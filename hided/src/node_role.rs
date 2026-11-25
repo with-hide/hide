@@ -1632,6 +1632,10 @@ fn carry_link(
             browser: Arc::clone(browser),
             generation,
         });
+    // The link's end closes its stream, so the node's reader and writer of
+    // it end too, whichever end ended the link (the core's silence
+    // included).
+    let ending = link.shutdown_handle();
     let link_end = serve(
         BufReader::new(link.duplicate()),
         link,
@@ -1642,6 +1646,7 @@ fn carry_link(
             .as_ref()
             .map(|browser| browser as &dyn hide_host::link_bridge::BrowserGateway),
     );
+    ending.shutdown();
     shared.live.send_replace(None);
     if let Some(changed) = &shared.roots_changed {
         changed(&[]);

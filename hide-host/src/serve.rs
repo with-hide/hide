@@ -1,13 +1,15 @@
-//! The helper's request loop: JSON lines in, JSON lines out, until the input
-//! ends. The input is the SSH channel, so the helper lives exactly as long as
-//! the connection that started it (PRD S5.5 D-20).
+//! The helper's request loop: JSON lines in, JSON lines out, until the link
+//! ends: its input ends, its output fails, or the core falls silent. The
+//! input is the SSH channel, so the helper lives exactly as long as the
+//! connection that started it (PRD S5.5 D-20).
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -18,7 +20,7 @@ use crate::protocol::{
 };
 use crate::root::{Root, relative_path};
 use crate::{bytes, document, git, index, list, mutate, save, worktrees};
-use hide_node_link::panes::Heard;
+use hide_node_link::panes::{HEARTBEAT, HEARTBEAT_LIMIT, Heard, PING_LINE};
 use hide_node_link::process::{GroupEnd, LeftRunning, LineInput, ProcessStart};
 
 /// Requests the helper works on at once; the core also admits at most this
@@ -77,14 +79,17 @@ pub trait Terminals: Send + Sync {
     fn stop(&self);
 }
 
-pub fn serve(input: impl BufRead + Send + 'static, output: impl Write + Send) -> io::Result<()> {
+pub fn serve(
+    input: impl BufRead + Send + 'static,
+    output: impl Write + Send + 'static,
+) -> io::Result<()> {
     serve_in(input, output, Env::of_process(), Services::none())
 }
 
 /// [`serve`] with the node's terminal service.
 pub fn serve_with_terminals(
     input: impl BufRead + Send + 'static,
-    output: impl Write + Send,
+    output: impl Write + Send + 'static,
     terminals: &dyn Terminals,
 ) -> io::Result<()> {
     serve_with(
@@ -212,7 +217,7 @@ impl Services<'_> {
 /// [`serve`] with what `services` names.
 pub fn serve_with(
     input: impl BufRead + Send + 'static,
-    output: impl Write + Send,
+    output: impl Write + Send + 'static,
     services: Services<'_>,
 ) -> io::Result<()> {
     serve_in(input, output, Env::of_process(), services)
@@ -220,7 +225,7 @@ pub fn serve_with(
 
 fn serve_in(
     input: impl BufRead + Send + 'static,
-    output: impl Write + Send,
+    output: impl Write + Send + 'static,
     env: Env,
     services: Services<'_>,
 ) -> io::Result<()> {
@@ -249,15 +254,12 @@ fn serve_in(
     };
     let terminals = services.terminals;
     let opened_roots = services.opened_roots;
-    // The core's lines, read on a thread of their own so a core that falls
-    // silent ends this link (`next_line`).
-    let heard = Arc::new(Heard::new());
-    let lines = read_lines(input, Arc::clone(&heard))?;
-    // Ends the heartbeat when the link does.
-    let link_ended = (Mutex::new(false), std::sync::Condvar::new());
+    // The core's lines and this node's each cross on a thread of their own,
+    // so the link's end never waits on a read or a write (`Wire`).
+    let wire = Arc::new(Wire::default());
+    let output = start_wire(input, output, &wire)?;
     let link = crate::link_bridge::LinkBridge::new(services.browser);
     let staging = crate::attachments::Staging::new(env.state.as_deref(), env.home.as_deref());
-    let output = Mutex::new(output);
     // The calls handed to a worker and not yet answered, each with whether
     // it was asked to stop; the reader enters one before handing it over, so
     // a cancel that arrives first still reaches it.
@@ -303,6 +305,7 @@ fn serve_in(
                 BACKGROUND_CONCURRENCY,
             ))
             .chain(std::iter::repeat_n(&pane_receiver, PANE_CONCURRENCY));
+        let mut workers = Vec::new();
         for receiver in lanes {
             let receiver = Arc::clone(receiver);
             let output = &output;
@@ -312,7 +315,7 @@ fn serve_in(
             let running = &running;
             let link = &link;
             let staging = &staging;
-            scope.spawn(move || {
+            workers.push(scope.spawn(move || {
                 loop {
                     let request = match receiver.lock().map(|receiver| receiver.recv()) {
                         Ok(Ok(request)) => request,
@@ -412,45 +415,31 @@ fn serve_in(
                         return;
                     }
                 }
-            });
+            }));
         }
         drop(receiver);
         drop(control_receiver);
         drop(background_receiver);
         drop(pane_receiver);
-        // The node says it is alive every heartbeat on every link, so the
-        // core ends a link whose node fell silent as this node ends one
-        // whose core did.
         {
-            let output = &output;
-            let link_ended = &link_ended;
-            scope.spawn(move || {
-                let (ended, wake) = link_ended;
-                let mut ended = lock(ended);
-                loop {
-                    let (guard, _) = wake
-                        .wait_timeout(ended, hide_node_link::panes::HEARTBEAT)
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    ended = guard;
-                    if *ended || write_raw(output, hide_node_link::panes::PING_LINE).is_err() {
-                        return;
-                    }
-                }
-            });
+            let wire = &*wire;
+            scope.spawn(move || watch(wire));
         }
         let result = read_requests(
-            &lines,
-            &heard,
+            &wire.inbox,
             [&sender, &control_sender, &background_sender, &pane_sender],
             &output,
             &running,
             terminals,
         );
-        // A reader still waiting on a silent input ends at its next line,
-        // when it finds no one takes it, or with the input.
-        drop(lines);
-        *lock(&link_ended.0) = true;
-        link_ended.1.notify_all();
+        // The core's lines are done with: a reader still waiting on its
+        // input ends at its next line.
+        wire.inbox.end(io::ErrorKind::BrokenPipe, "the link ended");
+        // A link that failed or fell silent carries nothing more, and
+        // nothing here waits on its output.
+        if let Err(error) = &result {
+            wire.outbox.end(error.kind(), &error.to_string());
+        }
         drop(sender);
         drop(control_sender);
         drop(background_sender);
@@ -474,6 +463,21 @@ fn serve_in(
             env.panes.close();
         }
         panes.stop();
+        // What the core asked before its input ended is answered while the
+        // link carries it, and written before this returns, since a node
+        // whose process is its link exits then; the silence watch ends both
+        // waits on a link that carries nothing.
+        let mut panicked = None;
+        for worker in workers {
+            if let Err(panic) = worker.join() {
+                panicked.get_or_insert(panic);
+            }
+        }
+        wire.outbox.finish();
+        wire.outbox.wait_done(None);
+        if let Some(panic) = panicked {
+            std::panic::resume_unwind(panic);
+        }
         result
     });
     panes.remove_folder();
@@ -510,43 +514,260 @@ pub fn windows_drives() -> Option<String> {
     }
 }
 
-/// One whole line from the core, its newline included, or what ended its
-/// input; the reader ends with that error.
-type Line = io::Result<Vec<u8>>;
+/// A link's two hand-offs, the core's lines in and this node's lines out,
+/// and when the core was last heard. A read blocks until a byte comes and a
+/// write until the other end takes it, and a connection that died without
+/// its close does neither, so the reads and the writes run on threads of
+/// their own (`start_wire`) that the link's end never waits for: whichever
+/// thread finds the end (the input's reader, the output's writer, the
+/// silence `watch`, the request loop) ends the hand-offs, and every thread
+/// waiting on one wakes. A thread still stuck in its read or its write ends
+/// with the connection: a node whose process is its link (`hided node
+/// serve`) exits once `serve` returns, and a resident node's owner closes
+/// its link stream then.
+#[derive(Default)]
+struct Wire {
+    inbox: Handoff,
+    outbox: Handoff,
+    heard: Heard,
+}
 
-/// Reads the core's lines from `input` on a thread of its own, hearing
-/// every read in `heard`, and hands each over once the request loop takes
-/// it. A read blocks until a byte comes and a connection that died without
-/// a close never sends one, so the loop must be able to stop waiting
-/// without the read: it ends the link on silence (`next_line`) and drops
-/// the receiver, and this thread then ends at its next line or with the
-/// input. A node whose process is its link (`hided node serve`) exits right
-/// after the loop; a resident node's link stream is closed by its owner as
-/// the link ends.
-fn read_lines(
+impl Wire {
+    fn end(&self, kind: io::ErrorKind, reason: &str) {
+        self.inbox.end(kind, reason);
+        self.outbox.end(kind, reason);
+    }
+}
+
+/// One line at a time from one of a link's threads to another, until the
+/// link ends.
+#[derive(Default)]
+struct Handoff {
+    state: Mutex<Handed>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct Handed {
+    line: Option<Vec<u8>>,
+    /// Nothing more is put; the line handed is still taken.
+    finished: bool,
+    /// The taker came back after the last line: it has taken, and on the
+    /// output written, everything put.
+    drained: bool,
+    /// Why the link ended, the first reason found; nothing is put or taken
+    /// after it.
+    ended: Option<(io::ErrorKind, String)>,
+}
+
+impl Handed {
+    fn ended(&self) -> Option<io::Error> {
+        self.ended
+            .as_ref()
+            .map(|(kind, reason)| io::Error::new(*kind, reason.clone()))
+    }
+
+    fn done(&self) -> bool {
+        self.ended.is_some() || self.drained
+    }
+}
+
+impl Handoff {
+    /// Hands `line` over once the line before it was taken; refused once
+    /// the link finished or ended.
+    fn put(&self, line: Vec<u8>) -> io::Result<()> {
+        let mut state = lock(&self.state);
+        loop {
+            if let Some(error) = state.ended() {
+                return Err(error);
+            }
+            if state.finished {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "the link finished",
+                ));
+            }
+            if state.line.is_none() {
+                state.line = Some(line);
+                self.changed.notify_all();
+                return Ok(());
+            }
+            state = wait(&self.changed, state);
+        }
+    }
+
+    /// Hands `line` over only if nothing waits to be taken: a ping behind a
+    /// busy or stuck output would say nothing the waiting line does not.
+    fn offer(&self, line: &[u8]) {
+        let mut state = lock(&self.state);
+        if state.line.is_none() && !state.finished && state.ended.is_none() {
+            state.line = Some(line.to_vec());
+            self.changed.notify_all();
+        }
+    }
+
+    /// The next line; `None` once the link finished and every line was
+    /// taken.
+    fn take(&self) -> io::Result<Option<Vec<u8>>> {
+        let mut state = lock(&self.state);
+        loop {
+            if let Some(error) = state.ended() {
+                return Err(error);
+            }
+            if let Some(line) = state.line.take() {
+                self.changed.notify_all();
+                return Ok(Some(line));
+            }
+            if state.finished {
+                state.drained = true;
+                self.changed.notify_all();
+                return Ok(None);
+            }
+            state = wait(&self.changed, state);
+        }
+    }
+
+    /// Nothing more is put: the taker takes the line handed, then hears
+    /// the end.
+    fn finish(&self) {
+        lock(&self.state).finished = true;
+        self.changed.notify_all();
+    }
+
+    /// Ends the link: what waits on either side, and what comes later, is
+    /// refused with `reason`.
+    fn end(&self, kind: io::ErrorKind, reason: &str) {
+        let mut state = lock(&self.state);
+        if state.ended.is_none() {
+            state.ended = Some((kind, reason.to_owned()));
+            state.line = None;
+        }
+        drop(state);
+        self.changed.notify_all();
+    }
+
+    /// Waits at most `within`, or with `None` for as long as it takes,
+    /// until the link ended or finished with every line taken; whether it
+    /// has.
+    fn wait_done(&self, within: Option<Duration>) -> bool {
+        let state = lock(&self.state);
+        match within {
+            Some(within) => self
+                .changed
+                .wait_timeout_while(state, within, |state| !state.done())
+                .unwrap_or_else(PoisonError::into_inner)
+                .0
+                .done(),
+            None => self
+                .changed
+                .wait_while(state, |state| !state.done())
+                .unwrap_or_else(PoisonError::into_inner)
+                .done(),
+        }
+    }
+}
+
+fn wait<'a, T>(changed: &Condvar, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
+    changed.wait(guard).unwrap_or_else(PoisonError::into_inner)
+}
+
+/// This node's end of the link's output: each write is one whole line,
+/// handed to the link's writer. Every line here is written with one
+/// `write_all` under the output's lock (`write_line`, `write_raw`,
+/// `crate::panes::write_event`), so a line is never cut by another.
+struct Outgoing(Arc<Wire>);
+
+impl Write for Outgoing {
+    fn write(&mut self, line: &[u8]) -> io::Result<usize> {
+        self.0.outbox.put(line.to_vec())?;
+        Ok(line.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Starts the link's reader of the core's lines and writer of this node's,
+/// each on a thread of its own (`Wire`), and returns this node's end of the
+/// output.
+fn start_wire(
     mut input: impl BufRead + Send + 'static,
-    heard: Arc<Heard>,
-) -> io::Result<mpsc::Receiver<Line>> {
-    let (sender, lines) = mpsc::sync_channel::<Line>(0);
+    mut output: impl Write + Send + 'static,
+    wire: &Arc<Wire>,
+) -> io::Result<Mutex<Outgoing>> {
+    let reading = Arc::clone(wire);
     std::thread::Builder::new()
         .name("node-link-read".into())
         .spawn(move || {
+            let wire = reading;
             loop {
-                match read_line(&mut input, &heard) {
+                match read_line(&mut input, &wire.heard) {
                     Ok(Some(line)) => {
-                        if sender.send(Ok(line)).is_err() {
+                        if wire.inbox.put(line).is_err() {
                             return;
                         }
                     }
-                    Ok(None) => return,
-                    Err(error) => {
-                        let _ = sender.send(Err(error));
-                        return;
-                    }
+                    Ok(None) => return wire.inbox.finish(),
+                    Err(error) => return wire.inbox.end(error.kind(), &error.to_string()),
                 }
             }
         })?;
-    Ok(lines)
+    let writing = Arc::clone(wire);
+    let started = std::thread::Builder::new()
+        .name("node-link-write".into())
+        .spawn(move || {
+            let wire = writing;
+            while let Ok(Some(line)) = wire.outbox.take() {
+                if let Err(error) = output.write_all(&line).and_then(|()| output.flush()) {
+                    // The core takes nothing more: the link ends here, the
+                    // request loop's wait for the core's next line with it.
+                    wire.end(error.kind(), &format!("the link's output failed: {error}"));
+                    return;
+                }
+            }
+        });
+    if let Err(error) = started {
+        // The reader ends at its next line.
+        wire.end(error.kind(), "the link's writer did not start");
+        return Err(error);
+    }
+    Ok(Mutex::new(Outgoing(Arc::clone(wire))))
+}
+
+/// Says this node is alive every [`HEARTBEAT`], on every link, so the core
+/// ends a link whose node fell silent as this node ends one whose core did:
+/// a core that sent no byte for [`HEARTBEAT_LIMIT`] (it pings every
+/// heartbeat) is a connection that died without its close reaching this
+/// machine, and the link ends as an ended input's would, letting go of what
+/// it holds (its pane ownership). Ends with the link's output.
+fn watch(wire: &Wire) {
+    let mut ping_at = Instant::now() + HEARTBEAT;
+    loop {
+        let Some(left) = wire.heard.silent() else {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "component": "node",
+                    "kind": "link.silent",
+                    "limit_ms": HEARTBEAT_LIMIT.as_millis() as u64,
+                })
+            );
+            wire.end(
+                io::ErrorKind::TimedOut,
+                &format!("the core sent nothing for {} s", HEARTBEAT_LIMIT.as_secs()),
+            );
+            return;
+        };
+        let now = Instant::now();
+        if now >= ping_at {
+            wire.outbox.offer(PING_LINE);
+            ping_at = now + HEARTBEAT;
+        }
+        if wire.outbox.wait_done(Some(left.min(ping_at - now))) {
+            return;
+        }
+    }
 }
 
 /// One whole line, newline included, or what is left of the input when it
@@ -583,52 +804,20 @@ fn read_line(input: &mut impl BufRead, heard: &Heard) -> io::Result<Option<Vec<u
     }
 }
 
-/// The core's next line; `None` once its input ended. A core that sent no
-/// byte for [`hide_node_link::panes::HEARTBEAT_LIMIT`] ends the link: the
-/// core writes a ping every heartbeat, so this is a connection that died
-/// without its close reaching this machine, and the link's end releases
-/// what it holds (its pane ownership) as the input's end would.
-fn next_line(lines: &mpsc::Receiver<Line>, heard: &Heard) -> io::Result<Option<Vec<u8>>> {
-    loop {
-        let Some(left) = heard.silent() else {
-            let limit = hide_node_link::panes::HEARTBEAT_LIMIT;
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "component": "node",
-                    "kind": "link.silent",
-                    "limit_ms": limit.as_millis() as u64,
-                })
-            );
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("the core sent nothing for {} s", limit.as_secs()),
-            ));
-        };
-        match lines.recv_timeout(left) {
-            Ok(line) => return line.map(Some),
-            // A line may still be arriving; `heard` says.
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
-        }
-    }
-}
-
 /// Reads requests and hands each to its lane: `[machine, control,
 /// background, pane]`.
 fn read_requests(
-    lines: &mpsc::Receiver<Line>,
-    heard: &Heard,
+    inbox: &Handoff,
     [sender, control_sender, background_sender, pane_sender]: [&mpsc::SyncSender<Request>; 4],
     output: &Mutex<impl Write>,
     running: &Mutex<HashMap<u64, bool>>,
     terminals: Option<&dyn Terminals>,
 ) -> io::Result<()> {
     loop {
-        let Some(line) = next_line(lines, heard)? else {
+        let Some(line) = inbox.take()? else {
             return Ok(());
         };
-        if line == hide_node_link::panes::PING_LINE {
+        if line == PING_LINE {
             continue;
         }
         if line.starts_with(hide_node_link::terminal::TERMINAL_LINE_PREFIX) {
@@ -2767,164 +2956,296 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
     }
 
-    /// A node whose core went silent with its connection still open, as a
-    /// server's end stays after the other machine roamed off its network
-    /// (with-hide/hide#2882), ends its link within the silence limit and
-    /// lets go of its state folder's pane ownership, so the node of the
-    /// core's next link takes it; it says it is alive meanwhile, whatever
-    /// its link.
     #[cfg(unix)]
-    #[test]
-    fn a_node_whose_core_falls_silent_ends_its_link_and_lets_its_panes_go() {
-        use hide_node_link::holders::{
-            HolderError, HolderProcess, HolderProcesses, HolderProof, HolderRecovery, HolderScroll,
-            PaneCall, PaneEnded, PaneFactsSink, PaneHolders, PaneInput, ScreenRules, StyledRead,
-        };
-        use hide_node_link::panes::{HEARTBEAT_LIMIT, PING_LINE};
-        use std::os::unix::net::UnixStream;
+    use hide_node_link::holders::{
+        HolderError, HolderProcess, HolderProcesses, HolderProof, HolderRecovery, HolderScroll,
+        PaneEnded, PaneFactsSink, PaneHolders, PaneInput, ScreenRules, StyledRead,
+    };
 
-        /// Holders whose ownership is the state folder's real pane lock,
-        /// taken as a node's holders take it, and asked nothing else.
-        enum Holders {
-            Unowned(hide_kit::panes::Panes),
-            Owned(#[allow(dead_code)] hide_kit::panes::Owner),
+    /// Holders whose ownership is the state folder's real pane lock, taken
+    /// as a node's holders take it, and asked nothing else.
+    #[cfg(unix)]
+    enum LockHolders {
+        Unowned(hide_kit::panes::Panes),
+        Owned(#[allow(dead_code)] hide_kit::panes::Owner),
+    }
+    impl PaneHolders for LockHolders {
+        fn own(self: Arc<Self>, within: Duration) -> Result<Arc<dyn PaneHolders>, HolderError> {
+            let LockHolders::Unowned(panes) = &*self else {
+                unreachable!()
+            };
+            let owner = panes
+                .acquire(within)
+                .map_err(|message| HolderError::Unreachable { message })?;
+            Ok(Arc::new(LockHolders::Owned(owner)))
         }
-        impl PaneHolders for Holders {
-            fn own(self: Arc<Self>, within: Duration) -> Result<Arc<dyn PaneHolders>, HolderError> {
-                let Holders::Unowned(panes) = &*self else {
-                    unreachable!()
-                };
-                let owner = panes
-                    .acquire(within)
-                    .map_err(|message| HolderError::Unreachable { message })?;
-                Ok(Arc::new(Holders::Owned(owner)))
-            }
-            fn recovered(&self, _: Duration) -> Result<HolderRecovery, HolderError> {
-                Ok(HolderRecovery::default())
-            }
-            fn terminate(&self, _: &str) -> Result<(), HolderError> {
-                unreachable!()
-            }
-            fn read(&self, _: &str, _: u16) -> Result<(String, bool), HolderError> {
-                unreachable!()
-            }
-            fn read_styled(&self, _: &str, _: StyledRead) -> Result<(String, bool), HolderError> {
-                unreachable!()
-            }
-            fn read_visible(&self, _: &str) -> Result<String, HolderError> {
-                unreachable!()
-            }
-            fn scroll(&self, _: &str, _: Option<u64>) -> Result<HolderScroll, HolderError> {
-                unreachable!()
-            }
-            fn processes(&self, _: &str, _: Duration) -> Result<HolderProcesses, HolderError> {
-                unreachable!()
-            }
-            fn process(
-                &self,
-                _: &str,
-                _: u32,
-                _: Duration,
-            ) -> Result<Option<HolderProcess>, HolderError> {
-                unreachable!()
-            }
-            fn proof(&self, _: &str) -> Result<HolderProof, HolderError> {
-                unreachable!()
-            }
-            fn input(&self, _: &str, _: PaneInput) -> Result<(), HolderError> {
-                unreachable!()
-            }
-            fn letter(
-                &self,
-                _: &str,
-                _: Vec<PaneInput>,
-                _: PaneInput,
-                _: Duration,
-            ) -> Result<(), HolderError> {
-                unreachable!()
-            }
-            fn watch_ends(&self, _: PaneEnded) {}
-            fn watch_facts(&self, _: PaneFactsSink) {}
-            fn set_rules(&self, _: &str, _: Option<ScreenRules>) -> Result<(), HolderError> {
-                unreachable!()
+        fn recovered(&self, _: Duration) -> Result<HolderRecovery, HolderError> {
+            Ok(HolderRecovery::default())
+        }
+        fn terminate(&self, _: &str) -> Result<(), HolderError> {
+            unreachable!()
+        }
+        fn read(&self, _: &str, _: u16) -> Result<(String, bool), HolderError> {
+            unreachable!()
+        }
+        fn read_styled(&self, _: &str, _: StyledRead) -> Result<(String, bool), HolderError> {
+            unreachable!()
+        }
+        fn read_visible(&self, _: &str) -> Result<String, HolderError> {
+            unreachable!()
+        }
+        fn scroll(&self, _: &str, _: Option<u64>) -> Result<HolderScroll, HolderError> {
+            unreachable!()
+        }
+        fn processes(&self, _: &str, _: Duration) -> Result<HolderProcesses, HolderError> {
+            unreachable!()
+        }
+        fn process(
+            &self,
+            _: &str,
+            _: u32,
+            _: Duration,
+        ) -> Result<Option<HolderProcess>, HolderError> {
+            unreachable!()
+        }
+        fn proof(&self, _: &str) -> Result<HolderProof, HolderError> {
+            unreachable!()
+        }
+        fn input(&self, _: &str, _: PaneInput) -> Result<(), HolderError> {
+            unreachable!()
+        }
+        fn letter(
+            &self,
+            _: &str,
+            _: Vec<PaneInput>,
+            _: PaneInput,
+            _: Duration,
+        ) -> Result<(), HolderError> {
+            unreachable!()
+        }
+        fn watch_ends(&self, _: PaneEnded) {}
+        fn watch_facts(&self, _: PaneFactsSink) {}
+        fn set_rules(&self, _: &str, _: Option<ScreenRules>) -> Result<(), HolderError> {
+            unreachable!()
+        }
+    }
+
+    /// A node serving a link whose output is `output`, asked by its core for
+    /// its panes (`Recovered`, answered as id 1); the test's end of the
+    /// link, the node's result once its loop returns, and whether its state
+    /// folder's pane lock is free.
+    #[cfg(unix)]
+    struct OwningNode {
+        core: std::os::unix::net::UnixStream,
+        finished: mpsc::Receiver<io::Result<()>>,
+        home: tempfile::TempDir,
+    }
+
+    #[cfg(unix)]
+    impl OwningNode {
+        fn start(output: impl Write + Send + 'static) -> Self {
+            use hide_node_link::holders::PaneCall;
+            let home = tempfile::tempdir().unwrap();
+            let env = Env {
+                panes: crate::pane_holders::PaneSlot::holding(Arc::new(LockHolders::Unowned(
+                    Self::panes(home.path()),
+                ))),
+                ..Env::of_process()
+            };
+            let (mut core, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+            let (done, finished) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = done.send(serve_in(
+                    io::BufReader::new(theirs),
+                    output,
+                    env,
+                    Services::none(),
+                ));
+            });
+            let mut recover = serde_json::to_vec(&Request {
+                id: 1,
+                call: Call::Pane {
+                    call: PaneCall::Recovered { timeout_ms: 5_000 },
+                },
+            })
+            .unwrap();
+            recover.push(b'\n');
+            core.write_all(&recover).unwrap();
+            Self {
+                core,
+                finished,
+                home,
             }
         }
-        let home = tempfile::tempdir().unwrap();
-        let state = home.path().join("state");
-        let open = || hide_kit::panes::Panes::open(home.path(), &state, |_| {}).unwrap();
-        let env = Env {
-            panes: crate::pane_holders::PaneSlot::holding(Arc::new(Holders::Unowned(open()))),
-            ..Env::of_process()
-        };
-        /// Each write the node makes, as it makes it.
-        struct Lines(mpsc::Sender<Vec<u8>>);
-        impl Write for Lines {
-            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-                let _ = self.0.send(bytes.to_vec());
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
+
+        fn panes(home: &Path) -> hide_kit::panes::Panes {
+            hide_kit::panes::Panes::open(home, &home.join("state"), |_| {}).unwrap()
         }
-        let (mut core, theirs) = UnixStream::pair().unwrap();
-        let (writes, written) = mpsc::channel();
-        let (done, finished) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = done.send(serve_in(
-                io::BufReader::new(theirs),
-                Lines(writes),
-                env,
-                Services::none(),
-            ));
-        });
+
+        fn lock_is_free(&self) -> bool {
+            Self::panes(self.home.path())
+                .acquire(Duration::ZERO)
+                .is_ok()
+        }
+    }
+
+    /// The lines a node wrote until it answered its core's id 1, refusing
+    /// nothing.
+    #[cfg(unix)]
+    fn answered_for_its_panes(written: &mpsc::Receiver<Vec<u8>>) {
         let mut said = Vec::new();
-        let mut recover = serde_json::to_vec(&Request {
-            id: 1,
-            call: Call::Pane {
-                call: PaneCall::Recovered { timeout_ms: 5_000 },
-            },
-        })
-        .unwrap();
-        recover.push(b'\n');
-        core.write_all(&recover).unwrap();
-        loop {
+        while !String::from_utf8_lossy(&said).contains("\"id\":1") {
             said.extend(
                 written
                     .recv_timeout(Duration::from_secs(20))
                     .expect("the node never answered for its panes"),
             );
-            if String::from_utf8_lossy(&said).contains("\"id\":1") {
-                break;
-            }
         }
         assert!(
             !String::from_utf8_lossy(&said).contains("\"error\""),
             "the node refused the ownership: {}",
             String::from_utf8_lossy(&said)
         );
+    }
+
+    /// A node whose core went silent with its connection still open, as a
+    /// server's end stays after the other machine roamed off its network
+    /// (with-hide/hide#2882), ends its link within the silence limit and
+    /// lets go of its state folder's pane ownership, so the node of the
+    /// core's next link takes it; its output stuck in a write meanwhile, as
+    /// one is once the connection's buffers are full, holds none of it up.
+    #[cfg(unix)]
+    #[test]
+    fn a_node_whose_core_falls_silent_ends_its_link_and_lets_its_panes_go() {
+        use hide_node_link::panes::{HEARTBEAT, HEARTBEAT_LIMIT, PING_LINE};
+
+        /// The core's end of the output: it takes the node's lines until
+        /// the answer for its panes, then holds the next write, telling the
+        /// test what it holds, until the test lets it go.
+        struct Stalls {
+            written: mpsc::Sender<Vec<u8>>,
+            answered: bool,
+            held: mpsc::Sender<Vec<u8>>,
+            release: mpsc::Receiver<()>,
+        }
+        impl Write for Stalls {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if self.answered {
+                    let _ = self.held.send(bytes.to_vec());
+                    let _ = self.release.recv();
+                    return Err(io::ErrorKind::BrokenPipe.into());
+                }
+                self.answered = String::from_utf8_lossy(bytes).contains("\"id\":1");
+                let _ = self.written.send(bytes.to_vec());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let (written, lines) = mpsc::channel();
+        let (held, holding) = mpsc::channel();
+        let (let_go, release) = mpsc::channel();
+        let node = OwningNode::start(Stalls {
+            written,
+            answered: false,
+            held,
+            release,
+        });
+        answered_for_its_panes(&lines);
         assert!(
-            open().acquire(Duration::ZERO).is_err(),
+            !node.lock_is_free(),
             "the node does not hold the ownership it answered for"
         );
+        let stuck = holding
+            .recv_timeout(HEARTBEAT + Duration::from_secs(5))
+            .expect("the node never wrote again after its answer");
+        assert_eq!(stuck, PING_LINE, "the node's next line was not its ping");
 
-        // The core sends nothing more and never closes its end.
-        let ended = finished
+        // The core sends nothing more and never closes its end, and the
+        // node's write stays stuck.
+        let ended = node
+            .finished
             .recv_timeout(HEARTBEAT_LIMIT + Duration::from_secs(15))
             .expect("the node kept a link whose core sent nothing");
         let error = ended.expect_err("a silent core is not an ended input");
         assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{error}");
         assert!(
-            open().acquire(Duration::ZERO).is_ok(),
+            node.lock_is_free(),
             "the node's pane ownership outlived its silent link"
         );
-        said.extend(written.try_iter().flatten());
+        drop(let_go);
+    }
+
+    /// A node whose output failed ends its link and lets go of its pane
+    /// ownership even while its core keeps writing: the core's pings keep
+    /// the input alive, and only the failed write says the link is gone.
+    #[cfg(unix)]
+    #[test]
+    fn a_node_whose_output_fails_ends_its_link_while_its_core_still_pings() {
+        use hide_node_link::panes::PING_LINE;
+
+        /// The core's end of the output: it takes the node's lines until the
+        /// answer for its panes and fails every write after it.
+        struct Fails {
+            written: mpsc::Sender<Vec<u8>>,
+            answered: bool,
+        }
+        impl Write for Fails {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if self.answered {
+                    return Err(io::ErrorKind::BrokenPipe.into());
+                }
+                self.answered = String::from_utf8_lossy(bytes).contains("\"id\":1");
+                let _ = self.written.send(bytes.to_vec());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let (written, lines) = mpsc::channel();
+        let mut node = OwningNode::start(Fails {
+            written,
+            answered: false,
+        });
+        answered_for_its_panes(&lines);
         assert!(
-            said.windows(PING_LINE.len()).any(|line| line == PING_LINE),
-            "the node never said it was alive: {}",
-            String::from_utf8_lossy(&said)
+            !node.lock_is_free(),
+            "the node does not hold the ownership it answered for"
         );
-        drop(core);
+        let mut pinging = node.core.try_clone().unwrap();
+        let (stop, stopped) = mpsc::channel::<()>();
+        let pinger = std::thread::spawn(move || {
+            while let Err(mpsc::RecvTimeoutError::Timeout) =
+                stopped.recv_timeout(Duration::from_millis(200))
+            {
+                if pinging.write_all(PING_LINE).is_err() {
+                    return;
+                }
+            }
+        });
+        // An answer the node cannot write.
+        let mut hello = serde_json::to_vec(&Request {
+            id: 2,
+            call: Call::Hello,
+        })
+        .unwrap();
+        hello.push(b'\n');
+        node.core.write_all(&hello).unwrap();
+
+        let ended = node
+            .finished
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the node kept a link whose output failed");
+        let error = ended.expect_err("a failed output is not an ended input");
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe, "{error}");
+        assert!(
+            node.lock_is_free(),
+            "the node's pane ownership outlived its failed link"
+        );
+        drop(stop);
+        pinger.join().unwrap();
     }
 
     /// A request whose id is still running is refused, and the running one

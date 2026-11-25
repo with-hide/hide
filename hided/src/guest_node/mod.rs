@@ -435,8 +435,9 @@ pub fn run(dir: &str) -> ! {
         record("guest_node.link_started", json!({"session": session}));
         terminals.relink();
         let reader = BufReader::new(stream.duplicate());
-        // The link's end closes its stream, so the node's reader of it ends
-        // too, whichever end ended the link (the core's silence included).
+        // The link's end closes its stream, so the node's reader and writer
+        // of it end too, whichever end ended the link (the core's silence
+        // included).
         let ending = stream.shutdown_handle();
         let served = hide_host::serve::serve_with(
             reader,
