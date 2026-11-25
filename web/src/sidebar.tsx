@@ -77,7 +77,7 @@ import { useOverviewCount } from "./Overview";
 import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFocus";
 import { SidebarLensSwitch, TaskLens, ToolTaskLens } from "./TaskLens";
 import { toolCells, toolCheckoutPane, useFrontTool, useToolSidebarProjects } from "./toolCells";
-import { GuestCheckoutRows, GuestMachineGroups, GuestProjectRows, PeerWorkRows, usePeerRows } from "./GuestWorkRows";
+import { GuestCheckoutRows, GuestMachineGroups, GuestProjectRows, PeerWorkRows, useGuestInFront, usePeerRows } from "./GuestWorkRows";
 import type { ToolCell } from "./agentScope";
 import { InToolCell } from "./components/tool-mark";
 import { DeviceChip } from "./components/device-chip";
@@ -579,7 +579,7 @@ function ProjectList({ actions, tool = null }: { actions: Actions; tool?: ToolCe
           <ProjectRowView key={rowKey(row)} row={row} first={index === 0 || listRows[index - 1]?.kind === "divider"} context={context} />
         ))}
         <CleanupRows workspaces={workspaces} context={context} deviceId={frontId} />
-        {!remote && !tool ? <GuestMachineGroups actions={actions} projects={guestProjects} /> : null}
+        {!remote && !tool ? <GuestMachineGroups actions={actions} projects={guestProjects} inset={PROJECT_COLUMN} /> : null}
         {/* A tool's cell with no work says so in the same place, in the tool's words (B42). */}
         {!remote && workspaces.length === 0 ? (
           <li className="flex flex-col items-start gap-sm px-sm py-sm text-caption text-muted-foreground" data-projects-empty="true" data-tool-cell-empty={tool ? "true" : undefined}>
@@ -646,7 +646,6 @@ const ProjectRowView = memo(function ProjectRowView({ row, first = false, stack 
   return <WorkspaceRows workspace={row.workspace} quiet={row.quiet === true} first={first} context={context} />;
 });
 
-const NO_CHECKOUT_ROWS: ReadonlySet<string> = new Set();
 
 /**
  * A raised Needs You or Done section above the project tree
@@ -986,10 +985,13 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
   const hideAiListed = useShellStore((s) => s.rest?.navigator?.hide_ai_checkouts);
   const issueSource = useShellStore((s) => projectIssueSource(s.rest, workspace));
   const expanded = !disclosure || projectExpanded(workspace);
-  // Another machine's panes started in this project's folders stand under the
-  // checkout row that holds them, and at the project's end when no row does,
-  // whatever is folded (PRD device-connect-iroh B10, `guestPlaces`).
-  const guestEnd = (rows: ReadonlySet<string>) => (workspace.remote_target_id ? null : <GuestProjectRows projectId={workspace.id} rows={rows} actions={actions} />);
+  // Another machine's panes started in this project's folders belong to it:
+  // under the checkout row that holds them, else at the project's end inside
+  // it, and hidden with it by the project's fold or the fold their checkout
+  // waits in (PRD device-connect-iroh B10, operator review 2026-11-25,
+  // `guestPlaces`). The one the center shows marks the fold that hides it.
+  const guestRows = !workspace.remote_target_id;
+  const guestInFront = useGuestInFront(workspace.id);
   const folder = folderCheckout(workspace);
   if (folder) {
     return (
@@ -1001,14 +1003,15 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
             agentRows={rowsByCheckout.get(folder.id) ?? NO_BOARD_ROWS}
             focused={context.workspaceScreen && folder.id === context.focusedCheckoutId}
             first={first}
+            guests={guestRows}
             context={context}
           />
         )}
-        {guestEnd(NO_CHECKOUT_ROWS)}
       </>
     );
   }
-  if (workspace.checkouts.length > 0 && workspace.checkouts.every((checkout) => workspace.session_folds?.cleanup.includes(checkout.id))) return guestEnd(NO_CHECKOUT_ROWS);
+  // Every checkout waits under 정리할 것: the project draws no row, and its machines' heads stand in its place.
+  if (workspace.checkouts.length > 0 && workspace.checkouts.every((checkout) => workspace.session_folds?.cleanup.includes(checkout.id))) return guestRows ? <GuestProjectRows projectId={workspace.id} inset={PROJECT_COLUMN} actions={actions} /> : null;
   const target = projectCheckout(workspace, useShellStore.getState().rest?.ui_state?.recent_checkouts);
   const hiding = focusFold(workspace, context.workspaceScreen ? context.focusedCheckoutId : null, expanded);
   // A checkout Hide AI made is drawn only while it is in front or an operator's agent works in it (PRD hide-ai-work-home D-17, B3).
@@ -1022,7 +1025,6 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
   const others = [...activeDrawn, ...emptyFold, ...inactiveDrawn].filter((checkout) => !checkout.is_primary);
   const othersOpen = workspace.inactive_checkouts.expanded;
   const othersMarks = sumMarks(others.map((checkout) => checkout.agent_summary?.marks));
-  const guestRows = !workspace.remote_target_id;
   const checkoutRow = (checkout: Checkout) => (
     <CheckoutRowView
       key={checkout.id}
@@ -1035,9 +1037,11 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
       context={context}
     />
   );
-  const rowCheckouts = new Set(expanded ? [...main, ...(othersOpen ? others : [])].map((checkout) => checkout.id) : []);
+  const rowCheckouts = new Set([...main, ...(othersOpen ? others : [])].map((checkout) => checkout.id));
+  const foldedCheckouts = new Set(othersOpen ? [] : others.map((checkout) => checkout.id));
+  const projectCurrent = hiding === "project" || (!expanded && guestInFront !== null);
+  const othersCurrent = !othersOpen && ((context.workspaceScreen && others.some((checkout) => checkout.id === context.focusedCheckoutId)) || (guestInFront !== null && foldedCheckouts.has(guestInFront.checkoutId ?? "")));
   return (
-    <>
     <li data-project={workspace.id} data-project-pinned={workspace.pinned ? "true" : undefined} data-project-quiet={quiet ? "true" : undefined} className={cn(!first && "mt-xs", quiet && "opacity-(--opacity-dimmed)")}>
       <EntryContextMenu
         label={t("common.entryActions", { name: workspace.label })}
@@ -1047,13 +1051,13 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
         data-project-menu={workspace.id}
       >
         <div
-          className={cn("flex min-h-(--size-project-row) w-full items-center gap-xs rounded-sm pr-xs", hiding === "project" ? "bg-secondary" : "hover:bg-accent")}
+          className={cn("flex min-h-(--size-project-row) w-full items-center gap-xs rounded-sm pr-xs", projectCurrent ? "bg-secondary" : "hover:bg-accent")}
           style={{ paddingLeft: PROJECT_COLUMN }}
         >
           <button
             type="button"
             data-project-row={workspace.id}
-            aria-current={hiding === "project" ? "true" : undefined}
+            aria-current={projectCurrent ? "true" : undefined}
             aria-label={workspace.label}
             className="flex min-w-0 flex-1 self-stretch items-center gap-sm rounded-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
             onClick={() => {
@@ -1074,7 +1078,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
               workspace={workspace}
               items={() => projectMenu(workspace, menuHost(), t, issueSource)}
               onSelect={(item) => runProjectItem(actions, workspace, item)}
-              fill={hiding === "project" ? "from-secondary" : "from-sidebar group-hover:from-accent group-has-focus-visible:from-accent"}
+              fill={projectCurrent ? "from-secondary" : "from-sidebar group-hover:from-accent group-has-focus-visible:from-accent"}
             >
               <RepositoryMark workspace={workspace} actions={actions} />
             </RowActions>
@@ -1101,7 +1105,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
                 label={t("sidebar.otherCheckouts")}
                 count={others.length}
                 expanded={othersOpen}
-                current={!othersOpen && context.workspaceScreen && others.some((checkout) => checkout.id === context.focusedCheckoutId)}
+                current={othersCurrent}
                 badge={<StatusBadge counts={othersMarks} data-other-checkouts-status={workspace.id} />}
                 onToggle={() => actions.toggleInactiveCheckouts(workspace.path)}
                 data-other-checkouts={workspace.id}
@@ -1109,11 +1113,10 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
               {othersOpen ? <ul>{others.map(checkoutRow)}</ul> : null}
             </li>
           ) : null}
+          {guestRows ? <GuestProjectRows projectId={workspace.id} rows={rowCheckouts} folded={foldedCheckouts} inset={PROJECT_COLUMN} actions={actions} /> : null}
         </ul>
       ) : null}
     </li>
-    {guestEnd(rowCheckouts)}
-    </>
   );
 }
 
@@ -1305,6 +1308,7 @@ const FolderRowView = memo(function FolderRowView({
   agentRows,
   focused,
   first,
+  guests = false,
   context,
 }: {
   workspace: Workspace;
@@ -1313,6 +1317,8 @@ const FolderRowView = memo(function FolderRowView({
   focused: boolean;
   /** The first row of its list: no project-block hairline above it. */
   first: boolean;
+  /** Draw another machine's panes started in the folder after its own rows (B10). */
+  guests?: boolean;
   context: ListContext;
 }) {
   const { t } = useInterfaceTranslation();
@@ -1384,6 +1390,7 @@ const FolderRowView = memo(function FolderRowView({
         </div>
       </EntryContextMenu>
       {visibleRows.length > 0 || (open && (sleeping.length + emptyTabs > 0 || !!checkout.agent_groups)) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} inset={PROJECT_NAME_COLUMN} glyphColumn={PROJECT_COLUMN} context={context} /> : null}
+      {guests ? <GuestCheckoutRows projectId={workspace.id} checkoutId={checkout.id} inset={PROJECT_NAME_COLUMN} actions={actions} /> : null}
     </li>
   );
 });

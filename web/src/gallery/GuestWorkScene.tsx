@@ -69,8 +69,8 @@ export function GuestWorkScene({ params }: { params: URLSearchParams }) {
             <PeerWorkRows group="needs_you" actions={actions} />
             <PeerWorkRows group="done" actions={actions} />
             <li className="px-sm py-xs text-caption text-foreground">shop-api</li>
-            <GuestProjectRows projectId="shop" actions={actions} />
-            <GuestMachineGroups actions={actions} projects={new Set(["shop"])} />
+            <GuestProjectRows projectId="shop" inset="var(--spacing-sm)" actions={actions} />
+            <GuestMachineGroups actions={actions} projects={new Set(["shop"])} inset="var(--spacing-sm)" />
           </ul>
           <div className="relative flex min-w-0 flex-1 flex-col">
             <GuestPaneScreen paneId={PANE} actions={actions} />
