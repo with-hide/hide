@@ -457,13 +457,18 @@ pub struct DeskConversationSnapshot {
 
 /// A message waiting for the turn before it to end (desk.md: "while a reply
 /// is being written, the next message waits"); `desk_queued_remove` takes
-/// it out before it goes.
+/// it out before it goes. It is the whole message: its words, chips and
+/// files go together, whether it waits from the start or came back first in
+/// line because the agent never took it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DeskQueuedMessage {
     pub id: u64,
     pub text: String,
     pub at_ms: u64,
     pub mentions: Vec<DeskMention>,
+    /// The files sent with it, which reach the agent as paths when it goes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<DeskAttachment>,
 }
 
 /// Messages that wait at once; one more is refused `desk_queued_full`.
@@ -478,6 +483,10 @@ pub enum DeskItem {
         text: String,
         at_ms: u64,
         mentions: Vec<DeskMention>,
+        /// The files sent with the message, drawn on its bubble; the agent
+        /// got their paths before the words.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<DeskAttachment>,
     },
     Reply {
         id: u64,
@@ -598,11 +607,20 @@ impl DeskItem {
     /// cap.
     pub fn text_bytes(&self) -> usize {
         match self {
-            Self::User { text, mentions, .. } => {
+            Self::User {
+                text,
+                mentions,
+                attachments,
+                ..
+            } => {
                 text.len()
                     + mentions
                         .iter()
                         .map(|mention| mention.id.len() + mention.name.len())
+                        .sum::<usize>()
+                    + attachments
+                        .iter()
+                        .map(|file| file.name.len() + file.path.len())
                         .sum::<usize>()
             }
             Self::Reply { text, mentions, .. } => {
@@ -641,6 +659,16 @@ impl DeskItem {
             Self::Switch { .. } => 0,
         }
     }
+}
+
+/// A file the operator dropped, pasted or picked into Desk's composer
+/// (PRD desk-2-ui B41): its name and size as the composer showed them, and
+/// the path the window's hided staged it at, which the agent was given.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeskAttachment {
+    pub name: String,
+    pub bytes: u64,
+    pub path: String,
 }
 
 /// A session or project the operator named with `@`; the message's text
@@ -739,6 +767,9 @@ pub enum DeskNotice {
     /// The turn failed; the detail is the agent's own one-line reason, when
     /// it gave one.
     TurnFailed,
+    /// A file the message named was gone, so the agent was not asked and the
+    /// message went back to the operator's input (PRD desk-2-ui B41).
+    AttachmentsGone,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

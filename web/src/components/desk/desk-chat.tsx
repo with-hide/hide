@@ -3,7 +3,9 @@ import { useMemo, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
 import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
+import { sentAttachment } from "../../deskComposer";
 import { useInterfaceTranslation } from "../../i18n/client";
+import type { DeskAttachment } from "../../snapshot";
 import { requireInterfaceLanguage } from "../../i18n/locale";
 import type { MessageKey } from "../../i18n/catalogs";
 import { composingKey } from "../../keys";
@@ -19,6 +21,7 @@ import { Hint } from "../ui/tooltip";
 import { agentProductName } from "../../agentAdapters";
 import { DeskJobCard, type DeskJobCardActions } from "./desk-job-card";
 import { SessionChip, useSessionChipBridge } from "./session-chip";
+import { SentAttachments } from "./desk-composer";
 
 /**
  * Words with their mentions drawn as chips (B18, B26): a session and a
@@ -47,24 +50,30 @@ export function DeskMentionChip({ mention, onPress }: { mention: DeskMention; on
 }
 
 /** The operator's own words, the one thing drawn as a bubble (B7, D-75). */
-export function DeskUserMessage({ text, mentions, onMention }: { text: string; mentions: readonly DeskMention[]; onMention?: (mention: DeskMention) => void }) {
+export function DeskUserMessage({ text, mentions, attachments = [], onMention }: { text: string; mentions: readonly DeskMention[]; attachments?: readonly DeskAttachment[]; onMention?: (mention: DeskMention) => void }) {
+  const files = useMemo(() => attachments.map((file) => ({ ...sentAttachment(file.path, file.bytes), name: file.name })), [attachments]);
   return (
-    <p className="max-w-(--size-pr-popover) self-end whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]" data-desk-item="user">
-      <MentionText text={text} mentions={mentions} token={markedMention} onMention={onMention} />
-    </p>
+    <div className="flex min-w-0 flex-col items-end gap-xs" data-desk-item="user">
+      <SentAttachments files={files} />
+      {text ? (
+        <p className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]">
+          <MentionText text={text} mentions={mentions} token={markedMention} onMention={onMention} />
+        </p>
+      ) : null}
+    </div>
   );
 }
 
 /**
  * A message sent while a reply was being written, waiting for the turn before
- * it (stopped, with `다시 시작하면 보내요`, while the agent refused the line's first one): the operator's bubble with `대기 중` and `✕`, which takes it out before it
- * goes (it is not in the conversation until its turn starts).
+ * it (stopped, with `다시 시작하면 보내요`, while the agent refused the line's first one): the operator's bubble, its files
+ * with it, with `대기 중` and `✕`, which takes it out before it goes (it is not in the conversation until its turn starts).
  */
 export function DeskQueuedBubble({ message, held = false, onRemove, onMention }: { message: DeskQueuedMessage; held?: boolean; onRemove: () => void; onMention?: (mention: DeskMention) => void }) {
   const { t } = useInterfaceTranslation();
   return (
     <div className="flex min-w-0 flex-col items-end gap-xxs" data-desk-queued={message.id}>
-      <div className="opacity-(--opacity-dimmed)"><DeskUserMessage text={message.text} mentions={message.mentions} onMention={onMention} /></div>
+      <div className="opacity-(--opacity-dimmed)"><DeskUserMessage text={message.text} mentions={message.mentions} attachments={message.attachments} onMention={onMention} /></div>
       <span className="flex items-center gap-xxs text-micro text-muted-foreground">
         {t(held ? "desk.queued.held" : "desk.queued.waiting")}
         <Hint label={t("desk.queued.remove")}>
@@ -150,6 +159,7 @@ const NOTICE: Record<Extract<DeskItem, { kind: "notice" }>["notice"], MessageKey
   resume_failed: "desk.notice.resume_failed",
   no_ask_mode: "desk.notice.no_ask_mode",
   turn_failed: "desk.notice.turn_failed",
+  attachments_gone: "desk.notice.attachments_gone",
 };
 
 export type DeskNoticeAction = "retry" | "restart" | "reinstall";
@@ -426,7 +436,7 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
     <ol className="mx-auto flex w-full max-w-(--size-editor-measure) min-w-0 flex-col gap-md px-lg py-lg text-subhead" aria-label={t("desk.name")} data-desk-chat={items.length}>
       {items.map((item, index) => (
         <li key={item.id} className="flex min-w-0 flex-col">
-          {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} onMention={actions.onMention} />
+          {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} attachments={item.attachments} onMention={actions.onMention} />
             : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} onMention={actions.onMention} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>

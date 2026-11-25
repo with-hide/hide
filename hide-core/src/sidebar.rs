@@ -279,6 +279,10 @@ pub struct SessionAgentPayload {
     /// wait is a question, not a permission; laid with `hook`.
     #[serde(skip)]
     pub(crate) hook_question: bool,
+    /// What the permission request `hook`'s wait is asks to run, when the
+    /// hook named it; laid with `hook`.
+    #[serde(skip)]
+    pub(crate) hook_asked: Option<hide_node_link::panes::HookAsked>,
 }
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize, Eq, PartialEq)]
@@ -890,6 +894,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         detail: None,
         message,
         user_turn,
+        asked: agent.hook_asked.clone(),
         ask_subject: None,
         laid_since_unix_ms: None,
         laid_lead: None,
@@ -1570,6 +1575,29 @@ mod tests {
         assert_eq!(axes["asks-blocked"], ("question", "unknown", RowMark::Turn));
         assert_eq!(axes["quiet"], ("none", "stopped", RowMark::Quiet));
         assert_eq!(axes["blocked"], ("approval", "unknown", RowMark::Turn));
+    }
+
+    /// The command a permission request asked to run, which the core's hook
+    /// facts laid on the agent, is on its snapshot row for the phone's card,
+    /// and an agent whose hook named none has no such field.
+    #[test]
+    fn a_hooks_asked_command_is_on_the_agents_row() {
+        let mut agents = payload(json!([
+            {"pane_id":"asking","agent_status":"blocked","state_change_seq":1},
+            {"pane_id":"plain","agent_status":"blocked","state_change_seq":2}
+        ]));
+        agents.agents[0].hook_asked =
+            hide_node_link::panes::HookAsked::of("cargo test --workspace");
+        let rows = project_agents(agents)
+            .agents
+            .iter()
+            .map(|agent| (agent.pane_id.clone(), serde_json::to_value(agent).unwrap()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            rows["asking"]["asked"],
+            json!({"command": "cargo test --workspace"})
+        );
+        assert_eq!(rows["plain"].get("asked"), None);
     }
 
     /// AC1. The engine's own lifecycle words, with no plugin token at all. Blocked

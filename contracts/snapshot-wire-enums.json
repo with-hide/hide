@@ -145,7 +145,7 @@
   "desk_irreversible": ["end_working_session", "force_push", "delete_remote", "delete_outside", "overwrite_outside", "unreadable"],
   "desk_permission_row": ["hide", "read", "shell", "edit"],
   "desk_permission_answer": ["run", "ask"],
-  "desk_notice": ["blocked", "preparing", "host_stopped", "resume_failed", "login_needed", "install_failed", "no_ask_mode", "turn_failed"],
+  "desk_notice": ["blocked", "preparing", "host_stopped", "resume_failed", "login_needed", "install_failed", "no_ask_mode", "turn_failed", "attachments_gone"],
   "desk_location": ["desk", "worktree", "checkout"],
   "desk_mention_kind": ["session", "project"],
   "desk_carried": ["all", "trimmed", "none"],

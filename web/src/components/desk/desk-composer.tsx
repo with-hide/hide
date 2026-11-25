@@ -1,12 +1,19 @@
-import { ArrowUpIcon, ChevronDownIcon, ImageIcon, LoaderCircleIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
-import { useRef, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { ArrowUpIcon, ChevronDownIcon, LoaderCircleIcon, PaperclipIcon, SquareIcon, UploadIcon, XIcon } from "lucide-react";
+import { useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { MAX_BATCH_BYTES, MAX_FILE_BYTES, MAX_FILES } from "../../attachments";
 import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskSelection } from "../../desk";
 import { agentPickable, deskAgentWord } from "../../desk";
+import { dragHasFiles, traySendable, type ComposerTray, type SentAttachment, type TrayFile } from "../../deskComposer";
+import { fileIcon } from "../../fileIcons";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
+import { formatBytes } from "../../i18n/format";
+import { requireInterfaceLanguage } from "../../i18n/locale";
 import { cn } from "../../lib/utils";
 import { AgentMark } from "../../AgentMark";
+import { FileMark } from "../file-mark";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
@@ -16,26 +23,100 @@ import { useNoticeFloor } from "../../noticeFloor";
 import type { DeskDraft } from "../../ui";
 import { MentionInput, type MentionInputHandle } from "./mention-input";
 
-/** A file the operator attached: an image or a dropped file, sent as its path (D-62, B29). */
-export type ComposerAttachment = { id: string; name: string; image: boolean };
+const MIB = MAX_FILE_BYTES / (1024 * 1024);
+const BATCH_MIB = MAX_BATCH_BYTES / (1024 * 1024);
+
+function useByteSize(): (bytes: number) => string {
+  const { i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  return (bytes) => formatBytes(language, bytes);
+}
 
 /**
- * The box the operator writes in, for Desk and for a thread alike (B7, B29):
- * the words, the attached files as chips above them, 📎, and send, which
+ * One attached file (D-27, B41, B42), in a composer's tray or over a sent
+ * message: an image with a thumbnail is its picture, any other file its mark,
+ * name and size. In the tray it has its `✕`, the band of its bytes read in
+ * while it reads, and, past the cap, a red line and `20MB를 넘어요`.
+ */
+export function AttachmentTile({ name, size, preview, state = "ready", read = 0, sent = false, onRemove }: {
+  name: string;
+  size: number | null;
+  preview: string | null;
+  state?: TrayFile["state"];
+  read?: number;
+  sent?: boolean;
+  onRemove?: () => void;
+}) {
+  const { t } = useInterfaceTranslation();
+  const bytes = useByteSize();
+  const refused = state === "too_large" || state === "over_batch" || state === "unreadable";
+  const why = state === "too_large" ? t("desk.composer.tooLarge", { limit: MIB }) : state === "over_batch" ? t("desk.composer.overBatch", { count: MAX_FILES, limit: BATCH_MIB }) : state === "unreadable" ? t("desk.composer.unreadable") : null;
+  const share = size && size > 0 ? Math.min(100, Math.round((read / size) * 100)) : 0;
+  const band = state === "reading" ? (
+    <span className="absolute inset-x-xs bottom-xxs h-xxs overflow-hidden rounded-full bg-border" role="progressbar" aria-label={name} aria-valuemin={0} aria-valuemax={100} aria-valuenow={share}>
+      <span className="block h-full rounded-full bg-agent-working" style={{ width: `${share}%` }} />
+    </span>
+  ) : null;
+  const face = preview ? (
+    <span className={cn("relative block overflow-hidden rounded-md border border-border bg-secondary", sent ? "aspect-[3/2] w-(--size-desk-output-thumb)" : "size-(--size-desk-attach-thumb)")}>
+      <img src={preview} alt="" className={cn("size-full object-cover", state === "reading" && "opacity-(--opacity-dimmed)")} />
+      {band}
+    </span>
+  ) : (
+    <span className={cn("relative flex h-(--size-desk-attach-thumb) max-w-(--size-tab-preferred) items-center gap-xs rounded-md border bg-secondary pr-sm pl-xs", refused ? "border-destructive" : "border-border", state === "reading" && "text-muted-foreground")}>
+      <span className="flex size-(--size-form-control) shrink-0 items-center justify-center rounded-sm bg-background">
+        <FileMark icon={fileIcon(name)} />
+      </span>
+      <span className="min-w-0 text-left">
+        <span className="block truncate text-caption text-foreground">{name}</span>
+        <span className={cn("block truncate text-micro", refused ? "text-destructive" : "text-muted-foreground")} data-desk-attachment-size="true">
+          {why ?? (size === null ? "\u00a0" : bytes(size))}
+        </span>
+      </span>
+      {band}
+    </span>
+  );
+  return (
+    <li className="relative shrink-0" data-desk-attachment={state} data-desk-attachment-kind={preview ? "image" : "file"}>
+      <span role="img" aria-label={why ? `${name} · ${why}` : name}>{face}</span>
+      {onRemove ? (
+        <Button variant="secondary" size="icon-xs" className="absolute -top-xs -right-xs rounded-full border border-border" aria-label={t("desk.composer.removeAttachment", { name })} onClick={onRemove} data-desk-attachment-remove={name}><XIcon /></Button>
+      ) : null}
+    </li>
+  );
+}
+
+/** The files a message carried, over its bubble at the right (B41). */
+export function SentAttachments({ files }: { files: readonly SentAttachment[] }) {
+  if (files.length === 0) return null;
+  return (
+    <ul className="flex max-w-(--size-pr-popover) flex-wrap justify-end gap-xs self-end" data-desk-sent-attachments={files.length}>
+      {files.map((file, index) => <AttachmentTile key={`${index}-${file.name}`} name={file.name} size={file.size} preview={file.preview} sent />)}
+    </ul>
+  );
+}
+
+/**
+ * The box the operator writes in, for Desk and for a session alike (B7,
+ * B29, B41): the words, the attached files above them, 📎, and send, which
  * becomes stop while Desk answers. `menu` is the `@` menu, opened above the
  * box while `menuOpen`; `children` sits in the box's foot between 📎 and
- * send (Desk's bar). 📎 shows only where attaching is taken (`onAttach`).
- * With `draft`, the box is Desk's, where picked mentions stand as chips
- * (D-85) and `value` is the draft's text; without, it is a plain text box.
+ * send (Desk's bar). With `tray`, the box takes files: dropped on it (the
+ * frame marks itself as the place to drop while files are dragged over it),
+ * pasted into it, or picked with 📎; a send waits while one is still read
+ * in or one is past the cap. With `draft`, the box is Desk's, where picked
+ * mentions stand as chips (D-85) and `value` is the draft's text; without,
+ * it is a plain text box.
  */
-export function DeskComposer({ value, draft, inputRef, label, placeholder, attachments = [], answering = false, focused = false, held = false, notice = null, menu = null, menuOpen = false, menuEmpty = false, onChange, onCaret, onKeyDown, onSend, onStop, onAttach, onRemoveAttachment, onMenuOpenChange, children }: {
+export function DeskComposer({ value, draft, inputRef, label, placeholder, tray, answering = false, focused = false, held = false, notice = null, menu = null, menuOpen = false, menuEmpty = false, onChange, onCaret, onKeyDown, onSend, onStop, onMenuOpenChange, children }: {
   value: string;
   /** Desk's draft: its mentions are drawn as chips in the box. */
   draft?: DeskDraft;
   inputRef?: Ref<MentionInputHandle>;
   label: string;
   placeholder: string;
-  attachments?: readonly ComposerAttachment[];
+  /** The files attached so far; without it the box takes none. */
+  tray?: ComposerTray;
   /** Desk is answering: send becomes stop (B7). A thread never answers here. */
   answering?: boolean;
   /** Drawn as the keyboard's place, as `답하기` leaves it (B29). */
@@ -56,20 +137,44 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, attac
   onKeyDown?: (event: KeyboardEvent<HTMLElement>) => void;
   onSend: () => void;
   onStop?: () => void;
-  onAttach?: () => void;
-  onRemoveAttachment?: (id: string) => void;
   onMenuOpenChange?: (open: boolean) => void;
   children?: ReactNode;
 }) {
   const { t } = useInterfaceTranslation();
-  const empty = value.trim() === "" && attachments.length === 0;
-  const blocked = empty || held;
+  const picker = useRef<HTMLInputElement>(null);
+  const [over, setOver] = useState(false);
+  const files = tray?.files ?? [];
+  const empty = value.trim() === "" && files.length === 0;
+  const blocked = empty || held || (files.length > 0 && traySendable(files) === null);
   const keyDown = (event: KeyboardEvent<HTMLElement>) => {
     onKeyDown?.(event);
     // Enter sends and Shift+Enter starts a line, while Desk answers too (the message waits for its turn); a key that ends an IME composition only commits it, and the `@` menu takes its own Enter.
     if (event.defaultPrevented || event.key !== "Enter" || event.shiftKey || composingKey(event) || (menuOpen && !menuEmpty)) return;
     event.preventDefault();
     if (!blocked) onSend();
+  };
+  // Only a drag of files from the system is taken: text, links and Hide's own rows keep their own drop.
+  const dragOver = (event: DragEvent<HTMLElement>) => {
+    if (!tray || !dragHasFiles([...event.dataTransfer.types])) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setOver(true);
+  };
+  const dragLeave = (event: DragEvent<HTMLElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(false);
+  };
+  const drop = (event: DragEvent<HTMLElement>) => {
+    setOver(false);
+    if (!tray || event.dataTransfer.files.length === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    tray.add([...event.dataTransfer.files]);
+  };
+  // A paste that carries files attaches them; words paste as words.
+  const paste = (event: ClipboardEvent<HTMLElement>) => {
+    if (!tray || event.clipboardData.files.length === 0) return;
+    event.preventDefault();
+    tray.add([...event.clipboardData.files]);
   };
   // A notice in the window's corner stands above the box, never over it.
   const box = useRef<HTMLDivElement>(null);
@@ -78,16 +183,18 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, attac
     <div ref={box} className="flex min-w-0 flex-col gap-xs" data-desk-composer={answering ? "answering" : "idle"}>
       <Popover open={menuOpen} onOpenChange={onMenuOpenChange}>
         <PopoverAnchor asChild>
-          <div className={cn("flex min-w-0 flex-col gap-xs rounded-xl border bg-background px-sm py-xs", focused || menuOpen ? "border-ring ring-1 ring-ring" : "border-input")} data-desk-composer-frame={focused ? "focused" : "rest"}>
-            {attachments.length > 0 ? (
-              <ul className="flex min-w-0 flex-wrap gap-xs" data-desk-attachments={attachments.length}>
-                {attachments.map((attachment) => (
-                  <li key={attachment.id} className="flex min-w-0 items-center gap-xxs rounded-xs bg-secondary py-xxs pl-xs text-micro text-subtle-foreground">
-                    {attachment.image ? <ImageIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" /> : <PaperclipIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />}
-                    <span className="max-w-(--size-tab-title-min) truncate">{attachment.name}</span>
-                    <Button variant="ghost" size="icon-xs" aria-label={t("desk.composer.removeAttachment", { name: attachment.name })} onClick={() => onRemoveAttachment?.(attachment.id)}><XIcon /></Button>
-                  </li>
-                ))}
+          <div
+            className={cn("relative flex min-w-0 flex-col gap-xs rounded-xl border bg-background px-sm py-xs", focused || menuOpen || over ? "border-ring ring-1 ring-ring" : "border-input")}
+            data-desk-composer-frame={over ? "drop" : focused ? "focused" : "rest"}
+            onDragEnter={dragOver}
+            onDragOver={dragOver}
+            onDragLeave={dragLeave}
+            onDrop={drop}
+            onPasteCapture={paste}
+          >
+            {files.length > 0 ? (
+              <ul className="flex min-w-0 flex-wrap gap-sm pt-xs pr-xs" data-desk-attachments={files.length}>
+                {files.map((file) => <AttachmentTile key={file.id} name={file.name} size={file.size} preview={file.preview} state={file.state} read={file.read} onRemove={() => tray?.remove(file.id)} />)}
               </ul>
             ) : null}
             {draft ? (
@@ -96,9 +203,9 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, attac
               <Textarea bare rows={1} value={value} aria-label={label} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-[calc(var(--text-body)*1.5*2+var(--spacing-xxs)*2)] py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value, event.target.selectionStart)} data-desk-composer-input="true" onKeyDown={keyDown} />
             )}
             <div className="flex min-w-0 items-center gap-xs">
-              {onAttach ? (
+              {tray ? (
                 <Hint label={t("desk.composer.attach")}>
-                  <Button variant="ghost" size="icon-sm" className="-ml-xxs text-muted-foreground" aria-label={t("desk.composer.attach")} onClick={onAttach}><PaperclipIcon /></Button>
+                  <Button variant="ghost" size="icon-sm" className="-ml-xxs text-muted-foreground" aria-label={t("desk.composer.attach")} onClick={() => picker.current?.click()} data-desk-composer-attach="true"><PaperclipIcon /></Button>
                 </Hint>
               ) : null}
               <span className="flex min-w-0 flex-1 items-center justify-end">{children}</span>
@@ -112,6 +219,12 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, attac
                 </Hint>
               )}
             </div>
+            {over ? (
+              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-xxs rounded-xl bg-background" data-desk-composer-drop="true">
+                <span className="flex items-center gap-xs text-caption text-foreground"><UploadIcon aria-hidden="true" className="size-(--size-icon-sm)" />{t("desk.composer.dropHere")}</span>
+                <span className="text-micro text-muted-foreground">{t("desk.composer.dropLimit", { limit: MIB })}</span>
+              </div>
+            ) : null}
           </div>
         </PopoverAnchor>
         {menu ? (
@@ -121,6 +234,19 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, attac
         ) : null}
       </Popover>
       {notice ? <p role="status" className="px-xs text-caption text-warning" data-desk-composer-notice="true">{notice}</p> : null}
+      {tray ? (
+        <Input
+          ref={picker}
+          type="file"
+          multiple
+          hidden
+          data-desk-composer-picker="true"
+          onChange={(event) => {
+            tray.add([...(event.target.files ?? [])]);
+            event.target.value = "";
+          }}
+        />
+      ) : null}
     </div>
   );
 }

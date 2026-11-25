@@ -184,6 +184,8 @@ export type AgentRow = {
   message?: string | null;
   /** Native unanswered question/plan, bounded and session/state-proven by the core. */
   user_turn?: UserTurnFact;
+  /** What the permission request the agent waits on asks to run, as its hook named it (Codex); the phone's approval card shows it. */
+  asked?: { command: string; cut?: boolean };
   /** A question the core asks on this row for the agent (`AskSubject`); the row then has no sentence of its own. */
   ask_subject?: AskSubject;
   /** The questions the session put to the operator that still wait and that the operator sent nothing since, oldest first (`OpenAsksSnapshot`, status-model.md: A question still waiting): the row's `?N`, the pane's mark and the turn card's list; absent while none does. */
@@ -3400,9 +3402,9 @@ export type DeskIrreversible = "end_working_session" | "force_push" | "delete_re
 export type DeskApprovalAnswer = "once" | "conversation" | "reject";
 /** Why a card asks, irreversible kinds first: `desk_approval_ask`. */
 export type DeskApprovalAsk = { kind: "irreversible"; value: DeskIrreversible } | { kind: "row"; value: DeskPermissionRow };
-/** A message sent while a reply was being written, waiting for the turn before it (`desk_queued_remove` takes it out); none is in `items` until its turn starts. */
-export type DeskQueuedMessage = { id: number; text: string; at_ms: number; mentions: DeskMention[] };
-export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
+/** A message sent while a reply was being written, waiting for the turn before it whole: its words, chips and files (`attachments`, absent when it has none); `desk_queued_remove` takes it out, and none is in `items` until its turn starts. */
+export type DeskQueuedMessage = { id: number; text: string; at_ms: number; mentions: DeskMention[]; attachments?: DeskAttachment[] };
+export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed" | "attachments_gone";
 export type DeskLocation = "desk" | "worktree" | "checkout";
 export type DeskChoice = { id: string; label: string };
 export type DeskMention = { kind: "session" | "project"; id: string; name: string };
@@ -3426,9 +3428,13 @@ export type DeskAgent = {
   efforts: DeskChoice[];
 };
 
+/** A file the operator sent to Desk's agent with a message (PRD desk-2-ui B41). */
+export type DeskAttachment = { name: string; bytes: number; path: string };
+
 /** One line of the Desk conversation. A message's text holds a mention as `@session(<id> <name>)` or `@project(<path> <name>)`. */
 export type DeskItem =
-  | { kind: "user"; id: number; text: string; at_ms: number; mentions: DeskMention[] }
+  /** `attachments` are the files sent with it, each staged at `path` on the core's machine; absent when none. */
+  | { kind: "user"; id: number; text: string; at_ms: number; mentions: DeskMention[]; attachments?: DeskAttachment[] }
   /** `thought_ms` and `steps` fold the turn into one line: `생각 8초 · 세션 4개 읽음`; `mentions` are the sessions its text names as `@session(<pane> <name>)`. */
   | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps; mentions: DeskSessionChip[] }
   | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }

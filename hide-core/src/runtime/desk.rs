@@ -32,9 +32,9 @@ use crate::desk::{
 use crate::handle::ChangeNotifier;
 use crate::model::{
     DESK_CAP_MAX, DESK_QUEUED_MAX, DeskAgentSnapshot, DeskAgentState, DeskApprovalState,
-    DeskCardKind, DeskChoiceSnapshot, DeskConversationSnapshot, DeskHostSnapshot, DeskHostState,
-    DeskItem, DeskLiveSnapshot, DeskLocation, DeskMention, DeskNotice, DeskQueuedMessage,
-    DeskReplyState, DeskSnapshot,
+    DeskAttachment, DeskCardKind, DeskChoiceSnapshot, DeskConversationSnapshot, DeskHostSnapshot,
+    DeskHostState, DeskItem, DeskLiveSnapshot, DeskLocation, DeskMention, DeskNotice,
+    DeskQueuedMessage, DeskReplyState, DeskSnapshot,
 };
 use hide_desk::permission::{self, Ask, Irreversible};
 use hide_desk::session::{Choice, Choices, OpenError};
@@ -222,6 +222,15 @@ pub(super) struct SendPayload {
     text: String,
     #[serde(default)]
     mentions: Vec<DeskMention>,
+    /// The files the composer sent, staged by the window's hided, which is
+    /// the only maker of this field (`hided/src/server.rs`,
+    /// `handle_desk_send`).
+    #[serde(default)]
+    files: Vec<DeskAttachment>,
+    /// `다시 시도`: the operator's message it sends again, whose files go
+    /// with it when this send carries none.
+    #[serde(default)]
+    again: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -494,8 +503,29 @@ impl Runtime {
 
     fn desk_send(&mut self, payload: SendPayload) -> bool {
         let text = payload.text.trim();
-        if text.is_empty() || text.len() > MAX_MESSAGE_BYTES {
+        let files = match payload.again {
+            Some(again) if payload.files.is_empty() => self
+                .desk
+                .stored
+                .conversation
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    DeskItem::User {
+                        id, attachments, ..
+                    } if *id == again => Some(attachments.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default(),
+            _ => payload.files,
+        };
+        if (text.is_empty() && files.is_empty()) || text.len() > MAX_MESSAGE_BYTES {
             return refused("message_size");
+        }
+        // hided names each file, so none holds the quote a prompt wraps a
+        // path in (`desk_start_turn`).
+        if files.iter().any(|file| file.path.contains('"')) {
+            return refused("attachments");
         }
         if payload.mentions.len() > MAX_MENTIONS
             || payload.mentions.iter().any(|mention| {
@@ -513,7 +543,7 @@ impl Runtime {
             return refused("agent_not_ready");
         }
         // While a reply is being written, or earlier messages still wait,
-        // the message waits its turn (letter-47148).
+        // the message waits its turn with its files (letter-47148).
         if self.desk.turn.is_some() || !self.desk.stored.queued.is_empty() {
             if self.desk.stored.queued.len() >= DESK_QUEUED_MAX {
                 return refused("desk_queued_full");
@@ -524,6 +554,7 @@ impl Runtime {
                 text: text.to_owned(),
                 at_ms: crate::links::now_ms(),
                 mentions: payload.mentions,
+                attachments: files,
             });
             self.desk.held = false;
             return true;
@@ -534,6 +565,7 @@ impl Runtime {
             Some(text.to_owned()),
             text.to_owned(),
             payload.mentions,
+            files,
         );
         true
     }
@@ -569,6 +601,7 @@ impl Runtime {
             Some(message.text.clone()),
             message.text,
             message.mentions,
+            message.attachments,
         );
         true
     }
@@ -595,10 +628,11 @@ impl Runtime {
         }
     }
 
-    /// The message of the turn under way, which the agent never took, goes
-    /// back first in line and out of the conversation, so no words are lost
-    /// to a refused start; it may make the line one past its cap, since the
-    /// cap only refuses what the operator sends.
+    /// The message of the turn under way, which the agent never took (its
+    /// sign-in, its ask mode), goes back first in line and out of the
+    /// conversation, words, chips and files together, so nothing is lost to
+    /// a refused start and nothing comes back to the composer; it may make the line one past its cap,
+    /// since the cap only refuses what the operator sends.
     fn desk_requeue_untaken(&mut self) {
         let Some(message) = self.desk.turn.as_ref().and_then(|turn| turn.message) else {
             return;
@@ -607,6 +641,7 @@ impl Runtime {
             text,
             at_ms,
             mentions,
+            attachments,
             ..
         }) = self
             .desk
@@ -628,26 +663,64 @@ impl Runtime {
                 text,
                 at_ms,
                 mentions,
+                attachments,
             },
         );
     }
 
-    /// ✕ on a queued message: it leaves the line and never goes.
+    /// The files Desk still has to hand its agent: every waiting message's
+    /// and the turn under way's. hided's keep of Desk's folder never removes
+    /// them (`hided/src/attachments.rs`, `commit_named`).
+    pub(crate) fn desk_files_in_use(&self) -> Vec<String> {
+        let turn = self.desk.turn.as_ref().map(|turn| turn.message);
+        let turn_files = self
+            .desk
+            .stored
+            .conversation
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                DeskItem::User {
+                    id, attachments, ..
+                } if Some(*id) == turn => Some(attachments),
+                _ => None,
+            });
+        self.desk
+            .stored
+            .queued
+            .iter()
+            .map(|message| &message.attachments)
+            .chain(turn_files)
+            .flatten()
+            .map(|file| file.path.clone())
+            .collect()
+    }
+
+    /// ✕ on a queued message: it leaves the line and never goes. Its files
+    /// stay in Desk's folder as a refused send's do, whose cap lets the
+    /// oldest go (`hided/src/attachments.rs`, `keep_newest`).
     fn desk_queued_remove(&mut self, id: u64) -> bool {
         let before = self.desk.stored.queued.len();
         self.desk.stored.queued.retain(|message| message.id != id);
         self.desk.stored.queued.len() != before
     }
 
-    /// Starts a turn: `shown` joins the conversation as the operator's
-    /// message, when there is one, and the agent receives `sent`.
+    /// Starts a turn: `shown` and its files join the conversation as the
+    /// operator's message, when there is one, and the agent receives the
+    /// files' paths before `sent`, each in double quotes, one space apart: a
+    /// prompt, not a shell line, so a path reads as the system spells it.
     fn desk_start_turn(
         &mut self,
         agent: AdapterId,
         shown: Option<String>,
         sent: String,
         mentions: Vec<DeskMention>,
+        attachments: Vec<DeskAttachment>,
     ) {
+        let files: Vec<String> = attachments.iter().map(|file| file.path.clone()).collect();
+        let quoted: String = files.iter().map(|path| format!("\"{path}\" ")).collect();
+        let sent = format!("{quoted}{sent}");
+        let node = (!files.is_empty()).then(|| self.own_node());
         let carried = (!self.desk.host.open)
             .then(|| self.desk.stored.conversation.carried())
             .flatten();
@@ -658,6 +731,7 @@ impl Runtime {
                 text,
                 at_ms: crate::links::now_ms(),
                 mentions,
+                attachments,
             });
             id
         });
@@ -693,6 +767,8 @@ impl Runtime {
                 DeskLocation::Worktree => hide_desk::Placement::Worktree,
                 DeskLocation::Checkout => hide_desk::Placement::Checkout,
             },
+            files,
+            node,
         }));
         self.desk.host.state = Some(if self.desk.host.open {
             DeskHostState::Thinking
@@ -1333,6 +1409,25 @@ impl Runtime {
                 }
                 return false;
             }
+            Report::AttachmentsGone { tag } => {
+                // No agent received the message, and sending it again would
+                // meet the same gone file: it stays in the conversation, its
+                // words kept, with a line under it that it was not sent, and
+                // the next waiting message goes once the worker's next report
+                // ends the turn. The operator attaches the file again in a
+                // new message.
+                let Some(agent) = self
+                    .desk
+                    .turn
+                    .as_ref()
+                    .filter(|turn| turn.tag == tag)
+                    .map(|turn| turn.agent)
+                else {
+                    return false;
+                };
+                self.push_notice(DeskNotice::AttachmentsGone, Some(agent), None);
+                self.save_desk();
+            }
             Report::TurnEnded { tag, outcome } => {
                 if self.desk.turn.as_ref().is_none_or(|turn| turn.tag != tag) {
                     return false;
@@ -1361,7 +1456,7 @@ impl Runtime {
                         &refusal.command,
                         refusal.text.as_deref(),
                     );
-                    self.desk_start_turn(agent, refusal.text, sent, Vec::new());
+                    self.desk_start_turn(agent, refusal.text, sent, Vec::new(), Vec::new());
                 }
                 self.save_desk();
             }
@@ -2656,6 +2751,266 @@ mod tests {
         assert_eq!(sent(&received).text, "hello");
     }
 
+    /// A file dropped into Desk's composer (PRD desk-2-ui B41): the agent
+    /// gets its staged path quoted before the words, as a file dragged onto
+    /// a terminal is typed, the bubble keeps the file's name and size and
+    /// not the path in its words, and `다시 시도` sends the same files again.
+    #[test]
+    fn files_sent_to_desk_reach_the_agent_as_quoted_paths_and_stay_on_the_bubble() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        // A prompt, not a shell line: a path reads as the system spells it, `$` and all.
+        let shot = root.path().join("desk-attachments").join("a $b.png");
+        let log = root.path().join("desk-attachments").join("install.log");
+        let quoted = |path: &std::path::Path| format!("\"{}\"", path.display());
+        let files = json!([
+            {"name": "a $b.png", "bytes": 2048, "path": shot.display().to_string()},
+            {"name": "install.log", "bytes": 84, "path": log.display().to_string()},
+        ]);
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "  why does it drop?  ", "files": files})
+        ));
+        let send = sent(&received);
+        assert_eq!(
+            send.text,
+            format!("{} {} why does it drop?", quoted(&shot), quoted(&log))
+        );
+        assert_eq!(
+            send.files,
+            [shot.display().to_string(), log.display().to_string()]
+        );
+        let bubble = items(&runtime)
+            .into_iter()
+            .find_map(|item| match item {
+                DeskItem::User {
+                    id,
+                    text,
+                    attachments,
+                    ..
+                } => Some((id, text, attachments)),
+                _ => None,
+            })
+            .expect("the operator's message");
+        assert_eq!(bubble.1, "why does it drop?");
+        assert_eq!(
+            bubble
+                .2
+                .iter()
+                .map(|file| (file.name.as_str(), file.bytes))
+                .collect::<Vec<_>>(),
+            [("a $b.png", 2048), ("install.log", 84)]
+        );
+
+        runtime.desk_report(Report::TurnEnded {
+            tag: send.tag,
+            outcome: TurnOutcome::Cancelled,
+        });
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "why does it drop?", "again": bubble.0})
+        ));
+        assert_eq!(
+            sent(&received).text,
+            format!("{} {} why does it drop?", quoted(&shot), quoted(&log))
+        );
+    }
+
+    /// The files of a message, as the line keeps them.
+    fn queued_files(runtime: &Runtime) -> Vec<(String, Vec<String>)> {
+        runtime
+            .snapshot
+            .desk
+            .as_ref()
+            .unwrap()
+            .conversation
+            .queued
+            .iter()
+            .map(|message| {
+                (
+                    message.text.clone(),
+                    message
+                        .attachments
+                        .iter()
+                        .map(|file| file.path.clone())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn held(runtime: &Runtime) -> bool {
+        runtime
+            .snapshot
+            .desk
+            .as_ref()
+            .unwrap()
+            .conversation
+            .queued_held
+    }
+
+    /// A message whose file is gone was never asked of the agent, and asking
+    /// again would meet the same gone file: it stays in the conversation
+    /// with a line under it that it was not sent, never goes again, and the
+    /// message waiting behind it goes; nothing returns to the composer.
+    #[test]
+    fn a_message_whose_file_is_gone_stays_unsent_in_the_conversation_and_the_line_goes_on() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        let gone = root.path().join("desk-attachments").join("shot.png");
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "look", "files": [{"name": "shot.png", "bytes": 3, "path": gone.display().to_string()}]})
+        ));
+        let send = sent(&received);
+        assert!(event(&mut runtime, "desk_send", json!({"text": "next"})));
+        // The worker finds the file gone and asks no agent.
+        runtime.desk_report(Report::AttachmentsGone { tag: send.tag });
+        runtime.desk_report(Report::TurnEnded {
+            tag: send.tag,
+            outcome: TurnOutcome::Cancelled,
+        });
+        let shown = items(&runtime);
+        let message = shown
+            .iter()
+            .position(|item| matches!(item, DeskItem::User { text, attachments, .. } if text == "look" && attachments.len() == 1))
+            .expect("the message stays in the conversation with its file");
+        assert!(
+            shown[message..].iter().any(|item| matches!(
+                item,
+                DeskItem::Notice {
+                    notice: DeskNotice::AttachmentsGone,
+                    ..
+                }
+            )),
+            "{shown:?}"
+        );
+        assert!(!held(&runtime));
+        // The next waiting message went; the gone one is not in the line.
+        assert_eq!(sent(&received).text, "next");
+        assert!(queued_files(&runtime).is_empty());
+        no_send(&received);
+    }
+
+    /// letter-47579: a message with a file sent while Desk answers waits in
+    /// line with its file, and when the turn before it ends the agent gets
+    /// the file's path before its words. Until then the files of the turn
+    /// and of the line are the ones Desk's folder must keep.
+    #[test]
+    fn a_message_with_a_file_sent_while_desk_answers_reaches_the_agent_from_the_line_with_its_path()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        let first = root.path().join("desk-attachments").join("first.png");
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "one", "files": [{"name": "first.png", "bytes": 5, "path": first.display().to_string()}]})
+        ));
+        let one = sent(&received);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        let log = root.path().join("desk-attachments").join("install.log");
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "and this", "files": [{"name": "install.log", "bytes": 84, "path": log.display().to_string()}]})
+        ));
+        no_send(&received);
+        assert_eq!(
+            queued_files(&runtime),
+            [("and this".to_owned(), vec![log.display().to_string()])]
+        );
+        let mut in_use = runtime.desk_files_in_use();
+        in_use.sort();
+        assert_eq!(
+            in_use,
+            [first.display().to_string(), log.display().to_string()]
+        );
+
+        runtime.desk_report(Report::TurnEnded {
+            tag: one.tag,
+            outcome: TurnOutcome::Done,
+        });
+        assert_eq!(runtime.desk_files_in_use(), [log.display().to_string()]);
+        let two = sent(&received);
+        assert_eq!(two.text, format!("\"{}\" and this", log.display()));
+        assert_eq!(two.files, [log.display().to_string()]);
+        assert!(items(&runtime).iter().any(|item| matches!(
+            item,
+            DeskItem::User { text, attachments, .. }
+                if text == "and this" && attachments.len() == 1
+        )));
+    }
+
+    /// letter-47579: a message with a file the agent never took (its
+    /// sign-in) comes back first in line with its file and holds the line;
+    /// the next send lets it go first, the file's path with it.
+    #[test]
+    fn a_refused_message_comes_back_first_in_line_with_its_file() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        let shot = root.path().join("desk-attachments").join("shot.png");
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "look", "files": [{"name": "shot.png", "bytes": 3, "path": shot.display().to_string()}]})
+        ));
+        let look = sent(&received);
+        runtime.desk_report(Report::OpenFailed {
+            adapter: AdapterId::CLAUDE,
+            error: OpenError::Login,
+            turn: Some(look.tag),
+        });
+        assert!(
+            !items(&runtime)
+                .iter()
+                .any(|item| matches!(item, DeskItem::User { .. })),
+            "the message left the conversation"
+        );
+        assert_eq!(
+            queued_files(&runtime),
+            [("look".to_owned(), vec![shot.display().to_string()])]
+        );
+        assert!(held(&runtime));
+        no_send(&received);
+
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "signed in"})
+        ));
+        let again = sent(&received);
+        assert_eq!(again.text, format!("\"{}\" look", shot.display()));
+        assert_eq!(again.files, [shot.display().to_string()]);
+        assert_eq!(
+            queued_files(&runtime),
+            [("signed in".to_owned(), Vec::new())]
+        );
+    }
+
+    /// Files alone are a message; nothing at all is not.
+    #[test]
+    fn a_message_of_files_alone_is_sent_and_an_empty_one_is_not() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        assert!(!event(&mut runtime, "desk_send", json!({"text": "  "})));
+        let shot = root.path().join("shot.png");
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "", "files": [{"name": "shot.png", "bytes": 1, "path": shot.display().to_string()}]})
+        ));
+        assert!(sent(&received).text.ends_with("shot.png\" "));
+    }
+
     fn queued(runtime: &Runtime) -> Vec<(u64, String)> {
         runtime
             .snapshot
@@ -2757,6 +3112,7 @@ mod tests {
             text: "kept".into(),
             at_ms: 0,
             mentions: Vec::new(),
+            attachments: Vec::new(),
         });
         let stored: Stored =
             serde_json::from_slice(&serde_json::to_vec(&runtime.desk.stored).unwrap()).unwrap();

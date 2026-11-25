@@ -80,6 +80,82 @@ pub struct HookStatusReport {
     /// `StopFailure`); absent on every other event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<HookRefusal>,
+    /// What the permission request this event is asks to run, whichever
+    /// agent sent it (`HookAsked`); absent on every other event. A report
+    /// that says a turn and carries none ends the one before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked: Option<HookAsked>,
+}
+
+/// The most bytes of a command a permission request reports. A card shows
+/// two lines of at most 200 characters (`hided/src/mobile/calls.rs`), so a
+/// longer command only has to arrive as cut.
+pub const ASKED_COMMAND_LIMIT: usize = 1024;
+
+/// The command a permission request asks to run: `tool_input.command`,
+/// which Claude Code's shell and Codex's shell and edit tools carry, cut to
+/// [`ASKED_COMMAND_LIMIT`] bytes with `cut` saying so. An agent that records
+/// the call in its session file only once it is allowed (Codex) names it
+/// nowhere else while the operator is asked.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HookAsked {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cut: bool,
+    /// `command` names the files of a patch, not a line the agent's dialog
+    /// draws, so no screen can be checked against it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub patch: bool,
+}
+
+/// What an edit tool's input holds in place of a command: a patch, which
+/// opens with this line and names each file it changes after one of the
+/// headers below. The card names the files, not the patch's lines.
+const PATCH_ENVELOPE: &str = "*** Begin Patch";
+const PATCH_HEADERS: [&str; 3] = ["*** Add File: ", "*** Update File: ", "*** Delete File: "];
+
+impl HookAsked {
+    /// The command `command` names, cut at a character boundary; `None` for
+    /// one of no words, which the card could not check against anything. A
+    /// patch is named by the files it changes (`apply_patch: a.rs, b.rs`).
+    pub fn of(command: &str) -> Option<Self> {
+        if command.trim().is_empty() {
+            return None;
+        }
+        if command.trim_start().starts_with(PATCH_ENVELOPE) {
+            let files: Vec<&str> = command
+                .lines()
+                .filter_map(|line| {
+                    PATCH_HEADERS
+                        .iter()
+                        .find_map(|header| line.strip_prefix(header))
+                })
+                .map(str::trim)
+                .collect();
+            if !files.is_empty() {
+                return Self::of_line(&format!("apply_patch: {}", files.join(", "))).map(|named| {
+                    Self {
+                        patch: true,
+                        ..named
+                    }
+                });
+            }
+        }
+        Self::of_line(command)
+    }
+
+    fn of_line(command: &str) -> Option<Self> {
+        let mut end = command.len().min(ASKED_COMMAND_LIMIT);
+        while !command.is_char_boundary(end) {
+            end -= 1;
+        }
+        Some(Self {
+            command: command[..end].to_owned(),
+            cut: end < command.len(),
+            patch: false,
+        })
+    }
 }
 
 /// The longest refusal line a report carries, in bytes: one line of a
@@ -505,6 +581,40 @@ mod tests {
         assert_eq!(HookRefusal::read(br#"{"error":"rate_limit"}"#, true), None);
     }
 
+    /// A request's command is kept whole up to the limit, cut at a character
+    /// boundary past it with `cut` saying so, and a patch is named by the
+    /// files it changes; a blank command names nothing.
+    #[test]
+    fn the_command_a_request_asks_to_run_is_bounded_and_a_patch_is_named_by_its_files() {
+        let whole = HookAsked::of("cargo test --workspace").unwrap();
+        assert_eq!(
+            (whole.command.as_str(), whole.cut),
+            ("cargo test --workspace", false)
+        );
+        assert_eq!(HookAsked::of("  \n "), None);
+        let exact = "x".repeat(ASKED_COMMAND_LIMIT);
+        assert!(!HookAsked::of(&exact).unwrap().cut);
+        // A character that straddles the limit is left out whole.
+        let wide = format!("{}한", "x".repeat(ASKED_COMMAND_LIMIT - 1));
+        let cut = HookAsked::of(&wide).unwrap();
+        assert_eq!(
+            (cut.command.len(), cut.cut),
+            (ASKED_COMMAND_LIMIT - 1, true)
+        );
+        let patch = "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-x\n+y\n*** Delete File: old.rs\n*** End Patch\n";
+        let named = HookAsked::of(patch).unwrap();
+        assert_eq!(
+            (named.command.as_str(), named.patch),
+            ("apply_patch: src/a.rs, old.rs", true)
+        );
+        // An envelope that names no file is kept as it is.
+        let bare = HookAsked::of("*** Begin Patch\n*** End Patch").unwrap();
+        assert_eq!(
+            (bare.command.as_str(), bare.patch),
+            ("*** Begin Patch\n*** End Patch", false)
+        );
+    }
+
     fn scratch(name: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
             "hide-agent-hooks-report-{name}-{}",
@@ -531,6 +641,7 @@ mod tests {
             waiting: None,
             account: None,
             refused: None,
+            asked: None,
         };
         assert_eq!(
             serde_json::to_value(&report).unwrap(),
