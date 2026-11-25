@@ -100,7 +100,7 @@ export function ToolRail({ actions }: { actions: Actions }) {
   const up = laneUp(drawn.mode);
   const documentsChord = commandLabel("toggle_lane_documents", uiState);
   // In focus mode the button is the desk beside the pane, which it folds and stands as ⌘E does: pressed while the desk
-  // stands, and while folded it counts the left pane's Views, the pane head's `뷰 N개` (D-63). It does nothing while the
+  // stands, and while folded its hint says the left pane's Views, the pane head's `뷰 N개` (D-63). It does nothing while the
   // desk holds no tab the strip shows, the core's `shown` count (D-60).
   const pair = useShellStore((s) => drawnPair(workspaceViewOf(s.rest)));
   const pairViews = usePaneViewRows(pair?.pane_id ?? "").length;

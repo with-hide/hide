@@ -142,6 +142,9 @@ it("lists a mission waiting on the operator when no session is drawn", async () 
     expect(item?.textContent).toContain("No Conductor conducts this mission · 1 stuck");
     expect([...item!.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["Resume command", "Take a look"]);
     expect(container.querySelector("[data-graph-mission-asks] h3")?.textContent).toBe("Waiting on you");
+    // The operator's My turn filter carries no number; the other filters keep theirs.
+    expect(container.querySelector('[data-focus="turn"]')?.textContent).not.toMatch(/\d/);
+    expect(container.querySelector('[data-focus="all"]')?.textContent).toMatch(/\d/);
   } finally { await act(async () => root.unmount()); }
 });
 

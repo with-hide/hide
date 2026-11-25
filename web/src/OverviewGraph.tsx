@@ -488,7 +488,7 @@ function teamRootOf(id: string, parents: ReadonlyMap<string, string | null>): st
 /** Who to answer for a root whose turn it is: the root itself when it asks, else the first descendant that does. */
 function askingPane(row: GraphAgent, model: OverviewGraphModel): string {
   if (row.agent.demand !== "none") return row.agent.pane_id;
-  return overviewGraphTeam(row, model).find((member) => member.row.agent.mark === "turn" && member.row.agent.demand !== "none")?.row.agent.pane_id ?? row.agent.pane_id;
+  return overviewGraphTeam(row, model).find((member) => member.row.activity === "turn" && member.row.agent.demand !== "none")?.row.agent.pane_id ?? row.agent.pane_id;
 }
 
 /** With nothing chosen, the side column lists the projects with their states, then what waits on the operator.

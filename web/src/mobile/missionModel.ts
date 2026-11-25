@@ -28,7 +28,7 @@ export function useMissionEntries(): MissionEntry<PhoneMission>[] | null {
   return useMemo(() => (missions ? missionEntries(missions) : null), [missions]);
 }
 
-/** The missions tab's badge (B28): open missions with anything in their `내 차례`, as the desktop's rail counts them; 0 draws none. */
+/** The missions tab's badge (B28): open missions with anything in their `내 차례`; 0 draws none. */
 export function useMissionBadge(): number {
   const entries = useMissionEntries();
   return entries ? turnCount(entries) : 0;
