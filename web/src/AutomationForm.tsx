@@ -1,5 +1,6 @@
 import { ChevronLeftIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Trans } from "react-i18next";
 import type { Actions } from "./actions";
 import { callAutomations, type SchedulePreview } from "./automationCall";
 import { addCall, datePlus, draftOf, draftSchedule, editCall, emptyField, exampleDraft, ONCE_QUICK_DAYS, refusalField, refusalKey, shownOwnFolder, type AutomationExample, type FormDraft, type ScheduleDraft, type ScheduleKind } from "./automationDraft";
@@ -17,7 +18,6 @@ import { startItems } from "./agentProfiles";
 import { effortsOf } from "./conductorSettings";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
-import { cn } from "./lib/utils";
 import { listedWorkspaces, localDeviceId, type Automation, type AutomationSchedule, type AutomationsSection, type AutomationWeekday, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -221,7 +221,7 @@ function PreviewLine({ preview }: { preview: Preview }) {
   const { value } = preview;
   if (value.reads_as.kind === "once" && value.next_run_at_unix_ms !== null) {
     const until = onceUntilText(value.reads_as, value.next_run_at_unix_ms, now, value.zone ?? undefined, language, t);
-    return <p className="text-caption text-subtle-foreground" data-automation-preview="once">{t("automationScreen.form.previewOnce", { when: onceText(value.reads_as, language, t), until })}</p>;
+    return <p className="text-caption text-subtle-foreground" data-automation-preview="once"><Trans i18n={i18n} t={t} i18nKey="automationScreen.form.previewOnce" values={{ when: onceText(value.reads_as, language, t), until }} components={{ when: <span className="font-semibold text-foreground" /> }} /></p>;
   }
   const reads = scheduleText(value.reads_as, language, t);
   const text = value.next_run_at_unix_ms === null
@@ -310,10 +310,10 @@ function ScheduleFields({ schedule, change, language, zone }: { schedule: Schedu
   // Today on the machine that runs it, which the quick picks count from and a first pick of 한 번 starts the day after.
   const today = wallDay(useMinuteClock(), zone);
   return (
-    <div className="flex min-w-0 flex-col gap-xs">
+    <div className="flex min-w-0 flex-col gap-sm">
       <ToggleGroup
         type="single"
-        className="flex-wrap self-start"
+        variant="pill"
         value={schedule.kind}
         onValueChange={(value) => {
           if (!value) return;
@@ -323,23 +323,26 @@ function ScheduleFields({ schedule, change, language, zone }: { schedule: Schedu
         aria-label={t("automationScreen.form.schedule")}
         data-automation-field="schedule-kind"
       >
-        {KINDS.map((kind) => <ToggleGroupItem key={kind} size="sm" value={kind} data-automation-schedule-kind={kind}>{t(KIND_KEY[kind])}</ToggleGroupItem>)}
+        {KINDS.map((kind) => <ToggleGroupItem key={kind} variant="pill" value={kind} data-automation-schedule-kind={kind}>{t(KIND_KEY[kind])}</ToggleGroupItem>)}
       </ToggleGroup>
       {schedule.kind === "once" ? (
-        <div className="flex min-w-0 flex-wrap items-center gap-xs" data-automation-once-fields="true">
+        <div className="flex min-w-0 flex-wrap items-center gap-sm" data-automation-once-fields="true">
           <Input type="date" className="w-auto shrink-0" value={schedule.date} min={today} aria-label={t("automationScreen.form.date")} onChange={(event) => change({ date: event.target.value })} data-automation-field="date" />
           <Input type="time" step={60} className="w-auto shrink-0" value={schedule.time} aria-label={t("automationScreen.form.time")} onChange={(event) => change({ time: event.target.value })} data-automation-field="time" />
+          {/* The quick picks wrap as one group, never one of them alone. */}
+          <div className="flex shrink-0 items-center gap-xs">
           {ONCE_QUICK_DAYS.map((days) => {
             const date = datePlus(today, days);
             return (
-              <Button key={days} type="button" variant="outline" size="sm" aria-pressed={schedule.date === date} onClick={() => change({ date })} data-automation-once-quick={days}>
+              <Button key={days} type="button" variant="outline" size="sm" className="h-(--size-control)" aria-pressed={schedule.date === date} onClick={() => change({ date })} data-automation-once-quick={days}>
                 {t(days === 1 ? "automationScreen.form.quick.tomorrow" : days === 3 ? "automationScreen.form.quick.threeDays" : "automationScreen.form.quick.week")}
               </Button>
             );
           })}
+          </div>
         </div>
       ) : (
-      <div className="flex min-w-0 flex-wrap items-center gap-xs">
+      <div className="flex min-w-0 flex-wrap items-center gap-sm">
         {schedule.kind === "every_minutes" ? (
           <Select value={String(schedule.minutes)} onValueChange={(value) => change({ minutes: Number(value) })}>
             <SelectTrigger aria-label={t("automationScreen.form.interval")} className="w-auto shrink-0" data-automation-field="minutes"><SelectValue /></SelectTrigger>
@@ -364,8 +367,8 @@ function ScheduleFields({ schedule, change, language, zone }: { schedule: Schedu
       </div>
       )}
       {schedule.kind === "weekly" ? (
-        <ToggleGroup type="multiple" className={cn("flex-wrap self-start")} value={schedule.days} onValueChange={(days) => change({ days: days as AutomationWeekday[] })} aria-label={t("automationScreen.form.days")} data-automation-field="days">
-          {WEEKDAYS.map((day) => <ToggleGroupItem key={day} size="sm" value={day} data-automation-day={day}>{weekdayText(language, day)}</ToggleGroupItem>)}
+        <ToggleGroup type="multiple" variant="pill" value={schedule.days} onValueChange={(days) => change({ days: days as AutomationWeekday[] })} aria-label={t("automationScreen.form.days")} data-automation-field="days">
+          {WEEKDAYS.map((day) => <ToggleGroupItem key={day} variant="pill" value={day} data-automation-day={day}>{weekdayText(language, day)}</ToggleGroupItem>)}
         </ToggleGroup>
       ) : null}
     </div>
