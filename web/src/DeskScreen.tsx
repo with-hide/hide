@@ -642,7 +642,8 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
         />
       ) : null}
       onTerminal={() => actions.deskTerminal()}
-      onOutput={(output) => actions.deskOpen({ kind: "output", output: outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath } : null) })}
+      outputOf={(output) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath } : null)}
+      onOutput={(output) => actions.deskOpen({ kind: "output", output })}
       onMission={room.mission}
       onSession={room.session}
       onCopy={(text, what) => actions.copyText(text, what)}

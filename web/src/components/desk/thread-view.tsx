@@ -119,6 +119,12 @@ function AcpPlan({ entries }: { entries: readonly AcpPlanEntry[] }) {
 
 export type ThreadPartActions = {
   onMission: (missionId: string) => void;
+  /**
+   * An output a line names, placed where it is read: the card's own when it
+   * lists it, else the file on the machine the session runs on (B27). What
+   * the thread draws and what `onOutput` opens are both this answer.
+   */
+  outputOf: (output: DeskOutput) => DeskOutput;
   onOutput: (output: DeskOutput) => void;
   /** A session a chip or an `@name` names: its pane when Hide knows it, else its name alone. */
   onSession: (session: DeskSessionRef) => void;
@@ -179,7 +185,7 @@ function HidePartLine({ part, command, actions }: { part: ThreadHidePart; comman
       );
       break;
     case "view":
-      body = <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={[part.output]} onOpen={actions.onOutput} /></div>;
+      body = <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={[actions.outputOf(part.output)]} onOpen={actions.onOutput} /></div>;
       break;
     case "mission":
       body = (
@@ -308,7 +314,7 @@ function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; l
 
 /** What a folded turn keeps in view (B26): its lines that lead somewhere, then the outputs it opened as one row of pictures. */
 function FoldedParts({ parts, actions }: { parts: ThreadTurn["parts"]; actions: ThreadPartActions }) {
-  const outputs = parts.flatMap((line) => (line.part.kind === "view" ? [line.part.output] : []));
+  const outputs = parts.flatMap((line) => (line.part.kind === "view" ? [actions.outputOf(line.part.output)] : []));
   const rest = parts.filter((line) => line.part.kind !== "view");
   return (
     <div className="flex min-w-0 flex-col gap-xs" data-desk-thread-parts={parts.length}>

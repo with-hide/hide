@@ -85,7 +85,7 @@ const CHAT_ACTIONS: DeskChatActions = {
   onApproval: noop, onQueuedRemove: noop, onNoticeAction: noop, onCopy: copied, onMention: noop, onHanded: noop,
 };
 
-const PART_ACTIONS = { onMission: noop, onOutput: noop, onSession: noop, onCopy: copied };
+const PART_ACTIONS = { onMission: noop, outputOf: (output: DeskOutput) => output, onOutput: noop, onSession: noop, onCopy: copied };
 
 /** A session the scene names, as its chip draws it. */
 const sceneSession = (name: string): DeskSessionRef => Object.values(SESSIONS).find((session) => session.name === name) ?? { name, mark: null, agent_kind: null };

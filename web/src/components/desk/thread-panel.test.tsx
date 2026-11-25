@@ -60,7 +60,7 @@ async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks 
   const noop = () => undefined;
   await act(async () => root.render(
     <TooltipProvider>
-      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} asks={asks} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} onCopy={onCopy} />
+      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} asks={asks} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
     </TooltipProvider>,
   ));
   const box = () => container.querySelector("textarea")!;

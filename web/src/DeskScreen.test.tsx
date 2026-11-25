@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { configureAttachments } from "./attachments";
+import { configureFileBytes } from "./fileBytes";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { DeskAgent, DeskItem, DeskJob } from "./desk";
 import { DeskScreen, DeskSettingsPage } from "./DeskScreen";
@@ -374,7 +375,9 @@ describe("Desk's room", () => {
     expect(document.body.querySelector("[data-desk-mention-session='w1:other']")).not.toBeNull();
   });
 
-  it("opens a file a connected device's session showed from that device, which no card lists (PRD desk-2-ui B27)", async () => {
+  it("draws and opens a file a connected device's session showed from that device, which no card lists (PRD desk-2-ui B27)", async () => {
+    const reads: Record<string, unknown>[] = [];
+    configureFileBytes((event) => { reads.push(event.payload as Record<string, unknown>); });
     const remoteRest = {
       navigator: {
         focused_device_id: "local", focused_checkout_id: null, focused_workspace_id: null,
@@ -388,7 +391,7 @@ describe("Desk's room", () => {
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([]));
     const thread = { generation: 1, state: "ready", pane_id: "d:p1", machine: "deepbox", failure: null, pane: "same", connected: true, has_older: false, older: "idle", input: null,
-      tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "문서 보여줘" } }, { sessionUpdate: "tool_call", toolCallId: "v1", title: "Bash", kind: "execute", rawInput: { command: "hide file open /home/me/repo/new.md" } }], parts: { v1: { kind: "view", view: "file", target: "/home/me/repo/new.md" } }, sessions: {} } };
+      tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "문서 보여줘" } }, { sessionUpdate: "tool_call", toolCallId: "v1", title: "Bash", kind: "execute", rawInput: { command: "hide file open /home/me/repo/new.md" } }, { sessionUpdate: "tool_call", toolCallId: "v2", title: "Bash", kind: "execute", rawInput: { command: "hide file open /home/me/repo/shot.png" } }], parts: { v1: { kind: "view", view: "file", target: "/home/me/repo/new.md" }, v2: { kind: "view", view: "file", target: "/home/me/repo/shot.png" } }, sessions: {} } };
     await act(async () => {
       const card: DeskJob = { id: "pane:d:p1", pane_id: "d:p1", title: "remote worker", agent_kind: "claude", project: { workspace_id: "w-deep", label: "deep" }, location: { kind: "checkout", label: "main" },
         state: "working", queue_position: null, now: "쓰는 중", plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
@@ -400,6 +403,8 @@ describe("Desk's room", () => {
     await act(async () => useShellStore.setState({ sessionThread: thread as never, sessionThreadHistory: { generation: 1, pages: [] } }));
     // The tab strip reads its sizes from the design tokens, which jsdom has no stylesheet for.
     for (const [name, value] of [["--size-tab-preferred", "160"], ["--size-tab-title-min", "48"], ["--size-tab-selected-max", "240"], ["--size-tab-icon-identity", "16"], ["--size-control-sm", "24"]] as const) document.documentElement.style.setProperty(name, value);
+    // The image it showed is drawn from the file on that device, as the open below reads it.
+    expect(reads).toMatchObject([{ path: "/home/me/repo/shot.png", device_id: "deepbox", root: "/home/me/repo" }]);
     await press("[data-desk-output='/home/me/repo/new.md']");
     const front = useUiStore.getState().deskRoom.panel?.tabs.find((tab) => tab.kind === "output");
     expect(front).toMatchObject({ kind: "output", output: { device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" } });
