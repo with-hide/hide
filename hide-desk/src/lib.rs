@@ -75,12 +75,28 @@ pub fn first_message(placement: Placement, carried: Option<&str>, message: &str)
     text
 }
 
-/// The message that carries the line the operator refused `command` with
-/// (`거절…`, PRD Desk D-83), sent once the turn it stopped ends.
-pub fn refusal_message(command: &str, line: &str) -> String {
-    format!(
-        "The operator refused this and did not let it run:\n<refused>\n{command}\n</refused>\nThe operator's message:\n{line}"
-    )
+/// What a plain refusal's message asks of the agent: no other way to the
+/// same, and words for the operator.
+pub const REFUSED_DO_NOT_RETRY: &str = "Do not try the same thing another way. Tell the operator in words that it did not run, and what you would do instead.";
+
+/// The message that tells the agent the operator refused `command`, a
+/// `kind` call (PRD Desk D-83), sent once the turn the refusal stopped ends:
+/// with the line `거절…` carried, or, for a plain refusal an agent ended its
+/// turn on, none, when it must not try the same another way.
+pub fn refusal_message(kind: permission::CardKind, command: &str, line: Option<&str>) -> String {
+    let what = match kind {
+        permission::CardKind::Command => "shell command",
+        permission::CardKind::Edit => "file change",
+        permission::CardKind::Read => "file read",
+        permission::CardKind::Other => "tool call",
+    };
+    let refused = format!(
+        "The operator refused this {what} and did not let it run:\n<refused>\n{command}\n</refused>\n"
+    );
+    match line {
+        Some(line) => format!("{refused}The operator's message:\n{line}"),
+        None => format!("{refused}{REFUSED_DO_NOT_RETRY}"),
+    }
 }
 
 /// The sessions a reply names as `@session(<pane> <name>)`, in order, each
@@ -140,6 +156,27 @@ fn closing(text: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plain_refusal_forbids_another_way_and_a_line_is_the_operator_s_word() {
+        let plain = refusal_message(permission::CardKind::Edit, "notes.md", None);
+        assert!(plain.contains("file change"));
+        assert!(plain.contains("<refused>\nnotes.md\n</refused>"));
+        assert!(plain.ends_with(REFUSED_DO_NOT_RETRY));
+        // What the sentence must keep saying, whatever its wording: no
+        // other way to the same, and words that it did not run.
+        assert!(REFUSED_DO_NOT_RETRY.contains("another way"));
+        assert!(REFUSED_DO_NOT_RETRY.contains("did not run"));
+        assert!(!plain.contains("The operator's message"));
+
+        let line = refusal_message(
+            permission::CardKind::Command,
+            "rm -rf build",
+            Some("keep build, clean dist"),
+        );
+        assert!(line.ends_with("The operator's message:\nkeep build, clean dist"));
+        assert!(!line.contains(REFUSED_DO_NOT_RETRY));
+    }
 
     #[test]
     fn a_reply_s_missions_are_read_with_parentheses_in_their_titles() {
