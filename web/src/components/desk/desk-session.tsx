@@ -120,7 +120,7 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
   onOutput: (output: DeskOutput) => void;
   onFiles: () => void;
   onTerminal: () => void;
-  /** `원래 화면에서 보기 ↗` (feedback 1 D2): the session's own tab, its terminal with the sidebar and files, as a sidebar row's ⌘-click (Ctrl on Windows and Linux) opens it; Desk leaves the front. */
+  /** ↗, `원래 화면에서 보기` in its hint (feedback 1 D2): the session's own tab, its terminal with the sidebar and files, as a sidebar row's ⌘-click (Ctrl on Windows and Linux) opens it; Desk leaves the front. */
   onOwnTab: () => void;
   onClose: () => void;
 }) {
@@ -138,11 +138,9 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
         </nav>
         {sleeping ? null : <PaneHeadChildren paneId={paneId} actions={deskActions} />}
         {sleeping ? null : (
-          <Hint label={t("desk.room.openOwnHint")}>
-            <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-session-own-tab="true" onClick={onOwnTab}>
-              {t("desk.room.openOwn")}
-              <ArrowUpRightIcon />
-            </Button>
+          // Its words live in its hint: at the panel's first width the head keeps its room for the session's path and name.
+          <Hint label={`${t("desk.room.openOwn")} · ${t("desk.room.openOwnHint")}`}>
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("desk.room.openOwn")} data-desk-session-own-tab="true" onClick={onOwnTab}><ArrowUpRightIcon /></Button>
           </Hint>
         )}
         <Hint label={t("desk.room.files")} shortcut={filesChord ?? undefined}>
