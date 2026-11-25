@@ -756,6 +756,7 @@ fn a_word_that_changes_the_shell_state_makes_the_line_unreadable_unless_known_ha
         "set -k; git diff GIT_EXTERNAL_DIFF='echo X;'",
         "set -ek; git diff GIT_EXTERNAL_DIFF='echo X;'",
         "set -o keyword; git diff GIT_EXTERNAL_DIFF='echo X;'",
+        "builtin set -k; git diff GIT_EXTERNAL_DIFF='echo X;'",
         "set -a; cat x",
         "set -e -o pipefail -o keyword; cat x",
         "set -f; cat x",
