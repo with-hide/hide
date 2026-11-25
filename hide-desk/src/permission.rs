@@ -64,29 +64,36 @@ impl ChoiceKind {
     pub fn rejects(self) -> bool {
         matches!(self, Self::RejectOnce | Self::RejectAlways)
     }
+}
 
-    pub fn allows(self) -> bool {
-        matches!(self, Self::AllowOnce | Self::AllowAlways)
-    }
+/// The most options a card keeps, in the agent's order: ACP agents offer two
+/// to six (Claude Code's way out of plan mode is the most, five), and every
+/// option is kept in `desk.json` and sent on each snapshot.
+pub const MAX_OPTIONS: usize = 8;
+
+/// The longest option id kept: an id goes back to the agent as it came, so
+/// a longer one cannot be cut and its option is left out.
+pub const MAX_OPTION_ID_BYTES: usize = 256;
+
+/// The longest option name kept; a longer one is cut at a character, since
+/// it is only shown.
+pub const MAX_OPTION_NAME_BYTES: usize = 200;
+
+/// The option that allows this one call and nothing after it.
+pub fn allow_once(choices: &[Choice]) -> Option<&str> {
+    choices
+        .iter()
+        .find(|choice| choice.kind == ChoiceKind::AllowOnce)
+        .map(|choice| choice.id.as_str())
 }
 
 /// A permission request as Hide reads it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Request {
     pub tool_call_id: Option<String>,
-    /// The agent's options, in its order.
+    /// The agent's options, in its order, at most [`MAX_OPTIONS`].
     pub choices: Vec<Choice>,
     pub action: Action,
-}
-
-impl Request {
-    /// The option that allows this one call and nothing after it.
-    pub fn allow_once(&self) -> Option<&str> {
-        self.choices
-            .iter()
-            .find(|choice| choice.kind == ChoiceKind::AllowOnce)
-            .map(|choice| choice.id.as_str())
-    }
 }
 
 /// What the operator sees on an approval card: the whole command (or the
@@ -167,45 +174,21 @@ pub fn card(action: &Action, place: &Place<'_>) -> Card {
     }
 }
 
-/// Programs a `hide` line may run beside its `hide` commands: each only
-/// reads or prints, runs no other program, writes no file and changes
-/// nothing of the shell's (so no `printf`, whose `-v` sets a variable, no
-/// `uniq`, whose second word is a file it writes, and no `sed`, `awk` or
-/// `xargs`); `sort` is one without its options that write or run
-/// ([`sorts_only`]). PowerShell's names are in lower case, as it finds them.
-const READS: &[&str] = &[
-    "cat",
-    "echo",
-    "true",
-    "jq",
-    "head",
-    "tail",
-    "wc",
-    "grep",
-    "cut",
-    "tr",
-    "convertfrom-json",
-    "select-string",
-    "write-output",
-];
-
-/// A redirection to one of these writes no file.
+/// A redirection to or from one of these reads and writes no file.
 const SAFE_TARGETS: &[&str] = &["/dev/null", "/dev/stdout", "/dev/stderr", "$null"];
 
-/// How deep a command substitution inside a substitution is read; one
-/// deeper is not a `hide` line.
-const MAX_DEPTH: usize = 4;
-
-/// Whether `line` runs `hide` commands and nothing else but what only reads
-/// or prints ([`READS`]), with their output piped, joined by `;`, `&&` or
-/// `||`, and redirected only to nowhere (`2>&1`, `>/dev/null`): the line
-/// Hide answers itself under 에이전트대로 (D-92). A bare `hide` names the
-/// one Desk's `PATH` finds first, and so does a path to it; any other
-/// program, a variable set before one, a function, a command a substitution
-/// runs that is not of the same kind, and a redirection that writes a file
-/// make it a line the agent's own card asks. On Windows the line must read
-/// so in both a POSIX shell's syntax and PowerShell's ([`SHELLS`]), since
-/// Hide does not know which of the two runs it.
+/// Whether `line` runs `hide` commands and nothing else: the line Hide
+/// answers itself under 에이전트대로 (D-92, "a line made only of `hide`
+/// commands"). Each command is `hide` ([`names_hide`]) or the `hide` Desk
+/// put first on the agent's `PATH`; they may be piped, joined by `;`, `&&`
+/// or `||`, and redirected only to or from nowhere (`2>&1`, `>/dev/null`),
+/// and a heredoc whose end word is quoted gives a letter its body. Any other
+/// program (`hide ps | head` included), a variable set before a command, a
+/// function, a command or process substitution, a backquote, a heredoc
+/// that substitutes and a redirection to or from a file make it a line the
+/// agent's own card asks. On Windows the line must read so in both a POSIX
+/// shell's syntax and PowerShell's ([`SHELLS`]), since Hide does not know
+/// which of the two runs it.
 pub fn hide_line(line: &str, place: &Place<'_>) -> bool {
     hide_line_in(line, place, SHELLS)
 }
@@ -220,67 +203,35 @@ const SHELLS: &[Syntax] = if cfg!(windows) {
 
 fn hide_line_in(line: &str, place: &Place<'_>, syntaxes: &[Syntax]) -> bool {
     syntaxes.iter().all(|syntax| {
-        let mut hide = false;
-        only_hide_and_reads(line, *syntax, place, 0, &mut hide) && hide
+        let read = hide_shell::shell_line(line, *syntax);
+        !read.commands.is_empty()
+            && !read.functions
+            && read.substitutions.is_empty()
+            && read.backquoted.is_empty()
+            && !read.bodies.iter().any(|body| *body)
+            && read
+                .targets
+                .iter()
+                .all(|(_, target)| SAFE_TARGETS.contains(&target.as_str()))
+            && read.commands.iter().all(|words| {
+                words.first().is_some_and(|program| {
+                    names_hide(program) || Path::new(program) == place.hide
+                })
+            })
     })
 }
 
-fn only_hide_and_reads(
-    line: &str,
-    syntax: Syntax,
-    place: &Place<'_>,
-    depth: usize,
-    hide: &mut bool,
-) -> bool {
-    let read = hide_shell::shell_line(line, syntax);
-    if depth > MAX_DEPTH
-        || read.commands.is_empty()
-        || read.functions
-        || read.bodies.iter().any(|body| *body)
-        || read
-            .writes
-            .iter()
-            .any(|(_, target)| !SAFE_TARGETS.contains(&target.as_str()))
-    {
-        return false;
+/// Whether a command word calls `hide` by its bare name: exactly `hide`,
+/// and on Windows, which finds a program without case and without `.exe`,
+/// `hide.exe` and any case of either. The one reading of a `hide` command
+/// in Desk's permission and in its turn's steps.
+fn names_hide(program: &str) -> bool {
+    if cfg!(windows) {
+        let lower = program.to_ascii_lowercase();
+        lower == "hide" || lower == "hide.exe"
+    } else {
+        program == "hide"
     }
-    let substitutions = read
-        .substitutions
-        .iter()
-        .map(|(_, text)| text)
-        .chain(&read.backquoted);
-    for text in substitutions {
-        if !only_hide_and_reads(text, syntax, place, depth + 1, hide) {
-            return false;
-        }
-    }
-    read.commands.iter().all(|words| {
-        let Some(program) = words.first() else {
-            return false;
-        };
-        // A program named by a path other than Desk's `hide` is not one
-        // of these, whatever its name.
-        let bare = !program.contains(['/', '\\']);
-        let name = syntax.program(program);
-        if (bare && name == "hide") || Path::new(program) == place.hide {
-            *hide = true;
-            true
-        } else {
-            let name = name.to_lowercase();
-            bare && (READS.contains(&name.as_str()) || (name == "sort" && sorts_only(&words[1..])))
-        }
-    })
-}
-
-/// Whether `sort` with these words only prints: no `-o`/`--output`, which
-/// writes a file, and no `--compress-program`, which runs one, in any of
-/// the abbreviations or short groups `sort` takes (`-ro x`, `--out=x`).
-fn sorts_only(args: &[String]) -> bool {
-    !args.iter().any(|arg| {
-        arg.starts_with("--o")
-            || arg.starts_with("--c")
-            || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('o'))
-    })
 }
 
 /// Reads `session/request_permission` params. `announced` is the last
@@ -295,16 +246,29 @@ pub fn read_request(params: &Value, announced: Option<&Value>) -> Request {
             options
                 .iter()
                 .filter_map(|option| {
+                    let id = option.get("optionId")?.as_str()?;
+                    if id.len() > MAX_OPTION_ID_BYTES {
+                        return None;
+                    }
+                    let mut name = text(option.get("name")).unwrap_or_default();
+                    if name.len() > MAX_OPTION_NAME_BYTES {
+                        let mut end = MAX_OPTION_NAME_BYTES;
+                        while !name.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        name.truncate(end);
+                    }
                     Some(Choice {
-                        id: option.get("optionId")?.as_str()?.to_owned(),
+                        id: id.to_owned(),
                         kind: option
                             .get("kind")
                             .cloned()
                             .and_then(|kind| serde_json::from_value(kind).ok())
                             .unwrap_or(ChoiceKind::Other),
-                        name: text(option.get("name")).unwrap_or_default(),
+                        name,
                     })
                 })
+                .take(MAX_OPTIONS)
                 .collect()
         })
         .unwrap_or_default();
@@ -468,11 +432,7 @@ fn hide_step(line: &str) -> Step {
         let Some((program, rest)) = words.split_first() else {
             continue;
         };
-        if Path::new(program)
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            != Some("hide")
-        {
+        if !names_hide(program) {
             return Step::Other;
         }
         let rest: Vec<&str> = rest.iter().map(String::as_str).collect();

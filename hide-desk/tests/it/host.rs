@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use hide_desk::AdapterId;
 use hide_desk::adapter::{self, Launch, Paths};
 use hide_desk::host::Host;
+use hide_desk::permission::allow_once;
 use hide_desk::rpc::{Incoming, Sink};
 use hide_desk::session::{self, OpenError};
 use serde_json::{Value, json};
@@ -258,7 +259,7 @@ fn a_turn_s_reply_and_its_permission_request_reach_the_owner() {
     };
     assert_eq!(method, "session/request_permission");
     let request = hide_desk::permission::read_request(&params, None);
-    assert_eq!(request.allow_once(), Some("yes"));
+    assert_eq!(allow_once(&request.choices), Some("yes"));
     let reject = request
         .choices
         .iter()

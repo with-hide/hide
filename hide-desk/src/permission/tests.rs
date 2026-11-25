@@ -25,68 +25,70 @@ const POSIX: &[Syntax] = &[Syntax::Posix];
 /// What Windows reads a line in, checked on every system.
 const WINDOWS: &[Syntax] = &[Syntax::Posix, Syntax::PowerShell];
 
-/// A letter's body as agents write it with a heredoc, which only a POSIX
-/// shell reads.
-const HEREDOCS: [&str; 2] = [
-    "hide request send a --intent i --body \"$(cat <<'EOF'\nrun `cargo test` first\nEOF\n)\"",
-    "hide request send a --intent i --body-file - <<'EOF'\nrun `cargo test` first\nEOF",
-];
-
 #[test]
-fn a_line_of_hide_commands_and_what_only_reads_their_output_is_hide_s_to_answer() {
-    // B46's examples, the ones the old card showed, and the shapes agents
-    // write a letter's body in, in both shells Windows may run.
-    let lines = [
-        "hide agent list | jq -r '.value.items[] | select(.runtime!=\"ended\") | [.id, .name] | @tsv'",
-        "hide ps | head -c 3000",
-        "hide agent read agent-18238 --lines 80 2>&1 | tail -60",
+fn a_line_of_hide_commands_only_is_hide_s_to_answer() {
+    // `hide` commands joined, piped into each other and redirected nowhere,
+    // in both shells Windows may run.
+    for line in [
         "hide task show agent-18399",
-        "hide agent list; echo ---; hide ps",
-        "hide agent list && hide ps | sort -k2 | grep -v ended",
-        "hide mission show mission-1 >/dev/null || true",
+        "hide agent list; hide ps",
+        "hide agent list && hide ps || hide inbox",
+        "hide agent read agent-18238 --lines 80 2>&1",
+        "hide mission show mission-1 >/dev/null",
         "hide agent archive agent-3",
         &format!("{HIDE} inbox"),
-        "hide request send a --intent i --body \"$(cat notes.md)\"",
         "hide request send a --intent i --body 'use `hide task` here'",
-    ];
-    for line in &lines {
+    ] {
         assert!(hide_line_in(line, &place(), POSIX), "{line}");
         assert!(hide_line_in(line, &place(), WINDOWS), "{line}");
     }
-    for line in HEREDOCS {
-        assert!(hide_line_in(line, &place(), POSIX), "{line}");
-        // PowerShell has no heredoc, so on Windows the agent asks.
-        assert!(!hide_line_in(line, &place(), WINDOWS), "{line}");
-    }
+    // A letter's body from a heredoc that substitutes nothing, which only
+    // a POSIX shell reads: PowerShell has no heredoc, so on Windows the
+    // agent asks.
+    let heredoc = "hide request send a --intent i --body-file - <<'EOF'\nrun `cargo test` first\nEOF";
+    assert!(hide_line_in(heredoc, &place(), POSIX));
+    assert!(!hide_line_in(heredoc, &place(), WINDOWS));
 }
 
 #[test]
-fn a_line_that_writes_runs_another_program_or_names_another_hide_is_the_agent_s_to_ask() {
+fn a_line_that_runs_anything_but_hide_or_touches_a_file_is_the_agent_s_to_ask() {
     for line in [
-        "hide agent list > agents.json",
-        "hide agent list | tee agents.json",
+        // Another program beside `hide`, a reader included.
+        "hide ps | head -c 3000",
+        "hide agent list | jq -r '.value.items[]'",
+        "hide agent list; echo ---; hide ps",
+        "hide mission show mission-1 >/dev/null || true",
         "hide agent list; touch x",
         "hide agent list | sh",
         "hide agent list | xargs rm",
-        "PATH=/tmp hide agent list",
         "env hide agent list",
+        // A file written or read.
+        "hide agent list > agents.json",
+        "hide ps >& out.txt",
+        "hide ps; hide inbox >& ~/.zshenv",
+        "hide ps &> out.txt",
+        "hide request send a --body-file - < notes.md",
+        // A substitution, a backquote, a heredoc that substitutes.
+        "hide request send a --body \"$(cat notes.md)\"",
+        "hide request send a --intent i --body \"$(cat <<'EOF'\nhi\nEOF\n)\"",
+        "hide request send a --body \"`touch y`\"",
+        "hide request send a --body-file - <<EOF\n$(touch y)\nEOF",
+        // Another `hide`, a variable before it, a function, a compound.
+        "PATH=/tmp hide agent list",
         "/tmp/hide agent list",
         "./hide agent list",
         "hide() { touch x; }; hide agent list",
-        "hide agent list | sort -o sorted.txt",
-        "hide agent list | sort -ro sorted.txt",
-        "hide agent list | sort --compress-program=sh",
-        "hide request send a --body \"$(rm -rf /tmp/x)\"",
-        "hide request send a --body \"`touch y`\"",
         "if true; then hide ps; fi",
-        "printf -v PATH /tmp; hide ps",
         // Nothing of Hide's runs.
         "echo hi",
-        "cat notes.md",
         "",
     ] {
         assert!(!is_hide_line(line), "{line}");
     }
+    // `hide.exe` and another case are `hide` only where the system finds a
+    // program so.
+    assert_eq!(is_hide_line("hide.exe ps"), cfg!(windows));
+    assert_eq!(is_hide_line("HIDE ps"), cfg!(windows));
 }
 
 #[test]
@@ -145,7 +147,7 @@ fn a_request_keeps_the_agent_s_options_as_it_names_them_in_its_order() {
             },
         ]
     );
-    assert_eq!(request.allow_once(), Some("allow-once"));
+    assert_eq!(allow_once(&request.choices), Some("allow-once"));
     let card = card(&request.action, &place());
     assert_eq!(
         (
@@ -212,7 +214,7 @@ fn codex_s_request_is_read_with_the_call_it_announced() {
     let card = card(&request.action, &place());
     assert_eq!(card.command, "touch x");
     assert_eq!(card.folder.as_deref(), Some("/r"));
-    assert_eq!(request.allow_once(), Some("allow_once"));
+    assert_eq!(allow_once(&request.choices), Some("allow_once"));
 }
 
 #[test]
@@ -236,7 +238,7 @@ fn a_request_hide_can_tell_little_of_is_still_a_card_named_as_the_agent_named_it
     );
     assert_eq!(card(&untitled.action, &place()).command, "fetch");
     // No allowance for this one call: under 다 허용 the operator chooses.
-    assert_eq!(untitled.allow_once(), None);
+    assert_eq!(allow_once(&untitled.choices), None);
 }
 
 #[test]
@@ -313,4 +315,22 @@ fn every_card_names_its_folder() {
         &place(),
     );
     assert_eq!(read.folder.as_deref(), Some(WORK));
+}
+
+#[test]
+fn a_request_keeps_at_most_its_first_options_each_named_within_its_cap() {
+    let mut options: Vec<Value> = (0..12)
+        .map(|n| json!({"optionId": format!("o{n}"), "kind": "allow_once", "name": "é".repeat(400)}))
+        .collect();
+    // An id too long to send back whole is left out, not cut.
+    options.insert(1, json!({"optionId": "x".repeat(MAX_OPTION_ID_BYTES + 1), "kind": "reject_once"}));
+    let request = read_request(
+        &json!({"toolCall": {"toolCallId": "t", "kind": "execute", "title": "ls"}, "options": options}),
+        None,
+    );
+    assert_eq!(request.choices.len(), MAX_OPTIONS);
+    assert_eq!(request.choices[0].id, "o0");
+    assert_eq!(request.choices[1].id, "o1");
+    assert!(request.choices.iter().all(|choice| choice.name.len() <= MAX_OPTION_NAME_BYTES));
+    assert!(request.choices[0].name.chars().all(|c| c == 'é'));
 }

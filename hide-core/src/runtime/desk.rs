@@ -1414,10 +1414,7 @@ impl Runtime {
                 card,
                 hide_line,
             } => {
-                let allow_once = options
-                    .iter()
-                    .find(|option| option.kind == ChoiceKind::AllowOnce)
-                    .map(|option| option.id.clone());
+                let allow_once = permission::allow_once(&options).map(str::to_owned);
                 let answered = match self.desk.stored.settings.permission {
                     DeskPermission::AllowAll => true,
                     DeskPermission::Agent => hide_line,
