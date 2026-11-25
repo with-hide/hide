@@ -66,8 +66,10 @@ pub(super) struct Desk {
     /// Working sessions the operator allowed Desk to archive with
     /// `한 번 허용`, by registration id, until the turn ends.
     archive_grants: Vec<String>,
-    /// The line the operator refused with, sent once the turn it stopped
-    /// ends.
+    /// The operator's last refusal in the turn under way, told to the agent
+    /// once that turn ends: always when it carries a line (`거절…`), and a
+    /// plain one only when the agent wrote nothing after it and no message
+    /// of the operator's waits.
     refusal: Option<Refusal>,
     /// Watch asks for Desk's sessions that have no watch yet, by intent;
     /// only sessions the ledger still holds are kept.
@@ -1003,8 +1005,8 @@ impl Runtime {
     }
 
     /// The Desk process ended: what the operator allowed for the
-    /// conversation asks again, and a refusal's line no turn will read is
-    /// dropped with the card that keeps it.
+    /// conversation asks again, and a refusal no turn will read, plain or
+    /// with a line, is dropped (a line stays on the card that keeps it).
     fn forget_allowances(&mut self) {
         self.desk.allowed.clear();
         self.desk.archive_grants.clear();
@@ -1447,8 +1449,10 @@ impl Runtime {
                 if self.desk.host.open {
                     self.desk.host.state = Some(DeskHostState::Ready);
                 }
+                // A message the operator queued speaks for them after a
+                // plain refusal, so Desk adds no words of its own before it.
                 if let Some(refusal) = self.desk.refusal.take()
-                    && (refusal.text.is_some() || silent)
+                    && (refusal.text.is_some() || (silent && self.desk.stored.queued.is_empty()))
                     && let Some(agent) = self.selected_agent()
                 {
                     let sent = hide_desk::refusal_message(
@@ -2268,7 +2272,7 @@ mod tests {
         assert!(send.text.contains("shell command"), "{}", send.text);
         assert!(send.text.contains("rm -rf /tmp/x"), "{}", send.text);
         assert!(
-            send.text.contains("Do not try the same thing another way."),
+            send.text.ends_with(hide_desk::REFUSED_DO_NOT_RETRY),
             "{}",
             send.text
         );
@@ -2314,9 +2318,85 @@ mod tests {
         let send = sent(&received);
         assert!(send.text.contains("rm -rf /tmp/x"), "{}", send.text);
         assert!(
-            send.text.contains("Do not try the same thing another way."),
+            send.text.ends_with(hide_desk::REFUSED_DO_NOT_RETRY),
             "{}",
             send.text
+        );
+    }
+
+    /// A message the operator queued during the turn goes after a plain
+    /// refusal the agent was silent on, with no words of Desk's first.
+    #[test]
+    fn a_queued_message_goes_instead_of_a_plain_refusal_s_notice() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, tag) = talking(root.path());
+        let id = ask(&mut runtime);
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "answer": "reject"})
+        ));
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "clean only dist"})
+        ));
+        runtime.desk_report(Report::TurnEnded {
+            tag,
+            outcome: TurnOutcome::Done,
+        });
+        assert_eq!(sent(&received).text, "clean only dist");
+    }
+
+    /// A line the operator refused with is not replaced by a plain refusal
+    /// of a card that waited beside it.
+    #[test]
+    fn a_refusal_s_line_outlives_a_plain_refusal_after_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, tag) = talking(root.path());
+        let first = ask(&mut runtime);
+        let second = request(&mut runtime, "rm -rf /tmp/y").expect("it asks");
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": first, "answer": "reject", "text": "keep tmp"})
+        ));
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": second, "answer": "reject"})
+        ));
+        runtime.desk_report(Report::TurnEnded {
+            tag,
+            outcome: TurnOutcome::Cancelled,
+        });
+        let send = sent(&received);
+        assert!(send.text.contains("rm -rf /tmp/x"), "{}", send.text);
+        assert!(send.text.ends_with("keep tmp"), "{}", send.text);
+    }
+
+    /// A reply already at its cap cannot show the words written after a
+    /// refusal, so it does not read as silent.
+    #[test]
+    fn a_reply_at_its_cap_never_reads_as_silent_after_a_refusal() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, tag) = talking(root.path());
+        said(&mut runtime, tag, &"x".repeat(MAX_REPLY_BYTES + 1));
+        let id = ask(&mut runtime);
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "answer": "reject"})
+        ));
+        said(&mut runtime, tag, "It was refused.");
+        runtime.desk_report(Report::TurnEnded {
+            tag,
+            outcome: TurnOutcome::Done,
+        });
+        assert!(
+            !received
+                .try_iter()
+                .any(|order| matches!(order, Order::Send(_)))
         );
     }
 

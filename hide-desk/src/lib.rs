@@ -75,6 +75,10 @@ pub fn first_message(placement: Placement, carried: Option<&str>, message: &str)
     text
 }
 
+/// What a plain refusal's message asks of the agent: no other way to the
+/// same, and words for the operator.
+pub const REFUSED_DO_NOT_RETRY: &str = "Do not try the same thing another way. Tell the operator in words that it did not run, and what you would do instead.";
+
 /// The message that tells the agent the operator refused `command`, a
 /// `kind` call (PRD Desk D-83), sent once the turn the refusal stopped ends:
 /// with the line `거절…` carried, or, for a plain refusal an agent ended its
@@ -91,9 +95,7 @@ pub fn refusal_message(kind: permission::CardKind, command: &str, line: Option<&
     );
     match line {
         Some(line) => format!("{refused}The operator's message:\n{line}"),
-        None => format!(
-            "{refused}Do not try the same thing another way. Tell the operator in words that it did not run, and what you would do instead."
-        ),
+        None => format!("{refused}{REFUSED_DO_NOT_RETRY}"),
     }
 }
 
@@ -133,7 +135,7 @@ mod tests {
         let plain = refusal_message(permission::CardKind::Edit, "notes.md", None);
         assert!(plain.contains("file change"));
         assert!(plain.contains("<refused>\nnotes.md\n</refused>"));
-        assert!(plain.contains("Do not try the same thing another way."));
+        assert!(plain.ends_with(REFUSED_DO_NOT_RETRY));
         assert!(!plain.contains("The operator's message"));
 
         let line = refusal_message(
@@ -142,7 +144,7 @@ mod tests {
             Some("keep build, clean dist"),
         );
         assert!(line.ends_with("The operator's message:\nkeep build, clean dist"));
-        assert!(!line.contains("another way"));
+        assert!(!line.contains(REFUSED_DO_NOT_RETRY));
     }
 
     #[test]
