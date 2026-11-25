@@ -142,9 +142,6 @@ it("lists a mission waiting on the operator when no session is drawn", async () 
     expect(item?.textContent).toContain("No Conductor conducts this mission · 1 stuck");
     expect([...item!.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["Resume command", "Take a look"]);
     expect(container.querySelector("[data-graph-mission-asks] h3")?.textContent).toBe("Waiting on you");
-    // The operator's My turn filter carries no number; the other filters keep theirs.
-    expect(container.querySelector('[data-focus="turn"]')?.textContent).not.toMatch(/\d/);
-    expect(container.querySelector('[data-focus="all"]')?.textContent).toMatch(/\d/);
   } finally { await act(async () => root.unmount()); }
 });
 
@@ -172,6 +169,11 @@ it("lists only the chosen project's missions waiting on the operator, on an empt
     const root = createRoot(container);
     await act(async () => root.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={createActions(() => true)} /></TooltipProvider>));
     const listed = [...container.querySelectorAll<HTMLElement>("[data-graph-mission-ask]")].map((item) => item.dataset.graphMissionAsk);
+    if (drawn) {
+      // The operator's My turn filter carries no number; the other filters keep theirs.
+      expect(container.querySelector('[data-focus="turn"]')?.textContent).not.toMatch(/\d/);
+      expect(container.querySelector('[data-focus="all"]')?.textContent).toMatch(/\d/);
+    }
     const count = container.querySelector(drawn ? '[data-graph-projects] .og-waiting h3 span' : "[data-graph-mission-asks] h3 span")?.textContent ?? null;
     await act(async () => root.unmount());
     container.remove();

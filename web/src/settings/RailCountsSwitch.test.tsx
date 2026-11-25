@@ -18,6 +18,7 @@ afterEach(() => {
 
 it("sends the tool rail counts switch to the core and waits for a live connection", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   const container = document.body.appendChild(document.createElement("div"));
   const root = createRoot(container);
   const sent: unknown[] = [];
