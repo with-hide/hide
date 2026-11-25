@@ -1203,6 +1203,10 @@ mod tests {
             "schedule_time_invalid",
             "schedule_days_missing",
             "schedule_hours_out_of_range",
+            "schedule_date_invalid",
+            "schedule_once_past",
+            "schedule_once_too_far",
+            "automation_done",
         ] {
             assert_ne!(
                 next_action(code),

@@ -2627,18 +2627,24 @@ impl Runtime {
             "folder": automation.folder.path,
             "next_run_at_unix_ms": automation.next_due_unix_ms,
         });
+        let once = automation.schedule.is_once();
         self.automations.book.automations.push(automation);
         self.automations.book.last_choice = Some(agent);
         if let Some(sink) = &self.product_analytics {
             use crate::automations::Example;
-            use crate::product_analytics::{AutomationStart, Event};
+            use crate::product_analytics::{AutomationSchedule, AutomationStart, Event};
             let start = match draft.example {
                 Some(Example::Report) => AutomationStart::Report,
                 Some(Example::Briefing) => AutomationStart::Briefing,
                 Some(Example::Ci) => AutomationStart::Ci,
                 None => AutomationStart::Own,
             };
-            sink.capture(Event::AutomationCreated { start });
+            let schedule = if once {
+                AutomationSchedule::Once
+            } else {
+                AutomationSchedule::Repeat
+            };
+            sink.capture(Event::AutomationCreated { start, schedule });
         }
         // The operator works in the screen that said the book before was
         // lost: the line has been read.

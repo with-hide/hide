@@ -1406,7 +1406,9 @@ fn a_run_stopped_before_its_row_is_read_opens_its_conversation_again() {
 /// end once, with what started it; a stop asked again counts nothing.
 #[test]
 fn an_automation_made_and_its_run_ended_are_each_counted_once() {
-    use crate::product_analytics::{AutomationOutcome, AutomationStart, AutomationTrigger, Event};
+    use crate::product_analytics::{
+        AutomationOutcome, AutomationSchedule, AutomationStart, AutomationTrigger, Event,
+    };
     let state = tempfile::tempdir().unwrap();
     let mut harness = Harness::new(&state);
     let statistics = Arc::new(RecordedStatistics::default());
@@ -1437,14 +1439,24 @@ fn an_automation_made_and_its_run_ended_are_each_counted_once() {
     assert_eq!(
         automations(),
         [Event::AutomationCreated {
-            start: AutomationStart::Briefing
+            start: AutomationStart::Briefing,
+            schedule: AutomationSchedule::Repeat,
+        }]
+    );
+    harness.once_in("Webhooks", 30);
+    assert_eq!(
+        automations(),
+        [Event::AutomationCreated {
+            start: AutomationStart::Own,
+            schedule: AutomationSchedule::Once,
         }]
     );
     let id = harness.run_now();
     assert_eq!(
         automations(),
         [Event::AutomationCreated {
-            start: AutomationStart::Own
+            start: AutomationStart::Own,
+            schedule: AutomationSchedule::Repeat,
         }]
     );
     harness.tick(1);
