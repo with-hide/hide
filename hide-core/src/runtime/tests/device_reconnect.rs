@@ -101,6 +101,7 @@ fn hook(runtime: &mut Runtime, turn: HookTurn) {
                 waiting: None,
                 account: None,
                 refused: None,
+                asked: None,
             },
         )
         .unwrap();
