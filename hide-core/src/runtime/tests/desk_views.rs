@@ -4092,3 +4092,37 @@ fn a_running_run_that_opens_more_than_the_cap_keeps_the_newest() {
         Some(format!("n{:02}.md", total - 1).as_str())
     );
 }
+
+/// `hide file open` of a file whose tab is open already shows what the file
+/// says now, as a page opened again loads again; a tab holding the
+/// operator's draft keeps the draft.
+#[test]
+fn opening_a_file_again_shows_what_it_says_now_unless_it_holds_a_draft() {
+    let (mut runtime, _checkout, directory) = setup("open-again");
+    let contents = |runtime: &Runtime| {
+        let tab = runtime
+            .snapshot
+            .editor
+            .tabs
+            .iter()
+            .find(|tab| tab.path.ends_with("/a.md"))
+            .expect("a.md has a tab");
+        let document = &runtime.editor_documents[&tab.id];
+        (tab.id.clone(), document.contents_utf8.clone().unwrap())
+    };
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "first");
+    assert_eq!(contents(&runtime).1, "a.md\n");
+
+    std::fs::write(directory.join("a.md"), "written by the agent\n").unwrap();
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "again");
+    let (tab_id, now) = contents(&runtime);
+    assert_eq!(now, "written by the agent\n");
+
+    assert!(runtime.dispatch_json(&explorer_event(
+        "file_draft",
+        serde_json::json!({"tab_id": tab_id, "contents_utf8": "the operator's draft\n"}),
+    )));
+    std::fs::write(directory.join("a.md"), "written once more\n").unwrap();
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "drafted");
+    assert_eq!(contents(&runtime).1, "the operator's draft\n");
+}

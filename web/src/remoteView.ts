@@ -10,6 +10,7 @@
 // again, so the page opens it at once rather than after a reconnect wait.
 
 import type { Clipboard } from "./clipboard";
+import { readDisplayPreferences, sameDisplayPreferences, type DisplayPreferences } from "./displayPreferences";
 
 /** What the socket of the bridge tells the page. */
 export type BridgeSocketEvent =
@@ -81,8 +82,8 @@ export type RemoteBridge = {
   onMenuCommand(listener: (id: string) => void): void;
   /** Says when the tile shows or hides. */
   onVisible(listener: (visible: boolean) => void): void;
-  /** Delivers what the window that shows this screen calls its machine, and that window's language; absent from an older desktop app. */
-  onViewer?(listener: (viewer: Viewer) => void): void;
+  /** Delivers what the window that shows this screen calls its machine, that window's language and its display choices; absent from an older desktop app. */
+  onViewer?(listener: (viewer: { language: string; name: string | null; display?: unknown }) => void): void;
   /** Delivers each work the guest's operator asked of this screen; absent from an older desktop app. */
   onWork?(listener: (work: RemoteWork) => void): void;
   /** Tells the guest how a start it handed here ended. */
@@ -186,8 +187,12 @@ export function remoteCommands(): { onCommand(listener: (id: string) => void): (
   };
 }
 
-/** The window that shows this screen: what it calls this machine, and its language. */
-export type Viewer = { language: string; name: string | null };
+/**
+ * The window that shows this screen: what it calls this machine, its
+ * language, and its View menu's display choices, which this screen draws
+ * with; `display` is null from an older desktop app, which sends none.
+ */
+export type Viewer = { language: string; name: string | null; display: DisplayPreferences | null };
 
 let viewer: Viewer | null = null;
 const viewerListeners = new Set<() => void>();
@@ -197,8 +202,9 @@ let viewerHeard = false;
 function hearViewer(): void {
   if (viewerHeard) return;
   viewerHeard = true;
-  remoteBridge()?.onViewer?.((next) => {
-    if (next.language === viewer?.language && next.name === viewer?.name) return;
+  remoteBridge()?.onViewer?.((told) => {
+    const next: Viewer = { language: told.language, name: told.name, display: readDisplayPreferences(told.display) };
+    if (viewer && next.language === viewer.language && next.name === viewer.name && sameDisplayPreferences(next.display, viewer.display)) return;
     viewer = next;
     for (const listener of viewerListeners) listener();
   });
@@ -208,8 +214,9 @@ function hearViewer(): void {
  * The window that shows this screen, or null outside a remote view and
  * before the desktop said it. A machine whose operator chose no language is
  * read in that window's language, not its operating system's, and its own
- * page names it as that window does rather than This Mac
- * (docs/LOCALIZATION.md; UI_BEHAVIOR.md, Device rail).
+ * page names it as that window does rather than This Mac, and its rows,
+ * tabs and panes draw with that window's display choices
+ * (docs/LOCALIZATION.md; UI_BEHAVIOR.md, Device rail; `displayPreferences.ts`).
  */
 export function subscribeViewer(listener: () => void): () => void {
   hearViewer();

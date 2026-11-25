@@ -4560,8 +4560,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** "reload" reads the disk contents; "keep_editing" accepts the disk
-     * timestamp so the next save overwrites. */
-    resolveConflict(tabId: string, action: "reload" | "keep_editing") {
+     * timestamp so the next save overwrites; "follow" reads the disk contents
+     * after the file changed there, only while the tab holds no edit, save or
+     * conflict of its own, which the core decides. */
+    resolveConflict(tabId: string, action: "reload" | "keep_editing" | "follow") {
       dispatch({ schema_version: 2, kind: "file_conflict", payload: { tab_id: tabId, action } });
     },
 

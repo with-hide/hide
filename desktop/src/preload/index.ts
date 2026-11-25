@@ -12,6 +12,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { BrowserCommand, BrowserHostEvent, BrowserRect, BrowserSync, RemoteScreenState } from "../../../web/src/host";
 import type { ExternalGrant, ExternalKind, ExternalRead, FirewallAnswer, FirewallState, NotificationPermission, ProbedPath, UpdateStatus, WhatsNewState, WindowChrome } from "../../../web/src/host";
+import type { DisplayPreferences } from "../../../web/src/displayPreferences";
 import type { RemoteWork, RemoteWorkResult } from "../../../web/src/remoteView";
 import type { RecordUpdate } from "../../../web/src/releases";
 import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WHATS_NEW_SAVE_CHANNEL, WHATS_NEW_STATE_CHANNEL, WHATS_NEW_STATE_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL, REMOTE_GO_CHANNEL, REMOTE_SETTINGS_CHANNEL, REMOTE_SHOW_CHANNEL, REMOTE_STATE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
@@ -180,7 +181,7 @@ contextBridge.exposeInMainWorld("hideHost", {
     },
   },
   remoteScreens: {
-    show(view: { device: string; key: string; rect: BrowserRect; name?: string | null } | null): void {
+    show(view: { device: string; key: string; rect: BrowserRect; name?: string | null; display?: DisplayPreferences } | null): void {
       ipcRenderer.send(REMOTE_SHOW_CHANNEL, view);
     },
     go(request: { device: string; key: string; work: RemoteWork }): void {
