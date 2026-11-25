@@ -3394,12 +3394,13 @@ mod tests {
     use crate::desktop_notices::DesktopNotices;
     use hide_core::agent_state::phone::project;
 
-    /// The automations the core counts as the operator's turn reach the
-    /// phone's automations frame through the rest the phone loop keeps: a
-    /// stopped one as `asks`, a once one whose run ended as `looks`; a count
-    /// elsewhere in the scope moves nothing (mission-104).
+    /// The automations and missions the core counts as the operator's turn
+    /// reach the phone's frames through the rest the phone loop keeps: a
+    /// stopped automation as `asks`, a once one whose run ended as `looks`, a
+    /// mission as the missions frame's `asks`; a count elsewhere in the scope
+    /// moves nothing (mission-104).
     #[test]
-    fn the_cores_automation_lines_reach_the_phones_frame_through_the_rest() {
+    fn the_cores_needs_you_lines_reach_the_phones_frames_through_the_rest() {
         use hide_core::automations::{
             AgentChoice, AutomationSnapshot, AutomationsSnapshot, Folder,
         };
@@ -3410,9 +3411,19 @@ mod tests {
         let mut snapshot = hide_core::Snapshot::initial(&options);
         snapshot.navigator.agent_scope.automation_asks = vec!["stopped".into()];
         snapshot.navigator.agent_scope.automation_looks = vec!["once".into()];
+        snapshot.navigator.agent_scope.mission_asks = vec!["m1".into()];
         let first = hide_core::RestSections::capture(&snapshot, None, 1);
         let mut kept = Value::Null;
         assert!(projection::update_inputs(&mut kept, &first, 0).unwrap());
+        // The missions section as the core writes one waiting mission.
+        kept["missions"] = json!({"items": [{
+            "id": "m1", "title": "Ship", "device_id": "test-node", "status": "running",
+            "conductor": {"pane_id": "w1:p1", "name": "Conductor", "agent_kind": "claude",
+                          "present": true, "takes_answers": true},
+            "created_at_unix_ms": 1,
+        }]});
+        let missions = PhoneMissions::project(&kept, "test-node", &project(&kept, "test-node"));
+        assert_eq!(missions.asks, ["m1"]);
         let (asks, looks) = automation_asks(&kept);
         assert_eq!(
             (asks.as_slice(), looks.as_slice()),
