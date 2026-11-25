@@ -16,7 +16,7 @@ import { DeskApprovalCard, DeskChat, DeskEmpty, DeskHandedLine, type DeskChatAct
 import { DeskPaneReturn } from "../components/desk/desk-entry";
 import { DeskJobCard, JobMark, OutputMark } from "../components/desk/desk-job-card";
 import { DeskChatColumn, DeskChatHead, DeskRoom, DeskTabPanel, type PanelTab } from "../components/desk/desk-room";
-import { SessionHead } from "../components/desk/desk-session";
+import { SessionAskCard, SessionHead } from "../components/desk/desk-session";
 import { OutputShelf } from "../components/desk/output-shelf";
 import { SidebarHeader } from "../components/sidebar-header";
 import { DeskMentionMenu } from "../components/desk/desk-mention-menu";
@@ -49,7 +49,7 @@ export const DESK_SCENES = [
   { state: "s2b", label: "2-1 현황 묻기 (B7, D-24)" },
   { state: "s3", label: "3 카드 상태 모음 (B16-B24, B36-B39)" },
   { state: "s4", label: "4 Desk 옆에 연 세션 (B2, B6, B8, B9)" },
-  { state: "s5", label: "5 세션이 물을 때: 질문 카드 (B14, B34)" },
+  { state: "s5", label: "5 세션이 물을 때: 에이전트 자신의 선택 카드 (B14, B34)" },
   { state: "s7", label: "7 결과물이 세션 옆 탭 패널에 (B16-B21)" },
   { state: "agent", label: "에이전트 고르기 · 바꿈 (B4, B8, B9, B44)" },
   { state: "agent-preparing", label: "Desk를 켠 직후 · 어댑터 받는 중 (B44, D-80)" },
@@ -160,13 +160,21 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, se
   const [text, setText] = useState(draft);
   const actions = useMemo(() => createActions(() => true), []);
   const lines = useMemo(() => threadLines(updates, parts, sceneSession), [updates, parts]);
-  const asks = useMemo(() => (job.state === "asking" && job.question ? [{ id: `${job.id}:ask`, text: job.question, at_unix_ms: Date.now() - 3 * 60_000 }] : []), [job]);
+  // A question is one Hide found in the conversation (the line above the box); an approval is the agent's own screen asking (its choice card).
+  const asks = useMemo(() => (job.state === "asking" && job.ask === "question" && job.question ? [
+    { id: `${job.id}:earlier`, text: "라이트 캡처는 6장 모두 찍을까요?", at_unix_ms: Date.now() - 12 * 60_000 },
+    { id: `${job.id}:ask`, text: job.question, at_unix_ms: Date.now() - 3 * 60_000 },
+  ] : []), [job]);
+  const choice = job.state === "asking" && job.ask === "approval" && job.question
+    ? <SessionAskCard ask={{ kind: "permission", turn: `${job.id}:turn`, since_ms: 2 * 60_000, command: job.question, choices: [{ id: "1", label: "Yes" }, { id: "2", label: "Yes, and don't ask again for this command" }, { id: "3", label: "No, and tell Codex what to do differently" }], answerable: true }} disabled={false} waited="2분" picked={null} answer={null} error={null} onPick={noop} onAnswer={noop} onTerminal={noop} onWrite={noop} />
+    : null;
   return <>
     <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onClose={noop} />
     <OutputShelf outputs={job.outputs} pulls={scenePulls(job)} selected={selectedOutput} onOpen={noop} onPull={noop} />
     <ThreadView
       job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk
       composer={{ value: text, tray: sceneTray(files), focused, onChange: setText, onSend: noop }}
+      ask={choice}
       asks={asks}
       onTerminal={noop} {...PART_ACTIONS}
     />
