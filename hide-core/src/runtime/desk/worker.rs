@@ -746,13 +746,13 @@ impl Worker {
                         // as ended: what it wrote after the mark is its error.
                         (_, Some(words)) => {
                             let reason = first_line(&words);
-                            crate::diagnostic!(json!({
-                                "component": "desk",
-                                "kind": "desk.turn_failed",
-                                "adapter": adapter.as_str(),
-                                "error": "failed turn mark",
-                                "reason": reason,
-                            }));
+                            self.turn_failed(
+                                adapter,
+                                &format!(
+                                    "failed turn mark: {}",
+                                    reason.as_deref().unwrap_or_default()
+                                ),
+                            );
                             TurnOutcome::Failed(reason)
                         }
                         (Some("refusal"), None) => {
@@ -790,7 +790,7 @@ impl Worker {
 
     /// Records a failed turn with what the adapter last wrote to its error
     /// output, which the screen never shows.
-    fn turn_failed(&self, adapter: AdapterId, error: &CallError) {
+    fn turn_failed(&self, adapter: AdapterId, error: &dyn std::fmt::Display) {
         let tail = self
             .running
             .as_ref()
@@ -1275,6 +1275,44 @@ mod tests {
         assert!(items.iter().any(|item| matches!(item,
             DeskItem::Notice { notice: DeskNotice::TurnFailed, detail: Some(detail), .. }
                 if detail == "exceeded retry limit, last status: 429 Too Many Requests")));
+        worker.end_process(false);
+    }
+
+    /// A turn the operator stopped reads as stopped even when its adapter
+    /// marked it failed on the way out: `cancelled` comes before the mark,
+    /// so no failed line shows for a turn the operator ended.
+    #[test]
+    fn a_cancelled_turn_its_adapter_marked_failed_reads_as_stopped() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, received, tag) = a_turn_and_one_waiting(root.path(), AdapterId::CODEX);
+        let mut worker = worker_running(&runtime, root.path(), AdapterId::CODEX, tag);
+        worker.incoming(
+            100,
+            Incoming::Notification {
+                method: "session/update".into(),
+                params: json!({"sessionId": "s1", "update": {"sessionUpdate": "session_info_update",
+                    "_meta": {"codex": {"threadStatus": {"type": "systemError"}}}}}),
+            },
+        );
+        worker.incoming(
+            101,
+            Incoming::Reply {
+                tag,
+                result: Ok(json!({"stopReason": "cancelled"})),
+            },
+        );
+        assert_eq!(sends(&received), ["two"]);
+        let items = items(&runtime.lock().unwrap());
+        assert!(
+            !items.iter().any(|item| matches!(
+                item,
+                DeskItem::Notice {
+                    notice: DeskNotice::TurnFailed,
+                    ..
+                }
+            )),
+            "a stopped turn read as failed: {items:?}"
+        );
         worker.end_process(false);
     }
 
