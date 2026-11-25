@@ -741,6 +741,8 @@ impl Worker {
             Incoming::Notification { method, params } if method == "session/update" => {
                 let update = session::read_update(&params);
                 let text = running.turn.read(number, &update);
+                // The agent writing puts the call it spoke of behind it.
+                let cleared = text.as_ref().is_some_and(|(tag, _)| running.wrote(*tag));
                 let adapter = running.adapter;
                 match update {
                     Update::Tool { id, call } => {
@@ -756,7 +758,7 @@ impl Worker {
                     Update::Text { .. } | Update::Break | Update::Info(_) | Update::Other => {}
                 }
                 if let Some((tag, text)) = text {
-                    if running.wrote(tag) {
+                    if cleared {
                         self.report(Report::Step { tag, step: None });
                     }
                     self.report(Report::Text { tag, text });
@@ -1527,7 +1529,7 @@ mod tests {
             )
         };
         let running = worker.running.as_mut().unwrap();
-        let mut note = |running: &mut Running, number: u64, id: &str| {
+        let note = |running: &mut Running, number: u64, id: &str| {
             let update = read(id);
             running.turn.read(number, &update);
             let Update::Tool { id, call } = update else {
