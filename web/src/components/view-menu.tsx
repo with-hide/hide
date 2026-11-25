@@ -3,7 +3,7 @@
 // key which shows them for as long as it is held, then how agent panes draw
 // their turn row. The core owns both choices; each check always reads what the
 // core confirmed. On another computer's screen these choices are the showing
-// window's (`displayPreferences.ts`), so that screen draws no View menu of its own.
+// window's (`drawnDisplay.ts`), so that screen draws no View menu of its own.
 
 import { EyeIcon } from "lucide-react";
 import type { Actions } from "../actions";

@@ -266,7 +266,6 @@ describe("an ask of a remote screen", () => {
     ]);
   });
 
-
   it("drops an ask made under another key or that waited past its bound", async () => {
     let clock = 1_000;
     const log = { event: vi.fn() };

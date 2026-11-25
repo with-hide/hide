@@ -144,7 +144,8 @@ export function SidebarScene({ theme, width, scale, content, devices, front, rai
 /**
  * A stand-in for the desktop's remote preload, put on the page before
  * anything hears the viewer: it says only who shows the screen, and with
- * `display` that window's View menu choices.
+ * `display` that window's View menu choices. It stays for the page's life,
+ * since one scene fills one document and the page hears its viewer once.
  */
 function standInViewer(lang: string, display: DisplayPreferences | undefined): void {
   (window as unknown as { hideRemote?: unknown }).hideRemote = {

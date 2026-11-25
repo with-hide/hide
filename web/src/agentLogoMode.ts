@@ -1,13 +1,12 @@
 // Whether a list row or tab draws its agent's logo (PRD agent-logo-view-mode):
 // when the drawn `agent_logo_mode` is shown (the core's, or on another
-// computer's screen the showing window's: `displayPreferences.ts`), or while an ⌥ hold has revealed
+// computer's screen the showing window's: `drawnDisplay.ts`), or while an ⌥ hold has revealed
 // the Agents family's numbers (D-05). The hold is the keyboard's own state
 // (`hints.ts`), read here and never listened for a second time.
 
 import { useSyncExternalStore } from "react";
-import { drawnDisplayPreferences } from "./drawnDisplay";
+import { drawnDisplayPreferences, subscribeDrawnDisplay } from "./drawnDisplay";
 import type { AgentLogoMode } from "./generated/hided-ws";
-import { subscribeViewer } from "./remoteView";
 import { useShellStore } from "./store";
 import type { NumberedFamily } from "./shortcuts";
 import { useUiStore } from "./ui";
@@ -18,8 +17,8 @@ export function agentLogosShown(mode: AgentLogoMode | undefined, hint: NumberedF
 }
 
 function subscribe(onChange: () => void): () => void {
-  const stores = [useShellStore.subscribe(onChange), useUiStore.subscribe(onChange), subscribeViewer(onChange)];
-  return () => stores.forEach((stop) => stop());
+  const stops = [subscribeDrawnDisplay(onChange), useUiStore.subscribe(onChange)];
+  return () => stops.forEach((stop) => stop());
 }
 
 function current(): boolean {
