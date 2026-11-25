@@ -453,15 +453,18 @@ fn every_agents_sample_reads_to_the_task_it_recorded() {
 
 /// A screen shows how long a command has run and how long it took, so
 /// every call says when it started and every finished result when it ended,
-/// from the record's own time: the samples were recorded on 2026-10-30.
+/// and it finds the answer a question Hide found was asked in, so every
+/// answer says when it was written, from the record's own time: the samples
+/// were recorded on 2026-10-30.
 #[test]
-fn every_call_and_finished_result_carries_when_it_was_written() {
+fn every_call_finished_result_and_answer_carries_when_it_was_written() {
     const RECORDED_FROM: u64 = 1_793_318_400_000; // 2026-10-30T00:00:00Z
     const RECORDED_TO: u64 = RECORDED_FROM + 24 * 60 * 60 * 1000;
     for sample in SAMPLES {
         let name = format!("{:?}", sample.format);
         let updates = Placed::new(sample).read_all();
         let mut started = std::collections::BTreeMap::new();
+        let mut answered = false;
         for update in &updates {
             let at = update["_meta"]["hide"]["at_ms"].as_u64();
             let id = update["toolCallId"].as_str();
@@ -480,10 +483,16 @@ fn every_call_and_finished_result_carries_when_it_was_written() {
                         "{name}: {id:?} ended before it started"
                     );
                 }
+                Some("agent_message_chunk") => {
+                    let at = at.unwrap_or_else(|| panic!("{name}: an answer without its time"));
+                    assert!((RECORDED_FROM..RECORDED_TO).contains(&at), "{name}: {at}");
+                    answered = true;
+                }
                 _ => {}
             }
         }
         assert!(!started.is_empty(), "{name}: the sample ran tools");
+        assert!(answered, "{name}: the sample answered");
     }
 }
 
