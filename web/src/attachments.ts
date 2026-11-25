@@ -139,6 +139,8 @@ export function refusalText(reason: string, t: TFunction<"translation">): string
       return t("panes.attachment.tooMany", { minimum: 1, maximum: MAX_FILES });
     case "staging_full":
       return t("panes.attachment.stagingFull");
+    case "desk_full":
+      return t("panes.attachment.deskFull");
     case "invalid_request_id":
       return t("panes.attachment.invalidName");
     case "size_mismatch":

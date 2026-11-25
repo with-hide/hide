@@ -766,4 +766,49 @@ mod restart_tests {
         assert_eq!(read.queued.len(), crate::model::DESK_QUEUED_MAX + 1);
         assert_eq!(read.queued[0].text, "m2");
     }
+
+    /// A waiting message is kept with its files, one of files alone
+    /// included (sent with no words, or come back first in line after a
+    /// refused start), across hided's restart; a record from before the
+    /// files were kept reads as a message with none.
+    #[test]
+    fn a_waiting_message_s_files_are_kept_across_a_restart_and_an_older_record_reads() {
+        let file = |name: &str| crate::model::DeskAttachment {
+            name: name.into(),
+            bytes: 3,
+            path: format!("/state/desk-attachments/r-0-{name}"),
+        };
+        let mut stored = Stored::default();
+        stored.queued.push(crate::model::DeskQueuedMessage {
+            id: 1,
+            text: "look".into(),
+            at_ms: 5,
+            mentions: Vec::new(),
+            attachments: vec![file("shot.png"), file("install.log")],
+        });
+        stored.queued.push(crate::model::DeskQueuedMessage {
+            id: 2,
+            text: String::new(),
+            at_ms: 6,
+            mentions: Vec::new(),
+            attachments: vec![file("only.png")],
+        });
+        let read = decode(&encode(&stored).unwrap()).unwrap();
+        assert_eq!(read.queued, stored.queued);
+
+        // An older build wrote no `attachments`.
+        let mut older: serde_json::Value =
+            serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+        for message in older["queued"].as_array_mut().unwrap() {
+            message.as_object_mut().unwrap().remove("attachments");
+        }
+        let read = decode(&serde_json::to_vec(&older).unwrap()).unwrap();
+        assert_eq!(
+            read.queued
+                .iter()
+                .map(|message| (message.text.as_str(), message.attachments.len()))
+                .collect::<Vec<_>>(),
+            [("look", 0)]
+        );
+    }
 }

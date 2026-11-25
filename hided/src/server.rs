@@ -4133,7 +4133,15 @@ fn handle_desk_send(state: &AppState, event: &Value) -> Vec<Message> {
         if !attachments::valid_request_id(&request_id) {
             return refuse("invalid_request_id");
         }
-        match state.attachments.commit_named(&stages) {
+        // The files Desk still has to send stay whatever its folder's cap says.
+        let in_use = match state.core.desk_files_in_use() {
+            Ok(in_use) => in_use,
+            Err(error) => {
+                log_snapshot_failure("desk_files_in_use", &error);
+                return refuse("forward_failed");
+            }
+        };
+        match state.attachments.commit_named(&stages, &in_use) {
             Ok(files) => files,
             Err(reason) => return refuse(reason),
         }

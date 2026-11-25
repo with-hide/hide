@@ -242,6 +242,9 @@ enum Command {
         device_id: String,
         reply: Sender<Vec<String>>,
     },
+    DeskFilesInUse {
+        reply: Sender<Vec<String>>,
+    },
     DeviceEngine {
         device_id: String,
         reply: Sender<Option<EngineHandle>>,
@@ -1261,6 +1264,16 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped registered-paths reply".to_owned())
     }
 
+    /// The files Desk still has to send; see `Core::desk_files_in_use`.
+    pub fn desk_files_in_use(&self) -> Result<Vec<String>, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::DeskFilesInUse { reply })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped desk-files reply".to_owned())
+    }
+
     pub fn workspace_remote_routes(&self) -> Result<Vec<hide_core::WorkspaceRemoteRoute>, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
@@ -2125,6 +2138,9 @@ fn owner_loop(
             }
             Command::RegisteredPaths { device_id, reply } => {
                 let _ = reply.send(core.registered_paths(&device_id));
+            }
+            Command::DeskFilesInUse { reply } => {
+                let _ = reply.send(core.desk_files_in_use());
             }
             Command::WorkspaceRemoteRoutes { reply } => {
                 let _ = reply.send(core.workspace_remote_routes());

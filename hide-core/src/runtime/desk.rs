@@ -620,10 +620,10 @@ impl Runtime {
         }
     }
 
-    /// The message of the turn under way, which the agent never took, goes
-    /// back first in line and out of the conversation, words, chips and
-    /// files together, so nothing is lost to a refused start and nothing
-    /// comes back to the composer; it may make the line one past its cap,
+    /// The message of the turn under way, which the agent never took (its
+    /// sign-in, its ask mode), goes back first in line and out of the
+    /// conversation, words, chips and files together, so nothing is lost to
+    /// a refused start and nothing comes back to the composer; it may make the line one past its cap,
     /// since the cap only refuses what the operator sends.
     fn desk_requeue_untaken(&mut self) {
         let Some(message) = self.desk.turn.as_ref().map(|turn| turn.message) else {
@@ -658,6 +658,34 @@ impl Runtime {
                 attachments,
             },
         );
+    }
+
+    /// The files Desk still has to hand its agent: every waiting message's
+    /// and the turn under way's. hided's keep of Desk's folder never removes
+    /// them (`hided/src/attachments.rs`, `commit_named`).
+    pub(crate) fn desk_files_in_use(&self) -> Vec<String> {
+        let turn = self.desk.turn.as_ref().map(|turn| turn.message);
+        let turn_files = self
+            .desk
+            .stored
+            .conversation
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                DeskItem::User {
+                    id, attachments, ..
+                } if Some(*id) == turn => Some(attachments),
+                _ => None,
+            });
+        self.desk
+            .stored
+            .queued
+            .iter()
+            .map(|message| &message.attachments)
+            .chain(turn_files)
+            .flatten()
+            .map(|file| file.path.clone())
+            .collect()
     }
 
     /// ✕ on a queued message: it leaves the line and never goes. Its files
@@ -1344,10 +1372,12 @@ impl Runtime {
                 return false;
             }
             Report::AttachmentsGone { tag } => {
-                // No agent received the message: it goes back first in line,
-                // as a sign-in's does, and the line holds with a line that
-                // says its files are gone; ✕ takes it out, and the turn ends
-                // with the worker's next report.
+                // No agent received the message, and sending it again would
+                // meet the same gone file: it stays in the conversation, its
+                // words kept, with a line under it that it was not sent, and
+                // the next waiting message goes once the worker's next report
+                // ends the turn. The operator attaches the file again in a
+                // new message.
                 let Some(agent) = self
                     .desk
                     .turn
@@ -1357,8 +1387,6 @@ impl Runtime {
                 else {
                     return false;
                 };
-                self.desk.held = true;
-                self.desk_requeue_untaken();
                 self.push_notice(DeskNotice::AttachmentsGone, Some(agent), None);
                 self.save_desk();
             }
@@ -2647,12 +2675,12 @@ mod tests {
             .queued_held
     }
 
-    /// A message whose file is gone was never asked of the agent: it comes
-    /// back first in line with its file, as a sign-in's refusal does, and
-    /// the line holds with a line that says why; nothing goes back to the
-    /// composer.
+    /// A message whose file is gone was never asked of the agent, and asking
+    /// again would meet the same gone file: it stays in the conversation
+    /// with a line under it that it was not sent, never goes again, and the
+    /// message waiting behind it goes; nothing returns to the composer.
     #[test]
-    fn a_message_whose_file_is_gone_comes_back_first_in_line_and_holds_it() {
+    fn a_message_whose_file_is_gone_stays_unsent_in_the_conversation_and_the_line_goes_on() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received) = runtime(root.path());
         event(&mut runtime, "desk_select", json!({"agent": "claude"}));
@@ -2663,6 +2691,7 @@ mod tests {
             json!({"text": "look", "files": [{"name": "shot.png", "bytes": 3, "path": gone.display().to_string()}]})
         ));
         let send = sent(&received);
+        assert!(event(&mut runtime, "desk_send", json!({"text": "next"})));
         // The worker finds the file gone and asks no agent.
         runtime.desk_report(Report::AttachmentsGone { tag: send.tag });
         runtime.desk_report(Report::TurnEnded {
@@ -2670,38 +2699,43 @@ mod tests {
             outcome: TurnOutcome::Cancelled,
         });
         let shown = items(&runtime);
+        let message = shown
+            .iter()
+            .position(|item| matches!(item, DeskItem::User { text, attachments, .. } if text == "look" && attachments.len() == 1))
+            .expect("the message stays in the conversation with its file");
         assert!(
-            !shown
-                .iter()
-                .any(|item| matches!(item, DeskItem::User { .. })),
-            "the message left the conversation"
+            shown[message..].iter().any(|item| matches!(
+                item,
+                DeskItem::Notice {
+                    notice: DeskNotice::AttachmentsGone,
+                    ..
+                }
+            )),
+            "{shown:?}"
         );
-        assert!(shown.iter().any(|item| matches!(
-            item,
-            DeskItem::Notice {
-                notice: DeskNotice::AttachmentsGone,
-                ..
-            }
-        )));
-        assert!(runtime.desk.turn.is_none());
-        assert_eq!(
-            queued_files(&runtime),
-            [("look".to_owned(), vec![gone.display().to_string()])]
-        );
-        assert!(held(&runtime));
+        assert!(!held(&runtime));
+        // The next waiting message went; the gone one is not in the line.
+        assert_eq!(sent(&received).text, "next");
+        assert!(queued_files(&runtime).is_empty());
         no_send(&received);
     }
 
     /// letter-47579: a message with a file sent while Desk answers waits in
     /// line with its file, and when the turn before it ends the agent gets
-    /// the file's path before its words.
+    /// the file's path before its words. Until then the files of the turn
+    /// and of the line are the ones Desk's folder must keep.
     #[test]
     fn a_message_with_a_file_sent_while_desk_answers_reaches_the_agent_from_the_line_with_its_path()
     {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received) = runtime(root.path());
         event(&mut runtime, "desk_select", json!({"agent": "claude"}));
-        assert!(event(&mut runtime, "desk_send", json!({"text": "one"})));
+        let first = root.path().join("desk-attachments").join("first.png");
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "one", "files": [{"name": "first.png", "bytes": 5, "path": first.display().to_string()}]})
+        ));
         let one = sent(&received);
         opened(&mut runtime, AdapterId::CLAUDE);
         let log = root.path().join("desk-attachments").join("install.log");
@@ -2715,11 +2749,18 @@ mod tests {
             queued_files(&runtime),
             [("and this".to_owned(), vec![log.display().to_string()])]
         );
+        let mut in_use = runtime.desk_files_in_use();
+        in_use.sort();
+        assert_eq!(
+            in_use,
+            [first.display().to_string(), log.display().to_string()]
+        );
 
         runtime.desk_report(Report::TurnEnded {
             tag: one.tag,
             outcome: TurnOutcome::Done,
         });
+        assert_eq!(runtime.desk_files_in_use(), [log.display().to_string()]);
         let two = sent(&received);
         assert_eq!(two.text, format!("\"{}\" and this", log.display()));
         assert_eq!(two.files, [log.display().to_string()]);

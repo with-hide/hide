@@ -199,6 +199,7 @@ describe("attachment upload", () => {
     expect(refusalText("batch_too_large", en)).toContain("40 MiB");
     expect(refusalText("too_many_files", en)).toContain("1 and 8");
     expect(refusalText("staging_full", en)).toContain("being prepared");
+    expect(refusalText("desk_full", en)).toContain("waiting to be sent");
     expect(refusalText("size_mismatch", en)).toContain("changed");
     expect(refusalText("wat", en)).toBe("The attachment was refused.");
   });

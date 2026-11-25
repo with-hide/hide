@@ -11,7 +11,7 @@
 //! hided refuses past them here rather than making the core read a file it will
 //! reject. A clipboard image stages at the exact path the core reads it from.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -35,9 +35,11 @@ const STAGED_KEEP: usize = 512;
 /// core may still be reading the file a just-pasted token names.
 const MAX_STAGED_BYTES: u64 = 256 * 1024 * 1024;
 /// Desk's own folder keeps this many of the newest files its messages sent,
-/// and no more bytes than this; past either the oldest go first, and a
-/// message that names one gone is refused when sent again
-/// (`hide-core/src/runtime/desk/worker.rs`).
+/// and no more bytes than this; past either the oldest go first, never one
+/// Desk still has to send (a waiting message's, the turn under way's) or one
+/// given within `COMMIT_GRACE`, and a message those alone would push past
+/// either is refused (`desk_full`). A message sent again whose file went is
+/// told so under it (`hide-core/src/runtime/desk/worker.rs`).
 const DESK_KEEP: usize = 64;
 const DESK_KEEP_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -181,11 +183,10 @@ fn make_room(
     Ok(())
 }
 
-/// Leaves at most `count` files and `bytes` in `dir`, removing the oldest
-/// first; `fresh` (the files just put there) are never removed.
-fn keep_newest(dir: &Path, fresh: &[PathBuf], count: usize, bytes: u64) {
+/// The files in `dir`, oldest first, with their bytes.
+fn files_in(dir: &Path) -> Vec<(std::time::SystemTime, u64, PathBuf)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+        return Vec::new();
     };
     let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
         .flatten()
@@ -198,13 +199,20 @@ fn keep_newest(dir: &Path, fresh: &[PathBuf], count: usize, bytes: u64) {
         })
         .collect();
     files.sort_by_key(|(modified, _, _)| *modified);
+    files
+}
+
+/// Leaves at most `count` files and `bytes` in `dir`, removing the oldest
+/// first; `kept` (files in use and the ones just put there) are never removed.
+fn keep_newest(dir: &Path, kept: &HashSet<PathBuf>, count: usize, bytes: u64) {
+    let files = files_in(dir);
     let mut left = files.len();
     let mut total: u64 = files.iter().map(|(_, size, _)| size).sum();
     for (_, size, path) in files {
         if left <= count && total <= bytes {
             break;
         }
-        if fresh.contains(&path) {
+        if kept.contains(&path) {
             continue;
         }
         if std::fs::remove_file(&path).is_ok() {
@@ -223,6 +231,10 @@ pub struct Attachments {
     /// staged (`hide_host::feedback`).
     state_dir: PathBuf,
     state: Mutex<State>,
+    /// The files given to Desk's messages within `COMMIT_GRACE`, which the
+    /// core may not have queued yet; locked for a whole commit to Desk's
+    /// folder, so two windows' commits take it one at a time.
+    desk_recent: Mutex<Vec<(PathBuf, Instant)>>,
 }
 
 impl Attachments {
@@ -274,6 +286,7 @@ impl Attachments {
             clipboard_root,
             state_dir: state_dir.to_owned(),
             state: Mutex::new(State::default()),
+            desk_recent: Mutex::new(Vec::new()),
         }
     }
 
@@ -502,9 +515,21 @@ impl Attachments {
     /// the order the client names them, with a batch's caps, moved into
     /// Desk's own folder: the stored message names them after a restart and
     /// past the staging folder's eviction. Each answers its name as the
-    /// operator's file was called, its bytes and its path there. Blocks on
-    /// the disk.
-    pub fn commit_named(&self, stages: &[String]) -> Result<Vec<CommittedFile>, &'static str> {
+    /// operator's file was called, its bytes and its path there. `in_use`
+    /// are the files Desk still has to send (`Core::desk_files_in_use`):
+    /// the folder's cap never removes them, nor a file given within
+    /// `COMMIT_GRACE`, and when those alone leave no room for this message
+    /// it is refused `desk_full` and its staged files let go. Blocks on the
+    /// disk.
+    pub fn commit_named(
+        &self,
+        stages: &[String],
+        in_use: &[String],
+    ) -> Result<Vec<CommittedFile>, &'static str> {
+        let mut recent = self
+            .desk_recent
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let files = self.commit_files(stages, MAX_FILES, None)?;
         // The staging folder lets go of them: they are Desk's now.
         {
@@ -518,6 +543,36 @@ impl Attachments {
             state.staged = kept;
             let freed: u64 = moved.iter().map(|entry| entry.bytes).sum();
             state.staged_bytes = state.staged_bytes.saturating_sub(freed);
+        }
+        recent.retain(|(_, at)| at.elapsed() < COMMIT_GRACE);
+        let mut keep: HashSet<PathBuf> = in_use
+            .iter()
+            .map(PathBuf::from)
+            .chain(recent.iter().map(|(path, _)| path.clone()))
+            .collect();
+        let (held, held_bytes) = files_in(&self.desk_dir)
+            .into_iter()
+            .filter(|(_, _, path)| keep.contains(path))
+            .fold((0usize, 0u64), |(count, sum), (_, size, _)| {
+                (count + 1, sum + size)
+            });
+        let incoming: u64 = files.iter().map(|(_, bytes)| bytes).sum();
+        if held + files.len() > DESK_KEEP || held_bytes + incoming > DESK_KEEP_BYTES {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "component": "hided",
+                    "kind": "attachment.desk_full",
+                    "held_files": held,
+                    "held_bytes": held_bytes,
+                    "files": files.len(),
+                    "bytes": incoming,
+                })
+            );
+            for (path, _) in &files {
+                let _ = std::fs::remove_file(path);
+            }
+            return Err("desk_full");
         }
         let mut committed: Vec<CommittedFile> = Vec::with_capacity(files.len());
         for (stage, (path, bytes)) in stages.iter().zip(&files) {
@@ -558,11 +613,13 @@ impl Attachments {
                 path: kept.display().to_string(),
             });
         }
-        let fresh: Vec<PathBuf> = committed
-            .iter()
-            .map(|file| PathBuf::from(&file.path))
-            .collect();
-        keep_newest(&self.desk_dir, &fresh, DESK_KEEP, DESK_KEEP_BYTES);
+        let now = Instant::now();
+        for file in &committed {
+            let path = PathBuf::from(&file.path);
+            recent.push((path.clone(), now));
+            keep.insert(path);
+        }
+        keep_newest(&self.desk_dir, &keep, DESK_KEEP, DESK_KEEP_BYTES);
         Ok(committed)
     }
 
@@ -803,7 +860,7 @@ mod tests {
             assert_eq!(service.write(&stage, bytes, true), Ok(true));
         }
         let files = service
-            .commit_named(&[format!("{id}-0"), format!("{id}-1")])
+            .commit_named(&[format!("{id}-0"), format!("{id}-1")], &[])
             .unwrap();
         assert_eq!(
             files
@@ -831,13 +888,76 @@ mod tests {
         );
         // A commit takes open stages only: the same files cannot be named twice.
         assert_eq!(
-            service.commit_named(&[format!("{id}-0")]),
+            service.commit_named(&[format!("{id}-0")], &[]),
             Err("unknown_stage")
         );
         // A new run empties the staging folder, not Desk's.
         drop(service);
         let _ = Attachments::new(dir.path());
         assert_eq!(std::fs::read(&files[1].path).unwrap(), [9]);
+    }
+
+    /// letter-47595: while Desk answers, nine messages of eight files wait
+    /// (72 files, past the folder's 64). The folder never removes a file a
+    /// waiting message names: a message only those files would push past the
+    /// cap is refused `desk_full` and its staged files let go, and once
+    /// messages went, the next one removes the oldest file no message waits on.
+    #[test]
+    fn desk_s_folder_never_removes_a_file_desk_still_has_to_send() {
+        let (dir, service) = attachments();
+        let base = std::time::SystemTime::now() - Duration::from_secs(3600);
+        let send = |message: u64, in_use: &[String]| {
+            let stages: Vec<String> = (0..MAX_FILES)
+                .map(|index| {
+                    let stage = format!("m{message}-{index}");
+                    service
+                        .begin(0, &stage, &format!("f{index}.txt"), 1, false)
+                        .unwrap();
+                    assert_eq!(service.write(&stage, &[7], true), Ok(true));
+                    stage
+                })
+                .collect();
+            let files = service.commit_named(&stages, in_use)?;
+            // Each message a minute after the one before, so "oldest" is
+            // the order they were sent in; and past the commit's grace.
+            for file in &files {
+                File::options()
+                    .write(true)
+                    .open(&file.path)
+                    .unwrap()
+                    .set_modified(base + Duration::from_secs(message * 60))
+                    .unwrap();
+            }
+            service.desk_recent.lock().unwrap().clear();
+            Ok::<Vec<String>, &str>(files.into_iter().map(|file| file.path).collect())
+        };
+        let mut messages: Vec<Vec<String>> = Vec::new();
+        for message in 0..8 {
+            let in_use = messages.concat();
+            messages.push(send(message, &in_use).unwrap());
+        }
+        assert_eq!(send(8, &messages.concat()), Err("desk_full"));
+        for path in messages.concat() {
+            assert!(Path::new(&path).exists(), "{path} was removed");
+        }
+        assert_eq!(
+            std::fs::read_dir(hide_kit::layout::screen_attachments(dir.path()))
+                .unwrap()
+                .count(),
+            0,
+            "the refused message's staged files are let go"
+        );
+
+        // The first two messages went: the ninth fits, and the folder lets
+        // go of the first message's files, the oldest no message waits on.
+        let in_use = messages[2..].concat();
+        let ninth = send(9, &in_use).unwrap();
+        for path in &messages[0] {
+            assert!(!Path::new(path).exists(), "{path} was kept");
+        }
+        for path in in_use.iter().chain(&ninth).chain(&messages[1]) {
+            assert!(Path::new(path).exists(), "{path} was removed");
+        }
     }
 
     #[test]
@@ -859,7 +979,7 @@ mod tests {
         }
         // The oldest file is the one just sent; past three files the next oldest goes.
         let fresh = folder.join("f0");
-        keep_newest(&folder, std::slice::from_ref(&fresh), 3, u64::MAX);
+        keep_newest(&folder, &HashSet::from([fresh]), 3, u64::MAX);
         let mut left: Vec<_> = std::fs::read_dir(&folder)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
@@ -867,7 +987,7 @@ mod tests {
         left.sort();
         assert_eq!(left, ["f0", "f2", "f3"]);
         // Past the bytes the oldest go too.
-        keep_newest(&folder, &[], 3, 10);
+        keep_newest(&folder, &HashSet::new(), 3, 10);
         assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1);
         assert!(folder.join("f3").exists());
     }
