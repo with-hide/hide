@@ -60,7 +60,9 @@ pub(super) enum Order {
     /// Desk was turned off: ends the process and every install under way,
     /// whose staging folders go with them (engineering principle 14).
     Off,
-    Incoming(Incoming),
+    /// A message from the agent, numbered as it arrived
+    /// ([`session::Arrivals`]).
+    Incoming(u64, Incoming),
     Installed(AdapterId, Result<(), InstallError>),
     /// The runtime is gone: end the process and the worker.
     Shutdown,
@@ -184,6 +186,8 @@ pub(super) fn start(
         notifier,
         orders: orders.clone(),
         queued: Arc::new(AtomicUsize::new(0)),
+        arrivals: session::Arrivals::default(),
+        signed_out: Arc::new(AtomicBool::new(false)),
         dropped_reported: Arc::new(AtomicBool::new(false)),
         stop: Arc::new(AtomicBool::new(false)),
         on: false,
@@ -203,6 +207,13 @@ struct Worker {
     /// The worker's own sender, for the agent's messages and installs.
     orders: Sender<Order>,
     queued: Arc<AtomicUsize>,
+    /// Numbers every message of every process this worker starts, so a
+    /// turn reads only what arrived after its prompt went out.
+    arrivals: session::Arrivals,
+    /// The running agent said it is signed out ([`session::sign_in_status`]),
+    /// so a call it refuses then is refused for the sign-in, whatever code
+    /// the refusal carries.
+    signed_out: Arc<AtomicBool>,
     /// Reply text was dropped past [`MAX_QUEUED_INCOMING`] and logged once.
     dropped_reported: Arc<AtomicBool>,
     /// Raised when Desk is turned off or the worker ends, so every install
@@ -225,6 +236,10 @@ struct Running {
     announced: HashMap<String, Value>,
     announced_order: Vec<String>,
     turn: Option<u64>,
+    /// The first arrival the running turn owns: what came before its
+    /// prompt went out, such as a `session/load`'s replay of the
+    /// conversation still waiting in the channel, is no turn's.
+    turn_from: u64,
     /// The tool calls announced in the turn running now, in order.
     turn_calls: Vec<String>,
     /// The work placement this session was last told; none for a session
@@ -275,9 +290,9 @@ impl Worker {
                 self.end_process(false);
             }
             Order::Shutdown => {}
-            Order::Incoming(incoming) => {
+            Order::Incoming(number, incoming) => {
                 self.queued.fetch_sub(1, Ordering::SeqCst);
-                self.incoming(incoming);
+                self.incoming(number, incoming);
             }
             Order::Installed(adapter, result) => {
                 self.installing.retain(|installing| *installing != adapter);
@@ -441,6 +456,7 @@ impl Worker {
             hide_desk::next_message(changed, &send.text)
         };
         running.placement = Some(send.placement);
+        running.turn_from = self.arrivals.next();
         match session::prompt(
             running.host.connection(),
             &running.session_id,
@@ -518,6 +534,7 @@ impl Worker {
                 return Err(OpenError::Failed(error));
             }
         };
+        self.signed_out.store(false, Ordering::SeqCst);
         let host = match Host::start(&launch, self.sink()) {
             Ok(host) => host,
             Err(error) => {
@@ -553,6 +570,11 @@ impl Worker {
             &pi_ready,
         ) {
             Ok(opened) => opened,
+            // An agent that said it is signed out refused the open for its
+            // sign-in, whichever error it answered with.
+            Err(OpenError::Failed(_)) if self.signed_out.load(Ordering::SeqCst) => {
+                return Err(close(&self.platform, host, OpenError::Login));
+            }
             Err(error) => return Err(close(&self.platform, host, error)),
         };
         let mut choices = opened.choices.clone();
@@ -582,6 +604,7 @@ impl Worker {
                 announced: HashMap::new(),
                 announced_order: Vec::new(),
                 turn: None,
+                turn_from: 0,
                 turn_calls: Vec::new(),
                 placement: None,
                 prelude: opened.prelude,
@@ -596,7 +619,15 @@ impl Worker {
         let orders = Mutex::new(self.orders.clone());
         let queued = Arc::clone(&self.queued);
         let reported = Arc::clone(&self.dropped_reported);
-        Arc::new(move |incoming: Incoming| {
+        let signed_out = Arc::clone(&self.signed_out);
+        self.arrivals.sink(move |number, incoming: Incoming| {
+            // Read here, on the connection's reader, so it is known before
+            // the answer to the call it came ahead of.
+            if let Incoming::Notification { method, params } = &incoming
+                && let Some(signed_in) = session::sign_in_status(method, params)
+            {
+                signed_out.store(!signed_in, Ordering::SeqCst);
+            }
             if matches!(incoming, Incoming::Notification { .. })
                 && queued.load(Ordering::SeqCst) >= MAX_QUEUED_INCOMING
             {
@@ -613,7 +644,7 @@ impl Worker {
             let sent = orders
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .send(Order::Incoming(incoming));
+                .send(Order::Incoming(number, incoming));
             if sent.is_err() {
                 queued.fetch_sub(1, Ordering::SeqCst);
             }
@@ -643,17 +674,22 @@ impl Worker {
         }
     }
 
-    fn incoming(&mut self, incoming: Incoming) {
+    fn incoming(&mut self, number: u64, incoming: Incoming) {
         let Some(running) = &mut self.running else {
             return;
         };
         match incoming {
             Incoming::Notification { method, params } if method == "session/update" => {
                 let update = session::read_update(&params);
+                // What arrived before the turn's prompt went out, such as
+                // the conversation a `session/load` replayed after `다시
+                // 시작`, is already in the conversation: no turn's reply or
+                // steps.
+                let owned = number >= running.turn_from;
                 // Pi's adapter writes startup lines on its own after the
                 // session opens, announced in its session answer.
                 let prelude = matches!(&update, Update::Text { text, .. } if running.prelude.as_deref() == Some(text.as_str()));
-                let piece = if prelude {
+                let piece = if prelude || !owned {
                     None
                 } else {
                     running.reply.piece(&update)
@@ -666,7 +702,8 @@ impl Worker {
                         }
                     }
                     Update::Tool { id, call } => {
-                        if running.turn.is_some()
+                        if owned
+                            && running.turn.is_some()
                             && running.turn_calls.len() < MAX_ANNOUNCED
                             && !running.turn_calls.contains(&id)
                         {
@@ -719,7 +756,10 @@ impl Worker {
                         }
                         _ => TurnOutcome::Done,
                     },
-                    Err(error) if current && signs_in(&error) => {
+                    Err(error)
+                        if current
+                            && (signs_in(&error) || self.signed_out.load(Ordering::SeqCst)) =>
+                    {
                         self.turn_failed(adapter, &error);
                         self.sign_in_needed(adapter, tag);
                         return;

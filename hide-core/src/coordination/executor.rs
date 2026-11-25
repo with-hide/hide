@@ -40,6 +40,13 @@ fn worktree_create_refusal(error: EngineError) -> String {
 // beside another spawn's.
 pub(crate) static SPAWN: Mutex<()> = Mutex::new(());
 
+/// Waits until no start holds this machine's start line, each holding it
+/// for the seconds a start takes. False for a line a panicked start
+/// poisoned, which refuses every start, so a caller does not wait on it.
+pub(crate) fn wait_for_spawn_line() -> bool {
+    SPAWN.lock().is_ok()
+}
+
 /// The refusal for a spawn whose machine already runs the most pane holders
 /// it keeps: the machine and the node's own count and cap, so the caller
 /// knows where to end finished agents.

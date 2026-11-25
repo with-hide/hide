@@ -201,6 +201,11 @@ pub(crate) struct Stored {
     /// conversation and queue (B29).
     #[serde(default, rename = "panel_widths")]
     pub lane: crate::model::DeskLane,
+    /// Messages the operator sent while a reply was being written, in order,
+    /// kept across a restart; each goes once the turn before it ended. An
+    /// older Hide reads past the key.
+    #[serde(default)]
+    pub queued: Vec<crate::model::DeskQueuedMessage>,
 }
 
 /// Spawns the queue holds; one past it is refused `desk_queue_full`.
