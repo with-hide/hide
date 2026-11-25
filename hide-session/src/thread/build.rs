@@ -55,7 +55,10 @@ pub(crate) enum Origin {
 impl Origin {
     const fn as_str(self) -> Option<&'static str> {
         match self {
-            Self::Operator | Self::Injected => None,
+            Self::Operator => None,
+            // `Thread::user` leaves an injected message out, so none is drawn
+            // with a mark.
+            Self::Injected => None,
             Self::Letter => Some("letter"),
             Self::Interrupted => Some("interrupted"),
         }
@@ -237,8 +240,17 @@ impl Thread {
         for part in parts {
             match part {
                 Part::Text(text) => {
+                    let had_text = !text.trim().is_empty();
+                    // A record's own mark is believed; without one, the text's
+                    // injected blocks come off its front and what follows
+                    // them is the operator's.
+                    let text = if origin == Origin::Operator {
+                        crate::strip_injected(text)
+                    } else {
+                        text
+                    };
                     let origin = classify(origin, text);
-                    if origin == Origin::Injected {
+                    if origin == Origin::Injected || (text.is_empty() && had_text) {
                         self.skip("injected");
                         continue;
                     }
@@ -475,8 +487,6 @@ fn classify(origin: Origin, text: &str) -> Origin {
         Origin::Interrupted
     } else if crate::is_letter(text) {
         Origin::Letter
-    } else if crate::has_injected_prefix(text) {
-        Origin::Injected
     } else {
         Origin::Operator
     }
