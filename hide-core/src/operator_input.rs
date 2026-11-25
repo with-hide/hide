@@ -756,6 +756,95 @@ mod tests {
     use hide_node_link::terminal::{GridSize, InputPermitReply, KeyTarget, TerminalControl};
     use std::sync::Mutex;
 
+    /// One machine's node as an attachment meets it: the core's own reads
+    /// the staged files, a device's stages them and answers its own path.
+    #[derive(Default)]
+    struct FileNode {
+        staged: Mutex<Vec<(String, Vec<u8>)>>,
+    }
+
+    impl crate::node_access::NodeLink for FileNode {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _: std::time::Duration,
+        ) -> Result<hide_node_link::LinkAnswer, hide_node_link::LinkError> {
+            use hide_node_link::protocol::Call;
+            let answer = match call {
+                Call::ReadAttachments { paths } => serde_json::to_value(
+                    paths
+                        .iter()
+                        .map(|path| {
+                            let name = path.rsplit('/').next().unwrap().to_owned();
+                            hide_node_link::attachments::ReadFile::new(path.clone(), name, b"PNG")
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap(),
+                // The device's staging names each file itself (`hide_host::attachments`).
+                Call::StageAttachment {
+                    request,
+                    index,
+                    file,
+                    ..
+                } => {
+                    let path = format!(
+                        "C:/Users/alice/.hide/state/terminal-attachments/hide-{request}-{index}.png"
+                    );
+                    self.staged
+                        .lock()
+                        .unwrap()
+                        .push((path.clone(), file.bytes().unwrap()));
+                    serde_json::Value::from(path)
+                }
+                other => panic!("an attachment asks no {other:?}"),
+            };
+            Ok(hide_node_link::LinkAnswer::Parsed(answer))
+        }
+    }
+
+    /// A session's input on a connected device (PRD desk-2-ui B41, Risks):
+    /// the file the composer staged on the core's machine crosses the link
+    /// and the agent is typed the device's own path, spelled as a path
+    /// crosses machines (`/` between names); with the link down nothing is
+    /// staged or typed and the input is refused, so the screen keeps it.
+    #[test]
+    fn a_device_session_s_file_crosses_the_link_and_the_agent_gets_the_device_s_path() {
+        let own = Arc::new(FileNode::default());
+        let device = Arc::new(FileNode::default());
+        let request = "0b7a3c52-9a1e-4f7d-8c2b-1a2b3c4d5e6f";
+        let staged = format!("/state/attachments/{request}-0-shot.png");
+        let attach = Attach::new(
+            true,
+            Arc::clone(&own) as _,
+            Some(Ok(Arc::clone(&device) as _)),
+        );
+        assert_eq!(
+            attach.words("봐 줘", std::slice::from_ref(&staged), request),
+            Ok(format!(
+                "\"C:/Users/alice/.hide/state/terminal-attachments/hide-{request}-0.png\" 봐 줘"
+            ))
+        );
+        assert_eq!(
+            device.staged.lock().unwrap().as_slice(),
+            [(
+                format!("C:/Users/alice/.hide/state/terminal-attachments/hide-{request}-0.png"),
+                b"PNG".to_vec()
+            )]
+        );
+
+        let attach = Attach::new(
+            true,
+            Arc::clone(&own) as _,
+            Some(Err("not connected".to_owned())),
+        );
+        assert_eq!(
+            attach.words("봐 줘", &[staged], request),
+            Err("device_unreachable")
+        );
+        assert_eq!(device.staged.lock().unwrap().len(), 1);
+    }
+
     /// A node that answers every permit as `allow` says and records the
     /// bytes asked for; anything else a writer did to the terminal would be
     /// a phone or a conversation moving the operator's screen.

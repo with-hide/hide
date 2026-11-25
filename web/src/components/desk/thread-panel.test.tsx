@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
+import { Blob as NodeBlob } from "node:buffer";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { configureAttachments } from "../../attachments";
+import { keepSent } from "../../deskComposer";
 import type { DeskJob } from "../../desk";
 import type { SessionThreadSection } from "../../snapshot";
 import { useShellStore } from "../../store";
@@ -156,6 +158,65 @@ it("asks for the page before once per state the core shows, a failed read includ
   await reachTop();
   expect(actions.readOlderThread).toHaveBeenCalledTimes(2);
   expect(actions.readOlderThread).toHaveBeenLastCalledWith(4);
+});
+
+/** A file whose bytes the tray reads in, as a browser's File gives them (jsdom's has no `stream`). */
+function readable(name: string, bytes: Uint8Array<ArrayBuffer>): File {
+  const file = new File([bytes], name);
+  file.stream = () => new NodeBlob([bytes]).stream() as ReadableStream<Uint8Array<ArrayBuffer>>;
+  return file;
+}
+
+/** A file the tray must never read: past the cap, its bytes stay where they are (desk-2-ui B42). */
+function unreadable(name: string, size: number): File {
+  const file = new File([], name);
+  Object.defineProperty(file, "size", { value: size });
+  file.stream = () => { throw new Error(`${name} was read`); };
+  file.arrayBuffer = () => Promise.reject(new Error(`${name} was read`));
+  return file;
+}
+
+async function drop(target: Element, files: File[]) {
+  const transfer = { types: ["Files"], files, dropEffect: "none" };
+  for (const kind of ["dragenter", "dragover", "drop"]) {
+    const event = new Event(kind, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", { value: transfer });
+    await act(async () => { target.dispatchEvent(event); });
+  }
+}
+
+it("takes dropped files above the box, holds send while one is past 20 MB without reading it, and sends the rest once it is out (desk-2-ui B41, B42)", async () => {
+  const { container, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await type("이 로그도 같이 봐 줘");
+  const frame = container.querySelector("[data-desk-composer-frame]")!;
+  await drop(frame, [readable("install.log", new Uint8Array([7, 8, 9])), unreadable("all-logs.zip", 20 * 1024 * 1024 + 1)]);
+  await vi.waitFor(() => expect(container.querySelector('[data-desk-attachment="ready"]')).not.toBeNull());
+
+  const big = container.querySelector('[data-desk-attachment="too_large"]');
+  expect(big?.textContent).toContain("Over 20 MB");
+  expect(container.querySelector<HTMLButtonElement>('[data-desk-composer-send="true"]')?.disabled).toBe(true);
+  await enter();
+  expect(events).toEqual([]);
+
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-desk-attachment-remove="all-logs.zip"]')!.click());
+  expect(container.querySelectorAll("[data-desk-attachment]")).toHaveLength(1);
+  expect(container.querySelector<HTMLButtonElement>('[data-desk-composer-send="true"]')?.disabled).toBe(false);
+  await enter();
+  expect(events.map((event) => event.kind)).toEqual(["attachment_stage", "thread_input"]);
+  expect(events[0]!.payload).toMatchObject({ name: "install.log", size: 3 });
+  expect(events[1]!.payload).toMatchObject({ text: "이 로그도 같이 봐 줘", stages: [events[0]!.payload.request_id] });
+});
+
+it("draws the files a sent message typed before its words over its bubble, by the names they were sent under (desk-2-ui B41)", async () => {
+  const { container } = await mount();
+  const stage = "0b7a3c52-9a1e-4f7d-8c2b-1a2b3c4d5e6f";
+  const typed = `"/Users/me/.hide/state/attachments/${stage}-0-화면 1.png" "C:/Users/me/.hide/state/terminal-attachments/hide-${stage}-1.log" 이것 좀 봐 줘`;
+  keepSent(`${stage}-1`, "install.log", null);
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: typed } }], parts: {}, sessions: {} } }) }));
+  const sent = container.querySelector("[data-desk-sent-attachments]");
+  expect([...sent!.querySelectorAll("[data-desk-attachment]")].map((tile) => tile.querySelector('[role="img"]')?.getAttribute("aria-label"))).toEqual(["화면 1.png", "install.log"]);
+  expect(container.querySelector('[data-desk-thread-line="user"] p')?.textContent).toBe("이것 좀 봐 줘");
 });
 
 it("draws a turn an agent recorded as interrupted as one quiet line, never as the operator's bubble", async () => {

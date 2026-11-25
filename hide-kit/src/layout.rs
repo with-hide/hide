@@ -417,6 +417,27 @@ pub fn letter_attachments(state_dir: &Path) -> PathBuf {
     state_dir.join("letter-attachments")
 }
 
+/// Files a window's operator dropped, pasted or picked into a terminal, a
+/// session's composer or Desk's composer, staged by the hided that serves
+/// that window before the core takes their paths. Started empty on each run
+/// and bounded by count and bytes; its owner is `hided`'s `attachments`.
+pub const SCREEN_ATTACHMENTS: &str = "attachments";
+
+pub fn screen_attachments(state_dir: &Path) -> PathBuf {
+    state_dir.join(SCREEN_ATTACHMENTS)
+}
+
+/// The files of the operator's messages to Desk's agent, moved here from
+/// `SCREEN_ATTACHMENTS` when the message is sent, so a stored message's
+/// paths outlive a restart and the staging folder's eviction (PRD desk-2-ui
+/// B41). Bounded by count and bytes, the oldest going first; its owner is
+/// `hided`'s `attachments`.
+pub const DESK_ATTACHMENTS: &str = "desk-attachments";
+
+pub fn desk_attachments(state_dir: &Path) -> PathBuf {
+    state_dir.join(DESK_ATTACHMENTS)
+}
+
 /// Files the operator attached to a terminal of this machine's panes from a
 /// window on another machine, one owner-only file each, kept 24 hours (PRD
 /// wsl-device B10); its owner is that node's `hide_host::attachments`.

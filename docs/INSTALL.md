@@ -525,6 +525,9 @@ Everything Hide owns on a machine is under `~/.hide`:
 | `~/.hide/ai` | Hide AI's folder for agy: `antigravity-read-only`, the tool-free folder a request runs in, and `antigravity-logs`, the logs of the last agy children of each kind Hide started ([AI_PROVIDERS.md](AI_PROVIDERS.md#antigravity)) |
 | `~/.hide/shell-integration` | The zsh and bash startup files a tab Hide makes for an agent starts its shell with, which read your own startup files and then mark the first prompt; one folder per build, another build's removed once unused for an hour |
 
+Files dropped, pasted or picked into a window's terminal or composer are staged in `~/.hide/state/attachments`, which `hided` empties at each start and keeps under 512 files and 256 MiB.
+The files of a message to Desk's agent are moved on send to `~/.hide/state/desk-attachments`, so the stored message's paths outlive a restart; `hided` keeps the newest 64 files and 256 MiB there, removing the oldest first but never a file a waiting message or the reply under way still names, and refuses a message those alone leave no room for; a message sent again whose file is gone stays in the conversation, unsent, with a line saying so (`hide_kit::layout::desk_attachments`, `hided/src/attachments.rs`).
+
 Missions are kept in `~/.hide/state/missions/<id>.json`, one schema-4 mission per file, beside `missions/index.json` with the next id and the metadata the list needs (`hide_kit::layout`).
 Their histories belong to the same book, in `missions/events/<id>.json`.
 The first migration copies legacy `mission-events/` histories before installing the index, preserving the old directory for a downgrade.
