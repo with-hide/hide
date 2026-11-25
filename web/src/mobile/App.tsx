@@ -35,7 +35,7 @@ import { hostedPhone, PHONE_PROTOCOL } from "./relayRuntime";
 import { HostPicker } from "./HostPicker";
 import { Landing, DeviceIdentity } from "./Landing";
 import { VersionScreen } from "./HostList";
-import { HOST_LIST_LINK, type PairedHost } from "./hosts";
+import { ADD_DEVICE_LINK, HOST_LIST_LINK, type PairedHost } from "./hosts";
 import { hintedMachine, markHinted, readHinted } from "./addHint";
 import { DemoBar } from "./Demo";
 import { ComputerChoice, GatheredList, openRoom, useConnectableHosts, type Watch } from "./Gathered";
@@ -166,7 +166,7 @@ export function ListScreen({ hosted = hostedPhone(), picker, gathered }: { hoste
       <ScreenHead
         data-phone-connected={connected ? "true" : "false"}
         data-phone-header={!hosted && macName ? headerLine(t, macName, otherPhones, devices) : undefined}
-        title={computers && activeRoom ? "hide" : hosted ? <HostPicker name={machinesName(macName, devices)} activeRoom={picker?.room} defaultOpen={picker?.open} /> : macName ? machinesName(macName, devices) : "hide"}
+        title={computers && activeRoom ? "hide" : hosted ? <HostPicker name={macName} activeRoom={picker?.room} defaultOpen={picker?.open} /> : macName ? machinesName(macName, devices) : "hide"}
         line={computers && activeRoom ? <ComputerChoice hosts={computers} activeRoom={activeRoom} /> : otherPhones > 0 ? t("mobile.otherPhonesLine", { count: otherPhones }) : null}
         action={
           <Button variant="ghost" size="icon" aria-label={t("mobile.start.title")} data-phone-start="true" className="-mr-sm size-(--size-touch-target) text-foreground" onClick={openStartSheet}>
@@ -258,7 +258,7 @@ function AddMachineHint({ hosts }: { hosts: readonly PairedHost[] }) {
   return (
     <div className="mx-xl mt-md flex items-center gap-sm text-body leading-relaxed text-subtle-foreground" data-phone-add-hint={machine.machine}>
       <span className="min-w-0 flex-1 break-keep wrap-anywhere">{t("mobile.addHint", { name: machine.name })}</span>
-      <Button variant="text" className="min-h-(--size-touch-target) shrink-0 px-none text-body" data-phone-add-hint-add="true" onClick={() => { if (done()) window.location.assign("/?add=1"); }}>
+      <Button variant="text" className="min-h-(--size-touch-target) shrink-0 px-none text-body" data-phone-add-hint-add="true" onClick={() => { if (done()) window.location.assign(ADD_DEVICE_LINK); }}>
         {t("mobile.addHintAdd")}
       </Button>
       <Button variant="ghost" size="icon" aria-label={t("common.close")} className="size-(--size-touch-target) text-muted-foreground" data-phone-add-hint-close="true" onClick={() => { done(); }}>

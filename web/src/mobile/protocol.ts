@@ -104,7 +104,20 @@ export type AgentGroup = { group: GroupId; count: number; rows: GroupRow[]; more
 /** The paired Mac (`local`) and each device it reaches, with the counts of their top rows. */
 /** Another machine the computer opens that runs work of its own, by its product device id and its name there (B56). */
 export type OtherMachine = { machine: string; name: string };
-export type PhoneDevice = { device_id: string; label: string | null; local?: true; connected: boolean; needs_you: number; working: number };
+export type PhoneDevice = {
+  device_id: string; label: string | null; local?: true; connected: boolean; needs_you: number; working: number;
+  /**
+   * How the Mac's core reaches the device (`DeviceLink`, `hide-core/src/agent_state/tally.rs`): over SSH, a WSL distribution of that
+   * PC, another computer that runs Hide and paired with it, or a node that dials it. Absent on the Mac itself and from a Mac before it;
+   * that and a value a newer Mac adds draw no mark (`linkMark`).
+   */
+  link?: "ssh" | "wsl" | "peer" | "inbound";
+};
+
+/** The mark a reached device's row wears for how it is reached, as Settings › Devices' rows do (`WayBadge`): SSH and WSL only. */
+export function linkMark(device: PhoneDevice): "SSH" | "WSL" | null {
+  return device.link === "ssh" ? "SSH" : device.link === "wsl" ? "WSL" : null;
+}
 
 /** Every agent the list holds, a parent before its children, shown or folded. */
 export function listedAgents(groups: readonly AgentGroup[]): PhoneAgent[] {
@@ -903,8 +916,18 @@ export function deviceNameOf(devices: readonly PhoneDevice[], id: string, macNam
 }
 
 export function machinesName(macName: string, devices: readonly PhoneDevice[]): string {
-  const names = devices.filter((device) => !device.local && device.connected && device.label).map((device) => device.label);
+  const names = shownThrough(devices).map((device) => device.label);
   return names.length > 0 ? `${macName} + ${names.join(", ")}` : macName;
+}
+
+/** The devices whose agents the Mac's list shows now: the connected ones it reaches. The home head counts them (`+N`). */
+export function shownThrough(devices: readonly PhoneDevice[]): PhoneDevice[] {
+  return devices.filter((device) => !device.local && device.connected && device.label);
+}
+
+/** A computer's name as the home head says it: without the `.local` macOS's network name ends with. */
+export function headName(name: string): string {
+  return name.replace(/\.local$/i, "");
 }
 
 /** The list header's second line (B19). */
