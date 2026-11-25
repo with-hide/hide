@@ -48,7 +48,7 @@ fn record(record: &Value, thread: &mut Thread) {
 
 /// Provider metadata that proves a message is not the operator's words.
 fn origin(record: &Value) -> Origin {
-    if record["isMeta"] == true || record["isCompactSummary"] == true {
+    if crate::claude_record_injected(record) {
         Origin::Injected
     } else {
         Origin::Operator
