@@ -25,6 +25,7 @@ So every review covers the perspectives below, and names the perspective of each
 - The same fact or decision computed in two or more places, or the same file read by two separate copies of its parser.
   One decision has one owner; every caller asks that owner.
 - A new function that is most of an existing one; extend the existing one for the callers that exist now instead.
+- A parallel copy of a component, helper, table or event the project already has: the reviewer searches for a sibling (`rg`) before approving new code that does the same job, and names the one to reuse.
 - Two implementations of one boundary (two engines, two hosts, two systems) that each carry their own copy of a shared rule instead of calling one place.
 - A fix that adds a special case for the instance in front of it (a second string match, threshold, delay or hardcoded value for a decision that already has one), above all when the same kind of bug has come back before: fix the common cause and model the state instead of adding a case.
 
@@ -60,6 +61,15 @@ So every review covers the perspectives below, and names the perspective of each
 - A new or changed test comes with its repeat result in the pull request's folded `Tests` block (changed tests times runs, linked to the repeat job); a test with none is an ordinary finding, because a single green run does not show a test is stable.
 - A new fixed wait, `sleep` or `timeout:` override names the state it waits for, as [Wait for state, not time](TESTING.md#wait-for-state-not-time) requires; one without it is an ordinary finding.
 - `docs/TESTING.md` owns which layer to test at, how to keep a test deterministic and the checklist for a test change ([Reviewing a pull request that adds or changes a test](TESTING.md#reviewing-a-pull-request-that-adds-or-changes-a-test)).
+
+### 7. Every agent, system and host
+
+`AGENTS.md`, Every Agent And Feature On Every System, owns the rule; a review checks the change against it.
+
+- Logic outside an agent's definition file (`hide-agent-adapter/agents/*.toml` and what reads it) that names one agent (`claude`, `codex`, `gemini`...): adding another agent must need a definition and no new branch.
+- A macOS, Windows or Linux difference written inline instead of once in its layer (`hide-platform`, `desktop/src/main/`), or a feature that works on this machine's pane and not on a pane of a connected device.
+- A gap on a system or a device that has no cell in `docs/INSTALL.md`, What each system supports, with its reason and what would close it.
+- `gh`, `glab`, GitHub or GitLab words in core logic outside the host interface: GitLab and a later Bitbucket should need an adapter and nothing else.
 
 ### Reviewing a cap
 

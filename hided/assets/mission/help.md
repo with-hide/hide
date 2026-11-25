@@ -190,10 +190,22 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   The node's worker starts from them: it puts the same steps up with `hide task set` and changes one only when the work turns out different, which the panel marks as changed.
   Once the worker's plan exists it is the truth and your `steps` stay its starting point; a later plan that leaves `steps` out keeps them, and `"steps": []` clears them.
 - Declare the `issues` and `paths` a node touches: the plan's answer lists `overlaps`, the other missions of this project on the same issue or files.
-- Show the plan in the conversation: the nodes and their kinds (코드, 일반 with its preset, 기다림), why each node is its own (which of the four lines above, in a few words), dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, each node's checkers, the verification strength (with its one-line reason when it differs from the setting), the cap, the scope (up to ready pull requests, or through the merge, naming the nodes the operator merges themselves as above), the GitHub or GitLab account, and any overlap.
+- Show the plan in the conversation: the nodes and their kinds (코드, 일반 with its preset, 기다림), why each node is its own (which of the four lines above, in a few words), dependencies, the PR or delivery of each and the merge order, the check command, each worker with its model and effort, the verification table (below, which replaces listing each node's checkers and what is verified together), the verification strength (with its one-line reason when it differs from the setting), the cap, the scope (up to ready pull requests, or through the merge, naming the nodes the operator merges themselves as above), the GitHub or GitLab account, and any overlap.
   Name the gates in one line that asks the operator to check there and tell you, such as `내가 확인할 곳: fix-1487 (재시작 후 태스크 렌즈), deploy (시작 전: 배포해도 될지). 여기서 확인하고 알려 주세요`; they approve it, or name more or fewer places.
   Ask about the cut in the same message, in one line in the operator's language that names the count and what you joined: `노드 3개로 나눴어요 (화면은 core와 한 노드로 합침). 더 합치거나 나눌까요?`; the operator's answer reshapes the plan before it starts.
   The operator's changes in conversation change this mission only; the settings stay as they are.
+- With the plan, show the verification table: one line for each finish line of a node (its `criteria`), so the operator sees before anything starts what will be checked, with which evidence and by whom.
+  The columns are `확인할 것` (the behaviour or cell by its name), `증거` (a unit test, a real CLI journey, an isolated candidate app, the screen) and `누가` (a checker's agent kind, the worker, or `사람`); group the lines under their node's key and leave out the `check` and `ci` lines, which Hide adds and judges itself.
+  Write each criterion so it reads as one short row; the table is the criteria and checks shown, never a second list to keep in step with them, and a node whose rows will not stay short is cut again.
+  A row whose `누가` is `사람` is the node's `gate`: the operator looks while the agents go on, and it holds the node only as a start gate does.
+  A row nothing here can run (no candidate app, no device) is written as `못 함` with its reason, never left out, so a gap in the checking is seen at the plan and not after a bug.
+
+  ```text
+  fix-1487
+   재시작 뒤 태스크 렌즈가 남아요 · 격리한 앱 · 검증 에이전트 (opus)
+   저장 형식이 옛 값을 읽어요 · 단위 테스트 · 작업자
+   고른 줄이 화면에서 보여요 · 화면 · 사람
+  ```
 - With the plan, show the options this mission runs with, one line each and in this order, in the operator's language:
   머지 (the scope and who merges, and any node the operator merges), 워크트리 (whether a merged worktree is cleaned up, and that one with changes or in use stays), 확인 (the verification strength), 동시에 (the cap), 내 폴더 (that your checkout is brought up to the destination when the mission closes, or `없음` when no node's result goes into the destination).
   A value as Settings › Mission has it ends with `(설정)`; a value this mission changed says why in a few words.
@@ -249,6 +261,7 @@ Join two nodes when they always change together, when the first has nothing a re
 A mission of one node is a fine mission: the plan, the checkers and the map still hold it.
 A review or verify of one node is a checker in its `checks`, never another node; a general node with the `verify` preset is only for changes that work only together.
 A checker's brief says what to check, where (an isolated candidate app, never the operator's), its line (`review` or `verify`), and to record its result with `hide mission record`.
+A verify checker's brief copies the node's rows of the verification table (what, evidence) and says to run each one; a review checker's brief names `docs/CODE_REVIEW.md` and says to give every perspective in the first round.
 A `research` node only when the plan cannot be written without its answer; a question a worker can settle in its own pane is not a node.
 A `deploy` node for each step that goes out where it is hard to take back (a deploy, an app submission, a release), after the nodes whose work it ships.
 A mission that changes what existing code does starts with a node that lists everything the existing implementation does, one cell per behaviour, each with the check that proves it; later nodes' finish lines name those cells.
@@ -540,6 +553,8 @@ A worker or checker of a mission records its own lines from its own pane; the Co
   The map shows the summary first and folds the evidence under it, so a long report in another language never stands in the operator's way (`mission_summary_invalid` for a longer or multi-line one).
   The `check` line names the commit it ran on with `--commit <sha>`, is recorded from a pane in the checkout it ran in (`mission_checkout_unknown` otherwise), and a rerun of a failed check on the same commit adds `--rerun`.
 - A checker records only its `review` or `verify` line, the same way; it is refused on any other line (`mission_criterion_not_yours`), and names the commit it read with `--commit <sha>` when the node has a pull request.
+  A `verify` names in its evidence each row of the node's verification table and what happened when it ran it; it passes only when every row was run and held, and a row it could not run makes it `--fail` naming that row and why, which the Conductor settles (`hide mission skip <node> verify --reason`), never a pass.
+  A `review`'s first round names the perspective of each finding and, for a perspective with none, says so in the evidence, so a perspective that was not read shows.
 - A record from a pane whose registration belongs to an earlier agent session than the one running there is refused `participant_session_changed`, and one from a pane with no registration `participant_unavailable`: tell your Conductor rather than retry, since only a new agent bound to the line can record it; `participant_registering` means the spawn that started you has not registered you yet, so run the same record again in a few seconds.
   A worker's or checker's record that Hide cannot judge because it could not read its agent ledger is refused `ledger_unavailable`: stop and tell the operator; the Conductor's record on a node that never had a worker needs no ledger.
   Each of these refusals (`mission_criterion_not_yours`, `participant_session_changed`, `participant_registering`, `participant_unavailable`, `ledger_unavailable`) leaves one `mission.record_refused` line in Hide's diagnostic log with your session's digest, the registrations it found for your pane and the agents bound to the line.
