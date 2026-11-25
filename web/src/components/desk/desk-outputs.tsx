@@ -4,20 +4,18 @@ import { cn } from "../../lib/utils";
 import { RowButton } from "../ui/row-button";
 import { OutputMark, UnseenMark } from "./desk-job-card";
 
-const PICTURE = "relative flex aspect-[3/2] overflow-hidden rounded-sm border border-border bg-muted outline-none hover:border-ring focus-visible:ring-1 focus-visible:ring-ring";
+const PICTURE = "relative flex aspect-[3/2] w-(--size-desk-output-thumb) overflow-hidden rounded-sm border border-border bg-muted outline-none hover:border-ring focus-visible:ring-1 focus-visible:ring-ring";
 
 /**
  * A thread's 결과물 (D-65, B30, B31), drawn as the session record's gallery
  * draws its own (`RecordGallery`): an image or a page with a picture as a
  * small thumbnail in a wrapping row, a document or a PR as a compact row. The output
  * shown in the 보기 column is ringed; an output not looked at yet carries a
- * look eye. Pressing one opens it there. `wide` draws the pictures larger
- * with their names under them, as the session panel's shelf lists a group.
+ * look eye. Pressing one opens it there.
  */
-export function DeskOutputs({ outputs, selected = null, wide = false, onOpen }: {
+export function DeskOutputs({ outputs, selected = null, onOpen }: {
   outputs: readonly DeskOutput[];
   selected?: string | null;
-  wide?: boolean;
   onOpen: (output: DeskOutput) => void;
 }) {
   const { t } = useInterfaceTranslation();
@@ -29,12 +27,11 @@ export function DeskOutputs({ outputs, selected = null, wide = false, onOpen }: 
       {pictures.length ? (
         <ul className="flex min-w-0 flex-wrap gap-xs">
           {pictures.map((output) => (
-            <li key={output.id} className={cn("flex flex-col gap-xxs", wide ? "w-(--size-desk-shelf-thumb)" : "w-(--size-desk-output-thumb)")}>
-              <RowButton className={cn(PICTURE, "w-full p-0", selected === output.id && "border-ring ring-1 ring-ring")} aria-label={output.seen ? output.label : `${output.label} · ${t("desk.outputs.unseen")}`} aria-pressed={selected === output.id} title={output.label} onClick={() => onOpen(output)} data-desk-output={output.id} data-desk-output-thumb={output.kind}>
+            <li key={output.id}>
+              <RowButton className={cn(PICTURE, "p-0", selected === output.id && "border-ring ring-1 ring-ring")} aria-label={output.seen ? output.label : `${output.label} · ${t("desk.outputs.unseen")}`} aria-pressed={selected === output.id} title={output.label} onClick={() => onOpen(output)} data-desk-output={output.id} data-desk-output-thumb={output.kind}>
                 <img src={output.thumb!} alt="" aria-hidden="true" draggable={false} className="size-full object-cover object-top" />
                 {!output.seen ? <UnseenMark className="absolute right-xxs top-xxs" /> : null}
               </RowButton>
-              {wide ? <span className="min-w-0 truncate text-caption text-subtle-foreground" title={output.label}>{output.label}</span> : null}
             </li>
           ))}
         </ul>

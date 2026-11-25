@@ -34,7 +34,7 @@ import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { MissionMap } from "../MissionMap";
 import { cn } from "../lib/utils";
 import { useShellStore } from "../store";
-import type { SnapshotRest } from "../snapshot";
+import type { SessionPull, SnapshotRest } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
   AGENTS, AGENTS_PREPARING, cardSceneItems, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, IRREVERSIBLE_CARD, MENTIONS, MENU_PROJECTS, menuSessions,
@@ -127,6 +127,11 @@ function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "",
 const CLAUDE: DeskSelection = { agent: "claude", model: "opus", effort: "high" };
 const CODEX: DeskSelection = { agent: "codex", model: "gpt", effort: "medium" };
 
+/** A card's pull requests as the session's PR list draws them on the shelf. */
+function scenePulls(job: DeskJob): SessionPull[] {
+  return job.pull_requests.map((pull) => ({ url: `https://github.com/with-hide/hide/pull/${pull.number}`, number: pull.number, title: `${job.title} #${pull.number}`, state: pull.state, own: true, holders: [], stale: false, last_read_at_unix_ms: null }));
+}
+
 /** A session open beside Desk: its head and outputs shelf, its conversation, and the question Hide found above the box when it asks. */
 function ThreadColumn({ job, updates, parts, reading = false, failure = null, selectedOutput = null, focused = false, draft = "", attachments = [] }: {
   job: DeskJob;
@@ -144,8 +149,8 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, se
   const lines = useMemo(() => threadLines(updates, parts, sceneSession), [updates, parts]);
   const asks = useMemo(() => (job.state === "asking" && job.question ? [{ id: `${job.id}:ask`, text: job.question, at_unix_ms: Date.now() - 3 * 60_000 }] : []), [job]);
   return <>
-    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} selectedOutput={selectedOutput} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onOutput={noop} onFiles={noop} onTerminal={noop} onClose={noop} />
-    <OutputShelf outputs={job.outputs} selected={selectedOutput} onOpen={noop} />
+    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onClose={noop} />
+    <OutputShelf outputs={job.outputs} pulls={scenePulls(job)} selected={selectedOutput} onOpen={noop} onPull={noop} />
     <ThreadView
       job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk
       composer={{ value: text, attachments, focused, onChange: setText, onSend: noop, onAttach: noop, onRemoveAttachment: noop }}

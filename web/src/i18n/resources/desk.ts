@@ -209,6 +209,7 @@ export const deskEnglish = {
   "desk.shelf.page": "Views",
   "desk.shelf.doc": "Files",
   "desk.shelf.pr": "PRs",
+  "desk.shelf.more": "+ {{count}} more · {{names}}",
   "desk.asks.more": "+{{count}} more",
   "desk.asks.head": "Questions Hide found · {{count}} · press one to go where it was asked",
   "desk.asks.go": "Go to where it was asked: {{question}}",
@@ -253,12 +254,12 @@ export const deskEnglish = {
   "desk.room.files": "Files",
   "desk.room.terminal": "Terminal",
   "desk.room.disconnected": "Not connected",
+  "desk.room.workedMission": "Open the mission it works for: {{title}}",
   "desk.room.writeOwn": "Write it yourself",
   "desk.room.explorerEmpty": "Pick a file on the left to open it here",
   "desk.room.besideHint": "Open beside Desk",
   "desk.room.closeSide": "Close {{name}} on this side",
   "desk.room.fileNotListed": "{{path}} cannot open here: its project is no longer listed",
-  "desk.room.moreChips": "{{count}} more",
 };
 
 const ko: Catalog<typeof deskEnglish> = {
@@ -466,6 +467,7 @@ const ko: Catalog<typeof deskEnglish> = {
   "desk.shelf.page": "보기",
   "desk.shelf.doc": "파일",
   "desk.shelf.pr": "PR",
+  "desk.shelf.more": "+ {{count}}개 더 · {{names}}",
   "desk.asks.more": "외 {{count}}",
   "desk.asks.head": "Hide가 찾은 질문 {{count}} · 누르면 그 자리로",
   "desk.asks.go": "물은 자리로 가기: {{question}}",
@@ -510,12 +512,12 @@ const ko: Catalog<typeof deskEnglish> = {
   "desk.room.files": "파일",
   "desk.room.terminal": "터미널",
   "desk.room.disconnected": "연결 안 됨",
+  "desk.room.workedMission": "맡은 미션 열기: {{title}}",
   "desk.room.writeOwn": "직접 쓰기",
   "desk.room.explorerEmpty": "왼쪽에서 파일을 고르면 여기에 열려요",
   "desk.room.besideHint": "Desk 옆에 열려 있어요",
   "desk.room.closeSide": "이쪽 {{name}} 닫기",
   "desk.room.fileNotListed": "{{path}}의 프로젝트가 목록에 없어 열 수 없어요",
-  "desk.room.moreChips": "{{count}}개 더 보기",
 };
 
 const zh: Catalog<typeof deskEnglish> = {
@@ -723,6 +725,7 @@ const zh: Catalog<typeof deskEnglish> = {
   "desk.shelf.page": "视图",
   "desk.shelf.doc": "文件",
   "desk.shelf.pr": "PR",
+  "desk.shelf.more": "+ 另 {{count}} 个 · {{names}}",
   "desk.asks.more": "另 {{count}} 个",
   "desk.asks.head": "Hide 找到的问题 {{count}} 个 · 点按前往提问处",
   "desk.asks.go": "前往提问处：{{question}}",
@@ -767,12 +770,12 @@ const zh: Catalog<typeof deskEnglish> = {
   "desk.room.files": "文件",
   "desk.room.terminal": "终端",
   "desk.room.disconnected": "未连接",
+  "desk.room.workedMission": "打开它所做的任务：{{title}}",
   "desk.room.writeOwn": "自己写",
   "desk.room.explorerEmpty": "在左侧选择文件即可在此打开",
   "desk.room.besideHint": "已在 Desk 旁打开",
   "desk.room.closeSide": "关闭这一侧的 {{name}}",
   "desk.room.fileNotListed": "{{path}} 无法打开：它的项目已不在列表中",
-  "desk.room.moreChips": "另外 {{count}} 个",
 };
 
 const ja: Catalog<typeof deskEnglish> = {
@@ -980,6 +983,7 @@ const ja: Catalog<typeof deskEnglish> = {
   "desk.shelf.page": "ビュー",
   "desk.shelf.doc": "ファイル",
   "desk.shelf.pr": "PR",
+  "desk.shelf.more": "+ 他 {{count}} 件 · {{names}}",
   "desk.asks.more": "他 {{count}} 件",
   "desk.asks.head": "Hide が見つけた質問 {{count}} 件 · 押すとその場所へ",
   "desk.asks.go": "質問された場所へ移動: {{question}}",
@@ -1024,12 +1028,12 @@ const ja: Catalog<typeof deskEnglish> = {
   "desk.room.files": "ファイル",
   "desk.room.terminal": "ターミナル",
   "desk.room.disconnected": "未接続",
+  "desk.room.workedMission": "担当のミッションを開く: {{title}}",
   "desk.room.writeOwn": "自分で書く",
   "desk.room.explorerEmpty": "左でファイルを選ぶとここに開きます",
   "desk.room.besideHint": "Desk の横に開いています",
   "desk.room.closeSide": "こちら側の {{name}} を閉じる",
   "desk.room.fileNotListed": "{{path}} を開けません。プロジェクトが一覧にありません",
-  "desk.room.moreChips": "ほか {{count}} 件",
 };
 
 export const deskCatalogs = { en: deskEnglish, ko, "zh-CN": zh, ja } satisfies Catalogs<typeof deskEnglish>;
