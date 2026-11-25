@@ -1787,7 +1787,7 @@ mod tests {
         }
     }
 
-    fn items(runtime: &Runtime) -> Vec<DeskItem> {
+    pub(super) fn items(runtime: &Runtime) -> Vec<DeskItem> {
         runtime
             .snapshot
             .desk
