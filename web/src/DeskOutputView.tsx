@@ -74,10 +74,12 @@ function FileOutput({ path, output, viewKey }: { path: string; output: DeskOutpu
   }, [reason, output.device_id, path]);
   if (state.status === "failed") {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-xs px-md text-center text-caption text-muted-foreground" data-viewer-state="failed" data-desk-output-failed={state.reason}>
-        <p>{t("desk.outputs.unavailable", { reason: downloadFailureText(state.reason, t) })}</p>
-        <Button variant="text" size="inline" className="text-caption" data-desk-output-retry="true" onClick={() => setAttempt((now) => now + 1)}>{t("desk.action.retry")}</Button>
-      </div>
+      <ViewerNotice
+        state="failed"
+        data-desk-output-failed={state.reason}
+        reason={t("desk.outputs.unavailable", { reason: downloadFailureText(state.reason, t) })}
+        action={<Button variant="text" size="inline" className="text-caption" data-desk-output-retry="true" onClick={() => setAttempt((now) => now + 1)}>{t("desk.action.retry")}</Button>}
+      />
     );
   }
   if (isVideoPath(path)) return <VideoBody path={path} state={state} />;
