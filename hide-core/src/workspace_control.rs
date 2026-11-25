@@ -292,6 +292,8 @@ pub struct ActionSource {
     channel: Arc<dyn NodeLink>,
     path: String,
     kind: SourceKind,
+    /// The file has a tab already, which shows as it is when the file
+    /// cannot be read now.
     already_open: bool,
     /// Whether the checkout is on the core's machine, whose agents open a
     /// file outside every checkout by the window's grant instead.
@@ -409,21 +411,22 @@ impl ActionSource {
             return Ok(ActionMaterial { file: None, path });
         }
         if matches!(self.kind, SourceKind::File) {
-            if self.already_open {
+            // A file with a tab is read again too, so the open shows what
+            // it says now; one that cannot be read then shows its tab as is.
+            let read = files::open_document(self.channel.as_ref(), &self.root, &path);
+            if self.already_open && read.is_err() {
                 return Ok(ActionMaterial { file: None, path });
             }
-            let opened = files::open_document(self.channel.as_ref(), &self.root, &path).map_err(
-                |failure| match failure {
-                    OpenFailure::Missing => Refusal {
-                        reason: "file_missing",
-                        next_action: "Check the path and retry",
-                    },
-                    OpenFailure::Failed(_) => Refusal {
-                        reason: "file_unavailable",
-                        next_action: "Check checkout access and file permissions, then retry",
-                    },
+            let opened = read.map_err(|failure| match failure {
+                OpenFailure::Missing => Refusal {
+                    reason: "file_missing",
+                    next_action: "Check the path and retry",
                 },
-            )?;
+                OpenFailure::Failed(_) => Refusal {
+                    reason: "file_unavailable",
+                    next_action: "Check checkout access and file permissions, then retry",
+                },
+            })?;
             return Ok(ActionMaterial {
                 file: Some(opened),
                 path,
