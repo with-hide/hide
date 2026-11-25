@@ -742,9 +742,9 @@ fn a_variable_that_chooses_what_runs_or_a_line_hide_cannot_read_still_asks() {
 #[cfg(windows)]
 #[test]
 fn a_windows_line_with_a_backslash_is_one_hide_cannot_read() {
-    // PowerShell's `rm -r C:\Users\me\x` read as POSIX would delete
-    // `C:Usersmex` below the folder it runs in.
-    let line = r"cd /r/herdr-ide; rm -r C:\Users\me\x";
+    // PowerShell's `rm -r C:\work\x` read as POSIX would delete
+    // `C:workx` below the folder it runs in.
+    let line = r"cd /r/herdr-ide; rm -r C:\work\x";
     assert!(asks(line).contains(&UNREADABLE), "{:?}", asks(line));
 }
 
