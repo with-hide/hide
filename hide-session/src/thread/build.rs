@@ -464,10 +464,7 @@ impl Thread {
         };
         let chunk = ContentChunk::new(block)
             .message_id(message.map(str::to_owned).map(Into::into))
-            .meta(self.message_meta(vec![
-                ("origin", json!("letter")),
-                ("from", json!(from)),
-            ]));
+            .meta(self.message_meta(vec![("origin", json!("letter")), ("from", json!(from))]));
         self.updates.push(SessionUpdate::UserMessageChunk(chunk));
     }
 
@@ -478,7 +475,11 @@ impl Thread {
         origin: Origin,
         block: ContentBlock,
     ) {
-        let marks = origin.as_str().map(|origin| ("origin", json!(origin))).into_iter().collect();
+        let marks = origin
+            .as_str()
+            .map(|origin| ("origin", json!(origin)))
+            .into_iter()
+            .collect();
         let chunk = ContentChunk::new(block)
             .message_id(message.map(str::to_owned).map(Into::into))
             .meta(self.message_meta(marks));
