@@ -57,6 +57,13 @@ async function choose(page: Page, field: string, option: Locator): Promise<void>
 
 const screen = (page: Page) => page.locator("[data-automation-screen]");
 
+/** The wall date and minute `ahead` minutes from now on this machine, whose zone hided reads a once time in. */
+function wallMinute(ahead: number): { date: string; time: string } {
+  const at = new Date(Date.now() + ahead * 60_000);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return { date: `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}`, time: `${two(at.getHours())}:${two(at.getMinutes())}` };
+}
+
 test("the 자동화 row opens an empty table, the form refuses what the core refuses, and an automation is made, paused, edited and removed", async ({ page }) => {
   const stack = await start(page, "automations-form");
   try {
@@ -86,15 +93,15 @@ test("the 자동화 row opens an empty table, the form refuses what the core ref
     await expect(create).toBeEnabled();
 
     // B6: every N minutes reads back as itself.
-    await choose(page, "schedule-kind", page.locator('[data-automation-schedule-kind="every_minutes"]'));
+    await page.locator('[data-automation-schedule-kind="every_minutes"]').click();
     await expect(page.locator("[data-automation-preview]")).toContainText("Every 30 minutes");
 
     // B7: a cron that runs closer than five minutes and a week with no day are refused under the schedule, and nothing can be made.
-    await choose(page, "schedule-kind", page.locator('[data-automation-schedule-kind="cron"]'));
+    await page.locator('[data-automation-schedule-kind="cron"]').click();
     await page.locator('[data-automation-field="cron"]').fill("*/4 * * * *");
     await expect(page.locator('[data-automation-refusal="schedule_too_often"]')).toBeVisible();
     await expect(create).toBeDisabled();
-    await choose(page, "schedule-kind", page.locator('[data-automation-schedule-kind="weekly"]'));
+    await page.locator('[data-automation-schedule-kind="weekly"]').click();
     await page.locator('[data-automation-day="mon"]').click();
     await expect(page.locator('[data-automation-refusal="schedule_days_missing"]')).toBeVisible();
     await expect(create).toBeDisabled();
@@ -196,7 +203,7 @@ test("a run started now is live in the screen and typed into, asks in Needs You 
     await expect(raised).toHaveCount(1, { timeout: 30_000 }); // wait-ok: the core read the blocked state and raised the run in Needs You
     await expect(raised.locator("[data-agent-task]")).toContainText("야간 점검");
     // It wears the automation's repeat arrow in its turn badge (operator decision 2026-11-21).
-    await expect(raised.locator('[data-agent-status-mark][data-mark-automation="true"]')).toHaveCount(1);
+    await expect(raised.locator('[data-agent-status-mark][data-mark-automation="repeat"]')).toHaveCount(1);
     await page.locator("[data-automation-run-head] [data-automation-back]").click();
     await raised.locator("[data-agent-open]").click();
     await expect(screen(page)).toHaveAttribute("data-automation-screen", "run");
@@ -296,6 +303,78 @@ test("a run's screen draws its terminal beside the run's desk, which leads with 
     await expect(page.locator(`[data-sidebar-tab-group="${hidden}"]`)).toHaveCount(0);
     await page.locator("[data-automation-run-head] [data-automation-back]").click();
     await withControl(stack.daemon, (control) => control.until((rest) => ((rest as Rest).focused?.pane_id === stack.fixture.pane ? true : undefined), "the focus back on the operator's pane", 30_000));
+  } finally {
+    stop(stack);
+  }
+});
+
+// mission-104 S-1 to S-4: a once automation made from the form a week ahead
+// waits in its own group; one due at the next minute runs once, stands in
+// Needs You with the clock until its run is opened, and folds with the done.
+test("a once automation waits in its group, runs once at its minute, stands in Needs You with the clock until its run is opened, and folds under the done ones", async ({ page }) => {
+  test.setTimeout(360_000); // wait-ok: a once time is a wall minute, so the run waits up to two minutes for it
+  const stack = await start(page, "automations-once");
+  try {
+    await page.locator("[data-sidebar-automations]").click();
+    await page.locator("[data-automation-new]").first().click();
+    await page.locator('[data-automation-field="name"]').fill("Webhook check");
+    await page.locator('[data-automation-field="task"]').fill("Read the webhook logs");
+    // S-2: once comes first and opens on tomorrow; a past date is the core's refusal and nothing can be made.
+    await expect(page.locator("[data-automation-schedule-kind]").first()).toHaveAttribute("data-automation-schedule-kind", "once");
+    await page.locator('[data-automation-schedule-kind="once"]').click();
+    await expect(page.locator('[data-automation-field="date"]')).toHaveValue(wallMinute(24 * 60).date);
+    const create = page.locator("[data-automation-create]");
+    await page.locator('[data-automation-field="date"]').fill(wallMinute(-2 * 24 * 60).date);
+    await expect(page.locator('[data-automation-refusal="schedule_once_past"]')).toBeVisible();
+    await expect(create).toBeDisabled();
+    // A week ahead reads back as its date, 7 days off, in this machine's zone.
+    await page.locator('[data-automation-once-quick="7"]').click();
+    const week = wallMinute(7 * 24 * 60).date;
+    await expect(page.locator('[data-automation-preview="once"]')).toContainText(`${week.slice(5)} 09:00 once · in 7d`);
+    await create.click();
+    await expect(screen(page)).toHaveAttribute("data-automation-screen", "detail");
+    await page.locator("[data-automation-back]").click();
+
+    // S-1: only the groups that hold something are drawn; the once one wears its date.
+    await expect(page.locator("[data-automation-group]")).toHaveCount(1);
+    const waiting = page.locator('[data-automation-group="once"]');
+    await expect(waiting).toContainText(week.slice(5));
+
+    // One due at the next minute (the minute after if this one is nearly over), and a repeating one.
+    const due = wallMinute(new Date().getSeconds() < 45 ? 1 : 2);
+    const id = await add(page, stack.daemon, { name: "Migration check", task: "Check the tables", agent: { kind: "claude" }, schedule: { kind: "once", ...due } });
+    await add(page, stack.daemon, { name: "Morning issues", task: "Sort issues", agent: { kind: "claude" } });
+    await expect(page.locator("[data-automation-group]")).toHaveCount(2);
+    await expect(waiting.locator("[data-automation-open]")).toHaveCount(2);
+
+    // Its run's agent starts at that minute, works and finishes its turn, with no one looking at it.
+    const pane = await withControl(stack.daemon, (control) => control.until((rest) => ((rest.navigator as { agents?: { pane_id: string; hide_ai?: { task?: { target?: string } } }[] } | undefined)?.agents ?? []).find((row) => row.hide_ai?.task?.target === id)?.pane_id, "the once run's agent", 180_000));
+    await setAgentState(stack.daemon, pane, "working");
+    await setAgentState(stack.daemon, pane, "idle");
+
+    // S-4: its line stands in Needs You with the clock, its run's result, and the app's count.
+    const look = page.locator(`[data-project-list] [data-automation-look="${id}"]`);
+    await expect(look).toHaveCount(1, { timeout: 60_000 }); // wait-ok: the core recorded the run as ended and put its line in Needs You
+    await expect(look.locator('[data-mark-automation="once"]')).toHaveCount(1);
+    await expect(look.locator('[data-automation-look-line="ok"]')).toContainText("Automation · once · ✓ Done");
+
+    // S-1: done, it leaves the waiting group for the fold, closed until pressed.
+    await expect(waiting.locator("[data-automation-open]")).toHaveCount(1);
+    const toggle = page.locator("[data-automation-done-toggle]");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator(`[data-automation-done-row="${id}"]`)).toHaveCount(0);
+    await toggle.click();
+    await expect(page.locator(`[data-automation-done-row="${id}"]`)).toHaveAttribute("data-automation-done-tone", "ok");
+
+    // S-4: the line opens that run, and opened, the core takes the line away.
+    await look.locator(`[data-automation-look-open="${id}"]`).click();
+    await expect(screen(page)).toHaveAttribute("data-automation-screen", "run");
+    await expect(page.locator('[data-automation-run-head="1"]')).toBeVisible();
+    await expect(look).toHaveCount(0);
+    // S-3: its detail says done, with no pause to press.
+    await page.locator("[data-automation-run-head] [data-automation-back]").click();
+    await expect(page.locator('[data-automation-next="done"]').first()).toBeVisible();
+    await expect(page.locator("[data-automation-pause]")).toHaveCount(0);
   } finally {
     stop(stack);
   }
