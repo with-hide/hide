@@ -440,7 +440,6 @@ pub fn run(dir: &str) -> ! {
             stream,
             Services {
                 terminals: Some(&*terminals),
-                heartbeat: false,
                 // A call the host handed to this guest's `hide` is in no
                 // pane: the node proves it by its folder, and the guest's
                 // core binds it to its checkout or refuses, finally (D-55).

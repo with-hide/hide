@@ -25,7 +25,6 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -699,11 +698,7 @@ fn find_core(state_dir: &Path) -> Result<LocalStream, AttachOutcome> {
 /// either ends or the node falls silent, then exits the process, so no
 /// direction is left waiting on the other.
 fn pipe(core: LocalStream) -> ! {
-    // Milliseconds since `started` on the monotonic clock, so a step of the
-    // wall clock neither ends a healthy link nor hides a silent one.
-    let started = Instant::now();
-    let now_ms = move || started.elapsed().as_millis() as u64;
-    let heard = Arc::new(AtomicU64::new(now_ms()));
+    let heard = Arc::new(hide_node_link::panes::Heard::new());
     let (done, ended) = std::sync::mpsc::channel::<&'static str>();
     let mut to_core = core.duplicate();
     {
@@ -716,7 +711,7 @@ fn pipe(core: LocalStream) -> ! {
                 match stdin.read(&mut buffer) {
                     Ok(0) => break "node_closed",
                     Ok(read) => {
-                        heard.store(now_ms(), Ordering::Relaxed);
+                        heard.hear();
                         if to_core.write_all(&buffer[..read]).is_err() {
                             break "core_closed";
                         }
@@ -753,15 +748,13 @@ fn pipe(core: LocalStream) -> ! {
             let _ = done.send(reason);
         });
     }
-    let limit = hide_node_link::panes::HEARTBEAT_LIMIT.as_millis() as u64;
     let reason = loop {
-        match ended.recv_timeout(Duration::from_secs(1)) {
+        let Some(left) = heard.silent() else {
+            break "node_silent";
+        };
+        match ended.recv_timeout(left) {
             Ok(reason) => break reason,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if now_ms().saturating_sub(heard.load(Ordering::Relaxed)) > limit {
-                    break "node_silent";
-                }
-            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break "ended",
         }
     };

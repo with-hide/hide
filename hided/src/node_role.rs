@@ -1655,7 +1655,7 @@ fn carry_link(
 /// Answers the core's calls until the link ends. The reader keeps what it
 /// buffered past the handshake: the core's first call.
 fn serve(
-    reader: impl BufRead,
+    reader: impl BufRead + Send + 'static,
     writer: LocalStream,
     identity: &NodeIdentity,
     terminals: &NodeTerminals,
@@ -1667,7 +1667,6 @@ fn serve(
         writer,
         hide_host::serve::Services {
             terminals: Some(terminals),
-            heartbeat: true,
             checkout_callers: true,
             opened_roots: Some(roots),
             browser,

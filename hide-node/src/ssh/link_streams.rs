@@ -575,7 +575,6 @@ mod tests {
                 node_end,
                 hide_host::serve::Services {
                     terminals: None,
-                    heartbeat: false,
                     checkout_callers: false,
                     opened_roots: None,
                     worktree_facts: None,

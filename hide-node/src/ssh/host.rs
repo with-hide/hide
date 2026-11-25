@@ -32,7 +32,7 @@ pub mod peer;
 pub mod wsl;
 use hide_node_link::HostError;
 pub use hide_node_link::LinkError;
-use hide_node_link::panes::{NodeEvent, PanesStarted};
+use hide_node_link::panes::{HEARTBEAT, HEARTBEAT_LIMIT, NodeEvent, PING_LINE, PanesStarted};
 use hide_node_link::protocol::{Call, Hello, PROTOCOL_VERSION, Request};
 use hide_node_link::{LinkAnswer, NodeLink, call_as};
 pub use kit::ReleaseIdentity;
@@ -861,8 +861,15 @@ impl RemoteHost {
 
     /// Writes one whole line, which carries its newline, by `deadline`. A
     /// line that was started and not finished ends the connection, since the
-    /// node would read the next line as its tail.
-    fn write_line(&self, line: &[u8], deadline: Instant, cancels: bool) -> Result<(), LinkError> {
+    /// node would read the next line as its tail. `effectless` is a line
+    /// that adds no effect on the device (a cancel, a ping), which a
+    /// draining link still writes.
+    fn write_line(
+        &self,
+        line: &[u8],
+        deadline: Instant,
+        effectless: bool,
+    ) -> Result<(), LinkError> {
         let inner = &self.inner;
         if let Some(reason) = self.closed_reason() {
             return Err(LinkError::NotConnected(reason));
@@ -883,7 +890,7 @@ impl RemoteHost {
             }
             // Admitted before the connection began to drain, but not sent:
             // it is refused now rather than sent after consent was withdrawn.
-            if let Some(reason) = inner.gate.stopped().filter(|_| !cancels) {
+            if let Some(reason) = inner.gate.stopped().filter(|_| !effectless) {
                 return Err(LinkError::NotConnected(reason));
             }
             Ok(tokio::time::timeout_at(deadline, async {
@@ -2216,19 +2223,41 @@ fn start_reader(
         dialed_by_node,
     });
     let reader = Arc::downgrade(&inner);
+    start_heartbeat(&inner);
     runtime.spawn(async move {
         let mut buffer: Vec<u8> = Vec::new();
         // How far `buffer` has been searched for a line end, so a large
         // answer arriving in many chunks is scanned once.
         let mut scanned = 0;
         let mut stderr: Vec<u8> = Vec::new();
+        // When the node last sent a byte. Until its first one, the program
+        // may still be starting (a new helper's first start on Windows is
+        // scanned for tens of seconds), and the first call's own deadline
+        // bounds that wait (`hello_timeout`).
+        let mut heard: Option<tokio::time::Instant> = None;
         let reason = 'read: loop {
+            let silent = async {
+                match heard {
+                    Some(heard) => tokio::time::sleep_until(heard + HEARTBEAT_LIMIT).await,
+                    None => std::future::pending().await,
+                }
+            };
             let arrival = tokio::select! {
+                // Bytes that arrived while a line was being handled are read
+                // before the silence is judged.
+                biased;
                 arrival = source.next() => arrival,
                 () = closing.notified() => break "this Hide closed the link".to_owned(),
+                () = silent => {
+                    break format!(
+                        "the node sent nothing for {} s",
+                        HEARTBEAT_LIMIT.as_secs()
+                    );
+                }
             };
             match arrival {
                 Arrival::Data(data) => {
+                    heard = Some(tokio::time::Instant::now());
                     buffer.extend_from_slice(&data);
                     while let Some(offset) = buffer[scanned..].iter().position(|byte| *byte == b'\n') {
                         let end = scanned + offset;
@@ -2278,6 +2307,50 @@ fn start_reader(
     RemoteHost { inner }
 }
 
+/// Writes [`PING_LINE`] to the node every [`HEARTBEAT`] until the link
+/// ends, so the node ends a link whose core went silent as the core ends
+/// one whose node did. On a thread of its own rather than the link's
+/// runtime: a line the reader hands to the core may take its one worker for
+/// a while, and a ping that waits behind it would read to the node as a
+/// core gone. A ping waiting behind another line's write goes without
+/// harm, since that write is bytes too.
+fn start_heartbeat(inner: &Arc<Inner>) {
+    let link = Arc::downgrade(inner);
+    let runtime = Arc::clone(&inner.runtime);
+    let mut closed = inner.closed.subscribe();
+    let spawned = std::thread::Builder::new()
+        .name("node-link-ping".into())
+        .spawn(move || {
+            loop {
+                // Holds no clone of the link while it waits, so dropping the
+                // last one still ends it at once.
+                let ended = runtime.block_on(async {
+                    tokio::time::timeout(HEARTBEAT, closed.wait_for(Option::is_some))
+                        .await
+                        .is_ok()
+                });
+                let Some(inner) = link.upgrade().filter(|_| !ended) else {
+                    return;
+                };
+                let host = RemoteHost { inner };
+                match host.write_line(PING_LINE, Instant::now() + HEARTBEAT_LIMIT, true) {
+                    Ok(()) | Err(LinkError::Busy) => {}
+                    Err(_) => return,
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        crate::diagnostic!(json!({
+            "component": "remote_host",
+            "kind": "host.heartbeat_unstarted",
+            "target": inner.target,
+            "error": error.to_string(),
+        }));
+        mark_closed(inner, "the link's heartbeat could not start".to_owned());
+        inner.closing.notify_one();
+    }
+}
+
 /// Sorts one whole line from the node: a terminal line, a pane event, a
 /// call's report, or an answer.
 fn deliver_line(inner: &Arc<Inner>, panes: Option<&PaneHook>, line: &[u8]) {
@@ -2293,7 +2366,7 @@ fn deliver_line(inner: &Arc<Inner>, panes: Option<&PaneHook>, line: &[u8]) {
         }
         return;
     }
-    if line.starts_with(b"{\"event\":\"ping\"}") {
+    if line == PING_LINE {
         return;
     }
     if line.starts_with(b"{\"event\":\"link_data\"")
