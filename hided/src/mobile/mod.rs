@@ -3394,6 +3394,80 @@ mod tests {
     use crate::desktop_notices::DesktopNotices;
     use hide_core::agent_state::phone::project;
 
+    /// The automations the core counts as the operator's turn reach the
+    /// phone's automations frame through the rest the phone loop keeps: a
+    /// stopped one as `asks`, a once one whose run ended as `looks`; a count
+    /// elsewhere in the scope moves nothing (mission-104).
+    #[test]
+    fn the_cores_automation_lines_reach_the_phones_frame_through_the_rest() {
+        use hide_core::automations::{
+            AgentChoice, AutomationSnapshot, AutomationsSnapshot, Folder,
+        };
+        let options: hide_core::CoreOptions = serde_json::from_value(json!({
+            "schema_version": 2, "node_id": "test-node", "app_state_path": ""
+        }))
+        .unwrap();
+        let mut snapshot = hide_core::Snapshot::initial(&options);
+        snapshot.navigator.agent_scope.automation_asks = vec!["stopped".into()];
+        snapshot.navigator.agent_scope.automation_looks = vec!["once".into()];
+        let first = hide_core::RestSections::capture(&snapshot, None, 1);
+        let mut kept = Value::Null;
+        assert!(projection::update_inputs(&mut kept, &first, 0).unwrap());
+        let (asks, looks) = automation_asks(&kept);
+        assert_eq!(
+            (asks.as_slice(), looks.as_slice()),
+            (&["stopped".to_owned()][..], &["once".to_owned()][..])
+        );
+
+        let item = |id: &str| AutomationSnapshot {
+            id: id.into(),
+            name: id.into(),
+            task: "Look".into(),
+            schedule: serde_json::from_value(json!({"kind": "daily", "time": "09:00"})).unwrap(),
+            reads_as: serde_json::from_value(json!({"kind": "daily", "time": "09:00"})).unwrap(),
+            next_run_at_unix_ms: None,
+            agent: AgentChoice {
+                kind: "claude".into(),
+                profile: None,
+                model: None,
+                effort: None,
+            },
+            folder: Folder {
+                path: "/srv/notes".into(),
+                default: true,
+                worktree: false,
+            },
+            paused: None,
+            running: false,
+            done: id == "once",
+            look_run: (id == "once").then_some(1),
+            unseen: 0,
+            recent_spend: None,
+            records: Vec::new(),
+        };
+        let section = AutomationsSnapshot {
+            items: vec![item("stopped"), item("once"), item("other")],
+            ..AutomationsSnapshot::default()
+        };
+        let frame =
+            phone::automations_frame(&PhoneAutomations::project(Some(&section), &asks, &looks));
+        assert_eq!(
+            (&frame["asks"], &frame["looks"]),
+            (&json!(["stopped"]), &json!(["once"]))
+        );
+
+        snapshot.navigator.agent_scope.overview_needs_you = 7;
+        let counted = hide_core::RestSections::capture(&snapshot, Some(&first), 2);
+        assert!(
+            !projection::update_inputs(&mut kept, &counted, 1).unwrap(),
+            "a count moves no phone input"
+        );
+        snapshot.navigator.agent_scope.automation_looks.clear();
+        let opened = hide_core::RestSections::capture(&snapshot, Some(&counted), 3);
+        assert!(projection::update_inputs(&mut kept, &opened, 2).unwrap());
+        assert_eq!(automation_asks(&kept).1, Vec::<String>::new());
+    }
+
     #[test]
     fn a_phones_held_queue_keeps_one_per_agent_and_at_most_eight() {
         let at = std::time::Instant::now();

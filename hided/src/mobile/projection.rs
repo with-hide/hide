@@ -61,6 +61,17 @@ pub fn update_inputs(
             .collect();
         changed |= replace(&mut kept["navigator"]["peer_work"], Value::Array(work));
     }
+    // The automations the core counts as the operator's turn, which the
+    // automations frame names (`super::automation_asks`): only these two
+    // lists, so a count elsewhere in the scope moves no phone input.
+    if rest.navigator.agent_scope.revision > have {
+        let scope = &rest.navigator.agent_scope.value;
+        let lists = serde_json::json!({
+            "automation_asks": scope.automation_asks,
+            "automation_looks": scope.automation_looks,
+        });
+        changed |= replace(&mut kept["navigator"]["agent_scope"], lists);
+    }
     field!("status", "remote", rest.status.remote);
     field!("status", "background_ai", rest.status.background_ai);
     field!("status", "last_error", rest.status.last_error);
