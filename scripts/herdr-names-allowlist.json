@@ -236,8 +236,6 @@
     "hide-core/tests/fixtures/release-state/v1.2.10/hook-facts.json": {"max": 7, "reason": "fixture"},
     "hide-desk/src/adapter.rs": {"max": 1, "reason": "test"},
     "hide-desk/src/host.rs": {"max": 3, "reason": "withheld-identity"},
-    "hide-desk/src/permission.rs": {"max": 4, "reason": "old-value"},
-    "hide-desk/src/permission/tests.rs": {"max": 4, "reason": "test"},
     "hide-desk/tests/it/host.rs": {"max": 3, "reason": "test"},
     "hide-holder/Cargo.toml": {"max": 1, "reason": "attribution"},
     "hide-holder/src/encode.rs": {"max": 5, "reason": "attribution"},
