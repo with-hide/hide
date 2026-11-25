@@ -214,9 +214,9 @@ fn hide_line_in(line: &str, place: &Place<'_>, syntaxes: &[Syntax]) -> bool {
                 .iter()
                 .all(|(_, target)| SAFE_TARGETS.contains(&target.as_str()))
             && read.commands.iter().all(|words| {
-                words.first().is_some_and(|program| {
-                    names_hide(program) || Path::new(program) == place.hide
-                })
+                words
+                    .first()
+                    .is_some_and(|program| names_hide(program) || Path::new(program) == place.hide)
             })
     })
 }
