@@ -107,6 +107,12 @@ pub(super) enum Report {
         tag: u64,
         text: String,
     },
+    /// What the turn's newest tool call does, sent each time that moves, so
+    /// the line under the reply says it while the turn runs.
+    Step {
+        tag: u64,
+        step: hide_desk::permission::Step,
+    },
     /// What the turn's tool calls did, sent just before it ends.
     Steps {
         tag: u64,
@@ -276,6 +282,8 @@ struct Running {
     /// The work placement this session was last told; none for a session
     /// resumed from an earlier run.
     placement: Option<hide_desk::Placement>,
+    /// The turn and step last sent as `Report::Step`.
+    told: Option<(u64, hide_desk::permission::Step)>,
 }
 
 impl Worker {
@@ -627,6 +635,7 @@ impl Worker {
                 announced_order: Vec::new(),
                 turn: session::TurnReader::new(opened.prelude, adapter.failed_turn_mark()),
                 placement: None,
+                told: None,
             },
             opened.resume_failed,
             choices,
@@ -702,7 +711,11 @@ impl Worker {
                 let text = running.turn.read(number, &update);
                 let adapter = running.adapter;
                 match update {
-                    Update::Tool { id, call } => running.remember(id, call),
+                    Update::Tool { id, call } => {
+                        if let Some((tag, step)) = running.note_step(&id, call) {
+                            self.report(Report::Step { tag, step });
+                        }
+                    }
                     Update::Choices(choices) => self.report(Report::Choices { adapter, choices }),
                     Update::Mode(mode) => self.mode_moved(&mode),
                     Update::Text { .. } | Update::Break | Update::Info(_) | Update::Other => {}
@@ -974,6 +987,23 @@ impl Worker {
 }
 
 impl Running {
+    /// Keeps the call `id` the session announced or moved and answers the
+    /// running turn's step when the call is that turn's and its step is not
+    /// the one last told, so a call's many updates tell it once.
+    fn note_step(&mut self, id: &str, call: Value) -> Option<(u64, hide_desk::permission::Step)> {
+        self.remember(id.to_owned(), call);
+        let tag = self.turn.running()?;
+        if !self.turn.made(id) {
+            return None;
+        }
+        let step = hide_desk::permission::step(self.announced.get(id)?);
+        if self.told == Some((tag, step)) {
+            return None;
+        }
+        self.told = Some((tag, step));
+        Some((tag, step))
+    }
+
     fn remember(&mut self, id: String, call: Value) {
         if let Some(announced) = self.announced.get_mut(&id) {
             session::merge_tool(announced, &call);
@@ -1152,6 +1182,7 @@ mod tests {
                 announced_order: Vec::new(),
                 turn,
                 placement: None,
+                told: None,
             }),
             installing: Vec::new(),
         }

@@ -129,6 +129,8 @@ struct Turn {
     started_at_ms: u64,
     first_text_at_ms: Option<u64>,
     steps: crate::model::DeskSteps,
+    /// What its newest tool call does, until the agent writes again.
+    now: Option<crate::model::DeskStepKind>,
 }
 
 /// A card waiting for the operator, and how to answer the agent.
@@ -651,6 +653,7 @@ impl Runtime {
             started_at_ms: crate::links::now_ms(),
             first_text_at_ms: None,
             steps: Default::default(),
+            now: None,
         });
         let resume = self
             .desk
@@ -1255,6 +1258,7 @@ impl Runtime {
                 };
                 turn.first_text_at_ms
                     .get_or_insert_with(crate::links::now_ms);
+                turn.now = None;
                 if turn.cut {
                     return false;
                 }
@@ -1269,6 +1273,18 @@ impl Runtime {
                 } else {
                     turn.text.push_str(&text);
                 }
+                self.compose_desk_live();
+                return true;
+            }
+            Report::Step { tag, step } => {
+                let Some(turn) = self.desk.turn.as_mut().filter(|turn| turn.tag == tag) else {
+                    return false;
+                };
+                let now = Some(step.into());
+                if turn.now == now {
+                    return false;
+                }
+                turn.now = now;
                 self.compose_desk_live();
                 return true;
             }
@@ -1601,6 +1617,7 @@ impl Runtime {
         self.snapshot.desk_live = Some(Arc::new(DeskLiveSnapshot {
             text: turn.map(|turn| turn.text.clone()),
             started_at_ms: turn.map(|turn| turn.started_at_ms),
+            step: turn.and_then(|turn| turn.now),
         }));
     }
 }
@@ -2168,6 +2185,32 @@ mod tests {
         let live = runtime.snapshot.desk_live.as_ref().unwrap();
         assert_eq!(live.text.as_deref(), Some("two sessions"));
         assert!(live.started_at_ms.is_some());
+        assert_eq!(live.step, None);
+        // The step a running call does shows until the agent writes again.
+        let step = |runtime: &Runtime| runtime.snapshot.desk_live.as_ref().unwrap().step;
+        assert!(runtime.desk_report(Report::Step {
+            tag: send.tag,
+            step: hide_desk::permission::Step::Files,
+        }));
+        assert_eq!(step(&runtime), Some(crate::model::DeskStepKind::Files));
+        assert!(!runtime.desk_report(Report::Step {
+            tag: send.tag,
+            step: hide_desk::permission::Step::Files,
+        }));
+        assert!(!runtime.desk_report(Report::Step {
+            tag: send.tag + 1,
+            step: hide_desk::permission::Step::Letter,
+        }));
+        runtime.desk_report(Report::Text {
+            tag: send.tag,
+            text: ".".into(),
+        });
+        assert_eq!(step(&runtime), None);
+        runtime.desk_report(Report::Step {
+            tag: send.tag,
+            step: hide_desk::permission::Step::Letter,
+        });
+        assert_eq!(step(&runtime), Some(crate::model::DeskStepKind::Letters));
         runtime.desk_report(Report::Steps {
             tag: send.tag,
             steps: vec![
@@ -2193,10 +2236,11 @@ mod tests {
         else {
             panic!("no reply");
         };
-        assert_eq!(text, "two sessions");
+        assert_eq!(text, "two sessions.");
         assert!(thought_ms.is_some());
         assert_eq!((steps.sessions, steps.letters), (2, 1));
-        assert_eq!(runtime.snapshot.desk_live.as_ref().unwrap().text, None);
+        let live = runtime.snapshot.desk_live.as_ref().unwrap();
+        assert_eq!((live.text.as_deref(), live.step), (None, None));
     }
 
     #[test]

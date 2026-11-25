@@ -792,6 +792,34 @@ pub struct DeskLiveSnapshot {
     pub text: Option<String>,
     /// When the turn being answered started, for `생각 중 · 3초`.
     pub started_at_ms: Option<u64>,
+    /// What the turn's newest tool call does while the agent has written
+    /// nothing since it, named as `DeskSteps` counts it: the line under the
+    /// reply says it until the turn ends.
+    pub step: Option<DeskStepKind>,
+}
+
+/// One of `DeskSteps`' kinds, by the name its count has there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeskStepKind {
+    Sessions,
+    Files,
+    Letters,
+    Starts,
+    Other,
+}
+
+impl From<hide_desk::permission::Step> for DeskStepKind {
+    fn from(step: hide_desk::permission::Step) -> Self {
+        use hide_desk::permission::Step;
+        match step {
+            Step::Sessions => Self::Sessions,
+            Step::Files => Self::Files,
+            Step::Letter => Self::Letters,
+            Step::Start => Self::Starts,
+            Step::Other => Self::Other,
+        }
+    }
 }
 
 /// What Desk's agent did in a turn, counted from its tool calls.
