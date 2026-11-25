@@ -16,6 +16,7 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { finishHumanTurn } from "./connection";
 import type { PhoneAgent } from "./protocol";
 import { usePhone } from "./store";
+import { cn } from "../lib/utils";
 
 /** The phone's own clipboard, which Copy of a person's turn's place writes; a refusal is the log's. */
 const clipboard = browserClipboard((message) => console.warn("phone.copy_failed", { message }));
@@ -26,6 +27,19 @@ export function AgentStatusMark({ agent }: { agent: PhoneAgent }) {
   if (agent.starred && agent.group === "revisit") return <RevisitStarShape slot data-phone-mark="star" />;
   if (agent.read) return <StatusMark mark="turn" read human={agent.human_turn != null} data-phone-mark="turn" />;
   return <StatusMark mark={agent.mark} human={agent.human_turn != null} className={(agent.mark === "turn" || agent.mark === "look") && !agent.emphasized ? "opacity-(--opacity-read-status)" : undefined} data-phone-mark={agent.mark} />;
+}
+
+/**
+ * The phone's one chip, in the desktop chip's shape (a small-cornered fill): the children chip, a mission's and a pull request's
+ * on the list and the detail all wear it, each with the face the desktop draws inside (`TreeChipFace`, `MissionChipFace`, the PR
+ * mark). Its border shows only when a child asks the operator (`raised`); the caller makes it a press.
+ */
+export function PhoneChip({ raised = false, className, children, ...data }: { raised?: boolean; className?: string; children: ReactNode } & Record<`data-${string}`, string | undefined>) {
+  return (
+    <span className={cn("flex min-w-0 shrink-0 items-center gap-xxs rounded-xs border bg-secondary px-xs py-xxs text-body font-normal", raised ? "border-warning/60" : "border-transparent", className)} {...data}>
+      {children}
+    </span>
+  );
 }
 
 /** What leads the detail's title: the mark and the agent's logo, which a list row leaves out (PRD agent-mark-quiet B12). */

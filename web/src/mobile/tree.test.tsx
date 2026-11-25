@@ -8,6 +8,7 @@ import { HostList } from "./HostList";
 import { HOSTS_KEY } from "./hosts";
 import type { AgentGroup, PhoneAgent, PhoneDevice } from "./protocol";
 import { applyFrame, patch, usePhone } from "./store";
+import { openDetail } from "./connection";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 const initial = usePhone.getState();
@@ -102,6 +103,29 @@ describe("a parent's children on the list", () => {
       // It leads the row's second line, before the line's words.
       const line = container.querySelector('[data-phone-row="local|p"] [data-phone-line]')!.parentElement!;
       expect(line.firstElementChild).toBe(chip);
+    } finally {
+      await unmount();
+    }
+  });
+});
+
+describe("the children chip on an agent's detail", () => {
+  it("leads the state strip, opens the children in a sheet, and a child's row there opens that child", async () => {
+    const parent = agent("p", { children: kids(2), descendants: { asking: 0, working: 2, done: 0 }, line: { text: "Reviewing", mode: "news", tone: "subtle" } });
+    const { container, unmount } = await mount([working([parent])]);
+    try {
+      await act(async () => openDetail({ device_id: "local", pane_id: "p" }));
+      const strip = container.querySelector("[data-phone-status-strip]")!;
+      const chip = strip.querySelector<HTMLElement>('[data-phone-children-toggle="local|p"]')!;
+      // It leads the strip, where the desktop pane header's turn row draws it.
+      expect(strip.firstElementChild).toBe(chip);
+      expect(chip.getAttribute("aria-expanded")).toBe("false");
+      await act(async () => chip.click());
+      const sheet = document.querySelector('[data-phone-children-sheet="local|p"]')!;
+      expect(panes(sheet as HTMLElement, '[data-phone-children="local|p"]')).toEqual(["local|c0", "local|c1"]);
+      await act(async () => sheet.querySelector<HTMLElement>('[data-phone-agent="local|c1"]')!.click());
+      expect(usePhone.getState().detail?.key).toEqual({ device_id: "local", pane_id: "c1" });
+      expect(document.querySelector("[data-phone-children-sheet]")).toBeNull();
     } finally {
       await unmount();
     }

@@ -11,7 +11,7 @@ import { OfflineText } from "./OfflineText";
 
 import { pullLabel } from "../codeHost";
 import { AnsiUp } from "ansi_up";
-import { CircleAlertIcon, ImageIcon, MoonIcon, FlagIcon } from "lucide-react";
+import { CircleAlertIcon, ImageIcon, MoonIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { Elapsed, useElapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
@@ -19,7 +19,8 @@ import { Button } from "../components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { wakeFailureReason, wakingLine } from "../sleep";
 import type { AgentSleep } from "../snapshot";
-import { AgentLead, PhoneHumanTurn, PlaceParts } from "./parts";
+import { AgentLead, PhoneChip, PhoneHumanTurn, PlaceParts } from "./parts";
+import { DetailChildrenChip } from "./ListRows";
 import { ActivityLine, Composer, PageHead, StatusStrip } from "./layout";
 import { lineParts } from "../agentRow";
 import { statusText } from "../agentStatus";
@@ -53,8 +54,8 @@ import {
 } from "./protocol";
 import { agentOf, openMission, usePhone } from "./store";
 import { agentLinks, progress } from "./missionModel";
-import { TONE_TEXT } from "../components/mission-tone";
-import { missionStalled, missionToneOf } from "../missions";
+import { MissionChipFace, TONE_TEXT } from "../components/mission-tone";
+import { chipWords, missionStalled, missionToneOf } from "../missions";
 import { PR_LOOK } from "../prMark";
 import { cn } from "../lib/utils";
 
@@ -117,9 +118,10 @@ export function Detail({ onBack }: { onBack: () => void }) {
           lead={agent ? <AgentLead agent={agent} /> : null}
           title={agent?.title ?? ""}
           line={agent ? <PlaceParts agent={agent} /> : null}
+          titleEnd={detail ? <DetailLinks agentKey={detail.key} /> : null}
         >
           {(hasConversation || hasLooks) && detail && !sleep ? (
-            <div className="mt-sm flex min-w-0 flex-wrap items-center justify-between gap-sm">
+            <div className="mt-sm flex min-w-0 items-center">
               <Tabs value={tab} onValueChange={(value) => setTab(value as DetailTab)} className="shrink-0">
                 <TabsList>
                   {hasConversation ? (
@@ -142,13 +144,12 @@ export function Detail({ onBack }: { onBack: () => void }) {
                   ) : null}
                 </TabsList>
               </Tabs>
-              <DetailLinks agentKey={detail.key} />
             </div>
-          ) : detail ? <DetailLinks agentKey={detail.key} className="mt-sm" /> : null}
+          ) : null}
           {agent ? <PhoneHumanTurn agent={agent} inset="mt-sm" /> : null}
         </PageHead>
       )}
-      {agent && !viewing && !sleep ? <AgentStrip agent={agent} /> : null}
+      {agent && !viewing && !sleep ? <AgentStrip key={`${agent.device_id}|${agent.pane_id}`} agent={agent} /> : null}
       {offline ? (
         <div role="status" className="shrink-0 bg-secondary px-lg py-sm text-subhead text-subtle-foreground" data-phone-unreachable="true">
           <OfflineText />
@@ -187,32 +188,29 @@ export function Detail({ onBack }: { onBack: () => void }) {
 }
 
 /**
- * The missions and pull requests this agent belongs to, one chip each under its title: a mission's title with `n/m` for its
- * Conductor or the step's title for a worker, a pull request's state mark and `#number`. A chip closes the detail and opens that
- * page on its tab, whose back goes to that tab's list.
+ * The missions and pull requests this agent belongs to, one chip each at the right of its title, where the desktop pane header
+ * draws them after the title: the desktop's mission face (its mark, `!` for the operator's turn, `k/n`) and a pull request's state
+ * mark and `#number`; the chip's name says the mission's title and a worker's step. A chip closes the detail and opens that page
+ * on its tab, whose back goes to that tab's list. Nothing at all, not even its room, when the agent belongs to nothing.
  */
-/** The chips of what the agent belongs to; nothing at all, not even its room, when it belongs to nothing. */
-function DetailLinks({ agentKey, className }: { agentKey: AgentKey; className?: string }) {
+function DetailLinks({ agentKey }: { agentKey: AgentKey }) {
   const { t } = useInterfaceTranslation();
   const missions = usePhone((s) => s.missions);
   const prs = usePhone((s) => s.prs?.items ?? null);
   const links = useMemo(() => agentLinks(agentKey, missions, prs), [agentKey, missions, prs]);
   if (links.missions.length === 0 && links.prs.length === 0) return null;
-  // Each chip is a small pill inside a press area of a touch target's height, so a row of them stays light.
-  const chip = "h-auto min-h-(--size-touch-target) max-w-full px-none py-none font-normal hover:bg-transparent";
-  const pill = "flex min-w-0 items-center gap-xs rounded-full bg-secondary px-md py-xs text-body text-foreground";
+  // Each chip sits inside a press area of a touch target's height, so a row of them stays light.
+  const chip = "-my-sm h-auto min-h-(--size-touch-target) max-w-full px-none py-none font-normal hover:bg-transparent";
   return (
-    <div className={cn("-my-sm flex min-w-0 flex-wrap justify-end gap-x-sm", className)} data-phone-detail-links="true">
+    <div className="flex min-w-0 flex-wrap justify-end gap-x-sm" data-phone-detail-links="true">
       {links.missions.map(({ mission, node, turn }) => {
         const { done, total } = progress(mission);
         return (
           <Button key={mission.id} variant="ghost" className={chip} data-phone-detail-mission={mission.id}
             aria-label={[t("mobile.tab.missions"), mission.title, node?.title, `${done}/${total}`].filter(Boolean).join(" · ")} onClick={() => { closeDetail(); openMission(mission.id); }}>
-            {/* The flag and the mission's progress, as Doop 02 draws it; the mission's and the step's names are the chip's name. */}
-            <span className={pill}>
-              <FlagIcon aria-hidden="true" className={cn("size-(--size-icon) shrink-0", TONE_TEXT[missionToneOf(mission.status, turn, missionStalled(mission))])} />
-              <span className="shrink-0 font-mono" data-phone-detail-mission-progress={`${done}/${total}`}>{done}/{total}</span>
-            </span>
+            <PhoneChip className={cn("font-mono", TONE_TEXT[missionToneOf(mission.status, turn, missionStalled(mission))])} data-phone-detail-mission-progress={`${done}/${total}`}>
+              <MissionChipFace turn={turn} delay={false} status={mission.status} counts={chipWords(mission).counts} icon="size-(--size-icon)" />
+            </PhoneChip>
           </Button>
         );
       })}
@@ -221,10 +219,10 @@ function DetailLinks({ agentKey, className }: { agentKey: AgentKey; className?: 
         return (
           <Button key={pr.key} variant="ghost" className={chip} data-phone-detail-pr={pr.key}
             aria-label={`${pullLabel(pr)} ${pr.title}`} onClick={() => { closeDetail(); openPrPage(pr.key); }}>
-            <span className={pill}>
+            <PhoneChip className="font-mono text-subtle-foreground">
               <Icon aria-hidden="true" className={cn("size-(--size-pr-icon) shrink-0", tone)} />
-              <span className="font-mono">{pullLabel(pr)}</span>
-            </span>
+              {pullLabel(pr)}
+            </PhoneChip>
           </Button>
         );
       })}
@@ -268,7 +266,8 @@ function AgentStrip({ agent }: { agent: PhoneAgent }) {
   const line = parts ? [parts.text, parts.tail].filter(Boolean).join(" · ") || null : null;
   // An agent asking the operator reads as their turn, not as the core's idle.
   const word = parts?.lead ?? (agent.mark === "turn" ? t("agents.mark.turn") : statusText(t, agent.status_code));
-  return <StatusStrip word={word} tone={STRIP_TONE[agent.mark] ?? "text-muted-foreground"} line={line} since={agent.changed_at_unix_ms} />;
+  // The children chip leads the strip, as it leads the desktop pane header's turn row.
+  return <StatusStrip lead={<DetailChildrenChip agent={agent} />} word={word} tone={STRIP_TONE[agent.mark] ?? "text-muted-foreground"} line={line} since={agent.changed_at_unix_ms} />;
 }
 
 /** The strip's word takes the colour of the row's mark. */

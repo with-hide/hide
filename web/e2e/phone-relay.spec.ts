@@ -45,18 +45,21 @@ test.use({ viewport: { width: 390, height: 844 }, locale: "en-US" });
 test.describe("narrow heads", () => {
   test.use({ viewport: { width: 320, height: 700 }, hasTouch: true, isMobile: true });
 
-  // UI_BEHAVIOR.md, The phone app: the detail's tabs and chips wrap rather than overlap on a narrow phone (I-17), and a View's
-  // head keeps its name, kind, opener and time inside the screen however long the name (I-65).
-  test("a detail's tabs and chips and a View's head stay inside a 320-wide screen without overlapping", async ({ page, relay }) => {
+  // UI_BEHAVIOR.md, The phone app: the detail's title wraps beside its chips and the strip's children chip stays in the screen on
+  // a narrow phone (I-17), and a View's head keeps its name, kind, opener and time inside the screen however long the name (I-65).
+  test("a detail's title, chips and strip and a View's head stay inside a 320-wide screen without overlapping", async ({ page, relay }) => {
     await page.goto(`${relay.origin}/p/${PHONE_PROTOCOL}/?demo=1`);
     await page.locator('[data-phone-agent="local|a1"]').tap();
-    const tabs = page.locator('[role="tablist"]').first();
+    const title = page.locator("[data-phone-detail] header h1").first();
     const chips = page.locator("[data-phone-detail-links]");
-    await expect(tabs).toBeVisible();
+    await expect(title).toBeVisible();
     await expect(chips).toBeVisible();
-    const [a, b] = [await tabs.boundingBox(), await chips.boundingBox()];
+    const [a, b] = [await title.boundingBox(), await chips.boundingBox()];
     const apart = a!.x + a!.width <= b!.x || b!.x + b!.width <= a!.x || a!.y + a!.height <= b!.y || b!.y + b!.height <= a!.y;
-    expect(apart, "the chips never sit on the tabs").toBe(true);
+    expect(apart, "the chips never sit on the title").toBe(true);
+    const childrenChip = page.locator('[data-phone-status-strip] [data-phone-children-toggle="local|a1"]');
+    await expect(childrenChip).toBeVisible();
+    expect((await childrenChip.boundingBox())!.x).toBeGreaterThanOrEqual(0);
     const spill = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(await spill()).toBeLessThanOrEqual(0);
     // The operator's words stand right, in a bubble narrower than the screen (Doop 02).
