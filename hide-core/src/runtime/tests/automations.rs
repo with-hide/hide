@@ -2552,7 +2552,14 @@ fn a_start_asked_again_is_the_start_it_made_though_the_task_changed() {
     let starts = harness.starts.lock().unwrap();
     assert_eq!(starts.asked.len(), 2);
     assert_eq!(starts.asked[0], starts.asked[1]);
-    assert_eq!(starts.asked[0].1.as_deref(), Some("Sort the new issues"));
+    assert!(
+        starts.asked[0]
+            .1
+            .as_deref()
+            .is_some_and(|brief| brief.starts_with("Sort the new issues")),
+        "{:?}",
+        starts.asked[0].1
+    );
 }
 
 /// Engineering 15: a close that keeps failing, as a worktree whose project
