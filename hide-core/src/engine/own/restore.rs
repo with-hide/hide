@@ -118,7 +118,11 @@ pub(super) fn read(path: &Path, backups: &Path) -> Topology {
 }
 
 /// Starts the restore of the panes `saved` names on a thread of its own.
-pub(super) fn start(engine: OwnEngine<'static>, saved: BTreeSet<String>) -> Result<(), String> {
+pub(super) fn start(
+    engine: OwnEngine<'static>,
+    saved: BTreeSet<String>,
+    on_failure: Option<Box<dyn FnOnce(EngineError) + Send>>,
+) -> Result<(), String> {
     std::thread::Builder::new()
         .name("hide-own-engine-restore".into())
         .spawn(move || {
@@ -135,7 +139,12 @@ pub(super) fn start(engine: OwnEngine<'static>, saved: BTreeSet<String>) -> Resu
                     gate.finish(Ok(()));
                     OwnEngine::resume_agents(&shared, &resumes);
                 }
-                Err(error) => gate.finish(Err(error)),
+                Err(error) => {
+                    gate.finish(Err(error.clone()));
+                    if let Some(on_failure) = on_failure {
+                        on_failure(error);
+                    }
+                }
             }
         })
         .map(|_| ())

@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 struct HolderNode {
     asked: Mutex<Vec<String>>,
     closed: Mutex<Option<String>>,
+    recovery_error: Option<String>,
 }
 
 impl NodeLink for HolderNode {
@@ -23,6 +24,13 @@ impl NodeLink for HolderNode {
             self.asked.lock().unwrap().push(format!("{call:?}"));
         }
         let answer: hide_node_link::holders::PaneAnswer = match call {
+            Call::Pane {
+                call: PaneCall::Recovered { .. },
+            } if self.recovery_error.is_some() => {
+                Err(hide_node_link::holders::HolderError::Unreachable {
+                    message: self.recovery_error.clone().unwrap(),
+                })
+            }
             Call::Pane {
                 call: PaneCall::Recovered { .. },
             } => Ok(serde_json::to_value(HolderRecovery {
@@ -178,6 +186,31 @@ fn a_device_whose_holders_did_not_start_opens_no_engine_and_says_why() {
     assert!(asked.is_empty(), "no engine asked the node: {asked:?}");
 }
 
+#[test]
+fn a_dialed_device_retries_on_a_new_link_when_pane_recovery_fails() {
+    let state = tempfile::tempdir().unwrap();
+    let shared = own_runtime(state.path());
+    let old = Arc::new(HolderNode {
+        recovery_error: Some("the previous pane owner still has work in flight".to_owned()),
+        ..HolderNode::default()
+    });
+    let generation = connect(&shared, ready(Arc::clone(&old), Ok(())));
+    wait_for("the unrecovered link to close", || {
+        old.closed_reason().is_some()
+    });
+    assert!(shared.lock().unwrap().ingest_host_closed(
+        DEVICE,
+        generation,
+        old.closed_reason().unwrap()
+    ));
+
+    let new = Arc::new(HolderNode::default());
+    let reconnected = connect(&shared, ready(Arc::clone(&new), Ok(())));
+    assert_ne!(reconnected, generation);
+    wait_delivery(&shared);
+    assert!(new.closed_reason().is_none());
+}
+
 /// An engine that finished opening after its attempt was replaced is
 /// handed back to be let go off the lock, not installed on the newer link.
 #[test]
@@ -194,6 +227,7 @@ fn an_engine_opened_for_a_replaced_attempt_is_not_installed() {
             home: "/srv/account".to_owned(),
             windows: false,
             switched: false,
+            reconnect_on_restore_failure: false,
         },
         Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
         Arc::default(),

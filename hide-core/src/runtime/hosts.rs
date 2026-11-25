@@ -1053,6 +1053,7 @@ impl Runtime {
                 self.device_connect_platform(device_id, &node.hello.os, &node.hello.arch);
                 let mut bound_now = false;
                 let mut helper_path = None;
+                let reconnect_on_restore_failure = dialed.is_some();
                 // What the probe on this link read of the machine, before
                 // the consent may take it.
                 let probe = dialed
@@ -1164,6 +1165,7 @@ impl Runtime {
                             Arc::clone(&node.host),
                             node.hello.home.clone(),
                             node.hello.os == "windows",
+                            reconnect_on_restore_failure,
                         ),
                         Err(reason) => {
                             self.own_device_holders_unstarted(device_id, reason);

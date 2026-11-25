@@ -336,6 +336,7 @@ impl Runtime {
             .status
             .remote
             .iter()
+            .filter(|status| status.state == "connected")
             .filter_map(|status| {
                 status
                     .session

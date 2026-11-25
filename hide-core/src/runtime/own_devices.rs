@@ -56,6 +56,7 @@ impl Runtime {
         link: Arc<dyn NodeLink>,
         home: Option<String>,
         windows: bool,
+        reconnect_on_restore_failure: bool,
     ) {
         let Some(own) = self.own_devices.as_ref() else {
             return;
@@ -126,6 +127,7 @@ impl Runtime {
                                 home,
                                 windows,
                                 switched,
+                                reconnect_on_restore_failure,
                             },
                             definitions,
                             launches,

@@ -233,7 +233,19 @@ pub(crate) fn open_device(
     launches: Arc<BTreeMap<String, crate::model::PaneLaunch>>,
 ) -> Result<OwnEngine<'static>, String> {
     let engine_dir = hide_kit::layout::device_engine_dir(state_dir, device)?;
-    OwnEngine::open(
+    let reconnect = link.reconnect_on_restore_failure.then(|| {
+        let node = Arc::downgrade(&node);
+        Box::new(move |error: EngineError| {
+            if matches!(error, EngineError::Unanswered(_))
+                && let Some(node) = node.upgrade()
+            {
+                node.close(&format!(
+                    "The device's panes could not be recovered: {error}"
+                ));
+            }
+        }) as Box<dyn FnOnce(EngineError) + Send>
+    });
+    OwnEngine::open_with_restore_failure(
         link_panes(Arc::clone(&node)),
         Place {
             engine_dir,
@@ -244,6 +256,7 @@ pub(crate) fn open_device(
             launches,
             switched: link.switched,
         },
+        reconnect,
     )
 }
 
@@ -254,6 +267,7 @@ pub(crate) struct DeviceLink {
     pub(crate) home: String,
     pub(crate) windows: bool,
     pub(crate) switched: bool,
+    pub(crate) reconnect_on_restore_failure: bool,
 }
 
 /// Whether the workspace, tab or pane id `id` is in a workspace this engine
@@ -290,6 +304,14 @@ impl OwnEngine<'static> {
     /// change, and laid out again around what `holders` found running as
     /// soon as the node says what that is, on a thread of its own.
     pub(crate) fn open(holders: Arc<dyn PaneHolders>, place: Place) -> Result<Self, String> {
+        Self::open_with_restore_failure(holders, place, None)
+    }
+
+    fn open_with_restore_failure(
+        holders: Arc<dyn PaneHolders>,
+        place: Place,
+        on_failure: Option<Box<dyn FnOnce(EngineError) + Send>>,
+    ) -> Result<Self, String> {
         let path = hide_kit::layout::engine_session_in(&place.engine_dir);
         let backups = hide_kit::layout::engine_backups_in(&place.engine_dir);
         let topology = restore::read(&path, &backups);
@@ -330,6 +352,7 @@ impl OwnEngine<'static> {
                 saver: None,
             },
             saved,
+            on_failure,
         )?;
         Ok(engine)
     }
