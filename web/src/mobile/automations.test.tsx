@@ -319,15 +319,19 @@ it("lists a once automation by its date, a done one last, and the one whose run 
     name: "Check migration", schedule: { ...once, date: "2026-11-19", time: "07:56" }, next_run_at_unix_ms: null, done: true, look_run: 1,
     records: [{ kind: "run", number: 1, trigger: "scheduled", started_at_unix_ms: NOW - 4 * 60_000, ended_at_unix_ms: NOW, state: "succeeded", attempt: 1, seen: false }],
   });
-  const { container, serve, click, unmount } = await connect(null);
+  const { container, serve, click, sent, unmount } = await connect(null);
   try {
     await serve({ type: "automations", items: [ended, automation("daily"), waiting], zone: ZONE, looks: ["migration"] });
     const look = container.querySelector('[data-phone-group="needs_you"] [data-phone-automation-look="migration"]')!;
     expect(look.querySelector('[data-mark-automation="once"]')).not.toBeNull();
     expect(look.querySelector('[data-phone-automation-look-line="ok"]')!.textContent).toBe("Automation · once · ✓ Done · 4m");
     expect(container.querySelector('[data-phone-tab="agents"]')!.getAttribute("data-phone-tab-count")).toBe("1");
+    // Opening the line looks at its run: the core is told once, with the run, and the automation's page opens.
+    await click('[data-phone-automation-look="migration"] [data-slot="row-overlay-button"]');
+    expect(sent()).toEqual([expect.objectContaining({ type: "automation", action: "look_seen", id: "migration", run: 1 })]);
+    expect(container.querySelector('[data-phone-automation-page="migration"]')).not.toBeNull();
+    await click('[data-phone-back="automations"]');
 
-    await click('[data-phone-tab="automations"]');
     const rows = [...container.querySelectorAll<HTMLElement>("[data-phone-automation]")];
     expect(rows.map((row) => row.getAttribute("data-phone-automation"))).toEqual(["daily", "week", "migration"]);
     expect(rows[2]!.getAttribute("data-phone-automation-state")).toBe("done");

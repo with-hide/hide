@@ -187,7 +187,9 @@ export class DemoSocket implements PhoneSocket {
         });
         return;
       case "automation":
-        this.automation(message.request_id, message.action, message.id);
+        // The sample host lists no once automation, so a look is taken and moves nothing.
+        if (message.action === "look_seen") this.emit({ type: "automation_result", request_id: message.request_id, action: "look_seen", id: message.id, ok: true, reason: null });
+        else this.automation(message.request_id, message.action, message.id);
         return;
       case "human_turn_done":
         this.later(ANSWER_MS, () => this.emit({ type: "human_turn_result", request_id: message.request_id, ok: true, reason: null }));

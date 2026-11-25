@@ -19,7 +19,7 @@ import { RowOverlayButton } from "../components/ui/row-button";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { pressAutomation } from "./connection";
+import { pressAutomation, seeAutomationLook } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { DeviceTag } from "./parts";
 import { noticeText, type PhoneAutomation } from "./protocol";
@@ -159,7 +159,7 @@ export function AutomationAskRows({ computer }: { computer?: string } = {}) {
       <ul data-phone-automation-looks={looking.length}>
         {looking.map((automation) => (
           <li key={automation.id} className="relative" data-phone-automation-look={automation.id}>
-            <RowOverlayButton aria-label={t("mobile.automations.open", { name: automation.name })} hover={false} className="active:bg-accent" onClick={() => openAutomation(automation.id)} />
+            <RowOverlayButton aria-label={t("mobile.automations.open", { name: automation.name })} hover={false} className="active:bg-accent" onClick={() => { if (automation.look_run !== undefined) seeAutomationLook(automation.id, automation.look_run); openAutomation(automation.id); }} />
             <div className="pointer-events-none relative flex min-h-(--size-touch-target) items-center gap-sm py-md">
               <span className="flex min-w-0 flex-1">
                 <TwoLineRow
