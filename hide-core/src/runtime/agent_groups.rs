@@ -279,10 +279,13 @@ impl Runtime {
         if !view.agent_groups.drafts.contains(id) {
             return false;
         }
-        if view
-            .agent_starts
-            .values()
-            .any(|start| start.is_pending() && start.draft_tab_id.as_deref() == Some(id))
+        let active = self
+            .group_start
+            .as_ref()
+            .filter(|start| start.workspace == *key)
+            .and_then(|start| view.agent_starts.get(&start.key));
+        if active
+            .is_some_and(|start| start.is_pending() && start.draft_tab_id.as_deref() == Some(id))
         {
             self.set_error(
                 "agent_group.start_pending",
@@ -291,6 +294,8 @@ impl Runtime {
             );
             return true;
         }
+        // Dismiss the inactive display only. The saved claim can still
+        // identify any terminal whose creation reply did not arrive.
         let Some(group) = view.agent_tab_group(id).map(|g| g.map(str::to_owned)) else {
             return false;
         };

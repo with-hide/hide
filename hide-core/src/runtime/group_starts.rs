@@ -48,6 +48,12 @@ impl StartIntent {
     pub(crate) fn is_pending(&self) -> bool {
         self.state == StartState::Pending
     }
+
+    fn dismissed_draft(&self, view: &workspace_views::WorkspaceView) -> bool {
+        self.draft_tab_id
+            .as_deref()
+            .is_some_and(|id| !view.agent_groups.drafts.contains(id))
+    }
 }
 
 pub(super) struct ActiveStart {
@@ -138,7 +144,11 @@ pub(super) fn staged_tab(
         }
     };
     view.agent_starts.values().any(|start| {
-        let Some(effect) = start.effect.as_ref().filter(|_| start.is_pending()) else {
+        let Some(effect) = start
+            .effect
+            .as_ref()
+            .filter(|_| start.is_pending() && !start.dismissed_draft(view))
+        else {
             return false;
         };
         if owner != Some(effect.workspace_id.as_str())
@@ -308,7 +318,9 @@ impl Runtime {
             if existing.agent_kind.as_deref() != agent_kind {
                 return Err("The original start must be confirmed before changing its agent. Retry its original choice.".into());
             }
-            if existing.state != StartState::Ready {
+            if existing.state != StartState::Ready
+                && !(existing.is_pending() && confirm_only && existing.dismissed_draft(view))
+            {
                 let layout = view.group_layout(existing.group_id.as_deref())
                     .ok_or("The original group is no longer available. Return to its checkout before retrying.")?;
                 let tab = existing
@@ -662,6 +674,10 @@ impl Runtime {
         let Some(start) = view.agent_starts.get(&active.key) else {
             return false;
         };
+        if start.is_pending() && start.dismissed_draft(view) {
+            // A confirmation can inspect the claim after its draft was closed.
+            return true;
+        }
         // A delegated tab has no ordinary strip membership. Once its exact
         // visible canvas admitted an add-pane request, that recorded tab may
         // finish in the background even if another canvas is selected.
@@ -905,9 +921,6 @@ impl Runtime {
         else {
             return global_current;
         };
-        if !active.explicit_target {
-            return global_current && self.group_start_target_is_current(task);
-        }
         let Some(view) = self
             .workspace_views
             .as_ref()
@@ -918,6 +931,12 @@ impl Runtime {
         let Some(start) = view.agent_starts.get(&active.key) else {
             return false;
         };
+        if start.is_pending() && start.dismissed_draft(view) {
+            return false;
+        }
+        if !active.explicit_target {
+            return global_current && self.group_start_target_is_current(task);
+        }
         (self.front_workspace_key().as_ref() == Some(&active.workspace)
             || origin
                 .and_then(|focus| focus.global_focus.as_ref())
@@ -939,11 +958,7 @@ impl Runtime {
     }
 
     pub(crate) fn group_start_failed(&mut self, task: u64, uncertain: bool) {
-        let Some(active) = self
-            .group_start
-            .as_ref()
-            .filter(|active| active.task == task)
-        else {
+        let Some(active) = self.group_start.take_if(|active| active.task == task) else {
             return;
         };
         if let Some(start) = self
@@ -1024,7 +1039,8 @@ impl Runtime {
         let Some(mut start) = view.agent_starts.get(&active.key).cloned() else {
             return;
         };
-        let promoted = !start.add_pane && start.state != StartState::Ready;
+        let promoted =
+            !start.add_pane && start.state != StartState::Ready && !start.dismissed_draft(view);
         let mut follow_local_global = follows_local_global && promoted;
         if promoted {
             // Topology may arrive before its acknowledgement; remove that

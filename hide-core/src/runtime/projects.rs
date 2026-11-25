@@ -5152,13 +5152,16 @@ impl Runtime {
                 .map(crate::worktree_control::TabTarget::device)
                 .ok_or("agent_start.device_unavailable")
         };
-        let target = match target {
-            Ok(target) => target,
-            Err(message) => return self.ingest_task_operation_result(id, Err(message.into())),
-        };
         let recovery_only = prepared
             .as_ref()
             .is_some_and(|prepared| prepared.request.recovery_only);
+        let target = match target {
+            Ok(target) => target,
+            Err(message) => {
+                self.group_start_failed(id, recovery_only);
+                return self.ingest_task_operation_result(id, Err(message.into()));
+            }
+        };
         let spawned = match prepared {
             Some(prepared) => crate::worktree_control::spawn_targeted_checkout_start(
                 target,

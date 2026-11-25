@@ -1141,6 +1141,84 @@ fn a_start_awaiting_confirmation_refuses_move_dissolve_and_draft_close() {
 }
 
 #[test]
+fn closing_an_idle_draft_keeps_its_claim_and_a_late_terminal_visible() {
+    let (mut runtime, checkout) = setup();
+    let prepared = runtime
+        .prepare_group_start(
+            71,
+            (crate::node::TEST_NODE, PATH),
+            None,
+            Some("interrupted-start"),
+            None,
+            false,
+        )
+        .expect("start reserved");
+    assert_eq!(prepared.saved.try_recv().unwrap(), Ok(()));
+    runtime.sync_workspace_view();
+    let draft = published(&runtime).drafts.first().unwrap().clone();
+    let saved = runtime
+        .save_group_start_effect(
+            71,
+            crate::start_claim::Effect {
+                workspace_id: "w-order".into(),
+                seed_tab_id: None,
+                target: None,
+                expected_command: Some(vec!["/bin/sh".into(), "-l".into()]),
+                shell_env: Default::default(),
+                shell_readiness: hide_node_link::protocol::ShellReadiness::Plain,
+                binding: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(saved.try_recv().unwrap(), Ok(()));
+    runtime.group_start_failed(71, true);
+    group(
+        &mut runtime,
+        "close-interrupted",
+        json!({"action":"close_draft","tab_id":draft}),
+    );
+    assert!(!published(&runtime).drafts.contains(&draft));
+    assert_eq!(ordered_tab_ids(&runtime, &checkout), TABS);
+    let retried = runtime
+        .prepare_group_start(
+            72,
+            (crate::node::TEST_NODE, PATH),
+            None,
+            Some("interrupted-start"),
+            None,
+            true,
+        )
+        .expect("the original request can still be inspected");
+    assert_eq!(retried.request.marker, prepared.request.marker);
+    assert!(retried.request.recovery_only);
+    assert!(!runtime.group_start_should_focus(72));
+
+    let stage = "w-order:t4";
+    let all = [TABS[0], TABS[1], TABS[2], stage];
+    let mut payload = tab_order_payload(PATH, &all, &all, TABS[0]);
+    payload.workspaces[0].tokens.insert(
+        crate::checkout_owner::OWNER_TOKEN.into(),
+        json!(crate::checkout_owner::owner_mark(
+            crate::node::TEST_NODE,
+            PATH
+        )),
+    );
+    payload
+        .panes
+        .iter_mut()
+        .find(|pane| pane.pane_id == format!("{stage}:p"))
+        .unwrap()
+        .start_claim = Some(crate::start_claim::label(&prepared.request.marker));
+    runtime.ingest_session(Ok(payload));
+    runtime.sync_workspace_view();
+    assert_eq!(ordered_tab_ids(&runtime, &checkout), all);
+    runtime.complete_group_start(72, Some(stage), &format!("{stage}:p"), false);
+    runtime.sync_workspace_view();
+    assert_eq!(tabs(&runtime, None), all);
+    assert!(!published(&runtime).drafts.contains(&draft));
+}
+
+#[test]
 fn a_late_start_fills_its_original_draft_once_without_changing_the_visible_group() {
     let (mut runtime, _) = setup();
     let target = create(&mut runtime, "target", "Starting");
