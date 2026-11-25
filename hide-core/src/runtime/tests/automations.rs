@@ -3056,6 +3056,9 @@ fn a_failed_once_run_stands_in_needs_you_and_the_automation_is_done_not_stopped(
         (&item["done"], &item["look_run"]),
         (&json!(true), &json!(2))
     );
+    // The desktop's detail opened without the run leaves the line.
+    harness.call(json!({"call": "seen", "id": id})).unwrap();
+    assert_eq!(harness.looks(), std::slice::from_ref(&id));
     // Opened on the phone (mission-104 review m6): a word for an older run
     // leaves the newer run's line; the word for it takes the line away.
     harness
