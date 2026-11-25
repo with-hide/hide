@@ -441,7 +441,24 @@ pub struct DeskConversationSnapshot {
     pub items: Vec<DeskItem>,
     /// Items dropped from the front to keep the conversation in its cap.
     pub dropped: u64,
+    /// Messages the operator sent while a reply was being written, in the
+    /// order they go: none is in `items` until its turn starts.
+    pub queued: Vec<DeskQueuedMessage>,
 }
+
+/// A message waiting for the turn before it to end (desk.md: "while a reply
+/// is being written, the next message waits"); `desk_queued_remove` takes
+/// it out before it goes.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeskQueuedMessage {
+    pub id: u64,
+    pub text: String,
+    pub at_ms: u64,
+    pub mentions: Vec<DeskMention>,
+}
+
+/// Messages that wait at once; one more is refused `desk_queued_full`.
+pub const DESK_QUEUED_MAX: usize = 8;
 
 /// One line of the conversation, kept in Desk's store as it is sent.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -519,8 +536,15 @@ pub enum DeskItem {
         card: DeskCardKind,
         /// The command, or the files an edit changes, as the agent asked.
         command: String,
+        /// The folder the command runs in, or that holds the files an edit
+        /// changes; none where Hide cannot name one.
         folder: Option<String>,
         reason: Option<String>,
+        /// The row of Settings › Labs › Desk › 권한 the request reads as,
+        /// whose name is the card's kind (`hide 명령` for a `hide` line);
+        /// none on a card kept from before it was sent.
+        #[serde(default)]
+        row: Option<DeskRow>,
         state: DeskApprovalState,
         /// Why it asks, irreversible kinds first (D-82): what
         /// `이 대화에서 계속 허용` keeps allowed. Empty on a card kept from
@@ -669,6 +693,9 @@ pub enum DeskCardKind {
 
 /// Why a card asks (`hide_desk::permission::Ask`).
 pub type DeskAsk = hide_desk::permission::Ask;
+
+/// A row of Settings › Labs › Desk › 권한 (`hide_desk::permission::Row`).
+pub type DeskRow = hide_desk::permission::Row;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

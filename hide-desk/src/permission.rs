@@ -337,7 +337,7 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
                 .map(wire_word)
                 .unwrap_or_else(|| place.cwd.to_owned());
             let mut line = Line::default();
-            read_line(command, &vec![Some(cwd)], place, 0, &mut line);
+            read_line(command, &vec![Some(cwd.clone())], place, 0, &mut line);
             // A line that changes the environment its programs read may
             // change which program a name runs and what it does.
             let unreadable = line.unreadable || line.environment;
@@ -352,7 +352,9 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
                 card: Card {
                     kind: CardKind::Command,
                     command: command.clone(),
-                    folder: folder.clone(),
+                    // Where it runs: the folder the agent named, else
+                    // Desk's own, which is where the agent's shell starts.
+                    folder: Some(cwd),
                     reason: reason.clone(),
                 },
                 deletes: line.changed(Change::Delete),
@@ -372,7 +374,11 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
             card: Card {
                 kind: CardKind::Edit,
                 command: paths.join("\n"),
-                folder: None,
+                folder: holding_folder(
+                    paths
+                        .iter()
+                        .map(|path| path_of(path, Some(place.cwd), place.home)),
+                ),
                 reason: reason.clone(),
             },
             ends: Vec::new(),
@@ -402,7 +408,8 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
             card: Card {
                 kind: CardKind::Read,
                 command: what.clone(),
-                folder: None,
+                // Where a name it reads is found.
+                folder: Some(place.cwd.to_owned()),
                 reason: None,
             },
             ends: Vec::new(),
@@ -427,6 +434,33 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
             delete_remote: false,
             unreadable: false,
         },
+    }
+}
+
+/// The folder that holds every one of `paths`: the deepest folder they all
+/// lie below. None when a path cannot be named or there is none.
+fn holding_folder(paths: impl Iterator<Item = Option<String>>) -> Option<String> {
+    let mut holding: Option<Vec<String>> = None;
+    for path in paths {
+        let path = normalize(&path?);
+        let (parent, _) = path.rsplit_once('/')?;
+        let names: Vec<String> = parent.split('/').map(str::to_owned).collect();
+        holding = Some(match holding {
+            None => names,
+            Some(held) => held
+                .into_iter()
+                .zip(names)
+                .take_while(|(held, name)| held == name)
+                .map(|(held, _)| held)
+                .collect(),
+        });
+    }
+    let names = holding?;
+    match names.join("/") {
+        // Below the root, whose name is empty.
+        joined if joined.is_empty() && !names.is_empty() => Some("/".to_owned()),
+        joined if joined.is_empty() => None,
+        joined => Some(joined),
     }
 }
 

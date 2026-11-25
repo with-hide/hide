@@ -3,12 +3,14 @@
 //! back (ACP v1).
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
 use crate::adapter::{AdapterId, AskMode};
-use crate::rpc::{CallError, Connection};
+use crate::rpc::{CallError, Connection, Incoming, Sink};
 
 /// How long a control request may take: a first `session/new` starts the
 /// agent's CLI, and a `session/load` replays the conversation.
@@ -198,6 +200,44 @@ pub fn choices(answer: &Value) -> Choices {
     }
 }
 
+/// What the agent sends, numbered in the order it arrives. A turn owns
+/// only what arrived after its prompt went out: a `session/load` replays
+/// the whole conversation as updates that all land before the load
+/// answers, so an owner that reads its messages after it prompted would
+/// otherwise join every earlier answer into the new reply. The rule is
+/// ACP's, so it holds for every agent that loads a session.
+#[derive(Clone, Debug, Default)]
+pub struct Arrivals(Arc<AtomicU64>);
+
+impl Arrivals {
+    /// A sink that numbers each message before `owner` takes it.
+    pub fn sink(&self, owner: impl Fn(u64, Incoming) + Send + Sync + 'static) -> Sink {
+        let count = Arc::clone(&self.0);
+        Arc::new(move |incoming| owner(count.fetch_add(1, Ordering::SeqCst), incoming))
+    }
+
+    /// The number the next message will carry: read just before a prompt
+    /// goes out, it is the first its turn owns.
+    pub fn next(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// What an agent says of its own sign-in, where it says it over ACP:
+/// codex-acp announces its account with `_auth/status_update`, whose
+/// `authStatus.kind` is `none` once it is signed out, as after it found a
+/// login it could no longer refresh and logged itself out. It then answers
+/// that open with an internal error, not ACP's `auth_required`, so this is
+/// how Desk learns the refusal was for the sign-in. `None` for any other
+/// message.
+pub fn sign_in_status(method: &str, params: &Value) -> Option<bool> {
+    if method != "_auth/status_update" {
+        return None;
+    }
+    let kind = params.pointer("/authStatus/kind")?.as_str()?;
+    Some(kind != "none")
+}
+
 /// Choices kept per option; a longer list is cut.
 pub const MAX_CHOICES: usize = 64;
 
@@ -374,6 +414,17 @@ mod tests {
             ("sonnet".to_owned(), "Sonnet 5.5".to_owned())
         );
         assert_eq!(read.effort.unwrap().config_id, "effort");
+    }
+
+    #[test]
+    fn an_agent_that_says_it_is_signed_out_reads_as_signed_out() {
+        // codex-acp 2.5.0 after it logged a login it could not refresh out.
+        let none = json!({"authStatus": {"kind": "none", "label": "Not logged in"}});
+        assert_eq!(sign_in_status("_auth/status_update", &none), Some(false));
+        let chatgpt = json!({"authStatus": {"kind": "chatgpt", "label": "ChatGPT Pro"}});
+        assert_eq!(sign_in_status("_auth/status_update", &chatgpt), Some(true));
+        assert_eq!(sign_in_status("session/update", &none), None);
+        assert_eq!(sign_in_status("_auth/status_update", &json!({})), None);
     }
 
     #[test]
