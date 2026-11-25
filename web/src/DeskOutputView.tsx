@@ -7,7 +7,7 @@
 // its link. Every output can be opened where its session opened it.
 
 import { ExternalLinkIcon, GlobeIcon } from "lucide-react";
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { addressShown, browserStillOf } from "./browserViews";
 import { PrMark } from "./components/pr-mark";
@@ -17,6 +17,7 @@ import type { FileSource } from "./fileBytes";
 import { useInterfaceTranslation } from "./i18n/client";
 import { MarkdownText } from "./MarkdownText";
 import { localDeviceId } from "./snapshot";
+import { downloadFailureText } from "./fileFailure";
 import { useShellStore } from "./store";
 import { ImageBody, PdfBody, VideoBody, ViewerNotice } from "./viewers/FileViewer";
 import { useFileBytesFrom } from "./viewers/useFileBytes";
@@ -58,15 +59,30 @@ export function DeskOutputView({ output, viewKey, actions }: { output: DeskOutpu
   );
 }
 
-/** A file the session showed: the image, PDF or video viewer, or a document's text read as Markdown. */
+/**
+ * A file the session showed: the image, PDF or video viewer, or a document's text read as Markdown. A file that cannot
+ * be read says why in words and offers `다시 시도` inside its tab, whatever its kind (B28); the code goes to the log.
+ */
 function FileOutput({ path, output, viewKey }: { path: string; output: DeskOutput; viewKey: string }) {
   const { t } = useInterfaceTranslation();
-  const state = useFileBytesFrom(path, useOutputSource(output));
+  const [attempt, setAttempt] = useState(0);
+  const state = useFileBytesFrom(path, useOutputSource(output), attempt);
   const displayId = `desk:${viewKey}`;
+  const reason = state.status === "failed" ? state.reason : null;
+  useEffect(() => {
+    if (reason !== null) useShellStore.getState().noteDiagnostic(`desk output: read failed device=${output.device_id ?? "local"} path=${path} reason=${reason}`);
+  }, [reason, output.device_id, path]);
+  if (state.status === "failed") {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-xs px-md text-center text-caption text-muted-foreground" data-viewer-state="failed" data-desk-output-failed={state.reason}>
+        <p>{t("desk.outputs.unavailable", { reason: downloadFailureText(state.reason, t) })}</p>
+        <Button variant="text" size="inline" className="text-caption" data-desk-output-retry="true" onClick={() => setAttempt((now) => now + 1)}>{t("desk.action.retry")}</Button>
+      </div>
+    );
+  }
   if (isVideoPath(path)) return <VideoBody path={path} state={state} />;
   if (IMAGE.test(path)) return <ImageBody path={path} state={state} displayId={displayId} />;
   if (PDF.test(path)) return <PdfBody path={path} state={state} displayId={displayId} />;
-  if (state.status === "failed") return <ViewerNotice state="failed" reason={t("desk.outputs.unavailable", { reason: state.reason })} />;
   if (state.status === "loading") return <ViewerNotice state="loading" reason={t("desk.outputs.reading")} />;
   return <DocumentText bytes={state.bytes} />;
 }

@@ -39,7 +39,7 @@ import { fileIcon } from "./fileIcons";
 import { useEscapeLayer } from "./components/ui/layer";
 import { useInterfaceTranslation } from "./i18n/client";
 import { machineName } from "./screenMachine";
-import { catalogWorkspaces, checkoutAtRoot, checkoutOfPane, paneRowOf, type AgentRow, type SleepingSession, type ViewDisplaySnapshot } from "./snapshot";
+import { catalogWorkspaces, checkoutAtRoot, checkoutOfPane, localDeviceId, paneRowOf, type AgentRow, type SleepingSession, type ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { windowIsActive } from "./viewFocus";
@@ -372,9 +372,16 @@ function everyCard(): DeskJob[] {
   return laneCards(useShellStore.getState().deskJobs);
 }
 
-/** The output a session's own line names, as its card lists it when it does: the View's id, or its address or file. */
-function outputOf(job: DeskJob | undefined, output: DeskOutput): DeskOutput {
-  return job?.outputs.find((made) => made.id === output.id || (output.url !== null && made.url === output.url) || (output.path !== null && namesView(made, output.path))) ?? output;
+/**
+ * The output a session's own line names, as its card lists it when it does: the View's id, or its address or file.
+ * A line the card does not list names a file as the session typed it, read where the session runs (B27), so it
+ * carries that session's device and checkout when they are another machine's.
+ */
+function outputOf(job: DeskJob | undefined, output: DeskOutput, place?: { device: string; checkout: string } | null): DeskOutput {
+  const made = job?.outputs.find((one) => one.id === output.id || (output.url !== null && one.url === output.url) || (output.path !== null && namesView(one, output.path)));
+  if (made) return made;
+  const node = localDeviceId(useShellStore.getState().rest);
+  return place && output.path !== null && output.device_id === null && place.device !== node ? { ...output, device_id: place.device, checkout: place.checkout } : output;
 }
 
 /** A mission's title as the mission list names it, else as its Conductor's card does. */
@@ -590,7 +597,7 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
         />
       ) : null}
       onTerminal={() => actions.deskTerminal()}
-      onOutput={(output) => actions.deskOpen({ kind: "output", output: outputOf(job ?? undefined, output) })}
+      onOutput={(output) => actions.deskOpen({ kind: "output", output: outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath } : null) })}
       onMission={room.mission}
       onSession={room.session}
     />
