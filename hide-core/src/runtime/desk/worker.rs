@@ -177,8 +177,14 @@ fn reason(error: &CallError) -> Option<String> {
     let CallError::Rejected(rejected) = error else {
         return None;
     };
-    let line = rejected.message.lines().next()?.trim();
-    (!line.is_empty()).then(|| line.chars().take(MAX_REASON_CHARS).collect())
+    first_line(&rejected.message)
+}
+
+/// The first line of the agent's own words with any text in it, cut to
+/// [`MAX_REASON_CHARS`].
+fn first_line(words: &str) -> Option<String> {
+    let line = words.lines().map(str::trim).find(|line| !line.is_empty())?;
+    Some(line.chars().take(MAX_REASON_CHARS).collect())
 }
 
 /// Whether the agent refused the call until the operator signs in: ACP's
@@ -638,7 +644,7 @@ impl Worker {
                 credential,
                 announced: HashMap::new(),
                 announced_order: Vec::new(),
-                turn: session::TurnReader::new(opened.prelude),
+                turn: session::TurnReader::new(opened.prelude, adapter.failed_turn_mark()),
                 placement: None,
             },
             opened.resume_failed,
@@ -718,7 +724,7 @@ impl Worker {
                     Update::Tool { id, call } => running.remember(id, call),
                     Update::Choices(choices) => self.report(Report::Choices { adapter, choices }),
                     Update::Mode(mode) => self.mode_moved(&mode),
-                    Update::Text { .. } | Update::Break | Update::Other => {}
+                    Update::Text { .. } | Update::Break | Update::Info(_) | Update::Other => {}
                 }
                 if let Some((tag, text)) = text {
                     self.report(Report::Text { tag, text });
@@ -738,10 +744,14 @@ impl Worker {
             }
             Incoming::Reply { tag, result } => {
                 let adapter = running.adapter;
-                let calls = running.turn.end(tag);
-                let current = calls.is_some();
-                if let Some(calls) = calls {
-                    let steps = calls
+                let answered = running.turn.end(tag);
+                let current = answered.is_some();
+                let failed = answered
+                    .as_ref()
+                    .and_then(|answered| answered.failed.clone());
+                if let Some(answered) = answered {
+                    let steps = answered
+                        .calls
                         .iter()
                         .filter_map(|id| running.announced.get(id))
                         .map(hide_desk::permission::step)
@@ -749,9 +759,22 @@ impl Worker {
                     self.report(Report::Steps { tag, steps });
                 }
                 let outcome = match result {
-                    Ok(answer) => match session::stop_reason(&answer) {
-                        Some("cancelled") => TurnOutcome::Cancelled,
-                        Some("refusal") => {
+                    Ok(answer) => match (session::stop_reason(&answer), failed) {
+                        (Some("cancelled"), _) => TurnOutcome::Cancelled,
+                        // The adapter marked the turn failed and answered it
+                        // as ended: what it wrote after the mark is its error.
+                        (_, Some(words)) => {
+                            let reason = first_line(&words);
+                            crate::diagnostic!(json!({
+                                "component": "desk",
+                                "kind": "desk.turn_failed",
+                                "adapter": adapter.as_str(),
+                                "error": "failed turn mark",
+                                "reason": reason,
+                            }));
+                            TurnOutcome::Failed(reason)
+                        }
+                        (Some("refusal"), None) => {
                             crate::diagnostic!(json!({
                                 "component": "desk",
                                 "kind": "desk.turn_refused",
@@ -1088,7 +1111,8 @@ mod tests {
     use super::*;
     use crate::desk::DeskPlaces;
     use crate::model::DeskHostState;
-    use crate::runtime::desk::tests::{event, opened, runtime, sends, sent};
+    use crate::model::{DeskItem, DeskNotice};
+    use crate::runtime::desk::tests::{event, items, opened, runtime, sends, sent};
 
     /// The variable that puts this test binary in a waiting process's role.
     const IDLE: &str = "HIDE_CORE_DESK_IDLE_PROCESS";
@@ -1124,9 +1148,14 @@ mod tests {
         }
     }
 
-    /// A worker whose process is the idle one, running the turn `tag`, and
-    /// reporting to `runtime`.
-    fn worker_running(runtime: &Arc<Mutex<Runtime>>, cwd: &std::path::Path, tag: u64) -> Worker {
+    /// A worker whose process is the idle one, speaking for `adapter`,
+    /// running the turn `tag`, and reporting to `runtime`.
+    fn worker_running(
+        runtime: &Arc<Mutex<Runtime>>,
+        cwd: &std::path::Path,
+        adapter: AdapterId,
+        tag: u64,
+    ) -> Worker {
         let launch = adapter::Launch {
             program: std::env::current_exe().unwrap(),
             args: [
@@ -1145,7 +1174,7 @@ mod tests {
         };
         let arrivals = session::Arrivals::default();
         let host = Host::start(&launch, arrivals.sink(|_, _| {})).unwrap();
-        let mut turn = session::TurnReader::new(None);
+        let mut turn = session::TurnReader::new(None, adapter.failed_turn_mark());
         turn.start(tag, arrivals.next());
         let (orders, _) = mpsc::channel();
         Worker {
@@ -1161,7 +1190,7 @@ mod tests {
             on: true,
             running: Some(Running {
                 host,
-                adapter: AdapterId::CLAUDE,
+                adapter,
                 session_id: "s1".into(),
                 credential: DeskCredential {
                     reference: PathBuf::new(),
@@ -1176,15 +1205,21 @@ mod tests {
         }
     }
 
-    /// A runtime with a turn under way on Claude and one message behind it.
+    /// A runtime with a turn under way on `adapter` and one message behind
+    /// it.
     fn a_turn_and_one_waiting(
         root: &std::path::Path,
+        adapter: AdapterId,
     ) -> (Arc<Mutex<Runtime>>, Receiver<Order>, u64) {
         let (mut runtime, received) = runtime(root);
-        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        event(
+            &mut runtime,
+            "desk_select",
+            json!({"agent": adapter.as_str()}),
+        );
         event(&mut runtime, "desk_send", json!({"text": "one"}));
         let one = sent(&received);
-        opened(&mut runtime, AdapterId::CLAUDE);
+        opened(&mut runtime, adapter);
         event(&mut runtime, "desk_send", json!({"text": "two"}));
         (Arc::new(Mutex::new(runtime)), received, one.tag)
     }
@@ -1204,8 +1239,8 @@ mod tests {
     #[test]
     fn a_process_that_dies_under_a_turn_sends_no_queued_message() {
         let root = tempfile::tempdir().unwrap();
-        let (runtime, received, tag) = a_turn_and_one_waiting(root.path());
-        let mut worker = worker_running(&runtime, root.path(), tag);
+        let (runtime, received, tag) = a_turn_and_one_waiting(root.path(), AdapterId::CLAUDE);
+        let mut worker = worker_running(&runtime, root.path(), AdapterId::CLAUDE, tag);
         worker.incoming(
             u64::MAX,
             Incoming::Closed {
@@ -1223,8 +1258,8 @@ mod tests {
     #[test]
     fn a_turn_past_the_cap_ends_with_its_process_and_sends_no_queued_message() {
         let root = tempfile::tempdir().unwrap();
-        let (runtime, received, tag) = a_turn_and_one_waiting(root.path());
-        let mut worker = worker_running(&runtime, root.path(), tag);
+        let (runtime, received, tag) = a_turn_and_one_waiting(root.path(), AdapterId::CLAUDE);
+        let mut worker = worker_running(&runtime, root.path(), AdapterId::CLAUDE, tag);
         worker.running.as_mut().unwrap().turn.end(tag);
         worker.turn_ended(
             tag,
@@ -1236,8 +1271,8 @@ mod tests {
         assert_eq!(after(&runtime), (false, 1, Some(DeskHostState::Stopped)));
 
         let root = tempfile::tempdir().unwrap();
-        let (runtime, received, tag) = a_turn_and_one_waiting(root.path());
-        let mut worker = worker_running(&runtime, root.path(), tag);
+        let (runtime, received, tag) = a_turn_and_one_waiting(root.path(), AdapterId::CLAUDE);
+        let mut worker = worker_running(&runtime, root.path(), AdapterId::CLAUDE, tag);
         worker.running.as_mut().unwrap().turn.end(tag);
         worker.turn_ended(tag, TurnOutcome::Done, None);
         assert_eq!(sends(&received), ["two"]);
@@ -1291,6 +1326,53 @@ mod tests {
         ]));
         assert!(files_gone(&one_gone, &files));
         assert!(!files_gone(&Facts(None), &files));
+    }
+
+    /// letter-47671, from the worker: a Codex turn whose model failed
+    /// (429 here, as codex-acp 2.5.0 sent it) is answered `end_turn`, and
+    /// still ends as a failed turn with Codex's words as its reason and no
+    /// reply text; the message behind it goes next, as after any turn.
+    #[test]
+    fn a_turn_its_adapter_marked_failed_ends_failed_and_the_next_message_goes() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, received, tag) = a_turn_and_one_waiting(root.path(), AdapterId::CODEX);
+        let mut worker = worker_running(&runtime, root.path(), AdapterId::CODEX, tag);
+        let update = |update: Value| Incoming::Notification {
+            method: "session/update".into(),
+            params: json!({"sessionId": "s1", "update": update}),
+        };
+        worker.incoming(
+            100,
+            update(json!({"sessionUpdate": "session_info_update",
+                "_meta": {"codex": {"threadStatus": {"type": "systemError"}}}})),
+        );
+        worker.incoming(
+            101,
+            update(
+                json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text",
+                "text": "exceeded retry limit, last status: 429 Too Many Requests\n\n"}}),
+            ),
+        );
+        worker.incoming(
+            102,
+            Incoming::Reply {
+                tag,
+                result: Ok(json!({"stopReason": "end_turn", "usage": null,
+                    "_meta": {"quota": {"token_count": null, "model_usage": []}}})),
+            },
+        );
+        assert_eq!(sends(&received), ["two"]);
+        let items = items(&runtime.lock().unwrap());
+        assert!(
+            !items
+                .iter()
+                .any(|item| matches!(item, DeskItem::Reply { .. })),
+            "the error became a reply: {items:?}"
+        );
+        assert!(items.iter().any(|item| matches!(item,
+            DeskItem::Notice { notice: DeskNotice::TurnFailed, detail: Some(detail), .. }
+                if detail == "exceeded retry limit, last status: 429 Too Many Requests")));
+        worker.end_process(false);
     }
 
     fn looked(
