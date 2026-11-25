@@ -1966,7 +1966,12 @@ pub const INJECTED_PREFIXES: &[&str] = &[
 
 /// The tags a Project Memory delivery begins with: a prompt's cards follow
 /// Hide's instruction for reporting a stale one, the index stands alone.
-const MEMORY_TAGS: &[&str] = &["<hide-memory-context", "<hide-memory-instruction"];
+const MEMORY_TAGS: &[&str] = &[
+    "<hide-memory-context",
+    "<hide-memory-instruction",
+    // The open questions a prompt gives, beside the cards.
+    "<hide-open-questions",
+];
 
 fn has_injected_prefix(text: &str) -> bool {
     injected_len(text.trim_start()).is_some()
@@ -1976,7 +1981,7 @@ fn has_injected_prefix(text: &str) -> bool {
 /// between them (as it is when it begins with none): what is left is the operator's own words, empty when the
 /// whole text was injected.
 /// A block ends at its closing tag when the prefix is a tag (and the AGENTS.md
-/// instructions at `</INSTRUCTIONS>`); a prefix that is a sentence, or a tag
+/// instructions at `</INSTRUCTIONS>`; a receipt line after one, at its own `/>`); a prefix that is a sentence, or a tag
 /// never closed, takes the rest of the text, so an operator who pastes such a
 /// sentence as the first words of a message to an agent that does not mark it
 /// loses the message.
@@ -1985,10 +1990,29 @@ pub(crate) fn strip_injected(text: &str) -> &str {
     if injected_len(rest).is_none() {
         return text;
     }
-    while let Some(len) = injected_len(rest) {
-        rest = rest[len..].trim_start();
+    loop {
+        if let Some(len) = injected_len(rest) {
+            rest = rest[len..].trim_start();
+        } else if let Some(len) = receipt_len(rest) {
+            rest = rest[len..].trim_start();
+        } else {
+            return rest;
+        }
     }
-    rest
+}
+
+/// The length of a receipt line (`<hide-memory-receipt …/>` or
+/// `<hide-asks-receipt …/>`) `text` begins with. It ends a delivery of
+/// context and is injected only after one: a receipt alone is as likely to be
+/// words an operator typed, which the label reader leaves as theirs.
+fn receipt_len(text: &str) -> Option<usize> {
+    [
+        label_transcript::RECEIPT_MARKER,
+        label_transcript::ASKS_RECEIPT_MARKER,
+    ]
+    .iter()
+    .any(|marker| text.starts_with(marker))
+    .then(|| text.find("/>").map_or(text.len(), |at| at + "/>".len()))
 }
 
 /// The length of the injected block `text` (already trimmed at the start)

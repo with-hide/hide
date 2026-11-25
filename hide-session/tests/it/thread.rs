@@ -772,7 +772,8 @@ fn hide_and_harness_wrappers_stay_apart_from_the_operators_words() {
 /// message, a note for an interrupted turn, and the environment ahead of a
 /// real prompt, as a part of its own or as the front of the prompt's. None
 /// of it is the operator's turn; the operator's own words next to it stay,
-/// and the interruption is drawn as one, as Claude Code's is.
+/// and the interruption is drawn as the short line Claude Code's is, not as
+/// the note Codex writes for the model.
 #[test]
 fn text_codex_injects_is_not_an_operator_turn() {
     let sample = SAMPLES
@@ -826,13 +827,53 @@ fn text_codex_injects_is_not_an_operator_turn() {
         marks,
         [
             ("고쳐줘".to_owned(), None),
-            (aborted.to_owned(), Some("interrupted".to_owned())),
+            (
+                "[Request interrupted by user]".to_owned(),
+                Some("interrupted".to_owned()),
+            ),
             ("또 해줘".to_owned(), None),
             ("왜 그래?".to_owned(), None),
         ]
     );
     // a's two parts and d's environment part; e only lost the front of its.
     assert_eq!(page.skipped.get("injected"), Some(&3));
+}
+
+/// A Memory delivery is three blocks in one text: the instruction, the
+/// cards and a receipt line that closes itself and carries an auth tag; the
+/// open questions a prompt gives are a block of their own with a receipt
+/// line of theirs. All of it is injected, and the operator's words after it
+/// stay.
+#[test]
+fn a_memory_delivery_with_its_receipt_is_left_out_to_the_last_line() {
+    let sample = SAMPLES
+        .iter()
+        .find(|sample| sample.format == SessionFormat::Codex)
+        .unwrap();
+    let placed = Placed::new(sample);
+    let auth = "a".repeat(64);
+    let delivery = format!(
+        "<hide-memory-instruction>If what the operator says now contradicts a card, run `hide memory stale <id>`.</hide-memory-instruction>\n<hide-memory-context trust=\"untrusted-reference-data\">\n{{\"id\":\"m1\",\"text\":\"a card\"}}\n</hide-memory-context>\n<hide-memory-receipt event=\"UserPromptSubmit\" count=\"1\" items=\"m1@1\" auth=\"{auth}\" />"
+    );
+    let asks = format!(
+        "<hide-open-questions trust=\"untrusted-reference-data\">\nq1 \"a question\"\n</hide-open-questions>\n<hide-asks-receipt items=\"q1\" auth=\"{auth}\" />"
+    );
+    let message = |id: &str, text: &str| json!({"type": "response_item", "payload": {"type": "message", "id": id, "role": "user", "content": [{"type": "input_text", "text": text}]}});
+    let session = std::fs::read_to_string(&placed.path).unwrap();
+    let header = session.lines().next().unwrap();
+    let records = [
+        message("a", &delivery),
+        message("b", &asks),
+        message("c", &format!("{delivery}\n{asks}\n고쳐줘")),
+    ];
+    let contents = std::iter::once(header.to_owned())
+        .chain(records.iter().map(Value::to_string))
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
+    std::fs::write(&placed.path, contents).unwrap();
+    let page = placed.read(None).unwrap();
+    assert_eq!(texts(&page), ["고쳐줘"]);
+    assert_eq!(page.skipped.get("injected"), Some(&2));
 }
 
 /// The limit of reading an injected block by its first words: a message

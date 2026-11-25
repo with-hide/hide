@@ -250,6 +250,14 @@ impl Thread {
                         text
                     };
                     let origin = classify(origin, text);
+                    // An interruption is one short line whatever the agent
+                    // wrote about it, as Claude Code writes its own: Codex's
+                    // note is for the model, in English, in tags.
+                    let text = if origin == Origin::Interrupted {
+                        INTERRUPTED
+                    } else {
+                        text
+                    };
                     if origin == Origin::Injected || (text.is_empty() && had_text) {
                         self.skip("injected");
                         continue;
@@ -478,6 +486,9 @@ impl Thread {
         self.updates.push(update(chunk));
     }
 }
+
+/// The line an interrupted turn is drawn as, in every agent's thread.
+const INTERRUPTED: &str = "[Request interrupted by user]";
 
 /// What the text itself says the message is, unless metadata already said.
 fn classify(origin: Origin, text: &str) -> Origin {
