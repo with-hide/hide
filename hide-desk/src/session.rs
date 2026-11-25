@@ -382,8 +382,32 @@ impl ReplyBlocks {
 pub const MAX_TURN_CALLS: usize = 256;
 
 /// The words a failed turn keeps after its mark; the failure line shows
-/// only their first line, so the rest is not kept.
+/// only their first line, so what comes past this is cut, and
+/// [`FAILURE_CUT`] says so.
 pub const MAX_FAILURE_BYTES: usize = 4 * 1024;
+
+/// Ends a failed turn's words that were cut at [`MAX_FAILURE_BYTES`].
+pub const FAILURE_CUT: char = '…';
+
+/// Adds `text` to a failed turn's words below [`MAX_FAILURE_BYTES`]: what
+/// reaches the cap is cut on a character and ends with [`FAILURE_CUT`],
+/// which leaves the words at the cap or past it, so nothing more is kept.
+fn keep_failure(words: &mut String, text: &str) {
+    if words.len() >= MAX_FAILURE_BYTES {
+        return;
+    }
+    let room = MAX_FAILURE_BYTES - words.len();
+    if text.len() < room {
+        words.push_str(text);
+        return;
+    }
+    let mut end = room;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    words.push_str(&text[..end]);
+    words.push(FAILURE_CUT);
+}
 
 /// How a turn ended, as its updates told it.
 #[derive(Debug, Default, PartialEq)]
@@ -459,9 +483,7 @@ impl TurnReader {
             return None;
         }
         if let (Some(words), Update::Text { text, .. }) = (&mut self.failed, update) {
-            if words.len() + text.len() <= MAX_FAILURE_BYTES {
-                words.push_str(text);
-            }
+            keep_failure(words, text);
             return None;
         }
         let piece = self.reply.piece(update);
@@ -654,6 +676,29 @@ mod tests {
             ("응답: fail please say hi".to_owned(), None)
         );
         assert_eq!(AdapterId::CLAUDE.failed_turn_mark(), None);
+    }
+
+    /// A failed turn's words past the cap are cut on a character and say
+    /// so, and nothing after the cut is kept: a first piece larger than the
+    /// cap still gives the failure line its first words.
+    #[test]
+    fn a_failed_turn_s_words_are_cut_at_the_cap_and_say_so() {
+        let mut turn = TurnReader::new(None, AdapterId::CODEX.failed_turn_mark());
+        turn.start(7, 0);
+        let long = "한도를 넘었어요 ".repeat(400);
+        assert!(long.len() > MAX_FAILURE_BYTES);
+        for update in [
+            json!({"sessionUpdate": "session_info_update",
+                   "_meta": {"codex": {"threadStatus": {"type": "systemError"}}}}),
+            said(&long),
+            said("after the cut"),
+        ] {
+            assert_eq!(turn.read(1, &read_update(&json!({"update": update}))), None);
+        }
+        let words = turn.end(7).unwrap().failed.unwrap();
+        assert!(words.ends_with(FAILURE_CUT), "not marked as cut");
+        assert!(long.starts_with(words.trim_end_matches(FAILURE_CUT)));
+        assert!((MAX_FAILURE_BYTES..=MAX_FAILURE_BYTES + 3).contains(&words.len()));
     }
 
     #[test]
