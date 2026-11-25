@@ -2777,9 +2777,8 @@ mod tests {
     #[test]
     fn a_node_whose_core_falls_silent_ends_its_link_and_lets_its_panes_go() {
         use hide_node_link::holders::{
-            HolderError, HolderProcess, HolderProcesses, HolderProof, HolderRecovery,
-            HolderScroll, PaneCall, PaneEnded, PaneFactsSink, PaneHolders, PaneInput, ScreenRules,
-            StyledRead,
+            HolderError, HolderProcess, HolderProcesses, HolderProof, HolderRecovery, HolderScroll,
+            PaneCall, PaneEnded, PaneFactsSink, PaneHolders, PaneInput, ScreenRules, StyledRead,
         };
         use hide_node_link::panes::{HEARTBEAT_LIMIT, PING_LINE};
         use std::os::unix::net::UnixStream;
@@ -2791,10 +2790,7 @@ mod tests {
             Owned(#[allow(dead_code)] hide_kit::panes::Owner),
         }
         impl PaneHolders for Holders {
-            fn own(
-                self: Arc<Self>,
-                within: Duration,
-            ) -> Result<Arc<dyn PaneHolders>, HolderError> {
+            fn own(self: Arc<Self>, within: Duration) -> Result<Arc<dyn PaneHolders>, HolderError> {
                 let Holders::Unowned(panes) = &*self else {
                     unreachable!()
                 };

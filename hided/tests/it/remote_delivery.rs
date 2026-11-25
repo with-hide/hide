@@ -843,7 +843,9 @@ fn a_device_link_cut_without_a_close_gives_its_panes_to_the_next_link() -> Resul
         );
         let restore: Value = serde_json::from_str(&last_logged(&state, "engine.restored"))?;
         ensure!(
-            restore["adopted"].as_u64().is_some_and(|adopted| adopted >= 1),
+            restore["adopted"]
+                .as_u64()
+                .is_some_and(|adopted| adopted >= 1),
             "the next link did not take the device's running pane back: {restore}"
         );
 

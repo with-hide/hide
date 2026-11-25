@@ -113,8 +113,10 @@ impl Heard {
     /// How long until the other end has sent nothing for
     /// [`HEARTBEAT_LIMIT`]; `None` once it has, and the link is gone.
     pub fn silent(&self) -> Option<std::time::Duration> {
-        let at = std::time::Duration::from_millis(self.at.load(std::sync::atomic::Ordering::Relaxed));
-        (at + HEARTBEAT_LIMIT).checked_sub(self.started.elapsed())
+        let at =
+            std::time::Duration::from_millis(self.at.load(std::sync::atomic::Ordering::Relaxed));
+        (at + HEARTBEAT_LIMIT)
+            .checked_sub(self.started.elapsed())
             .filter(|left| !left.is_zero())
     }
 }
