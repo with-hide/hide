@@ -46,6 +46,13 @@ pub const RESULT_ADDRESS_LIMIT: usize = 1024;
 const SCHEMA_VERSION: u32 = 1;
 const NAME_CAP: usize = 80;
 const TASK_CAP: usize = 16 * 1024;
+/// The line every run's first prompt carries after the task: a result file
+/// is shown with `hide file open`, which is how a run's result reaches the
+/// operator (`Run::results`), and a run with nothing to show just ends. A
+/// reminder in the prompt, not a check at the run's end, so it reads the same
+/// for every agent on every system.
+const RESULT_LINE: &str =
+    "[결과] 결과 파일을 만들었으면 `hide file open <경로>`로 보여 줘. 만들 게 없으면 그냥 끝내.";
 /// The last answer a run keeps for the next one: one paragraph (D-10).
 const ANSWER_CAP: usize = 1_000;
 /// A failure's code as a run keeps it.
@@ -661,15 +668,16 @@ impl Automation {
         }
     }
 
-    /// The run's first prompt (D-10, B13): the task, then the last finished
-    /// run's time and result and, when it finished the task, its last answer.
+    /// The run's first prompt (D-10, B13): the task, the line that asks for
+    /// its result as a View, then the last finished run's time and result
+    /// and, when it finished the task, its last answer.
     pub fn prompt(&self, before: u64, zone: &TimeZone) -> String {
         let last = self
             .runs()
             .rev()
             .find(|run| run.number < before && run.finished());
         let Some(last) = last else {
-            return self.task.clone();
+            return format!("{}\n\n{RESULT_LINE}", self.task);
         };
         let when = local_minute(last.started_at_unix_ms, zone);
         let result = match last.state {
@@ -681,7 +689,10 @@ impl Automation {
             RunState::Stopped => "멈춤 · 사람이 끝냄".to_owned(),
             RunState::Starting | RunState::Running => unreachable!("a finished run"),
         };
-        let mut prompt = format!("{}\n\n[지난 회차 · {when} · {result}]", self.task);
+        let mut prompt = format!(
+            "{}\n\n{RESULT_LINE}\n\n[지난 회차 · {when} · {result}]",
+            self.task
+        );
         if let Some(answer) = last
             .answer
             .as_deref()
@@ -1604,22 +1615,27 @@ mod tests {
         assert!(matches!(automation.records[2], Entry::Run(_)));
     }
 
-    /// B13: the first run gets the task alone; the next one the last run's
-    /// time, result and the answer it finished with.
+    /// B13: the first run gets the task and the result line; the next one
+    /// also the last run's time, result and the answer it finished with.
     #[test]
     fn a_runs_prompt_carries_the_last_runs_time_result_and_answer() {
         let zone = seoul();
         let now = at("2026-11-19T09:00");
         let mut automation = automation(daily("09:00"), now);
         let first = automation.new_run(Trigger::Scheduled, Some(now), now);
-        assert_eq!(automation.prompt(first, &zone), "새 이슈를 정리해줘");
+        assert_eq!(
+            automation.prompt(first, &zone),
+            format!("새 이슈를 정리해줘\n\n{RESULT_LINE}")
+        );
         let run = automation.run_mut(first).unwrap();
         run.state = RunState::Succeeded;
         run.answer = answer_paragraph("새 이슈 3개를 정리했어요.\n\n자세한 내용은 아래.");
         let second = automation.new_run(Trigger::Scheduled, Some(now + 24 * HOUR), now);
         assert_eq!(
             automation.prompt(second, &zone),
-            "새 이슈를 정리해줘\n\n[지난 회차 · 2026-11-19 09:00 · 성공]\n새 이슈 3개를 정리했어요."
+            format!(
+                "새 이슈를 정리해줘\n\n{RESULT_LINE}\n\n[지난 회차 · 2026-11-19 09:00 · 성공]\n새 이슈 3개를 정리했어요."
+            )
         );
         let run = automation.run_mut(second).unwrap();
         run.state = RunState::Failed;
