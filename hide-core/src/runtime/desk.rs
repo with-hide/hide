@@ -142,14 +142,17 @@ struct Approval {
     asks: Vec<Ask>,
     /// The working sessions it ends, which `한 번 허용` lets Desk archive.
     sessions: Vec<String>,
-    /// What the agent asked to run, which a refusal's line names.
+    /// What the agent asked to run and what kind of call it is, which a
+    /// refusal names.
     command: String,
+    kind: permission::CardKind,
 }
 
 /// A refusal to send once the turn it ended ends: what was refused and
 /// `거절…`'s line, none for a plain refusal.
 struct Refusal {
     command: String,
+    kind: permission::CardKind,
     text: Option<String>,
 }
 
@@ -523,7 +526,12 @@ impl Runtime {
             return true;
         }
         self.desk.held = false;
-        self.desk_start_turn(agent, Some(text.to_owned()), text.to_owned(), payload.mentions);
+        self.desk_start_turn(
+            agent,
+            Some(text.to_owned()),
+            text.to_owned(),
+            payload.mentions,
+        );
         true
     }
 
@@ -798,6 +806,7 @@ impl Runtime {
             if text.is_some() || self.desk.refusal.is_none() {
                 self.desk.refusal = Some(Refusal {
                     command: approval.command,
+                    kind: approval.kind,
                     text,
                 });
             }
@@ -1328,8 +1337,11 @@ impl Runtime {
                     && (refusal.text.is_some() || cancelled)
                     && let Some(agent) = self.selected_agent()
                 {
-                    let sent =
-                        hide_desk::refusal_message(&refusal.command, refusal.text.as_deref());
+                    let sent = hide_desk::refusal_message(
+                        refusal.kind,
+                        &refusal.command,
+                        refusal.text.as_deref(),
+                    );
                     self.desk_start_turn(agent, refusal.text, sent, Vec::new());
                 }
                 self.save_desk();
@@ -1392,6 +1404,7 @@ impl Runtime {
                     asks: decision.asks,
                     sessions: decision.sessions,
                     command: card.command,
+                    kind: card.kind,
                 });
                 self.save_desk();
             }
@@ -2073,7 +2086,11 @@ mod tests {
         let send = sent(&received);
         assert_eq!(
             send.text,
-            hide_desk::refusal_message("rm -rf /tmp/x", Some(line))
+            hide_desk::refusal_message(
+                hide_desk::permission::CardKind::Command,
+                "rm -rf /tmp/x",
+                Some(line)
+            )
         );
         assert!(matches!(
             items(&runtime).last(),
@@ -2126,14 +2143,22 @@ mod tests {
             outcome: TurnOutcome::Cancelled,
         });
         let send = sent(&received);
-        assert_eq!(
-            send.text,
-            hide_desk::refusal_message("rm -rf /tmp/x", None)
+        // It names the refused call and forbids doing it another way.
+        assert!(send.text.contains("shell command"), "{}", send.text);
+        assert!(send.text.contains("rm -rf /tmp/x"), "{}", send.text);
+        assert!(
+            send.text.contains("Do not try the same thing another way."),
+            "{}",
+            send.text
         );
         assert_eq!(items(&runtime).len(), shown);
         assert!(matches!(
             card(&runtime, id),
-            DeskItem::Approval { state: DeskApprovalState::Rejected, refusal: None, .. }
+            DeskItem::Approval {
+                state: DeskApprovalState::Rejected,
+                refusal: None,
+                ..
+            }
         ));
 
         // Its answer ends the turn Desk started, and nothing more goes.
