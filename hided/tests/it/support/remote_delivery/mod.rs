@@ -479,7 +479,9 @@ pub struct Agent {
     device: Option<&'static str>,
     daemon: Daemon,
     root: PathBuf,
-    sequence: u32,
+    /// The account's pane commands so far, counted from any thread: a
+    /// spawn's pane and the pane it makes are asked at once.
+    sequence: std::sync::atomic::AtomicU32,
 }
 
 impl Agent {
@@ -521,7 +523,7 @@ impl Agent {
             device,
             daemon: daemon.clone(),
             root: commands,
-            sequence: 0,
+            sequence: std::sync::atomic::AtomicU32::new(0),
         };
         agent.view(&agent.pane.clone())?;
         let registered = agent
@@ -570,7 +572,7 @@ impl Agent {
     /// session Hide waits for before it calls a spawned agent started. The
     /// fixture's provider is a shim that reports nothing by itself, so its
     /// SessionStart hook runs from inside the pane.
-    pub fn report_session(&mut self, pane: &str, session: &str) -> Result<()> {
+    pub fn report_session(&self, pane: &str, session: &str) -> Result<()> {
         self.view(pane)?;
         finished_session(&self.environment.home, session)?;
         let started = json!({
@@ -595,17 +597,20 @@ impl Agent {
         Ok(())
     }
 
-    pub fn run_in_pane(&mut self, command: &str) -> Result<PaneOutput> {
+    pub fn run_in_pane(&self, command: &str) -> Result<PaneOutput> {
         let pane = self.pane.clone();
         self.run_in(&pane, command)
     }
 
     /// Runs a command in a pane of this account whose provider is the
     /// fixture shim, such as the pane of an agent Hide spawned here.
-    pub fn run_in(&mut self, pane: &str, command: &str) -> Result<PaneOutput> {
-        ensure!(self.sequence < 32, "private pane command cap");
-        self.sequence += 1;
-        let base = self.root.join(format!("command-{}", self.sequence));
+    pub fn run_in(&self, pane: &str, command: &str) -> Result<PaneOutput> {
+        let sequence = self
+            .sequence
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        ensure!(sequence <= 32, "private pane command cap");
+        let base = self.root.join(format!("command-{sequence}"));
         let script = base.with_extension("sh");
         let out = base.with_extension("out");
         let err = base.with_extension("err");

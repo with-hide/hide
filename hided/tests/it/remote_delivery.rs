@@ -806,41 +806,45 @@ fn briefed_start(fixture: &mut Fixture, brief: &str, on_device: bool) -> Result<
     };
     let before = fixture::ready_panes(&home)?;
     // The spawn waits for its agent's session, which the stand-in reports
-    // only when asked, from the same account the spawn may run in: it runs
-    // in the background, and its answer is read once the session is in.
-    let answer = fixture.local.environment.home.join(format!("{name}.spawn"));
-    let started = fixture.local.run_in_pane(&format!(
-        "( {spawn} > {out} 2> {err}; printf '%s' \"$?\" > {status} ) &",
-        out = quote(answer.with_extension("out")),
-        err = quote(answer.with_extension("err")),
-        status = quote(answer.with_extension("status")),
-    ))?;
-    ensure!(
-        started.status == 0,
-        "the spawn did not start: {}",
-        started.stderr
-    );
-    let spawned = wait_for("the spawned agent's pane", || {
-        Ok(fixture::ready_panes(&home)?
-            .into_iter()
-            .find(|pane| !before.contains(pane)))
-    })?;
+    // only when asked: the new pane reports it from its own account while
+    // the caller's pane still runs the spawn.
     let agent = if on_device {
-        &mut fixture.remote
+        &fixture.remote
     } else {
-        &mut fixture.local
+        &fixture.local
     };
-    let screen_pane = agent.core_pane(&spawned);
-    agent.report_session(&screen_pane, session)?;
-    let status = wait_for("the spawn's answer", || {
-        Ok(std::fs::read_to_string(answer.with_extension("status")).ok())
+    let finished = AtomicBool::new(false);
+    let (answer, spawned) = std::thread::scope(|scope| {
+        let reporter = scope.spawn(|| -> Result<Option<String>> {
+            let pane = wait_for("the spawned agent's pane", || {
+                if finished.load(Ordering::Relaxed) {
+                    return Ok(Some(None));
+                }
+                Ok(fixture::ready_panes(&home)?
+                    .into_iter()
+                    .find(|pane| !before.contains(pane))
+                    .map(Some))
+            })?;
+            if let Some(pane) = &pane {
+                agent.report_session(&agent.core_pane(pane), session)?;
+            }
+            Ok(pane)
+        });
+        let answer = fixture.local.run_in_pane(&spawn);
+        finished.store(true, Ordering::Relaxed);
+        let reported = reporter
+            .join()
+            .map_err(|_| anyhow::anyhow!("reporter panicked"))?;
+        Ok::<_, anyhow::Error>((answer?, reported?))
     })?;
     ensure!(
-        status == "0",
+        answer.status == 0,
         "spawn refused: {} {}",
-        std::fs::read_to_string(answer.with_extension("out")).unwrap_or_default(),
-        std::fs::read_to_string(answer.with_extension("err")).unwrap_or_default()
+        answer.stdout,
+        answer.stderr
     );
+    let spawned = spawned.context("the spawned agent's pane")?;
+    let screen_pane = agent.core_pane(&spawned);
     // The start carried the brief, its line breaks as U+2028, after `--`,
     // byte for byte from the file its machine kept, and the file is gone.
     let argv = fixture::started_with(&home, &spawned)?.context("the stand-in's arguments")?;
@@ -874,12 +878,11 @@ fn briefed_start(fixture: &mut Fixture, brief: &str, on_device: bool) -> Result<
     // The agent's first turn records the brief as Claude Code does, with its
     // line breaks, which confirms it.
     let agent = if on_device {
-        &mut fixture.remote
+        &fixture.remote
     } else {
-        &mut fixture.local
+        &fixture.local
     };
-    let hooks = agent.hooks.clone();
-    agent.run_in(&screen_pane, &hook(&hooks, session, brief))?;
+    agent.run_in(&screen_pane, &hook(&agent.hooks, session, brief))?;
     wait_for("the launched brief confirmed by its record", || {
         let saved = record(&fixture.ledger()?)?;
         Ok(saved["brief_input"]["confirmed_at_unix_ms"]

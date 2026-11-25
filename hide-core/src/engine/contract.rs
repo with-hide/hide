@@ -1317,7 +1317,6 @@ fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_shell() {
 }
 
 #[cfg(unix)]
-#[allow(clippy::disallowed_methods)] // a poll bounded by START_WITHIN that shows the pane when it ends
 fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
     use std::os::unix::fs::PermissionsExt;
     struct Running(BuiltHolders);
@@ -1386,17 +1385,9 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
     engine
         .start_agent(WAIT, &start)
         .unwrap_or_else(|error| panic!("{named} takes the start: {error:?}"));
-    let deadline = Instant::now() + START_WITHIN;
-    while !written.exists() {
-        if Instant::now() >= deadline {
-            let screen = engine
-                .read_pane(WAIT, &pane, "visible", 40)
-                .map(|read| read.text)
-                .unwrap_or_default();
-            panic!("{named} never ran the start; its pane shows:\n{screen}");
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    until_within("the program records its arguments", START_WITHIN, || {
+        written.exists()
+    });
     let given: Vec<String> = std::fs::read(&written)
         .unwrap()
         .split(|byte| *byte == 0)

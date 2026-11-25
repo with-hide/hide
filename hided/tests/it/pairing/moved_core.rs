@@ -507,7 +507,7 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
         folder
     };
     let own_hide = at("p").join("hide");
-    let mut lead = Agent::start(
+    let lead = Agent::start(
         &screen,
         commands("l"),
         Environment::of_home(&home_of("ch")),
@@ -521,7 +521,7 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
         &core.terminal.state.join("engine").to_string_lossy(),
     )
     .unwrap();
-    let mut worker = Agent::start(
+    let worker = Agent::start(
         &screen,
         commands("w"),
         Environment::of_home(&home_of("mh")),
