@@ -32,6 +32,10 @@ const SHOWN_WITHIN: Duration = Duration::from_secs(30);
 /// gives an agent's screen.
 #[cfg(windows)]
 const START_WITHIN: Duration = crate::agent_start::AGENT_START_DEADLINE;
+/// How long one shell has to run a typed start in the per-shell tests,
+/// well inside the harness's 120 s bound for a test.
+#[cfg(unix)]
+const SHELL_START_WITHIN: Duration = Duration::from_secs(30);
 
 /// A command line for the engine's default shell that prints `word-42`,
 /// spelled so that the line itself does not contain what it prints.
@@ -353,6 +357,8 @@ pub(crate) struct BuiltHolders {
     service: std::sync::Arc<hide_node::terminal::Service>,
     /// The node's account home, which its panes' programs run in.
     pub(crate) home: std::path::PathBuf,
+    /// The node's state folder, where it keeps its panes' prompt files.
+    pub(crate) state_dir: std::path::PathBuf,
     folder: String,
     _root: tempfile::TempDir,
 }
@@ -456,7 +462,17 @@ fn built_node_and_holders(
         PaneShell::Fixed(shell),
     ));
     (
-        Arc::new(hide_node::Local::new(Some(home.to_owned())).with_panes(panes)),
+        Arc::new({
+            let node = hide_node::Local::new(Some(home.to_owned()))
+                .keeping_feedback_in(state_dir.to_owned())
+                .with_panes(panes);
+            // A start with a first input runs the `hide` beside the node's
+            // program (`hide agent exec --prompt-file`): the built one.
+            match std::env::var_os("HIDE_TEST_HIDE_BIN") {
+                Some(hide) => node.with_program(PathBuf::from(hide).with_file_name("hided")),
+                None => node,
+            }
+        }),
         terminals.service,
         holders,
     )
@@ -471,6 +487,19 @@ impl BuiltHolders {
     pub(crate) fn start_in(shell: Vec<std::ffi::OsString>) -> Self {
         let (root, [home, state_dir, folder]) = holder_root();
         let (node, service) = built_node(&home, &state_dir, shell);
+        // The machine the engine starts agents on, whose node keeps a
+        // start's first input (`Call::PromptFile`).
+        let place = super::own::Place {
+            engine_dir: hide_kit::layout::engine_dir(&state_dir),
+            home: hide_platform::path::to_wire(&home).unwrap(),
+            node: std::sync::Arc::clone(&node) as std::sync::Arc<dyn hide_node_link::NodeLink>,
+            windows: cfg!(windows),
+            definitions: std::sync::Arc::new(hide_agent_adapter::definition::Catalog::read(
+                Vec::new(),
+            )),
+            launches: std::sync::Arc::default(),
+            switched: false,
+        };
         // Asked as every own engine asks its machine's holders: through the
         // machine's node, here this machine's in-process node, by the
         // requests a device's node answers over its link (D-22).
@@ -479,10 +508,11 @@ impl BuiltHolders {
             .recovered(Duration::from_secs(120))
             .expect("the contract acquires pane ownership");
         Self {
-            engine: super::own::OwnEngine::new(std::sync::Arc::clone(&linked)),
+            engine: super::own::OwnEngine::placed(std::sync::Arc::clone(&linked), place),
             panes: linked,
             service,
             home,
+            state_dir,
             folder: hide_platform::path::to_wire(&folder).unwrap(),
             _root: root,
         }
@@ -550,6 +580,7 @@ fn the_own_engine_refuses_an_agent_start_over_a_running_program() {
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             wakes: false,
             program: None,
+            prompt: None,
         })
         .unwrap();
     let error = engine.start_agent(WAIT, &start).unwrap_err();
@@ -1220,7 +1251,8 @@ fn launched_input_reaches_npms_program(shell: &str) {
         .chain("%PATH% & ^ \"x\" \\\" ".chars().cycle())
         .take(16 * 1024)
         .collect();
-    for (index, input) in [short, long.as_str()].into_iter().enumerate() {
+    let korean = "한글 첫 지시입니다\n둘째 줄";
+    for (index, input) in [short, long.as_str(), korean].into_iter().enumerate() {
         let written = install.path().join(format!("argv-{index}.json"));
         let env = BTreeMap::from([(
             "HIDE_TEST_ARGV".to_owned(),
@@ -1235,18 +1267,20 @@ fn launched_input_reaches_npms_program(shell: &str) {
                 .pane_processes(WAIT, &pane)
                 .is_ok_and(|processes| processes.shell_holds_terminal())
         });
-        let words = crate::start_prompt::launched("codex", &[], input, true, Some(&form))
+        let words = crate::start_prompt::launched("codex", &[], input, Some(&form))
             .expect("the start carries the input")
             .expect("Codex declares a launch");
+        let (lead, prompt) = crate::start_prompt::split_carried(words.clone());
         let start = engine
             .prepare_start(super::AgentLaunch {
                 pane_id: pane.clone(),
                 name: format!("launched-{index}"),
                 launch: crate::launch::Launch::default_of("codex"),
-                args: words.clone(),
+                args: lead,
                 codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
                 wakes: false,
                 program: super::StartProgram::of("codex", &form),
+                prompt,
             })
             .expect("the start is prepared");
         engine
@@ -1267,6 +1301,212 @@ fn launched_input_reaches_npms_program(shell: &str) {
             "{shell} did not hand the input over as its last word"
         );
     }
+}
+
+/// A first input launched as a start's argument reaches the program whole
+/// from a shell in glibc's `C` locale, whose line editor turns each
+/// non-ASCII byte it reads into `?` (with-hide/hide#2900): the line runs the
+/// node's `hide` (`HIDE_TEST_HIDE_BIN`) with the path of the file the node
+/// keeps the input in and needs no syntax of the shell's own, so a Korean
+/// brief arrives as given in every shell, and the file is gone once read.
+/// One test per shell the lane gives (`HIDE_TEST_ZSH_BIN`,
+/// `HIDE_TEST_BASH_BIN`, `HIDE_TEST_FISH_BIN`, `HIDE_TEST_TCSH_BIN`,
+/// `HIDE_TEST_CSH_BIN`) and `/bin/sh`, each pane with `LC_ALL=C`.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder and zsh: HIDE_TEST_HOLDER_BIN, HIDE_TEST_ZSH_BIN"]
+fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_zsh() {
+    launched_input_reaches_the_program_in(shell_named("HIDE_TEST_ZSH_BIN"));
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder and bash: HIDE_TEST_HOLDER_BIN, HIDE_TEST_BASH_BIN"]
+fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_bash() {
+    launched_input_reaches_the_program_in(shell_named("HIDE_TEST_BASH_BIN"));
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder and fish: HIDE_TEST_HOLDER_BIN, HIDE_TEST_FISH_BIN"]
+fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_fish() {
+    launched_input_reaches_the_program_in(shell_named("HIDE_TEST_FISH_BIN"));
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder and tcsh: HIDE_TEST_HOLDER_BIN, HIDE_TEST_TCSH_BIN"]
+fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_tcsh() {
+    launched_input_reaches_the_program_in(shell_named("HIDE_TEST_TCSH_BIN"));
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder and BSD csh: HIDE_TEST_HOLDER_BIN, HIDE_TEST_CSH_BIN"]
+fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_csh() {
+    launched_input_reaches_the_program_in(shell_named("HIDE_TEST_CSH_BIN"));
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_sh() {
+    launched_input_reaches_the_program_in("/bin/sh".into());
+}
+
+/// The shell the lane names in `variable`.
+#[cfg(unix)]
+/// The shell `variable` names. A machine without that shell fails the test
+/// naming the variable rather than pass it unrun (scripts/prepare-ignored-tests.sh
+/// sets each one only where the shell is found, and CI installs them all).
+fn shell_named(variable: &str) -> std::ffi::OsString {
+    std::env::var_os(variable).unwrap_or_else(|| {
+        panic!(
+            "{variable} names no shell: this machine has none of that kind, or \
+             scripts/prepare-ignored-tests.sh was not sourced; run the other \
+             shells' tests by name"
+        )
+    })
+}
+
+/// The variables of a home made for one test's shell, every shell alike:
+/// `HOME` and each XDG folder under `home`, so nothing a shell reads or
+/// writes at its start is the runner's, and a home the shells have run in
+/// before, so none does its first-run work while the test waits:
+/// - zsh finds startup files, so Debian's and Ubuntu's zsh opens no new-user
+///   menu, and Ubuntu's global zshrc runs no compinit, which asks about the
+///   runner's folders; either would take the typed start as its answer.
+/// - fish finds its generated completions, so it starts no man-page reader:
+///   fish runs that `python3` in its own process group, where it held the
+///   terminal for 15 to 30 s on a Linux runner (the shell never held it
+///   alone, so nothing could be typed).
+#[cfg(unix)]
+fn shell_home(home: &std::path::Path) -> BTreeMap<String, String> {
+    std::fs::write(home.join(".zshenv"), "skip_global_compinit=1\n").unwrap();
+    std::fs::write(home.join(".zshrc"), "").unwrap();
+    let mut env = BTreeMap::from([("HOME".to_owned(), home.to_str().unwrap().to_owned())]);
+    for (name, folder) in [
+        ("XDG_CONFIG_HOME", ".config"),
+        ("XDG_DATA_HOME", ".local/share"),
+        ("XDG_CACHE_HOME", ".cache"),
+        ("XDG_STATE_HOME", ".local/state"),
+    ] {
+        let folder = home.join(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        env.insert(name.to_owned(), folder.to_str().unwrap().to_owned());
+    }
+    std::fs::create_dir_all(home.join(".local/share/fish/generated_completions")).unwrap();
+    env
+}
+
+#[cfg(unix)]
+fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
+    use std::os::unix::fs::PermissionsExt;
+    struct Running(BuiltHolders);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            self.0.stop();
+        }
+    }
+    let named = shell.to_string_lossy().into_owned();
+    assert!(
+        std::env::var_os("HIDE_TEST_HIDE_BIN").is_some(),
+        "the start runs the node's hide: set HIDE_TEST_HIDE_BIN (scripts/prepare-ignored-tests.sh)"
+    );
+    let running = Running(BuiltHolders::start_in(vec![shell]));
+    let built = &running.0;
+    let home = shell_home(&built.home);
+    let engine = &built.engine;
+    engine.set_agent_definitions(std::sync::Arc::new(
+        hide_agent_adapter::definition::Catalog::read(Vec::new()),
+    ));
+    // A stand-in Codex that writes each word it was given, ended by a NUL,
+    // to the file its pane names, started by its file as the node names
+    // one (`StartForm::Direct`), never by a name a login shell's `PATH`
+    // could resolve to a real Codex.
+    let bin = tempfile::tempdir().unwrap();
+    let codex = bin.path().join("codex");
+    std::fs::write(
+        &codex,
+        "#!/bin/sh\nprintf '%s' \"$HOME\" > \"$HIDE_TEST_ARGV.home\"\nfor word in \"$@\"; do printf '%s\\0' \"$word\"; done > \"$HIDE_TEST_ARGV\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let written = bin.path().join("argv");
+    let mut env = home;
+    env.insert(
+        "HIDE_TEST_ARGV".to_owned(),
+        written.to_str().unwrap().to_owned(),
+    );
+    env.insert("LC_ALL".to_owned(), "C".to_owned());
+    let (_, _, pane) = engine
+        .create_workspace(WAIT, &built.folder, "c-locale", false, env)
+        .expect("a workspace is made");
+    prompted(engine, &pane);
+    until_within_showing(
+        &format!("{named} alone holds its terminal"),
+        SHELL_START_WITHIN,
+        || {
+            engine
+                .pane_processes(WAIT, &pane)
+                .is_ok_and(|processes| processes.shell_holds_terminal())
+        },
+        || format!("{:?}", engine.pane_processes(WAIT, &pane)),
+    );
+    let input = "한글 첫 지시입니다: '따옴표' \"큰따옴표\" $HOME `tick`\n둘째 줄 -x";
+    let form = hide_node_link::protocol::StartForm::Direct {
+        program: codex.to_str().unwrap().to_owned(),
+        leading: Vec::new(),
+    };
+    let words = crate::start_prompt::launched("codex", &[], input, Some(&form))
+        .expect("the start carries the input")
+        .expect("Codex declares a launch");
+    let (lead, prompt) = crate::start_prompt::split_carried(words.clone());
+    let start = engine
+        .prepare_start(super::AgentLaunch {
+            pane_id: pane.clone(),
+            name: "launched-c".to_owned(),
+            launch: crate::launch::Launch::default_of("codex"),
+            args: lead,
+            codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+            wakes: false,
+            program: super::StartProgram::of("codex", &form),
+            prompt,
+        })
+        .expect("the start is prepared");
+    engine
+        .start_agent(WAIT, &start)
+        .unwrap_or_else(|error| panic!("{named} takes the start: {error:?}"));
+    // Well inside the harness's own bound, so a shell that never runs the
+    // start is named, with what its pane shows.
+    until_within_showing(
+        &format!("{named} runs the start"),
+        SHELL_START_WITHIN,
+        || written.exists(),
+        || {
+            engine
+                .read_pane(WAIT, &pane, "visible", 40)
+                .map(|read| read.text)
+                .unwrap_or_default()
+        },
+    );
+    assert_eq!(
+        std::fs::read_to_string(bin.path().join("argv.home")).unwrap(),
+        built.home.to_str().unwrap(),
+        "{named} ran in the test's home, whose startup files it reads"
+    );
+    let given: Vec<String> = std::fs::read(&written)
+        .unwrap()
+        .split(|byte| *byte == 0)
+        .filter(|word| !word.is_empty())
+        .map(|word| String::from_utf8(word.to_vec()).expect("UTF-8 words"))
+        .collect();
+    assert_eq!(given, words, "{named} changed a word on its way");
+    let folder = hide_kit::layout::prompt_files(&built.state_dir);
+    assert!(
+        std::fs::read_dir(&folder).map_or(true, |mut files| files.next().is_none()),
+        "{named} left the prompt file"
+    );
 }
 
 /// After the machine went down, a restarted pane's agent resumes through
@@ -1632,6 +1872,7 @@ fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_co
                 codex_daemon: CodexDaemon::Unsupported,
                 wakes: false,
                 program: None,
+                prompt: None,
             })
             .expect("the start is prepared");
         start_at_shell_reusing_name(
@@ -1752,6 +1993,7 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
             codex_daemon: CodexDaemon::Unsupported,
             wakes: false,
             program: None,
+            prompt: None,
         })
         .expect("the start is prepared");
     start_at_shell_reusing_name(
@@ -1846,11 +2088,23 @@ fn until(what: &str, done: impl Fn() -> bool) {
     until_within(what, SHOWN_WITHIN, done);
 }
 
-#[allow(clippy::disallowed_methods)] // a polling helper bounded by a deadline
 fn until_within(what: &str, within: Duration, done: impl Fn() -> bool) {
+    until_within_showing(what, within, done, String::new);
+}
+
+/// [`until_within`], naming in its failure what `shown` reads then.
+#[allow(clippy::disallowed_methods)] // a polling helper bounded by a deadline
+fn until_within_showing(
+    what: &str,
+    within: Duration,
+    done: impl Fn() -> bool,
+    shown: impl Fn() -> String,
+) {
     let deadline = Instant::now() + within;
     while !done() {
-        assert!(Instant::now() < deadline, "{what} never happened");
+        if Instant::now() >= deadline {
+            panic!("{what} never happened; it shows:\n{}", shown());
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
 }

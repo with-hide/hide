@@ -14,6 +14,7 @@
 //! never in the agent: `allow_always` is never chosen. A new conversation, a
 //! restart or the process's end closes a waiting card as a refusal.
 
+mod files;
 pub(super) mod jobs;
 mod worker;
 
@@ -30,13 +31,14 @@ use crate::desk::{
 };
 use crate::handle::ChangeNotifier;
 use crate::model::{
-    DESK_CAP_MAX, DeskAgentSnapshot, DeskAgentState, DeskApprovalState, DeskCardKind,
-    DeskChoiceSnapshot, DeskConversationSnapshot, DeskHostSnapshot, DeskHostState, DeskItem,
-    DeskLiveSnapshot, DeskLocation, DeskMention, DeskNotice, DeskReplyState, DeskSnapshot,
+    DESK_CAP_MAX, DESK_QUEUED_MAX, DeskAgentSnapshot, DeskAgentState, DeskApprovalState,
+    DeskCardKind, DeskChoiceSnapshot, DeskConversationSnapshot, DeskHostSnapshot, DeskHostState,
+    DeskItem, DeskLiveSnapshot, DeskLocation, DeskMention, DeskNotice, DeskQueuedMessage,
+    DeskReplyState, DeskSnapshot,
 };
 use hide_desk::permission::{self, Ask, Irreversible};
 use hide_desk::session::{Choice, Choices, OpenError};
-use worker::{Order, Report, TurnOutcome};
+use worker::{Order, Report, TurnEnd, TurnOutcome};
 
 /// A mention's id or name; a longer one is refused with its message.
 const MAX_MENTION_BYTES: usize = 1024;
@@ -70,6 +72,22 @@ pub(super) struct Desk {
     /// Watch asks for Desk's sessions that have no watch yet, by intent;
     /// only sessions the ledger still holds are kept.
     watch_asks: HashMap<String, jobs::WatchAsk>,
+    /// The files Desk's tab panel holds open, oldest first (`files.rs`);
+    /// the window's, so never stored.
+    files: Vec<files::DeskFile>,
+    /// The agent refused the last start (its sign-in, its ask mode, a
+    /// process that did not open): the queued messages wait for the
+    /// operator's next send, `다시 시작` or a session that opens, rather
+    /// than meet the same refusal one after another.
+    held: bool,
+    /// Agents that refused Desk for their sign-in since their last session
+    /// opened: their word reads signed out whatever Hide AI's read of the
+    /// login says, since a login file can outlive its sign-in.
+    sign_in_refused: BTreeSet<AdapterId>,
+    /// The queued starts the queue handed to be run, in order; tests answer
+    /// them themselves.
+    #[cfg(test)]
+    launched: Vec<String>,
 }
 
 /// One of Desk's agents as Hide's catalog says it on the core's own
@@ -152,16 +170,31 @@ pub(super) enum DeskEvent {
     JobRead(JobPayload),
     /// The operator looked at a job's output in the lane's 보기 column (B31).
     OutputSeen(OutputPayload),
-    /// The lane's pin, or a tab kept or closed in its 보기 column (B31, B32).
+    /// A panel width the operator dragged and let go (PRD desk-2-ui B22):
+    /// one event per drag.
     Lane(LanePayload),
+    /// The files windows' rooms brought into Desk's hold and let go, from
+    /// `hided`, which owns each hold (PRD desk-2-ui B19, B36).
+    File(files::FilePayload),
+    /// A held file that could not be opened, read again (B28).
+    FileRetry(files::RetryPayload),
+    /// ✕ on a message waiting for the turn before it: it never goes.
+    QueuedRemove(QueuedPayload),
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub(super) enum LanePayload {
-    Pin { pinned: bool },
-    Keep { tab: crate::model::DeskKeptTab },
-    Close { tab: crate::model::DeskKeptTab },
+pub(super) struct QueuedPayload {
+    id: u64,
+}
+
+/// The width a drag set; the one it did not move is absent.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct LanePayload {
+    #[serde(default)]
+    view_width: Option<u32>,
+    #[serde(default)]
+    session_width: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -235,7 +268,7 @@ fn present<'de, D: serde::Deserializer<'de>>(
 }
 
 impl DeskEvent {
-    pub(super) const KINDS: [&'static str; 13] = [
+    pub(super) const KINDS: [&'static str; 16] = [
         "desk_send",
         "desk_stop",
         "desk_approval",
@@ -249,6 +282,9 @@ impl DeskEvent {
         "desk_job_read",
         "desk_output_seen",
         "desk_lane",
+        "desk_file",
+        "desk_file_retry",
+        "desk_queued_remove",
     ];
 
     pub(super) fn decode(kind: &str, payload: Value) -> Option<Self> {
@@ -269,6 +305,9 @@ impl DeskEvent {
             "desk_job_read" => Self::JobRead(parse(payload)?),
             "desk_output_seen" => Self::OutputSeen(parse(payload)?),
             "desk_lane" => Self::Lane(parse(payload)?),
+            "desk_file" => Self::File(parse(payload)?),
+            "desk_file_retry" => Self::FileRetry(parse(payload)?),
+            "desk_queued_remove" => Self::QueuedRemove(parse(payload)?),
             _ => return None,
         })
     }
@@ -318,7 +357,10 @@ impl Runtime {
         // installed refuses it: the phone's 볼 것 sends the same event for a
         // View it showed (PRD mobile-companion-ui D-15).
         let view_seen = matches!(event, DeskEvent::OutputSeen(_));
-        if !view_seen {
+        // Letting a file go always lands, so a Desk switched off holds
+        // nothing a window let go; `desk_file` opens nothing while it is off.
+        let file_holds = matches!(event, DeskEvent::File(_));
+        if !view_seen && !file_holds {
             if self.desk.worker.is_none() {
                 return refused("desk_unavailable");
             }
@@ -335,9 +377,14 @@ impl Runtime {
                 | DeskEvent::JobRead(_)
                 | DeskEvent::OutputSeen(_)
         );
+        // A width moves only the `desk` section's lane; a file Desk holds
+        // moves the editor's documents, no section of Desk's.
+        let file = matches!(event, DeskEvent::File(_) | DeskEvent::FileRetry(_));
+        let jobs = !file && !matches!(event, DeskEvent::Lane(_));
+        let room = room && !file;
         // An output seen moves the View's seen state, which the core keeps
-        // with the View, not in Desk's store.
-        let stored = !matches!(event, DeskEvent::OutputSeen(_));
+        // with the View, not in Desk's store; a file held is the window's.
+        let stored = !file && !matches!(event, DeskEvent::OutputSeen(_));
         let changed = match event {
             DeskEvent::Send(payload) => {
                 // Only the Desk composer sends it.
@@ -366,47 +413,42 @@ impl Runtime {
                 self.mark_view_seen(&(payload.device_id, payload.checkout), &payload.id)
             }
             DeskEvent::Lane(payload) => self.desk_lane(payload),
+            DeskEvent::File(payload) => self.desk_file(payload),
+            DeskEvent::FileRetry(payload) => self.desk_file_retry(payload.into()),
+            DeskEvent::QueuedRemove(payload) => self.desk_queued_remove(payload.id),
         };
-        if changed {
-            if stored {
+        let sent = self.desk_send_queued();
+        if changed || sent {
+            if stored || sent {
                 self.save_desk();
             }
-            if room {
+            if room || sent {
                 self.compose_desk();
             }
-            self.compose_desk_jobs();
+            if jobs {
+                self.compose_desk_jobs();
+            }
         }
-        changed
+        changed || sent
     }
 
-    /// The lane's pin, or a kept tab (B31, B32). Keeping a kept tab or
-    /// closing one not kept changes nothing; one past the cap is refused.
+    /// The widths the operator dragged Desk's panels to (B22, B23). A drag
+    /// that names no width, or one outside what the core keeps, is refused.
     fn desk_lane(&mut self, payload: LanePayload) -> bool {
-        let lane = &mut self.desk.stored.lane;
-        match payload {
-            LanePayload::Pin { pinned } => {
-                let changed = lane.pinned != pinned;
-                lane.pinned = pinned;
-                changed
-            }
-            LanePayload::Keep { tab } => {
-                let key = tab.key();
-                if lane.kept.iter().any(|kept| kept.key() == key) {
-                    return false;
-                }
-                if lane.kept.len() >= crate::model::DESK_KEPT_TABS_MAX {
-                    return refused("desk_tabs_full");
-                }
-                lane.kept.push(tab);
-                true
-            }
-            LanePayload::Close { tab } => {
-                let key = tab.key();
-                let before = lane.kept.len();
-                lane.kept.retain(|kept| kept.key() != key);
-                lane.kept.len() != before
-            }
+        let valid = |width: Option<u32>| {
+            width.is_none_or(|width| (1..=crate::model::DESK_LANE_WIDTH_MAX).contains(&width))
+        };
+        if payload.view_width.is_none() && payload.session_width.is_none()
+            || !valid(payload.view_width)
+            || !valid(payload.session_width)
+        {
+            return refused("desk_lane_width_invalid");
         }
+        let lane = &mut self.desk.stored.lane;
+        let before = *lane;
+        lane.view_width = payload.view_width.or(lane.view_width);
+        lane.session_width = payload.session_width.or(lane.session_width);
+        *lane != before
     }
 
     /// Whether this daemon runs Desk: its queued spawns start as
@@ -462,11 +504,121 @@ impl Runtime {
         if self.desk_agent_state(agent) != DeskAgentState::Ready {
             return refused("agent_not_ready");
         }
-        if self.desk.turn.is_some() {
-            return refused("turn_under_way");
+        // While a reply is being written, or earlier messages still wait,
+        // the message waits its turn (letter-47148).
+        if self.desk.turn.is_some() || !self.desk.stored.queued.is_empty() {
+            if self.desk.stored.queued.len() >= DESK_QUEUED_MAX {
+                return refused("desk_queued_full");
+            }
+            let id = self.desk.stored.conversation.next_id();
+            self.desk.stored.queued.push(DeskQueuedMessage {
+                id,
+                text: text.to_owned(),
+                at_ms: crate::links::now_ms(),
+                mentions: payload.mentions,
+            });
+            self.desk.held = false;
+            return true;
         }
+        self.desk.held = false;
         self.desk_start_turn(agent, text.to_owned(), text.to_owned(), payload.mentions);
         true
+    }
+
+    /// Sends the first queued message once nothing stands before it: no
+    /// turn under way or refusal to send, Desk on, its agent ready, and the
+    /// process neither stopped (`다시 시작` answers that) nor refused by the
+    /// agent (the operator's next send answers that). It is the one place
+    /// that decides it, read after every event and every report, so no
+    /// change of state is missed (`desk_event`, `desk_report`).
+    fn desk_send_queued(&mut self) -> bool {
+        if self.desk.stored.queued.is_empty()
+            || !self.desk.stored.settings.enabled
+            || self.desk.turn.is_some()
+            || self.desk.refusal.is_some()
+            || self.desk.held
+            || self.desk.host.state == Some(DeskHostState::Stopped)
+        {
+            return false;
+        }
+        let Some(agent) = self
+            .desk
+            .stored
+            .selection
+            .agent
+            .filter(|agent| self.desk_agent_state(*agent) == DeskAgentState::Ready)
+        else {
+            return false;
+        };
+        let message = self.desk.stored.queued.remove(0);
+        self.desk_start_turn(agent, message.text.clone(), message.text, message.mentions);
+        true
+    }
+
+    fn desk_turn_tag(&self) -> Option<u64> {
+        self.desk.turn.as_ref().map(|turn| turn.tag)
+    }
+
+    /// The turn under way ends as `outcome` says: requests the agent made
+    /// in it end with it, and so do the archives its cards allowed once.
+    fn desk_close_turn(&mut self, outcome: TurnOutcome) {
+        self.close_approvals();
+        self.desk.archive_grants.clear();
+        match outcome {
+            TurnOutcome::Done => self.finish_turn(DeskReplyState::Done),
+            TurnOutcome::Cancelled | TurnOutcome::Ended => {
+                self.finish_turn(DeskReplyState::Stopped);
+            }
+            TurnOutcome::Failed(reason) => {
+                self.finish_turn(DeskReplyState::Stopped);
+                let agent = self.selected_agent();
+                self.push_notice(DeskNotice::TurnFailed, agent, reason);
+            }
+        }
+    }
+
+    /// The message of the turn under way, which the agent never took, goes
+    /// back first in line and out of the conversation, so no words are lost
+    /// to a refused start; it may make the line one past its cap, since the
+    /// cap only refuses what the operator sends.
+    fn desk_requeue_untaken(&mut self) {
+        let Some(message) = self.desk.turn.as_ref().map(|turn| turn.message) else {
+            return;
+        };
+        let Some(DeskItem::User {
+            text,
+            at_ms,
+            mentions,
+            ..
+        }) = self
+            .desk
+            .stored
+            .conversation
+            .items
+            .iter()
+            .find(|item| item.id() == message)
+            .cloned()
+        else {
+            return;
+        };
+        self.desk.stored.conversation.remove(message);
+        let id = self.desk.stored.conversation.next_id();
+        self.desk.stored.queued.insert(
+            0,
+            DeskQueuedMessage {
+                id,
+                text,
+                at_ms,
+                mentions,
+            },
+        );
+    }
+
+    /// ✕ on a queued message: it leaves the line and never goes.
+    fn desk_queued_remove(&mut self, id: u64) -> bool {
+        let before = self.desk.stored.queued.len();
+        self.desk.stored.queued.retain(|message| message.id != id);
+        self.desk.stored.queued.len() != before
     }
 
     /// Starts a turn: `shown` joins the conversation as the operator's
@@ -660,6 +812,8 @@ impl Runtime {
             .sessions
             .retain(|(adapter, _)| Some(*adapter) != agent);
         self.desk.stored.conversation.clear();
+        // A new conversation starts with nothing of the last one waiting.
+        self.desk.stored.queued.clear();
         if let Some(default) = self.desk.stored.settings.default_agent
             && Some(default) != agent
         {
@@ -673,8 +827,36 @@ impl Runtime {
 
     fn desk_restart(&mut self) -> bool {
         self.end_desk_process();
+        self.forget_stopped();
         self.order(Order::Check);
+        self.desk.held = false;
         true
+    }
+
+    /// `멈췄어요 · 다시 시작` is answered once the process is restarted or a
+    /// session opens again: the line and its button leave the conversation,
+    /// so no stale `다시 시작` stays live under the new process.
+    fn forget_stopped(&mut self) {
+        let stopped: Vec<u64> = self
+            .desk
+            .stored
+            .conversation
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    DeskItem::Notice {
+                        notice: DeskNotice::HostStopped,
+                        ..
+                    }
+                )
+            })
+            .map(DeskItem::id)
+            .collect();
+        for id in stopped {
+            self.desk.stored.conversation.remove(id);
+        }
     }
 
     /// Ends the Desk process from the room: the reply under way stops, and
@@ -806,6 +988,10 @@ impl Runtime {
             self.desk.stored.selection.agent = settings.default_agent;
         }
         let enabled = self.desk.stored.settings.enabled;
+        // A raised cap frees places: the queue fills them in order.
+        if enabled && self.desk.stored.settings.cap > before.cap {
+            self.desk_start_queued();
+        }
         if enabled != before.enabled {
             if enabled {
                 // Every adapter is installed now, not when it is chosen
@@ -914,8 +1100,19 @@ impl Runtime {
         self.compose_desk_live();
     }
 
-    /// What the worker learned, applied under the lock.
+    /// What the worker learned, applied under the lock; then the one place
+    /// that decides whether the first queued message goes.
     fn desk_report(&mut self, report: Report) -> bool {
+        let changed = self.desk_apply_report(report);
+        if self.desk_send_queued() {
+            self.save_desk();
+            self.compose_desk();
+            return true;
+        }
+        changed
+    }
+
+    fn desk_apply_report(&mut self, report: Report) -> bool {
         match report {
             Report::Availability(states) => {
                 let mut changed = false;
@@ -977,12 +1174,31 @@ impl Runtime {
                     .retain(|(stored, _)| *stored != adapter);
                 self.desk.stored.sessions.push((adapter, session_id));
                 self.learn_choices(adapter, &choices);
+                self.forget_stopped();
+                self.desk.held = false;
+                self.desk.sign_in_refused.remove(&adapter);
                 if resume_failed {
                     self.push_notice(DeskNotice::ResumeFailed, Some(adapter), None);
                 }
                 self.save_desk();
             }
-            Report::OpenFailed { adapter, error } => {
+            Report::OpenFailed {
+                adapter,
+                error,
+                turn,
+            } => {
+                // The agent never took the turn's message: it goes back first
+                // in line and the turn ends, and `held` keeps the line until
+                // the operator sends again or restarts. A turn started since,
+                // by `다시 시작` or a new conversation, is not this one.
+                self.desk.held = true;
+                if turn.is_some() && self.desk_turn_tag() == turn {
+                    self.desk_requeue_untaken();
+                    self.desk_close_turn(TurnOutcome::Cancelled);
+                }
+                if error == OpenError::Login {
+                    self.desk.sign_in_refused.insert(adapter);
+                }
                 // A sign-in the agent asked for leaves its state as it is: the
                 // bar's sign-in word is Settings' read of the agent (D-81).
                 let (state, notice, detail) = match error {
@@ -1017,13 +1233,6 @@ impl Runtime {
                         return true;
                     }
                 };
-                // No agent received the message: it goes back to the
-                // operator's input, and the screen keeps its words (B6).
-                if notice == DeskNotice::LoginNeeded
-                    && let Some(turn) = &self.desk.turn
-                {
-                    self.desk.stored.conversation.remove(turn.message);
-                }
                 let kept = if notice == DeskNotice::LoginNeeded {
                     self.desk
                         .agents
@@ -1080,19 +1289,7 @@ impl Runtime {
                 if self.desk.turn.as_ref().is_none_or(|turn| turn.tag != tag) {
                     return false;
                 }
-                // Requests the agent made in the turn end with it, and so do
-                // the archives its cards allowed once.
-                self.close_approvals();
-                self.desk.archive_grants.clear();
-                match outcome {
-                    TurnOutcome::Done => self.finish_turn(DeskReplyState::Done),
-                    TurnOutcome::Cancelled => self.finish_turn(DeskReplyState::Stopped),
-                    TurnOutcome::Failed(reason) => {
-                        self.finish_turn(DeskReplyState::Stopped);
-                        let agent = self.selected_agent();
-                        self.push_notice(DeskNotice::TurnFailed, agent, reason);
-                    }
-                }
+                self.desk_close_turn(outcome);
                 if self.desk.host.open {
                     self.desk.host.state = Some(DeskHostState::Ready);
                 }
@@ -1148,6 +1345,7 @@ impl Runtime {
                     command: card.command.clone(),
                     folder: card.folder,
                     reason: card.reason,
+                    row: Some(reading.row),
                     state: DeskApprovalState::Waiting,
                     asks: decision.asks.clone(),
                     subject,
@@ -1179,10 +1377,22 @@ impl Runtime {
                 }
                 self.save_desk();
             }
-            Report::Ended { unexpected, detail } => {
+            Report::Ended {
+                unexpected,
+                detail,
+                turn,
+            } => {
+                // The turn that ends with the process ends as the report says.
+                // A turn started since, as `다시 시작` starts the next queued
+                // message beside the old process's end, is not that
+                // process's: the worker sends it to the next one.
+                if let Some(TurnEnd { tag, outcome }) = turn
+                    && self.desk_turn_tag() == Some(tag)
+                {
+                    self.desk_close_turn(outcome);
+                }
                 self.close_approvals();
                 self.forget_allowances();
-                self.finish_turn(DeskReplyState::Stopped);
                 if unexpected {
                     self.desk.host = Host {
                         state: Some(DeskHostState::Stopped),
@@ -1194,7 +1404,9 @@ impl Runtime {
                     self.save_desk();
                 } else {
                     self.desk.host.open = false;
-                    if self.desk.host.state != Some(DeskHostState::Stopped) {
+                    if self.desk.turn.is_none()
+                        && self.desk.host.state != Some(DeskHostState::Stopped)
+                    {
                         self.desk.host.state = Some(DeskHostState::Idle);
                     }
                 }
@@ -1290,7 +1502,11 @@ impl Runtime {
                     label: id.label(),
                     state,
                     detail,
-                    signed_in: agent.signed_in,
+                    signed_in: if desk.sign_in_refused.contains(&id) {
+                        Some(false)
+                    } else {
+                        agent.signed_in
+                    },
                     login_command: id.login_command(),
                     always_runs: id.always_runs(),
                     models: known.models,
@@ -1319,10 +1535,14 @@ impl Runtime {
                     items
                 },
                 dropped: *dropped,
+                queued: desk.stored.queued.clone(),
+                queued_max: DESK_QUEUED_MAX,
+                queued_full: desk.stored.queued.len() >= DESK_QUEUED_MAX,
+                queued_held: desk.held && !desk.stored.queued.is_empty(),
             },
             approvals_waiting: desk.approvals.len(),
             settings: desk.stored.settings,
-            lane: desk.stored.lane.clone(),
+            lane: desk.stored.lane,
         }));
     }
 
@@ -1554,11 +1774,11 @@ mod tests {
         snapshot
     }
 
-    fn event(runtime: &mut Runtime, kind: &str, payload: serde_json::Value) -> bool {
+    pub(super) fn event(runtime: &mut Runtime, kind: &str, payload: serde_json::Value) -> bool {
         runtime.desk_event(DeskEvent::decode(kind, payload).expect(kind))
     }
 
-    fn sent(received: &Receiver<Order>) -> worker::Send {
+    pub(super) fn sent(received: &Receiver<Order>) -> worker::Send {
         loop {
             match received.try_recv().expect("no Send order") {
                 Order::Send(send) => return send,
@@ -1567,7 +1787,7 @@ mod tests {
         }
     }
 
-    fn items(runtime: &Runtime) -> Vec<DeskItem> {
+    pub(super) fn items(runtime: &Runtime) -> Vec<DeskItem> {
         runtime
             .snapshot
             .desk
@@ -1578,7 +1798,7 @@ mod tests {
             .clone()
     }
 
-    fn opened(runtime: &mut Runtime, adapter: AdapterId) {
+    pub(super) fn opened(runtime: &mut Runtime, adapter: AdapterId) {
         runtime.desk_report(Report::Opened {
             adapter,
             session_id: format!("{}-session", adapter.as_str()),
@@ -1857,7 +2077,7 @@ mod tests {
         for (kind, payload) in [
             ("desk_select", json!({"agent": "claude"})),
             ("desk_send", json!({"text": "start something"})),
-            ("desk_lane", json!({"action": "pin", "pinned": true})),
+            ("desk_lane", json!({"view_width": 640})),
         ] {
             assert!(!event(&mut runtime, kind, payload), "{kind}");
         }
@@ -1935,7 +2155,6 @@ mod tests {
         assert_eq!(send.adapter, AdapterId::CLAUDE);
         assert_eq!(send.text, "what runs now?");
         assert_eq!(send.resume, None);
-        assert!(!event(&mut runtime, "desk_send", json!({"text": "again"})));
 
         opened(&mut runtime, AdapterId::CLAUDE);
         runtime.desk_report(Report::Text {
@@ -2140,10 +2359,11 @@ mod tests {
             "desk_send",
             json!({"text": "what runs now"})
         ));
-        sent(&received);
+        let send = sent(&received);
         runtime.desk_report(Report::OpenFailed {
             adapter: AdapterId::CODEX,
             error: OpenError::Login,
+            turn: Some(send.tag),
         });
         let conversation = &runtime.desk.stored.conversation.items;
         assert!(
@@ -2212,14 +2432,12 @@ mod tests {
         runtime.desk_report(Report::OpenFailed {
             adapter: AdapterId::OPENCODE,
             error: OpenError::Login,
-        });
-        runtime.desk_report(Report::TurnEnded {
-            tag: send.tag,
-            outcome: TurnOutcome::Cancelled,
+            turn: Some(send.tag),
         });
         runtime.desk_report(Report::Ended {
             unexpected: false,
             detail: None,
+            turn: None,
         });
 
         let items = items(&runtime);
@@ -2249,6 +2467,500 @@ mod tests {
         assert_eq!(desk.host.state, DeskHostState::Idle);
         assert!(event(&mut runtime, "desk_send", json!({"text": "hello"})));
         assert_eq!(sent(&received).text, "hello");
+    }
+
+    fn queued(runtime: &Runtime) -> Vec<(u64, String)> {
+        runtime
+            .snapshot
+            .desk
+            .as_ref()
+            .unwrap()
+            .conversation
+            .queued
+            .iter()
+            .map(|message| (message.id, message.text.clone()))
+            .collect()
+    }
+
+    fn no_send(received: &Receiver<Order>) {
+        assert!(
+            !received
+                .try_iter()
+                .any(|order| matches!(order, Order::Send(_))),
+            "a message went"
+        );
+    }
+
+    /// letter-47148: a message sent while a reply is being written waits in
+    /// line, shown apart from the conversation; ✕ takes one out, `중지`
+    /// stops only the turn, and each goes, in order, when the turn before
+    /// it ends; past eight the next is refused and the composer keeps it.
+    #[test]
+    fn a_message_sent_during_a_reply_waits_and_goes_when_the_turn_before_it_ends() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        assert!(event(&mut runtime, "desk_send", json!({"text": "one"})));
+        let one = sent(&received);
+        opened(&mut runtime, AdapterId::CODEX);
+        for text in ["two", "three", "four"] {
+            assert!(event(&mut runtime, "desk_send", json!({"text": text})));
+        }
+        no_send(&received);
+        let waiting = queued(&runtime);
+        assert_eq!(
+            waiting
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>(),
+            ["two", "three", "four"]
+        );
+        assert!(
+            !items(&runtime)
+                .iter()
+                .any(|item| matches!(item, DeskItem::User { text, .. } if text != "one"))
+        );
+        assert!(event(
+            &mut runtime,
+            "desk_queued_remove",
+            json!({"id": waiting[1].0})
+        ));
+
+        assert!(event(&mut runtime, "desk_stop", json!({})));
+        runtime.desk_report(Report::TurnEnded {
+            tag: one.tag,
+            outcome: TurnOutcome::Cancelled,
+        });
+        let two = sent(&received);
+        assert_eq!(two.text, "two");
+        runtime.desk_report(Report::TurnEnded {
+            tag: two.tag,
+            outcome: TurnOutcome::Done,
+        });
+        let four = sent(&received);
+        assert_eq!(four.text, "four");
+        assert!(queued(&runtime).is_empty());
+
+        for index in 0..DESK_QUEUED_MAX {
+            assert!(event(
+                &mut runtime,
+                "desk_send",
+                json!({"text": format!("more {index}")})
+            ));
+        }
+        assert!(!event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "one too many"})
+        ));
+        assert_eq!(queued(&runtime).len(), DESK_QUEUED_MAX);
+    }
+
+    /// A queued message is kept with Desk's store, so after hided starts
+    /// again it goes once its agent is ready; one the agent refused to start
+    /// for its sign-in goes back first and holds the line until the
+    /// operator sends again.
+    #[test]
+    fn a_queued_message_goes_once_the_agent_is_ready_and_waits_after_a_refused_start() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        runtime.desk.stored.queued.push(DeskQueuedMessage {
+            id: 90,
+            text: "kept".into(),
+            at_ms: 0,
+            mentions: Vec::new(),
+        });
+        let stored: Stored =
+            serde_json::from_slice(&serde_json::to_vec(&runtime.desk.stored).unwrap()).unwrap();
+        assert_eq!(stored.queued, runtime.desk.stored.queued);
+        let ready = |runtime: &mut Runtime, state: DeskAgentState| {
+            runtime.desk_report(Report::Availability(vec![(AdapterId::CLAUDE, state, None)]));
+        };
+        ready(&mut runtime, DeskAgentState::Preparing);
+        no_send(&received);
+        ready(&mut runtime, DeskAgentState::Ready);
+        let kept = sent(&received);
+        assert_eq!(kept.text, "kept");
+
+        assert!(event(&mut runtime, "desk_send", json!({"text": "next"})));
+        runtime.desk_report(Report::OpenFailed {
+            adapter: AdapterId::CLAUDE,
+            error: OpenError::Login,
+            turn: Some(kept.tag),
+        });
+        no_send(&received);
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "after sign-in"})
+        ));
+        // The one the agent never took goes first, kept by the core.
+        assert_eq!(sent(&received).text, "kept");
+        assert_eq!(
+            queued(&runtime)
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect::<Vec<_>>(),
+            ["next", "after sign-in"]
+        );
+    }
+
+    pub(super) fn sends(received: &Receiver<Order>) -> Vec<String> {
+        received
+            .try_iter()
+            .filter_map(|order| match order {
+                Order::Send(send) => Some(send.text),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// S2: a process that ends under a turn ends that turn and wakes no
+    /// queued message: a crash, or a cap crossed right after a turn (the
+    /// worker measures before it tells the turn's end), leaves the line
+    /// for `다시 시작`.
+    #[test]
+    fn a_process_that_ends_wakes_no_queued_message() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        event(&mut runtime, "desk_send", json!({"text": "one"}));
+        let one = sent(&received);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        event(&mut runtime, "desk_send", json!({"text": "two"}));
+        // The cap: the turn's end and the process's in one report.
+        runtime.desk_report(Report::Ended {
+            unexpected: true,
+            detail: Some("the agent left 60 processes".into()),
+            turn: Some(TurnEnd {
+                tag: one.tag,
+                outcome: TurnOutcome::Done,
+            }),
+        });
+        assert_eq!(sends(&received), Vec::<String>::new());
+        assert_eq!(queued(&runtime).len(), 1);
+
+        assert!(event(&mut runtime, "desk_restart", json!({})));
+        let two = sent(&received);
+        assert_eq!(two.text, "two");
+        opened(&mut runtime, AdapterId::CLAUDE);
+        event(&mut runtime, "desk_send", json!({"text": "three"}));
+        // A crash under the turn ends it as stopped and sends nothing.
+        runtime.desk_report(Report::Ended {
+            unexpected: true,
+            detail: Some("killed".into()),
+            turn: Some(TurnEnd {
+                tag: two.tag,
+                outcome: TurnOutcome::Ended,
+            }),
+        });
+        assert!(runtime.desk.turn.is_none());
+        assert_eq!(sends(&received), Vec::<String>::new());
+    }
+
+    /// S2: `다시 시작` while the process runs a turn sends the next queued
+    /// message, and the old process's end, told after, does not close that
+    /// new turn, whose answer then joins the conversation.
+    #[test]
+    fn the_old_process_s_end_leaves_the_turn_a_restart_started() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        event(&mut runtime, "desk_send", json!({"text": "one"}));
+        let one = sent(&received);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        event(&mut runtime, "desk_send", json!({"text": "two"}));
+        assert!(event(&mut runtime, "desk_restart", json!({})));
+        let two = sent(&received);
+        assert_eq!(two.text, "two");
+        runtime.desk_report(Report::Ended {
+            unexpected: false,
+            detail: None,
+            turn: Some(TurnEnd {
+                tag: one.tag,
+                outcome: TurnOutcome::Ended,
+            }),
+        });
+        assert_eq!(
+            runtime.desk.turn.as_ref().map(|turn| turn.tag),
+            Some(two.tag)
+        );
+        opened(&mut runtime, AdapterId::CLAUDE);
+        runtime.desk_report(Report::Text {
+            tag: two.tag,
+            text: "응답: 둘".into(),
+        });
+        runtime.desk_report(Report::TurnEnded {
+            tag: two.tag,
+            outcome: TurnOutcome::Done,
+        });
+        assert!(
+            items(&runtime)
+                .iter()
+                .any(|item| matches!(item, DeskItem::Reply { text, .. } if text == "응답: 둘"))
+        );
+    }
+
+    /// S3: a message the agent never took goes back first in line, out of
+    /// the conversation, and goes again once the operator sends; one taken
+    /// from the line after hided started again is kept the same way.
+    #[test]
+    fn a_message_the_agent_never_took_goes_back_first_in_line() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        event(&mut runtime, "desk_send", json!({"text": "A"}));
+        let a = sent(&received);
+        event(&mut runtime, "desk_send", json!({"text": "B"}));
+        runtime.desk_report(Report::OpenFailed {
+            adapter: AdapterId::CODEX,
+            error: OpenError::Login,
+            turn: Some(a.tag),
+        });
+        let texts = |runtime: &Runtime| {
+            queued(runtime)
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts(&runtime), ["A", "B"]);
+        assert!(
+            !items(&runtime)
+                .iter()
+                .any(|item| matches!(item, DeskItem::User { .. }))
+        );
+        assert_eq!(sends(&received), Vec::<String>::new());
+        event(&mut runtime, "desk_send", json!({"text": "C"}));
+        let again = sent(&received);
+        assert_eq!(again.text, "A");
+        // The process does not open again: back in line, ahead of B and C.
+        runtime.desk_report(Report::OpenFailed {
+            adapter: AdapterId::CODEX,
+            error: OpenError::Failed("the process did not start".into()),
+            turn: Some(again.tag),
+        });
+        assert_eq!(texts(&runtime), ["A", "B", "C"]);
+    }
+
+    /// letter-47232: a login file can outlive its sign-in, so Hide AI's
+    /// read says signed in while the agent refuses Desk for its sign-in.
+    /// Once it refused, the bar says what the refusal said, `로그인 필요`,
+    /// until a session of that agent opens again.
+    #[test]
+    fn an_agent_that_refused_for_its_sign_in_reads_signed_out_until_a_session_opens() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        runtime.ingest_background_ai(read(&[("codex", "ready", true)]));
+        let word = |runtime: &Runtime| {
+            runtime
+                .snapshot
+                .desk
+                .as_ref()
+                .unwrap()
+                .agents
+                .iter()
+                .find(|agent| agent.id == AdapterId::CODEX)
+                .and_then(|agent| agent.signed_in)
+        };
+        assert_eq!(word(&runtime), Some(true));
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        event(&mut runtime, "desk_send", json!({"text": "hi"}));
+        let first = sent(&received);
+        runtime.desk_report(Report::OpenFailed {
+            adapter: AdapterId::CODEX,
+            error: OpenError::Login,
+            turn: Some(first.tag),
+        });
+        assert_eq!(word(&runtime), Some(false));
+        event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "after codex login"}),
+        );
+        sent(&received);
+        opened(&mut runtime, AdapterId::CODEX);
+        assert_eq!(word(&runtime), Some(true));
+    }
+
+    /// An open that failed for a turn `다시 시작` already ended gives back
+    /// nothing of the turn it started since, whose message was taken from
+    /// the line and goes to the next process.
+    #[test]
+    fn a_late_refused_open_leaves_the_turn_started_since() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        event(&mut runtime, "desk_send", json!({"text": "A"}));
+        let a = sent(&received);
+        event(&mut runtime, "desk_send", json!({"text": "B"}));
+        assert!(event(&mut runtime, "desk_restart", json!({})));
+        let b = sent(&received);
+        assert_eq!(b.text, "B");
+        runtime.desk_report(Report::OpenFailed {
+            adapter: AdapterId::CODEX,
+            error: OpenError::Failed("the process did not start".into()),
+            turn: Some(a.tag),
+        });
+        assert_eq!(runtime.desk.turn.as_ref().map(|turn| turn.tag), Some(b.tag));
+        assert!(queued(&runtime).is_empty());
+        assert!(
+            items(&runtime)
+                .iter()
+                .any(|item| matches!(item, DeskItem::User { text, .. } if text == "B"))
+        );
+    }
+
+    /// A line held after a sign-in refusal, full to one past its cap, moves
+    /// on one press of `다시 시작` (the login line's button): its head goes
+    /// at once and the rest one after another, with no new message.
+    #[test]
+    fn a_held_line_goes_again_on_restart_even_when_full() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        event(&mut runtime, "desk_send", json!({"text": "A"}));
+        let a = sent(&received);
+        for n in 0..DESK_QUEUED_MAX {
+            assert!(event(
+                &mut runtime,
+                "desk_send",
+                json!({"text": format!("q{n}")})
+            ));
+        }
+        runtime.desk_report(Report::OpenFailed {
+            adapter: AdapterId::CODEX,
+            error: OpenError::Login,
+            turn: Some(a.tag),
+        });
+        let conversation = |runtime: &Runtime| {
+            let desk = runtime.snapshot.desk.as_ref().unwrap();
+            (
+                desk.conversation.queued.len(),
+                desk.conversation.queued_full,
+                desk.conversation.queued_held,
+            )
+        };
+        assert_eq!(conversation(&runtime), (DESK_QUEUED_MAX + 1, true, true));
+        no_send(&received);
+
+        assert!(event(&mut runtime, "desk_restart", json!({})));
+        let again = sent(&received);
+        assert_eq!(again.text, "A");
+        assert_eq!(conversation(&runtime), (DESK_QUEUED_MAX, true, false));
+        opened(&mut runtime, AdapterId::CODEX);
+        runtime.desk_report(Report::TurnEnded {
+            tag: again.tag,
+            outcome: TurnOutcome::Done,
+        });
+        assert_eq!(sent(&received).text, "q0");
+        assert_eq!(conversation(&runtime), (DESK_QUEUED_MAX - 1, false, false));
+    }
+
+    /// O1: Desk turned off with a message waiting, and on again, sends it:
+    /// the line is read after every change, not after a few chosen events.
+    #[test]
+    fn a_message_queued_while_desk_was_off_goes_when_it_is_on_again() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        event(&mut runtime, "desk_send", json!({"text": "one"}));
+        sent(&received);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        event(&mut runtime, "desk_send", json!({"text": "two"}));
+        assert!(event(
+            &mut runtime,
+            "desk_settings_set",
+            json!({"enabled": false})
+        ));
+        assert_eq!(sends(&received), Vec::<String>::new());
+        assert!(event(
+            &mut runtime,
+            "desk_settings_set",
+            json!({"enabled": true})
+        ));
+        assert_eq!(sends(&received), ["two"]);
+    }
+
+    /// O3: the line's cap and whether it is full ride the conversation, so
+    /// the screen can say the line is full.
+    #[test]
+    fn the_conversation_says_how_many_may_wait_and_when_the_line_is_full() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        event(&mut runtime, "desk_send", json!({"text": "one"}));
+        sent(&received);
+        let conversation = |runtime: &Runtime| {
+            let desk = runtime.snapshot.desk.as_ref().unwrap();
+            (desk.conversation.queued_max, desk.conversation.queued_full)
+        };
+        assert_eq!(conversation(&runtime), (DESK_QUEUED_MAX, false));
+        for index in 0..DESK_QUEUED_MAX {
+            event(
+                &mut runtime,
+                "desk_send",
+                json!({"text": format!("m{index}")}),
+            );
+        }
+        assert_eq!(conversation(&runtime), (DESK_QUEUED_MAX, true));
+        let first = queued(&runtime)[0].0;
+        event(&mut runtime, "desk_queued_remove", json!({"id": first}));
+        assert_eq!(conversation(&runtime), (DESK_QUEUED_MAX, false));
+    }
+
+    fn stopped_notices(runtime: &Runtime) -> usize {
+        items(runtime)
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    DeskItem::Notice {
+                        notice: DeskNotice::HostStopped,
+                        ..
+                    }
+                )
+            })
+            .count()
+    }
+
+    /// letter-47179: `멈췄어요 · 다시 시작` leaves the conversation once the
+    /// operator restarted, and once a session opened again without it, so
+    /// no live `다시 시작` stays under a process that runs.
+    #[test]
+    fn the_stopped_notice_leaves_once_the_process_restarts_or_a_session_opens() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        let stop = |runtime: &mut Runtime| {
+            let turn = runtime.desk.turn.as_ref().map(|turn| TurnEnd {
+                tag: turn.tag,
+                outcome: TurnOutcome::Ended,
+            });
+            runtime.desk_report(Report::Ended {
+                unexpected: true,
+                detail: Some("killed".into()),
+                turn,
+            });
+        };
+        event(&mut runtime, "desk_send", json!({"text": "알파첫째"}));
+        sent(&received);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        stop(&mut runtime);
+        assert_eq!(stopped_notices(&runtime), 1);
+        assert!(event(&mut runtime, "desk_restart", json!({})));
+        assert_eq!(stopped_notices(&runtime), 0);
+
+        event(&mut runtime, "desk_send", json!({"text": "브라보둘째"}));
+        sent(&received);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        stop(&mut runtime);
+        assert_eq!(stopped_notices(&runtime), 1);
+        // The next message starts the process again with no restart.
+        event(&mut runtime, "desk_send", json!({"text": "찰리셋째"}));
+        assert_eq!(sent(&received).resume.as_deref(), Some("claude-session"));
+        opened(&mut runtime, AdapterId::CLAUDE);
+        assert_eq!(stopped_notices(&runtime), 0);
     }
 
     #[test]
@@ -2353,88 +3065,62 @@ mod tests {
         );
     }
 
-    fn kept_output(job: &str, id: &str) -> serde_json::Value {
-        json!({"kind": "output", "job": job, "output": {
-            "id": id, "kind": "image", "label": id, "thumb": null, "seen": true, "pr_state": null,
-            "device_id": "node", "checkout": "/repo", "path": format!("/repo/{id}"), "url": null,
-        }})
-    }
-
     fn lane(runtime: &Runtime) -> crate::model::DeskLane {
-        runtime.snapshot.desk.as_ref().unwrap().lane.clone()
+        runtime.snapshot.desk.as_ref().unwrap().lane
     }
 
     #[test]
-    fn the_lanes_pin_and_kept_tabs_are_kept_in_desks_store() {
+    fn a_dragged_width_is_kept_in_desks_store_and_the_other_width_stays() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, _) = runtime(root.path());
-        // B32: the pin is kept; pressing it again where it is changes nothing.
+        assert_eq!(lane(&runtime), crate::model::DeskLane::default());
+        assert!(event(&mut runtime, "desk_lane", json!({"view_width": 720})));
         assert!(event(
             &mut runtime,
             "desk_lane",
-            json!({"action": "pin", "pinned": true})
+            json!({"session_width": 480})
         ));
+        // Letting go where it already was changes nothing.
         assert!(!event(
             &mut runtime,
             "desk_lane",
-            json!({"action": "pin", "pinned": true})
+            json!({"session_width": 480})
         ));
-        // B31: a kept tab is kept once, and closing it lets it go.
-        let tab = kept_output("job-1", "compare.png");
-        assert!(event(
-            &mut runtime,
-            "desk_lane",
-            json!({"action": "keep", "tab": tab})
-        ));
-        assert!(!event(
-            &mut runtime,
-            "desk_lane",
-            json!({"action": "keep", "tab": tab})
-        ));
-        let mission = json!({"kind": "mission", "mission": "mission-1", "title": "Desk 1차"});
-        assert!(event(
-            &mut runtime,
-            "desk_lane",
-            json!({"action": "keep", "tab": mission})
-        ));
-        assert_eq!(lane(&runtime).kept.len(), 2);
-        assert!(lane(&runtime).pinned);
-        assert!(event(
-            &mut runtime,
-            "desk_lane",
-            json!({"action": "close", "tab": mission})
-        ));
-        let kept = lane(&runtime);
+        let expected = crate::model::DeskLane {
+            view_width: Some(720),
+            session_width: Some(480),
+        };
+        assert_eq!(lane(&runtime), expected);
         assert_eq!(
-            kept.kept.iter().map(|tab| tab.key()).collect::<Vec<_>>(),
-            ["output:job-1:compare.png"]
-        );
-        assert_eq!(
-            runtime.desk.stored.lane, kept,
+            runtime.desk.stored.lane, expected,
             "the store saves what the room shows"
         );
     }
 
     #[test]
-    fn a_tab_past_the_lanes_cap_is_refused_and_the_kept_ones_stay() {
+    fn a_width_event_without_a_width_or_out_of_range_or_from_desk_1_is_refused() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, _) = runtime(root.path());
-        for index in 0..crate::model::DESK_KEPT_TABS_MAX {
-            let tab = kept_output("job", &format!("{index}.png"));
-            assert!(event(
-                &mut runtime,
-                "desk_lane",
-                json!({"action": "keep", "tab": tab})
-            ));
+        for payload in [
+            json!({}),
+            json!({"view_width": 0}),
+            json!({"session_width": crate::model::DESK_LANE_WIDTH_MAX + 1}),
+        ] {
+            assert!(
+                !event(&mut runtime, "desk_lane", payload.clone()),
+                "{payload}"
+            );
         }
-        let past = kept_output("job", "past.png");
-        assert!(!event(
-            &mut runtime,
-            "desk_lane",
-            json!({"action": "keep", "tab": past})
-        ));
-        let kept = lane(&runtime).kept;
-        assert_eq!(kept.len(), crate::model::DESK_KEPT_TABS_MAX);
-        assert_eq!(kept[0].key(), "output:job:0.png");
+        // Desk 1차's pin and kept tabs are no event any more.
+        for payload in [
+            json!({"action": "pin", "pinned": true}),
+            json!({"action": "keep", "tab": {"kind": "mission", "mission": "m", "title": "t"}}),
+        ] {
+            assert!(
+                DeskEvent::decode("desk_lane", payload.clone()).is_none(),
+                "{payload}"
+            );
+        }
+        assert_eq!(lane(&runtime), crate::model::DeskLane::default());
     }
 }

@@ -31,6 +31,7 @@ fn record(record: &Value, thread: &mut Thread) {
     let message = &record["message"];
     let cwd = record["cwd"].as_str().unwrap_or_default();
     match (role, &message["content"]) {
+        ("user", Value::String(text)) if image_note(text) => thread.skip("claude_image_note"),
         ("user", Value::String(text)) => {
             thread.user(record["uuid"].as_str(), origin(record), [Part::Text(text)]);
         }
@@ -47,7 +48,7 @@ fn record(record: &Value, thread: &mut Thread) {
 
 /// Provider metadata that proves a message is not the operator's words.
 fn origin(record: &Value) -> Origin {
-    if record["isMeta"] == true || record["isCompactSummary"] == true {
+    if crate::claude_record_injected(record) {
         Origin::Injected
     } else {
         Origin::Operator
@@ -59,7 +60,14 @@ fn user_blocks(record: &Value, blocks: &[Value], thread: &mut Thread) {
     let mut parts = Vec::new();
     for block in blocks {
         match block["type"].as_str() {
-            Some("text") => parts.push(Part::Text(block["text"].as_str().unwrap_or_default())),
+            Some("text") => {
+                let text = block["text"].as_str().unwrap_or_default();
+                if image_note(text) {
+                    thread.skip("claude_image_note");
+                } else {
+                    parts.push(Part::Text(text));
+                }
+            }
             Some("image") => parts.extend(image(block)),
             Some("tool_result") => result(record, block, thread),
             _ => thread.skip("claude_block_unknown"),
@@ -68,6 +76,22 @@ fn user_blocks(record: &Value, blocks: &[Value], thread: &mut Thread) {
     if !parts.is_empty() {
         thread.user(id, origin(record), parts);
     }
+}
+
+/// The note Claude Code writes beside an image it scaled down for the model,
+/// `[Image: original 2880x1800, displayed at 2000x1250. Multiply coordinates
+/// by 1.44 to map to original image.]`: words for the model, not the
+/// conversation, so no reader of the thread shows it (PRD desk-2-ui B12).
+/// The image itself is a block of its own record, read as an image. If
+/// Claude Code words the note differently, it shows again; this is the one
+/// place that knows it.
+fn image_note(text: &str) -> bool {
+    let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+    lines.next().is_some_and(note_line) && lines.all(note_line)
+}
+
+fn note_line(line: &str) -> bool {
+    line.starts_with("[Image: original ") && line.ends_with(']') && line.contains(", displayed at ")
 }
 
 fn image(block: &Value) -> Option<Part<'_>> {

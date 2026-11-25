@@ -32,6 +32,7 @@ pub mod peer;
 pub mod wsl;
 use hide_node_link::HostError;
 pub use hide_node_link::LinkError;
+use hide_node_link::liveness::{Liveness, PING_LINE};
 use hide_node_link::panes::{NodeEvent, PanesStarted};
 use hide_node_link::protocol::{Call, Hello, PROTOCOL_VERSION, Request};
 use hide_node_link::{LinkAnswer, NodeLink, call_as};
@@ -557,11 +558,15 @@ struct Inner {
     /// The link runs over the attach role's local stream: a node that dialed
     /// this core, not a device it dialed.
     dialed_by_node: bool,
+    /// When the node last sent a byte, and the link's watch and pinger
+    /// (`start_liveness`).
+    liveness: Arc<Liveness>,
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
         self.closing.notify_one();
+        self.liveness.end();
     }
 }
 
@@ -635,6 +640,7 @@ impl RemoteHost {
                 protocol: std::sync::OnceLock::new(),
                 streams: Default::default(),
                 dialed_by_node: false,
+                liveness: Arc::default(),
             }),
         }
     }
@@ -861,8 +867,15 @@ impl RemoteHost {
 
     /// Writes one whole line, which carries its newline, by `deadline`. A
     /// line that was started and not finished ends the connection, since the
-    /// node would read the next line as its tail.
-    fn write_line(&self, line: &[u8], deadline: Instant, cancels: bool) -> Result<(), LinkError> {
+    /// node would read the next line as its tail. `effectless` is a line
+    /// that adds no effect on the device (a cancel, a ping), which a
+    /// draining link still writes.
+    fn write_line(
+        &self,
+        line: &[u8],
+        deadline: Instant,
+        effectless: bool,
+    ) -> Result<(), LinkError> {
         let inner = &self.inner;
         if let Some(reason) = self.closed_reason() {
             return Err(LinkError::NotConnected(reason));
@@ -883,7 +896,7 @@ impl RemoteHost {
             }
             // Admitted before the connection began to drain, but not sent:
             // it is refused now rather than sent after consent was withdrawn.
-            if let Some(reason) = inner.gate.stopped().filter(|_| !cancels) {
+            if let Some(reason) = inner.gate.stopped().filter(|_| !effectless) {
                 return Err(LinkError::NotConnected(reason));
             }
             Ok(tokio::time::timeout_at(deadline, async {
@@ -892,6 +905,38 @@ impl RemoteHost {
             })
             .await)
         })?;
+        self.written(written)
+    }
+
+    /// Writes [`PING_LINE`] only while no other line is being written, and
+    /// answers `Busy` at once otherwise: the line being written is bytes
+    /// too, so a ping never waits behind one. Its write has no deadline of
+    /// its own: only the link's watch, hearing nothing from the node, ends a
+    /// link, and a ping stuck on a dead connection fails as that end closes
+    /// the connection under it.
+    fn ping(&self) -> Result<(), LinkError> {
+        let inner = &self.inner;
+        if let Some(reason) = self.closed_reason() {
+            return Err(LinkError::NotConnected(reason));
+        }
+        let written = inner.runtime.block_on(async {
+            let Ok(mut writer) = inner.writer.try_lock() else {
+                return Err(LinkError::Busy);
+            };
+            let written = async {
+                writer.write_all(PING_LINE).await?;
+                writer.flush().await
+            };
+            Ok(Ok(written.await))
+        })?;
+        self.written(written)
+    }
+
+    /// What a write that began came to: done, or the link ended under it.
+    fn written(
+        &self,
+        written: Result<std::io::Result<()>, tokio::time::error::Elapsed>,
+    ) -> Result<(), LinkError> {
         match written {
             Ok(Ok(())) => Ok(()),
             // A write that failed or timed out may have sent part of the
@@ -1045,6 +1090,7 @@ fn mark_closed(inner: &Inner, reason: String) {
     lock_recover(&inner.pending).clear();
     inner.streams.end_all();
     inner.stop_gates(&reason);
+    inner.liveness.end();
 }
 
 /// Why a line the device helper sent, whole or still arriving, is longer
@@ -2214,8 +2260,15 @@ fn start_reader(
         protocol: std::sync::OnceLock::new(),
         streams: Default::default(),
         dialed_by_node,
+        // Until the node's first byte, the program may still be starting (a
+        // new helper's first start on Windows is scanned for tens of
+        // seconds), and the first call's own deadline bounds that wait
+        // (`hello_timeout`).
+        liveness: Arc::new(Liveness::unheard()),
     });
     let reader = Arc::downgrade(&inner);
+    let liveness = Arc::clone(&inner.liveness);
+    start_liveness(&inner);
     runtime.spawn(async move {
         let mut buffer: Vec<u8> = Vec::new();
         // How far `buffer` has been searched for a line end, so a large
@@ -2225,10 +2278,18 @@ fn start_reader(
         let reason = 'read: loop {
             let arrival = tokio::select! {
                 arrival = source.next() => arrival,
-                () = closing.notified() => break "this Hide closed the link".to_owned(),
+                // The link was closed, by this Hide or by its watch: its
+                // reason, when it gave one.
+                () = closing.notified() => {
+                    break reader
+                        .upgrade()
+                        .and_then(|inner| inner.closed.borrow().clone())
+                        .unwrap_or_else(|| "this Hide closed the link".to_owned());
+                }
             };
             match arrival {
                 Arrival::Data(data) => {
+                    liveness.hear();
                     buffer.extend_from_slice(&data);
                     while let Some(offset) = buffer[scanned..].iter().position(|byte| *byte == b'\n') {
                         let end = scanned + offset;
@@ -2278,6 +2339,62 @@ fn start_reader(
     RemoteHost { inner }
 }
 
+/// Starts the link's watch and pinger (`hide_node_link::liveness`): the
+/// watch closes a link whose node sent nothing for [`HEARTBEAT_LIMIT`], and
+/// the pinger writes [`PING_LINE`] every heartbeat while no other line is
+/// being written (`RemoteHost::ping`), so the node ends a link whose core
+/// went silent as the core ends one whose node did. On threads of their
+/// own rather than the link's runtime: a line the reader hands to the core
+/// may take its one worker for a while, and a ping that waits behind it
+/// would read to the node as a core gone.
+///
+/// Both are the link's and end with it, on every path a link ends by: each
+/// of them ends its liveness (`mark_closed`: the reader's end, the watch's
+/// close, [`RemoteHost::close`], a write that failed; and the last clone's
+/// drop), which wakes both at once, and a ping the link refuses as closed
+/// ends the pinger. Neither holds a clone of the link while it waits for
+/// its next turn, only the pinger while it writes, so neither keeps one
+/// alive.
+fn start_liveness(inner: &Arc<Inner>) {
+    let watched = {
+        let link = Arc::downgrade(inner);
+        let liveness = Arc::clone(&inner.liveness);
+        std::thread::Builder::new()
+            .name("node-link-watch".into())
+            .spawn(move || {
+                liveness.watch(|gone| {
+                    if let Some(inner) = link.upgrade() {
+                        RemoteHost { inner }.close(&gone.error("the node").to_string());
+                    }
+                });
+            })
+    };
+    let pinged = watched.and_then(|_| {
+        let link = Arc::downgrade(inner);
+        let liveness = Arc::clone(&inner.liveness);
+        std::thread::Builder::new()
+            .name("node-link-ping".into())
+            .spawn(move || {
+                liveness.pinger(|| {
+                    let Some(inner) = link.upgrade() else {
+                        return false;
+                    };
+                    matches!(RemoteHost { inner }.ping(), Ok(()) | Err(LinkError::Busy))
+                });
+            })
+    });
+    if let Err(error) = pinged {
+        crate::diagnostic!(json!({
+            "component": "remote_host",
+            "kind": "host.heartbeat_unstarted",
+            "target": inner.target,
+            "error": error.to_string(),
+        }));
+        mark_closed(inner, "the link's heartbeat could not start".to_owned());
+        inner.closing.notify_one();
+    }
+}
+
 /// Sorts one whole line from the node: a terminal line, a pane event, a
 /// call's report, or an answer.
 fn deliver_line(inner: &Arc<Inner>, panes: Option<&PaneHook>, line: &[u8]) {
@@ -2293,7 +2410,7 @@ fn deliver_line(inner: &Arc<Inner>, panes: Option<&PaneHook>, line: &[u8]) {
         }
         return;
     }
-    if line.starts_with(b"{\"event\":\"ping\"}") {
+    if line == PING_LINE {
         return;
     }
     if line.starts_with(b"{\"event\":\"link_data\"")
@@ -2456,6 +2573,7 @@ fn deliver_event(inner: &Arc<Inner>, panes: Option<&PaneHook>, line: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hide_node_link::liveness::HEARTBEAT_LIMIT;
 
     /// The first Hello after the connection's install wrote the helper
     /// waits long enough for a scanned first start, past the bound a helper
@@ -2646,6 +2764,180 @@ mod tests {
         assert_eq!(heard.len(), 1);
         assert_eq!(heard[0].0, "node-a");
         assert!(matches!(&heard[0].1, NodeEvent::Revoke { token } if token == "t"));
+    }
+
+    /// A link over a local stream whose node end the test holds, with the
+    /// node's reader bounded past one heartbeat, and the reasons it ends by.
+    fn silent_node_link() -> (
+        RemoteHost,
+        hide_platform::ipc::LocalStream,
+        std::io::BufReader<hide_platform::ipc::LocalStream>,
+        mpsc::Receiver<String>,
+    ) {
+        let (core_end, node_end) = hide_platform::ipc::LocalStream::pair().expect("a stream pair");
+        let (closed, ended) = mpsc::channel();
+        let link = over_local_stream(
+            "inbound:node-a",
+            core_end,
+            None,
+            Box::new(move |reason| {
+                let _ = closed.send(reason);
+            }),
+        )
+        .expect("a local link");
+        let writer = node_end.duplicate();
+        node_end
+            .set_read_timeout(Some(
+                hide_node_link::liveness::HEARTBEAT + Duration::from_secs(5),
+            ))
+            .expect("a read bound");
+        (link, writer, std::io::BufReader::new(node_end), ended)
+    }
+
+    /// The core says it is alive on every link (with-hide/hide#2882), and
+    /// waits out a node that has not spoken yet, past the silence limit: a
+    /// new helper's first start, which the first call's own deadline bounds
+    /// (`hello_timeout`).
+    #[test]
+    fn a_link_pings_a_node_that_has_not_spoken_and_waits_for_it() {
+        let (link, writer, mut reader, _ended) = silent_node_link();
+        let start = Instant::now();
+        let mut line = String::new();
+        while start.elapsed() < HEARTBEAT_LIMIT + Duration::from_secs(2) {
+            assert!(ping_or_end(&mut reader, &mut line), "the link ended");
+        }
+        assert_eq!(link.closed_reason(), None, "a starting node's link ended");
+        drop(writer);
+    }
+
+    /// The core ends a link whose node went silent with its connection open
+    /// (with-hide/hide#2882): once a node that spoke sends nothing for the
+    /// silence limit, the link ends and closes the stream under it.
+    #[test]
+    fn a_link_ends_once_its_node_falls_silent() {
+        use std::io::Write;
+        let (_link, mut writer, mut reader, ended) = silent_node_link();
+        // The node speaks once, then never again, its stream still open.
+        writer.write_all(PING_LINE).expect("the node's one line");
+        let spoke = Instant::now();
+        let reason = ended
+            .recv_timeout(HEARTBEAT_LIMIT + Duration::from_secs(10))
+            .expect("the link outlived its silent node");
+        assert!(reason.contains("sent nothing"), "{reason}");
+        assert!(
+            spoke.elapsed() >= HEARTBEAT_LIMIT - Duration::from_secs(1),
+            "the link ended {:?} after the node's last byte",
+            spoke.elapsed()
+        );
+        // The node reads the end of the stream once the pings already sent
+        // are read.
+        let mut line = String::new();
+        while ping_or_end(&mut reader, &mut line) {}
+        drop(writer);
+    }
+
+    /// The core's ping never waits behind another line, which would leave
+    /// it a moment of a busy link's write before its deadline ended the link:
+    /// with the writer taken it is skipped at once and the link stays, and
+    /// with the writer free it reaches the node.
+    #[test]
+    fn a_ping_skips_a_taken_writer_and_leaves_the_link() {
+        let (link, writer, mut reader, _ended) = silent_node_link();
+        let held = link.inner.runtime.block_on(link.inner.writer.lock());
+        let asked = Instant::now();
+        assert!(matches!(link.ping(), Err(LinkError::Busy)));
+        assert!(
+            asked.elapsed() < Duration::from_secs(1),
+            "the ping waited {:?} behind the writer",
+            asked.elapsed()
+        );
+        drop(held);
+        assert_eq!(link.closed_reason(), None, "a skipped ping ended the link");
+        link.ping().expect("a ping on a free writer");
+        let mut line = String::new();
+        assert!(ping_or_end(&mut reader, &mut line), "the node read no ping");
+        drop(writer);
+    }
+
+    /// A ping whose write stalls past the silence limit ends no link whose
+    /// node still speaks: only hearing nothing ends a link, never a write
+    /// that is slow (a busy device behind a slow connection).
+    #[test]
+    #[allow(clippy::disallowed_methods)] // the node speaks every few seconds while the core's ping is held: a live, slow link is the subject
+    fn a_ping_stalled_past_the_limit_leaves_a_link_whose_node_speaks() {
+        use std::io::Write;
+        struct Stalling {
+            entered: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+        }
+        impl Write for Stalling {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                let _ = self.entered.send(());
+                let _ = self.release.recv();
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let (core_end, mut node_end) =
+            hide_platform::ipc::LocalStream::pair().expect("a stream pair");
+        let (entered, stalled) = mpsc::channel();
+        let (releasing, released) = mpsc::channel::<()>();
+        let (closed, ended) = mpsc::channel();
+        let shut = core_end.shutdown_handle();
+        let link = over_stream(
+            "inbound:node-a",
+            Box::new(core_end),
+            Box::new(Stalling {
+                entered,
+                release: released,
+            }),
+            Box::new(move || shut.shutdown()),
+            None,
+            Box::new(move |reason| {
+                let _ = closed.send(reason);
+            }),
+        )
+        .expect("a link");
+        // Let go of the held write before the link's runtime goes, on a
+        // failed assertion's unwind too, so a failure fails and never hangs.
+        let release = releasing;
+        let speaking = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let node = {
+            let speaking = Arc::clone(&speaking);
+            std::thread::spawn(move || {
+                while speaking.load(Ordering::Relaxed) {
+                    if node_end.write_all(PING_LINE).is_err() {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_secs(3)); // wait-ok: the node's next ping, spaced well under the limit as a live node's are
+                }
+            })
+        };
+        stalled
+            .recv_timeout(hide_node_link::liveness::HEARTBEAT + Duration::from_secs(5))
+            .expect("the core's ping reached its write");
+        let outcome = ended.recv_timeout(HEARTBEAT_LIMIT + Duration::from_secs(5));
+        assert!(
+            outcome.is_err(),
+            "a link whose node spoke ended behind a stalled ping: {outcome:?}"
+        );
+        assert_eq!(link.closed_reason(), None);
+        drop(release);
+        speaking.store(false, Ordering::Relaxed);
+        node.join().unwrap();
+        link.close("the test is done");
+    }
+
+    /// Reads one line into `line`; false at the stream's end.
+    fn ping_or_end(reader: &mut impl std::io::BufRead, line: &mut String) -> bool {
+        line.clear();
+        let read = reader.read_line(line).expect("the stream's end");
+        if read > 0 {
+            assert_eq!(line.as_bytes(), PING_LINE);
+        }
+        read > 0
     }
 
     /// Remote audit R2: a call has one deadline. A call that waited for a

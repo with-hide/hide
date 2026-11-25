@@ -498,6 +498,7 @@ pub(crate) fn start_launched(
         codex_daemon: request.codex_daemon,
         wakes: true,
         program: crate::start_prompt::start_program_of(engine, node, &request.kind),
+        prompt: None,
     }) {
         Ok(start) => start,
         // A Codex whose daemon Hide has not read answers its own code

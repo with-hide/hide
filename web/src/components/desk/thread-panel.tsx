@@ -1,50 +1,49 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "../../actions";
 import { refusalText, submitThreadInput } from "../../attachments";
-import type { DeskJob, DeskMention } from "../../desk";
+import type { DeskJob, DeskMention, DeskOutput } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { allAgents } from "../../paneAgents";
 import { useShellStore } from "../../store";
 import { Input } from "../ui/input";
-import { threadInputHeld, threadLaunchModel, threadScreen } from "../../threadView";
+import { threadInputHeld, threadScreen } from "../../threadView";
 import type { ComposerAttachment } from "./desk-composer";
-import { ChevronLeftIcon } from "lucide-react";
-import { Button } from "../ui/button";
-import { LaneColumnHead } from "./desk-lane";
-import { ThreadHead, ThreadView, type ThreadConductor, type ThreadPartActions } from "./thread-view";
+import type { ReactNode } from "react";
+import { ThreadView, type ThreadPartActions } from "./thread-view";
 
 type Attached = ComposerAttachment & { bytes: Uint8Array };
+
+const NO_OUTPUTS: readonly DeskOutput[] = [];
 
 /** The refusals a thread's input words itself; any other is an attachment's, worded as a terminal attachment's is. */
 const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "uncertain", "unavailable", "device_unreachable", "too_long", "control_characters", "attachment_failed", "input_refused"]);
 
 /**
- * A thread on screen, connected to the core (D-61, B25-B29): it opens the
- * session thread of `job`'s pane while it is shown and closes it after, draws
- * the record as the core reads it on, reads the page before when the
- * conversation is scrolled to its top, and types the input box's words and
- * files into that pane. Where the lane puts it, and where a chip or `터미널로`
- * goes, are the lane's.
+ * A session's conversation on screen, connected to the core (PRD desk-2-ui
+ * D-01, D-20, B2, B15, B30): it opens the session thread of the pane while
+ * it is shown and closes it after, draws the record as the core reads it
+ * on, reads the page before when the conversation is scrolled to its top,
+ * and types the input box's words and files into that pane. Its head, the
+ * question card and what stands in the box's place while it sleeps are the
+ * caller's.
  */
-export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, conductor = null, pinned, mentions = [], startedByDesk = false, selectedOutput = null, focused = false, answer = 0, terminalChord, onBack, onPin, onClose, onTerminal, ...parts }: {
+export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, mentions = [], startedByDesk = false, selectedOutput = null, focused = false, answer = 0, head = null, ask = null, foot = null, onTerminal, ...parts }: {
   /** The session's card; a session that is no job of Desk's opens before its card arrives, by its pane (D-87). */
   job: DeskJob | null;
   /** The pane whose thread this is; its card's when not given. */
   paneId?: string | null;
   actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread">;
-  conductor?: ThreadConductor | null;
-  pinned: boolean;
   mentions?: readonly DeskMention[];
   startedByDesk?: boolean;
   selectedOutput?: string | null;
   focused?: boolean;
   /** Moves when `답하기` asks for this thread's input box (B29): the box takes the keyboard. */
   answer?: number;
-  terminalChord?: string | null;
-  onBack: () => void;
-  onPin: () => void;
-  onClose: () => void;
+  /** The panel's head, drawn once the card is here. */
+  head?: ReactNode;
+  ask?: ReactNode;
+  foot?: ReactNode;
   onTerminal: () => void;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
@@ -61,11 +60,9 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, condu
   const history = useShellStore((s) => s.sessionThreadHistory);
   const plans = useShellStore((s) => s.rest?.plans);
   const missions = useShellStore((s) => s.rest?.missions);
-  const launches = useShellStore((s) => s.rest);
   const rows = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
   const refusal = useShellStore((s) => s.threadInputRefusal);
   const screen = useMemo(() => threadScreen(thread, history, { plans, missions }, rows), [thread, history, plans, missions, rows]);
-  const model = threadLaunchModel(launches, thread);
 
   const [text, setText] = useState("");
   const [files, setFiles] = useState<Attached[]>([]);
@@ -127,20 +124,19 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, condu
     if (answer > 0) root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]")?.focus();
   }, [answer]);
 
-  if (!job) {
-    // The thread opened from the first frame; its head waits for the card the core sends with it.
+  if (!job && !foot) {
+    // The thread opened from the first frame and its card is on its way, or the session has no card any more (its
+    // pane closed): the head and its `✕` stand either way (B6).
     return (
       <div ref={root} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""} data-desk-thread-pending="true">
-        <LaneColumnHead pinned={pinned} onPin={onPin} onClose={onClose}>
-          <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("desk.thread.back")} onClick={onBack}><ChevronLeftIcon /></Button>
-        </LaneColumnHead>
+        {head}
         <p role="status" className="p-md text-caption text-muted-foreground">{t("desk.thread.reading")}</p>
       </div>
     );
   }
   return (
     <div ref={root} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""}>
-      <ThreadHead job={job} model={model} conductor={conductor} pinned={pinned} terminalChord={terminalChord} onBack={onBack} onTerminal={onTerminal} onPin={onPin} onClose={onClose} />
+      {head}
       <ThreadView
         job={job}
         lines={screen.lines}
@@ -148,7 +144,9 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, condu
         failure={screen.failure}
         mentions={mentions}
         startedByDesk={startedByDesk}
-        outputs={job.outputs}
+        outputs={job?.outputs ?? NO_OUTPUTS}
+        ask={ask}
+        foot={foot}
         selectedOutput={selectedOutput}
         composer={{
           value: text,

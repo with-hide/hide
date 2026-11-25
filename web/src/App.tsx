@@ -1,5 +1,6 @@
 import { InterfaceLanguageBoundary, translate, useInterfaceTranslation } from "./i18n/client";
 import { agentCapacityNotice } from "./agentLayout";
+import { storeAskNotice, storeAskNoticeChanges } from "./storeAskNotice";
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { createActions, type Actions } from "./actions";
 import { identity, moveBuffer, tabBufferKey, type BufferKey } from "./buffers";
@@ -62,6 +63,7 @@ import { configureAccessCalls } from "./accessCall";
 import { configureAutomationCalls } from "./automationCall";
 import { configureGuestCloseCalls } from "./guestCloseCall";
 import { OpeningStatus } from "./OpeningStatus";
+import { watchDeskFiles } from "./deskFiles";
 import { connectShell, type DispatchFn } from "./ws";
 
 const noop: DispatchFn = () => {};
@@ -144,6 +146,8 @@ export function App() {
     const unsubscribeScreen = useUiStore.subscribe((state, previous) => {
       if (state.screen !== previous.screen) observeRecent(useShellStore.getState().rest, true);
     });
+    // Desk's file tabs reach hided as the room's whole file set, on each change and each connect (`deskFiles.ts`).
+    const unwatchDeskRoom = watchDeskFiles((files) => actions.deskFiles(files));
     // A failure the operator can act on is a notice rather than only a diagnostic (design 13); it is raised
     // before the rest of this subscriber runs, as it always was.
     const unsubscribeNotices = watchErrorNotices();
@@ -162,6 +166,12 @@ export function App() {
         if (waiting > 0) useUiStore.getState().showNotice({ level: "important", key: "agent_capacity", text: agentCapacityNotice(waiting), refreshable: false });
         else if (previouslyWaiting > 0) useUiStore.getState().dismissNotices((notice) => notice.key === "agent_capacity");
       }
+      // An agent's skill or MCP ask waits on the operator, so it stands in the corner until it is answered.
+      if (state.rest?.status?.store_asks !== previous.rest?.status?.store_asks) {
+        const { raise, gone } = storeAskNoticeChanges(state.rest?.status?.store_asks, previous.rest?.status?.store_asks);
+        for (const ask of raise) useUiStore.getState().showNotice(storeAskNotice(ask, translate));
+        if (gone.length > 0) useUiStore.getState().dismissNotices((notice) => notice.storeAsk !== undefined && gone.includes(notice.storeAsk));
+      }
       // A refused commit brings nothing forward, so the next surface in use is a visit again.
       if (fresh) {
         expectSurface(null);
@@ -178,6 +188,7 @@ export function App() {
       window.removeEventListener("pointerdown", noteOperatorPointer, true);
       window.removeEventListener("keydown", endCommit, true);
       unsubscribeScreen();
+      unwatchDeskRoom();
       unsubscribeNotices();
       unsubscribe();
       keyboard();
@@ -294,6 +305,7 @@ export function App() {
   // waits on the core; every other notice stands in the window's corner,
   // newest nearest the corner.
   const remoteScreen = useUiStore((s) => s.remoteScreen);
+  const noticeFloor = useUiStore((s) => s.noticeFloor);
   const notices: [string, ReactNode][] = [
     ["agent_close_notice", <AgentCloseNotice actions={actions} />],
     ["draft_recovery", <DraftRecoveryLine actions={actions} />],
@@ -358,7 +370,7 @@ export function App() {
               </>
             )}
           </div>
-          <ToastStack>{notices.map(leftOut)}</ToastStack>
+          <ToastStack floor={noticeFloor}>{notices.map(leftOut)}</ToastStack>
           {overlays.map(leftOut)}
         </div>
       </RenderBoundary>

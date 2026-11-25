@@ -1,5 +1,5 @@
 import { CircleAlertIcon, XIcon } from "lucide-react";
-import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type CSSProperties, type ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import { Button } from "./button";
 import { Hint } from "./tooltip";
@@ -16,13 +16,16 @@ export const TOAST_INFO_MS = 10_000;
 
 /**
  * The window's corner where notices stand, newest nearest the corner. It takes
- * no press itself, so the screen under its empty space stays usable.
+ * no press itself, so the screen under its empty space stays usable. `floor`
+ * lifts it above the input boxes a screen keeps at the window's foot, in CSS
+ * pixels (`noticeFloor.ts`).
  */
-export function ToastStack({ children }: { children: ReactNode }) {
+export function ToastStack({ floor = 0, children }: { floor?: number; children: ReactNode }) {
   return (
     <div
       data-toast-stack="true"
-      className="pointer-events-none absolute bottom-lg right-lg z-40 flex w-(--size-toast-w) max-w-[calc(100%-var(--spacing-xxl))] flex-col justify-end gap-sm"
+      style={{ "--toast-floor": `${floor}px` } as CSSProperties}
+      className="pointer-events-none absolute bottom-[calc(var(--spacing-lg)+var(--toast-floor))] right-lg z-40 flex w-(--size-toast-w) max-w-[calc(100%-var(--spacing-xxl))] flex-col justify-end gap-sm"
     >
       {children}
     </div>

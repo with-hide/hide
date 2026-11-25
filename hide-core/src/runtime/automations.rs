@@ -33,6 +33,7 @@ use crate::automations::{
     MACHINE_CHANGED, Notice, Opened, Pause, PauseReason, RESULT_ADDRESS_LIMIT, RunResult, RunState,
     RunWorktree, SkipReason, Stored, Trigger, Unreadable, attempt_intent, open_intent, reason_code,
 };
+use crate::coordination::SPAWN_BUSY;
 use crate::latest_file::{LatestFile, read_capped};
 use crate::view_layout::{DisplayKind, KeptView};
 
@@ -60,8 +61,6 @@ const BUSY_GAP_MS: u64 = 1_000;
 /// before it is given up as a transient failure: the line is never held
 /// that long by starts alone, nor a machine's kit that long unread.
 const WAIT_LIMIT_MS: u64 = 15 * 60 * 1000;
-/// The start's answer when another start holds this machine's start line.
-const SPAWN_BUSY: &str = "spawn_busy";
 /// The refusals of a start that started nothing and that a later ask of
 /// the same intent may pass: the start line held, a Codex start on a
 /// machine whose kit has not read its Codex yet (the unused pane is closed

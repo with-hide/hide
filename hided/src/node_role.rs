@@ -20,7 +20,7 @@
 //! and both threads.
 
 use std::collections::BTreeSet;
-use std::io::{BufRead, BufReader};
+use std::io::{BufReader, Read};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
@@ -1633,7 +1633,7 @@ fn carry_link(
             generation,
         });
     let link_end = serve(
-        BufReader::new(link.duplicate()),
+        link.duplicate(),
         link,
         identity,
         &terminals,
@@ -1652,22 +1652,25 @@ fn carry_link(
     }))
 }
 
-/// Answers the core's calls until the link ends. The reader keeps what it
-/// buffered past the handshake: the core's first call.
+/// Answers the core's calls until the link ends. The link carries what the
+/// handshake read past its end (`Mux::start`): the core's first call.
 fn serve(
-    reader: impl BufRead,
+    reader: impl Read,
     writer: LocalStream,
     identity: &NodeIdentity,
     terminals: &NodeTerminals,
     roots: &hide_host::serve::OpenedRoots,
     browser: Option<&dyn hide_host::link_bridge::BrowserGateway>,
 ) -> Result<String, String> {
+    // The link's end closes its stream (`LinkEnd::Shut`), whichever end
+    // ended the link.
+    let ending = writer.shutdown_handle();
     hide_host::serve::serve_with(
         reader,
         writer,
         hide_host::serve::Services {
+            end: hide_host::serve::LinkEnd::Shut(Box::new(move || ending.shutdown())),
             terminals: Some(terminals),
-            heartbeat: true,
             checkout_callers: true,
             opened_roots: Some(roots),
             browser,
