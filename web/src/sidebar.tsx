@@ -28,7 +28,6 @@ import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } fr
 import { SidebarMissionRow, useEveryDeviceMissionAsks } from "./components/sidebar-mission-row";
 import { SidebarAutomationRow, useEveryDeviceAutomationAsks } from "./components/sidebar-automation-row";
 import { automationOwnAsks, missionOwnAsks, ownAskKey } from "./ownAsks";
-import { useMissionTurnCount } from "./MissionScreen";
 import { RAIL_ELBOW, TreeRails } from "./components/agent-tree";
 import { SubagentTreeRow } from "./components/subagent-row";
 import { siblingsShown, sidebarTreeLines } from "./sidebarTree";
@@ -73,7 +72,6 @@ import { SidebarMenus } from "./components/sidebar-menus";
 import { useShellStore } from "./store";
 import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
 import { useUiStore } from "./ui";
-import { useOverviewCount } from "./Overview";
 import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFocus";
 import { SidebarLensSwitch, TaskLens, ToolTaskLens } from "./TaskLens";
 import { toolCells, toolCheckoutPane, useFrontTool, useToolSidebarProjects } from "./toolCells";
@@ -108,13 +106,8 @@ export function Sidebar({ actions }: { actions: Actions }) {
   const tool = useFrontTool();
   // The switch has no chord of its own until the operator binds one (issue 170).
   const overviewChord = useShellStore((s) => commandLabel("overview", s.rest?.ui_state));
-  // The operator's counts are not the tool's: a tool's cell shows its grey number on its tile alone (B41).
-  const operatorOverviewCount = useOverviewCount();
-  const overviewCount = tool ? 0 : operatorOverviewCount;
   const overviewSelected = useUiStore((s) => s.overviewOpen || s.screen?.kind === "main");
   const missionsSelected = useUiStore((s) => !s.overviewOpen && s.screen?.kind === "missions");
-  const operatorMissionsCount = useMissionTurnCount();
-  const missionsCount = tool ? 0 : operatorMissionsCount;
   const missionsChord = useShellStore((s) => commandLabel("open_missions", s.rest?.ui_state));
   const automationsSelected = useUiStore((s) => !s.overviewOpen && s.screen?.kind === "automations");
   // The runs no one has looked at yet (B1); a tool's cell keeps the operator's numbers off its screen (B41).
@@ -173,8 +166,8 @@ export function Sidebar({ actions }: { actions: Actions }) {
         <div className="sidebar-header-container flex min-h-0 min-w-0 flex-1 flex-col">
           <SidebarHeader
             compact={(preview ?? storedWidth ?? tokenPx("--size-sidebar-ideal")) < tokenPx("--size-sidebar-ideal")}
-            overview={{ selected: overviewSelected, count: overviewCount, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
-            missions={{ selected: missionsSelected, count: missionsCount, chord: missionsChord || null, onOpen: () => actions.openMissions() }}
+            overview={{ selected: overviewSelected, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
+            missions={{ selected: missionsSelected, chord: missionsChord || null, onOpen: () => actions.openMissions() }}
             automations={{ selected: automationsSelected, count: automationsCount, onOpen: () => actions.openAutomations() }}
             addProject={{ chord: commandLabel("new_workspace") || null, onOpen: () => actions.openAddProject() }}
             searchChord={commandLabel("search") || null}

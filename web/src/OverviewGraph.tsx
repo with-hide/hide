@@ -458,7 +458,7 @@ function WorkGraph({ projects, deviceId, tool = null, actions, onOpenRecord, pro
         <div className="og-toolbar-actions">{mode === "graph" ? <><Button variant="ghost" size="sm" onClick={foldAll}>{t("overviewGraph.foldAll")}</Button><Button variant="ghost" size="sm" onClick={unfoldAll}>{t("overviewGraph.unfoldAll")}</Button></> : null}{projectId ? <Button variant="ghost" size="sm" onClick={() => useUiStore.getState().setOverview({ projectId: null })}>{t("overviewGraph.allProjects")}</Button> : null}<ToggleGroup type="single" value={mode} onValueChange={(value) => { if (value === "graph" || value === "list") setMode(value); }} aria-label={t("overviewGraph.title")}><ToggleGroupItem value="graph">{t("overviewGraph.graph")}</ToggleGroupItem><ToggleGroupItem value="list">{t("overviewGraph.list")}</ToggleGroupItem></ToggleGroup></div>
       </div>
       <div className="og-filters">
-        <div role="group" aria-label={t("overviewGraph.filter")}><span className="og-filter-scope">{t("overviewGraph.sessionScope")}</span>{(["all", "turn", "working", "results"] as const).map((value) => <Button key={value} variant={focus === value ? "secondary" : "ghost"} size="sm" aria-pressed={focus === value} data-focus={value} onClick={() => setFocus(value)}>{t(tool && value === "turn" ? "taskLens.tool.group.needs_you" : `overviewGraph.focus.${value}`)} <span>{model.counts[value]}</span></Button>)}</div>
+        <div role="group" aria-label={t("overviewGraph.filter")}><span className="og-filter-scope">{t("overviewGraph.sessionScope")}</span>{(["all", "turn", "working", "results"] as const).map((value) => <Button key={value} variant={focus === value ? "secondary" : "ghost"} size="sm" aria-pressed={focus === value} data-focus={value} onClick={() => setFocus(value)}>{t(tool && value === "turn" ? "taskLens.tool.group.needs_you" : `overviewGraph.focus.${value}`)}{!tool && value === "turn" ? null : <> <span>{model.counts[value]}</span></>}</Button>)}</div>
         <label><input type="checkbox" checked={includeResting} onChange={(event) => setIncludeResting(event.target.checked)} />{t("overviewGraph.includeResting")}</label>
       </div>
       {model.limited ? <p className="og-notice" role="status">{t("overviewGraph.limit", { count: LAYOUT_NODE_LIMIT })}</p> : null}
@@ -530,7 +530,7 @@ function ProjectColumn({ deviceId, projectId, tool, model, query, setQuery, hidd
       {found.length > FOUND_LIMIT ? <p className="og-no-match">{t("overviewGraph.moreFound", { count: found.length - FOUND_LIMIT })}</p> : null}
     </section> : null}
     {waiting.length + missions.length + automations.length > 0 ? <section className="og-waiting" aria-label={heading}>
-      <h3>{heading} <span>{waiting.length + missions.length + automations.length}</span></h3>
+      <h3>{heading}{tool ? <> <span>{waiting.length + missions.length + automations.length}</span></> : null}</h3>
       <div className="og-ask-list">
       {missions.map((ask) => <OverviewMissionAsk key={`mission:${ask.mission.id}`} ask={ask} actions={actions} />)}
       {automations.map((ask) => <OverviewAutomationAsk key={`automation:${ask.automation.id}`} ask={ask} actions={actions} />)}
@@ -584,7 +584,7 @@ function OverviewMissionAsks({ deviceId, projectId, tool, actions }: { deviceId:
   if (missions.length + automations.length === 0) return null;
   const heading = t(tool ? "taskLens.tool.group.needs_you" : "overviewGraph.waiting");
   return <section className="og-waiting og-waiting-alone" aria-label={heading} data-graph-mission-asks="true">
-    <h3>{heading} <span>{missions.length + automations.length}</span></h3>
+    <h3>{heading}{tool ? <> <span>{missions.length + automations.length}</span></> : null}</h3>
     <div className="og-ask-list">
       {missions.map((ask) => <OverviewMissionAsk key={`mission:${ask.mission.id}`} ask={ask} actions={actions} />)}
       {automations.map((ask) => <OverviewAutomationAsk key={`automation:${ask.automation.id}`} ask={ask} actions={actions} />)}

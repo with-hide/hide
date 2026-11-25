@@ -34,7 +34,6 @@ import {
   rowLine,
   rowLineText,
   STATE_PILL,
-  turnCount,
   type MissionEntry,
   type MissionGroup,
   type MissionProject,
@@ -74,13 +73,6 @@ export function useDeviceMissions(deviceId: string, tool: string | null = null):
     if (missions.failed) return FAILED;
     return { state: "ready", entries: deviceMissions(missions.items, deviceId, tool).map((mission) => missionEntry(mission, escalationOf)) };
   }, [missions, deviceId, tool, escalationOf]);
-}
-
-/** The sidebar row's number (B1): the front device's missions with anything in their `내 차례`. */
-export function useMissionTurnCount(): number {
-  const deviceId = useShellStore((s) => frontDeviceId(s.rest));
-  const missions = useDeviceMissions(deviceId);
-  return missions.state === "ready" ? turnCount(missions.entries) : 0;
 }
 
 /** A group's name, the turn named for the tool in a tool's cell. */
