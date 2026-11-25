@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, missionMentions, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
+import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
 import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -90,16 +90,6 @@ describe("what the working line says (feedback 1 c3)", () => {
     expect(threadPhase(turn([tool("execute")]))).toBe("other");
     expect(threadPhase(turn([tool("think")]))).toBe("thinking");
     expect(threadPhase(turn([tool("read")], [{ kind: "agent", id: "a", message: null, text: "다 읽었어요" }]))).toBe("answering");
-  });
-});
-
-describe("the missions a Desk answer names", () => {
-  it("reads each `@mission(<id> <title>)` once, in order, and leaves a token without a title as text", () => {
-    const text = "@mission(mission-63 안드로이드 앱 출시) 지휘 세션이 기다려요. @mission(mission-58 그랩마켓 실습 레포) 잠듦, 다시 @mission(mission-63 안드로이드 앱 출시) and @mission(mission-9)";
-    expect(missionMentions(text)).toEqual([
-      { token: "@mission(mission-63 안드로이드 앱 출시)", id: "mission-63", title: "안드로이드 앱 출시" },
-      { token: "@mission(mission-58 그랩마켓 실습 레포)", id: "mission-58", title: "그랩마켓 실습 레포" },
-    ]);
   });
 });
 

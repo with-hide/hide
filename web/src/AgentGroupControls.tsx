@@ -5,7 +5,7 @@ import type { AgentLayout } from "./agentLayout";
 import { EntryDropdown, type MenuEntry } from "./components/entry-menu";
 import { coreErrorText } from "./coreError";
 import { Button } from "./components/ui/button";
-import { GroupMark } from "./components/group-mark";
+import { GroupMark, groupSymbol } from "./components/group-mark";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Hint } from "./components/ui/tooltip";
 import { Input } from "./components/ui/input";
@@ -24,7 +24,7 @@ export function AgentGroupSelector({ layout, workspace, actions }: { layout: Age
   const groups = layout.groups ?? [];
   const selected = layout.group_id ?? null;
   const name = groups.find((group) => group.id === selected)?.name ?? t("groups.ungrouped");
-  const items: MenuEntry[] = groups.map((group) => ({ id: `select:${group.id ?? ""}`, label: group.name ?? t("groups.ungrouped"), unavailable: null }));
+  const items: MenuEntry[] = groups.map((group) => ({ id: `select:${group.id ?? ""}`, label: group.name ?? t("groups.ungrouped"), icon: groupSymbol(group), unavailable: null }));
   items.push({ id: "create", label: t("groups.create"), icon: "add", separated: true, unavailable: groups.filter((group) => group.id !== null).length >= 32 ? t("groups.limit") : null });
   if (selected !== null) items.push({ id: "rename", label: t("groups.rename"), icon: "rename", unavailable: null }, { id: "dissolve", label: t("groups.dissolve"), unavailable: null });
   if (layout.can_undo_group) items.push({ id: "undo", label: t("groups.undo"), unavailable: null, separated: true });

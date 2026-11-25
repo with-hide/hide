@@ -158,7 +158,7 @@ const chip = (session: DeskSessionRef): DeskSessionChip => ({ ...session, pane_i
 export function handoffItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 1, text: "@project(~/projects/herdr-ide herdr-ide) mention 버튼 정리하고 PR까지, 갤러리 캡처 라이트·다크 비교, release 노트 초안도 맡겨줘", at_ms: at(now, 15), mentions: [MENTIONS[2]!] },
-    { kind: "reply", mentions: [], agent: "claude", id: 2, text: "스레드 세 개를 띄울게요.\n\n띄웠어요. mention 버튼은 PR로 낼 일이라 새 worktree에서 해요.", at_ms: at(now, 15), state: "done", thought_ms: null, steps: NO_STEPS },
+    { kind: "reply", mentions: [], missions: [], agent: "claude", id: 2, text: "스레드 세 개를 띄울게요.\n\n띄웠어요. mention 버튼은 PR로 낼 일이라 새 worktree에서 해요.", at_ms: at(now, 15), state: "done", thought_ms: null, steps: NO_STEPS },
     { kind: "job", id: 3, job_id: "mention" },
     { kind: "job", id: 4, job_id: "gallery" },
     { kind: "job", id: 5, job_id: "release" },
@@ -173,14 +173,14 @@ export function statusItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 11, text: "지금 작업들 잘 되고 있어?", at_ms: at(now, 8), mentions: [] },
     {
-      kind: "reply", mentions: [chip(SESSIONS.recordNow), chip(SESSIONS.gallery)], agent: "claude", id: 12, at_ms: at(now, 8), state: "done", thought_ms: 5_000, steps: { ...NO_STEPS, sessions: 9 },
+      kind: "reply", missions: [], mentions: [chip(SESSIONS.recordNow), chip(SESSIONS.gallery)], agent: "claude", id: 12, at_ms: at(now, 8), state: "done", thought_ms: 5_000, steps: { ...NO_STEPS, sessions: 9 },
       text: "9개 중 **2개가 답을 기다리고**, 하나는 꼬일 수 있어요.\n\n- **꼬일 수 있어요** · @session(w1:record-now record-now)와 @session(w1:gallery 갤러리 캡처 비교)가 둘 다 `scripts/capture-gallery.mjs`를 고쳐요. 맞춰 줄까요?\n- **미션 판단** · Desk 1차가 1b를 공용 부품 머지 전에 시작할지 물어요.\n- **잘 돌고 있어요** · mention 버튼 정리(6/14), reel 자막 수정(mini) 외 4개. PR 1905는 초록이라 머지만 남았어요.",
     },
     { kind: "job", id: 13, job_id: "gallery" },
     { kind: "user", id: 14, text: "응 맞춰줘", at_ms: at(now, 4), mentions: [] },
     letter(15, SESSIONS.recordNow, "fyi", "다크 출력은 dark/로 맞춰요", true),
     letter(16, SESSIONS.gallery, "fyi", "record-now가 같은 파일을 고쳐요, 먼저 받아서 하세요", false),
-    { kind: "reply", mentions: [], agent: "claude", id: 17, text: "양쪽에 알렸어요. 갤러리 캡처 비교는 아직 질문에 답을 기다리고 있어요.", at_ms: at(now, 4), state: "done", thought_ms: null, steps: NO_STEPS },
+    { kind: "reply", mentions: [], missions: [], agent: "claude", id: 17, text: "양쪽에 알렸어요. 갤러리 캡처 비교는 아직 질문에 답을 기다리고 있어요.", at_ms: at(now, 4), state: "done", thought_ms: null, steps: NO_STEPS },
   ];
 }
 
@@ -188,10 +188,10 @@ export function statusItems(now: number): DeskItem[] {
 export function switchedItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 21, text: "오늘 끝난 거 정리해줘", at_ms: at(now, 30), mentions: [] },
-    { kind: "reply", mentions: [], agent: "claude", id: 22, text: "세 개 끝났어요: release 노트, 갤러리 비교, reel 자막. 갤러리 비교는 다크 캡처가 남았어요.", at_ms: at(now, 29), state: "done", thought_ms: null, steps: NO_STEPS },
+    { kind: "reply", mentions: [], missions: [], agent: "claude", id: 22, text: "세 개 끝났어요: release 노트, 갤러리 비교, reel 자막. 갤러리 비교는 다크 캡처가 남았어요.", at_ms: at(now, 29), state: "done", thought_ms: null, steps: NO_STEPS },
     { kind: "switch", id: 23, from: "claude", to: "codex", carried: "all" },
     { kind: "user", id: 24, text: "그럼 다크 캡처는 이어서 맡겨줘", at_ms: at(now, 20), mentions: [] },
-    { kind: "reply", mentions: [], agent: "codex", id: 25, text: "갤러리 비교 스레드에 다크 모드 캡처를 이어서 하라고 전했어요.", at_ms: at(now, 19), state: "done", thought_ms: null, steps: NO_STEPS },
+    { kind: "reply", mentions: [], missions: [], agent: "codex", id: 25, text: "갤러리 비교 스레드에 다크 모드 캡처를 이어서 하라고 전했어요.", at_ms: at(now, 19), state: "done", thought_ms: null, steps: NO_STEPS },
     { kind: "model", id: 26, model: "gpt-mini", effort: "medium" },
   ];
 }
@@ -208,7 +208,7 @@ export function mentionItems(now: number): DeskItem[] {
 export function missionItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 41, text: "Desk 1차를 미션으로 돌려줘", at_ms: at(now, 25), mentions: [] },
-    { kind: "reply", mentions: [], agent: "claude", id: 42, text: "Conductor 스레드를 띄워 미션으로 돌려요. 노드 여섯 개, PR 모드예요.", at_ms: at(now, 25), state: "done", thought_ms: null, steps: NO_STEPS },
+    { kind: "reply", mentions: [], missions: [], agent: "claude", id: 42, text: "Conductor 스레드를 띄워 미션으로 돌려요. 노드 여섯 개, PR 모드예요.", at_ms: at(now, 25), state: "done", thought_ms: null, steps: NO_STEPS },
     { kind: "job", id: 43, job_id: "conductor" },
   ];
 }
@@ -259,7 +259,7 @@ export function stateItems(now: number): DeskItem[] {
     { kind: "notice", id: 73, notice: "no_ask_mode", agent: "grok", detail: null },
     { kind: "notice", id: 74, notice: "turn_failed", agent: "claude", detail: null },
     { kind: "notice", id: 94, notice: "turn_failed", agent: "opencode", detail: "Rate limit reached for bai/deepseek-v4.1-flash" },
-    { kind: "reply", mentions: [], agent: "claude", id: 75, text: "정리하고 테스트를 다시 돌렸어요. 실패 하나는", at_ms: at(now, 1), state: "stopped", thought_ms: null, steps: NO_STEPS },
+    { kind: "reply", mentions: [], missions: [], agent: "claude", id: 75, text: "정리하고 테스트를 다시 돌렸어요. 실패 하나는", at_ms: at(now, 1), state: "stopped", thought_ms: null, steps: NO_STEPS },
     { kind: "user", id: 76, text: "지금 돌고 있는 일들 어디까지 왔어요?", at_ms: at(now, 0), mentions: [] },
   ];
 }
@@ -498,7 +498,7 @@ export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
   ].join("\n");
   const items: DeskItem[] = [
     { kind: "user", id: 1, text: "지금 돌고 있는 세션 프로젝트별로 정리해줘", at_ms: at(now, 1), mentions: [] },
-    { kind: "reply", agent: "claude", id: 2, text, at_ms: at(now, 1), state: "done", thought_ms: 6_000, steps: { ...NO_STEPS, sessions: every.length }, mentions: every.map((named) => ({ pane_id: pane(named.name), name: named.name, agent_kind: named.mark === null ? null : named.kind, mark: named.mark })) },
+    { kind: "reply", missions: [], agent: "claude", id: 2, text, at_ms: at(now, 1), state: "done", thought_ms: 6_000, steps: { ...NO_STEPS, sessions: every.length }, mentions: every.map((named) => ({ pane_id: pane(named.name), name: named.name, agent_kind: named.mark === null ? null : named.kind, mark: named.mark })) },
   ];
   return { items, facts, open: pane("agent-journey") };
 }

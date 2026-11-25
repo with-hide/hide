@@ -21,6 +21,15 @@ describe("named groups (group-tabs B4, B12, B20, B25)", () => {
     expect(groupNameProblem("renamed", full, "g0")).toBeNull();
   });
 
+  it("checks a name only against the groups of the same role, so Desk's reserved group and the operator's own never clash", () => {
+    const groups = [{ id: null, name: null, tabs: [] }, { id: "g1", name: "Desk", tabs: [], role: "desk" as const }, { id: "g2", name: "개편", tabs: [] }];
+    expect(groupNameProblem("Desk", groups, null)).toBeNull();
+    expect(groupNameProblem("Desk", groups, "g2")).toBeNull();
+    expect(groupNameProblem("개편", groups, "g1")).toBeNull();
+    const both = [...groups, { id: "g3", name: "Desk", tabs: [] }];
+    expect(groupNameProblem("Desk", both, "g2")).toBe("groups.duplicateName");
+  });
+
   it("keeps delegated descendants with their root and exposes empty groups, terminals and drafts", () => {
     const agent = (id: string) => legacyAgentRow({ id, pane_id: id, identity_label: id, agent_kind: "codex", device_id: "local" });
     const root = agent("root"), child = agent("child");

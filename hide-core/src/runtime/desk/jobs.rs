@@ -2437,6 +2437,7 @@ mod tests {
                 agent_kind: None,
                 mark: None,
             }],
+            missions: Vec::new(),
         });
         runtime.compose_desk();
         let chips = |runtime: &Runtime| {
@@ -2474,8 +2475,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = desk(root.path(), 2, &[]);
         runtime.start_test_desk();
+        // Each row named as the sidebar names it, not as the reply did.
         runtime.snapshot.navigator.agents = (1..=20)
-            .map(|n| row(&format!("p{n}"), if n == 7 { "blocked" } else { "working" }))
+            .map(|n| {
+                let mut row = row(&format!("p{n}"), if n == 7 { "blocked" } else { "working" });
+                row.identity_label = format!("task {n}");
+                row
+            })
             .collect();
         // Twenty listed sessions and one the sidebar no longer lists.
         let text: String = (1..=21)
@@ -2500,6 +2506,7 @@ mod tests {
             thought_ms: None,
             steps: Default::default(),
             mentions,
+            missions: Vec::new(),
         });
         runtime.compose_desk_jobs();
 
@@ -2511,6 +2518,13 @@ mod tests {
             .collect();
         let listed: Vec<String> = (1..=20).map(|n| format!("p{n}")).collect();
         assert_eq!(panes, listed);
+        let titles: Vec<&str> = section
+            .named
+            .iter()
+            .map(|card| card.title.as_str())
+            .collect();
+        let named: Vec<String> = (1..=20).map(|n| format!("task {n}")).collect();
+        assert_eq!(titles, named);
         let asking = section
             .named
             .iter()

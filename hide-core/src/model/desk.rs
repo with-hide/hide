@@ -504,6 +504,10 @@ pub enum DeskItem {
         /// chip.
         #[serde(default)]
         mentions: Vec<DeskSessionChip>,
+        /// The missions the reply names as `@mission(<id> <title>)`, each
+        /// the app's mission chip.
+        #[serde(default)]
+        missions: Vec<DeskMissionMention>,
     },
     /// The operator switched agents; `carried` says how much of the
     /// conversation went with the switch.
@@ -690,6 +694,14 @@ pub struct DeskSessionChip {
     pub agent_kind: Option<String>,
     #[serde(default, skip_deserializing)]
     pub mark: Option<crate::agent_state::RowMark>,
+}
+
+/// A mission a reply names: its id, and the title the reply wrote, shown
+/// while the app holds no mission of that id.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeskMissionMention {
+    pub id: String,
+    pub title: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -1172,6 +1172,10 @@ impl Runtime {
                     mark: None,
                 })
                 .collect();
+            let missions = hide_desk::mission_mentions(&turn.text)
+                .into_iter()
+                .map(|(id, title)| crate::model::DeskMissionMention { id, title })
+                .collect();
             self.desk.stored.conversation.push(DeskItem::Reply {
                 id,
                 agent: turn.agent,
@@ -1187,6 +1191,7 @@ impl Runtime {
                     .map(|at| at.saturating_sub(turn.started_at_ms)),
                 steps: turn.steps,
                 mentions,
+                missions,
             });
             // The sessions it names get their cards (D-86).
             self.compose_desk_jobs();
@@ -1349,7 +1354,6 @@ impl Runtime {
                 };
                 turn.first_text_at_ms
                     .get_or_insert_with(crate::links::now_ms);
-                turn.now = None;
                 if turn.cut {
                     return false;
                 }
@@ -1371,7 +1375,7 @@ impl Runtime {
                 let Some(turn) = self.desk.turn.as_mut().filter(|turn| turn.tag == tag) else {
                     return false;
                 };
-                let now = Some(step.into());
+                let now = step.map(Into::into);
                 if turn.now == now {
                     return false;
                 }
@@ -2328,29 +2332,34 @@ mod tests {
         assert_eq!(live.text.as_deref(), Some("two sessions"));
         assert!(live.started_at_ms.is_some());
         assert_eq!(live.step, None);
-        // The step a running call does shows until the agent writes again.
+        // The step the worker tells shows until it tells another or none.
         let step = |runtime: &Runtime| runtime.snapshot.desk_live.as_ref().unwrap().step;
+        let files = Some(hide_desk::permission::Step::Files);
         assert!(runtime.desk_report(Report::Step {
             tag: send.tag,
-            step: hide_desk::permission::Step::Files,
+            step: files,
         }));
         assert_eq!(step(&runtime), Some(crate::model::DeskStepKind::Files));
         assert!(!runtime.desk_report(Report::Step {
             tag: send.tag,
-            step: hide_desk::permission::Step::Files,
+            step: files,
         }));
         assert!(!runtime.desk_report(Report::Step {
             tag: send.tag + 1,
-            step: hide_desk::permission::Step::Letter,
+            step: Some(hide_desk::permission::Step::Letter),
         }));
+        assert!(runtime.desk_report(Report::Step {
+            tag: send.tag,
+            step: None,
+        }));
+        assert_eq!(step(&runtime), None);
         runtime.desk_report(Report::Text {
             tag: send.tag,
-            text: ".".into(),
+            text: " in @mission(mission-63 결제 흐름 정리 (11-25)).".into(),
         });
-        assert_eq!(step(&runtime), None);
         runtime.desk_report(Report::Step {
             tag: send.tag,
-            step: hide_desk::permission::Step::Letter,
+            step: Some(hide_desk::permission::Step::Letter),
         });
         assert_eq!(step(&runtime), Some(crate::model::DeskStepKind::Letters));
         runtime.desk_report(Report::Steps {
@@ -2373,12 +2382,23 @@ mod tests {
             state: DeskReplyState::Done,
             thought_ms,
             steps,
+            missions,
             ..
         }) = desk.conversation.items.last()
         else {
             panic!("no reply");
         };
-        assert_eq!(text, "two sessions.");
+        assert_eq!(
+            text,
+            "two sessions in @mission(mission-63 결제 흐름 정리 (11-25))."
+        );
+        assert_eq!(
+            missions,
+            &[crate::model::DeskMissionMention {
+                id: "mission-63".into(),
+                title: "결제 흐름 정리 (11-25)".into(),
+            }]
+        );
         assert!(thought_ms.is_some());
         assert_eq!((steps.sessions, steps.letters), (2, 1));
         let live = runtime.snapshot.desk_live.as_ref().unwrap();

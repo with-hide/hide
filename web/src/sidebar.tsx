@@ -72,7 +72,7 @@ import { PracticeInvite } from "./components/practice-invite";
 import { HerdrImportLine } from "./HerdrImport";
 import { SidebarMenus } from "./components/sidebar-menus";
 import { useShellStore } from "./store";
-import { deskReturn, deskReturnWords, leaveDesk } from "./keyboard";
+import { deskReturn, deskReturnWords, pressDeskRow } from "./keyboard";
 import { GroupMark } from "./components/group-mark";
 import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
 import { useUiStore } from "./ui";
@@ -181,7 +181,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
               // In front, the row says where leaving goes and the chord that also leaves.
               chord: deskSelected ? commandLabel("recent_area_tab") || null : null,
               leaveTo: deskSelected ? deskReturnWords(deskReturn(useShellStore.getState().rest)) : null,
-              onOpen: () => (deskSelected ? leaveDesk(actions) : actions.openDesk()),
+              onOpen: () => pressDeskRow(actions),
             } : undefined}
             missions={{ selected: missionsSelected, chord: missionsChord || null, onOpen: () => actions.openMissions() }}
             automations={{ selected: automationsSelected, count: automationsCount, onOpen: () => actions.openAutomations() }}

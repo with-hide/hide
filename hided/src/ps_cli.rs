@@ -581,6 +581,22 @@ mod tests {
         );
     }
 
+    /// Desk's instructions ask its agent to name a mission by the id `hide ps`
+    /// prints after `mission`, so the text keeps that shape.
+    #[test]
+    fn an_agent_in_a_mission_prints_the_mission_s_id_title_and_its_role() {
+        let mut value = fixture();
+        value["panes"][0]["agent"]["mission"] =
+            json!({"id": "mission-63", "title": "결제 흐름 정리 (11-25)", "role": "conductor"});
+        let text = draw(&read(&value).unwrap());
+        assert!(
+            text.contains(
+                "w1:p1  lead [agent-1]  claude  going  \"lead task\"  mission mission-63 \"결제 흐름 정리 (11-25)\" conductor\n"
+            ),
+            "{text}"
+        );
+    }
+
     #[test]
     fn agents_without_a_pane_and_ended_ones_print_in_their_own_sections() {
         let mut value = json!({"panes": [], "missions_unreadable": true, "agents": [

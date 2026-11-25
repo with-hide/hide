@@ -8,9 +8,9 @@
 // The fields no section carries (marked `wire gap` below) are a thread's
 // own, which the threads node reads from the session record.
 
-import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskPermissionRow, DeskPermissions, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
+import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskMissionMention, DeskNotice, DeskOutput, DeskOutputKind, DeskPermissionRow, DeskPermissions, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
 
-export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskApprovalState, DeskChoice, DeskIrreversible, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskPermissionAnswer, DeskQueuedMessage, DeskPermissionRow, DeskPermissions, DeskSteps } from "./snapshot";
+export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskApprovalState, DeskChoice, DeskIrreversible, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskMissionMention, DeskOutput, DeskOutputKind, DeskPermissionAnswer, DeskQueuedMessage, DeskPermissionRow, DeskPermissions, DeskSteps } from "./snapshot";
 
 export type DeskSelection = DeskSection["selection"];
 
@@ -385,7 +385,6 @@ export function mentionParts(text: string, mentions: readonly DeskMention[], tok
  */
 export type WorkingPhase = "thinking" | "answering" | "editing" | DeskStepKind;
 
-/** Desk's turn as the working line says it: the step its newest call does, else answering once it has written, else thinking. */
 /**
  * Whether Desk's conversation keeps its foot in view after a scroll from `before` to `now` (scrollTop): reaching
  * the foot holds it, and only a move up away from it lets go. A scroll the browser makes itself while the
@@ -397,6 +396,7 @@ export function holdsFoot(held: boolean, before: number, now: number, distance: 
   return now < before ? false : held;
 }
 
+/** Desk's turn as the working line says it: the step its newest call does, else answering once it has written, else thinking. */
 export function deskPhase(step: DeskStepKind | null | undefined, text: string | null): WorkingPhase {
   return step ?? (text ? "answering" : "thinking");
 }
@@ -426,18 +426,8 @@ export function threadPhase(turn: ThreadTurn | undefined): WorkingPhase {
   return "thinking";
 }
 
-/** A mission a Desk answer names as `@mission(<id> <title>)`: its token in the text, its id and the title the answer wrote. */
-export type DeskMissionMention = { token: string; id: string; title: string };
-
-/** The missions an answer names, each token once, in order; a token with no title is no mention and stays text. */
-export function missionMentions(text: string): DeskMissionMention[] {
-  const found: DeskMissionMention[] = [];
-  for (const match of text.matchAll(/@mission\((\S+)\s+([^)]+?)\s*\)/g)) {
-    const token = match[0];
-    if (!found.some((one) => one.token === token)) found.push({ token, id: match[1]!, title: match[2]! });
-  }
-  return found;
-}
+/** A mission mention as a Desk answer's text holds it. */
+export const markedMission = (mission: DeskMissionMention) => `@mission(${mission.id} ${mission.title})`;
 
 /** A mention as a Desk message's text holds it. */
 export const markedMention = (mention: DeskMention) => `@${mention.kind}(${mention.id} ${mention.name})`;

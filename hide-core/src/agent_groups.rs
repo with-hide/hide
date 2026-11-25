@@ -666,6 +666,32 @@ mod tests {
     }
 
     #[test]
+    fn a_second_saved_group_of_desk_s_role_becomes_the_operator_s_own() {
+        let mut view = WorkspaceView::new("local", "/desk-checkout");
+        let desk = view.ensure_reserved_agent_group(GroupRole::Desk).unwrap();
+        let other = view.create_agent_group("내 Desk").unwrap();
+        let mut saved = serde_json::to_value(&view.agent_groups).unwrap();
+        saved["items"][1]["role"] = saved["items"][0]["role"].clone();
+        view.agent_groups = serde_json::from_value(saved).unwrap();
+        let notes = view.repair_agent_groups();
+        assert_eq!(
+            notes,
+            ["a second reserved Agent group became an ordinary one"]
+        );
+        assert_eq!(
+            view.agent_groups
+                .items
+                .iter()
+                .map(|g| (g.id.as_str(), g.role))
+                .collect::<Vec<_>>(),
+            [
+                (desk.as_str(), Some(GroupRole::Desk)),
+                (other.as_str(), None)
+            ]
+        );
+    }
+
+    #[test]
     fn delegated_arrivals_leave_selected_empty_groups_and_drafts_alone() {
         for draft in [false, true] {
             let mut view = WorkspaceView::new("local", "/empty-checkout");

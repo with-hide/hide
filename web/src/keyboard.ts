@@ -161,6 +161,13 @@ export function leaveDesk(actions: Actions): void {
   if (!before || !goToItem(before, actions)) useUiStore.getState().setScreen({ kind: "main" });
 }
 
+/** The sidebar's Desk row: pressed while Desk is in front it leaves Desk, otherwise it opens Desk. */
+export function pressDeskRow(actions: Actions): void {
+  const ui = useUiStore.getState();
+  if (!ui.overviewOpen && ui.screen?.kind === "desk") leaveDesk(actions);
+  else actions.openDesk();
+}
+
 function goToItem(chosen: CycleItem, actions: Actions): boolean {
   const target = chosen.target;
   switch (target.kind) {

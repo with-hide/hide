@@ -74,3 +74,13 @@ it("shows a session's card with its place, line, plan, pull request, outputs and
   await act(async () => host.querySelector<HTMLElement>('[data-desk-session-card-parent] [data-desk-session-chip]')!.click());
   expect(opened).toEqual(["thread", "agent-14586"]);
 });
+
+it("draws each mission the reply item carries in place of its token, a title with parentheses whole, and leaves the text of one it does not carry", async () => {
+  const missions = [{ id: "mission-63", title: "결제 흐름 정리 (11-25)" }];
+  const text = "@mission(mission-63 결제 흐름 정리 (11-25)) runs; @mission(mission-9 not read) waits.";
+  const host = await render(<DeskReply text={text} missions={missions} />);
+  const drawn = [...host.querySelectorAll("[data-desk-mission-mention]")];
+  expect(drawn.map((one) => [one.getAttribute("data-desk-mission-mention"), one.textContent])).toEqual([["mission-63", "결제 흐름 정리 (11-25)"]]);
+  expect(host.textContent).not.toContain("@mission(mission-63");
+  expect(host.textContent).toContain("@mission(mission-9 not read)");
+});

@@ -112,10 +112,12 @@ pub(super) enum Report {
         text: String,
     },
     /// What the turn's newest tool call does, sent each time that moves, so
-    /// the line under the reply says it while the turn runs.
+    /// the line under the reply says it while the turn runs; none once the
+    /// agent writes again. The worker alone decides it (`Running::note_step`,
+    /// `Running::wrote`); the runtime shows what it is told.
     Step {
         tag: u64,
-        step: hide_desk::permission::Step,
+        step: Option<hide_desk::permission::Step>,
     },
     /// What the turn's tool calls did, sent just before it ends.
     Steps {
@@ -291,8 +293,19 @@ struct Running {
     /// The work placement this session was last told; none for a session
     /// resumed from an earlier run.
     placement: Option<hide_desk::Placement>,
-    /// The turn and step last sent as `Report::Step`.
-    told: Option<(u64, hide_desk::permission::Step)>,
+    /// The running turn's newest call, by id, and the step last sent for
+    /// it as `Report::Step`: an update of an older call never moves it, and
+    /// the agent writing forgets it, so the next call is told even when it
+    /// does the same kind of thing.
+    now: Option<Now>,
+}
+
+/// The call the line under Desk's reply speaks of, and what it was told.
+#[derive(Debug, PartialEq)]
+struct Now {
+    tag: u64,
+    id: String,
+    step: hide_desk::permission::Step,
 }
 
 impl Worker {
@@ -654,7 +667,7 @@ impl Worker {
                 announced_order: Vec::new(),
                 turn: session::TurnReader::new(opened.prelude, adapter.failed_turn_mark()),
                 placement: None,
-                told: None,
+                now: None,
             },
             opened.resume_failed,
             choices,
@@ -732,7 +745,10 @@ impl Worker {
                 match update {
                     Update::Tool { id, call } => {
                         if let Some((tag, step)) = running.note_step(&id, call) {
-                            self.report(Report::Step { tag, step });
+                            self.report(Report::Step {
+                                tag,
+                                step: Some(step),
+                            });
                         }
                     }
                     Update::Choices(choices) => self.report(Report::Choices { adapter, choices }),
@@ -740,6 +756,9 @@ impl Worker {
                     Update::Text { .. } | Update::Break | Update::Info(_) | Update::Other => {}
                 }
                 if let Some((tag, text)) = text {
+                    if running.wrote(tag) {
+                        self.report(Report::Step { tag, step: None });
+                    }
                     self.report(Report::Text { tag, text });
                 }
             }
@@ -1007,20 +1026,40 @@ impl Worker {
 
 impl Running {
     /// Keeps the call `id` the session announced or moved and answers the
-    /// running turn's step when the call is that turn's and its step is not
-    /// the one last told, so a call's many updates tell it once.
+    /// running turn's step when it moved: an id seen for the first time
+    /// becomes the turn's newest call, whatever update kind carried it, and an update moves the step only for that newest call
+    /// (its kind or input may arrive late), never for an older one ending.
     fn note_step(&mut self, id: &str, call: Value) -> Option<(u64, hide_desk::permission::Step)> {
+        let first = !self.announced.contains_key(id);
         self.remember(id.to_owned(), call);
         let tag = self.turn.running()?;
         if !self.turn.made(id) {
             return None;
         }
-        let step = hide_desk::permission::step(self.announced.get(id)?);
-        if self.told == Some((tag, step)) {
+        let newest = self
+            .now
+            .as_ref()
+            .is_some_and(|now| now.tag == tag && now.id == id);
+        if !first && !newest {
             return None;
         }
-        self.told = Some((tag, step));
-        Some((tag, step))
+        let step = hide_desk::permission::step(self.announced.get(id)?);
+        let told = self
+            .now
+            .as_ref()
+            .is_some_and(|now| now.tag == tag && now.step == step);
+        self.now = Some(Now {
+            tag,
+            id: id.to_owned(),
+            step,
+        });
+        (!told).then_some((tag, step))
+    }
+
+    /// The agent wrote in turn `tag`: the call it spoke of is behind it, so
+    /// answers whether a step was showing and is now cleared.
+    fn wrote(&mut self, tag: u64) -> bool {
+        self.now.take_if(|now| now.tag == tag).is_some()
     }
 
     fn remember(&mut self, id: String, call: Value) {
@@ -1230,7 +1269,7 @@ mod tests {
                 announced_order: Vec::new(),
                 turn,
                 placement: None,
-                told: None,
+                now: None,
             }),
             installing: Vec::new(),
         }
@@ -1403,6 +1442,109 @@ mod tests {
         assert!(items.iter().any(|item| matches!(item,
             DeskItem::Notice { notice: DeskNotice::TurnFailed, detail: Some(detail), .. }
                 if detail == "exceeded retry limit, last status: 429 Too Many Requests")));
+        worker.end_process(false);
+    }
+
+    /// The line under Desk's reply says what the turn's newest call does:
+    /// a call after the agent wrote is told even when it is the same kind
+    /// as the one before, and an older call ending never brings its step
+    /// back (review letter-48069).
+    #[test]
+    fn the_working_step_follows_the_newest_call_and_starts_over_after_text() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _received, tag) = a_turn_and_one_waiting(root.path(), AdapterId::CLAUDE);
+        let mut worker = worker_running(&runtime, root.path(), AdapterId::CLAUDE, tag);
+        let update = |update: Value| Incoming::Notification {
+            method: "session/update".into(),
+            params: json!({"sessionId": "s1", "update": update}),
+        };
+        let call = |id: &str, kind: &str, input: Value| {
+            update(
+                json!({"sessionUpdate": "tool_call", "toolCallId": id, "kind": kind,
+                "status": "in_progress", "rawInput": input}),
+            )
+        };
+        let done = |id: &str| {
+            update(
+                json!({"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed"}),
+            )
+        };
+        let step = |runtime: &Arc<Mutex<Runtime>>| {
+            runtime
+                .lock()
+                .unwrap()
+                .snapshot
+                .desk_live
+                .as_ref()
+                .and_then(|live| live.step)
+        };
+        use crate::model::DeskStepKind;
+
+        worker.incoming(100, call("a", "execute", json!({"command": "hide ps"})));
+        assert_eq!(step(&runtime), Some(DeskStepKind::Sessions));
+        worker.incoming(
+            101,
+            update(json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Looking. "}})),
+        );
+        assert_eq!(step(&runtime), None);
+        worker.incoming(
+            102,
+            call(
+                "b",
+                "execute",
+                json!({"command": "hide agent show agent-1"}),
+            ),
+        );
+        assert_eq!(step(&runtime), Some(DeskStepKind::Sessions));
+
+        worker.incoming(103, call("c", "read", json!({"path": "/tmp/notes.md"})));
+        assert_eq!(step(&runtime), Some(DeskStepKind::Files));
+        worker.incoming(104, call("d", "execute", json!({"command": "hide ps"})));
+        assert_eq!(step(&runtime), Some(DeskStepKind::Sessions));
+        worker.incoming(105, done("c"));
+        assert_eq!(step(&runtime), Some(DeskStepKind::Sessions));
+        worker.incoming(
+            106,
+            update(json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Two."}})),
+        );
+        worker.incoming(107, done("d"));
+        assert_eq!(step(&runtime), None);
+        worker.end_process(false);
+    }
+
+    /// A turn that ended on a file read does not hide the next turn's first
+    /// file read: what was told belongs to its turn (review letter-48079).
+    #[test]
+    fn the_next_turn_tells_its_first_step_even_when_the_last_turn_ended_on_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _received, tag) = a_turn_and_one_waiting(root.path(), AdapterId::CLAUDE);
+        let mut worker = worker_running(&runtime, root.path(), AdapterId::CLAUDE, tag);
+        let read = |id: &str| {
+            session::read_update(
+                &json!({"sessionId": "s1", "update": {"sessionUpdate": "tool_call",
+                "toolCallId": id, "kind": "read", "status": "in_progress",
+                "rawInput": {"path": "/tmp/notes.md"}}}),
+            )
+        };
+        let running = worker.running.as_mut().unwrap();
+        let mut note = |running: &mut Running, number: u64, id: &str| {
+            let update = read(id);
+            running.turn.read(number, &update);
+            let Update::Tool { id, call } = update else {
+                panic!("a tool call reads as one");
+            };
+            running.note_step(&id, call)
+        };
+        assert_eq!(
+            note(running, 100, "a"),
+            Some((tag, permission::Step::Files))
+        );
+        running.turn.end(tag);
+        running.turn.start(tag + 1, 200);
+        assert_eq!(
+            note(running, 201, "b"),
+            Some((tag + 1, permission::Step::Files))
+        );
         worker.end_process(false);
     }
 

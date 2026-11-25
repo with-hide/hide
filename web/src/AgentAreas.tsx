@@ -27,6 +27,7 @@ import { useKeyboardOwner } from "./viewFocus";
 import { numberOf, numberedTabs } from "./numbering";
 import { useUiStore } from "./ui";
 import { useInterfaceTranslation } from "./i18n/client";
+import { groupSymbol } from "./components/group-mark";
 
 const SharedAgentTree = createAreaTree<AgentItem>("agent");
 /** `remoteBody` draws a device tab's panes: the tab an area shows, or `null` for the one its engine has in front. */
@@ -106,7 +107,7 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
     menu: (id, geometry, sizes) => {
       const items: MenuEntry[] = agentMenu({ workspace, remote: single, layout, geometry, sizes }, id).filter((item) => !isDraft(id) || (item.id !== "rename_tab" && item.id !== "copy_name"));
       if (layout.groups) {
-        items.splice(1, 0, { id: "group:new", label: t("groups.newWithTab"), unavailable: null }, { id: "group:move", label: t("groups.move"), unavailable: null, choices: layout.groups.map((group) => ({ id: `group:to:${group.id ?? ""}`, label: group.name ?? t("groups.ungrouped"), checked: group.id === (layout.group_id ?? null) })) });
+        items.splice(1, 0, { id: "group:new", label: t("groups.newWithTab"), unavailable: null }, { id: "group:move", label: t("groups.move"), unavailable: null, choices: layout.groups.map((group) => ({ id: `group:to:${group.id ?? ""}`, label: group.name ?? t("groups.ungrouped"), icon: groupSymbol(group), checked: group.id === (layout.group_id ?? null) })) });
         if (layout.group_id) items.splice(3, 0, { id: "group:remove", label: t("groups.remove"), unavailable: null });
       }
       if (movingTab(operations, id)) for (const item of items) if (item.id !== "copy_name") item.unavailable = t("menus.paneMove.busy");
