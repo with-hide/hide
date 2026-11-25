@@ -3838,6 +3838,7 @@ mod tests {
     fn listed_automations(running: bool) -> PhoneAutomations {
         PhoneAutomations {
             asks: Vec::new(),
+            looks: Vec::new(),
             unreadable: false,
             items: vec![hide_core::agent_state::phone::PhoneAutomation {
                 id: "auto-1".into(),
@@ -3847,6 +3848,8 @@ mod tests {
                 next_run_at_unix_ms: Some(1),
                 paused: None,
                 running,
+                done: false,
+                look_run: None,
                 unseen: 0,
                 recent_spend: None,
                 records: Vec::new(),

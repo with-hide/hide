@@ -1,6 +1,7 @@
 # hide automation
 An automation hands one agent the same task on a schedule, such as tidying new issues every weekday morning: at each time Hide starts a fresh conversation in the automation's folder, and the operator sees its runs under 자동화 below the missions in the sidebar.
 When the operator asks for a task to run again at set times with no one present ("매일 아침 9시에 이슈 정리해줘", "every Monday check the stale PRs"), make it with `hide automation add`, not a cron job, an OS scheduler or a script of your own.
+A task for one later time with no one present ("N일 뒤에 점검해줘", "1주일 뒤에 이 내용으로 확인해줘", "check this again next Tuesday") is a once automation: `--schedule "once in 7d 09:00"` or `--schedule "once 2026-12-02 09:00"`.
 A wait or a check inside this conversation (watch CI every ten minutes until it ends, poll a deploy) is not an automation: keep doing it yourself as now.
 
 ```
@@ -20,7 +21,11 @@ hide automation remove <id|name>
   - `every 15m`: every 5, 10, 15 or 30 minutes, counted from each hour's start (:00, :15, :30 and :45 here).
   - `every 3h 09:00`: every 1 to 12 hours, counted from that time (00:00, 03:00, ..., 21:00 here).
   - `cron 0 9 * * 1-5`: a five-field cron line, minute hour day month weekday.
-- An automation runs at most every five minutes: a cron line whose times come closer than that is refused (`*/5 * * * *` runs; `*/4 * * * *` does not).
+  - `once 2026-12-02 09:00`: one time, on that date at that time, then never again.
+  - `once in 7d 09:00`: one time, 7 days from today at 09:00 (`once in 0d 18:00` is today); `once in 3h`, `once in 30m` and `once in 2d` are now plus that, to the minute.
+- A once time named from now is turned into its date and time when the automation is made or edited, so the answer's `reads_as_text` says the date itself (`once on Wed 2026-12-02 at 09:00`); for a weekday such as next Tuesday, give that date.
+  A once time already past is refused (`schedule_once_past`), and so is one more than 366 days ahead (`schedule_once_too_far`).
+- An automation runs at most every five minutes: a cron line whose times come closer than that is refused (`*/5 * * * *` runs; `*/4 * * * *` does not). A once time has no such limit.
   When the operator wants an unattended repeat more often than that, tell them the shortest period is five minutes and offer `every 5m`.
   A run still going when the next time comes keeps going, and that time is skipped.
 - `hide automation preview --schedule <when>` answers what a schedule reads as and when it runs next, without making anything.
@@ -35,7 +40,8 @@ hide automation remove <id|name>
 
 ## The answer
 Each command prints one line, `{"ok":true,"value":…}` or `{"ok":false,"error":{"code","message"}}`.
-- `add`, `edit`, `show`, `run`, `pause` and `resume` answer the automation: its `id`, `reads_as_text` (`weekdays at 09:00`), `next_run_at` on the machine's wall clock with its `zone`, `paused`, `running`, `folder`, `agent` and its `records` newest first.
+- `add`, `edit`, `show`, `run`, `pause` and `resume` answer the automation: its `id`, `reads_as_text` (`weekdays at 09:00`), `next_run_at` on the machine's wall clock with its `zone`, `paused`, `running`, `done`, `folder`, `agent` and its `records` newest first.
+- A once automation is `done: true` once its run for that time ended, whatever the result: it never runs again on schedule, `next_run_at` is null, and its records stay. Its run waits in the operator's 내 차례 until they open it there (`look_run` names that run).
   Tell the operator in one line what you made and when it runs next, in their language, such as `평일 09:00마다 돌아요 · 다음: 11-20(목) 09:00`.
 - `list` answers each automation with its newest record as `last_record`; `remove` answers which one went and how many records with it.
 - An automation stopped for something a person fixes (`paused.reason` other than `operator`: a sign-in that ended, a folder that is gone, an agent not set up) carries `fix`, one sentence of what to do; tell the operator that, then `resume` it once they have.
@@ -46,5 +52,7 @@ Each command prints one line, `{"ok":true,"value":…}` or `{"ok":false,"error":
 - Name an automation by its id or its exact name; `list` shows both.
 - `edit` changes only what it names, from the next run on: a run going keeps what it started with. `--own-folder` moves it back to its own folder.
 - `pause` stops the next times and lets a run going finish; `resume` turns it on again from its next time and clears its line in the operator's 내 차례.
-- `run` starts a manual run now, refused while one goes (`automation_running`).
+  A once automation paused past its time runs once as soon as it is resumed; one whose time came cannot be paused (`automation_done`).
+- `run` starts a manual run now, refused while one goes (`automation_running`); on a done once automation it runs once more and it stays done.
+- `edit --schedule` with a new once time or a repeating schedule sets a done once automation going again from that time.
 - `remove` only when the operator asked for it: it ends a run going, closes its terminals and forgets its records; its folder and the files in it stay.

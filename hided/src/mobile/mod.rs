@@ -2851,7 +2851,7 @@ impl Mobile {
         // The core's automations section as last sent and its asks as last
         // read from `rest`: the list is projected again only when either moves.
         let mut automations: Option<Arc<hide_core::automations::AutomationsSnapshot>> = None;
-        let mut asks: Vec<String> = Vec::new();
+        let mut asks: (Vec<String>, Vec<String>) = Default::default();
         // Whatever ends the follower, no waiting notice it handed out is sent or held after it.
         let _withdraw = WithdrawOnExit(Arc::clone(&self));
         loop {
@@ -2862,7 +2862,7 @@ impl Mobile {
                 cursor = 0;
                 rest = Value::Null;
                 automations = None;
-                asks.clear();
+                asks = Default::default();
                 self.withdraw_waiting();
                 self.catalog
                     .send_replace(Arc::new(start::Catalog::default()));

@@ -10,7 +10,7 @@
 //! tell the operator to do. The window's form opens the same calls by its own
 //! events; nothing here is the form's.
 
-use hide_core::automations::{Call, Clock, PauseReason, Schedule, Weekday};
+use hide_core::automations::{Asked, Call, Clock, Day, FromNow, PauseReason, Schedule, Weekday};
 use serde_json::{Value, json};
 
 use crate::env::Env;
@@ -21,7 +21,7 @@ pub const HELP: &str = include_str!("../assets/automation/help.md");
 pub const USAGE: &str = "hide automation help\nhide automation add --name <name> --task <text> --schedule <when> --kind <kind> [--profile <name>] [--model <model>] [--effort <effort>] [--folder <path> [--worktree]] [--run-now]\nhide automation list\nhide automation show <id|name>\nhide automation run <id|name>\nhide automation pause <id|name>\nhide automation resume <id|name>\nhide automation edit <id|name> [--name <name>] [--task <text>] [--schedule <when>] [--kind <kind> [--profile <name>] [--model <model>] [--effort <effort>]] [--folder <path> | --own-folder] [--worktree | --no-worktree]\nhide automation remove <id|name>\nhide automation preview --schedule <when>";
 
 /// The forms `--schedule` takes, as a refusal and the guide name them.
-const SCHEDULE_FORMS: &str = "Give --schedule as one of: \"daily 09:00\", \"weekdays 09:00\", \"weekly mon,thu 09:00\", \"every 15m\" (every 5, 10, 15 or 30 minutes from the hour), \"every 3h 09:00\" (every 1 to 12 hours from that time) or \"cron <minute> <hour> <day> <month> <weekday>\", such as \"cron 0 9 * * 1-5\"; times are HH:MM on a 24-hour clock in the zone of the machine that runs Hide";
+const SCHEDULE_FORMS: &str = "Give --schedule as one of: \"daily 09:00\", \"weekdays 09:00\", \"weekly mon,thu 09:00\", \"every 15m\" (every 5, 10, 15 or 30 minutes from the hour), \"every 3h 09:00\" (every 1 to 12 hours from that time), \"cron <minute> <hour> <day> <month> <weekday>\", such as \"cron 0 9 * * 1-5\", or one time: \"once 2026-12-02 09:00\", \"once in 7d 09:00\" (7 days from today at 09:00), \"once in 3h\" or \"once in 30m\" (from now); times are HH:MM on a 24-hour clock in the zone of the machine that runs Hide";
 
 /// The flags each verb reads, valued and switches: the contract's table
 /// names the same (`cli_contract`, held by its test).
@@ -317,12 +317,58 @@ pub fn parse(args: &[String]) -> Result<AutomationCli, String> {
 
 /// Reads a `--schedule` value into the core's schedule (B6). The words are
 /// read here; whether the schedule may run (five minutes apart at least, a
-/// cron line that names a real time, a period the form offers) is the
-/// core's check, the one the form makes too.
-pub fn read_schedule(text: &str) -> Result<Schedule, &'static str> {
+/// cron line that names a real time, a period the form offers, one time not
+/// past) is the core's check, the one the form makes too. One time named
+/// from now goes to the core as that, which reads it against its own clock
+/// and zone (mission-104 O-1).
+pub fn read_schedule(text: &str) -> Result<Asked, &'static str> {
     let text = text.trim();
     let (form, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
-    let rest = rest.trim();
+    if form.eq_ignore_ascii_case("once") {
+        return read_once(rest.trim());
+    }
+    read_repeating(form, rest.trim()).map(Asked::Schedule)
+}
+
+/// `2026-12-02 09:00`, `in 7d 09:00`, `in 7d`, `in 3h` or `in 30m`.
+fn read_once(rest: &str) -> Result<Asked, &'static str> {
+    const UNREADABLE: &str = "schedule_unreadable";
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    match words.as_slice() {
+        [date, time] if !date.eq_ignore_ascii_case("in") => Ok(Asked::Schedule(Schedule::Once {
+            date: Day::parse(date)?,
+            time: Clock::parse(time)?,
+        })),
+        ["in", count] | ["in", count, _] => {
+            let lower = count.to_ascii_lowercase();
+            let (digits, unit) = lower.split_at(lower.len().saturating_sub(1));
+            if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(UNREADABLE);
+            }
+            // A count too large to hold is past the horizon however it reads.
+            let count: u32 = digits.parse().map_err(|_| "schedule_once_too_far")?;
+            let minutes = |per: u32| {
+                count
+                    .checked_mul(per)
+                    .map(|minutes| Asked::FromNow(FromNow::OnceInMinutes { minutes }))
+                    .ok_or("schedule_once_too_far")
+            };
+            match (unit, words.get(2)) {
+                ("d", Some(time)) => Ok(Asked::FromNow(FromNow::OnceInDays {
+                    days: count,
+                    time: Clock::parse(time)?,
+                })),
+                ("d", None) => minutes(24 * 60),
+                ("h", None) => minutes(60),
+                ("m", None) => minutes(1),
+                _ => Err(UNREADABLE),
+            }
+        }
+        _ => Err(UNREADABLE),
+    }
+}
+
+fn read_repeating(form: &str, rest: &str) -> Result<Schedule, &'static str> {
     let time = |word: &str| Clock::parse(word);
     match form.to_ascii_lowercase().as_str() {
         "cron" if !rest.is_empty() => Ok(Schedule::Cron {
@@ -402,6 +448,18 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "schedule_hours_out_of_range" => {
             "Every N hours takes 1 to 12 hours, such as \"every 3h 09:00\"; for once a day use \"daily 09:00\""
+        }
+        "schedule_date_invalid" => {
+            "Give the date as YYYY-MM-DD and a day that exists, such as \"once 2026-12-02 09:00\""
+        }
+        "schedule_once_past" => {
+            "That time has already passed on the machine that runs Hide; give a later one, such as \"once in 1h\" or \"once in 1d 09:00\""
+        }
+        "schedule_once_too_far" => {
+            "One time can be at most 366 days ahead; give an earlier time, or a repeating schedule"
+        }
+        "automation_done" => {
+            "It already ran its one time (or its run for it goes now), so there is nothing to pause; give it a new time with hide automation edit <id> --schedule \"once ...\", or remove it"
         }
         "automation_unknown" => {
             "No automation has that id or name; run hide automation list and name one by its id or exact name"
@@ -684,6 +742,13 @@ fn schedule_words(schedule: &Value) -> Option<String> {
             format!("every {hours} hours from {}", clock(time))
         }
         Schedule::Cron { expr } => format!("cron {expr}"),
+        Schedule::Once { date, time } => {
+            format!(
+                "once on {} at {}",
+                date.date().strftime("%a %Y-%m-%d"),
+                clock(time)
+            )
+        }
     })
 }
 
@@ -853,68 +918,132 @@ mod tests {
         }
     }
 
+    /// A repeating form, as the core keeps it.
+    fn read(text: &str) -> Result<Schedule, &'static str> {
+        match read_schedule(text)? {
+            Asked::Schedule(schedule) => Ok(schedule),
+            other => panic!("{text} read as {other:?}"),
+        }
+    }
+
+    /// mission-104 O-1: the once forms, a date given as itself and one named
+    /// from now as that, for the core to read against its own clock.
+    #[test]
+    fn each_once_form_reads_as_the_core_takes_it() {
+        let nine = Clock { hour: 9, minute: 0 };
+        assert_eq!(
+            read_schedule("once 2026-12-02 09:00"),
+            Ok(Asked::Schedule(Schedule::Once {
+                date: Day::parse("2026-12-02").unwrap(),
+                time: nine
+            }))
+        );
+        assert_eq!(
+            read_schedule("Once in 7d 09:00"),
+            Ok(Asked::FromNow(FromNow::OnceInDays {
+                days: 7,
+                time: nine
+            }))
+        );
+        for (text, minutes) in [
+            ("once in 3h", 180),
+            ("once in 30m", 30),
+            ("once in 2d", 2880),
+        ] {
+            assert_eq!(
+                read_schedule(text),
+                Ok(Asked::FromNow(FromNow::OnceInMinutes { minutes })),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            read_schedule("once 2026-02-30 09:00"),
+            Err("schedule_date_invalid")
+        );
+        assert_eq!(read_schedule("once 2026-12-02"), Err("schedule_unreadable"));
+        assert_eq!(
+            read_schedule("once in 3h 09:00"),
+            Err("schedule_unreadable")
+        );
+        assert_eq!(read_schedule("once in 7w"), Err("schedule_unreadable"));
+        assert_eq!(read_schedule("once in d"), Err("schedule_unreadable"));
+        assert_eq!(
+            read_schedule("once in 7d 9am"),
+            Err("schedule_time_invalid")
+        );
+        assert_eq!(
+            read_schedule("once in 99999999999m"),
+            Err("schedule_once_too_far")
+        );
+        assert_eq!(
+            read_schedule("once in 4000000d"),
+            Err("schedule_once_too_far")
+        );
+        assert_eq!(
+            hide_core::automations::ONCE_HORIZON_DAYS,
+            366,
+            "the guide and the refusal say 366 days"
+        );
+        assert!(HELP.contains("366 days"));
+        assert_eq!(
+            schedule_words(&json!({"kind": "once", "date": "2026-12-02", "time": "09:00"})),
+            Some("once on Wed 2026-12-02 at 09:00".into())
+        );
+    }
+
     #[test]
     fn each_schedule_form_reads_as_the_core_choice() {
         let nine = Clock { hour: 9, minute: 0 };
+        assert_eq!(read("daily 09:00"), Ok(Schedule::Daily { time: nine }));
         assert_eq!(
-            read_schedule("daily 09:00"),
-            Ok(Schedule::Daily { time: nine })
-        );
-        assert_eq!(
-            read_schedule("Weekdays 09:00"),
+            read("Weekdays 09:00"),
             Ok(Schedule::Weekdays { time: nine })
         );
         assert_eq!(
-            read_schedule("weekly mon, Thu 09:00"),
+            read("weekly mon, Thu 09:00"),
             Ok(Schedule::Weekly {
                 days: vec![Weekday::Mon, Weekday::Thu],
                 time: nine
             })
         );
         assert_eq!(
-            read_schedule("every 3h 09:00"),
+            read("every 3h 09:00"),
             Ok(Schedule::EveryHours {
                 hours: 3,
                 time: nine
             })
         );
         assert_eq!(
-            read_schedule("every 15m"),
+            read("every 15m"),
             Ok(Schedule::EveryMinutes { minutes: 15 })
         );
         assert_eq!(
-            read_schedule("cron 0 9 * * 1-5"),
+            read("cron 0 9 * * 1-5"),
             Ok(Schedule::Cron {
                 expr: "0 9 * * 1-5".into()
             })
         );
         // What the words cannot say is refused here; what may not run is
         // the core's to refuse, with its own reason.
-        assert_eq!(read_schedule("daily 9am"), Err("schedule_time_invalid"));
-        assert_eq!(read_schedule("hourly"), Err("schedule_unreadable"));
-        assert_eq!(
-            read_schedule("weekly someday 09:00"),
-            Err("schedule_unreadable")
-        );
-        assert_eq!(read_schedule("every 3 09:00"), Err("schedule_unreadable"));
+        assert_eq!(read("daily 9am"), Err("schedule_time_invalid"));
+        assert_eq!(read("hourly"), Err("schedule_unreadable"));
+        assert_eq!(read("weekly someday 09:00"), Err("schedule_unreadable"));
+        assert_eq!(read("every 3 09:00"), Err("schedule_unreadable"));
         // Every N minutes counts from the hour and takes no time.
-        assert_eq!(read_schedule("every 15m 09:00"), Err("schedule_unreadable"));
-        assert_eq!(read_schedule("every 1 5m"), Err("schedule_unreadable"));
-        assert_eq!(read_schedule("every m"), Err("schedule_unreadable"));
+        assert_eq!(read("every 15m 09:00"), Err("schedule_unreadable"));
+        assert_eq!(read("every 1 5m"), Err("schedule_unreadable"));
+        assert_eq!(read("every m"), Err("schedule_unreadable"));
+        assert_eq!(read("every 900m"), Err("schedule_minutes_out_of_range"));
+        assert_eq!(read("cron"), Err("schedule_unreadable"));
         assert_eq!(
-            read_schedule("every 900m"),
-            Err("schedule_minutes_out_of_range")
-        );
-        assert_eq!(read_schedule("cron"), Err("schedule_unreadable"));
-        assert_eq!(
-            read_schedule("weekly 09:00"),
+            read("weekly 09:00"),
             Ok(Schedule::Weekly {
                 days: vec![],
                 time: nine
             })
         );
         assert_eq!(
-            read_schedule("every 30h 09:00"),
+            read("every 30h 09:00"),
             Ok(Schedule::EveryHours {
                 hours: 30,
                 time: nine
