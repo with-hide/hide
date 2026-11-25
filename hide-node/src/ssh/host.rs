@@ -2314,6 +2314,14 @@ fn start_reader(
 /// a while, and a ping that waits behind it would read to the node as a
 /// core gone. A ping waiting behind another line's write goes without
 /// harm, since that write is bytes too.
+///
+/// The thread is the link's and ends with it, on every path a link ends
+/// by: each of them sets the link's `closed` reason (`mark_closed`: the
+/// reader's end, whatever ended it, the silence limit included;
+/// [`RemoteHost::close`]; a write that failed), which wakes the wait at
+/// once; dropping the last clone drops that reason's sender, which wakes it
+/// too; and a ping the link refuses as closed ends it. It holds no clone of
+/// the link while it waits, so it never keeps one alive.
 fn start_heartbeat(inner: &Arc<Inner>) {
     let link = Arc::downgrade(inner);
     let runtime = Arc::clone(&inner.runtime);
@@ -2719,6 +2727,84 @@ mod tests {
         assert_eq!(heard.len(), 1);
         assert_eq!(heard[0].0, "node-a");
         assert!(matches!(&heard[0].1, NodeEvent::Revoke { token } if token == "t"));
+    }
+
+    /// A link over a local stream whose node end the test holds, with the
+    /// node's reader bounded past one heartbeat, and the reasons it ends by.
+    fn silent_node_link() -> (
+        RemoteHost,
+        hide_platform::ipc::LocalStream,
+        std::io::BufReader<hide_platform::ipc::LocalStream>,
+        mpsc::Receiver<String>,
+    ) {
+        let (core_end, node_end) = hide_platform::ipc::LocalStream::pair().expect("a stream pair");
+        let (closed, ended) = mpsc::channel();
+        let link = over_local_stream(
+            "inbound:node-a",
+            core_end,
+            None,
+            Box::new(move |reason| {
+                let _ = closed.send(reason);
+            }),
+        )
+        .expect("a local link");
+        let writer = node_end.duplicate();
+        node_end
+            .set_read_timeout(Some(HEARTBEAT + Duration::from_secs(5)))
+            .expect("a read bound");
+        (link, writer, std::io::BufReader::new(node_end), ended)
+    }
+
+    /// The core says it is alive on every link (with-hide/hide#2882), and
+    /// waits out a node that has not spoken yet, past the silence limit: a
+    /// new helper's first start, which the first call's own deadline bounds
+    /// (`hello_timeout`).
+    #[test]
+    fn a_link_pings_a_node_that_has_not_spoken_and_waits_for_it() {
+        let (link, writer, mut reader, _ended) = silent_node_link();
+        let start = Instant::now();
+        let mut line = String::new();
+        while start.elapsed() < HEARTBEAT_LIMIT + Duration::from_secs(2) {
+            assert!(ping_or_end(&mut reader, &mut line), "the link ended");
+        }
+        assert_eq!(link.closed_reason(), None, "a starting node's link ended");
+        drop(writer);
+    }
+
+    /// The core ends a link whose node went silent with its connection open
+    /// (with-hide/hide#2882): once a node that spoke sends nothing for the
+    /// silence limit, the link ends and closes the stream under it.
+    #[test]
+    fn a_link_ends_once_its_node_falls_silent() {
+        use std::io::Write;
+        let (_link, mut writer, mut reader, ended) = silent_node_link();
+        // The node speaks once, then never again, its stream still open.
+        writer.write_all(PING_LINE).expect("the node's one line");
+        let spoke = Instant::now();
+        let reason = ended
+            .recv_timeout(HEARTBEAT_LIMIT + Duration::from_secs(10))
+            .expect("the link outlived its silent node");
+        assert!(reason.contains("sent nothing"), "{reason}");
+        assert!(
+            spoke.elapsed() >= HEARTBEAT_LIMIT - Duration::from_secs(1),
+            "the link ended {:?} after the node's last byte",
+            spoke.elapsed()
+        );
+        // The node reads the end of the stream once the pings already sent
+        // are read.
+        let mut line = String::new();
+        while ping_or_end(&mut reader, &mut line) {}
+        drop(writer);
+    }
+
+    /// Reads one line into `line`; false at the stream's end.
+    fn ping_or_end(reader: &mut impl std::io::BufRead, line: &mut String) -> bool {
+        line.clear();
+        let read = reader.read_line(line).expect("the stream's end");
+        if read > 0 {
+            assert_eq!(line.as_bytes(), PING_LINE);
+        }
+        read > 0
     }
 
     /// Remote audit R2: a call has one deadline. A call that waited for a
