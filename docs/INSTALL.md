@@ -589,7 +589,7 @@ The relay does not keep messages for later delivery.
 
 Add the phone app to the Home Screen and enable notifications there if you want them.
 If you used the older Tailscale address, scan the new QR and enable notifications once at the new address.
-The device name in the phone header lets you switch computers; **다른 기기 연결** adds another one, including inside the Home Screen app.
+The device name in the phone header lets you switch computers; **기기 추가** adds another computer that runs Hide, including inside the Home Screen app, and says where an SSH server is added instead (in the computer's Hide).
 Each computer allows four paired phones; Settings › Devices lists them in its **폰** group, where each phone's ⋯ renames or disconnects it.
 
 On a computer with no screen, such as a server you reach over SSH, run `hide phone pair` in a terminal outside Hide's panes: it turns **Open hide from your phone** on, draws the QR in the terminal and waits until a phone scans it.

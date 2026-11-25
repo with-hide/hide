@@ -93,6 +93,9 @@ The phone app (`web/src/mobile`) builds its screens from the same parts and toke
 | An agent's mark and logo, title, project | `AgentLead`, `AgentTitle`, `PlaceParts` (`web/src/mobile/parts.tsx`) | `PlaceParts` shows the project alone when the Mac sends `project`, else the place. |
 
 - Every press is at least `--size-touch-target` (44 px) tall; a row that is one press spans the screen's width.
+- A row's less frequent action, such as removing a device, is its menu (`ContextMenu`), which a held finger opens as a right-click does, never a second button on the row; the click that ends the long press does not press the row.
+- A hover fill lights only where a pointer can hover: the shared `hover` variant (`web/src/index.css`) sits in `@media (hover: hover)`, so a tap on a touch screen leaves no filled box behind.
+- A device is drawn as the device picker draws it (`web/src/mobile/HostList.tsx`): its icon in a small rounded `bg-secondary` tile, its name on one line, its state's dot and word, and its 내 차례 and 작업 중 counts as two small mono `Badge`s at the right, the first in `text-warning`.
 - The heads take the top safe area with `phone-safe-top`, and what sits at the bottom of a screen takes `phone-safe-bottom`; nothing else pads for the notch or the home bar.
 - Check a phone screen at 393 by 852 in Light and Dark, with a long Korean title and with `--interface-scale` raised, as the compare captures for a phone pull request do.
 
