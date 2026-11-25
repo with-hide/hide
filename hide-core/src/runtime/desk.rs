@@ -122,8 +122,9 @@ struct Host {
 struct Turn {
     tag: u64,
     agent: AdapterId,
-    /// The operator's message the turn answers.
-    message: u64,
+    /// The operator's message the turn answers; none for a turn Desk
+    /// started itself to tell the agent of a plain refusal.
+    message: Option<u64>,
     text: String,
     cut: bool,
     started_at_ms: u64,
@@ -145,10 +146,11 @@ struct Approval {
     command: String,
 }
 
-/// `거절…`'s line and what it refused.
+/// A refusal to send once the turn it ended ends: what was refused and
+/// `거절…`'s line, none for a plain refusal.
 struct Refusal {
     command: String,
-    text: String,
+    text: Option<String>,
 }
 
 /// What the shell asked (`desk_*`).
@@ -521,7 +523,7 @@ impl Runtime {
             return true;
         }
         self.desk.held = false;
-        self.desk_start_turn(agent, text.to_owned(), text.to_owned(), payload.mentions);
+        self.desk_start_turn(agent, Some(text.to_owned()), text.to_owned(), payload.mentions);
         true
     }
 
@@ -551,7 +553,12 @@ impl Runtime {
             return false;
         };
         let message = self.desk.stored.queued.remove(0);
-        self.desk_start_turn(agent, message.text.clone(), message.text, message.mentions);
+        self.desk_start_turn(
+            agent,
+            Some(message.text.clone()),
+            message.text,
+            message.mentions,
+        );
         true
     }
 
@@ -582,7 +589,7 @@ impl Runtime {
     /// to a refused start; it may make the line one past its cap, since the
     /// cap only refuses what the operator sends.
     fn desk_requeue_untaken(&mut self) {
-        let Some(message) = self.desk.turn.as_ref().map(|turn| turn.message) else {
+        let Some(message) = self.desk.turn.as_ref().and_then(|turn| turn.message) else {
             return;
         };
         let Some(DeskItem::User {
@@ -622,30 +629,33 @@ impl Runtime {
     }
 
     /// Starts a turn: `shown` joins the conversation as the operator's
-    /// message, and the agent receives `sent`.
+    /// message, when there is one, and the agent receives `sent`.
     fn desk_start_turn(
         &mut self,
         agent: AdapterId,
-        shown: String,
+        shown: Option<String>,
         sent: String,
         mentions: Vec<DeskMention>,
     ) {
         let carried = (!self.desk.host.open)
             .then(|| self.desk.stored.conversation.carried())
             .flatten();
-        let id = self.desk.stored.conversation.next_id();
-        self.desk.stored.conversation.push(DeskItem::User {
-            id,
-            text: shown,
-            at_ms: crate::links::now_ms(),
-            mentions,
+        let message = shown.map(|text| {
+            let id = self.desk.stored.conversation.next_id();
+            self.desk.stored.conversation.push(DeskItem::User {
+                id,
+                text,
+                at_ms: crate::links::now_ms(),
+                mentions,
+            });
+            id
         });
         self.desk.next_tag += 1;
         let tag = self.desk.next_tag;
         self.desk.turn = Some(Turn {
             tag,
             agent,
-            message: id,
+            message,
             text: String::new(),
             cut: false,
             started_at_ms: crate::links::now_ms(),
@@ -685,6 +695,16 @@ impl Runtime {
     fn desk_stop(&mut self) -> bool {
         if self.desk.turn.is_none() {
             return false;
+        }
+        // The operator stopped the turn: a plain refusal it ended on is
+        // not told, since the agent is not to go on.
+        if self
+            .desk
+            .refusal
+            .as_ref()
+            .is_some_and(|refusal| refusal.text.is_none())
+        {
+            self.desk.refusal = None;
         }
         // The agent answers each request it is waiting on as cancelled.
         let cancelled = json!({"outcome": {"outcome": "cancelled"}});
@@ -768,12 +788,19 @@ impl Runtime {
                 self.set_approval(waiting.item, DeskApprovalState::AllowedConversation, None);
             }
         }
-        if let Some(text) = text {
-            self.desk.refusal = Some(Refusal {
-                command: approval.command,
-                text,
-            });
-            self.order(Order::Cancel);
+        if payload.answer == ApprovalAnswer::Reject {
+            // A line stops the turn so it reaches Desk as the next message;
+            // a plain refusal leaves the turn to the agent, and is sent only
+            // if the agent ends its turn on it.
+            if text.is_some() {
+                self.order(Order::Cancel);
+            }
+            if text.is_some() || self.desk.refusal.is_none() {
+                self.desk.refusal = Some(Refusal {
+                    command: approval.command,
+                    text,
+                });
+            }
         }
         true
     }
@@ -1289,14 +1316,20 @@ impl Runtime {
                 if self.desk.turn.as_ref().is_none_or(|turn| turn.tag != tag) {
                     return false;
                 }
+                let cancelled = matches!(outcome, TurnOutcome::Cancelled);
                 self.desk_close_turn(outcome);
                 if self.desk.host.open {
                     self.desk.host.state = Some(DeskHostState::Ready);
                 }
+                // A plain refusal goes to the agent only when the agent
+                // ended its turn on it, as OpenCode does with a refusal
+                // that carries no words; one that went on said so itself.
                 if let Some(refusal) = self.desk.refusal.take()
+                    && (refusal.text.is_some() || cancelled)
                     && let Some(agent) = self.selected_agent()
                 {
-                    let sent = hide_desk::refusal_message(&refusal.command, &refusal.text);
+                    let sent =
+                        hide_desk::refusal_message(&refusal.command, refusal.text.as_deref());
                     self.desk_start_turn(agent, refusal.text, sent, Vec::new());
                 }
                 self.save_desk();
@@ -2038,7 +2071,10 @@ mod tests {
             outcome: TurnOutcome::Cancelled,
         });
         let send = sent(&received);
-        assert_eq!(send.text, hide_desk::refusal_message("rm -rf /tmp/x", line));
+        assert_eq!(
+            send.text,
+            hide_desk::refusal_message("rm -rf /tmp/x", Some(line))
+        );
         assert!(matches!(
             items(&runtime).last(),
             Some(DeskItem::User { text, .. }) if text == line
@@ -2060,6 +2096,72 @@ mod tests {
         runtime.desk_report(Report::TurnEnded {
             tag,
             outcome: TurnOutcome::Done,
+        });
+        assert!(
+            !received
+                .try_iter()
+                .any(|order| matches!(order, Order::Send(_)))
+        );
+    }
+
+    /// OpenCode ends its turn on a refusal that carries no words (its ACP
+    /// reply has no place for them): Desk tells it, so it says so and goes
+    /// on as an agent that went on itself would, with no message shown as
+    /// the operator's.
+    #[test]
+    fn a_plain_refusal_the_agent_ended_its_turn_on_is_sent_to_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, tag) = talking(root.path());
+        let id = ask(&mut runtime);
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "answer": "reject"})
+        ));
+        let orders: Vec<Order> = received.try_iter().collect();
+        assert!(!orders.iter().any(|order| matches!(order, Order::Cancel)));
+        let shown = items(&runtime).len();
+        runtime.desk_report(Report::TurnEnded {
+            tag,
+            outcome: TurnOutcome::Cancelled,
+        });
+        let send = sent(&received);
+        assert_eq!(
+            send.text,
+            hide_desk::refusal_message("rm -rf /tmp/x", None)
+        );
+        assert_eq!(items(&runtime).len(), shown);
+        assert!(matches!(
+            card(&runtime, id),
+            DeskItem::Approval { state: DeskApprovalState::Rejected, refusal: None, .. }
+        ));
+
+        // Its answer ends the turn Desk started, and nothing more goes.
+        runtime.desk_report(Report::TurnEnded {
+            tag: send.tag,
+            outcome: TurnOutcome::Done,
+        });
+        assert!(
+            !received
+                .try_iter()
+                .any(|order| matches!(order, Order::Send(_)))
+        );
+    }
+
+    #[test]
+    fn a_stop_after_a_plain_refusal_tells_the_agent_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, tag) = talking(root.path());
+        let id = ask(&mut runtime);
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "answer": "reject"})
+        ));
+        assert!(event(&mut runtime, "desk_stop", json!({})));
+        runtime.desk_report(Report::TurnEnded {
+            tag,
+            outcome: TurnOutcome::Cancelled,
         });
         assert!(
             !received

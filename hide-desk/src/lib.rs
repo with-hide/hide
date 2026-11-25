@@ -75,12 +75,16 @@ pub fn first_message(placement: Placement, carried: Option<&str>, message: &str)
     text
 }
 
-/// The message that carries the line the operator refused `command` with
-/// (`거절…`, PRD Desk D-83), sent once the turn it stopped ends.
-pub fn refusal_message(command: &str, line: &str) -> String {
-    format!(
-        "The operator refused this and did not let it run:\n<refused>\n{command}\n</refused>\nThe operator's message:\n{line}"
-    )
+/// The message that tells the agent the operator refused `command` (PRD
+/// Desk D-83), sent once the turn the refusal stopped ends: with the line
+/// `거절…` carried, or, for a plain refusal an agent ended its turn on, none.
+pub fn refusal_message(command: &str, line: Option<&str>) -> String {
+    let refused =
+        format!("The operator refused this and did not let it run:\n<refused>\n{command}\n</refused>\n");
+    match line {
+        Some(line) => format!("{refused}The operator's message:\n{line}"),
+        None => format!("{refused}Tell the operator it did not run, and go on without it."),
+    }
 }
 
 /// The sessions a reply names as `@session(<pane> <name>)`, in order, each
