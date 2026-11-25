@@ -1129,10 +1129,11 @@ fn unix_now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Hands the worker the operator's agent-summary switch and the core's
-/// output language, under one brief lock, on every tick and publish: a
-/// turned switch reaches the screen and the running request within one
-/// tick, and a changed language the next request. The launch records that
+/// Hands the worker the operator's agent-summary switch, Hide AI's
+/// usage-limit pause and the core's output language, under one brief lock,
+/// on every tick and publish: a turned switch reaches the screen and the
+/// running request within one tick, a pause the requests only, and a changed
+/// language the next request. The launch records that
 /// name the accounts of the target's agents ride the same lock, copied
 /// only when one moved since the worker last took them. Returns whether
 /// the shown labels changed.
@@ -1146,16 +1147,17 @@ fn take_label_switch(context: &SessionSyncContext, worker: &mut LabelWorker) -> 
         runtime.lock().ok().map(|guard| {
             (
                 guard.agent_summary(),
+                guard.labels_paused(),
                 guard.output_language(),
                 guard.account_launches(device, edit),
             )
         })
     });
-    taken.is_some_and(|(on, language, launches)| {
+    taken.is_some_and(|(on, paused, language, launches)| {
         if let Some(launches) = launches {
             worker.follow_account_launches(launches);
         }
-        worker.follow_core(on, language, Instant::now())
+        worker.follow_core(on, paused, language, Instant::now())
     })
 }
 

@@ -161,7 +161,7 @@ fn runs_on_past_the_limit_names_the_fallback_that_answers() {
         (Some(93.0), Some(90))
     );
     assert!(!runtime.usage_paused(), "Codex still answers");
-    assert!(runtime.agent_summary());
+    assert!(!runtime.labels_paused());
 }
 
 /// B5, B8: every agent past the limit pauses Hide AI, and a higher limit or
@@ -174,9 +174,10 @@ fn every_agent_past_the_limit_pauses_and_a_higher_limit_resumes() {
         weekly("codex", Some(96.0), next_week_ms()),
     ]);
     assert!(runtime.usage_paused());
+    assert!(runtime.labels_paused(), "no label is asked");
     assert!(
-        !runtime.agent_summary(),
-        "labels fall back to the session's own text"
+        runtime.agent_summary(),
+        "the labels already made stay shown"
     );
     let refusal = runtime.snapshot.status.background_ai.refusal.clone();
     assert_eq!(
@@ -186,7 +187,7 @@ fn every_agent_past_the_limit_pauses_and_a_higher_limit_resumes() {
 
     runtime.dispatch_json(&ai_event(serde_json::json!({"usage_limit": 95})));
     assert!(!runtime.usage_paused(), "Claude at 93 is under 95");
-    assert!(runtime.agent_summary());
+    assert!(!runtime.labels_paused());
 
     runtime.dispatch_json(&ai_event(serde_json::json!({"usage_limit": 80})));
     assert!(runtime.usage_paused());
@@ -208,7 +209,7 @@ fn a_new_week_resumes_hide_ai() {
         weekly("codex", Some(96.0), next_week_ms()),
     ]);
     assert!(!runtime.usage_paused());
-    assert!(runtime.agent_summary());
+    assert!(!runtime.labels_paused());
 }
 
 /// A figure whose window already reset is a week that is over.
@@ -221,7 +222,7 @@ fn a_figure_from_a_week_that_is_over_stops_nothing() {
         weekly("codex", Some(99.0), past),
     ]);
     assert!(!runtime.usage_paused());
-    assert!(runtime.agent_summary());
+    assert!(!runtime.labels_paused());
 }
 
 /// No agent chosen, or Hide AI off, is not a pause: nothing is asked anyway.
