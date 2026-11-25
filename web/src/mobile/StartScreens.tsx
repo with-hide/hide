@@ -4,12 +4,13 @@
 // screen, and its Settings is the fourth tab of the phone app.
 
 import { useState } from "react";
-import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, QrCodeIcon, ServerIcon, SettingsIcon, type LucideIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, QrCodeIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import type { TFunction } from "i18next";
 import { decodeQr, type PairingQr } from "../../../hide-relay-protocol/web";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { appHost } from "./appHost";
+import { DeviceTile } from "./HostList";
 import { relayReady } from "./relayRuntime";
 import { scanInApp, WebScanner } from "./ScanQr";
 import { AboutSection, DisplaySection, ROW_INSET, Section } from "./SettingsParts";
@@ -61,11 +62,6 @@ export function FirstScreen({ t, onScan, onDemo, onSettings }: { t: TFunction; o
   );
 }
 
-/** A choice's icon in its small rounded tile, as a device row of the picker draws one. */
-function ChoiceTile({ icon: Icon }: { icon: LucideIcon }) {
-  return <span aria-hidden="true" className="flex size-(--size-control-lg) shrink-0 items-center justify-center rounded-sm bg-secondary text-subtle-foreground"><Icon className="size-(--size-icon-lg)" /></span>;
-}
-
 function ChoiceText({ title, body }: { title: string; body: string }) {
   return <span className="flex min-w-0 flex-1 flex-col gap-xxs">
     <b className="break-keep text-subhead font-semibold text-foreground wrap-anywhere">{title}</b>
@@ -88,12 +84,12 @@ export function AddChoice({ t, onBack, onComputer }: { t: TFunction; onBack: () 
       </header>
       <div className="flex flex-col gap-md pt-xl">
         <Button variant="outline" className="h-auto min-h-(--size-touch-target) items-start justify-start gap-md whitespace-normal rounded-lg p-md text-left" data-phone-add-kind="computer" onClick={onComputer}>
-          <ChoiceTile icon={QrCodeIcon} />
+          <DeviceTile icon={QrCodeIcon} />
           <ChoiceText title={t("mobile.add.computer")} body={t("mobile.add.computerBody")} />
           <ChevronRightIcon aria-hidden="true" className="mt-xs size-(--size-icon) shrink-0 text-muted-foreground" />
         </Button>
         <div className="flex items-start gap-md rounded-lg border border-border p-md" data-phone-add-kind="server">
-          <ChoiceTile icon={ServerIcon} />
+          <DeviceTile icon={ServerIcon} />
           <ChoiceText title={t("mobile.add.server")} body={t("mobile.add.serverBody")} />
         </div>
       </div>

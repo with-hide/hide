@@ -104,7 +104,7 @@ export function HostList({ t, active, machines = [], activeRoom: named, card = f
   </div>;
 }
 
-/** A device's icon in its small rounded tile: a paired computer's laptop, a reached device's server (`compact`, a size smaller). */
+/** A device's icon in its small rounded tile: a paired computer's laptop, a reached device's server (`compact`, a size smaller), and 기기 추가's choices. */
 export function DeviceTile({ icon: Icon, compact = false }: { icon: LucideIcon; compact?: boolean }) {
   return <span aria-hidden="true" className={cn("flex shrink-0 items-center justify-center rounded-sm bg-secondary text-subtle-foreground", compact ? "size-(--size-control)" : "size-(--size-control-lg)")}>
     <Icon className={compact ? "size-(--size-icon)" : "size-(--size-icon-lg)"} />

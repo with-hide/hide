@@ -759,6 +759,12 @@ test("기기 추가 asks first, in the language the Mac chose, and a device reac
   const sheet = page.getByRole("dialog", { name: "기기" });
   await expect(sheet.locator('[data-phone-device-row="mini"] [data-phone-device-link="ssh"]')).toHaveText("SSH");
   await expect(sheet.locator('[data-phone-host-viewing="true"]')).toContainText("지금 보는 중");
+  // 기기 지우기 is the row's menu, which opens above the sheet it sits in and closes without touching the row.
+  await sheet.locator('[data-phone-host-viewing="true"]').click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "기기 지우기" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menuitem", { name: "기기 지우기" })).toHaveCount(0);
+  await expect(sheet).toBeVisible();
   await sheet.getByRole("button", { name: "기기 추가" }).click();
   await expect(page).toHaveURL(relay.origin + "/?add=1");
   await expect(page.getByRole("heading", { name: "기기 추가" })).toBeVisible();
