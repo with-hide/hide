@@ -6,6 +6,9 @@
 # and its version, engine and rules moved under [screen], unchanged; its
 # alias with a space is left out, since a program is a plain file name.
 # [resume] last: qwenlm.github.io/qwen-code-docs, "--continue: Resume the most recent session for this project".
+# Added by Hide: `asks = "folder_trust"` on the rule of its question whether
+# to trust a folder, which no evaluator reads (docs/agent-hooks.md, Folder
+# trust for the folders Hide starts agents in).
 schema = 1
 id = "qwen"
 name = "Qwen Code"
@@ -15,6 +18,29 @@ hooks = "none"
 
 [resume]
 last = ["--continue"]
+
+# Added by Hide: Qwen Code's folder trust, the one place of an account Hide
+# writes for it (docs/agent-hooks.md, Folder trust for the folders Hide starts
+# agents in). The file and its format are Qwen Code's own source's
+# (packages/cli/src/config/trustedFolders.ts, v0.28.4): `QWEN_HOME` moves
+# the folder and `QWEN_CODE_TRUSTED_FOLDERS_PATH` the file, and Hide keeps no
+# profile of Qwen Code, so the default account is the only one.
+[account]
+by = "none"
+reason = "Hide keeps no profile of Qwen Code, an agent known only by its definition file"
+
+[account.paths]
+hooks = false
+hook_trust = false
+plugins = false
+skills = false
+folder_trust = "~/.qwen/trustedFolders.json"
+folder_trust_format = "qwen"
+sessions = false
+login = false
+state = false
+usage = false
+mcp = false
 
 [screen]
 version = "2026.08.14.1"
@@ -85,6 +111,7 @@ line_regex = [
 [[screen.rules]]
 id = "folder_trust_dialog"
 state = "blocked"
+asks = "folder_trust"
 priority = 970
 region = "bottom_non_empty_lines(20)"
 visible_blocker = true

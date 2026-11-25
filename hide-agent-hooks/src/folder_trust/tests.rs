@@ -1,5 +1,5 @@
 use super::*;
-use hide_agent_adapter::AccountRef;
+use hide_agent_adapter::{AccountRef, AgentId};
 
 /// An absolute folder on this system: `/work/<name>`, or `C:\work\<name>`.
 fn folder(name: &str) -> PathBuf {
@@ -612,27 +612,6 @@ fn codex_trust_needs_a_codex_to_record_it_through() {
     assert!(read_record(Agent::Codex, root.path()).unwrap().is_empty());
 }
 
-#[test]
-fn only_claude_codex_agy_grok_and_pi_starts_record_a_trust() {
-    use hide_agent_adapter::LaunchDialect;
-    for dialect in [
-        LaunchDialect::Claude,
-        LaunchDialect::Codex,
-        LaunchDialect::Antigravity,
-        LaunchDialect::Grok,
-        LaunchDialect::Pi,
-    ] {
-        assert!(Agent::of(dialect).is_some(), "{dialect:?}");
-    }
-    for dialect in [
-        LaunchDialect::OpenCode,
-        LaunchDialect::Omp,
-        LaunchDialect::Cursor,
-    ] {
-        assert!(Agent::of(dialect).is_none(), "{dialect:?}");
-    }
-}
-
 /// Grok's trust file as Grok reads it: each folder it decided, and whether
 /// it trusts it.
 fn grok_decisions(home: &Path) -> Vec<(String, bool)> {
@@ -886,6 +865,125 @@ fn pi_s_own_lock_is_waited_for_and_a_missing_agent_folder_is_made() {
     trust_worktree(Agent::Pi, home.path(), &linked, none()).unwrap();
     assert!(settings.is_file());
     assert!(!lock.exists());
+}
+
+const QWEN_OPERATOR: &str = "{\n  \"/elsewhere\": \"TRUST_FOLDER\"\n}\n";
+
+#[test]
+fn qwen_code_trusts_the_worktree_itself_and_hide_takes_out_only_its_own_entry() {
+    let home = home();
+    let settings = Agent::QwenCode.settings_path(home.path());
+    assert_eq!(settings, home.path().join(".qwen/trustedFolders.json"));
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(&settings, QWEN_OPERATOR).unwrap();
+    let (_, linked) = linked_worktree(home.path());
+    let key = hide_platform::fs::identity::canonical(&linked).unwrap();
+    trust_worktree(Agent::QwenCode, home.path(), &linked, none()).unwrap();
+    let written = read_json(&settings);
+    assert_eq!(written["/elsewhere"], "TRUST_FOLDER");
+    assert_eq!(written[key.to_str().unwrap()], "TRUST_FOLDER");
+    assert_eq!(written.as_object().unwrap().len(), 2);
+    assert_eq!(
+        recorded(Agent::QwenCode, home.path()),
+        [key.to_str().unwrap()]
+    );
+    assert!(
+        !home.path().join(".qwen/trustedFolders.json.lock").exists(),
+        "Hide releases Qwen Code's lock"
+    );
+
+    assert_eq!(
+        forget(Agent::QwenCode, home.path(), &linked, none()).unwrap(),
+        1
+    );
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), QWEN_OPERATOR);
+    assert!(recorded(Agent::QwenCode, home.path()).is_empty());
+
+    trust_worktree(Agent::QwenCode, home.path(), &linked, none()).unwrap();
+    assert_eq!(forget_all(Agent::QwenCode, home.path(), none()).unwrap(), 1);
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), QWEN_OPERATOR);
+}
+
+#[test]
+fn qwen_code_s_own_rule_for_the_worktree_or_a_folder_above_stays_the_operator_s() {
+    let home = home();
+    let settings = Agent::QwenCode.settings_path(home.path());
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let (_, linked) = linked_worktree(home.path());
+    let key = hide_platform::fs::identity::canonical(&linked).unwrap();
+    let key = key.to_str().unwrap();
+    let above = Path::new(key)
+        .parent()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let unchanged = |rules: serde_json::Value| {
+        let text = serde_json::to_string_pretty(&rules).unwrap();
+        std::fs::write(&settings, &text).unwrap();
+        trust_worktree(Agent::QwenCode, home.path(), &linked, none()).unwrap();
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), text, "{rules}");
+        assert!(recorded(Agent::QwenCode, home.path()).is_empty(), "{rules}");
+    };
+    // A rule for a folder above decides every folder below it, trusted or
+    // not, and a `TRUST_PARENT` decides the folder above the one it names.
+    unchanged(serde_json::json!({ &above: "TRUST_FOLDER" }));
+    unchanged(serde_json::json!({ &above: "DO_NOT_TRUST" }));
+    unchanged(serde_json::json!({ key: "DO_NOT_TRUST" }));
+    unchanged(serde_json::json!({ format!("{key}/src"): "TRUST_PARENT" }));
+    // A rule for a folder beside it, or a value Qwen Code does not know,
+    // decides nothing there.
+    std::fs::write(
+        &settings,
+        serde_json::to_string(&serde_json::json!({
+            format!("{key}-other"): "TRUST_FOLDER",
+            key: "MAYBE",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    trust_worktree(Agent::QwenCode, home.path(), &linked, none()).unwrap();
+    assert_eq!(read_json(&settings)[key], "TRUST_FOLDER");
+}
+
+/// The rule as Qwen Code compares it, written and resolved: a rule for a
+/// link to a folder above the worktree decides the worktree too.
+#[cfg(unix)]
+#[test]
+fn qwen_code_s_rule_for_a_link_to_a_folder_above_stays_the_operator_s() {
+    let home = home();
+    let settings = Agent::QwenCode.settings_path(home.path());
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let (_, linked) = linked_worktree(home.path());
+    let key = hide_platform::fs::identity::canonical(&linked).unwrap();
+    let alias = home.path().join("alias");
+    std::os::unix::fs::symlink(key.parent().unwrap(), &alias).unwrap();
+    let text = serde_json::to_string_pretty(
+        &serde_json::json!({ alias.to_str().unwrap(): "DO_NOT_TRUST" }),
+    )
+    .unwrap();
+    std::fs::write(&settings, &text).unwrap();
+    trust_worktree(Agent::QwenCode, home.path(), &linked, none()).unwrap();
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), text);
+    assert!(recorded(Agent::QwenCode, home.path()).is_empty());
+}
+
+/// Qwen Code compares folders without case on Windows (`path.relative`), so
+/// a rule for a folder above spelled in another case decides the worktree.
+#[cfg(windows)]
+#[test]
+fn qwen_code_s_rule_in_another_case_stays_the_operator_s() {
+    let home = home();
+    let settings = Agent::QwenCode.settings_path(home.path());
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let (_, linked) = linked_worktree(home.path());
+    let key = hide_platform::fs::identity::canonical(&linked).unwrap();
+    let above = key.parent().unwrap().to_str().unwrap().to_uppercase();
+    let text = serde_json::to_string_pretty(&serde_json::json!({ above: "DO_NOT_TRUST" })).unwrap();
+    std::fs::write(&settings, &text).unwrap();
+    trust_worktree(Agent::QwenCode, home.path(), &linked, none()).unwrap();
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), text);
+    assert!(recorded(Agent::QwenCode, home.path()).is_empty());
 }
 
 /// Claude Code's account in the folder `spelled`, as the node resolves a

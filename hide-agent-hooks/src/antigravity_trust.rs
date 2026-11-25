@@ -43,7 +43,7 @@ pub fn prepare_read_only(home: &Path) -> Result<(), InstallFailure> {
     }
     let canonical = hide_platform::fs::identity::canonical(&folder)
         .map_err(|error| failure(error.to_string()))?;
-    folder_trust::trust(Agent::Antigravity, home, &canonical, Tools::none())
+    folder_trust::trust(Agent::Antigravity, home, &canonical, Tools::none()).map(drop)
 }
 
 /// Whether Hide AI's agy folder is as [`prepare_read_only`] leaves it.

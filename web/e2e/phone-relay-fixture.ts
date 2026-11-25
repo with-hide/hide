@@ -92,7 +92,9 @@ export async function startPhoneRelay(port = 0) {
   const errors: string[] = [];
   const active = new Map<number, WebSocket>();
   let nextConnection = 1;
-  const state = { protocol: PHONE_PROTOCOL, offline: false, refusal: "", sleeping: false, push: false, notifications: "unasked" as "unasked" | "on" | "off", dropInputReply: false, refuseMission: "", html: null as string | null, rows: "terminal output from device", refuseAppRegistration: false, look: null as FixtureLook | null };
+  const state = { protocol: PHONE_PROTOCOL, offline: false, refusal: "", sleeping: false, push: false, notifications: "unasked" as "unasked" | "on" | "off", dropInputReply: false, refuseMission: "", html: null as string | null, rows: "terminal output from device", refuseAppRegistration: false, look: null as FixtureLook | null,
+    /** The Mac's explicit interface language, and whether it reaches a device over SSH, as an `agents` frame says them. */
+    interfaceLanguage: null as string | null, reached: false };
   const wire = { binaryFrames: 0 };
   // The transfer in flight, driven by the phone's acks as hided's is.
   let transfer: { id: number; requestId: string; viewId: string; parts: string[]; sent: number; acked: number; ended: boolean } | null = null;
@@ -108,7 +110,7 @@ export async function startPhoneRelay(port = 0) {
       await send(t.id, { type: "look_end", request_id: t.requestId, view_id: t.viewId });
     }
   };
-  const groups = (): ServerFrame => ({ type: "agents", interface_language: null, color_theme: null, devices: [{ device_id: "local", label: null, local: true, connected: true, needs_you: 1, working: 2 }], groups: [
+  const groups = (): ServerFrame => ({ type: "agents", interface_language: state.interfaceLanguage, color_theme: null, devices: [{ device_id: "local", label: null, local: true, connected: true, needs_you: 1, working: 2 }, ...(state.reached ? [{ device_id: "mini", label: "Mac mini", connected: true, needs_you: 0, working: 0, link: "ssh" as const }] : [])], groups: [
     { group: "needs_you", count: 1, rows: [{ kind: "agent", ...agent, ...(state.sleeping ? { sleep: { state: "sleeping", since_unix_ms: 1 } } : {}) } as PhoneAgent & { kind: "agent" }] },
     { group: "working", count: 2, rows: [] },
   ] });

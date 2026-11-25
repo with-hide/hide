@@ -74,10 +74,6 @@ pub struct PluginFile {
 #[derive(Debug)]
 pub struct Plugin {
     pub files: &'static [PluginFile],
-    /// The agent whose folder trust Hide records for the worktrees it starts
-    /// it in (`folder_trust`), taken out with the plugin: switching the agent
-    /// off and removing Hide from the machine both remove the plugin.
-    pub trust: Option<crate::folder_trust::Agent>,
 }
 
 /// The plugin `dialect` names.
@@ -217,8 +213,16 @@ impl Plugin {
         // judges that account's file first (`hide_kit` targets). A guest's
         // installation leaves them: the record is the account's one, kept
         // by the account's own Hide for the worktrees it made.
+        // The folder trust Hide records for the agent, when its definition
+        // declares a trust file (`folder_trust::Agent::of_kind`), goes with
+        // the plugin: switching the agent off and removing Hide from the
+        // machine both remove the plugin.
         let guest = install.is_some_and(crate::route::is_guest_install);
-        let forgotten = match self.trust {
+        let trust = self
+            .files
+            .first()
+            .and_then(|file| crate::folder_trust::Agent::of_kind(file.config.adapter().id));
+        let forgotten = match trust {
             Some(agent) if at.is_default() && !guest => crate::folder_trust::forget_all(
                 agent,
                 at.home(),

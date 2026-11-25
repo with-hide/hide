@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { initializeInterfaceI18n } from "../i18n/instance";
 import { noticeText, type ServerFrame, type StartCatalog } from "./protocol";
-import { NO_CHOICE, mayHaveStarted, modelsOf, selectionOf, startFailure, startProblem, targetText } from "./start";
+import { NO_CHOICE, mayHaveStarted, modelsOf, selectionOf, startDevices, startFailure, startProblem } from "./start";
 import { CLOSED_SHEET, applyFrame, patch, usePhone } from "./store";
 
-/** The frame hided/src/mobile/start.rs sends, as its own test builds it. */
+/** The frame hided/src/mobile/start.rs sends, as its own test builds it, with a main checkout listed after another of its project. */
 const FRAME = `{
   "type": "start_catalog",
   "targets": [
-    {"id": "c1", "device_id": "local", "place": "hide · main", "device_label": null, "connected": true},
-    {"id": "rc1", "device_id": "mini", "place": "contong · main", "device_label": "mini", "connected": false}
+    {"id": "c2", "device_id": "local", "place": "hide · prd/a", "project": "hide", "project_id": "w1", "branch": "prd/a", "main": false, "device_label": null, "connected": true},
+    {"id": "c1", "device_id": "local", "place": "hide · main", "project": "hide", "project_id": "w1", "branch": "main", "main": true, "device_label": null, "connected": true},
+    {"id": "c4", "device_id": "local", "place": "notes", "project": "notes", "project_id": "w2", "branch": null, "main": true, "device_label": null, "connected": true},
+    {"id": "rc1", "device_id": "mini", "place": "contong · main", "project": "contong", "project_id": "rw1", "branch": "main", "main": true, "device_label": "mini", "connected": false}
   ],
   "core_platform": "macos aarch64",
   "kinds": [
@@ -21,27 +23,58 @@ const FRAME = `{
 
 const catalog = JSON.parse(FRAME) as StartCatalog;
 const korean = initializeInterfaceI18n("ko").getFixedT(null, "translation");
-const english = initializeInterfaceI18n("en").getFixedT(null, "translation");
+
+describe("startDevices", () => {
+  it("lists each device's projects once, this Mac first, each with its main checkout first", () => {
+    const devices = startDevices(catalog);
+    expect(devices.map((device) => [device.deviceId, device.label, device.connected])).toEqual([["local", null, true], ["mini", "mini", false]]);
+    expect(devices[0]!.projects.map((project) => [project.label, project.targets.map((target) => target.id)])).toEqual([["hide", ["c1", "c2"]], ["notes", ["c4"]]]);
+    expect(devices[1]!.projects.map((project) => project.label)).toEqual(["contong"]);
+  });
+
+  it("keeps two projects of one name apart, and one id on two devices apart", () => {
+    const twins: StartCatalog = { ...catalog, targets: [
+      { id: "a", device_id: "local", place: "app · main", project: "app", project_id: "w1", branch: "main", main: true, device_label: null, connected: true },
+      { id: "b", device_id: "local", place: "app · main", project: "app", project_id: "w2", branch: "main", main: true, device_label: null, connected: true },
+      { id: "c", device_id: "mini", place: "app · main", project: "app", project_id: "w1", branch: "main", main: true, device_label: "mini", connected: true },
+    ] };
+    expect(startDevices(twins).map((device) => device.projects.length)).toEqual([2, 1]);
+  });
+
+  it("reads an older Mac's targets, which name no project, as a project each named by its place", () => {
+    const older: StartCatalog = { ...catalog, targets: [
+      { id: "c1", device_id: "local", place: "hide · main", device_label: null, connected: true },
+      { id: "c2", device_id: "local", place: "hide · prd/a", device_label: null, connected: true },
+    ] };
+    const projects = startDevices(older)[0]!.projects;
+    expect(projects.map((project) => [project.label, project.targets.map((target) => target.id)])).toEqual([["hide · main", ["c1"]], ["hide · prd/a", ["c2"]]]);
+    expect(selectionOf(older, { ...NO_CHOICE, target: "c2" }).target?.branch).toBeUndefined();
+  });
+
+  it("lists nothing before the catalog arrives", () => {
+    expect(startDevices(null)).toEqual([]);
+  });
+});
 
 describe("selectionOf", () => {
-  it("defaults to the first target with the remembered kind and its model", () => {
+  it("defaults to the first project's main checkout with the remembered kind and its model", () => {
     const selection = selectionOf(catalog, NO_CHOICE);
     expect(selection.target?.id).toBe("c1");
-    expect(targetText(english, selection.target!, catalog.core_platform)).toBe("This Mac · hide · main");
-    expect(targetText(korean, selection.target!, catalog.core_platform)).toBe("이 Mac · hide · main");
+    expect(selection.project?.label).toBe("hide");
     expect(selection.kind).toBe("codex");
-    // Codex lists no model: the select is disabled on the default.
+    // Codex lists no model: the model word is disabled on the default.
     expect(modelsOf(selection)).toEqual([]);
     expect(selection.model).toBe("");
   });
 
-  it("names the core's machine as its system does, in the phone's language", () => {
-    const local = catalog.targets[0]!;
-    expect(targetText(english, local, "windows x86_64")).toBe("This PC · hide · main");
-    expect(targetText(korean, local, "windows x86_64")).toBe("이 PC · hide · main");
-    expect(targetText(korean, local, "linux x86_64")).toBe("이 컴퓨터 · hide · main");
-    // A registered device keeps the name it was registered under.
-    expect(targetText(korean, catalog.targets[1]!, "windows x86_64")).toBe("mini · contong · main");
+  it("follows a chosen checkout to its project", () => {
+    expect(selectionOf(catalog, { ...NO_CHOICE, target: "c2" })).toMatchObject({ target: { id: "c2", branch: "prd/a" }, project: { label: "hide" } });
+    expect(selectionOf(catalog, { ...NO_CHOICE, target: "rc1" }).project?.label).toBe("contong");
+  });
+
+  it("sends no model for an agent whose start takes none, even one remembered for it", () => {
+    const opencode: StartCatalog = { ...catalog, remembered: { kind: "opencode", models: { opencode: "gpt-5" } } };
+    expect(selectionOf(opencode, NO_CHOICE)).toMatchObject({ kind: "opencode", model: "" });
   });
 
   it("follows the operator's changes over the remembered choice", () => {
@@ -87,7 +120,7 @@ describe("the store", () => {
 
   it("keeps the catalog frame hided sends", () => {
     applyFrame(JSON.parse(FRAME) as ServerFrame);
-    expect(usePhone.getState().startCatalog?.targets.map((target) => target.id)).toEqual(["c1", "rc1"]);
+    expect(usePhone.getState().startCatalog?.targets.map((target) => target.id)).toEqual(["c2", "c1", "c4", "rc1"]);
     expect(usePhone.getState().startCatalog?.remembered.kind).toBe("codex");
   });
 });

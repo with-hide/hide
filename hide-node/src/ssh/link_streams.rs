@@ -569,13 +569,14 @@ mod tests {
     ) -> RemoteHost {
         let (core_end, node_end) = hide_platform::ipc::LocalStream::pair().expect("a pair");
         std::thread::spawn(move || {
-            let input = BufReader::new(node_end.duplicate());
+            let input = node_end.duplicate();
+            let ending = node_end.shutdown_handle();
             let _ = hide_host::serve::serve_with(
                 input,
                 node_end,
                 hide_host::serve::Services {
+                    end: hide_host::serve::LinkEnd::Shut(Box::new(move || ending.shutdown())),
                     terminals: None,
-                    heartbeat: false,
                     checkout_callers: false,
                     opened_roots: None,
                     worktree_facts: None,

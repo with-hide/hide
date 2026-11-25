@@ -189,9 +189,20 @@ pub fn capture_within(mut command: Command, within: Duration) -> Result<Captured
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    let program = Path::new(command.get_program())
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let started = Instant::now();
     OwnedChild::spawn(&mut command)?
-        .capture_until(Instant::now() + within, READ_CAP)
-        .map_err(|error| anyhow::anyhow!("private command capture: {error}"))
+        .capture_until(started + within, READ_CAP)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "private command capture of {program}: {error} after {:?}",
+                started.elapsed()
+            )
+        })
 }
 
 pub fn successful(command: Command) -> Result<Vec<u8>> {
@@ -773,6 +784,9 @@ pub struct Fixture {
     pub local: Agent,
     pub remote: Agent,
     pub ssh: super::sshd::Sshd,
+    /// What the core's `ssh` reaches the device's server through, which a
+    /// journey can cut as a network that went away.
+    pub network: super::relay::Relay,
     pub state: PathBuf,
     pub hide: PathBuf,
     pub hooks: PathBuf,
@@ -901,9 +915,10 @@ impl Fixture {
             remote_env.home.join("absent-tailscale").into_os_string(),
         );
         let ssh = super::sshd::Sshd::start(&root.join("sshd"), &remote_env.values())?;
+        let network = super::relay::Relay::start(ssh.port)?;
         fs::write(
             local_env.home.join(".ssh/config"),
-            ssh.client_config("delivery-fixture"),
+            ssh.client_config_through("delivery-fixture", network.port)?,
         )?;
         local_env.set("HIDE_STATE_DIR", state.as_os_str());
         local_env.set("HIDE_KEEP_ALIVE", "1");
@@ -996,6 +1011,7 @@ impl Fixture {
                 local,
                 remote,
                 ssh,
+                network,
                 state,
                 hide: cli.join("hide"),
                 hooks: cli.join("hide-agent-hooks"),
@@ -1241,7 +1257,8 @@ impl Fixture {
         self.screen.snapshot()
     }
 
-    fn event(&self, kind: &str, payload: Value) -> Result<()> {
+    /// Sends the core a screen event, as the window does.
+    pub fn event(&self, kind: &str, payload: Value) -> Result<()> {
         self.screen.event(kind, payload)
     }
 

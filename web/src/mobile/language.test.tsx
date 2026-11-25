@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clientI18n, translate } from "../i18n/translator";
 import { PhoneLanguageBoundary } from "./language";
 import type { ServerFrame } from "./protocol";
+import { MAC_LANGUAGE_KEY, choosePhoneSettings, startLanguage } from "./settings";
 import { applyFrame, patch, usePhone } from "./store";
 
 let root: Root;
@@ -31,7 +32,9 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   Reflect.deleteProperty(navigator, "serviceWorker");
-  patch({ interfaceLanguage: null });
+  patch({ interfaceLanguage: null, groups: null, demo: false });
+  localStorage.removeItem(MAC_LANGUAGE_KEY);
+  choosePhoneSettings({ language: null });
   vi.restoreAllMocks();
   await clientI18n.changeLanguage("en");
 });
@@ -82,5 +85,31 @@ describe("the phone's language", () => {
     await vi.waitFor(() => expect(postMessage.mock.calls.at(-1)?.[0]).toMatchObject({ type: "words", words: { needs_you: "自分の番", done: "未読", observer_unconfirmed: "オブザーバーが警告を確認していません", letter_undelivered: "レターが届いていません", status_question: "質問", status_approval: "承認", status_error: "ブロック", status_done: "完了", subject_plan_review: "作業ステップのレビュー · {{count}}ステップ" } }));
     await choose(null);
     await vi.waitFor(() => expect(postMessage.mock.calls.at(-1)?.[0]).toMatchObject({ type: "words", words: { needs_you: "Needs You", done: "Unread", observer_unconfirmed: "Observer has not confirmed a warning", letter_undelivered: "Letter not delivered", status_question: "Question", status_approval: "Approval", status_error: "Blocked", status_done: "Done", subject_plan_review: "Task steps review · {{count}} steps" } }));
+  });
+
+  // The add page came up in English on a phone whose app spoke Korean: the start page has no Mac, so it reads the last Mac's choice.
+  it("lets the start page speak the language the last Mac chose, under the phone's own choice", async () => {
+    browserLanguage = "en-US";
+    await mount();
+    expect(startLanguage(localStorage, navigator.language)).toBe("en");
+    // Before the Mac's first list its language is unknown, and nothing is kept.
+    await choose("ko");
+    expect(localStorage.getItem(MAC_LANGUAGE_KEY)).toBeNull();
+    await act(async () => applyFrame({ type: "agents", groups: [], devices: [], interface_language: "ko", color_theme: null }));
+    expect(localStorage.getItem(MAC_LANGUAGE_KEY)).toBe("ko");
+    expect(startLanguage(localStorage, navigator.language)).toBe("ko");
+    choosePhoneSettings({ language: "ja" });
+    expect(startLanguage(localStorage, navigator.language)).toBe("ja");
+    choosePhoneSettings({ language: null });
+    // A Mac that follows its system leaves the phone's own language, as the app reads it.
+    await act(async () => applyFrame({ type: "agents", groups: [], devices: [], interface_language: null, color_theme: null }));
+    expect(localStorage.getItem(MAC_LANGUAGE_KEY)).toBeNull();
+    expect(startLanguage(localStorage, navigator.language)).toBe("en");
+  });
+
+  it("keeps no language from the sample host", async () => {
+    await mount();
+    await act(async () => patch({ demo: true, groups: [], interfaceLanguage: "ko" }));
+    expect(localStorage.getItem(MAC_LANGUAGE_KEY)).toBeNull();
   });
 });

@@ -838,31 +838,34 @@ test("the phone's start sheet starts an agent in a checkout, lists no Home, and 
     await phone.locator('[data-phone-pair="true"]').tap();
     await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 });
 
-    // B42: + opens the sheet; the target is a checkout on This Mac (no Home is listed), the kind and model the remembered choice.
+    // B42: + opens the sheet; where is a checkout on This Mac (no Home is listed), who the remembered kind and model.
     await phone.locator('[data-phone-start="true"]').tap();
     const sheet = phone.locator('[data-phone-start-sheet="true"]');
     await expect(sheet).toBeVisible();
-    const target = sheet.locator('[data-phone-start-target="true"]');
-    await expect(target).not.toHaveValue("", { timeout: 20_000 });
-    await expect(target.locator("option:checked")).toContainText(`${THIS_MACHINE} · `);
-    await expect(target.locator("option", { hasText: "Home" })).toHaveCount(0);
-    await expect(target.locator('option[value^="home:"]')).toHaveCount(0);
-    await expect(sheet.locator('[data-phone-start-kind="true"]')).toHaveValue("claude");
+    const project = sheet.locator("[data-phone-start-project]");
+    await expect(project).not.toHaveAttribute("data-phone-start-target", "", { timeout: 20_000 });
+    await expect(sheet.locator("[data-phone-start-device]")).toHaveText(THIS_MACHINE);
+    await expect(sheet.locator('[data-phone-start-kind="claude"]')).toBeVisible();
     await expect(sheet.locator('[data-phone-start-submit="true"]')).toBeDisabled();
     // B46: the Korean text and a long checkout name stay inside the phone's width.
     await sheet.locator('[data-phone-start-text="true"]').fill("첫 지시 확인용 문장입니다. 아주 긴 한국어 문장이 줄을 바꿔도 시트 밖으로 나가지 않아야 합니다.");
-    for (const control of ["target", "kind", "model"]) {
-      const box = await sheet.locator(`[data-phone-start-${control}="true"]`).boundingBox();
+    for (const control of ["project", "kind", "model"]) {
+      const box = await sheet.locator(`[data-phone-start-${control}]`).boundingBox();
       expect(box && box.x >= 0 && box.x + box.width <= 390).toBe(true);
     }
     await screenshot(phone, "mobile-phone-start-sheet");
 
-    // B43: a checkout target with the model the catalog lists; the phone lands on that agent's detail.
-    const checkout = target.locator("option", { hasText: "fixture" }).first();
-    await target.selectOption(await checkout.getAttribute("value") as string);
-    const model = sheet.locator('[data-phone-start-model="true"]');
+    // B43: a project of the checkout fixture, on its main checkout, with the model the catalog lists; the phone lands on that agent's detail.
+    await project.tap();
+    const projects = phone.locator('[data-phone-start-list="project"]');
+    await expect(projects.locator("[data-phone-start-option]", { hasText: "Home" })).toHaveCount(0);
+    await projects.locator("[data-phone-start-option]", { hasText: "fixture" }).first().tap();
+    await expect(projects).toHaveCount(0);
+    const model = sheet.locator("[data-phone-start-model]");
     await expect(model).toBeEnabled({ timeout: 20_000 });
-    await model.selectOption("opus");
+    await model.tap();
+    await phone.locator('[data-phone-start-list="model"] [data-phone-start-option="opus"]').tap();
+    await expect(model).toHaveAttribute("data-phone-start-model", "opus");
     await sheet.locator('[data-phone-start-submit="true"]').tap();
     const detail = phone.locator("[data-phone-detail]");
     await expect(detail).toBeVisible({ timeout: 45_000 });
@@ -874,7 +877,7 @@ test("the phone's start sheet starts an agent in a checkout, lists no Home, and 
     await phone.locator('[data-phone-back="true"]').tap();
     await phone.locator('[data-phone-start="true"]').tap();
     await expect(sheet.locator('[data-phone-start-text="true"]')).toHaveValue("");
-    await expect(sheet.locator('[data-phone-start-model="true"]')).toHaveValue("opus", { timeout: 20_000 });
+    await expect(model).toHaveAttribute("data-phone-start-model", "opus", { timeout: 20_000 });
     await sheet.locator('[data-phone-start-text="true"]').fill("오프라인 초안");
     await phoneContextA.setOffline(true);
     await expect(sheet.locator('[data-phone-start-unreachable="true"]')).toBeVisible({ timeout: 30_000 });
@@ -884,8 +887,8 @@ test("the phone's start sheet starts an agent in a checkout, lists no Home, and 
     await phoneContextA.setOffline(false);
     await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 30_000 });
 
-    // B42, B43: the first checkout is the default target again; the start lands on its agent.
-    await expect(target).not.toHaveValue("");
+    // B42, B43: the first project's main checkout is the default target again; the start lands on its agent.
+    await expect(project).not.toHaveAttribute("data-phone-start-target", "");
     await sheet.locator('[data-phone-start-submit="true"]').tap();
     await expect(detail).toBeVisible({ timeout: 45_000 });
     await expect(detail).not.toHaveAttribute("data-phone-detail", new RegExp(`\\|${pane}$`));
