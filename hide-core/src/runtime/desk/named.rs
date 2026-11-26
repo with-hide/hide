@@ -15,7 +15,7 @@ use super::super::Runtime;
 use super::jobs::FOLLOWED_CHIPS;
 use crate::desk::NamedSession;
 use crate::links::ledger::{LedgerAnswer, LedgerCall, SessionIdentity, SessionRecord};
-use crate::model::{DeskItem, DeskPullRequest, DeskRecordSnapshot, PrState};
+use crate::model::{DeskItem, DeskPullRequest, DeskRecordSnapshot};
 
 /// The pull requests a record's chip and card count at most.
 const RECORD_PULLS: usize = 8;
@@ -134,7 +134,12 @@ impl Runtime {
             .into_iter()
             .filter(|pane| !rows.contains(pane))
             .filter_map(|pane| {
-                let named = self.desk.stored.named.iter().find(|named| named.pane_id == pane)?;
+                let named = self
+                    .desk
+                    .stored
+                    .named
+                    .iter()
+                    .find(|named| named.pane_id == pane)?;
                 Some((pane, &named.session))
             })
             .collect();
@@ -388,7 +393,7 @@ fn record_facts(record: &SessionRecord, agent_kind: String) -> DeskRecordSnapsho
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{DeskReplyState, DeskSessionChip, ThreadFailure, ThreadPane};
+    use crate::model::{DeskReplyState, DeskSessionChip, PrState, ThreadFailure, ThreadPane};
     use serde_json::json;
 
     const SESSION: &str = "0b9e2a4c-4c0e-4d7a-9a51-2f7f6a1e3c11";
@@ -529,20 +534,35 @@ mod tests {
             ..SessionRecord::default()
         };
         runtime.desk_records_read(vec![(built, Ok(LedgerAnswer::Record(Box::new(record))))]);
-        assert_eq!(records(&runtime).len(), 1, "gone everywhere, it reads as its record");
+        assert_eq!(
+            records(&runtime).len(),
+            1,
+            "gone everywhere, it reads as its record"
+        );
 
         // Another session in a new pane changes nothing.
         runtime.snapshot.navigator.agents = vec![row("p5", "other")];
         runtime.refresh_desk_jobs();
         assert_eq!(records(&runtime).len(), 1);
-        assert!(runtime.snapshot.desk_jobs.as_ref().unwrap().moved.is_empty());
+        assert!(
+            runtime
+                .snapshot
+                .desk_jobs
+                .as_ref()
+                .unwrap()
+                .moved
+                .is_empty()
+        );
 
         // The same session resumed in p5.
         runtime.snapshot.navigator.agents = vec![row("p5", SESSION)];
         runtime.refresh_desk_jobs();
         runtime.compose_desk();
         let jobs = runtime.snapshot.desk_jobs.as_ref().unwrap();
-        assert!(jobs.records.is_empty(), "a session running somewhere has no record drawn");
+        assert!(
+            jobs.records.is_empty(),
+            "a session running somewhere has no record drawn"
+        );
         assert_eq!(
             jobs.moved,
             [crate::model::DeskMovedSnapshot {
@@ -552,7 +572,9 @@ mod tests {
             "a press on the chip opens p5"
         );
         assert!(
-            jobs.named.iter().any(|card| card.pane_id.as_deref() == Some("p5")),
+            jobs.named
+                .iter()
+                .any(|card| card.pane_id.as_deref() == Some("p5")),
             "its hover card is the live row's"
         );
         let desk = runtime.snapshot.desk.as_ref().unwrap();
@@ -578,7 +600,13 @@ mod tests {
         // order; the rows no chip names make no pair of their own.
         runtime.snapshot.navigator.agents = vec![row("p7", SESSION), row("p5", SESSION)];
         runtime.refresh_desk_jobs();
-        let moved: Vec<_> = runtime.snapshot.desk_jobs.as_ref().unwrap().moved.iter()
+        let moved: Vec<_> = runtime
+            .snapshot
+            .desk_jobs
+            .as_ref()
+            .unwrap()
+            .moved
+            .iter()
             .map(|pair| (pair.pane_id.as_str(), pair.live_pane_id.as_str()))
             .collect();
         assert_eq!(moved, [("p1", "p7")]);
@@ -634,7 +662,11 @@ mod tests {
             .collect();
         assert_eq!(
             states,
-            [(1, PrState::Failed), (2, PrState::Merged), (3, PrState::Pending)]
+            [
+                (1, PrState::Failed),
+                (2, PrState::Merged),
+                (3, PrState::Pending)
+            ]
         );
     }
 
