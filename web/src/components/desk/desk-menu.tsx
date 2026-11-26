@@ -16,7 +16,7 @@ import { CommandList } from "../ui/command";
 export const DESK_MENU_PANEL = "w-(--radix-popover-trigger-width) rounded-xl border-none p-none shadow-modal";
 
 export const DESK_MENU_DROPDOWN =
-  "rounded-xl border-none p-xs shadow-modal [&_[role^=menuitem]]:rounded-md [&_[role^=menuitem]]:py-sm [&_[role^=menuitem][data-highlighted]]:bg-secondary! [&_[role^=menuitem][data-highlighted]]:text-foreground! [&_[role=menuitemradio][data-state=checked]]:bg-secondary [&_[role=menuitemradio]>span:first-child_svg]:size-(--size-status-mark) [&_[role=menuitemradio]>span:first-child_svg]:text-foreground";
+  "rounded-xl border-none p-xs shadow-modal [&_[role^=menuitem]]:rounded-md [&_[role^=menuitem]]:py-sm [&_[role^=menuitem][data-highlighted]]:bg-secondary! [&_[role^=menuitem][data-highlighted]]:text-foreground! [&_[role=menuitemradio][data-state=checked]]:bg-secondary [&_[role=menuitemradio]>span:first-child_.lucide-circle]:size-(--size-status-mark) [&_[role=menuitemradio]>span:first-child_.lucide-circle]:text-foreground";
 
 /** A dropdown's group name in the panel's look: small, bold and muted. */
 export const DESK_MENU_HEADING = "text-micro font-semibold text-muted-foreground";

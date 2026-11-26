@@ -40,7 +40,7 @@ import type { AgentSleep, AgentStatusCode, PaneRow, RowMark, TerminalPane } from
 import { PaneNoticeBody } from "./PaneNotice";
 import { caughtUp } from "./operatorFocus";
 import { useShellStore } from "./store";
-import { attachTerminal, bracketedPaste, focusTerminal, pasteExplorerCopy, pasteExplorerFile, requestView, setTextScale, terminalLinkAt, terminalSelectionText, typeReference } from "./terminals";
+import { attachTerminal, focusTerminal, pasteExplorerCopy, pasteExplorerFile, pasteText, requestView, setTextScale, terminalLinkAt, terminalSelectionText, typeReference } from "./terminals";
 
 /**
  * Transport states with a live stream; anything else is drawn as a caption in
@@ -260,7 +260,7 @@ export const PaneView = memo(function PaneView({
     const files = Array.from(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
-    void submitFiles(paneId, files, false, bracketedPaste(paneId));
+    void submitFiles(paneId, files, false);
   };
 
   const acceptsAgentDrag = () => {
@@ -338,25 +338,23 @@ export const PaneView = memo(function PaneView({
     focusTerminal(paneId);
   }, [paneId, focused, snapshotIncludesLastClick, keysStayOnDesk, entryInput, entryKeys]);
 
-  // ⌘V of an image is the shell's; text paste stays xterm's own. The listener
-  // runs in the capture phase, before xterm's textarea sees the event.
+  // Every paste into the pane is the shell's, before xterm's textarea sees it
+  // (the listener runs in the capture phase): an image as an attachment, and
+  // text as a paste the pane's holder wraps for the program (`pasteText`),
+  // since xterm never learns the program's paste mode.
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return undefined;
     const onPaste = (event: ClipboardEvent) => {
       const text = event.clipboardData?.getData("text/plain") ?? "";
-      if (text && pasteExplorerCopy(paneId, text)) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
       const items = Array.from(event.clipboardData?.items ?? []).filter((item) => item.type.startsWith("image/"));
-      if (items.length === 0) return;
       const files = items.map((item) => item.getAsFile()).filter((file): file is File => file !== null);
-      if (files.length === 0) return;
+      if (!text && files.length === 0) return;
       event.preventDefault();
       event.stopPropagation();
-      void submitFiles(paneId, files, true, bracketedPaste(paneId));
+      if (text && pasteExplorerCopy(paneId, text)) return;
+      if (files.length > 0) void submitFiles(paneId, files, true);
+      else pasteText(paneId, text);
     };
     host.addEventListener("paste", onPaste, true);
     return () => host.removeEventListener("paste", onPaste, true);

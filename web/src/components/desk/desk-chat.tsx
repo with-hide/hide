@@ -94,24 +94,22 @@ export function DeskQueuedBubble({ message, held = false, onRemove, onMention }:
 }
 
 /**
- * A mission a Desk answer names (`@mission(<id> <title>)`): its title and
- * the app's mission chip, its mark and done count, which opens its map. The
- * title is the mission's own while the app holds it; one the app does not
- * hold keeps the answer's title and has no chip.
+ * A mission a Desk answer names (`@mission(<id> <title>)`): its title where
+ * the answer names it, in the title the app holds while it holds the mission;
+ * its chip, two lines, stands in a row behind the paragraph (`DeskReply`).
  */
-function DeskMissionMention({ mention, onOpen }: { mention: DeskMissionMention; onOpen?: (missionId: string) => void }) {
+function DeskMissionMention({ mention }: { mention: DeskMissionMention }) {
   const title = useShellStore((s) => s.rest?.missions?.items.find((one) => one.id === mention.id)?.title) ?? mention.title;
   return (
-    <span className="inline-flex max-w-full min-w-0 items-center gap-xxs align-middle" data-desk-mission-mention={mention.id}>
+    <span className="inline-flex max-w-full min-w-0 items-center align-middle" data-desk-mission-mention={mention.id}>
       <span className="truncate font-semibold text-foreground">{title}</span>
-      {onOpen ? <MissionChipOf id={mention.id} onOpen={onOpen} /> : null}
     </span>
   );
 }
 
 /**
  * Desk's answer as plain Markdown (D-75), where a session it names is that
- * session's chip and a mission its title and mission chip, each pressed to
+ * session's chip and a mission its title, with its mission chip in a row behind the paragraph, each pressed to
  * open it; the core reads both from the finished answer, so a `live` one
  * streams its text alone; a stopped answer keeps what it said and says it
  * stopped (B7). Given `copy`, it offers `복사` of its original words, each
@@ -127,14 +125,17 @@ export function DeskReply({ text, stopped = false, live = false, mentions = [], 
   const here = useShellStore((s) => localDeviceId(s.rest));
   const place = useMemo<AnswerPlace | null>(() => (onFile ? { device: here, cwd: null } : null), [onFile, here]);
   const files = useFilePathChips(text, place, live, onFile ?? noFile);
+  // A mission the app does not hold keeps the answer's title with no chip. The selector returns the ids of this answer's held
+  // missions as one string, so a mission changing, or one this answer does not name, never redraws the answer (its text selection stays).
+  const heldIds = useShellStore((s) => missions.filter((mission) => s.rest?.missions?.items.some((one) => one.id === mission.id)).map((mission) => mission.id).join(" "));
   const chips = useMemo<MarkdownChip[]>(() => [
     ...mentions.map((mention) => ({
       token: markedMention(mention),
       node: bridge(<SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id }} onPress={onMention ? () => onMention(mention) : undefined} />),
     })),
-    ...missions.map((mission) => ({ token: markedMission(mission), node: bridge(<DeskMissionMention mention={mission} onOpen={onMission} />) })),
+    ...missions.map((mission) => ({ token: markedMission(mission), node: bridge(<DeskMissionMention mention={mission} />), after: onMission && heldIds.split(" ").includes(mission.id) ? bridge(<MissionChipOf id={mission.id} onOpen={onMission} />) : undefined })),
     ...files,
-  ], [mentions, missions, onMention, onMission, bridge, files]);
+  ], [mentions, missions, heldIds, onMention, onMission, bridge, files]);
   const words = <MarkdownText text={text} size="chat" chips={chips} copyCode={copy} />;
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-item="reply" data-desk-reply={live ? "live" : stopped ? "stopped" : "done"}>
@@ -315,6 +316,12 @@ function answeredWord(item: DeskApproval): MessageKey {
   }
 }
 
+/** A card's buttons by what pressing them does, not by the word they read (an agent with two options of a kind has no word on either): a refusal as words, an allow-once option the card's primary, any other secondary. */
+function buttonVariant(button: ApprovalButton): "text" | "secondary" | "ask" {
+  if (refuses(button)) return "text";
+  return button.option?.kind === "allow_once" ? "ask" : "secondary";
+}
+
 const BUTTON_WORD: Record<ApprovalWord, MessageKey> = {
   reject: "desk.approval.reject",
   allow_always: "desk.approval.allowAlways",
@@ -323,12 +330,14 @@ const BUTTON_WORD: Record<ApprovalWord, MessageKey> = {
 
 /**
  * What Desk's agent asks to run, waiting for the operator (D-92, frame A2 가):
- * the one `!` card without an agent mark, since it is Desk's own. It comes
+ * the card on the ask surface (`border-warning/50 bg-warning/10`) without an
+ * agent mark, since it is Desk's own, its kind (`셸 명령`) first in the ask
+ * colour and then `Desk가 이 일을 하려고 해요`. It comes
  * under `에이전트대로` for each request the agent makes, and under `다 허용`
  * only for one with no allow-once answer. The command on one grey block,
  * folded to two lines when longer, the folder, Desk's reason when it gave
- * one, and the agent's own answers as grey buttons, none the default
- * (`approvalButtons`): `거절…` opens one line whose words go to Desk with the
+ * one, and the agent's own answers (`approvalButtons`), `거절…` as words, `항상 허용`
+ * secondary and `한 번 허용` the one primary in the ask colour (`buttonVariant`): `거절…` opens one line whose words go to Desk with the
  * refusal, `항상 허용` and `한 번 허용` go to the agent as its own options, so
  * what the agent keeps allowed is the agent's, as in the terminal. Every
  * button names the agent's own option on hover. Once answered it folds to one
@@ -354,14 +363,12 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
   }
   const refuse = ({ option }: ApprovalButton) => onAnswer(option?.id ?? null, line.trim() || undefined);
   return (
-    <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={t(APPROVAL_CARD[item.card])} data-desk-item="approval" data-desk-approval={item.state}>
-      <p className="flex min-w-0 items-center gap-sm">
-        <StatusMark mark="turn" />
-        <span className="font-medium text-foreground">{t("desk.approval.title")}</span>
-        <span className="-ml-xs min-w-0 truncate text-caption text-muted-foreground">{t(APPROVAL_CARD[item.card])}</span>
+    <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-warning/50 bg-warning/10 px-md py-sm" aria-label={t(APPROVAL_CARD[item.card])} data-desk-item="approval" data-desk-approval={item.state}>
+      <p className="flex min-w-0 items-baseline gap-sm">
+        <span className="shrink-0 text-micro font-semibold text-warning" data-desk-approval-kind-label={item.card}>{t(APPROVAL_CARD[item.card])}</span>
+        <span className="min-w-0 truncate font-medium text-foreground">{t("desk.approval.title")}</span>
       </p>
-      {/* What follows the title starts where the title does, so the card reads as one item under its mark. */}
-      <div className="flex min-w-0 flex-col gap-xs pl-[calc(var(--size-agent-mark)+var(--spacing-sm))]">
+      <div className="flex min-w-0 flex-col gap-xs">
       <ApprovalCommand command={item.command} />
       {item.folder ? (
         <p className="flex min-w-0 items-baseline gap-xs text-micro text-muted-foreground">
@@ -399,7 +406,7 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
             // The button keeps its own word as its name; the hint adds the agent's own name for the option when the word is Hide's.
             return (
               <Hint key={option?.id ?? "reject"} label={option?.name ?? label} active={word !== null && option !== null}>
-                <Button variant="secondary" size="sm" aria-label={label} data-desk-approval-option={option?.id} data-desk-approval-kind={option?.kind ?? "reject"} onClick={() => (refuses(button) ? setRefusing(button) : onAnswer(option?.id ?? null))}>
+                <Button variant={buttonVariant(button)} size="sm" aria-label={label} data-desk-approval-option={option?.id} data-desk-approval-kind={option?.kind ?? "reject"} onClick={() => (refuses(button) ? setRefusing(button) : onAnswer(option?.id ?? null))}>
                   {label}
                 </Button>
               </Hint>

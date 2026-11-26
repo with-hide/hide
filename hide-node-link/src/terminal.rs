@@ -140,12 +140,14 @@ pub enum TerminalControl {
     /// The paste is being cancelled: keys for the pane are refused until it
     /// is released.
     AttachmentRefuse { intent: String },
-    /// The paste's text is ready: write it, then the keys held behind it,
-    /// to the session of `generation`.
+    /// The paste is ready: paste each shell-quoted path to the session of
+    /// `generation`, a space after each, then write the keys held behind
+    /// them. The pane's holder wraps each path in bracketed paste only when
+    /// the program turned that mode on, which only it can know.
     AttachmentDeliver {
         intent: String,
         generation: u64,
-        paste: String,
+        paths: Vec<String>,
     },
     /// The paste ended without being written: drop the keys held behind it.
     AttachmentRelease { intent: String },
@@ -270,6 +272,10 @@ pub enum TerminalDown {
         target: KeyTarget,
         data: String,
         typed_at_unix_ms: u64,
+        /// The text was pasted: the pane's holder wraps it for the program's
+        /// paste mode when it writes it ([`TerminalNode::type_into`]).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        paste: bool,
     },
     View {
         pane: String,
@@ -423,9 +429,13 @@ pub trait TerminalNode: Send + Sync {
         reply(Err(InputPermitError::Unavailable));
     }
 
-    /// A key from the screen, typed at `typed_at_unix_ms`. A key the node
-    /// cannot take is reported, never written elsewhere.
-    fn key(&self, target: KeyTarget, bytes: Vec<u8>, typed_at_unix_ms: u64);
+    /// What a screen typed into a pane at `typed_at_unix_ms`: keys, or text
+    /// it pasted. A paste goes to the pane's holder as a paste, which the
+    /// holder wraps in bracketed paste only when the program turned that mode
+    /// on: a screen draws from fragments that never carry the mode, so it
+    /// cannot know (with-hide/hide issue 2952). Input the node cannot take is
+    /// reported, never written elsewhere.
+    fn type_into(&self, target: KeyTarget, input: ScreenInput, typed_at_unix_ms: u64);
 
     /// The grid the screen draws the pane at; `new_view` is a view that has
     /// nothing drawn yet and needs a full frame.
@@ -433,6 +443,28 @@ pub trait TerminalNode: Send + Sync {
 
     /// A reader lost the pane's output: draw it again from a full frame.
     fn redraw(&self, pane: &str);
+}
+
+/// What a screen typed into a pane ([`TerminalNode::type_into`]): keys
+/// already encoded, or pasted text, its line breaks carriage returns as a
+/// terminal sends them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ScreenInput {
+    Keys(Vec<u8>),
+    Paste(Vec<u8>),
+}
+
+impl ScreenInput {
+    /// Its bytes, which a cap counts.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Keys(bytes) | Self::Paste(bytes) => bytes.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Where a node's reports go: the core, for this machine's node, or the

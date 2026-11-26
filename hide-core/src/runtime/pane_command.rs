@@ -534,7 +534,15 @@ mod tests {
                 Err(hide_node_link::terminal::InputPermitError::Unavailable)
             });
         }
-        fn key(&self, target: hide_node_link::terminal::KeyTarget, bytes: Vec<u8>, _at: u64) {
+        fn type_into(
+            &self,
+            target: hide_node_link::terminal::KeyTarget,
+            input: hide_node_link::terminal::ScreenInput,
+            _at: u64,
+        ) {
+            let hide_node_link::terminal::ScreenInput::Keys(bytes) = input else {
+                unreachable!("a pane command types into a guest's pane and never pastes there");
+            };
             if let hide_node_link::terminal::KeyTarget::Pane(pane) = target {
                 self.typed.lock().unwrap().push((pane, bytes));
             }

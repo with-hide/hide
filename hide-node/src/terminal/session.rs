@@ -280,10 +280,7 @@ pub(super) enum WriterCommand {
     Mouse(hide_holder_protocol::Mouse),
     /// Bytes for the pane, counted against [`MAX_UNWRITTEN_INPUT_BYTES`] by
     /// their length.
-    Input {
-        bytes: Vec<u8>,
-        written: Option<Written>,
-    },
+    Input(Vec<u8>),
     /// Pasted text, counted by its length.
     Paste(Vec<u8>),
     /// Named keys, each counted as one byte.
@@ -306,10 +303,7 @@ pub(super) enum WriterCommand {
 
 impl WriterCommand {
     fn input(bytes: &[u8]) -> Self {
-        Self::Input {
-            bytes: bytes.to_vec(),
-            written: None,
-        }
+        Self::Input(bytes.to_vec())
     }
 
     fn cost(&self) -> usize {
@@ -317,7 +311,7 @@ impl WriterCommand {
             Self::Scroll { .. } | Self::Mouse(_) | Self::Resize(_) | Self::Redraw(_) => {
                 CONTROL_LINE_COST
             }
-            Self::Input { bytes, .. } | Self::Paste(bytes) => bytes.len(),
+            Self::Input(bytes) | Self::Paste(bytes) => bytes.len(),
             Self::Keys(keys) => keys.len(),
             Self::Submit(submit) => super::input::submit_len(submit),
             Self::Engine { input, .. } => input.len(),
@@ -326,15 +320,11 @@ impl WriterCommand {
     }
 
     /// The command never reached the writer. Its sender hears the refusal
-    /// itself, so a paste's [`Written`] is told nothing: it would run under
+    /// itself, so a barrier's [`Written`] is told nothing: it would run under
     /// the service's lock, which its own callback takes.
     fn refused(self, refusal: WriteRefused) -> Result<(), WriteRefused> {
         match self {
-            Self::Input {
-                written: Some(written),
-                ..
-            }
-            | Self::Barrier(written) => written.disarm(),
+            Self::Barrier(written) => written.disarm(),
             Self::Engine { command, .. } => command.refused(match &refusal {
                 WriteRefused::Full => "Pane input exceeded the writer backlog limit",
                 WriteRefused::Failed(message) | WriteRefused::Unsupported(message) => message,
@@ -661,15 +651,6 @@ impl Session {
         Ok(())
     }
 
-    /// [`Session::write`], telling `written` once the bytes reached the
-    /// session's pipe or could not; an `Err` answer tells it nothing.
-    pub(super) fn write_then(&self, bytes: &[u8], written: Written) -> Result<(), WriteRefused> {
-        self.send(WriterCommand::Input {
-            bytes: bytes.to_vec(),
-            written: Some(written),
-        })
-    }
-
     /// A side-channel write may start after earlier controller writes have
     /// reached the pipe. This barrier emits no terminal protocol or input.
     pub(super) fn after_writes(&self, written: Written) -> Result<(), WriteRefused> {
@@ -790,9 +771,9 @@ fn spawn_session_writer(
                         }
                         (writer.scroll(lines, column, row, modifiers), None, None)
                     }
-                    WriterCommand::Input { bytes, written } => {
+                    WriterCommand::Input(bytes) => {
                         echo.input();
-                        (writer.input(&bytes), None, written)
+                        (writer.input(&bytes), None, None)
                     }
                     WriterCommand::Engine { input, command } => {
                         if !command.begin() {
@@ -1097,7 +1078,7 @@ mod tests {
 
     /// Principle 15 on the local path: a session whose reader stopped holds
     /// at most its cap of input, refuses the rest until it drains, and tells
-    /// a paste it was written only once the pipe took it.
+    /// a barrier behind a paste it was written only once the pipe took it.
     #[test]
     fn a_stalled_session_holds_at_most_its_cap_and_says_written_only_after_the_write() {
         let go = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
@@ -1113,8 +1094,9 @@ mod tests {
         )
         .unwrap();
         let (told, written) = channel();
+        session.write(b"paste").unwrap();
         session
-            .write_then(b"paste", Written::new(move |ok| told.send(ok).unwrap()))
+            .after_writes(Written::new(move |ok| told.send(ok).unwrap()))
             .unwrap();
         // The pipe has not taken the paste, so nobody hears it was written.
         assert!(written.recv_timeout(Duration::from_millis(100)).is_err());
@@ -1149,7 +1131,7 @@ mod tests {
         drop(session);
     }
 
-    /// A refused paste tells its caller, never its callback: the callback
+    /// A refused barrier tells its caller, never its callback: the callback
     /// takes the service's lock, which the caller holds while it writes. The
     /// write runs on its own thread so a deadlock fails the test instead of
     /// hanging it.
@@ -1161,13 +1143,10 @@ mod tests {
         thread::spawn(move || {
             let _service = held.lock().unwrap();
             let refused = session
-                .write_then(
-                    b"'/tmp/a.png' ",
-                    Written::new(move |written| {
-                        let _service = lock.lock().unwrap();
-                        let _ = called.send(written);
-                    }),
-                )
+                .after_writes(Written::new(move |written| {
+                    let _service = lock.lock().unwrap();
+                    let _ = called.send(written);
+                }))
                 .is_err();
             let _ = answered.send(refused);
             session

@@ -320,13 +320,13 @@ impl ScreenTerminals {
         Ok(())
     }
 
-    /// A key a screen typed: into this machine's pane, or held for the
-    /// core's.
+    /// A key or a paste a screen typed: into this machine's pane, or held
+    /// for the core's, a paste marked as one.
     pub(super) fn key(
         &self,
         connection: u64,
         target: KeyTarget,
-        bytes: Vec<u8>,
+        input: ScreenInput,
         typed_at_unix_ms: u64,
     ) -> Result<(), String> {
         if let KeyTarget::Pane(pane) = &target
@@ -338,14 +338,19 @@ impl ScreenTerminals {
                 );
             };
             link.terminals
-                .key(KeyTarget::Pane(own.to_owned()), bytes, typed_at_unix_ms);
+                .type_into(KeyTarget::Pane(own.to_owned()), input, typed_at_unix_ms);
             return Ok(());
         }
+        let (bytes, paste) = match input {
+            ScreenInput::Keys(bytes) => (bytes, false),
+            ScreenInput::Paste(text) => (text, true),
+        };
         self.up(
             TerminalDown::Key {
                 target,
                 data: encode_base64(&bytes),
                 typed_at_unix_ms,
+                paste,
             },
             connection,
         )
@@ -418,14 +423,14 @@ pub(super) fn take_terminal_key(
     connection: u64,
     event: &Value,
 ) -> Result<Option<String>, String> {
-    let (target, bytes) = terminal_key(event)?;
+    let (target, input) = terminal_key(event)?;
     let typed = match &target {
         KeyTarget::Pane(pane) => Some(pane.clone()),
         KeyTarget::Request(_) => None,
     };
     state
         .terminals
-        .key(connection, target, bytes, crate::server::unix_ms_now())?;
+        .key(connection, target, input, crate::server::unix_ms_now())?;
     Ok(typed)
 }
 
@@ -596,8 +601,12 @@ mod tests {
         let first_screen = terminals.unsent.watch(1);
         let second_screen = terminals.unsent.watch(2);
         let key = |text: &str| KeyTarget::Pane(format!("core-pane-{text}"));
-        terminals.key(1, key("a"), b"a".to_vec(), 1).unwrap();
-        terminals.key(2, key("b"), b"b".to_vec(), 2).unwrap();
+        terminals
+            .key(1, key("a"), ScreenInput::Keys(b"a".to_vec()), 1)
+            .unwrap();
+        terminals
+            .key(2, key("b"), ScreenInput::Keys(b"b".to_vec()), 2)
+            .unwrap();
         let now = Instant::now();
         let mut held = lock(&terminals.held);
         let (first, typed_by) = held.next(now, &terminals.unsent).expect("the first key");
@@ -614,8 +623,19 @@ mod tests {
         // A paste larger than the bound goes alone; behind it, a key that
         // would cross the bound is refused.
         let paste = vec![b'x'; HELD_BYTES * 2];
-        terminals.key(3, key("c"), paste, 3).unwrap();
-        let refused = terminals.key(3, key("d"), b"d".to_vec(), 4).unwrap_err();
+        terminals
+            .key(3, key("c"), ScreenInput::Paste(paste), 3)
+            .unwrap();
+        assert!(
+            lock(&terminals.held)
+                .lines
+                .back()
+                .is_some_and(|line| line.text.contains(r#""paste":true"#)),
+            "a paste goes up marked as one"
+        );
+        let refused = terminals
+            .key(3, key("d"), ScreenInput::Keys(b"d".to_vec()), 4)
+            .unwrap_err();
         assert!(refused.contains("not sent"), "{refused}");
         // This machine's own panes never wait for the relay; with no live
         // link a key for one is refused to its screen, never lost unsaid.
@@ -623,7 +643,7 @@ mod tests {
             .key(
                 3,
                 KeyTarget::Pane("remote:screen:pane:w:p".to_owned()),
-                b"x".to_vec(),
+                ScreenInput::Keys(b"x".to_vec()),
                 5,
             )
             .unwrap_err();
@@ -641,7 +661,9 @@ mod tests {
         let first_screen = terminals.unsent.watch(7);
         let second_screen = terminals.unsent.watch(8);
         let key = KeyTarget::Pane("core-pane".to_owned());
-        terminals.key(7, key.clone(), b"a".to_vec(), 1).unwrap();
+        terminals
+            .key(7, key.clone(), ScreenInput::Keys(b"a".to_vec()), 1)
+            .unwrap();
         let failing = Box::pin(futures_util::sink::unfold(
             (),
             |(), _: tungstenite::Message| async { Err::<(), ()>(()) },
@@ -650,7 +672,9 @@ mod tests {
         let told = first_screen.take().expect("the failed write is told");
         assert!(told.contains("cut off"), "{told}");
 
-        terminals.key(8, key, b"b".to_vec(), 2).unwrap();
+        terminals
+            .key(8, key, ScreenInput::Keys(b"b".to_vec()), 2)
+            .unwrap();
         let stalled = Box::pin(futures_util::sink::unfold(
             (),
             |(), _: tungstenite::Message| std::future::pending::<Result<(), ()>>(),
@@ -681,7 +705,9 @@ mod tests {
         let screen = terminals.unsent.watch(1);
         let key = KeyTarget::Pane("core-pane".to_owned());
         terminals.redraw(1, "core-pane");
-        terminals.key(1, key.clone(), b"a".to_vec(), 1).unwrap();
+        terminals
+            .key(1, key.clone(), ScreenInput::Keys(b"a".to_vec()), 1)
+            .unwrap();
         let late = Instant::now() + HELD_FOR + Duration::from_millis(1);
         lock(&terminals.held).expire(late, &terminals.unsent);
         assert_eq!(
@@ -713,14 +739,20 @@ mod tests {
         let left = terminals.unsent.watch(3);
         let key = KeyTarget::Pane("core-pane".to_owned());
         for at in 0..70 {
-            terminals.key(1, key.clone(), b"a".to_vec(), at).unwrap();
+            terminals
+                .key(1, key.clone(), ScreenInput::Keys(b"a".to_vec()), at)
+                .unwrap();
         }
-        terminals.key(3, key.clone(), b"c".to_vec(), 70).unwrap();
+        terminals
+            .key(3, key.clone(), ScreenInput::Keys(b"c".to_vec()), 70)
+            .unwrap();
         drop(left);
         let late = Instant::now() + HELD_FOR + Duration::from_millis(1);
         lock(&terminals.held).expire(late, &terminals.unsent);
         for at in 0..70 {
-            terminals.key(2, key.clone(), b"b".to_vec(), at).unwrap();
+            terminals
+                .key(2, key.clone(), ScreenInput::Keys(b"b".to_vec()), at)
+                .unwrap();
         }
         lock(&terminals.held).clear(&terminals.unsent);
 

@@ -30,8 +30,8 @@ use hide_node::terminal::OutputSink;
 use hide_node::terminal::copies::MAX_WAITING_COPIES;
 use hide_node_link::address::is_pane_of;
 use hide_node_link::terminal::{
-    TerminalClipboard, TerminalDown, TerminalLine, TerminalNode, TerminalOutput, TerminalUp,
-    decode_base64, encode_base64,
+    ScreenInput, TerminalClipboard, TerminalDown, TerminalLine, TerminalNode, TerminalOutput,
+    TerminalUp, decode_base64, encode_base64,
 };
 use serde_json::json;
 
@@ -761,7 +761,12 @@ fn take_down(text: &str, terminals: &dyn TerminalNode, own_node: &str) -> Result
     let line: TerminalLine<TerminalDown> =
         serde_json::from_str(text).map_err(|error| format!("{:?}", error.classify()))?;
     match line.terminal {
-        TerminalDown::Key { target, data, .. } => {
+        TerminalDown::Key {
+            target,
+            data,
+            paste,
+            ..
+        } => {
             if let hide_node_link::terminal::KeyTarget::Pane(pane) = &target
                 && is_pane_of(pane, own_node)
             {
@@ -770,7 +775,13 @@ fn take_down(text: &str, terminals: &dyn TerminalNode, own_node: &str) -> Result
             let bytes = decode_base64(&data)?;
             // Stamped here, on the core's clock, as a key from a screen of
             // this machine is.
-            terminals.key(target, bytes, crate::server::unix_ms_now());
+            let now = crate::server::unix_ms_now();
+            let input = if paste {
+                ScreenInput::Paste(bytes)
+            } else {
+                ScreenInput::Keys(bytes)
+            };
+            terminals.type_into(target, input, now);
         }
         // A node's screens send their views with their other events, so the
         // core decides the grid each is drawn at (`pane_sizes`).
@@ -798,7 +809,10 @@ mod tests {
 
     impl TerminalNode for Keys {
         fn control(&self, _: hide_node_link::terminal::TerminalControl) {}
-        fn key(&self, _: hide_node_link::terminal::KeyTarget, bytes: Vec<u8>, _: u64) {
+        fn type_into(&self, _: hide_node_link::terminal::KeyTarget, input: ScreenInput, _: u64) {
+            let ScreenInput::Keys(bytes) = input else {
+                unreachable!("these tests relay keys only")
+            };
             lock(&self.0).push(bytes);
         }
         fn view(&self, _: &str, _: hide_node_link::terminal::GridSize, _: bool) {}
@@ -818,6 +832,72 @@ mod tests {
         .unwrap();
         assert_eq!(take_down(&line, &keys, "device"), Err("control".into()));
         assert!(lock(&keys.0).is_empty());
+    }
+
+    /// What a relay typed into this machine's panes: each paste, and each
+    /// run of keys.
+    #[derive(Default)]
+    struct Typed {
+        pastes: Mutex<Vec<(String, Vec<u8>)>>,
+        keys: Mutex<Vec<Vec<u8>>>,
+    }
+
+    impl TerminalNode for Typed {
+        fn control(&self, _: hide_node_link::terminal::TerminalControl) {}
+        fn type_into(
+            &self,
+            target: hide_node_link::terminal::KeyTarget,
+            input: ScreenInput,
+            _: u64,
+        ) {
+            match input {
+                ScreenInput::Keys(bytes) => lock(&self.keys).push(bytes),
+                ScreenInput::Paste(text) => {
+                    let hide_node_link::terminal::KeyTarget::Pane(pane) = target else {
+                        unreachable!("these tests paste into panes")
+                    };
+                    lock(&self.pastes).push((pane, text));
+                }
+            }
+        }
+        fn view(&self, _: &str, _: hide_node_link::terminal::GridSize, _: bool) {}
+        fn redraw(&self, _: &str) {}
+    }
+
+    /// with-hide/hide issue 2952: a node's screen pastes into this machine's pane
+    /// as a paste, for that pane's holder to wrap; its own pane is still not
+    /// the relay's.
+    #[test]
+    fn a_node_screens_paste_reaches_this_machines_pane_as_a_paste() {
+        let typed = Typed::default();
+        let line = |pane: &str, paste: bool| {
+            serde_json::to_string(&TerminalLine {
+                terminal: TerminalDown::Key {
+                    target: hide_node_link::terminal::KeyTarget::Pane(pane.to_owned()),
+                    data: encode_base64(b"a\rb"),
+                    typed_at_unix_ms: 1,
+                    paste,
+                },
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            take_down(&line("core-pane", true), &typed, "device"),
+            Ok(())
+        );
+        assert_eq!(
+            take_down(&line("core-pane", false), &typed, "device"),
+            Ok(())
+        );
+        assert_eq!(
+            take_down(&line("remote:device:pane:w1:p1", true), &typed, "device"),
+            Err("own_pane".into())
+        );
+        assert_eq!(
+            lock(&typed.pastes).as_slice(),
+            [("core-pane".to_owned(), b"a\rb".to_vec())]
+        );
+        assert_eq!(lock(&typed.keys).as_slice(), [b"a\rb".to_vec()]);
     }
 
     /// A send the node does not take (a large message over a slow forward)
@@ -870,6 +950,7 @@ mod tests {
                 target: hide_node_link::terminal::KeyTarget::Pane("core-pane".to_owned()),
                 data: encode_base64(b"k"),
                 typed_at_unix_ms: 1,
+                paste: false,
             },
         })
         .unwrap();

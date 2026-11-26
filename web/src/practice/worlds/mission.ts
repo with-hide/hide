@@ -23,7 +23,7 @@ import type { MessageKey } from "../../i18n/catalogs";
 import { clientI18n } from "../../i18n/translator";
 import { nextSidebarLens, type AgentChip, type AgentRow, type AgentState, type MemorySection, type Mission, type MissionNode, type PaneFocusRequest, type PaneHeader, type SidebarLens, type DetailItem } from "../../snapshot";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
-import { agent, applyDesk, cardDesk, closedCard, counted, deskSnapshot, focusedPane, hideAiOn, keyText, shellScreen, typed, withLineage, withTasks, type DeskModel, type PracticePlace } from "./kit";
+import { agent, applyDesk, cardDesk, closedCard, counted, deskSnapshot, focusedPane, hideAiOn, shellScreen, typed, typedText, withLineage, withTasks, type DeskModel, type PracticePlace } from "./kit";
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 /** The checkout's folder, as the kit draws it. */
@@ -366,7 +366,7 @@ function apply(model: MissionModel, event: CoreEvent): MissionModel | null {
       return p.stage === model.stage + 1 && BEATS[model.stage] !== undefined ? to(model, p.stage as MissionStage) : null;
     // Only the Conductor is talked to here; keys typed into another pane reach no one.
     case "key":
-      return p.pane_id === CONDUCTOR && typeof p.bytes_base64 === "string" ? typed(model, keyText(p.bytes_base64), submit) : null;
+      return p.pane_id === CONDUCTOR && typeof p.bytes_base64 === "string" ? typed(model, typedText({ bytes_base64: p.bytes_base64, paste: p.paste }), submit) : null;
     case "mission_answer": {
       const answer = answerOf(model, p);
       return answer ? answered(model, answer.line, answer.drop) : null;

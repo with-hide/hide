@@ -625,9 +625,9 @@ fn send_to_guest(
         "text_landed":permitted.is_ok() && text.is_some(),"keys_landed":permitted.is_ok() && enter})
     );
     permitted.map_err(|_| "pane_unavailable".to_owned())?;
-    terminals.key(
+    terminals.type_into(
         hide_node_link::terminal::KeyTarget::Pane(pane.clone()),
-        bytes,
+        hide_node_link::terminal::ScreenInput::Keys(bytes),
         crate::observed::now_unix_ms(),
     );
     serde_json::to_value(PaneSent {

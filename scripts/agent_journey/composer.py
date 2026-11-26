@@ -30,10 +30,11 @@ from . import cells
 
 CELL = "composer"
 TEXT = "hello 안녕하세요"
-# Twelve short lines, pasted as Hide's terminal pastes them: xterm.js turns
-# each line break into CR and brackets the text when the program asked for
-# it (`prepareTextForTerminal`, `bracketTextForPaste`). An LF-separated paste
-# reached Grok 1.0.52 on Windows as eleven prompts (run 39635682277).
+# Twelve short lines, pasted as Hide's terminal pastes them: the window turns
+# each line break into CR (`pasteText`) and the pane's holder brackets the
+# text when the program asked for it (`hide_vt::encode_paste`). An
+# LF-separated paste reached Grok 1.0.52 on Windows as eleven prompts (run
+# 39635682277).
 BLOCK = "\r".join(f"composer check line {number:02d}" for number in range(1, 13))
 PASTE = ("\x1b[200~" + BLOCK + "\x1b[201~").encode()
 # The agents that on Windows read console key records, are never told of a

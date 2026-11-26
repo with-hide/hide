@@ -23,7 +23,7 @@ A file may only go down: a new raw control fails, and a file with fewer than its
 
 | You need | Use | Notes |
 | --- | --- | --- |
-| An action | `Button` | `variant`: `default` (the one primary action), `secondary`, `outline`, `ghost` (toolbar and row actions), `destructive`, `link`, `text`, `text-link`, `row-action`, `tint` (the accent's light fill with the accent as its words, for the primary action of a small surface that is not a screen or a dialog, such as a corner notice's `지금 업데이트`); `size`: `default`, `sm`, `lg`, `icon`, `icon-sm`, `icon-xs`, `inline`. The lime fill (`default`) is for the one irreversible primary action of a screen or dialog (a submit, a confirm); an action inside a card, a list or a row is `secondary`, `text` or `row-action`, and lime otherwise marks only the focus ring and a selection. |
+| An action | `Button` | `variant`: `default` (the one primary action), `secondary`, `outline`, `ghost` (toolbar and row actions), `destructive`, `link`, `text`, `text-link`, `row-action`, `tint` (the accent's light fill with the accent as its words, for the primary action of a small surface that is not a screen or a dialog, such as a corner notice's `지금 업데이트`), `ask` (the warning amber fill, the primary action of a card on the ask surface such as Desk's approval card's `한 번 허용`); `size`: `default`, `sm`, `lg`, `icon`, `icon-sm`, `icon-xs`, `inline`. The lime fill (`default`) is for the one irreversible primary action of a screen or dialog (a submit, a confirm); an action inside a card, a list or a row is `secondary`, `text` or `row-action`, and lime otherwise marks only the focus ring and a selection. |
 | An action that reads as words in a row or a sentence (더 보기, 접기, 열기) | `Button variant="text" size="inline"`; `variant="text-link"` when it underlines on hover | `inline` keeps the surrounding text's size; set one with `className` (`text-caption`, `text-micro`) only to differ from it. |
 | An icon-only control | `Button size="icon"`, `"icon-sm"` or `"icon-xs"` (a dense row) inside `Hint` | The hint's label is the control's accessible name. |
 | An icon action inside a row that lights on hover | `Button variant="row-action" size="icon-xs"` | `ghost` would light in the row's own hover color and vanish. |
@@ -37,7 +37,7 @@ A file may only go down: a new raw control fails, and a file with fewer than its
 | One of a long list | `Select` | |
 | A text field | `Input`; `Textarea` for several lines | `Textarea bare` inside a composer whose container is the frame. |
 | A range | `Slider` | |
-| A menu from a button | `DropdownMenu` | Hide's action menus are `EntryDropdown`, `EntryContextMenu` and `EntryPointMenu` in `components/entry-menu.tsx`. |
+| A menu from a button | `DropdownMenu` | Hide's action menus are `EntryDropdown`, `EntryContextMenu` and `EntryPointMenu` in `components/entry-menu.tsx`. A short choice among a few (two or three rows that each carry a line of description) uses `DropdownMenuRadioItem mark="check"`: a green ✓ and a lit row for the chosen one, where the default `dot` marks a long list's choice quietly (the gallery's Dropdown Menu › Radio Check). |
 | A menu on right-click | `ContextMenu` | |
 | A floating panel with controls | `Popover` | |
 | A modal task | `Dialog` | `DialogHeader`, `DialogBody`, `DialogFooter`. |
@@ -63,7 +63,7 @@ These already draw a thing Hide shows in several places; use them instead of dra
 | A map page, a mission's or a plan's | `MapPage`, `MapSplit` (the map with the column beside it), and in that column `MapPanel` with `MapPanelHead` for the picked card (`map-page.tsx`); what a step's card, row and panel say comes from `plans.ts` (`stepStatusWord`, `stepLeft`) |
 | A state pill's colour | `PILL_TONE` and `STATE_PILL_TONE` (`mission-tone.tsx`) |
 | A letter | `letter-mark.tsx`: `LetterTag` at the head of a letter's line, `RowLetterMark` on a sidebar row, `PaneLetterButton` in a pane header |
-| A mission a session conducts | `MissionChip` (`mission-chip.tsx`), reading the store; `MissionChipView` draws one from values a caller holds |
+| A mission a session conducts | `MissionChip` (`mission-chip.tsx`), reading the store; `MissionChipView` draws one from values a caller holds; Desk draws a mission in two lines (`DeskMissionChip` for a card's, `MissionChipOf` for an answer's and the head of the session beside Desk), the sidebar's Conductor row keeping the one line |
 | An `@name` in a line of words | `MentionChip` (`mention-chip.tsx`), `kind` `session` or `project`; `lead` (a project's ⌂) replaces `@` on the same colour; Desk draws a project through `DeskMentionChip` in its messages, threads and the composer's chips, and a session there as `SessionChip` |
 | A session named in a Desk line (a reply, a letter, a thread, the operator's message, a composer chip), with its card on hover | `SessionChip` (`components/desk/session-chip.tsx`), in the session colour of `MentionChip`, fed by `SessionChipProvider`; `SessionCard` is the card alone |
 | An agent's runtime logo | `agent-logo.tsx` |

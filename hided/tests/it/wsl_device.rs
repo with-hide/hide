@@ -35,7 +35,7 @@ use hide_node_link::holders::{HolderRecovery, HolderStart, PaneHolders};
 use hide_node_link::link_panes::LinkPanes;
 use hide_node_link::protocol::{Call, RootOpened, RootRef};
 use hide_node_link::register::Registrable;
-use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalReport};
+use hide_node_link::terminal::{GridSize, KeyTarget, ScreenInput, TerminalControl, TerminalReport};
 use hide_node_link::{ErrorCode, LinkError, NodeLink, call_as, call_as_with_progress};
 use serde_json::{Value, json};
 
@@ -421,9 +421,9 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
             .any(|report| matches!(report, TerminalReport::State { pane: reported, state } if reported == &pane && state.state == "controlling"))
             .then_some(())
     });
-    terminals.key(
+    terminals.type_into(
         KeyTarget::Pane(pane.clone()),
-        b"printf 'wsl_%s\\n' answered\r".to_vec(),
+        ScreenInput::Keys(b"printf 'wsl_%s\\n' answered\r".to_vec()),
         1,
     );
     wait_for("the command's output", || {
@@ -493,9 +493,9 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
             .any(|report| matches!(report, TerminalReport::State { pane: reported, state } if reported == &pane && state.state == "controlling"))
             .then_some(())
     });
-    terminals.key(
+    terminals.type_into(
         KeyTarget::Pane(pane.clone()),
-        b"printf 'wsl_%s\\n' again\r".to_vec(),
+        ScreenInput::Keys(b"printf 'wsl_%s\\n' again\r".to_vec()),
         2,
     );
     wait_for("the new link's command output", || {
@@ -815,9 +815,11 @@ fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reco
         manual: false,
     });
     wait_for("the pane's terminal", || controlling(&sink, &pane));
-    terminals.key(
+    terminals.type_into(
         KeyTarget::Pane(pane.clone()),
-        format!("python3 -m http.server {PAGE_PORT} --bind 127.0.0.1\r").into_bytes(),
+        ScreenInput::Keys(
+            format!("python3 -m http.server {PAGE_PORT} --bind 127.0.0.1\r").into_bytes(),
+        ),
         1,
     );
     let runtime = tokio::runtime::Runtime::new().unwrap();

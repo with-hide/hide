@@ -715,13 +715,14 @@
     "to_node": {
       "hello": "0x01",
       "input": "0x02",
+      "paste": "0x04",
       "redraw": "0x10",
       "resize": "0x03",
       "terminate": "0x05"
     },
     "versions": [
       1,
-      1
+      2
     ]
   }
 }

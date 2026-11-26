@@ -13,7 +13,13 @@ use std::fmt;
 
 pub const MAGIC: [u8; 8] = *b"HIDETAP1";
 pub const OLDEST_TAP: u16 = 1;
-pub const NEWEST_TAP: u16 = 1;
+pub const NEWEST_TAP: u16 = PASTE_TAP;
+/// The first tap that carries [`ToNode::Paste`]: a screen's paste, which the
+/// node hands the pane's holder to wrap for the program's paste mode
+/// (with-hide/hide issue 2952). A node on 1 skips that kind, so a host sends it
+/// only to a node that welcomed it at this version or later, and types a
+/// paste as [`ToNode::Input`] to one on 1, as it did before.
+pub const PASTE_TAP: u16 = 2;
 
 /// The most bytes of output a node keeps waiting for a slow host.
 pub const CAP_BYTES: usize = 4 * 1024 * 1024;
@@ -39,11 +45,30 @@ impl std::error::Error for TapError {}
 /// What the host sends the node.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToNode {
-    Hello { oldest: u16, newest: u16 },
-    Input { pane: String, bytes: Vec<u8> },
-    Resize { pane: String, rows: u16, cols: u16 },
-    Terminate { pane: String },
-    Redraw { pane: String },
+    Hello {
+        oldest: u16,
+        newest: u16,
+    },
+    Input {
+        pane: String,
+        bytes: Vec<u8>,
+    },
+    /// Text a screen pasted, its line breaks carriage returns; from tap 2.
+    Paste {
+        pane: String,
+        text: Vec<u8>,
+    },
+    Resize {
+        pane: String,
+        rows: u16,
+        cols: u16,
+    },
+    Terminate {
+        pane: String,
+    },
+    Redraw {
+        pane: String,
+    },
 }
 
 /// What the node sends the host.
@@ -89,6 +114,7 @@ pub mod kind {
     pub const HELLO: u8 = 0x01;
     pub const INPUT: u8 = 0x02;
     pub const RESIZE: u8 = 0x03;
+    pub const PASTE: u8 = 0x04;
     pub const TERMINATE: u8 = 0x05;
     pub const REDRAW: u8 = 0x10;
     pub const WELCOME: u8 = 0x81;
@@ -184,6 +210,11 @@ impl ToNode {
                 out.extend_from_slice(bytes);
                 kind::INPUT
             }
+            Self::Paste { pane, text } => {
+                put_pane(&mut out, pane)?;
+                out.extend_from_slice(text);
+                kind::PASTE
+            }
             Self::Resize { pane, rows, cols } => {
                 put_pane(&mut out, pane)?;
                 put_size(&mut out, *rows, *cols);
@@ -217,6 +248,10 @@ impl ToNode {
             kind::INPUT => Self::Input {
                 pane: reader.pane()?,
                 bytes: reader.rest(),
+            },
+            kind::PASTE => Self::Paste {
+                pane: reader.pane()?,
+                text: reader.rest(),
             },
             kind::RESIZE => Self::Resize {
                 pane: reader.pane()?,
@@ -346,6 +381,10 @@ mod tests {
             ToNode::Input {
                 pane: pane(),
                 bytes: b"ls\r".to_vec(),
+            },
+            ToNode::Paste {
+                pane: pane(),
+                text: b"one\rtwo".to_vec(),
             },
             ToNode::Resize {
                 pane: pane(),
