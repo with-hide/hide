@@ -348,7 +348,7 @@ class TableWidget extends WidgetType {
     const root = document.createElement("div");
     root.className = "cm-md-table";
     const react = createRoot(root);
-    react.render(createElement(Drawn, { drawn: () => view.requestMeasure(), children: renderMarkdown(this.source, { html: true, link: liveLinkAddress, parts: this.parts }) }));
+    react.render(this.drawing(view));
     tableRoots.set(root, react);
     // A picture in a cell changes the table's height when it arrives or gives up.
     for (const type of ["load", "error"]) root.addEventListener(type, () => view.requestMeasure(), true);
@@ -370,6 +370,15 @@ class TableWidget extends WidgetType {
       });
     }
     return root;
+  }
+  updateDOM(dom: HTMLElement, view: EditorView): boolean {
+    const react = tableRoots.get(dom);
+    if (!react) return false;
+    react.render(this.drawing(view));
+    return true;
+  }
+  private drawing(view: EditorView): ReactElement {
+    return createElement(Drawn, { drawn: () => view.requestMeasure(), children: renderMarkdown(this.source, { html: true, link: liveLinkAddress, parts: this.parts }) });
   }
   destroy(dom: HTMLElement): void {
     const react = tableRoots.get(dom);
@@ -402,8 +411,7 @@ class CodeHeadWidget extends WidgetType {
     const root = document.createElement("span");
     root.className = "cm-md-code-head-row";
     const react = createRoot(root);
-    const action = this.copy ? createElement(CopyWords, { text: this.code, what: "code block", copy: this.copy, quiet: true }) : undefined;
-    react.render(createElement(CodeBlockHead, { language: this.language, action }));
+    react.render(this.head());
     tableRoots.set(root, react);
     root.addEventListener("mousedown", (event) => {
       if (event.button !== 0 || (event.target instanceof Element && event.target.closest("[data-copy-words]"))) return;
@@ -417,6 +425,16 @@ class CodeHeadWidget extends WidgetType {
     const react = tableRoots.get(dom);
     tableRoots.delete(dom);
     if (react) queueMicrotask(() => react.unmount());
+  }
+  updateDOM(dom: HTMLElement): boolean {
+    const react = tableRoots.get(dom);
+    if (!react) return false;
+    react.render(this.head());
+    return true;
+  }
+  private head(): ReactElement {
+    const action = this.copy ? createElement(CopyWords, { text: this.code, what: "code block", copy: this.copy, quiet: true }) : undefined;
+    return createElement(CodeBlockHead, { language: this.language, action });
   }
   ignoreEvent(): boolean {
     return true;
