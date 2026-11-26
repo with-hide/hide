@@ -12,7 +12,7 @@ import { useShellStore } from "../store";
 import type { DispatchFn } from "../ws";
 import { DelegationTab } from "./DelegationTab";
 
-// Settings › Delegation: the agent list as the operator edits it for whoever
+// Settings › Models by purpose: the agent list as the operator edits it for whoever
 // hands work to an agent, with Hide's suggested wording for a row's purpose
 // beside the free text.
 

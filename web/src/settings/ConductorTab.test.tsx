@@ -111,13 +111,13 @@ it("puts the merged-worktree cleanup switch right under the cap and the scope, o
   } finally { await off.unmount(); }
 });
 
-it("lists no candidate table beside the cap and the scope, only a link that opens Settings › Delegation with how many entries the list has", async () => {
+it("lists no candidate table beside the cap and the scope, only a link that opens Settings › Models by purpose with how many entries the list has", async () => {
   const tab = await mount({ ...DEFAULT_CONDUCTOR, candidates: [{ agent: "claude", purpose: "" }, { agent: "codex", purpose: "" }] });
   try {
     expect(document.querySelector("[data-conductor-candidate]")).toBeNull();
     const row = document.querySelector<HTMLElement>("[data-conductor-models]")!;
     expect(row.getAttribute("data-conductor-models")).toBe("2");
     expect(row.textContent).toContain("Agents and models to hand work to");
-    expect(row.querySelector("button")?.textContent).toBe("Open Delegation (2)");
+    expect(row.querySelector("button")?.textContent).toBe("Open Models by purpose (2)");
   } finally { await tab.unmount(); }
 });

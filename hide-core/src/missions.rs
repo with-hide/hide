@@ -55,7 +55,7 @@ pub use crate::dag::NODE_LIMIT;
 pub const CAP_LIMIT: u8 = 16;
 /// The concurrency cap a fresh install starts with (D-08).
 pub const DEFAULT_CAP: u8 = 4;
-/// Rows of the operator's agent list in Settings › Delegation (D-31).
+/// Rows of the operator's agent list in Settings › Models by purpose (D-31).
 pub const CANDIDATE_LIMIT: usize = 16;
 /// Dependencies one node may name.
 const DEPENDENCY_LIMIT: usize = 16;

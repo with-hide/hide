@@ -4468,7 +4468,7 @@ impl Runtime {
         }))
     }
 
-    /// The operator's agent list (Settings › Delegation) as `hide agent
+    /// The operator's agent list (Settings › Models by purpose) as `hide agent
     /// catalog` and `hide mission settings` name it for whoever chooses whom
     /// to start; nothing is refused for being outside it (PRD
     /// agent-profiles-phase2 B11, B15): each row's agent item as

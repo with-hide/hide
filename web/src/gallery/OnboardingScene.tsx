@@ -192,7 +192,7 @@ const SCENE_MOBILE: MobileState = {
   push_mode: "app_closed",
   now_ms: 0,
 };
-/** Settings › Delegation's list and Settings › Mission's values, in invented words. */
+/** Settings › Models by purpose's list and Settings › Mission's values, in invented words. */
 const SCENE_CONDUCTOR = {
   concurrency: 4, default_scope: "pr", default_strength: "normal", clean_merged: true,
   candidates: [

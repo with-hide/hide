@@ -9,7 +9,7 @@ import { CapControl, CleanMergedControl, ConductorError, ScopeControl, StrengthC
 // Settings › Mission (PRD software-factory-conductor D-31, B48, B49): how
 // many agents a mission runs at once, how far a mission goes when it does not
 // say, whether a merged node's worktree is cleaned up (operator decision
-// 2026-11-02, every mission at once), a link to the agent list (Settings › Delegation) a Conductor chooses its workers and checkers by, and
+// 2026-11-02, every mission at once), a link to the agent list (Settings › Models by purpose) a Conductor chooses its workers and checkers by, and
 // how strongly a new mission is checked. The controls live in
 // `ConductorControls.tsx`; this page lays them out as settings rows, and the
 // mission screen's ⚙ opens it (PRD mission-screen B10).

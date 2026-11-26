@@ -13,7 +13,7 @@
 //! `models_read_timeout` with the CLI's default model, so a plan made from
 //! it is never empty.
 //!
-//! `candidates` is the operator's agent list (Settings › Delegation): whom
+//! `candidates` is the operator's agent list (Settings › Models by purpose): whom
 //! they want work handed to and what each row is for. Every agent that
 //! chooses who to start reads it here; nothing is refused for being outside
 //! it.

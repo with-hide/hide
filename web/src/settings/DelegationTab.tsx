@@ -3,7 +3,7 @@ import { useInterfaceTranslation } from "../i18n/client";
 import type { Actions } from "../actions";
 import { CandidateAdd, CandidateRows, ConductorError, useConductorEdit } from "./ConductorControls";
 
-// Settings › Delegation (operator decision 2026-11-26): the agents and models
+// Settings › Models by purpose (operator decision 2026-11-26): the agents and models
 // the operator wants work handed to, each with a line on what it is for. Desk,
 // a mission's Conductor and any agent that starts another read it as `hide
 // agent catalog`'s `candidates`; it limits none of them. The value is

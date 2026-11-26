@@ -128,7 +128,7 @@ it("edits only after the variables' values are read, and deletes after naming th
   // What uses it, each with what the delete does: the project goes back to the default, the agent list's rows stay as a missing profile (agent-profiles-phase2 B22).
   expect(tab.all("[data-profile-use]").map((row) => [row.dataset.profileUse, row.textContent])).toEqual([
     ["project", "blog · goes back to the agent default"],
-    ["candidates", "2 rows in Delegation · stays as Missing profile"],
+    ["candidates", "2 rows in Models by purpose · stays as Missing profile"],
     ["hide_ai", "Hide AI · stays as Missing profile and is passed over"],
   ]);
   await tab.click(tab.q("[data-profile-delete-confirm]"));
