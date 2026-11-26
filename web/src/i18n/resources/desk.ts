@@ -778,7 +778,7 @@ const zh: Catalog<typeof deskEnglish> = {
   "desk.mention.newThread": "新线程",
   "desk.mention.liveSessions": "正在运行的会话 {{count}}",
   "desk.mention.menu": "指定会话或项目",
-  "desk.command.menu": "代理的命令",
+  "desk.command.menu": "智能体的命令",
   "desk.command.heading": "{{agent}} 命令",
   "desk.mention.matched": "会话",
   "desk.mention.childSessions": "子会话",
