@@ -3352,6 +3352,28 @@ mod tests {
         }
     }
 
+    /// A `--force` progress letter whose forced bell was refused, here over
+    /// someone's text in the composer, is an ordinary progress letter after
+    /// it: once the composer clears it rings no bell and rides the next
+    /// handover like any other.
+    #[test]
+    fn a_forced_progress_letter_refused_its_bell_then_rides_like_any_other() {
+        let bell = Bell::start(json!({}));
+        bell.ack(&bell.letter);
+        *bell.screen.lock().unwrap() = CODEX_DRAFT.into();
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        bell.working_since(start - 1_000);
+        let forced = bell.send_kind("forced", "progress", false, true);
+        bell.pass(&mut doorbell, start);
+        assert!(bell.typed().is_empty());
+        assert!(!bell.letter_forced(&forced), "its forced bell was refused");
+        *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+        bell.pass(&mut doorbell, start + 250);
+        assert!(bell.typed().is_empty());
+        assert_eq!(doorbell.held.get(&forced), Some(&Hold::Rides));
+    }
+
     /// PRD engine-bundle-1 B4: a `--force` send reads the recipient's
     /// composer first, and while it shows someone's text, or cannot be read
     /// empty, the send is refused with nothing recorded and nothing typed.
@@ -5681,11 +5703,17 @@ mod tests {
             assert_eq!(doorbell.held.get(id), Some(&Hold::Rides), "{id}");
         }
         assert_eq!(crate::delivery::held::held_for(Hold::Rides), None);
+        // Both letters are past the mid-turn wait here, counted from their
+        // arrival at `start`, so neither is held for it.
         bell.working_since(start - MID_TURN_WAIT_MS);
-        bell.pass(&mut doorbell, start + 1_000);
+        let mid_turn = start + MID_TURN_WAIT_MS + 1_000;
+        bell.pass(&mut doorbell, mid_turn);
         assert!(bell.typed().is_empty(), "mid-turn, past the wait and --now");
+        for id in [&progress, &urgent] {
+            assert_eq!(doorbell.held.get(id), Some(&Hold::Rides), "{id}");
+        }
         let forced = bell.send_kind("forced", "progress", false, true);
-        bell.pass(&mut doorbell, start + 2_000);
+        bell.pass(&mut doorbell, mid_turn + 1_000);
         assert_eq!(bell.typed().len(), 1, "the --force letter is typed");
         assert!(bell.letter_forced(&forced));
     }

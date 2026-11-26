@@ -306,7 +306,8 @@ impl Letter {
     /// at rest or at work: every kind but `progress`, which is news and
     /// never the reason a turn starts, `--now` or not. A progress letter
     /// rides whatever next hands its recipient's letters over: another
-    /// letter's bell, a tool gap, `hide inbox`. A `--force` letter keeps the
+    /// letter's bell, a tool gap, a turn end beside a letter that rings,
+    /// `hide inbox`. A `--force` letter keeps the
     /// bell its sender asked for. Asleep, fewer still wake the agent
     /// ([`Letter::wakes_a_sleeper`]).
     pub(crate) fn rings(&self) -> bool {

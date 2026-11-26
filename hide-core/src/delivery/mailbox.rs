@@ -970,6 +970,10 @@ pub(crate) fn tool_pull(
 
 /// At a safe gap, take this session's bell batch immediately, then letters
 /// whose wait during uninterrupted work is over. Both hooks share the caps.
+/// A turn end continues the agent's turn for what it hands over, so it takes
+/// letters only when one of them rings (`Letter::rings`), the rest riding
+/// with it: a `progress` letter alone starts no turn there, as it rings no
+/// bell at rest. A tool gap starts no turn and takes them as before.
 pub(crate) fn gap_pull(
     ledger: &Ledger,
     actor: &Actor,
@@ -1005,6 +1009,9 @@ pub(crate) fn gap_pull(
                         })))
         })
         .collect();
+    if matches!(point, PullPoint::TurnEnd) && !due.iter().any(|letter| letter.rings()) {
+        return Ok(Intake::default());
+    }
     Ok(render(due, language, bundling))
 }
 
@@ -2100,6 +2107,65 @@ mod tests {
                 [later.id]
             );
         }
+    }
+
+    /// A turn end continues the turn for what it hands over, so a progress
+    /// letter alone is not taken there, even sent with `--now`, while a tool
+    /// gap, which starts no turn, takes it; beside a letter that rings it
+    /// rides the same turn end.
+    #[test]
+    fn a_turn_end_takes_a_progress_letter_only_beside_one_that_rings() {
+        let mut ledger = Ledger::default();
+        let mut recipient = actor("recipient");
+        recipient.kind = "grok".into();
+        recipient.session = crate::engine::tokens::session_digest("native-session");
+        let progress = send(
+            &mut ledger,
+            &actor("worker"),
+            &recipient,
+            "plan",
+            "the plan",
+            "progress",
+            None,
+            1,
+        )
+        .unwrap();
+        ledger.letters[0].immediate = true;
+        let take = |ledger: &Ledger, point: PullPoint| {
+            gap_pull(
+                ledger,
+                &recipient,
+                point,
+                Some(1),
+                2,
+                InterfaceLanguage::English,
+                Bundling::PerSender,
+            )
+            .unwrap()
+            .ids
+        };
+        assert!(take(&ledger, PullPoint::TurnEnd).is_empty());
+        assert_eq!(
+            take(&ledger, PullPoint::Tool),
+            std::slice::from_ref(&progress.id)
+        );
+        let request = send(
+            &mut ledger,
+            &actor("worker"),
+            &recipient,
+            "ask",
+            "which way?",
+            "request",
+            None,
+            2,
+        )
+        .unwrap();
+        ledger.letters[1].immediate = true;
+        let mut taken = take(&ledger, PullPoint::TurnEnd);
+        taken.sort();
+        let mut both = vec![progress.id, request.id];
+        both.sort();
+        assert_eq!(taken, both);
     }
 
     #[test]

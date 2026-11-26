@@ -84,7 +84,7 @@ A `report` to its parent also puts the child to sleep once it rests off the oper
 
 No bell rings for a `progress` letter, at rest or at work, `--now` included (`Letter::rings`): it is news, never the reason a turn starts, and it rides whatever next hands its recipient's letters over.
 On Claude Code and Codex that is the bell of another letter, at rest or mid-turn, whose line counts it among the letters waiting and whose prompt hook hands it over in the same bundle, or `hide inbox`; an operator's prompt hands over no letter body, only the count line, and a status cell's bell takes no letters ([Hide's notices are status cells](#hides-notices-are-status-cells)).
-A kind that takes letters at its tools takes it at a tool call once its wait is over, as any letter ([Letters while the agent works](#letters-while-the-agent-works)), and OpenCode, Pi and omp take it on their next prompt too; asleep, it waits for whatever wakes the agent, as before.
+A kind that takes letters at its tools takes it at a tool call once its wait is over, as any letter ([Letters while the agent works](#letters-while-the-agent-works)), but at Grok's turn end only beside a letter that rings, since that handover continues the turn; OpenCode, Pi and omp take it on their next prompt too; asleep, it waits for whatever wakes the agent, as before.
 A `--force` progress letter keeps the bell its sender asked for, and one whose forced bell was refused rides like any other.
 So a letter that needs its recipient to act is a `request` or a `block`, never `progress`; a worker that stops without saying so is still raised by its stopped warning and its watch.
 The doorbell logs the wait as `doorbell.held` with `rides_next_handover`, a hold that is not the operator's to lift, so no pane shows it waiting and a mission's map never counts it as held.
@@ -261,6 +261,7 @@ How it reaches the agent follows the kind, and one letter takes one path and is 
 The ask (`Command::Pull { point: Tool }`, node protocol 47) names the pane's own native session and is refused with `session_mismatch` for any other, since it hands letters over; it submits nothing, so a draft in the composer stays a draft (D-09).
 Grok also asks at its root session's `Stop`, as `hide inbox --hook --session <id> --turn-end` does.
 A nonempty answer becomes `{"decision":"block","reason":<letters>}`, followed by confirmation after stdout flush; Grok feeds the reason to the model and continues the turn.
+Since that continues the turn, a turn end hands letters over only when one of them rings (`Letter::rings`), the others riding with it, so a `progress` letter alone, `--now` or not, starts no turn there and waits for a tool call, another letter or `hide inbox` (`mailbox::gap_pull`); a tool call starts no turn and takes it as any letter.
 A second Stop with `stopHookActive: true` makes no letter pull and ends normally even if confirmation of the first handover failed.
 Tool and turn-end intake share the three-handover limit and the prompt's bundle and 8 KiB cap ([One bundle per handover](#one-bundle-per-handover)).
 Parallel tool hooks in one batch may pull the same claimed letter before either confirms it: the claim binds the bell turn, not an exclusive tool invocation.
