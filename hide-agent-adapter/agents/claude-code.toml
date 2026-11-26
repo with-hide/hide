@@ -304,3 +304,12 @@ permission = { allow = ["enter"], allow_always = ["down", "enter"], deny = ["esc
 # config and auto-mode-setup change settings Desk does not show.
 [desk]
 left_out = ["remote-control", "config", "auto-mode-setup"]
+
+# How a running session changes its model and its effort: the line typed into
+# its prompt (docs/ARCHITECTURE.md, A session's model and effort), each checked
+# in a terminal of Claude Code 2.1.332 on 2026-11-26. Claude Code also keeps
+# the choice as its default for new sessions, as when typed by hand.
+[switch]
+model = "/model {model}"
+effort = "/effort {effort}"
+efforts = ["low", "medium", "high", "xhigh", "max"]

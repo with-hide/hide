@@ -186,3 +186,13 @@ not = [
 # in the terminal.
 [answer]
 plan_approval = { approve = ["a"], keep_planning = ["s"] }
+
+# How a running session changes its model and its effort (docs/ARCHITECTURE.md,
+# A session's model and effort), checked in a terminal of Grok 1.0.92 on
+# 2026-11-26: `/model <model> [window] [effort]` is its one command, and a
+# model alone keeps the effort; the efforts are the ones it names for a word
+# it does not know.
+[switch]
+model = "/model {model}"
+effort = "/model {model} {effort}"
+efforts = ["low", "medium", "high", "xhigh"]

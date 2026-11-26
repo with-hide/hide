@@ -108,3 +108,11 @@ question = { down = "down", pick = "enter", row = "{n}." }
 # No row: agy marks no end under the command it asks for, so a command of more lines could not be
 # told from one, and its permission is answered in the terminal.
 permission = { allow = ["enter"], deny = ["down", "down", "down", "enter"] }
+
+# How a running session changes its model and its effort (docs/ARCHITECTURE.md,
+# A session's model and effort), each checked in a terminal of agy 1.5.18 on
+# 2026-11-26; the efforts are the ones it names for a word it does not know.
+[switch]
+model = "/model {model}"
+effort = "/effort {effort}"
+efforts = ["low", "medium", "high", "xhigh", "max"]

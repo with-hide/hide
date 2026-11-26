@@ -36,6 +36,24 @@ pub struct WebAdapter {
     /// How the agent's transcript shows the doorbell's line, which the shell
     /// dims; absent for an agent that does not type the line.
     pub bell_echo: Option<WebBellEcho>,
+    /// What a running session changes from a session input
+    /// (`definition::Switch`): absent for an agent that changes neither its
+    /// model nor its effort by a typed line.
+    pub switch: Option<WebSwitch>,
+}
+
+/// The slots of a running session a session input can change, as the
+/// agent's `[switch]` names them: each the line Hide types for it, with
+/// `{model}` and `{effort}` standing for the values, none for a slot the
+/// agent changes only in a menu of its own.
+#[derive(serde::Serialize)]
+pub struct WebSwitch {
+    pub model: Option<&'static str>,
+    pub effort: Option<&'static str>,
+    /// The efforts the effort line takes, in the agent's order.
+    pub efforts: &'static [String],
+    /// A model change puts the effort back to the new model's own default.
+    pub model_resets_effort: bool,
 }
 
 /// The echo of the doorbell's line: `prompt` is what the agent's composer
@@ -95,5 +113,14 @@ pub fn web_contract() -> impl Iterator<Item = WebAdapter> {
                 .map_or(&[], |composer| composer.marker),
             chrome: echo.chrome,
         }),
+        switch: super::definition::builtin(row.id)
+            .map(|definition| &definition.switch)
+            .filter(|switch| switch.model.is_some() || switch.effort.is_some())
+            .map(|switch| WebSwitch {
+                model: switch.model.as_deref(),
+                effort: switch.effort.as_deref(),
+                efforts: &switch.efforts,
+                model_resets_effort: switch.model_resets_effort,
+            }),
     })
 }

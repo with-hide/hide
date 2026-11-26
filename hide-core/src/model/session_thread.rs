@@ -133,6 +133,11 @@ pub struct SessionThreadSnapshot {
     /// The page the session is still writing, read again as it writes.
     pub tail: Option<Arc<ThreadPageSnapshot>>,
     pub input: Option<ThreadInputSnapshot>,
+    /// The model and effort the session runs with as Hide knows them: what
+    /// its start named, or the last a session input changed; each absent
+    /// for the CLI's own (docs/ARCHITECTURE.md, A session's model and
+    /// effort).
+    pub choice: hide_agent_adapter::LaunchChoice,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
