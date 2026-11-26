@@ -329,12 +329,14 @@ impl<'a> PaneAddress<'a> {
         }
     }
 
-    /// The pane an id names on `device`, where `node` is the core's own
-    /// node: a full device address stands as it is, and a bare id is a pane
-    /// of `device`.
+    /// The pane an id a caller on `device` named is, where `node` is the
+    /// core's own node: a bare id is a pane of `device`, and a full address
+    /// stands for its pane, the node's own `remote:<node>:pane:<id>` read as
+    /// the node's pane (no device is registered under the node's id).
     pub fn named(node: &str, device: &'a str, id: &'a str) -> Result<Self, NotAPane> {
         match Self::parse(id)? {
             Self::Node(pane) => Ok(Self::on(node, device, pane)),
+            Self::Device { device, pane } if device == node => Ok(Self::Node(pane)),
             address => Ok(address),
         }
     }
@@ -423,22 +425,47 @@ pub fn scoped_project_id(device: &str, project: &str) -> String {
     scoped_id(device, Kind::Project, hash)
 }
 
-/// Pane `pane` of `device` as the core names it, where `node` is the core's
-/// own node.
-pub fn pane_id_on(node: &str, device: &str, pane: &str) -> String {
-    PaneAddress::on(node, device, pane).to_string()
+/// Who an answer names a pane to, which decides how it is spelled.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Reader<'a> {
+    /// A caller on machine `.0` that this core serves: its own node or one
+    /// of its devices. The core names its own ids as a reader on its node.
+    On(&'a str),
+    /// An agent of another machine's own core, asking through it; `.0` is
+    /// this core's node, the device id that machine knows this one by.
+    Core(&'a str),
 }
 
-/// The core's id for the pane a caller named on `device`, where `node` is
-/// the core's own node. The engine numbers panes per machine, so a bare id is a
-/// pane of the caller's machine; an id already scoped to a device is a full
-/// address and stands as it is.
-pub fn named_pane_id(node: &str, device: &str, id: &str) -> String {
-    if device == node || is_device_scoped(id) {
-        id.to_owned()
-    } else {
-        scoped_pane_id(device, id)
+/// Pane `pane` of `machine` as an answer names it to `reader`, which uses it
+/// as written in any command: for a caller this core serves, bare on the
+/// caller's own machine, which is how a bare id it types reads
+/// ([`named_pane_id`]), and `remote:<machine>:pane:<pane>` on any other, the
+/// core's own node included; for another core's agent,
+/// `core:<this node>:pane:<id>`, with the id as this core names it. Every id
+/// the core keeps and every answer that names a pane is spelled here, so no
+/// caller builds one from `machine` and `pane`.
+pub fn pane_for_caller(reader: Reader<'_>, machine: &str, pane: &str) -> String {
+    match reader {
+        Reader::On(caller) => PaneAddress::on(caller, machine, pane).to_string(),
+        Reader::Core(node) => CoreAddress::new(
+            node,
+            CoreItem::Pane,
+            &PaneAddress::on(node, machine, pane).to_string(),
+        )
+        .to_string(),
     }
+}
+
+/// The core's id for the pane a caller on `device` named, where `node` is
+/// the core's own node: the one reading of every pane id a caller passes
+/// ([`PaneAddress::named`]). The engine numbers panes per machine, so a bare
+/// id is a pane of the caller's machine; a full address stands for the pane
+/// it names, and `remote:<node>:pane:<id>`, which [`pane_for_caller`] hands
+/// a device's caller for a pane of the core's node, is that pane's bare id.
+/// An id that names no pane of this core (another core's, a malformed one)
+/// is returned as it is, for its own reader to refuse.
+pub fn named_pane_id(node: &str, device: &str, id: &str) -> String {
+    PaneAddress::named(node, device, id).map_or_else(|_| id.to_owned(), |pane| pane.to_string())
 }
 
 /// Whether two ids named on `device` are the same pane: a bare id is a pane
@@ -483,8 +510,82 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_answer_names_each_pane_as_its_caller_uses_it_and_reads_it_back() {
+        // The core runs on node `core` and on device `mini`; `studio` is
+        // another device. (reader, pane's machine, engine id, address the
+        // reader is handed, the core's id for the pane it names.)
+        for (reader, machine, pane, handed, core_id) in [
+            // A caller on the core's own machine.
+            (Reader::On("core"), "core", "h5:p2", "h5:p2", "h5:p2"),
+            (
+                Reader::On("core"),
+                "mini",
+                "h5:p2",
+                "remote:mini:pane:h5:p2",
+                "remote:mini:pane:h5:p2",
+            ),
+            // A caller on the device: its own pane bare, the core's node and
+            // another device in full.
+            (
+                Reader::On("mini"),
+                "mini",
+                "h5:p2",
+                "h5:p2",
+                "remote:mini:pane:h5:p2",
+            ),
+            (
+                Reader::On("mini"),
+                "core",
+                "w1:p1",
+                "remote:core:pane:w1:p1",
+                "w1:p1",
+            ),
+            (
+                Reader::On("mini"),
+                "studio",
+                "h5:p2",
+                "remote:studio:pane:h5:p2",
+                "remote:studio:pane:h5:p2",
+            ),
+        ] {
+            assert_eq!(
+                pane_for_caller(reader, machine, pane),
+                handed,
+                "{reader:?} {machine} {pane}"
+            );
+            let Reader::On(device) = reader else {
+                unreachable!()
+            };
+            assert_eq!(
+                named_pane_id("core", device, handed),
+                core_id,
+                "{handed} named on {device}"
+            );
+        }
+        // Another core's agent is handed this core's panes as this core's
+        // (`core:<node>:pane:<id>`), its node's bare and a device's in full,
+        // and this core reads back the id inside.
+        for (machine, pane, handed, inside) in [
+            ("core", "h5:p2", "core:core:pane:h5:p2", "h5:p2"),
+            (
+                "mini",
+                "h5:p2",
+                "core:core:pane:remote:mini:pane:h5:p2",
+                "remote:mini:pane:h5:p2",
+            ),
+        ] {
+            assert_eq!(pane_for_caller(Reader::Core("core"), machine, pane), handed);
+            assert_eq!(
+                CoreAddress::parse(handed),
+                Some(Ok(CoreAddress::new("core", CoreItem::Pane, inside)))
+            );
+            assert_eq!(named_pane_id("core", "core", inside), inside);
+        }
+    }
+
+    #[test]
     fn a_device_pane_round_trips_and_a_node_pane_keeps_the_engine_s_id() {
-        let remote = pane_id_on("core", "mini", "w1:p2");
+        let remote = pane_for_caller(Reader::On("core"), "mini", "w1:p2");
         assert_eq!(remote, "remote:mini:pane:w1:p2");
         assert_eq!(
             PaneAddress::parse(&remote),
@@ -493,7 +594,7 @@ mod tests {
                 pane: "w1:p2"
             })
         );
-        let local = pane_id_on("core", "core", "w1:p2");
+        let local = pane_for_caller(Reader::On("core"), "core", "w1:p2");
         assert_eq!(local, "w1:p2");
         assert_eq!(PaneAddress::parse(&local), Ok(PaneAddress::Node("w1:p2")));
     }

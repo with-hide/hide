@@ -35,7 +35,7 @@ export function MissionChip({ agent, onOpen }: { agent: ConductorOwner; onOpen: 
 /** What a hover card puts on the chip that anchors it: its handlers and states, and the ref it is placed by. */
 type ChipAnchor = { anchor?: ComponentProps<"button">; ref?: Ref<HTMLButtonElement> };
 
-/** How many lines Desk's mission chip takes: two after a paragraph, one where a table's cell or a list's item names the mission (Doop Q 가). */
+/** How many lines Desk's mission chip takes: two on a card or a session's head, one where an answer names the mission (Doop Q 가). */
 export type ChipLines = 1 | 2;
 
 /**
@@ -46,7 +46,7 @@ export type ChipLines = 1 | 2;
  * answer names and the session beside Desk that conducts one; the sidebar's
  * Conductor row keeps its one-line chip. Only the name is cut short, its
  * whole in the hint. `lines={1}` draws the same chip on one line, in the
- * place of the mission's name in a table's cell or a list's item (Doop Q 가):
+ * place of the mission's name wherever an answer names it (Doop Q 가):
  * its cells on a fixed track so a table's rows line them up, and the
  * operator's turn as the warning edge and `!` alone, its words in the hint.
  */
@@ -143,7 +143,7 @@ export function DeskMissionChip({ mission, onOpen }: { mission: DeskMission; onO
   return <MissionChipCard id={mission.id} title={mission.title} status={mission.status} {...counts} cells={cellsFromCounts(counts)} tone={missionToneOf(mission.status, mission.turn !== null, DESK_NOT_STALLED)} turn={mission.turn} delay={delay} onOpen={onOpen} />;
 }
 
-/** The chip of the mission `id` as the store holds it now (a Desk answer's `@mission`, on one line in a table's cell or a list's item; the session beside Desk's head), nothing for a mission it does not hold. */
+/** The chip of the mission `id` as the store holds it now (a Desk answer's `@mission`, on one line in the name's place; the session beside Desk's head), nothing for a mission it does not hold. */
 export function MissionChipOf({ id, lines, onOpen }: { id: string; lines?: ChipLines; onOpen: (missionId: string) => void }) {
   const mission = useShellStore((s) => s.rest?.missions?.items.find((one) => one.id === id) ?? null);
   return mission ? <StoredMissionChip mission={mission} lines={lines} onOpen={onOpen} /> : null;

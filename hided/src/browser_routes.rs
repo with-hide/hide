@@ -250,7 +250,9 @@ impl BrowserRoutes {
         .await
         .map_err(|_| "core_unavailable")??
         .ok_or("view_unavailable")?;
-        if self.pages.own_node() == key.device {
+        // The page loads on the machine its source names, which for a page
+        // of Desk's desk is the session's that opened it, not the desk's.
+        if self.pages.own_node() == source.device_id {
             return Ok(Resolved::of(&source, source.url.clone()));
         }
         let mut routes = self.routes.lock().await;
@@ -308,7 +310,7 @@ impl BrowserRoutes {
         owner_started: u64,
     ) -> Result<Option<Route>, &'static str> {
         let pages = Arc::clone(&self.pages);
-        let device = key.device.clone();
+        let device = source.device_id.clone();
         let way = tokio::task::spawn_blocking(move || pages.way(&device))
             .await
             .map_err(|_| "core_unavailable")??;

@@ -8,7 +8,7 @@ import { BUILDER, FOCUS_WORLD, type FocusModel } from "./practice/worlds/focus";
 import { catalogWorkspaces, frontCheckout, type ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
-import { ViewAreas } from "./ViewAreas";
+import { projectSuffixes, ViewAreas } from "./ViewAreas";
 import type { DispatchFn } from "./ws";
 
 vi.mock("./terminals", () => ({ mountTerminalPreview: () => false }));
@@ -89,6 +89,31 @@ describe("the desk's ✕ in focus mode (UI_BEHAVIOR, Focus mode)", () => {
     const project = catalogWorkspaces(rest).find((row) => row.checkouts.some((one) => one.path === checkout.path))!;
     await draw(FOCUS_WORLD.initial(), { path: `${checkout.path}/docs/plan.md`, label: "plan.md", origin: { device_id: project.device_id, path: checkout.path } });
     expect(container.querySelector("[data-editor-path]")?.textContent).toBe(`${project.label} › docs › plan.md`);
+  });
+
+  it("follows two same-name files side by side in one strip with their projects, front tab or not (PRD desk-own-desk B12)", () => {
+    const { rest } = FOCUS_WORLD.snapshot(FOCUS_WORLD.initial(), Date.now());
+    const tree = structuredClone(rest.workspace_view?.layout?.root);
+    if (!tree || !("area" in tree)) throw new Error("the fixture's desk is one area");
+    const shown = tree.area.displays[0]!;
+    const file = (id: string, root: string): ViewDisplaySnapshot => ({ ...shown, id, kind: "file", label: "notes.md", path: `${root}/notes.md`, origin: { device_id: "local", path: root } });
+    tree.area.displays = [file("fixture-notes", "/work/fixture"), file("other-notes", "/work/other")];
+    tree.area.active = "fixture-notes";
+    const named = projectSuffixes(tree, rest, ((key: string) => key) as never);
+    expect([named.get("fixture-notes"), named.get("other-notes")]).toEqual(["fixture", "other"]);
+    tree.area.displays = [file("fixture-notes", "/work/fixture")];
+    expect(projectSuffixes(tree, rest, ((key: string) => key) as never).size).toBe(0);
+  });
+
+  it("offers Retry on a file of Desk's desk waiting for its device, and only there (PRD desk-own-desk B41)", async () => {
+    const waiting = { state: "waiting" as const, reason: "Waiting for mini to connect", path: "/srv/app/plan.md", label: "plan.md" };
+    await draw(FOCUS_WORLD.initial(), waiting);
+    expect(container.querySelector("[data-retry-unavailable]")).toBeNull();
+    await draw(FOCUS_WORLD.initial(), { ...waiting, origin: { device_id: "mini", path: "/srv/app" } });
+    expect(container.querySelector('[data-area-empty="view-waiting"]')?.textContent).toContain("Waiting for mini to connect");
+    const retry = container.querySelector<HTMLButtonElement>("[data-retry-unavailable]");
+    await act(async () => retry!.click());
+    expect(events.map((event) => event.kind)).toContain("view_layout");
   });
 
   it("keeps its ◧ and closes the documents outside the mode", async () => {

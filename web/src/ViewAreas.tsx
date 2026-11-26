@@ -26,7 +26,7 @@ import { caughtUp } from "./operatorFocus";
 import { useUiStore } from "./ui";
 import { commandLabel } from "./shortcutLabels";
 import { keyboardInputRevision, noteDrawnViews, useKeyboardOwner } from "./viewFocus";
-import { displayIdentity, displayMenu, displayName, focusRequestArrived, isFixedDisplay, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
+import { areasOf, displayIdentity, displayMenu, displayName, focusRequestArrived, isFixedDisplay, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
 import { findArea, locateDisplay } from "./areaLayout";
 import { DeskExpandButton, DeskPairButton, DeskWideButton, PairOthers } from "./DeskPairControls";
 import { DESK_SCREEN, type DeskWorkspace } from "./deskDesk";
@@ -233,16 +233,18 @@ function DisplayBody({ display, workspace: desk, actions }: { display: ViewDispl
   if (display.state === "open") {
     return <DisplayEditor display={display} workspace={workspace} placeKey={placeKey(workspaceKey(desk), display)} actions={actions} place={place} />;
   }
-  const state = display.state === "opening" ? <AreaEmpty state="view-opening" text={t("documents.view.openingNamed", { label: display.label })} /> : display.state === "waiting" ? <AreaEmpty state="view-waiting" text={display.reason ?? t("documents.view.waitingPath", { path: display.path })} /> : (
+  const retry = <Button variant="ghost" onPointerDown={(event) => event.stopPropagation()} onClick={() => actions.retryView(display.id)} data-retry-unavailable={display.id}>
+    {t("common.retry")}
+  </Button>;
+  // A file of Desk's desk waits on its own device, and offers Retry there (PRD desk-own-desk B41).
+  const state = display.state === "opening" ? <AreaEmpty state="view-opening" text={t("documents.view.openingNamed", { label: display.label })} /> : display.state === "waiting" ? <AreaEmpty state="view-waiting" text={display.reason ?? t("documents.view.waitingPath", { path: display.path })}>{display.origin ? retry : null}</AreaEmpty> : (
     <AreaEmpty state="view-unavailable" text={display.reason ? t("documents.view.unavailableReason", { path: display.path, reason: display.reason }) : t("documents.view.unavailable", { path: display.path })}>
       {/* Each button is one action on this view alone, like a tab's ×: its
           press does not also make the area active (one action, one event). */}
       <Button variant="secondary" data-keyboard-stays="true" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }} onClick={() => actions.closeView(display.id)} data-close-unavailable={display.id}>
         {t("documents.view.closeView")}
       </Button>
-      <Button variant="ghost" onPointerDown={(event) => event.stopPropagation()} onClick={() => actions.retryView(display.id)} data-retry-unavailable={display.id}>
-        {t("common.retry")}
-      </Button>
+      {retry}
     </AreaEmpty>
   );
   return <>
@@ -387,8 +389,9 @@ function ExternalBadge({ path }: { path: string | null }) {
  * only where another file there has the same name and another checkout or
  * path, and then its checkout's project as the catalog names it.
  */
-function projectSuffixes(root: ViewLayoutSnapshot["root"], rest: SnapshotRest | null, t: Parameters<typeof cardTitle>[1]): Map<string, string> {
-  const files = shownDisplays(root).filter((display) => display.kind === "file" && display.origin);
+export function projectSuffixes(root: ViewLayoutSnapshot["root"], rest: SnapshotRest | null, t: Parameters<typeof cardTitle>[1]): Map<string, string> {
+  // Every tab, not only each area's front one: two of one name side by side in one strip are told apart too.
+  const files = areasOf(root).flatMap((area) => area.displays).filter((display) => display.kind === "file" && display.origin);
   const byName = new Map<string, ViewDisplaySnapshot[]>();
   for (const display of files) byName.set(displayName(display, t), [...(byName.get(displayName(display, t)) ?? []), display]);
   const projects = catalogWorkspaces(rest);

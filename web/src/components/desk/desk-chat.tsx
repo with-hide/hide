@@ -5,7 +5,7 @@ import type { ApprovalButton, ApprovalWord, DeskAgent, DeskApproval, DeskItem, D
 import { approvalButtons, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, markedMission, mentionParts, namedMention, namedText, refuses } from "../../desk";
 import { sentAttachment } from "../../deskComposer";
 import { useInterfaceTranslation } from "../../i18n/client";
-import type { DeskAttachment, DeskCompaction } from "../../snapshot";
+import type { DeskAttachment, DeskCompaction, DeskSessionChip } from "../../snapshot";
 import { requireInterfaceLanguage } from "../../i18n/locale";
 import type { MessageKey } from "../../i18n/catalogs";
 import { composingKey } from "../../keys";
@@ -94,10 +94,9 @@ export function DeskQueuedBubble({ message, held = false, onRemove, onMention }:
 }
 
 /**
- * A mission a Desk answer names (`@mission(<id> <title>)`): its title where
- * the answer names it, in the title the app holds while it holds the mission;
- * its chip, two lines, stands in a row behind the paragraph, and in a table's
- * cell or a list's item the one-line chip takes the title's place (`DeskReply`).
+ * A mission a Desk answer names (`@mission(<id> <title>)`) that the app does
+ * not hold: its title where the answer names it, as the answer wrote it. One
+ * the app holds is its one-line chip in the title's place (`DeskReply`).
  */
 function DeskMissionMention({ mention }: { mention: DeskMissionMention }) {
   const title = useShellStore((s) => s.rest?.missions?.items.find((one) => one.id === mention.id)?.title) ?? mention.title;
@@ -112,12 +111,25 @@ function DeskMissionMention({ mention }: { mention: DeskMissionMention }) {
 const NO_REPLY_MENTIONS: readonly DeskMention[] = [];
 const NO_REPLY_MISSIONS: readonly DeskMissionMention[] = [];
 
+/** The answer being written: its words and the sessions and missions they name so far (`desk_live`). */
+export type DeskLiveAnswer = { text: string; mentions: readonly DeskSessionChip[]; missions: readonly DeskMissionMention[] };
+
+/**
+ * `list` as the array it was while it names the same things, so a chunk that
+ * closes no token keeps every chip as it is drawn; a list only grows while an
+ * answer streams, and a new one is taken whole.
+ */
+function useSameList<T>(list: readonly T[], key: (one: T) => string): readonly T[] {
+  // Kept while its names stay the same: the memo reads the names, not the array.
+  const names = list.map(key).join("\n");
+  return useMemo(() => list, [names]);
+}
+
 /**
  * Desk's answer as plain Markdown (D-75), where a session it names is that
- * session's chip and a mission its title, with its mission chip in a row behind the paragraph (in a table's cell
- * or a list's item, the one-line chip in the title's place and no row), each pressed to
- * open it; the core reads both from the finished answer, so a `live` one
- * streams its text alone; a stopped answer keeps what it said and says it
+ * session's chip and a mission its one-line mission chip, in the place the
+ * words name it, each pressed to open it; the core reads both as each token
+ * closes, so a `live` answer shows them while it is still written; a stopped answer keeps what it said and says it
  * stopped (B7). Given `copy`, it offers `복사` of its original words, each
  * session and mission said by its name, always under it and on every code
  * block (Doop E2). A compaction the agent told outside its words (OpenCode's
@@ -142,15 +154,10 @@ export function DeskReply({ text, stopped = false, live = false, mentions = NO_R
       token: markedMention(mention),
       node: bridge(<SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id }} onPress={onMention ? () => onMention(mention) : undefined} />),
     })),
-    ...missions.map((mission) => {
-      const held = onMission && heldIds.split(" ").includes(mission.id);
-      return {
-        token: markedMission(mission),
-        node: bridge(<DeskMissionMention mention={mission} />),
-        after: held ? bridge(<MissionChipOf id={mission.id} onOpen={onMission} />) : undefined,
-        item: held ? bridge(<MissionChipOf id={mission.id} lines={1} onOpen={onMission} />) : undefined,
-      };
-    }),
+    ...missions.map((mission) => ({
+      token: markedMission(mission),
+      node: bridge(onMission && heldIds.split(" ").includes(mission.id) ? <MissionChipOf id={mission.id} lines={1} onOpen={onMission} /> : <DeskMissionMention mention={mission} />),
+    })),
     ...files,
   ], [mentions, missions, heldIds, onMention, onMission, bridge, files]);
   const words = <MarkdownText text={text} size="chat" chips={chips} copyCode={copy} />;
@@ -166,6 +173,14 @@ export function DeskReply({ text, stopped = false, live = false, mentions = NO_R
       {stopped ? <span className="text-micro text-muted-foreground">{t("desk.reply.stopped")}</span> : null}
     </div>
   );
+}
+
+/** The answer being written, its chips drawn as each closes and kept as they are while its words stream. */
+function DeskLiveReply({ live, onMention, onMission, onFile }: { live: DeskLiveAnswer; onMention?: (mention: DeskMention) => void; onMission?: (missionId: string) => void; onFile?: (file: FoundAnswerPath) => void }) {
+  const chips = useSameList(live.mentions, (chip) => `${chip.pane_id} ${chip.name}`);
+  const mentions = useMemo(() => (chips.length ? chips.map(chipMention) : NO_REPLY_MENTIONS), [chips]);
+  const missions = useSameList(live.missions.length ? live.missions : NO_REPLY_MISSIONS, (mission) => `${mission.id} ${mission.title}`);
+  return <DeskReply text={live.text} live mentions={mentions} missions={missions} onMention={onMention} onMission={onMission} onFile={onFile} />;
 }
 
 const STEP_WORDS = {
@@ -468,7 +483,7 @@ export type DeskChatActions = DeskJobCardActions & {
   onCopy: CopyText;
   onMention: (mention: DeskMention) => void;
   onHanded: (paneId: string) => void;
-  /** A file path an answer names, pressed: a project's file opens in the tab panel, an outside one shows in the file manager. */
+  /** A file path an answer names, pressed: a project's file opens on Desk's desk, an outside one shows in the file manager. */
   onFile?: (file: FoundAnswerPath) => void;
 };
 
@@ -522,7 +537,7 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
   /** The line is stopped on its first message until a send or a restart. */
   held?: boolean;
   /** The answer streaming now, after the last item. */
-  live?: string | null;
+  live?: DeskLiveAnswer | null;
   /** The turn under way, which the working line says (feedback 1 c3): what it does now and when it started; none once it ends or while it waits on the operator. */
   working?: { phase: WorkingPhase; since: number | null } | null;
   selectedJob?: string | null;
@@ -533,7 +548,7 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
   return (
     <ol className="mx-auto flex w-full max-w-(--size-editor-measure) min-w-0 flex-col gap-md px-lg py-lg text-subhead" aria-label={t("desk.name")} data-desk-chat={items.length}>
       {items.map((item, index) => (
-        <li key={item.id} className="flex min-w-0 flex-col">
+        <li key={item.id} className="flex min-w-0 flex-col" data-scroll-anchor={item.id}>
           {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} attachments={item.attachments} onMention={actions.onMention} copy={actions.onCopy} />
             : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} missions={item.missions} compaction={item.compaction ?? null} onMention={actions.onMention} onMission={actions.onMission} onFile={actions.onFile} copy={actions.onCopy} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
@@ -544,7 +559,7 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
             : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} {...actions} />}
         </li>
       ))}
-      {live !== null ? <li className="flex min-w-0 flex-col"><DeskReply text={live} live /></li> : null}
+      {live !== null ? <li className="flex min-w-0 flex-col"><DeskLiveReply live={live} onMention={actions.onMention} onMission={actions.onMission} onFile={actions.onFile} /></li> : null}
       {working ? <li data-desk-item="working"><WorkingLine phase={working.phase} since={working.since} /></li> : null}
       {queued.map((message) => <li key={`queued-${message.id}`} className="flex min-w-0 flex-col"><DeskQueuedBubble message={message} held={held} onRemove={() => actions.onQueuedRemove(message.id)} onMention={actions.onMention} /></li>)}
     </ol>

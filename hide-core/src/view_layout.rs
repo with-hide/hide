@@ -284,10 +284,11 @@ pub struct Display {
     /// to open this (PRD lane-desk-pair-view D-54): the View is that pane's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_terminal: Option<crate::view_feedback::LinkTerminal>,
-    /// The checkout a View on Desk's desk shows a file of (PRD desk-own-desk
-    /// D-10): Desk's desk holds Views of every project and device, so each
-    /// file names its own. Absent on a Workspace's View, whose checkout is
-    /// its Workspace, and on a page or a card, which belong to no checkout.
+    /// The checkout a View on Desk's desk shows a file of, or a page of
+    /// loads from (PRD desk-own-desk D-10): Desk's desk holds Views of every
+    /// project and device, so each names its own. Absent on a Workspace's
+    /// View, whose checkout is its Workspace, on a card, and on a page Desk
+    /// opened itself, which loads on the core's machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<ViewOrigin>,
 }

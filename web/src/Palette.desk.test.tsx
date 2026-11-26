@@ -13,7 +13,7 @@ import { useUiStore } from "./ui";
 import type { DispatchFn } from "./ws";
 
 // Expected answers are PRD desk-2-ui D-23, B37, B38: ⌘P on Desk searches the
-// session's checkout or every project, ↵ opens the file in the tab panel as a
+// session's checkout or every project, ↵ opens the file on Desk's desk as a
 // preview, ⌘↵ (Ctrl+Enter off macOS) opens it to the side in the panel, and the Explorer
 // column is left as it was.
 

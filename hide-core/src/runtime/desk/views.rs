@@ -29,14 +29,10 @@ use crate::view_layout::{DisplayKind, Layout, LayoutError, ViewOrigin};
 use crate::workspace_views::Place;
 
 /// The folder Desk's desk is keyed under: Desk's caller name, which no
-/// checkout's absolute path can be on any system, so it alone names the desk.
-/// Its device is the core's own node, where Desk runs and its pages load
-/// (the desktop host and hided route a page by its workspace's device).
+/// checkout's absolute path can be on any system. Its device is the core's
+/// own node, where Desk runs; a page a session opened loads on that
+/// session's machine (`Display::origin`).
 pub(in crate::runtime) const DESK_VIEWS_PATH: &str = crate::workspace_control::DESK_CALLER;
-
-pub(in crate::runtime) fn is_desk_key(key: &WorkspaceKey) -> bool {
-    key.1 == DESK_VIEWS_PATH
-}
 
 /// `desk_view_open`: what a press in Desk's room opens on Desk's desk, in
 /// front (PRD desk-own-desk B10, B11, B14, B37-B39).
@@ -73,6 +69,12 @@ impl Runtime {
     /// The key the runtime's View code reaches Desk's desk under.
     pub(in crate::runtime) fn desk_key(&self) -> WorkspaceKey {
         (self.node.as_str().to_owned(), DESK_VIEWS_PATH.to_owned())
+    }
+
+    /// Whether `key` is Desk's desk: Desk's folder on the core's own node,
+    /// the one answer every place that asks reads.
+    pub(in crate::runtime) fn is_desk_key(&self, key: &WorkspaceKey) -> bool {
+        key.1 == DESK_VIEWS_PATH && key.0 == self.node.as_str()
     }
 
     /// Whether Desk's desk is in use: Desk installed and on, in a shell
@@ -155,7 +157,7 @@ impl Runtime {
         workspace_id: &str,
         checkout_id: &str,
     ) -> Option<ViewOrigin> {
-        if !is_desk_key(key) {
+        if !self.is_desk_key(key) {
             return None;
         }
         self.workspace_key(workspace_id, checkout_id)
@@ -187,7 +189,11 @@ impl Runtime {
                 preview,
                 beside,
                 ..
-            } => self.desk_open_file(&workspace_id, &checkout_id, &path, preview, beside),
+            } => {
+                // A refused open sets the error the window shows, a change too.
+                self.desk_open_file(&workspace_id, &checkout_id, &path, preview, beside);
+                true
+            }
             OpenPayload::Card { card } => self.open_card_on(&self.desk_key(), &Place::Desk, card),
             OpenPayload::Output {
                 device_id,
@@ -198,7 +204,9 @@ impl Runtime {
     }
 
     /// A file of the checkout `workspace_id`/`checkout_id` in front of Desk's
-    /// desk, as the Workspace's file view opens one (B14, B37, B38).
+    /// desk, as the Workspace's file view opens one (B14, B37, B38). Returns
+    /// whether the file was placed or its read began; a refusal (the checkout
+    /// gone, no room, an unreadable file) is the error the window shows.
     pub(in crate::runtime) fn desk_open_file(
         &mut self,
         workspace_id: &str,
@@ -213,9 +221,9 @@ impl Runtime {
                 "The file's project or checkout is no longer available",
                 false,
             );
-            return true;
+            return false;
         }
-        self.open_file_in_view(
+        let placed = self.open_file_in_view(
             &self.desk_key(),
             workspace_id,
             checkout_id,
@@ -229,14 +237,17 @@ impl Runtime {
             "checkout": checkout_id,
             "preview": preview,
             "beside": beside,
+            "placed": placed,
         }));
-        true
+        placed
     }
 
     /// A View a session opened, as a tab of Desk's desk (D-12): a file of
-    /// its checkout, a page at its address as a new page of Desk's, a card
-    /// as itself; a diff shows its file, since Desk's desk has no diff tab.
-    /// The session's View stays where it is and is seen (B25, B34).
+    /// its checkout, a page at its address as a new page of Desk's that loads
+    /// on the session's machine, a card as itself; a diff shows its file,
+    /// since Desk's desk has no diff tab. The session's View stays where it
+    /// is, and is seen once it opened here (B25, B34); one that did not open
+    /// stays to look at.
     fn desk_open_output(&mut self, key: WorkspaceKey, id: &str) -> bool {
         let Some(display) = self.view_display(&key, id).cloned() else {
             return super::refused("desk_output_gone");
@@ -274,32 +285,42 @@ impl Runtime {
                     .url
                     .clone()
                     .unwrap_or_else(|| crate::view_layout::BLANK_PAGE.to_owned());
-                self.desk_open_page(&url)
+                let origin = ViewOrigin {
+                    device_id: key.0.clone(),
+                    path: key.1.clone(),
+                };
+                self.desk_open_page(&url, origin)
             }
             DisplayKind::Card => match display.card.clone() {
-                Some(card) => self.open_card_on(&self.desk_key(), &Place::Desk, card),
+                Some(card) => self.place_card_on(&self.desk_key(), &Place::Desk, card),
                 None => super::refused("desk_output_gone"),
             },
             // An outside file is the desktop window's grant, which only its
             // own Workspace's tab stands on.
             DisplayKind::External => super::refused("desk_output_external"),
         };
-        let seen = self.mark_view_seen(&key, id);
-        opened || seen
+        if opened {
+            self.mark_view_seen(&key, id);
+        }
+        // A refusal sets the error the window shows, a change either way.
+        true
     }
 
-    /// A new page of Desk's at `url`, or the page Desk's desk holds at it
-    /// brought in front and loaded again.
-    fn desk_open_page(&mut self, url: &str) -> bool {
-        let opened = self.open_browser_at(url, self.desk_key());
-        if let Err(kind) = opened {
-            crate::diagnostic!(serde_json::json!({
-                "component": "desk",
-                "kind": "desk_views.page_refused",
-                "reason": kind,
-            }));
+    /// A new page of Desk's at `url` from the checkout `origin`, or the page
+    /// Desk's desk holds at it from there brought in front and loaded again.
+    /// Returns whether it opened; a refusal is the window's error.
+    fn desk_open_page(&mut self, url: &str, origin: ViewOrigin) -> bool {
+        match self.open_browser_at(url, self.desk_key(), Some(origin)) {
+            Ok(_) => true,
+            Err(kind) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "desk",
+                    "kind": "desk_views.page_refused",
+                    "reason": kind,
+                }));
+                false
+            }
         }
-        true
     }
 
     /// Desk was switched on or off (B33): off lets every document of Desk's
@@ -392,13 +413,15 @@ impl Runtime {
                         placement: None,
                     },
                 ),
-                Err(message) => self.insert_unavailable_file_tab(
-                    &workspace_id,
-                    &checkout_id,
-                    &path,
-                    false,
-                    message,
-                ),
+                Err(message) => {
+                    self.insert_unavailable_file_tab(
+                        &workspace_id,
+                        &checkout_id,
+                        &path,
+                        false,
+                        message,
+                    );
+                }
             }
         }
         began
@@ -507,5 +530,12 @@ impl Runtime {
     #[cfg(test)]
     pub(in crate::runtime) fn desk_stored_for_test(&self) -> &crate::desk::Stored {
         &self.desk.stored
+    }
+
+    /// Desk's store as a start reads it from its file, for a test of a
+    /// restart.
+    #[cfg(test)]
+    pub(in crate::runtime) fn read_desk_store_for_test(&mut self, stored: crate::desk::Stored) {
+        self.desk.stored = stored;
     }
 }

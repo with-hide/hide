@@ -119,7 +119,7 @@ it("swaps no part of Desk's answer while it streams, though each word draws the 
   expect(vi.mocked(markdownLive).mock.calls.length - built).toBe(1);
 });
 
-it("draws in a drawn table's cells the chips that arrive once the answer ends, in their item form", async () => {
+it("draws in a drawn table's cells the chips that arrive while the answer streams, and draws a chip again when its part changes", async () => {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -129,13 +129,29 @@ it("draws in a drawn table's cells the chips that arrive once the answer ends, i
   await draw([]);
   await vi.waitFor(() => expect(host.querySelector(".cm-md-table")?.textContent).toContain("@mission(mission-63 결제)"));
   const table = host.querySelector(".cm-md-table");
-  const node = <b>결제</b>;
-  await draw([{ token: "@mission(mission-63 결제)", node, item: <i data-test-item="mission-63">M63 결제</i> }]);
+  await draw([{ token: "@mission(mission-63 결제)", node: <i data-test-chip="mission-63">M63 결제</i> }]);
   expect(host.querySelector(".cm-md-table")).toBe(table);
-  await vi.waitFor(() => expect(table?.querySelector("[data-test-item='mission-63']")?.textContent).toBe("M63 결제"));
-  // A chip whose item alone changed (its mission moved on) is a changed chip too.
-  await draw([{ token: "@mission(mission-63 결제)", node, item: <i data-test-item="mission-63">M63 결제 · 3/4</i> }]);
-  await vi.waitFor(() => expect(table?.querySelector("[data-test-item='mission-63']")?.textContent).toBe("M63 결제 · 3/4"));
+  await vi.waitFor(() => expect(table?.querySelector("[data-test-chip='mission-63']")?.textContent).toBe("M63 결제"));
+  // A chip whose part changed (its mission moved on) is a changed chip too.
+  await draw([{ token: "@mission(mission-63 결제)", node: <i data-test-chip="mission-63">M63 결제 · 3/4</i> }]);
+  await vi.waitFor(() => expect(table?.querySelector("[data-test-chip='mission-63']")?.textContent).toBe("M63 결제 · 3/4"));
+});
+
+it("keeps room around every chip from the words beside it, and gives Desk's lines the height of a chip and room above and below it", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted.push(root);
+  const text = "@session(w1:p2 fix) 가 `/a/b.md` 를 고쳤고 @mission(mission-63 결제) 도 돌아요.";
+  const chips: MarkdownChip[] = [
+    { token: "@session(w1:p2 fix)", node: <b data-test-chip="session">fix</b> },
+    { token: "`/a/b.md`", at: [text.indexOf("`")], node: <b data-test-chip="file">b.md</b> },
+    { token: "@mission(mission-63 결제)", node: <b data-test-chip="mission">M63 결제</b> },
+  ];
+  await act(async () => root.render(<TooltipProvider><MarkdownText text={text} size="chat" chips={chips} /></TooltipProvider>));
+  await vi.waitFor(() => expect(host.querySelectorAll("[data-markdown-chip]")).toHaveLength(3));
+  expect([...host.querySelectorAll("[data-markdown-chip]")].map((chip) => getComputedStyle(chip).margin)).toEqual(Array(3).fill("0 var(--spacing-xxs)"));
+  expect(getComputedStyle(host.querySelector(".cm-content")!).lineHeight).toBe("calc(var(--text-subhead) + var(--spacing-md))");
 });
 
 it("draws a chip that arrives after the text was parsed over the Live plan's marks it covers", async () => {

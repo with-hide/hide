@@ -244,6 +244,8 @@ pub struct BrowserPage {
 /// a node whose core runs elsewhere reads it from that core over the link.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BrowserRouteSource {
+    /// The machine the page loads on: the View's own, or for a page of
+    /// Desk's desk the machine of the session that opened it.
     pub device_id: String,
     /// The checkout a `file:` page reads its own files from, the one whose
     /// root holds the page's file even when another checkout's Workspace

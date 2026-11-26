@@ -1043,7 +1043,7 @@ impl Runtime {
             })
             .collect();
         let scope = self.session_scope_of_pane(&row.pane_id);
-        let mut opened: Vec<_> = index
+        let opened: Vec<_> = index
             .displays
             .iter()
             .filter(|(_, display)| {
@@ -1055,14 +1055,10 @@ impl Runtime {
                 })
             })
             .collect();
-        // Newest first, then cut: a session that opened more than the list
-        // holds shows its newest and says the rest are left out (PRD
-        // desk-own-desk D-18, engineering principle 15).
-        opened.sort_by_key(|(_, display)| std::cmp::Reverse(display.opened_stamp));
-        card.outputs_more = opened.len() > MAX_OUTPUTS;
+        let (opened, more) = newest_outputs(opened, |(_, display)| display.opened_stamp);
+        card.outputs_more = more;
         card.outputs = opened
             .into_iter()
-            .take(MAX_OUTPUTS)
             .map(|(key, display)| view_output(key, display))
             .chain(pulls.iter().map(|pull| crate::model::DeskJobOutput {
                 id: pull.url.clone(),
@@ -1486,6 +1482,17 @@ pub(super) fn view_output(
         path: (!page && !display.path.is_empty()).then(|| display.path.clone()),
         url: display.url.clone().filter(|_| page),
     }
+}
+
+/// A session's opened Views as its card lists them: newest first, then cut,
+/// so a session that opened more than the list holds shows its newest and
+/// says the rest are left out (PRD desk-own-desk D-18, engineering principle
+/// 15).
+fn newest_outputs<T>(mut opened: Vec<T>, stamp: impl Fn(&T) -> u64) -> (Vec<T>, bool) {
+    opened.sort_by_key(|item| std::cmp::Reverse(stamp(item)));
+    let more = opened.len() > MAX_OUTPUTS;
+    opened.truncate(MAX_OUTPUTS);
+    (opened, more)
 }
 
 fn output_kind(display: &crate::view_layout::Display) -> crate::model::DeskOutputKind {
@@ -2117,6 +2124,18 @@ mod tests {
     }
 
     #[test]
+    fn a_card_lists_its_sessions_newest_thirty_two_views_and_says_older_ones_were_left_out() {
+        let stamps: Vec<u64> = (0..=MAX_OUTPUTS as u64).collect();
+        let (listed, more) = newest_outputs(stamps.clone(), |stamp| *stamp);
+        assert_eq!(listed.len(), MAX_OUTPUTS);
+        assert_eq!(listed.first(), Some(&(MAX_OUTPUTS as u64)), "newest first");
+        assert!(!listed.contains(&0), "the oldest is left out");
+        assert!(more);
+        let (listed, more) = newest_outputs(stamps[1..].to_vec(), |stamp| *stamp);
+        assert_eq!((listed.len(), more), (MAX_OUTPUTS, false));
+    }
+
+    #[test]
     fn a_spawn_past_the_cap_waits_in_order_and_cancel_moves_the_rest_up() {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = desk(root.path(), 2, &["a", "b"]);
@@ -2585,8 +2604,10 @@ mod tests {
         let text: String = (1..=21)
             .map(|n| format!("@session(p{n} job-{n}) "))
             .collect();
-        let mentions = hide_desk::session_mentions(&text)
-            .into_iter()
+        let mentions = hide_desk::Answer::read(&text)
+            .sessions()
+            .iter()
+            .cloned()
             .map(|(pane_id, name)| crate::model::DeskSessionChip {
                 pane_id,
                 name,

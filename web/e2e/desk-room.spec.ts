@@ -125,6 +125,7 @@ test("a sidebar row opens its session beside Desk, marked on its row, Escape clo
 });
 
 test("the session's 뷰 N list holds 볼 것 above 본 것, newest first, previews a row under the pointer, and a row opens on Desk's desk and turns seen (PRD desk-own-desk B21-B25)", async ({ page }) => {
+  // e2e: the list is drawn from what the session's own `hide file open` made the core record, and the row's press opens it through the core.
   test.setTimeout(180_000);
   // The session runs the stand-in in a shell pane, so `hide file open` runs as that agent; Desk's spawn names its reported session.
   const engine = await startFixture({ agents: false });

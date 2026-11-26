@@ -8,7 +8,7 @@ import { PreviewTile, tileOf } from "./preview-tile";
 /**
  * A thread's 결과물 (D-65, B30, B31; feedback 2 frame M 나): every file or
  * page as the one preview tile (`PreviewTile`), in a wrapping row, a pull
- * request as a compact row. The output shown in the tab panel is ringed; an
+ * request as a compact row. The output shown on Desk's desk is ringed; an
  * output not looked at yet carries a look eye. Pressing one opens it there.
  */
 export function DeskOutputs({ outputs, selected = null, onOpen }: {

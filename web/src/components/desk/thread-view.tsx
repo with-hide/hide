@@ -25,6 +25,7 @@ import { DeskOutputs } from "./desk-outputs";
 import type { AnswerPlace, FoundAnswerPath } from "../../answerPaths";
 import { useFilePathChips } from "./file-path-chip";
 import { ThreadAsks } from "./thread-asks";
+import { keepScroll, keptScroll, placeAt, scrollPlace, stillAt, type ScrollPlace } from "../../conversationScroll";
 
 const TOOL_ICON: Partial<Record<AcpToolKind, typeof WrenchIcon>> = {
   execute: SquareTerminalIcon,
@@ -297,6 +298,11 @@ function UserLine({ line, handed, copy, actions }: { line: Extract<ThreadLine, {
  * work open, along a rail. A part that leads somewhere (a new session, a
  * letter, an output, a mission, a PR) stays in view while the work is folded.
  */
+/** A turn as the place a conversation was left names it: its first line's place and words, since a page read in above moves the place. */
+function turnAnchor(turn: ThreadTurn): string {
+  return `${turn.key}:${turn.user?.text.slice(0, 80) ?? ""}`;
+}
+
 function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; live: boolean; handed: boolean; words: Words; lit: Lit | null; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
   const [toggled, setToggled] = useState(false);
@@ -304,7 +310,7 @@ function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; l
   const counts = [turn.files ? t("desk.turn.files", { count: turn.files }) : null, turn.commands ? t("desk.turn.commands", { count: turn.commands }) : null].filter(Boolean);
   const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
   return (
-    <li className="flex min-w-0 flex-col gap-sm" data-desk-thread-turn={open ? "open" : "folded"}>
+    <li className="flex min-w-0 flex-col gap-sm" data-desk-thread-turn={open ? "open" : "folded"} data-scroll-anchor={turnAnchor(turn)}>
       {turn.user ? <UserLine line={turn.user} handed={handed} copy={words.copy} actions={actions} /> : null}
       {turn.work.length ? (
         <Button variant="text" size="inline" className="self-start gap-xxs text-caption text-muted-foreground" aria-expanded={open} data-desk-turn-toggle={open ? "open" : "folded"} onClick={() => setToggled(!toggled)}>
@@ -367,25 +373,54 @@ const AT_END = 24;
  * The conversation's scrolling (B25): while the operator is at its end, what
  * the session writes next is brought into view; a page read in above keeps
  * the lines they are reading where they were; reaching the top asks for the
- * page before.
+ * page before. Left above its end for another screen or another session,
+ * `scrollKey`'s conversation comes back to the turn the operator was reading
+ * (`keptScroll`), held there while its lines are drawn again until the
+ * operator scrolls; a turn the lines read again no longer hold leaves it at
+ * its end.
  */
-function useThreadScroll(lines: readonly ThreadLine[], onReachTop?: () => void) {
+function useThreadScroll(lines: readonly ThreadLine[], scrollKey: string | null, onReachTop?: () => void) {
   const ref = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
+  const anchor = useRef<ScrollPlace | null>(null);
+  const resized = useRef<ResizeObserver | null>(null);
   const before = useRef<{ first: string | null; height: number }>({ first: null, height: 0 });
+  useLayoutEffect(() => {
+    const box = ref.current;
+    if (!box || scrollKey === null) return;
+    anchor.current = keptScroll(scrollKey);
+    atEnd.current = anchor.current === null;
+    // The lines' words fill their editors after the pass that draws them, so the held turn is placed again as they grow.
+    const observer = new ResizeObserver(() => {
+      if (anchor.current) placeAt(box, anchor.current);
+    });
+    resized.current = observer;
+    return () => {
+      keepScroll(scrollKey, atEnd.current ? null : (anchor.current ?? scrollPlace(box)));
+      observer.disconnect();
+      resized.current = null;
+    };
+  }, [scrollKey]);
   useLayoutEffect(() => {
     const box = ref.current;
     if (!box) return;
     // A message line's id is its place, which a page read in above moves, so the first line is known by its words too.
     const head = lines[0];
     const first = head ? `${head.kind}:${head.id}:${"text" in head ? head.text.slice(0, 80) : ""}` : null;
-    if (atEnd.current) box.scrollTop = box.scrollHeight;
+    if (anchor.current && lines.length > 0 && !placeAt(box, anchor.current)) {
+      anchor.current = null;
+      atEnd.current = true;
+    }
+    if (anchor.current) for (const child of box.querySelectorAll("[data-scroll-anchor]")) resized.current?.observe(child);
+    else if (atEnd.current) box.scrollTop = box.scrollHeight;
     else if (before.current.first !== null && first !== before.current.first) box.scrollTop += box.scrollHeight - before.current.height;
     before.current = { first, height: box.scrollHeight };
   }, [lines]);
   const onScroll = () => {
     const box = ref.current;
     if (!box) return;
+    if (anchor.current && stillAt(box, anchor.current)) return;
+    anchor.current = null;
     atEnd.current = box.scrollHeight - box.scrollTop - box.clientHeight < AT_END;
     before.current.height = box.scrollHeight;
     if (box.scrollTop < AT_END) onReachTop?.();
@@ -431,7 +466,7 @@ function useWords(mentions: readonly DeskMention[], onSession: ThreadPartActions
  * line. A session asleep with no card any more (its sleep closed its pane,
  * B43) keeps its record above the foot that wakes it.
  */
-export function ThreadView({ job, lines, reading = false, failure = null, mentions = NO_MENTIONS, startedByDesk = false, composer, ask = null, asks = NO_ASKS, onAsk, foot = null, workingSince = null, onTerminal, onReachTop, olderLeft = false, ...actions }: {
+export function ThreadView({ job, lines, reading = false, failure = null, mentions = NO_MENTIONS, startedByDesk = false, composer, ask = null, asks = NO_ASKS, onAsk, foot = null, workingSince = null, onTerminal, onReachTop, olderLeft = false, scrollKey = null, ...actions }: {
   job: DeskJob | null;
   /** When the session's running turn started (its row's last prompt), for the working line's time. */
   workingSince?: number | null;
@@ -458,9 +493,11 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   onReachTop?: () => void;
   /** The record holds pages before the ones read, which `onReachTop` reads. */
   olderLeft?: boolean;
+  /** Which conversation this is, so the place it was left at comes back with it; none keeps no place. */
+  scrollKey?: string | null;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
-  const scroller = useThreadScroll(lines, onReachTop);
+  const scroller = useThreadScroll(lines, scrollKey, onReachTop);
   const turns = useMemo(() => threadTurns(lines), [lines]);
   const running = job?.state === "working" || job?.state === "starting";
   const words = useWords(mentions, actions.onSession, actions.onCopy, actions.place ?? null, actions.onFile);

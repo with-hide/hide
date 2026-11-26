@@ -3691,9 +3691,9 @@ export type DeskSection = {
 
 /**
  * The `desk_view` rest section (PRD desk-own-desk D-01, D-02): Desk's own
- * desk of Views, under the reserved workspace `{device_id: "", path:
- * "hide:desk"}` every `view_layout`, `browser_open` and `browser_state` names
- * it by. Absent while Desk is off. `opened` moves each time Desk's agent puts
+ * desk of Views, under the reserved workspace `{device_id: <the core's
+ * node>, path: "hide:desk"}` every `view_layout`, `browser_open` and
+ * `browser_state` names it by. Absent while Desk is off. `opened` moves each time Desk's agent puts
  * a file in front (B35), so a window showing Desk shows its desk.
  */
 export type DeskViewSnapshot = { device_id: string; path: string; layout: ViewLayoutSnapshot; opened: number };
@@ -3748,8 +3748,8 @@ export type DeskRecord = {
 /** The `desk_live` section: the reply being written, `null` between turns. */
 /** One of `DeskSteps`' kinds, by its count's name there. */
 export type DeskStepKind = keyof DeskSteps;
-/** The turn under way: its reply so far, when it started, and what its newest tool call does while the agent has written nothing since. */
-export type DeskLive = { text: string | null; started_at_ms: number | null; step?: DeskStepKind | null };
+/** The turn under way: its reply so far, when it started, what its newest tool call does while the agent has written nothing since, and the sessions and missions its reply names so far, each read once its token closed. */
+export type DeskLive = { text: string | null; started_at_ms: number | null; step?: DeskStepKind | null; mentions?: DeskSessionChip[]; missions?: DeskMissionMention[] };
 
 /** The `suggestions` section: absent until the Hide AI tool opens a Project. */
 export type SuggestionsSection = { project: ProjectSuggestions | null };

@@ -480,6 +480,51 @@ fn a_file_desks_agent_opens_goes_in_front_of_desks_desk() {
 }
 
 #[test]
+fn an_agent_open_desks_desk_has_no_room_for_is_refused_and_opens_when_asked_again_after_room_is_made()
+ {
+    let (mut runtime, other, checkout) = desk_runtime_with_other("own-desk-agent-full");
+    // Thirty-two Views of unsaved work, none of which may close to make room (B28).
+    for n in 0..crate::view_layout::MAX_VIEW_DISPLAYS {
+        let file = other.join(format!("f{n:02}.md"));
+        std::fs::write(&file, "x\n").expect("fixture");
+        open_on_desk(&mut runtime, "workspace:other", &checkout, &file);
+        let tab = open_tab(&runtime, &file).expect("open");
+        runtime.dispatch_json(&explorer_event(
+            "file_draft",
+            serde_json::json!({"tab_id": tab, "contents_utf8": "changed\n"}),
+        ));
+    }
+    let file = other.join("plan.md");
+    std::fs::write(&file, "plan\n").expect("fixture");
+
+    let refused = agent_open(&mut runtime, "r-full", &file).unwrap_err();
+
+    assert_eq!(refused.reason, "desk_open_refused");
+    assert_eq!(
+        runtime.snapshot.desk_view.as_ref().map(|view| view.opened),
+        Some(0),
+        "a refused open is no open the window shows the desk for"
+    );
+    assert!(
+        !desk_views(&mut runtime)
+            .iter()
+            .any(|view| view.path == file.to_string_lossy())
+    );
+
+    let first = desk_views(&mut runtime)[0].id.clone();
+    desk_layout(
+        &mut runtime,
+        serde_json::json!({"action": "close", "display_id": first, "discard": true}),
+    );
+    agent_open(&mut runtime, "r-full", &file).expect("the same request opens once there is room");
+    assert!(
+        desk_views(&mut runtime)
+            .iter()
+            .any(|view| view.path == file.to_string_lossy())
+    );
+}
+
+#[test]
 fn desk_is_refused_a_diff_another_action_a_path_outside_every_project_and_a_missing_file() {
     let (mut runtime, other, _) = desk_runtime_with_other("own-desk-agent-refused");
     let file = other.join("a.rs");
@@ -605,4 +650,377 @@ fn a_page_of_desks_desk_is_the_core_machines_and_resolves_to_load_there() {
         shown(&mut runtime).is_empty(),
         "the page is on no Workspace's desk"
     );
+}
+
+// A View a session opened, pressed in its `뷰 N` list or on its card (D-12,
+// B25, B34): it opens on Desk's desk from the session's own machine and
+// checkout, and is seen only once it opened there.
+
+const DEVICE: &str = "remote:desk-device";
+const DEVICE_ROOT: &str = "/srv/remote";
+
+/// A device whose one project is `DEVICE_ROOT`, as its engine session lists
+/// it, in `state`.
+fn device_status(runtime: &mut Runtime, state: &str) {
+    let mut project = workspace(
+        "remote-workspace",
+        "Remote",
+        DEVICE_ROOT,
+        vec![checkout(
+            "remote-workspace",
+            "remote-checkout",
+            DEVICE_ROOT,
+            Some(pane("remote-pane", DEVICE_ROOT)),
+        )],
+    );
+    project.device_id = DEVICE.to_owned();
+    project.remote_target_id = Some(DEVICE.to_owned());
+    runtime
+        .snapshot
+        .status
+        .remote
+        .retain(|remote| remote.target_id != DEVICE);
+    runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
+        target_id: DEVICE.to_owned(),
+        state: state.to_owned(),
+        message: None,
+        session: Some(RemoteSessionSnapshot {
+            workspaces: vec![project],
+            agents: Vec::new(),
+            active_tab_ids: Default::default(),
+            focused_workspace_id: None,
+            focused_checkout_id: None,
+            focused_tab_id: None,
+            focused_pane_id: None,
+            pane_layouts: Vec::new(),
+            pane_hook_tokens: Default::default(),
+            issue_tokens: Default::default(),
+            issue_links: Default::default(),
+        }),
+        files: RemoteFileListSnapshot::idle(),
+        catalog: Default::default(),
+        unreachable_since_unix_ms: None,
+    });
+}
+
+/// A View of `kind` at `at` (an address for a page) the session at `key`
+/// opened and the operator has not looked at.
+fn session_view(
+    runtime: &mut Runtime,
+    key: &(String, String),
+    kind: crate::view_layout::DisplayKind,
+    at: &str,
+) -> String {
+    let entry = runtime
+        .workspace_views
+        .as_mut()
+        .expect("views")
+        .views
+        .entry(&key.0, &key.1);
+    let layout = &mut entry
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout;
+    let display = if kind == crate::view_layout::DisplayKind::Browser {
+        layout.new_browser_display(at, 1)
+    } else {
+        layout.new_display(at, kind, None, false)
+    };
+    let id = display.id.clone();
+    let area = layout.active_area().id.clone();
+    layout.append(&area, display).expect("room");
+    runtime.mark_view_unseen(key, &id);
+    assert!(
+        unseen(runtime, key, &id),
+        "the fixture's View waits to be looked at"
+    );
+    id
+}
+
+fn open_output(runtime: &mut Runtime, key: &(String, String), id: &str) {
+    runtime.dispatch_json(&explorer_event(
+        "desk_view_open",
+        serde_json::json!({"kind": "output", "device_id": key.0, "checkout": key.1, "id": id}),
+    ));
+}
+
+fn unseen(runtime: &Runtime, key: &(String, String), id: &str) -> bool {
+    runtime
+        .view_display(key, id)
+        .is_some_and(|display| display.unseen.is_some())
+}
+
+fn error_kind(runtime: &Runtime) -> Option<String> {
+    runtime
+        .snapshot
+        .status
+        .last_error
+        .as_ref()
+        .map(|error| error.kind.clone())
+}
+
+#[test]
+fn a_device_sessions_page_opens_on_desks_desk_and_loads_through_that_device() {
+    use crate::view_layout::DisplayKind;
+    let (mut runtime, _, _) = desk_runtime("own-desk-device-page");
+    runtime.snapshot.status.engine.state = "connected".into();
+    device_status(&mut runtime, "connected");
+    let key = (DEVICE.to_owned(), DEVICE_ROOT.to_owned());
+    let web = "http://localhost:5173/";
+    let local = "file:///srv/remote/site/index.html";
+    for url in [web, local] {
+        let id = session_view(&mut runtime, &key, DisplayKind::Browser, url);
+        open_output(&mut runtime, &key, &id);
+        assert!(!unseen(&runtime, &key, &id), "{url} opened, so it is seen");
+    }
+
+    let node = runtime.node.as_str().to_owned();
+    let pages: Vec<_> = runtime
+        .desk_views()
+        .expect("Desk's desk")
+        .displays()
+        .filter(|display| display.kind == DisplayKind::Browser)
+        .map(|display| {
+            (
+                display.id.clone(),
+                display.load,
+                display.url.clone(),
+                display.origin.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(pages.len(), 2);
+    for (id, load, url, origin) in &pages {
+        assert_eq!(
+            origin.as_ref().map(|origin| origin.key()),
+            Some(key.clone())
+        );
+        let source = runtime
+            .browser_route_source(&node, "hide:desk", id, *load)
+            .expect("the page resolves");
+        assert_eq!(
+            (
+                source.device_id.as_str(),
+                source.checkout_path.as_str(),
+                Some(&source.url)
+            ),
+            (DEVICE, DEVICE_ROOT, url.as_ref()),
+            "it loads on the session's device, from its checkout"
+        );
+    }
+
+    // The same address of this machine's session is another page.
+    let directory = runtime
+        .catalog_workspaces()
+        .find(|workspace| workspace.device_id == node)
+        .map(|workspace| workspace.path.clone())
+        .expect("this machine's project");
+    let here = (node.clone(), directory);
+    let id = session_view(&mut runtime, &here, DisplayKind::Browser, web);
+    open_output(&mut runtime, &here, &id);
+    let pages = runtime
+        .desk_views()
+        .unwrap()
+        .displays()
+        .filter(|display| display.kind == DisplayKind::Browser)
+        .count();
+    assert_eq!(pages, 3, "a page of another machine at the same address");
+
+    device_status(&mut runtime, "disconnected");
+    let (id, load, ..) = &pages_of(&runtime)[0];
+    assert!(
+        runtime
+            .browser_route_source(&node, "hide:desk", id, *load)
+            .is_none(),
+        "a page of a device that went away loads nowhere else"
+    );
+}
+
+fn pages_of(runtime: &Runtime) -> Vec<(String, u64)> {
+    runtime
+        .desk_views()
+        .expect("Desk's desk")
+        .displays()
+        .filter(|display| {
+            display.kind == crate::view_layout::DisplayKind::Browser
+                && display
+                    .origin
+                    .as_ref()
+                    .is_some_and(|origin| origin.device_id == DEVICE)
+        })
+        .map(|display| (display.id.clone(), display.load))
+        .collect()
+}
+
+#[test]
+fn an_output_that_does_not_open_on_desks_desk_stays_to_look_at() {
+    use crate::view_layout::DisplayKind;
+    let (mut runtime, checkout_id, directory) = desk_runtime("own-desk-output-refused");
+    runtime.snapshot.status.engine.state = "connected".into();
+    let key = (
+        runtime.node.as_str().to_owned(),
+        directory.to_string_lossy().into_owned(),
+    );
+
+    // An outside file is the desktop window's grant, which Desk's desk never holds.
+    let outside = session_view(
+        &mut runtime,
+        &key,
+        DisplayKind::External,
+        "/Users/x/Downloads/shot.png",
+    );
+    open_output(&mut runtime, &key, &outside);
+    assert!(unseen(&runtime, &key, &outside));
+
+    // Thirty-two Views of unsaved work leave no room (B28).
+    for n in 0..crate::view_layout::MAX_VIEW_DISPLAYS {
+        let file = directory.join(format!("f{n:02}.md"));
+        std::fs::write(&file, "x\n").expect("fixture");
+        open_on_desk(&mut runtime, "workspace:order", &checkout_id, &file);
+        let tab = open_tab(&runtime, &file).expect("open");
+        runtime.dispatch_json(&explorer_event(
+            "file_draft",
+            serde_json::json!({"tab_id": tab, "contents_utf8": "changed\n"}),
+        ));
+    }
+    runtime.snapshot.status.last_error = None;
+    let page = session_view(
+        &mut runtime,
+        &key,
+        DisplayKind::Browser,
+        "https://example.com/",
+    );
+    open_output(&mut runtime, &key, &page);
+    assert!(
+        unseen(&runtime, &key, &page),
+        "a refused page stays to look at"
+    );
+    assert_eq!(
+        error_kind(&runtime).as_deref(),
+        Some(crate::view_layout::LayoutError::DisplayLimit.kind()),
+        "the window says why"
+    );
+    let plan = directory.join("plan.md");
+    std::fs::write(&plan, "plan\n").expect("fixture");
+    let file = session_view(
+        &mut runtime,
+        &key,
+        DisplayKind::File,
+        &plan.to_string_lossy(),
+    );
+    open_output(&mut runtime, &key, &file);
+    assert!(
+        unseen(&runtime, &key, &file),
+        "a refused file stays to look at"
+    );
+}
+
+#[test]
+fn a_file_of_a_device_that_is_away_waits_naming_it_and_no_read_begins() {
+    let (mut runtime, _, _) = desk_runtime("own-desk-device-wait");
+    let views = runtime.desk_views_mut().expect("Desk's desk");
+    let area = views.active_area().id.clone();
+    let mut file = views.new_display(
+        &format!("{DEVICE_ROOT}/plan.md"),
+        crate::view_layout::DisplayKind::File,
+        None,
+        false,
+    );
+    file.origin = Some(crate::view_layout::ViewOrigin {
+        device_id: DEVICE.to_owned(),
+        path: DEVICE_ROOT.to_owned(),
+    });
+    let id = file.id.clone();
+    views.append(&area, file).expect("room");
+
+    assert!(
+        !runtime.restore_desk_views(),
+        "B41: no read while its device is away"
+    );
+    let shown = desk_views(&mut runtime);
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].state, crate::model::ViewDisplayState::Waiting);
+    assert!(
+        shown[0]
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains(DEVICE)),
+        "it names the device: {:?}",
+        shown[0].reason
+    );
+    desk_layout(
+        &mut runtime,
+        serde_json::json!({"action": "retry", "display_id": id}),
+    );
+    assert_eq!(error_kind(&runtime).as_deref(), Some("view_layout.waiting"));
+}
+
+#[test]
+fn desks_desk_comes_back_with_its_document_on_a_runtime_started_from_its_saved_store() {
+    let (mut runtime, checkout_id, directory) = desk_runtime("own-desk-restart");
+    let file = directory.join("notes.md");
+    open_on_desk(&mut runtime, "workspace:order", &checkout_id, &file);
+    let bytes = crate::desk::encode_for_test(runtime.desk_stored_for_test());
+
+    // B8: a second runtime over the same checkout, Desk's store read from the file.
+    let (second, _) = tab_order_runtime(&directory.to_string_lossy());
+    let mut second = with_new_views(second, "own-desk-restart-second");
+    second.read_desk_store_for_test(
+        crate::desk::decode_for_test(&bytes).expect("the saved store reads"),
+    );
+    second.start_test_desk();
+    let views = desk_views(&mut second);
+
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].path, file.to_string_lossy());
+    assert_eq!(views[0].state, crate::model::ViewDisplayState::Open);
+    assert!(
+        open_tab(&second, &file).is_some(),
+        "its document was read back"
+    );
+}
+
+/// B42: a file of a project with no tab yet that cannot be read opens on
+/// Desk's desk as a tab saying why, in front, and Retry reads it once it can.
+#[cfg(unix)]
+#[test]
+fn a_file_desk_cannot_read_opens_as_a_tab_saying_why_and_retry_reads_it_once_it_can() {
+    use std::os::unix::fs::PermissionsExt;
+    let (mut runtime, other, other_checkout) = desk_runtime_with_other("own-desk-unreadable");
+    let file = other.join("locked.md");
+    std::fs::write(&file, "unlocked\n").expect("fixture");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).expect("lock");
+    // A mode bit locks a file only for an account that is not root.
+    if std::fs::read(&file).is_ok() {
+        return;
+    }
+
+    open_on_desk(&mut runtime, "workspace:other", &other_checkout, &file);
+
+    let views = desk_views(&mut runtime);
+    assert_eq!(views.len(), 1, "the open is a View of Desk's desk");
+    assert_eq!(views[0].path, file.to_string_lossy());
+    let reason = runtime
+        .snapshot
+        .editor
+        .tabs
+        .iter()
+        .find(|tab| tab.path == file.to_string_lossy())
+        .and_then(|tab| tab.unavailable_reason.clone());
+    assert!(reason.is_some(), "its tab says why it could not be read");
+
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).expect("unlock");
+    desk_layout(
+        &mut runtime,
+        serde_json::json!({"action": "retry", "display_id": views[0].id}),
+    );
+
+    let tab = runtime
+        .snapshot
+        .editor
+        .tabs
+        .iter()
+        .find(|tab| tab.path == file.to_string_lossy())
+        .expect("the tab stays");
+    assert_eq!(tab.unavailable_reason, None, "Retry read the file");
+    assert_eq!(desk_views(&mut runtime).len(), 1);
 }

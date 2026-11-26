@@ -16,7 +16,7 @@ import type { DispatchFn } from "./ws";
 
 // Expected answers are PRD desk-2-ui D-24, B39: on Desk ⌘K lists sessions, PRs
 // and missions; ↵ opens a session beside Desk and ⌘↵ goes to its tab; a PR or a
-// mission opens in the tab panel and opens no session.
+// mission opens on Desk's desk and opens no session.
 
 Element.prototype.scrollIntoView = () => {};
 

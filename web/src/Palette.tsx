@@ -31,7 +31,7 @@ import { composingKey } from "./keys";
 export function Palette({ actions }: { actions: Actions }) {
   const overlay = useUiStore((s) => s.overlay);
   const onDesk = useUiStore((s) => s.screen?.kind === "desk");
-  // On Desk ⌘P searches the open session's checkout or every project and opens in the tab panel (PRD desk-2-ui B37, B38); every other screen keeps its own.
+  // On Desk ⌘P searches the open session's checkout or every project and opens on Desk's desk (PRD desk-2-ui B37, B38); every other screen keeps its own.
   if (overlay === "file_palette") return <FilePalette actions={actions} desk={onDesk} />;
   if (overlay === "diff_palette") return <DiffPalette actions={actions} />;
   if (overlay === "search") return <SearchPalette actions={actions} />;
@@ -109,7 +109,7 @@ const hitKey = (hit: FileHit) => `${hit.device_id}:${hit.root_path}:${hit.path}`
 /**
  * ⌘P: the file palette over hided's index of the checkout in front. On Desk
  * (`desk`) it lists the checkout of the session open beside Desk, or every
- * project at once, and a pick opens in the tab panel; the list, the debounce,
+ * project at once, and a pick opens on Desk's desk; the list, the debounce,
  * the polling and the keys are the app's own (PRD desk-2-ui D-23).
  */
 function FilePalette({ actions, desk }: { actions: Actions; desk: boolean }) {
@@ -197,7 +197,7 @@ function FilePalette({ actions, desk }: { actions: Actions; desk: boolean }) {
       value={current ? hitKey(current) : ""}
       onValue={setHighlighted}
       onKeyDown={(event) => {
-        // ⌘↵ (Ctrl+Enter off macOS) opens the highlighted file beside the active View area (S7 B4); on Desk it opens it to the side in the tab panel.
+        // ⌘↵ (Ctrl+Enter off macOS) opens the highlighted file beside the active View area (S7 B4); on Desk it opens it to the side on Desk's desk.
         if (event.key !== "Enter" || !holdsCommandKey(event) || composingKey(event) || !current) return;
         event.preventDefault();
         event.stopPropagation();

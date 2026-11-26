@@ -86,7 +86,7 @@ export function SearchPalette({ actions }: { actions: Actions }) {
     return {
       target: frontTarget(state.rest, ui.screen?.kind ?? null, ui.searchOver === "settings", state.focusedPaneId, owner === "pane" || owner === "agent", checkout?.id ?? null),
       checkout: ui.screen?.kind === "workspace" && ui.searchOver !== "settings" ? checkout : null,
-      // On Desk a pick opens beside Desk or in its tab panel, and missions are listed (PRD desk-2-ui B39).
+      // On Desk a pick opens beside Desk or on its desk, and missions are listed (PRD desk-2-ui B39).
       desk: ui.screen?.kind === "desk",
     };
   });
@@ -156,7 +156,7 @@ export function SearchPalette({ actions }: { actions: Actions }) {
     if (entry.dimmed) return;
     close();
     if (front.desk) {
-      // A session opens beside Desk, or goes to its tab with ⌘↵; a PR or a mission opens in the tab panel and opens no session (D-24).
+      // A session opens beside Desk, or goes to its tab with ⌘↵; a PR or a mission opens on Desk's desk and opens no session (D-24).
       if (entry.kind === "agent" && entry.paneId) return tab ? actions.openDeskSessionTab(entry.paneId) : actions.openDeskSession(entry.paneId);
       const deskTab = deskTabOf(entry);
       if (deskTab) return actions.deskOpen(deskTab);

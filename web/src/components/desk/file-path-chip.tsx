@@ -23,7 +23,7 @@ function fileName(path: string): string {
 /**
  * A file an answer names (feedback 2 frame M [2]), drawn as the session chip
  * is (its kind's icon and its name). A project's file shows its tile and
- * full path under the pointer and opens in the tab panel; a file outside
+ * full path under the pointer and opens on Desk's desk; a file outside
  * every project carries a small ↗, says in one line that it shows in the
  * system's file manager (`Finder에서 보기 · <path>`), and a press only
  * reveals it there, never opening or running it.
@@ -56,18 +56,27 @@ export function FilePathChip({ file, onOpen }: { file: FoundAnswerPath; onOpen: 
 
 /**
  * The chips for the file paths `text` writes, once each is found: a path
- * that names nothing stays words. Nothing is looked up while the words are
- * still `live` (an answer being written), nor for a session no checkout
- * holds (`place` null).
+ * that names nothing stays words. While the words are still `live` (an
+ * answer being written) only its finished lines are read, so a path still
+ * being written is never looked up and the paths are read again once per
+ * line, not per chunk; nothing is looked up for a session no checkout holds
+ * (`place` null).
  */
-/** No file chips, one array, so an answer still streaming (it has none yet) keeps its chips array while its words change. */
+/** No file chips, one array, so an answer with no file found keeps its chips array while its words change. */
 const NO_FILE_CHIPS: MarkdownChip[] = [];
+
+/** The part of `text` its paths are read from: all of it once written, else up to its last finished line, which streaming never changes again. */
+export function settledWords(text: string, live: boolean): string {
+  return live ? text.slice(0, text.lastIndexOf("\n") + 1) : text;
+}
 
 export function useFilePathChips(text: string, place: AnswerPlace | null, live: boolean, onOpen: (file: FoundAnswerPath) => void): MarkdownChip[] {
   const bridge = useSessionChipBridge();
   const latest = useRef(onOpen);
   latest.current = onOpen;
-  const written = useMemo(() => (live || !place ? [] : writtenPaths(text)), [text, live, place]);
+  // A string is compared by its value, so a chunk that finishes no line reads no paths again.
+  const settled = settledWords(text, live);
+  const written = useMemo(() => (!place ? [] : writtenPaths(settled)), [settled, place]);
   const [found, setFound] = useState<Map<string, FoundAnswerPath>>(() => new Map());
   const device = place?.device ?? null;
   const cwd = place?.cwd ?? null;
@@ -83,13 +92,13 @@ export function useFilePathChips(text: string, place: AnswerPlace | null, live: 
     };
   }, [written, device, cwd]);
   return useMemo(() => {
-    if (written.length === 0) return NO_FILE_CHIPS;
+    // Built from the finished lines alone, the words streaming does not change, so a chunk that ends no line keeps every chip.
     const chips: MarkdownChip[] = [];
     for (const one of written) {
       const file = found.get(one.written);
       if (!file) continue;
-      chips.push({ token: text.slice(one.from, one.to), at: [one.from], node: bridge(<FilePathChip file={file} onOpen={(chosen) => latest.current(chosen)} />) });
+      chips.push({ token: settled.slice(one.from, one.to), at: [one.from], node: bridge(<FilePathChip file={file} onOpen={(chosen) => latest.current(chosen)} />) });
     }
-    return chips;
-  }, [written, found, text, bridge]);
+    return chips.length ? chips : NO_FILE_CHIPS;
+  }, [written, found, settled, bridge]);
 }

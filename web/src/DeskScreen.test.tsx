@@ -580,7 +580,31 @@ describe("Desk's room", () => {
     expect(line()).toBeNull();
   });
 
-  it("draws a file an answer names inside a project as a chip that opens it in the tab panel, and leaves a missing path and code as words (feedback 2 frame M [2])", async () => {
+  it("turns a session, a mission and a file a streaming answer names into chips as each is written, before the answer ends", async () => {
+    const asked: string[] = [];
+    configureFileBytes((event) => {
+      const read = event.payload as Record<string, unknown>;
+      asked.push(read.path as string);
+      queueMicrotask(() => answerBytes(read, [35], 40));
+    });
+    const held = { id: "mission-63", title: "결제 흐름 정리", status: "running", nodes: [], conductor: { present: true }, decision: null, question: null, delay: null, closed_at_unix_ms: null };
+    await render(desk([]));
+    await act(async () => useShellStore.setState({ rest: { ...rest, missions: { items: [held] } } as unknown as SnapshotRest }));
+    // The core reads each token once its parenthesis closes and sends it with the words so far; the last line is still being written.
+    const text = "@session(w1:p2 fix login)이 /work/repo-home/notes/live.md 를 고쳤고\n@mission(mission-63 결제 흐름 정리)도 /work/repo-home/notes/pla";
+    await act(async () => useShellStore.setState({ deskLive: { text, started_at_ms: 1, step: null, mentions: [{ pane_id: "w1:p2", name: "fix login", agent_kind: null, mark: null }], missions: [{ id: "mission-63", title: "결제 흐름 정리" }] } }));
+    const reply = () => document.body.querySelector("[data-desk-reply='live']")!;
+    await vi.waitFor(() => expect(reply().querySelector("[data-mission-chip-lines='1']")).not.toBeNull());
+    expect(reply().querySelector("[data-desk-session-chip]")?.textContent).toBe("fix login");
+    expect(reply().textContent).not.toContain("@session(");
+    expect(reply().textContent).not.toContain("@mission(");
+    // A path on a finished line is looked up and becomes its chip; one still being written is never asked for.
+    // (Its own path, so the answer checks this file keeps for 10 s name nothing another test asks about.)
+    await vi.waitFor(() => expect(reply().querySelector("[data-desk-file-chip='project']")?.textContent).toBe("live.md"));
+    expect(asked).toEqual(["/work/repo-home/notes/live.md"]);
+  });
+
+  it("draws a file an answer names inside a project as a chip that opens it on Desk's desk, and leaves a missing path and code as words (feedback 2 frame M [2])", async () => {
     const asked: Record<string, unknown>[] = [];
     configureFileBytes((event) => {
       const read = event.payload as Record<string, unknown>;
@@ -859,7 +883,7 @@ describe("Desk's room", () => {
     });
   });
 
-  it("opens a session a chip names beside Desk, stays in Desk, and closes the tab panel before the session on Escape (D-09, B2, B21)", async () => {
+  it("opens a session a chip names beside Desk, stays in Desk, and closes Desk's desk before the session on Escape (D-09, B2, B21)", async () => {
     // `fixer` runs in the sidebar but Desk did not start it: it has no card until its conversation opens.
     const row = { pane_id: "w1:p2", identity_label: "fixer", agent_kind: "claude", mark: "going" } as never;
     const card: DeskJob = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },

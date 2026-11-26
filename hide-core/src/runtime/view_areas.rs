@@ -26,7 +26,6 @@
 
 use serde::Deserialize;
 
-use super::desk::views::is_desk_key;
 use super::documents::OpenRequestFields;
 use super::workspace_view::{AreaIntent, WorkspaceKey, file_label};
 use super::*;
@@ -592,7 +591,7 @@ impl Runtime {
     /// checkout, which a tab or pane choice moves on its own event, before
     /// the engine confirms it.
     pub(super) fn front_place(&self, key: &WorkspaceKey) -> Place {
-        if is_desk_key(key) {
+        if self.is_desk_key(key) {
             return Place::Desk;
         }
         let shown = (key.0 == self.node.as_str())
@@ -626,8 +625,8 @@ impl Runtime {
 
     /// The tree at `place` of the Workspace `key`.
     pub(super) fn view_layout_at(&self, key: &WorkspaceKey, place: &Place) -> Option<&Layout> {
-        if *place == Place::Desk || is_desk_key(key) {
-            return (*place == Place::Desk && is_desk_key(key))
+        if *place == Place::Desk || self.is_desk_key(key) {
+            return (*place == Place::Desk && self.is_desk_key(key))
                 .then(|| self.desk_views())
                 .flatten();
         }
@@ -645,7 +644,7 @@ impl Runtime {
 
     /// Where the View `id` of the Workspace `key` sits.
     pub(super) fn view_place(&self, key: &WorkspaceKey, id: &str) -> Option<Place> {
-        if is_desk_key(key) {
+        if self.is_desk_key(key) {
             return self.desk_views()?.display(id).map(|_| Place::Desk);
         }
         self.workspace_views
@@ -657,7 +656,7 @@ impl Runtime {
 
     /// The View `id` of the Workspace `key`, on a desk or not.
     pub(super) fn view_display(&self, key: &WorkspaceKey, id: &str) -> Option<&Display> {
-        if is_desk_key(key) {
+        if self.is_desk_key(key) {
             return self.desk_views()?.display(id);
         }
         self.workspace_views
@@ -669,11 +668,11 @@ impl Runtime {
 
     /// Every View of the Workspace, on each desk and then on the shelf.
     pub(super) fn view_displays(&self, key: &WorkspaceKey) -> impl Iterator<Item = &Display> {
-        let desk = is_desk_key(key).then(|| self.desk_views()).flatten();
+        let desk = self.is_desk_key(key).then(|| self.desk_views()).flatten();
         let workspace = self
             .workspace_views
             .as_ref()
-            .filter(|_| !is_desk_key(key))
+            .filter(|_| !self.is_desk_key(key))
             .and_then(|store| store.views.get(&key.0, &key.1));
         desk.into_iter()
             .flat_map(Layout::displays)
@@ -876,8 +875,8 @@ impl Runtime {
         place: &Place,
         change: impl FnOnce(&mut Layout, u64) -> Result<(T, bool), LayoutError>,
     ) -> Result<T, LayoutError> {
-        if *place == Place::Desk || is_desk_key(key) {
-            if *place != Place::Desk || !is_desk_key(key) {
+        if *place == Place::Desk || self.is_desk_key(key) {
+            if *place != Place::Desk || !self.is_desk_key(key) {
                 return Err(LayoutError::UnknownArea(key.1.clone()));
             }
             return self.change_desk_views(change);
@@ -1164,8 +1163,9 @@ impl Runtime {
             "display": oldest.display_id,
             "display_kind": oldest.kind,
         }));
+        // Every View, Desk's desk's among them, still showing the document
+        // keeps it.
         if let Some(document) = oldest.document
-            && !self.desk_holds_tab(&document)
             && !self
                 .every_view()
                 .any(|(_, display)| display.tab_id.as_ref() == Some(&document))
@@ -1232,7 +1232,7 @@ impl Runtime {
         path: &str,
         preview: bool,
         beside: bool,
-    ) {
+    ) -> bool {
         match self.prepare_file_tab(workspace_id, checkout_id, path) {
             Ok(prepared) => self.show_file_in_view(
                 prepared,
@@ -1245,14 +1245,18 @@ impl Runtime {
             ),
             // The read failed before anything moved, so every display keeps
             // what it shows (B15).
-            Err(message) => self.set_error("file.open_failed", message, true),
+            Err(message) => {
+                self.set_error("file.open_failed", message, true);
+                false
+            }
         }
     }
 
     /// Opens a file of the checkout `workspace_id`/`checkout_id` into the
     /// View areas of the Workspace `key`, the front one (contract 4.2). A
     /// file being read shows when the read lands, where it was asked for; a
-    /// failed read moves nothing.
+    /// failed read moves nothing. Returns whether the file was placed or its
+    /// read began, false when the open was refused.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn show_file_in_view(
         &mut self,
@@ -1263,7 +1267,7 @@ impl Runtime {
         path: &str,
         preview: bool,
         beside: bool,
-    ) {
+    ) -> bool {
         self.reconcile_view_displays();
         let key = key.clone();
         let place = self.front_place(&key);
@@ -1278,7 +1282,7 @@ impl Runtime {
             preview,
             beside,
         ) {
-            return;
+            return false;
         }
         // The Explorer shows the Workspace's own tree, which holds no file of
         // another checkout to select.
@@ -1297,21 +1301,24 @@ impl Runtime {
                     None,
                     replace.as_deref(),
                 );
+                true
             }
             read @ super::editor::PreparedFileTab::Read { .. } => {
-                if let Some(tab_id) =
+                let Some(tab_id) =
                     self.insert_file_tab(read, workspace_id, checkout_id, path, preview)
-                {
-                    self.place_document(
-                        &key,
-                        &place,
-                        &tab_id,
-                        preview,
-                        beside,
-                        None,
-                        replace.as_deref(),
-                    );
-                }
+                else {
+                    return false;
+                };
+                self.place_document(
+                    &key,
+                    &place,
+                    &tab_id,
+                    preview,
+                    beside,
+                    None,
+                    replace.as_deref(),
+                );
+                true
             }
             super::editor::PreparedFileTab::Reading { root, channel } => {
                 // A display that shows the file but could not read it is
@@ -1329,7 +1336,7 @@ impl Runtime {
                         Ok(shown) => shown,
                         Err(error) => {
                             self.set_error(error.kind(), error.message(), false);
-                            return;
+                            return false;
                         }
                     }
                 } else {
@@ -1358,6 +1365,7 @@ impl Runtime {
                         placement,
                     },
                 );
+                true
             }
         }
     }
@@ -2088,7 +2096,7 @@ impl Runtime {
         let key = (workspace.device_id, workspace.path);
         // Desk's desk is in front wherever the window drew it; a Workspace's
         // only while it is the one in front.
-        if is_desk_key(&key) {
+        if self.is_desk_key(&key) {
             if self.desk_views().is_none() {
                 self.set_error("view_layout.desk_off", "Desk is switched off", false);
                 return true;
@@ -2243,6 +2251,7 @@ impl Runtime {
             beside_display.as_deref(),
             reveal,
             opener,
+            None,
         );
         if let Err(refusal) = &outcome {
             self.set_error(refusal.kind, refusal.message.clone(), false);
@@ -2267,24 +2276,36 @@ impl Runtime {
             device_id: key.0,
             path: key.1,
         };
-        self.place_browser(url, Some(workspace), None, None, None, true, opener.into())
-            .map(|(_, display_id)| display_id)
-            .map_err(|refusal| refusal.kind)
+        self.place_browser(
+            url,
+            Some(workspace),
+            None,
+            None,
+            None,
+            true,
+            opener.into(),
+            None,
+        )
+        .map(|(_, display_id)| display_id)
+        .map_err(|refusal| refusal.kind)
     }
 
     /// Opens `url` on the desk of `key` as the operator's page, nothing
     /// brought forward: Desk's desk opening a session's page (PRD
-    /// desk-own-desk D-12). The display it is in, or why it was refused.
+    /// desk-own-desk D-12). The page keeps the machine and checkout it came
+    /// from (`origin`, D-10), whose loopback and files it loads from as the
+    /// session's own page does. A refusal is the window's error to show.
     pub(super) fn open_browser_at(
         &mut self,
         url: &str,
         key: WorkspaceKey,
+        origin: Option<ViewOrigin>,
     ) -> Result<String, &'static str> {
         let workspace = ViewWorkspace {
             device_id: key.0,
             path: key.1,
         };
-        self.place_browser(
+        match self.place_browser(
             url,
             Some(workspace),
             None,
@@ -2292,9 +2313,14 @@ impl Runtime {
             None,
             false,
             crate::view_feedback::OpenedBy::Operator,
-        )
-        .map(|(_, display_id)| display_id)
-        .map_err(|refusal| refusal.kind)
+            origin,
+        ) {
+            Ok((_, display_id)) => Ok(display_id),
+            Err(refusal) => {
+                self.set_error(refusal.kind, refusal.message, false);
+                Err(refusal.kind)
+            }
+        }
     }
 
     /// The receipt a sender that named its open waits for.
@@ -2579,6 +2605,7 @@ impl Runtime {
         beside_display: Option<&str>,
         reveal: bool,
         opener: crate::view_feedback::OpenedBy,
+        origin: Option<ViewOrigin>,
     ) -> Result<(WorkspaceKey, String), LayoutRefusal> {
         if !self.separate_view_areas() {
             return Err(browser_refusal("This shell does not draw View areas"));
@@ -2589,7 +2616,7 @@ impl Runtime {
         let key = match (workspace, pane_id) {
             (Some(workspace), _) => {
                 let key = (workspace.device_id, workspace.path);
-                if is_desk_key(&key) {
+                if self.is_desk_key(&key) {
                     if self.desk_views().is_none() {
                         return Err(browser_refusal("Desk is switched off"));
                     }
@@ -2654,7 +2681,9 @@ impl Runtime {
         let existing = (!url.is_empty())
             .then(|| {
                 self.claim_existing_view(&key, &place, |display| {
-                    display.kind == DisplayKind::Browser && display.url.as_deref() == Some(url)
+                    display.kind == DisplayKind::Browser
+                        && display.url.as_deref() == Some(url)
+                        && display.origin == origin
                 })
             })
             .flatten();
@@ -2705,6 +2734,7 @@ impl Runtime {
                 }
                 let mut display = layout.new_browser_display(url, load);
                 own(&mut display);
+                display.origin = origin.clone();
                 let display_id = display.id.clone();
                 // A page's own new tab stands beside that page (Open to the
                 // side's order): in the area next to it, else, its area being
@@ -2900,7 +2930,7 @@ impl Runtime {
         if same_address_and_title {
             return false;
         }
-        if is_desk_key(&key) {
+        if self.is_desk_key(&key) {
             return self
                 .change_desk_views(|layout, _| {
                     let display = layout
@@ -3093,21 +3123,10 @@ impl Runtime {
         };
         let front = self.front_checkout_owned();
         let source = self.display_source_of(key, &display);
+        // A View of Desk's desk waits on its own checkout's device; once
+        // that device is back it reads again (`restore_desk_views`), and
+        // Retry while it waits says so (PRD desk-own-desk B41).
         let (state, reason) = self.display_state(&self.display_facts(key), &display);
-        // A View of Desk's desk waiting for its device reads again once the
-        // device is back: Retry after a reconnect is the operator's way to
-        // ask (PRD desk-own-desk B41).
-        let state = match state {
-            ViewDisplayState::Waiting
-                if display
-                    .origin
-                    .as_ref()
-                    .is_some_and(|origin| self.view_root_wait(&origin.key()).is_none()) =>
-            {
-                ViewDisplayState::Unavailable
-            }
-            state => state,
-        };
         match state {
             ViewDisplayState::Waiting => {
                 self.set_error(
@@ -3151,13 +3170,15 @@ impl Runtime {
                             placement: None,
                         },
                     ),
-                    Err(message) => self.insert_unavailable_file_tab(
-                        &workspace_id,
-                        &checkout_id,
-                        &display.path,
-                        display.preview,
-                        message,
-                    ),
+                    Err(message) => {
+                        self.insert_unavailable_file_tab(
+                            &workspace_id,
+                            &checkout_id,
+                            &display.path,
+                            display.preview,
+                            message,
+                        );
+                    }
                 }
                 true
             }
@@ -3244,13 +3265,15 @@ impl Runtime {
                                 placement: None,
                             },
                         ),
-                        Err(message) => self.insert_unavailable_file_tab(
-                            &workspace_id,
-                            &checkout_id,
-                            path,
-                            false,
-                            message,
-                        ),
+                        Err(message) => {
+                            self.insert_unavailable_file_tab(
+                                &workspace_id,
+                                &checkout_id,
+                                path,
+                                false,
+                                message,
+                            );
+                        }
                     }
                 }
             }
