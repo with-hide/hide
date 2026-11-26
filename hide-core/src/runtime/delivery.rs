@@ -3272,10 +3272,20 @@ pub(crate) mod tests {
         root: &std::path::Path,
         kind: &str,
     ) -> (Arc<Mutex<Runtime>>, Actor, Observation, PathBuf) {
+        fixture_on(root, kind, crate::node::TEST_NODE)
+    }
+
+    /// [`fixture_of`] for a core whose own node is `node`, as a second
+    /// machine's core runs beside the first.
+    pub(crate) fn fixture_on(
+        root: &std::path::Path,
+        kind: &str,
+        node: &str,
+    ) -> (Arc<Mutex<Runtime>>, Actor, Observation, PathBuf) {
         let state = root.join("state");
         hide_platform::fs::private::create_dir_all(&state).unwrap();
         let options: CoreOptions = serde_json::from_value(json!({
-            "schema_version":SCHEMA_VERSION,"node_id":"test-node","home":root,
+            "schema_version":SCHEMA_VERSION,"node_id":node,"home":root,
             "app_state_path":state.join("app.json"),
             "workspace_views_path":root.join("views.json"),
         }))
@@ -3294,7 +3304,7 @@ pub(crate) mod tests {
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
             {"id":"recipient","pane_id":"recipient","agent":kind,"agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"},
         ]})).unwrap();
-        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
+        runtime.observe_delivery_laid(node, &payload, None, None);
         runtime.snapshot.status.engine.state = "connected".into();
         let panes = ["sender", "recipient"]
             .into_iter()
@@ -3333,7 +3343,7 @@ pub(crate) mod tests {
             path: "/checkouts/fixture".into(),
             remote_target_id: None,
             expanded: true,
-            device_id: crate::node::TEST_NODE.into(),
+            device_id: node.into(),
             repo_name: "fixture".into(),
             is_git: false,
             default_branch: None,
@@ -3374,7 +3384,7 @@ pub(crate) mod tests {
             pane_id: "sender".into(),
             name: "sender".into(),
             kind: "codex".into(),
-            device_id: crate::node::TEST_NODE.into(),
+            device_id: node.into(),
             session: Some("sender-session".into()),
         };
         let target = runtime
@@ -3382,7 +3392,7 @@ pub(crate) mod tests {
                 pane_id: "recipient".into(),
                 name: "recipient".into(),
                 kind: kind.into(),
-                device_id: crate::node::TEST_NODE.into(),
+                device_id: node.into(),
                 session: Some("recipient-session".into()),
             })
             .unwrap();
@@ -5519,6 +5529,14 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(shown["sender"]["pane_id"], "remote:test-node:pane:sender");
+        let inbox = run("device", &device_caller, Command::Inbox { bundle: true }).unwrap();
+        let listed = inbox["letters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|listed| listed["id"] == letter["id"])
+            .expect("the letter in the device agent's inbox");
+        assert_eq!(listed["sender"]["pane_id"], "remote:test-node:pane:sender");
         let back = run(
             "device",
             &device_caller,

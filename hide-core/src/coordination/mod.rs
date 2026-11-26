@@ -5042,6 +5042,18 @@ mod tests {
             pane(&ledger, Reader::On("mini")).as_deref(),
             Some("remote:core-node:pane:worker-pane")
         );
+        // A start another core's agent asked for, with no parent: its
+        // asker's registration is on this core's node, and the asker is
+        // handed the pane as this core's, in the answer and in a refusal of
+        // a start that stopped partway alike (`incomplete_spawn`).
+        let (ledger, _, _, id, _) = pending_spawn_mode(SpawnMode::Handoff, "core-node");
+        let spawn = ledger.spawns.iter().find(|spawn| spawn.id == id).unwrap();
+        assert_eq!(
+            executor::spawn_ref(spawn, &ledger, "core-node", Reader::Core("core-node"))
+                .pane
+                .as_deref(),
+            Some("core:core-node:pane:worker-pane")
+        );
     }
 
     /// A pending spawn with a brief, its agent's start typed: what is left is

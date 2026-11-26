@@ -230,12 +230,14 @@ impl Actor {
 
     /// This actor as an answer to `reader` shows it: its pane as that reader
     /// uses it (`address::pane_for_caller`), from the machine it runs on and
-    /// that machine's own id for it. Hide's own identities (`hide:`) and a
-    /// guest's pane name no pane of this core and stay as they are.
+    /// that machine's own id for it. A code-owned identity (Hide's own, a
+    /// tool's, the operator's) and a guest's pane name no pane of this core
+    /// and stay as they are.
     pub(crate) fn read_by(&self, reader: crate::address::Reader<'_>) -> Actor {
         use crate::address::PaneAddress;
         let mut actor = self.clone();
-        if !self.pane_id.starts_with(HIDE_PREFIX)
+        if !self.code_owned()
+            && !self.pane_id.starts_with(HIDE_PREFIX)
             && let Ok(pane @ (PaneAddress::Node(_) | PaneAddress::Device { .. })) =
                 PaneAddress::parse(&self.pane_id)
         {

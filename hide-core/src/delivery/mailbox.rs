@@ -1361,10 +1361,12 @@ fn inbox(ledger: &Ledger, actor: &Actor) -> Inbox {
                 .collect(),
         })
         .collect();
+    // The letters as the caller reads them (`Letter::read_by`).
+    let reader = actor.pane_reader();
     let letters = shares
         .into_iter()
         .flat_map(|share| share.shown)
-        .cloned()
+        .map(|letter| letter.read_by(reader))
         .collect();
     let returned = ledger
         .letters
@@ -1374,7 +1376,7 @@ fn inbox(ledger: &Ledger, actor: &Actor) -> Inbox {
                 && !letter.recipient.same_identity(actor)
                 && returned(letter)
         })
-        .cloned()
+        .map(|letter| letter.read_by(reader))
         .collect();
     Inbox {
         letters,
