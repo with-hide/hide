@@ -8,7 +8,7 @@ import { TooltipProvider } from "../ui/tooltip";
 import { GLANCE_FILE_ROWS, GlanceCrumb, GlancePanel } from "./glance-panel";
 
 // Expected answers are the approved 한눈에 picture (sections 1 and 2) and the
-// glance node's contract: sessions 내 차례 first, files 볼 것 first with their
+// operator's approved contract: sessions 내 차례 first, files 볼 것 first with their
 // session named at the end, a capped list with `… n개 더`, `⟩` folds.
 
 const card = (pane: string, title: string, state: DeskJob["state"]): DeskJob => ({
