@@ -223,9 +223,14 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const empty = shown.length === 0 && !answering && queued.length === 0;
   const drawn = desk !== null;
   const scrollKey = `desk:${desk?.conversation.generation ?? 0}`;
+  // The conversation the effect last followed: one that changed while Desk stayed open (a new conversation) never
+  // comes back, so its place is let go, never read from the new conversation's lines.
+  const followed = useRef<string | null>(null);
   useLayoutEffect(() => {
     const box = scroller.current;
     if (!box) return;
+    if (followed.current !== null && followed.current !== scrollKey) keepScroll(followed.current, null);
+    followed.current = scrollKey;
     let anchor = keptScroll(scrollKey);
     stick.current = anchor === null;
     const pin = () => {

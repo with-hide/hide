@@ -62,7 +62,7 @@ export function FilePathChip({ file, onOpen }: { file: FoundAnswerPath; onOpen: 
  * line, not per chunk; nothing is looked up for a session no checkout holds
  * (`place` null).
  */
-/** No file chips, one array, so an answer that names no file keeps its chips array while its words change. */
+/** No file chips, one array, so an answer with no file found keeps its chips array while its words change. */
 const NO_FILE_CHIPS: MarkdownChip[] = [];
 
 /** The part of `text` its paths are read from: all of it once written, else up to its last finished line, which streaming never changes again. */
@@ -92,13 +92,13 @@ export function useFilePathChips(text: string, place: AnswerPlace | null, live: 
     };
   }, [written, device, cwd]);
   return useMemo(() => {
-    if (written.length === 0) return NO_FILE_CHIPS;
+    // Built from the finished lines alone, the words streaming does not change, so a chunk that ends no line keeps every chip.
     const chips: MarkdownChip[] = [];
     for (const one of written) {
       const file = found.get(one.written);
       if (!file) continue;
-      chips.push({ token: text.slice(one.from, one.to), at: [one.from], node: bridge(<FilePathChip file={file} onOpen={(chosen) => latest.current(chosen)} />) });
+      chips.push({ token: settled.slice(one.from, one.to), at: [one.from], node: bridge(<FilePathChip file={file} onOpen={(chosen) => latest.current(chosen)} />) });
     }
-    return chips;
-  }, [written, found, text, bridge]);
+    return chips.length ? chips : NO_FILE_CHIPS;
+  }, [written, found, settled, bridge]);
 }

@@ -14,7 +14,7 @@ pub mod rpc;
 pub mod session;
 
 pub use adapter::AdapterId;
-pub use answer::{Answer, session_mentions};
+pub use answer::Answer;
 
 /// What the Desk agent is told before the operator's first message in a
 /// session: its role, that it acts through the `hide` CLI, and to answer in

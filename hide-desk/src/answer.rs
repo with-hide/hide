@@ -15,7 +15,10 @@ const MAX_TOKEN_BYTES: usize = 1024;
 
 /// One answer's words as the agent wrote them, with each token that closed
 /// written as its chip names it (a quoted name without its quotes), and the
-/// sessions and missions those tokens name, in order and once per id.
+/// sessions and missions those tokens name, in order and once per id. Every
+/// one is a chip (PRD session-docs-and-assistant D-86): the reply's own byte
+/// cap bounds how many it can name, so no count cap leaves a later one as raw
+/// text.
 ///
 /// [`Answer::push`] reads only what may still change: the chunk, and a token
 /// the chunk before left open (bounded by [`MAX_TOKEN_BYTES`] and its line),
@@ -114,14 +117,6 @@ impl Answer {
             }
         }
     }
-}
-
-/// The sessions `text` names as `@session(<pane> <name>)`, in order, each
-/// once. Every one is a chip (PRD session-docs-and-assistant D-86): the
-/// reply's own byte cap bounds how many it can name, so no count cap leaves a
-/// later one as raw text. A name the agent quoted is read without its quotes.
-pub fn session_mentions(text: &str) -> Vec<(String, String)> {
-    Answer::read(text).sessions
 }
 
 /// The first `@session(` or `@mission(` at or past `from`.
@@ -226,11 +221,8 @@ mod tests {
         let text = "@session(w1:p2 fix login) is done; @session(w3:p1 docs) waits. \
                     Again @session(w1:p2 fix login), then @session(broken) and @session(w4:p1 tail";
         assert_eq!(
-            session_mentions(text),
-            [
-                ("w1:p2".to_owned(), "fix login".to_owned()),
-                ("w3:p1".to_owned(), "docs".to_owned()),
-            ]
+            pairs(Answer::read(text).sessions()),
+            [("w1:p2", "fix login"), ("w3:p1", "docs")]
         );
     }
 
@@ -265,7 +257,7 @@ mod tests {
         let text: String = (1..=40)
             .map(|n| format!("- @session(w{n}:p1 job-{n}) runs\n"))
             .collect();
-        let found = session_mentions(&text);
+        let found = Answer::read(&text).sessions().to_vec();
         assert_eq!(found.len(), 40);
         assert_eq!(found[16], ("w17:p1".to_owned(), "job-17".to_owned()));
         assert_eq!(found[39], ("w40:p1".to_owned(), "job-40".to_owned()));

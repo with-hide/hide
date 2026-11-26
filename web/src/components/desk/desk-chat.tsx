@@ -115,15 +115,14 @@ const NO_REPLY_MISSIONS: readonly DeskMissionMention[] = [];
 export type DeskLiveAnswer = { text: string; mentions: readonly DeskSessionChip[]; missions: readonly DeskMissionMention[] };
 
 /**
- * `list` as the array it was last render while it names the same things, so
- * a chunk that closes no token keeps every chip as it is drawn; a list only
- * grows while an answer streams, and a new one is taken whole.
+ * `list` as the array it was while it names the same things, so a chunk that
+ * closes no token keeps every chip as it is drawn; a list only grows while an
+ * answer streams, and a new one is taken whole.
  */
 function useSameList<T>(list: readonly T[], key: (one: T) => string): readonly T[] {
-  const kept = useRef(list);
-  const before = kept.current;
-  if (before !== list && !(before.length === list.length && before.every((one, at) => key(one) === key(list[at]!)))) kept.current = list;
-  return kept.current;
+  // Kept while its names stay the same: the memo reads the names, not the array.
+  const names = list.map(key).join("\n");
+  return useMemo(() => list, [names]);
 }
 
 /**
