@@ -2291,6 +2291,20 @@ fn connect_again(state: &DaemonState) -> Result<(), String> {
         .map_err(|error| format!("the node did not take this connection: {error}"))
 }
 
+/// The resources folder of the desktop package `program` runs from, as the
+/// app's note names it (`hide_kit::app::note`). Judged by the file `program`
+/// is, not the link it was invoked through: the kit's command resolves into
+/// its package, and a link that only looks like a package path has no
+/// authority. Spelled as Hide's canonical path, without the `\\?\` prefix
+/// Windows adds, so the kit's command in `~/.local/bin` can name the folder
+/// by a relative way on the same drive.
+fn package_of(program: &Path) -> Option<std::path::PathBuf> {
+    hide_platform::fs::identity::canonical(program)
+        .ok()
+        .as_deref()
+        .and_then(hide_kit::bundled_kit_dir)
+}
+
 /// The daemon of this state folder, replaced or started as [`connect`]
 /// says.
 fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
@@ -2300,14 +2314,7 @@ fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
     move_legacy_state(env).map_err(ConnectError::StartFailed)?;
     let _serialized = state_file::lock_connect(&env.state_dir)
         .map_err(|error| ConnectError::StartFailed(format!("the connect lock: {error}")))?;
-    // Judged by the file this `hide` is, not the link it was invoked
-    // through: the kit's command resolves into its package, and a link that
-    // only looks like a package path has no authority.
-    let package = std::env::current_exe()
-        .and_then(|path| path.canonicalize())
-        .ok()
-        .as_deref()
-        .and_then(hide_kit::bundled_kit_dir);
+    let package = std::env::current_exe().ok().as_deref().and_then(package_of);
     // The app says it opens this folder's core, before anything below can
     // end the connect: from now on the app updates that core, and a paired
     // machine's raise leaves it alone (B23). The connect goes on without
@@ -5002,5 +5009,35 @@ mod tests {
             local_folder("stauts-not-a-folder").unwrap_err(),
             "stauts-not-a-folder is neither a folder here nor a hide command: check the path, or run hide --help for the commands"
         );
+    }
+
+    /// The package a connect notes on Windows is the plain drive spelling,
+    /// never the `\\?\` one the system's own canonical path gives: the
+    /// kit's `hide.cmd` in `~/.local/bin` names its folder by a relative way,
+    /// which a `\\?\C:` prefix beside the plain `C:` of the command folder
+    /// reads as two drives (seen on a Windows laptop, 1.2.12-main.466419d1).
+    #[cfg(windows)]
+    #[test]
+    fn the_package_a_connect_notes_on_windows_carries_no_verbatim_prefix() {
+        use std::path::{Component, Prefix};
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("app");
+        let resources = app.join("resources");
+        std::fs::create_dir_all(&resources).unwrap();
+        std::fs::write(resources.join("app.asar"), "").unwrap();
+        std::fs::write(resources.join("hided.exe"), "").unwrap();
+        std::fs::write(app.join("hide.exe"), "").unwrap();
+
+        let package = package_of(&resources.join("hided.exe")).expect("a desktop package");
+        assert!(
+            matches!(
+                package.components().next(),
+                Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
+            ),
+            "a plain drive path, not {}",
+            package.display()
+        );
+        assert!(package.ends_with(r"app\resources"), "{}", package.display());
+        assert!(hide_platform::fs::identity::same_file(&package, &resources).unwrap());
     }
 }
