@@ -202,6 +202,49 @@ pub(crate) struct Stored {
     /// older Hide reads past the key.
     #[serde(default)]
     pub queued: Vec<crate::model::DeskQueuedMessage>,
+    /// The sessions the conversation's chips name, by pane, oldest named
+    /// first, so a chip whose pane is gone still reads its session's record
+    /// and thread (feedback 2, frame K). An older Hide reads past the key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub named: Vec<NamedSession>,
+}
+
+/// The sessions [`Stored::named`] keeps; naming one more lets the one named
+/// longest ago go.
+pub(crate) const MAX_NAMED_SESSIONS: usize = 64;
+
+/// A session a chip of the conversation names, as its pane last ran it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NamedSession {
+    pub pane_id: String,
+    pub session: crate::links::ledger::SessionIdentity,
+    /// The Hide agent kind its row had, which its chip's agent mark draws.
+    pub agent_kind: String,
+    /// Where its thread is read on its machine; none for an agent Hide reads
+    /// no thread of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<crate::runtime::ThreadReference>,
+}
+
+impl Stored {
+    /// Keeps `named` as the session its pane runs now: a pane named again
+    /// with another session takes the new one in its place. Past
+    /// [`MAX_NAMED_SESSIONS`] the session named longest ago goes. Whether
+    /// anything changed, for a save.
+    pub(crate) fn keep_named(&mut self, named: NamedSession) -> bool {
+        if let Some(kept) = self.named.iter_mut().find(|kept| kept.pane_id == named.pane_id) {
+            if *kept == named {
+                return false;
+            }
+            *kept = named;
+            return true;
+        }
+        self.named.push(named);
+        let excess = self.named.len().saturating_sub(MAX_NAMED_SESSIONS);
+        self.named.drain(..excess);
+        true
+    }
 }
 
 /// Spawns the queue holds; one past it is refused `desk_queue_full`.
@@ -366,6 +409,13 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
     stored.queued.truncate(crate::model::DESK_QUEUED_MAX + 1);
     let excess = stored.marks.len().saturating_sub(MAX_MARKS);
     stored.marks.drain(..excess);
+    stored.named.retain(|named| {
+        named.pane_id.len() <= 1024
+            && named.agent_kind.len() <= 64
+            && named.thread.as_ref().is_none_or(crate::runtime::ThreadReference::bounded)
+    });
+    let excess = stored.named.len().saturating_sub(MAX_NAMED_SESSIONS);
+    stored.named.drain(..excess);
     let width = |width: Option<u32>| {
         width.filter(|width| (1..=crate::model::DESK_LANE_WIDTH_MAX).contains(width))
     };
@@ -847,6 +897,50 @@ mod restart_tests {
                 ("failed", QueuedState::Failed)
             ]
         );
+    }
+
+    /// A session a chip names is kept by its pane: the same pane with a new
+    /// session takes it in its place, past the cap the one named longest ago
+    /// goes, and the store reads back what it kept within the cap (feedback
+    /// 2, frame K).
+    #[test]
+    fn named_sessions_keep_the_newest_sixty_four_and_read_back_within_the_cap() {
+        let named = |pane: usize, session: &str| NamedSession {
+            pane_id: format!("p{pane}"),
+            session: crate::links::ledger::SessionIdentity {
+                device_id: "node".into(),
+                agent: "codex".into(),
+                session_id: session.into(),
+            },
+            agent_kind: "codex".into(),
+            thread: Some(
+                serde_json::from_value(serde_json::json!({
+                    "agent": "codex", "account": "default", "reference_kind": "id",
+                    "reference_value": session, "cwd": "/repo",
+                }))
+                .unwrap(),
+            ),
+        };
+        let mut stored = Stored::default();
+        for pane in 0..=MAX_NAMED_SESSIONS {
+            assert!(stored.keep_named(named(pane, &format!("s{pane}"))));
+        }
+        assert_eq!(stored.named.len(), MAX_NAMED_SESSIONS);
+        assert_eq!(stored.named[0].pane_id, "p1");
+        assert_eq!(stored.named.last().unwrap().pane_id, format!("p{MAX_NAMED_SESSIONS}"));
+        assert!(!stored.keep_named(named(5, "s5")));
+        assert!(stored.keep_named(named(5, "s5-cleared")));
+        assert_eq!(stored.named.len(), MAX_NAMED_SESSIONS);
+        assert_eq!(stored.named[4].session.session_id, "s5-cleared");
+        assert_eq!(decode(&encode(&stored).unwrap()).unwrap().named, stored.named);
+
+        // A file holding more than the cap, from a hand edit, reads its newest.
+        let mut over: serde_json::Value = serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+        over["named"].as_array_mut().unwrap().push(serde_json::to_value(named(99, "s99")).unwrap());
+        let read = decode(&serde_json::to_vec(&over).unwrap()).unwrap();
+        assert_eq!(read.named.len(), MAX_NAMED_SESSIONS);
+        assert_eq!(read.named.last().unwrap().pane_id, "p99");
+        assert_eq!(read.named[0].pane_id, "p2");
     }
 
     /// The waiting messages read back as they were kept, within the line's
