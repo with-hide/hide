@@ -162,12 +162,12 @@ describe("Desk's room", () => {
     expect(sent("desk_send")).toEqual([{ text: "@project(/work/repo-home repo) fix the build", mentions: [repo], again: 1 }]);
   });
 
-  const dropFile = async (name: string, bytes: number[]) => {
+  const dropFile = async (name: string, bytes: number[], at = "[data-desk-composer-frame]") => {
     const file = new File([new Uint8Array(bytes)], name);
     file.stream = () => new NodeBlob([new Uint8Array(bytes)]).stream() as ReadableStream<Uint8Array<ArrayBuffer>>;
     const drop = new Event("drop", { bubbles: true, cancelable: true });
     Object.defineProperty(drop, "dataTransfer", { value: { types: ["Files"], files: [file] } });
-    await act(async () => { document.body.querySelector("[data-desk-composer-frame]")!.dispatchEvent(drop); });
+    await act(async () => { document.body.querySelector(at)!.dispatchEvent(drop); });
     await vi.waitFor(() => expect(document.body.querySelector('[data-desk-attachment="reading"]')).toBeNull());
   };
   const tiles = () => [...document.body.querySelectorAll("[data-desk-composer-frame] [data-desk-attachment]")].map((tile) => [tile.getAttribute("data-desk-attachment"), tile.textContent]);
@@ -176,7 +176,8 @@ describe("Desk's room", () => {
     configureAttachments({ dispatch: (event) => { events.push(event); return true; }, sendBinary: () => undefined });
     useUiStore.setState({ deskDraft: { text: "왜 끊기는지 봐 줘", mentions: [] } });
     await render(desk([]));
-    await dropFile("install.log", [7, 8]);
+    // Dropped on the column's head, far from the box, the file still lands in it (Doop L 가).
+    await dropFile("install.log", [7, 8], "[data-desk-chat-head]");
 
     await press("[data-desk-composer-send]");
     const [message] = sent("desk_send") as { request_id: string; stages: string[] }[];

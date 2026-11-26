@@ -211,6 +211,36 @@ it("takes dropped files above the box, holds send while one is past 20 MB withou
   expect(events[1]!.payload).toMatchObject({ text: "이 로그도 같이 봐 줘", stages: [events[0]!.payload.request_id] });
 });
 
+it("takes a file dragged anywhere over the panel into its box, lighting only the box's border, and none while the wake line stands in its place (Doop L 나)", async () => {
+  const { container } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  const frame = () => container.querySelector("[data-desk-composer-frame]")!.getAttribute("data-desk-composer-frame");
+  const conversation = container.querySelector("[data-desk-thread-conversation]")!;
+  await drag(conversation, "dragenter");
+  expect(frame()).toBe("drop");
+  // Nothing else is drawn over the panel or the box while the files are over it.
+  expect(container.querySelector("[data-desk-composer-drop]")).toBeNull();
+  await drag(conversation, "dragleave");
+  expect(frame()).toBe("rest");
+  await drop(conversation, [readable("mini-login.log", new Uint8Array([1, 2]))]);
+  await vi.waitFor(() => expect(container.querySelector('[data-desk-attachment="ready"]')?.textContent).toContain("mini-login.log"));
+
+  const asleep = await mount(job, <p data-wake="true">wake</p>);
+  const panel = asleep.container.querySelector("[data-desk-thread-panel]")!;
+  const refused = new Event("dragover", { bubbles: true, cancelable: true });
+  Object.defineProperty(refused, "dataTransfer", { value: { types: ["Files"], files: [], dropEffect: "none" } });
+  await act(async () => { panel.dispatchEvent(refused); });
+  expect(refused.defaultPrevented).toBe(false);
+});
+
+/** A drag of files from the system over `target`, leaving to nothing when it is `dragleave`. */
+async function drag(target: Element, kind: "dragenter" | "dragleave") {
+  const event = new Event(kind, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: { types: ["Files"], files: [], dropEffect: "none" } });
+  Object.defineProperty(event, "relatedTarget", { value: null });
+  await act(async () => { target.dispatchEvent(event); });
+}
+
 it("draws the files a sent message typed before its words over its bubble, by the names they were sent under (desk-2-ui B41)", async () => {
   const { container } = await mount();
   const stage = "0b7a3c52-9a1e-4f7d-8c2b-1a2b3c4d5e6f";

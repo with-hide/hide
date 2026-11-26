@@ -392,7 +392,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
           actions={actions}
           room={room}
           chat={(
-            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} />} composer={composer} scrollRef={scroller}>
+            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} />} composer={composer} tray={tray} scrollRef={scroller}>
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
