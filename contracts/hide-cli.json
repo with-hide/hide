@@ -6338,7 +6338,6 @@
                 "plan_delegate_needs_parent",
                 "plan_order_refused",
                 "plan_review_pending",
-                "plan_candidate_refused",
                 "plan_delegate_full",
                 "plan_delegate_not_permitted",
                 "plan_unavailable",
@@ -8100,8 +8099,7 @@
                 "mission_preset_invalid",
                 "mission_gate_node_started",
                 "mission_machine_node_refused",
-                "mission_profile_unknown",
-                "mission_candidate_refused"
+                "mission_profile_unknown"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -9802,7 +9800,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:5619c53635d9b2fbc4f235a832e679dbc2496dcf5b5df03c41a834e53780a0e7",
+    "digest": "sha256:46b8d083dd0d975d70d5065714b4f7f0cd54d485414de2339ae39ef6600151c4",
     "envelopes": {
         "access": {
             "answer": "value",

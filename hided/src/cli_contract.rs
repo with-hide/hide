@@ -1021,7 +1021,6 @@ pub const COMMANDS: &[Spec] = &[
             "plan_delegate_needs_parent",
             "plan_order_refused",
             "plan_review_pending",
-            "plan_candidate_refused",
             "plan_delegate_full",
             "plan_delegate_not_permitted",
             "plan_unavailable",
@@ -2026,7 +2025,6 @@ pub const COMMANDS: &[Spec] = &[
             "mission_gate_node_started",
             "mission_machine_node_refused",
             "mission_profile_unknown",
-            "mission_candidate_refused",
         ],
     },
     Spec {

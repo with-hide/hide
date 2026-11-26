@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
 import { AgentMark } from "./AgentMark";
 import { agentMarkOf } from "./agentLogos";
 import { useInterfaceTranslation } from "./i18n/client";
+import { useOnScreen } from "./lib/useOnScreen";
 import "./missionStartGuide.css";
 
 // How a mission starts, shown on the mission screen while the device has none
@@ -48,30 +48,6 @@ function Call({ kind, call, runtime }: { kind: string; call: string; runtime: st
       <span className="min-w-0 truncate text-subtle-foreground">{runtime}</span>
     </span>
   );
-}
-
-/**
- * Whether the picture is on screen in a window that shows, so its loop runs
- * only then (B4, PRD risk on CPU): off screen or in a hidden window every
- * animation is paused where it is.
- */
-function useOnScreen<T extends Element>(): [React.RefObject<T | null>, boolean] {
-  const ref = useRef<T>(null);
-  const [seen, setSeen] = useState(false);
-  const [shown, setShown] = useState(() => typeof document === "undefined" || document.visibilityState !== "hidden");
-  useEffect(() => {
-    const node = ref.current;
-    if (!node || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver((entries) => setSeen(entries.some((entry) => entry.isIntersecting)));
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-  useEffect(() => {
-    const update = () => setShown(document.visibilityState !== "hidden");
-    document.addEventListener("visibilitychange", update);
-    return () => document.removeEventListener("visibilitychange", update);
-  }, []);
-  return [ref, seen && shown];
 }
 
 /** Workers' boxes: where each stands, its agent and what it makes. */

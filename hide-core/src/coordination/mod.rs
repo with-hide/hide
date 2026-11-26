@@ -63,7 +63,6 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | hide_node_link::holders::HOLDER_CAP_REFUSAL
             | "card_not_processed"
             | "mission_cap_reached"
-            | "mission_candidate_refused"
             | "mission_profile_unknown"
             | "mission_conducted"
             | "mission_criteria_missing"
@@ -102,7 +101,6 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_machine_no_repository"
             | "mission_nodes_unfinished"
             | "plan_invalid"
-            | "plan_candidate_refused"
             | "plan_order_refused"
             | "plan_too_large"
             | "plan_node_unknown"
@@ -282,19 +280,18 @@ pub enum Command {
         /// children asleep now. Only the core sets it, from `plan_node`.
         #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
         plan: Option<Box<PlanAdmission>>,
-        /// The agent item the spawn starts with, when an admission judged
-        /// it (Settings › Mission's candidates, PRD agent-profiles-phase2
-        /// D-08, B13). Only the core sets it, never on the wire.
+        /// The agent item the spawn starts with, when a mission's plan names
+        /// it (PRD agent-profiles-phase2 D-02). Only the core sets it, never
+        /// on the wire.
         #[serde(skip)]
         pick: Option<Picked>,
     },
 }
 
-/// The item the core picked for a spawn when it admitted it
-/// (`Runtime::spawn_request`, under the lock its admissions run under):
-/// the start takes this one rather than picking again, so a project's or
-/// a profile's change between the two never starts an item the admission
-/// did not judge.
+/// The item the core picked for a node's worker from its mission's plan
+/// (`Runtime::planned_request`, under the lock its admissions run under):
+/// the start takes this one rather than picking again, so a profile's
+/// change between the two never starts another item.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Picked(pub(crate) Box<crate::launch::Request>);
 

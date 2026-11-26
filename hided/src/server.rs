@@ -1550,10 +1550,8 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         // hide-plan-delegate B5, B6).
         code if code.starts_with("plan_") => hide_core::plans::next_action(code),
         // A spawn under a mission node that may not start yet (PRD
-        // node-presets D-06), or of an item none of the mission's candidates
-        // admits, is refused as the mission words it for a plan too.
-        code
-        @ ("mission_node_held" | "mission_gate_before_start" | "mission_candidate_refused") => {
+        // node-presets D-06) is refused as the mission words it for a plan too.
+        code @ ("mission_node_held" | "mission_gate_before_start") => {
             hide_core::missions::next_action(code)
         }
         "agent_pane_required" => {
@@ -6729,16 +6727,10 @@ mod tests {
     }
 
     /// A spawn under a mission node held or behind its start gate says what
-    /// the mission owes, not to retry the same spawn (PRD node-presets D-06),
-    /// and a spawn none of the mission's candidates admits is told what a
-    /// plan naming that item is told.
+    /// the mission owes, not to retry the same spawn (PRD node-presets D-06).
     #[test]
     fn a_spawn_the_mission_refuses_says_what_the_mission_owes() {
-        for code in [
-            "mission_node_held",
-            "mission_gate_before_start",
-            "mission_candidate_refused",
-        ] {
+        for code in ["mission_node_held", "mission_gate_before_start"] {
             let next = delivery_next_action(&format!("{code}\u{1f}ship"));
             assert_eq!(next, hide_core::missions::next_action(code));
             assert!(!next.contains("retry the same intent"), "{next}");
@@ -6844,10 +6836,6 @@ mod tests {
             ("plan_node_finished\u{1f}web", "already done or dropped"),
             ("plan_node_unknown\u{1f}nope", "hide task show"),
             ("plan_delegate_full\u{1f}3", "do this step yourself"),
-            (
-                "plan_candidate_refused\u{1f}Codex · team",
-                "favorite models",
-            ),
         ] {
             let (code, detail) = hide_core::coordination::split_refusal(reason);
             let detail = detail.unwrap();

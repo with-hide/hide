@@ -5,7 +5,7 @@
 // shows as pending until the snapshot says it landed. The sheet is the shell:
 // each page is its own module under `settings/`.
 
-import { BellIcon, BlocksIcon, GaugeIcon, BotIcon, FlaskConicalIcon, FolderGit2Icon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, BirdIcon, ShieldIcon, SlidersHorizontalIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, BlocksIcon, GaugeIcon, BotIcon, FlaskConicalIcon, FolderGit2Icon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, BirdIcon, SendIcon, ShieldIcon, SlidersHorizontalIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
 import { useState, useSyncExternalStore } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -20,6 +20,7 @@ import { SETTINGS_GROUPS, type SettingsTab } from "./settings";
 import { AboutTab } from "./settings/AboutTab";
 import { AgentsTab } from "./settings/AgentsTab";
 import { ConductorTab } from "./settings/ConductorTab";
+import { DelegationTab } from "./settings/DelegationTab";
 import { DevicesTab } from "./settings/DevicesTab";
 import { GeneralTab } from "./settings/GeneralTab";
 import { RemoteRepositoriesTab } from "./settings/RemoteRepositoriesTab";
@@ -47,6 +48,7 @@ const TAB_ICONS: Record<SettingsTab, LucideIcon> = {
   devices: MonitorSmartphoneIcon,
   shortcuts: KeyboardIcon,
   agents: BotIcon,
+  delegation: SendIcon,
   skills: BlocksIcon,
   hideAi: SparklesIcon,
   conductor: ListTreeIcon,
@@ -134,6 +136,7 @@ function SettingsSheet({ actions }: { actions: Actions }) {
               {tab === "devices" ? <DevicesTab actions={actions} /> : null}
               {tab === "shortcuts" ? <ShortcutsTab actions={actions} /> : null}
               {tab === "agents" ? <AgentsTab actions={actions} /> : null}
+              {tab === "delegation" ? <DelegationTab actions={actions} /> : null}
               {tab === "skills" ? <SkillsTab actions={actions} /> : null}
               {tab === "hideAi" ? <HideAiTab actions={actions} /> : null}
               {tab === "conductor" ? <ConductorTab actions={actions} /> : null}

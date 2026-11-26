@@ -9,7 +9,9 @@
 // with `system=windows` on the PC.
 // `look=ready|update_there|not_running|sign_in` is what a chosen SSH Host's
 // own Hide answers the dialog (PRD device-connect-iroh B7): choose `studio`
-// and its one line is drawn, with `Connect` where the two can pair.
+// and its one line is drawn, with `Connect` where the two can pair; with no
+// `look` it has no Hide, and its line says how one gets there. `mini` and
+// WSL Debian are added, each with its way to its device's 서버로 연결.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
@@ -27,7 +29,10 @@ const distro = (name: string, over: Partial<WslDistribution> = {}): WslDistribut
 const HOSTS: SshHosts = {
   state: "ready",
   truncated: false,
-  hosts: [{ alias: "studio", address: "you@studio.example:22", added_as: null, problem: null }],
+  hosts: [
+    { alias: "studio", address: "you@studio.example:22", added_as: null, problem: null },
+    { alias: "mini", address: "you@mini.example:22", added_as: "Mac mini", problem: null },
+  ],
   wsl: [
     distro("Ubuntu-24.04", { default: true }),
     distro("Debian", { added_as: "WSL Debian" }),
@@ -45,6 +50,12 @@ const DEVICES: Device[] = [
   device("local", { kind: "local", state: "local", host: { ...host("windows x86_64"), consent: "this_machine" } }),
   device(WSL_ID, { label: "WSL Ubuntu-24.04", wsl_distro: "Ubuntu-24.04", host: { ...host("linux x86_64"), windows_drives: "/mnt" } }),
   device("studio", { label: "studio", ssh_alias: "studio", host: host("macos aarch64") }),
+];
+
+/** The devices the added rows name, each opened from its row's 서버로 연결 › (with-hide/hide issue 3007). */
+const ADDED: Device[] = [
+  device("mini", { label: "Mac mini", ssh_alias: "mini", host: host("macos aarch64") }),
+  device("wsl-debian-3f2a", { label: "WSL Debian", wsl_distro: "Debian", host: host("linux x86_64") }),
 ];
 
 const MAC = device("local", { kind: "local", state: "local", host: { ...host("macos aarch64"), consent: "this_machine" } });
@@ -143,7 +154,7 @@ function Body({ actions }: { actions: ReturnType<typeof createActions> }) {
           <DialogTitle>{t("devices.addTitle")}</DialogTitle>
         </DialogHeader>
         <DialogBody>
-          <AddDevice actions={actions} devices={[]} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" onPaired={() => {}} />
+          <AddDevice actions={actions} devices={ADDED} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" onPaired={() => {}} onShowDevice={() => {}} />
         </DialogBody>
       </DialogContent>
     </Dialog>

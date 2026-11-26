@@ -96,6 +96,48 @@ it("opens an SSH device's row on its two ways and reads its machine once, changi
   await unmount();
 });
 
+/** The words a card's rows end on while this computer sleeps, the moment the two ways differ. */
+const asleep = (q: (selector: string) => HTMLElement | null, card: "direct" | "server") =>
+  Object.fromEntries(
+    ["agents", "missions", "automations"].map((row) => [row, q(`[data-device-way-row="${card}"] [data-device-keep="${row}"] [data-keep-asleep]`)?.textContent]),
+  );
+
+it("lays the two ways side by side and says what each keeps doing while this computer sleeps", async () => {
+  const { q, answer, press, unmount } = await mount([helper()]);
+  await press(FOLD);
+  await answer("look_switch", { condition: { kind: "auto_login_on" }, user: "me" });
+  const direct = '[data-device-way-row="direct"]';
+  const server = '[data-device-way-row="server"]';
+  expect(q(`${direct} [data-device-way-headline]`)?.textContent).toBe("When this computer sleeps,missions and automations stop too");
+  expect(q(`${server} [data-device-way-headline]`)?.textContent).toBe("Even when this computer sleeps,it keeps running on Mac mini");
+  // Over SSH the agents go on in their terminals, while missions and automations wait for this computer.
+  expect(asleep(q, "direct")).toEqual({ agents: "●Keep doing their work", missions: "‖Stop", automations: "‖Stop" });
+  expect(asleep(q, "server")).toEqual({ agents: "●Keep running", missions: "●Keep running", automations: "●Keep running" });
+  // What the device itself offers does not move with the beat.
+  expect(q(`${direct} [data-device-keep="there"]`)?.textContent).toBe("On Mac miniNo Hide screen");
+  expect(q(`${server} [data-device-keep="there"]`)?.textContent).toBe("On Mac miniInstall the app to use it there");
+  expect(q(`${direct} [data-device-way-picture="direct"]`)?.getAttribute("aria-label")).toBe("Hide runs only on this computer. When it sleeps, that device keeps only a small tool.");
+  expect(q(`${server} [data-device-way-picture="server"]`)).not.toBeNull();
+  // The button and what it costs sit with the server card.
+  expect(q(`${server} ${SWITCH}`)).not.toBeNull();
+  expect(q(server)?.textContent).toContain("In exchange, memory, standing instructions and the phone connection are set up on that device separately");
+  expect(q(direct)?.textContent).toContain("That device only gets a small tool");
+  await unmount();
+});
+
+it("draws no sleep picture for a WSL distribution, which runs on this PC and sleeps with it", async () => {
+  const { q, answer, press, unmount } = await mount([helper({ ssh_alias: null, wsl_distro: "Ubuntu", host: host("linux x86_64") })]);
+  await press(FOLD);
+  await answer("look_switch", { condition: { kind: "linger_on" } });
+  expect(q('[data-device-way-row="direct"]')?.textContent).toContain("Connect directly over WSL");
+  expect(q("[data-device-way-picture]")).toBeNull();
+  expect(q("[data-device-way-keeps]")).toBeNull();
+  expect(q("[data-device-way-headline]")).toBeNull();
+  expect(q('[data-device-way-row="server"]')?.textContent).toContain("For a device that runs a Hide of its own");
+  expect(q(SWITCH)).not.toBeNull();
+  await unmount();
+});
+
 it("warns about a Mac that does not log in by itself and still lets it be switched, with the steps only where macOS offers them", async () => {
   const { q, answer, press, unmount } = await mount([helper()]);
   await press(FOLD);
@@ -176,6 +218,12 @@ it("draws the steps the core says a switch is at in the button's place, with not
   await answer("look_switch", { condition: { kind: "auto_login_on" } });
   await show([helper({ switch_step: "starting" })]);
   expect(q(SWITCH)).toBeNull();
+  // The steps take the server card's picture and rows; the card in use says how it ends.
+  expect(q('[data-device-way-row="server"] [data-switch-step="starting:on"]')).not.toBeNull();
+  expect(q("[data-device-way-picture]")).toBeNull();
+  expect(q("[data-device-way-keeps]")).toBeNull();
+  expect(q('[data-device-way-row="direct"]')?.getAttribute("data-device-way-now")).toBe("true");
+  expect(q('[data-device-way-row="direct"]')?.textContent).toContain("It becomes a server once this finishes");
   expect([...document.querySelectorAll("[data-switch-step]")].map((step) => step.getAttribute("data-switch-step"))).toEqual(["checking:done", "starting:on", "pairing:later", "connecting:later", "projects:later"]);
   expect(q('[data-switch-step="starting:on"]')?.textContent).toContain("Start Hide on Mac mini");
   // Over, with the device not switched: the button is back.
@@ -272,6 +320,8 @@ it("says once, on the row of a device switched while this window watched, what s
   // A switched machine has nothing to press, and says how to go back.
   expect(q(SWITCH)).toBeNull();
   expect(q('[data-device-ways-back="mini"]')?.textContent).toBe("To go back, remove this device and add it over SSH again");
+  // The switched machine is still told apart from the direct way by what each keeps doing while this computer sleeps.
+  expect(asleep(q, "server")).toEqual({ agents: "●Keep running", missions: "●Keep running", automations: "●Keep running" });
   await press('[data-device-switched-seen="mini"]');
   expect(q("[data-device-switched]")).toBeNull();
   expect(useUiStore.getState().switchedDevices).toEqual([]);
