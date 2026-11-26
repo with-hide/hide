@@ -49,10 +49,10 @@ test("@platform a folder's memo is added from the toolbar, opens in the detail, 
     // The core closes and reopens a Local issue from the same panel (with-hide/hide issue 2947): the
     // control flips with the core's answer, and the status chip follows it.
     await item.locator('[data-item-open-toggle="close"]').click();
-    await expect(item.locator('[data-item-open-toggle="reopen"]')).toBeVisible({ timeout: 30_000 });
+    await expect(item.locator('[data-item-open-toggle="reopen"]')).toBeVisible();
     await expect(item.locator("[data-item-undo]")).toHaveCount(0);
     await item.locator('[data-item-open-toggle="reopen"]').click();
-    await expect(item.locator('[data-item-open-toggle="close"]')).toBeVisible({ timeout: 30_000 });
+    await expect(item.locator('[data-item-open-toggle="close"]')).toBeVisible();
     await item.locator("[data-item-undo]").click();
     await expect(row).toHaveCount(0, { timeout: 30_000 });
   } finally { daemon?.stop(); engine.stop(); }
