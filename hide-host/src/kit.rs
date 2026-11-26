@@ -972,6 +972,24 @@ mod tests {
             named(&of_program(&stray), &stray, &[]),
             (None, vec![root(&downloads)])
         );
+        // A guest's node and a device's helper name their own root too.
+        let guest_root = dir.path().join("state/g/0123456789abcdef/i");
+        let in_guest_root = programs(&guest_root.join("0123456789abcdef"), &whole);
+        let guest = KitPlace::Guest {
+            root: guest_root.clone(),
+            version: "0123456789abcdef".to_owned(),
+        };
+        assert_eq!(
+            named(&guest, &in_guest_root, &[]),
+            (
+                Some(format!("guest-root:{}", guest_root.display())),
+                none.clone()
+            )
+        );
+        assert_eq!(
+            named(&KitPlace::Installed, &in_helper_root, &[]),
+            (Some(root(&helper_root)), none.clone())
+        );
         // A login item's copy of the app's build installs the app's kit and
         // answers as the app, and still for the panes of its own root.
         let package = PathBuf::from("/Applications/hide.app/Contents/Resources");
