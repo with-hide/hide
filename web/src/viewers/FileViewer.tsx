@@ -5,6 +5,7 @@
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
+import { loadPdfjs } from "./pdfjs";
 import type { Actions } from "../actions";
 import { blobUrl } from "../fileBytes";
 import { useInterfaceTranslation } from "../i18n/client";
@@ -208,9 +209,7 @@ export function PdfBody({ path, state, displayId, comments }: { path: string; st
     let destroy: (() => void) | null = null;
     const load = async () => {
       try {
-        const pdfjs = await import("pdfjs-dist");
-        const worker = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
-        pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+        const pdfjs = await loadPdfjs();
         // pdf.js detaches the buffer it is handed, so it gets a copy.
         const task = pdfjs.getDocument({ data: state.bytes.slice() });
         destroy = () => {

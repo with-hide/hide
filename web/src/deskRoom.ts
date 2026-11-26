@@ -6,7 +6,7 @@
 // (`desk.lane`, B23).
 
 import type { DeskItem, DeskJob, DeskOutput } from "./snapshot";
-import { absolutePathRoot } from "./terminalLinks";
+import { absolutePathRoot, underFolder } from "./terminalLinks";
 
 /**
  * A tab of the tab panel (B18, B19): an output the session opened (a page,
@@ -297,15 +297,20 @@ export function namesView(made: DeskOutput, written: string): boolean {
 
 /**
  * The output a session's own line names, as its card lists it when it does: the View's id, or its address or file.
- * A line the card does not list names a file as the session typed it, read where the session runs (B27), so it
- * carries that session's device and checkout when they are another machine's; read without them it would go to
- * this machine's boundary, which refuses a path of another machine's checkout.
+ * A line the card does not list names a file as the session typed it, read where the session runs (B27): a relative
+ * spelling under the session's own folder (`folder`, its pane's folder), and with that session's device and checkout
+ * when they are another machine's; read without them it would go to this machine's boundary, which refuses a path of
+ * another machine's checkout.
  */
-export function outputNamed(listed: readonly DeskOutput[], output: DeskOutput, place: { device: string; checkout: string } | null, node: string): DeskOutput {
+export function outputNamed(listed: readonly DeskOutput[], output: DeskOutput, place: { device: string; checkout: string; folder: string } | null, node: string): DeskOutput {
   const made = listed.find((one) => one.id === output.id || (output.url !== null && one.url === output.url) || (output.path !== null && namesView(one, output.path)));
   if (made) return made;
-  return place && output.path !== null && output.device_id === null && place.device !== node ? { ...output, device_id: place.device, checkout: place.checkout } : output;
+  if (!place || output.path === null || output.device_id !== null) return output;
+  const path = absolutePathRoot(place.folder) ? underFolder(place.folder, output.path) : output.path;
+  if (place.device !== node) return { ...output, path, device_id: place.device, checkout: place.checkout };
+  return path === output.path ? output : { ...output, path };
 }
+
 
 /**
  * The panels' first widths before the operator drags one, and their floors

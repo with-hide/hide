@@ -1261,6 +1261,11 @@ pub struct RunSnapshot {
     /// window shows the run, as `answer` rides: the run screen's 결과.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub results: Vec<ResultSnapshot>,
+    /// Its agent opened something for the operator, which put the run in
+    /// Needs You (B15): said for every run, shown or not, so the 태스크
+    /// list knows which runs came to Needs You without carrying their 결과.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub has_results: bool,
 }
 
 /// One row of a run's 결과: the View's kind and name, and the `key` a press
@@ -1349,6 +1354,7 @@ impl AutomationsSnapshot {
                             } else {
                                 Vec::new()
                             },
+                            has_results: !run.results.is_empty(),
                         }),
                         Entry::Skipped {
                             at_unix_ms,
@@ -1920,8 +1926,9 @@ mod tests {
     }
 
     /// Operator choice 2026-11-24: a run's results ride the section newest
-    /// first, only while a window shows the run, as its answer does; a book
-    /// written before results read with none.
+    /// first, only while a window shows the run, as its answer does, and
+    /// that it has some rides always; a book written before results read
+    /// with none.
     #[test]
     fn a_runs_results_ride_the_section_newest_first_only_while_the_run_is_shown() {
         let now = at("2026-11-19T09:00");
@@ -1943,12 +1950,14 @@ mod tests {
                 |id, run| shown && id == "abc123" && run == number,
             );
             match &section.items[0].records[0] {
-                RecordSnapshot::Run(run) => run.results.clone(),
+                RecordSnapshot::Run(run) => (run.results.clone(), run.has_results),
                 other => panic!("a run's record, not {other:?}"),
             }
         };
-        assert!(rows(false).is_empty());
-        let shown = rows(true);
+        // Whether it has any is said either way: the 태스크 list reads it for every run.
+        assert_eq!(rows(false), (Vec::new(), true));
+        let (shown, has_results) = rows(true);
+        assert!(has_results);
         assert_eq!(
             shown
                 .iter()
