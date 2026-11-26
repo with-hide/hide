@@ -283,6 +283,7 @@ mod tests {
             spend: None,
             answer: None,
             results: Vec::new(),
+            has_results: false,
         })
     }
 

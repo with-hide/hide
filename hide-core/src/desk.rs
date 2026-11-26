@@ -286,14 +286,10 @@ impl Stored {
             }
             self.named.push(named.clone());
         }
-        let in_use: std::collections::HashSet<&str> =
-            chipped.iter().map(|named| named.pane_id.as_str()).collect();
-        let mut excess = self.named.len().saturating_sub(MAX_NAMED_SESSIONS);
-        self.named.retain(|kept| {
-            let drop = excess > 0 && !in_use.contains(kept.pane_id.as_str());
-            excess -= usize::from(drop);
-            !drop
-        });
+        // The chipped, at most the cap, now stand at the recent end, so the
+        // oldest past the cap are never ones a chip names.
+        let excess = self.named.len().saturating_sub(MAX_NAMED_SESSIONS);
+        self.named.drain(..excess);
         changed
     }
 }

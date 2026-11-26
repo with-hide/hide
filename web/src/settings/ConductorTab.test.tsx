@@ -117,7 +117,7 @@ it("lists no candidate table beside the cap and the scope, only a link that open
     expect(document.querySelector("[data-conductor-candidate]")).toBeNull();
     const row = document.querySelector<HTMLElement>("[data-conductor-models]")!;
     expect(row.getAttribute("data-conductor-models")).toBe("2");
-    expect(row.textContent).toContain("Workers and checkers");
+    expect(row.textContent).toContain("Agents and models to hand work to");
     expect(row.querySelector("button")?.textContent).toBe("Open Favorite models (2)");
   } finally { await tab.unmount(); }
 });

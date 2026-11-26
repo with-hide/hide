@@ -9,6 +9,8 @@
 import { LoaderCircleIcon, MapIcon, PlayIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Actions } from "./actions";
+import { answerPlace, type FoundAnswerPath } from "./answerPaths";
+import { hostBridge } from "./host";
 import { deskFavorites, deskOn, deskPhase, holdsFoot, laneCards, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
 import { activeTab, closePanel, closeSide, closeTab, fileName, followFrom, keepTab, newSessionBeside, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab, type NewSessionFollow } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
@@ -23,7 +25,7 @@ import { SessionChipProvider, type SessionChipSource } from "./components/desk/s
 import { SessionAskCard, SessionHead, SessionRecordFoot, SessionSleepingFoot } from "./components/desk/desk-session";
 import { LineButton } from "./LinkSessions";
 import { resumeBlock, resumeCheckout } from "./linkPanel";
-import { resumeFailureText, resumeRequest, useSessionResume } from "./useSessionResume";
+import { resumeFailureText, resumeReason, resumeRequest, useSessionResume } from "./useSessionResume";
 import { OutputShelf } from "./components/desk/output-shelf";
 import { rowPulls } from "./prMark";
 import { useElapsed } from "./components/elapsed";
@@ -355,6 +357,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       if (project && checkout) actions.openWorkspace(project.device_id, project.id, checkout.id);
     },
     onHanded: (paneId) => room.session({ name: "", mark: null, agent_kind: null, pane_id: paneId }),
+    onFile: (file) => openAnswerFile(actions, file),
   }), [actions, onNoticeAction, room]);
   const place = useUiStore((s) => s.deskRoom);
   const front = activeTab(place.panel);
@@ -417,7 +420,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
           actions={actions}
           room={room}
           chat={(
-            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} />} composer={composer} scrollRef={scroller}>
+            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} />} composer={composer} tray={tray} scrollRef={scroller}>
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
@@ -456,7 +459,7 @@ function everyCard(): DeskJob[] {
 }
 
 /** The output a session's own line names, as `outputNamed` resolves it, on this machine's node. */
-function outputOf(job: DeskJob | undefined, output: DeskOutput, place?: { device: string; checkout: string } | null): DeskOutput {
+function outputOf(job: DeskJob | undefined, output: DeskOutput, place?: { device: string; checkout: string; folder: string } | null): DeskOutput {
   return outputNamed(job?.outputs ?? [], output, place ?? null, localDeviceId(useShellStore.getState().rest));
 }
 
@@ -534,6 +537,19 @@ function useDeskPartActions(actions: Actions, room: RoomActions, scope: Explorer
 function openPullRequest(actions: Actions, url: string, label: string) {
   const listed = everyCard().flatMap((job) => job.outputs).find((output) => output.kind === "pr" && output.url === url);
   actions.deskOpen({ kind: "output", output: listed ?? { id: `pr:${url}`, kind: "pr", label, thumb: null, seen: true, pr_state: null, device_id: null, checkout: null, path: null, url } });
+}
+
+/**
+ * A file chip an answer drew, pressed (feedback 2 frame M [2]): a project's
+ * file opens in the tab panel as the app's file view; a path outside every
+ * project never reaches the core, and this computer's file manager only
+ * shows it, selected in its folder.
+ */
+function openAnswerFile(actions: Actions, file: FoundAnswerPath) {
+  if (file.kind === "project") return actions.deskOpen({ kind: "file", device_id: file.device, root: file.root, path: file.path });
+  const bridge = hostBridge();
+  if (!bridge) return useShellStore.getState().noteDiagnostic("desk file chip: no desktop host to reveal an outside path");
+  bridge.revealPath(file.path);
 }
 
 /** A file Desk's Explorer opened: in the tab panel, under the session's checkout it lists (B36, B37). */
@@ -625,7 +641,7 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
   const checkout = resumeCheckout({ device_id: device, cwd: record.cwd }, catalogOf(workspaces, remote), null, node);
   const live = useShellStore((s) => s.connection === "live");
   const blocked = resumeBlock({ agent: record.session.agent, file: record.path ? "present" : "missing", device_id: device }, checkout, devices, node);
-  const reason = blocked ? t(blocked.key, "device" in blocked ? { device: blocked.device } : {}) : !live ? t("devices.rail.notConnected") : null;
+  const reason = resumeReason(blocked, live, t);
   // The resumed session opens beside Desk, as any session Desk opens does, not in its own tab.
   const { resume, start } = useSessionResume((pane) => actions.openDeskSession(pane));
   const resumeNow = () => {
@@ -770,11 +786,12 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
         />
       ) : null}
       onTerminal={() => actions.deskTerminal()}
-      outputOf={(output) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath } : null)}
+      outputOf={(output) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath, folder: answerPlace(useShellStore.getState().rest, paneId)?.cwd ?? checkoutPath } : null)}
       onOutput={(output) => actions.deskOpen({ kind: "output", output })}
       onMission={room.mission}
       onSession={room.session}
       onCopy={(text, what) => actions.copyText(text, what)}
+      onFile={(file) => openAnswerFile(actions, file)}
     />
   );
 }

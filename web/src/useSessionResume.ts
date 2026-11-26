@@ -6,7 +6,7 @@ import { startReasonText } from "./startReason";
 import { agentFailure } from "./startDraft";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
-import { resumeProvider } from "./linkPanel";
+import { resumeProvider, type Blocked } from "./linkPanel";
 import type { Actions } from "./actions";
 import type { TFunction } from "i18next";
 
@@ -31,6 +31,12 @@ export function resumeRequest(startAgent: Actions["startAgent"], session: Resume
   const provider = resumeProvider(session.agent);
   if (!checkout || !provider) return null;
   return (requestId, confirmOnly) => startAgent({ target: { checkoutPath: checkout.path }, deviceId: session.device_id === node ? undefined : session.device_id, provider, resumeSessionId: session.session_id, resumeSessionPath: session.path ?? undefined, requestId, confirmOnly });
+}
+
+/** Why a session cannot resume, as the record screen and Desk say it: the session's own block, else the lost connection to Hide; null when it can. */
+export function resumeReason(blocked: Blocked, connected: boolean, t: TFunction<"translation">): string | null {
+  if (blocked) return "device" in blocked ? t(blocked.key, { device: blocked.device }) : t(blocked.key);
+  return connected ? null : t("devices.rail.notConnected");
 }
 
 /** What a resume that did not open says, in the words every session line uses; null while none failed. */

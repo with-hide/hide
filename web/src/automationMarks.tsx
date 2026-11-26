@@ -27,9 +27,9 @@ const TONE_CLASS: Record<RecordTone, string> = {
   stopped: "text-muted-foreground",
 };
 
-/** A record's mark: ✓, ✗, –, ● or ■ (B3, B16, B20, B22). */
-export function ToneMark({ tone }: { tone: RecordTone }) {
-  const className = cn("size-(--size-icon-sm) shrink-0", TONE_CLASS[tone]);
+/** A record's mark: ✓, ✗, –, ● or ■ (B3, B16, B20, B22); `quiet` leaves it in the line's grey. */
+export function ToneMark({ tone, quiet = false }: { tone: RecordTone; quiet?: boolean }) {
+  const className = cn("size-(--size-icon-sm) shrink-0", !quiet && TONE_CLASS[tone]);
   switch (tone) {
     case "ok":
       return <CheckIcon aria-hidden="true" className={className} />;
@@ -47,20 +47,21 @@ export function ToneMark({ tone }: { tone: RecordTone }) {
 
 /**
  * `자동화 · 한 번 · ✓ 끝남 · 4분`: what a once automation's run came to, its result in its tone with its mark (S-4, S-5); the one
- * line the sidebar, the Overview, the phone and its gathered list draw. A caption line stays on one line and cuts its result;
- * a body line (the phone) wraps.
+ * line the sidebar, the Overview, the phone and its gathered list draw, and, `자동화 · ✓ 끝남 · 4분` without `once`, a repeating
+ * automation's run resting in the 태스크 list's 쉬는 중, where `quiet` draws its result in a resting row's grey. A caption line
+ * stays on one line and cuts its result; a body line (the phone) wraps.
  */
-export function LookLine({ run, size = "caption", className }: { run: RunFacts | null; size?: "caption" | "body"; className?: string }) {
+export function LookLine({ run, once = true, quiet = false, size = "caption", className }: { run: RunFacts | null; once?: boolean; quiet?: boolean; size?: "caption" | "body"; className?: string }) {
   const { t, i18n } = useInterfaceTranslation();
   const shown = run ? lookText(run, requireInterfaceLanguage(i18n.language), t) : null;
   return (
     <span className={cn("flex min-w-0 items-center gap-x-xs text-muted-foreground", size === "caption" ? "text-caption" : "flex-wrap text-body", className)} data-automation-look-line={shown?.tone ?? "none"}>
-      <span className="shrink-0">{t("automationScreen.look.kind")}</span>
+      <span className="shrink-0">{t(once ? "automationScreen.look.kind" : "automationScreen.look.kindRepeat")}</span>
       {shown ? (
         <>
           <span aria-hidden="true" className="shrink-0">{" · "}</span>
-          <ToneMark tone={shown.tone} />
-          <span className={cn("min-w-0", size === "caption" && "truncate", TONE_CLASS[shown.tone])}>{shown.text}</span>
+          <ToneMark tone={shown.tone} quiet={quiet} />
+          <span className={cn("min-w-0", size === "caption" && "truncate", !quiet && TONE_CLASS[shown.tone])}>{shown.text}</span>
         </>
       ) : null}
     </span>

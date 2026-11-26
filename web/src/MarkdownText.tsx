@@ -40,12 +40,13 @@ const codeCopy = EditorView.theme({
 
 /**
  * A token of the text drawn as a part instead of its letters, such as a
- * session a Desk reply names. `after` is a part that does not fit a line of
- * words: the token's place keeps `node`, and `after` stands in a row of its
- * own right behind the paragraph that holds the token, with the other parts
- * that paragraph has.
+ * session a Desk reply names: everywhere it stands, or only at the offsets
+ * `at` names (a file path, which a code block keeps as code). `after` is a
+ * part that does not fit a line of words: the token's place keeps `node`, and
+ * `after` stands in a row of its own right behind the paragraph that holds the
+ * token, with the other parts that paragraph has.
  */
-export type MarkdownChip = { token: string; node: ReactNode; after?: ReactNode };
+export type MarkdownChip = { token: string; node: ReactNode; at?: readonly number[]; after?: ReactNode };
 
 const roots = new WeakMap<HTMLElement, Root>();
 
@@ -110,22 +111,38 @@ function paragraphEnd(text: string, at: number): number {
   return blank < 0 ? text.length : blank;
 }
 
-/** Every place a chip's token stands in the text, replaced by the chip, and each paragraph's `after` parts in a row behind it. */
+/**
+ * Every place a chip's token stands in the text, replaced by the chip, and each paragraph's `after` parts in a row behind it;
+ * where two chips would cover the same letters, the one that starts first, then the earlier chip, wins.
+ */
 function chipDecorations(text: string, chips: readonly MarkdownChip[]): Extension {
-  const ranges: Range<Decoration>[] = [];
-  const rows = new Map<number, number[]>();
+  const spans: { from: number; to: number; index: number }[] = [];
   chips.forEach((chip, index) => {
     if (!chip.token) return;
-    for (let at = text.indexOf(chip.token); at >= 0; at = text.indexOf(chip.token, at + chip.token.length)) {
-      ranges.push(Decoration.replace({ widget: new ChipWidget(index, chip.node) }).range(at, at + chip.token.length));
-      if (chip.after) {
-        const end = paragraphEnd(text, at);
-        const row = rows.get(end) ?? [];
-        if (!row.includes(index)) rows.set(end, [...row, index]);
-      }
+    if (chip.at) {
+      for (const at of chip.at) if (text.startsWith(chip.token, at)) spans.push({ from: at, to: at + chip.token.length, index });
+      return;
     }
+    for (let at = text.indexOf(chip.token); at >= 0; at = text.indexOf(chip.token, at + chip.token.length)) spans.push({ from: at, to: at + chip.token.length, index });
   });
-  for (const [end, indexes] of rows) ranges.push(Decoration.widget({ widget: new ChipRowWidget(indexes.join(" "), indexes.map((index) => chips[index]!.after)), block: true, side: 1 }).range(end));
+  spans.sort((a, b) => a.from - b.from || a.index - b.index);
+  const ranges: Range<Decoration>[] = [];
+  const rows = new Map<number, Set<number>>();
+  let end = 0;
+  for (const span of spans) {
+    if (span.from < end) continue;
+    const chip = chips[span.index]!;
+    ranges.push(Decoration.replace({ widget: new ChipWidget(span.index, chip.node) }).range(span.from, span.to));
+    end = span.to;
+    if (chip.after) {
+      const close = paragraphEnd(text, span.from);
+      rows.set(close, (rows.get(close) ?? new Set()).add(span.index));
+    }
+  }
+  for (const [at, held] of rows) {
+    const indexes = [...held].sort((a, b) => a - b);
+    ranges.push(Decoration.widget({ widget: new ChipRowWidget(indexes.join(" "), indexes.map((index) => chips[index]!.after)), block: true, side: 1 }).range(at));
+  }
   return [chipRow, EditorView.decorations.of(Decoration.set(ranges, true))];
 }
 
