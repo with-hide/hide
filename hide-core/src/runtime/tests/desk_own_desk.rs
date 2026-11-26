@@ -52,7 +52,7 @@ fn open_on_desk_as(
 
 fn desk_layout(runtime: &mut Runtime, action: serde_json::Value) {
     let mut payload = action;
-    payload["workspace"] = serde_json::json!({"device_id": "", "path": "hide:desk"});
+    payload["workspace"] = serde_json::json!({"device_id": runtime.node.as_str(), "path": "hide:desk"});
     runtime.dispatch_json(&explorer_event("view_layout", payload));
 }
 
@@ -520,4 +520,26 @@ fn desks_explorer_changes_its_sessions_checkout_and_opens_its_created_file_nowhe
     assert_eq!(front(&runtime), before, "the front checkout stays");
     assert_eq!(open_tab(&runtime, &made), None);
     assert!(desk_views(&mut runtime).is_empty());
+}
+
+#[test]
+fn a_page_of_desks_desk_is_the_core_machines_and_resolves_to_load_there() {
+    let (mut runtime, _, _) = desk_runtime("desk-own-desk-page");
+    runtime.snapshot.status.engine.state = "connected".into();
+    let node = runtime.node.as_str().to_owned();
+    runtime.dispatch_json(&explorer_event(
+        "browser_open",
+        serde_json::json!({"url": "https://example.com/", "workspace": {"device_id": node, "path": "hide:desk"}}),
+    ));
+    let page = desk_views(&mut runtime)
+        .into_iter()
+        .find(|display| display.kind == crate::view_layout::DisplayKind::Browser)
+        .expect("the page is on Desk's desk");
+    assert_eq!(runtime.snapshot.desk_view.as_ref().map(|view| view.device_id.clone()), Some(node.clone()));
+    let load = runtime.view_display(&runtime.desk_key(), &page.id).map(|display| display.load).expect("the page's display");
+    let source = runtime
+        .browser_route_source(&node, "hide:desk", &page.id, load)
+        .expect("a page of Desk's desk resolves");
+    assert_eq!((source.device_id, source.url), (node, "https://example.com/".to_owned()));
+    assert!(shown(&mut runtime).is_empty(), "the page is on no Workspace's desk");
 }

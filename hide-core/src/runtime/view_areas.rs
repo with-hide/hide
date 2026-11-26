@@ -39,7 +39,7 @@ use crate::view_layout::{
     MAX_VIEW_AREAS, MAX_VIEW_DISPLAYS, Node, browser_address, browser_title,
 };
 use crate::workspace_views::Place;
-use super::desk::views::{desk_key, is_desk_key};
+use super::desk::views::is_desk_key;
 
 /// Split request ids remembered per Workspace, so a split sent twice splits
 /// once (engineering principle 11). Runtime only.
@@ -690,7 +690,7 @@ impl Runtime {
     pub(super) fn every_view_layout(&self) -> impl Iterator<Item = (WorkspaceKey, Place, &Layout)> {
         let desk = self
             .desk_views()
-            .map(|layout| (desk_key(), Place::Desk, layout));
+            .map(|layout| (self.desk_key(), Place::Desk, layout));
         self.workspace_views
             .iter()
             .flat_map(|store| {
@@ -708,7 +708,7 @@ impl Runtime {
         let desk = self
             .desk_views()
             .into_iter()
-            .flat_map(|layout| layout.displays().map(|display| (desk_key(), display)));
+            .flat_map(|layout| layout.displays().map(|display| (self.desk_key(), display)));
         self.workspace_views
             .iter()
             .flat_map(|store| {

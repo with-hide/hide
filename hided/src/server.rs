@@ -2841,7 +2841,7 @@ enum ClientAction {
 /// finds the checkout and its device in its own catalog, and the helper
 /// confines the path to the checkout root it opened, or, for a registration,
 /// to that device's own home (`hide_host::register`).
-const DEVICE_FILE_EVENTS: [&str; 14] = [
+const DEVICE_FILE_EVENTS: [&str; 13] = [
     "create_workspace",
     "desk_view_open",
     "clone_repository",
@@ -2855,7 +2855,6 @@ const DEVICE_FILE_EVENTS: [&str; 14] = [
     "path_move",
     "path_copy",
     "path_trash",
-    "desk_file_retry",
 ];
 
 /// The SSH device a file event names, or `None` for this machine. Any id

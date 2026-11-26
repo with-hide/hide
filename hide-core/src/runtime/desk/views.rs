@@ -28,17 +28,14 @@ use crate::runtime::workspace_view::WorkspaceKey;
 use crate::view_layout::{DisplayKind, Layout, LayoutError, ViewOrigin};
 use crate::workspace_views::Place;
 
-/// The folder Desk's desk is keyed under, beside its empty device: Desk's
-/// caller name, which no checkout's absolute path can be on any system.
+/// The folder Desk's desk is keyed under: Desk's caller name, which no
+/// checkout's absolute path can be on any system, so it alone names the desk.
+/// Its device is the core's own node, where Desk runs and its pages load
+/// (the desktop host and hided route a page by its workspace's device).
 pub(in crate::runtime) const DESK_VIEWS_PATH: &str = crate::workspace_control::DESK_CALLER;
 
-/// The key the runtime's View code reaches Desk's desk under.
-pub(in crate::runtime) fn desk_key() -> WorkspaceKey {
-    (String::new(), DESK_VIEWS_PATH.to_owned())
-}
-
 pub(in crate::runtime) fn is_desk_key(key: &WorkspaceKey) -> bool {
-    key.0.is_empty() && key.1 == DESK_VIEWS_PATH
+    key.1 == DESK_VIEWS_PATH
 }
 
 /// `desk_view_open`: what a press in Desk's room opens on Desk's desk, in
@@ -73,6 +70,11 @@ pub(in crate::runtime) enum OpenPayload {
 }
 
 impl Runtime {
+    /// The key the runtime's View code reaches Desk's desk under.
+    pub(in crate::runtime) fn desk_key(&self) -> WorkspaceKey {
+        (self.node.as_str().to_owned(), DESK_VIEWS_PATH.to_owned())
+    }
+
     /// Whether Desk's desk is in use: Desk installed and on, in a shell
     /// that draws View areas.
     pub(in crate::runtime) fn desk_views_on(&self) -> bool {
@@ -181,7 +183,7 @@ impl Runtime {
                 beside,
                 ..
             } => self.desk_open_file(&workspace_id, &checkout_id, &path, preview, beside),
-            OpenPayload::Card { card } => self.open_card_on(&desk_key(), &Place::Desk, card),
+            OpenPayload::Card { card } => self.open_card_on(&self.desk_key(), &Place::Desk, card),
             OpenPayload::Output {
                 device_id,
                 checkout,
@@ -208,7 +210,7 @@ impl Runtime {
             );
             return true;
         }
-        self.open_file_in_view(&desk_key(), workspace_id, checkout_id, path, preview, beside);
+        self.open_file_in_view(&self.desk_key(), workspace_id, checkout_id, path, preview, beside);
         crate::diagnostic!(serde_json::json!({
             "component": "desk",
             "kind": "desk_views.file_open",
@@ -248,7 +250,7 @@ impl Runtime {
                 self.desk_open_page(&url)
             }
             DisplayKind::Card => match display.card.clone() {
-                Some(card) => self.open_card_on(&desk_key(), &Place::Desk, card),
+                Some(card) => self.open_card_on(&self.desk_key(), &Place::Desk, card),
                 None => super::refused("desk_output_gone"),
             },
             // An outside file is the desktop window's grant, which only its
@@ -262,7 +264,7 @@ impl Runtime {
     /// A new page of Desk's at `url`, or the page Desk's desk holds at it
     /// brought in front and loaded again.
     fn desk_open_page(&mut self, url: &str) -> bool {
-        let opened = self.open_browser_at(url, desk_key());
+        let opened = self.open_browser_at(url, self.desk_key());
         if let Err(kind) = opened {
             crate::diagnostic!(serde_json::json!({
                 "component": "desk",
@@ -389,7 +391,7 @@ impl Runtime {
                     .iter()
                     .filter(|display| display.kind == DisplayKind::Browser)
                     .map(|display| BrowserViewInventoryRow {
-                        device_id: String::new(),
+                        device_id: self.node.as_str().to_owned(),
                         path: DESK_VIEWS_PATH.to_owned(),
                         area_id: area.id.clone(),
                         view_id: display.id.clone(),
@@ -432,9 +434,9 @@ impl Runtime {
     /// Workspace's is: absent while Desk's desk is not in use.
     pub(in crate::runtime) fn publish_desk_view(&mut self) {
         let published = self.desk_views().map(|layout| DeskViewSnapshot {
-            device_id: String::new(),
+            device_id: self.node.as_str().to_owned(),
             path: DESK_VIEWS_PATH.to_owned(),
-            layout: self.view_layout_snapshot(&desk_key(), layout),
+            layout: self.view_layout_snapshot(&self.desk_key(), layout),
             opened: self.desk.views_opened,
         });
         self.snapshot.desk_view = published;
