@@ -10,7 +10,7 @@ import { MapIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Actions } from "./actions";
 import { deskOn, deskPhase, holdsFoot, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
-import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
+import { activeTab, closePanel, closeSide, closeTab, fileName, followFrom, keepTab, newSessionBeside, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab, type NewSessionFollow } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
 import { AreaEmpty } from "./AreaEmpty";
 import { DisplayEditor, DocumentKeeper } from "./Editor";
@@ -102,6 +102,25 @@ function useReadShownCards(scroller: RefObject<HTMLDivElement | null>, jobs: rea
       document.removeEventListener("visibilitychange", soon);
     };
   }, [scroller, jobs, onRead]);
+}
+
+/**
+ * Opens beside Desk the first session a turn starts, as `newSessionBeside`
+ * rules (frame J), from the lines and cards this visit of the room sees
+ * arrive; the lines there when the room was entered are old.
+ */
+function useNewSessionBeside(actions: Actions, generation: number | undefined, items: readonly DeskItem[] | undefined, cards: Readonly<Record<string, DeskJob>>) {
+  const follow = useRef<NewSessionFollow | null>(null);
+  useEffect(() => {
+    if (generation === undefined || !items) return;
+    if (!follow.current) {
+      follow.current = followFrom(generation, items);
+      return;
+    }
+    const next = newSessionBeside(follow.current, generation, items, cards, useUiStore.getState().deskRoom);
+    follow.current = next.follow;
+    if (next.open) actions.openDeskSession(next.open);
+  }, [actions, generation, items, cards]);
 }
 
 /** Where the `@` menu stands: the `@` word Esc closed it on, the project ⇥ entered, and the parents the operator folded open or shut. */
@@ -199,6 +218,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   }, [empty, drawn]);
 
   useReadShownCards(scroller, jobs, actions.deskJobRead);
+  useNewSessionBeside(actions, desk?.conversation.generation, items, byId);
 
   const send = (words = draft) => {
     if (!canSend || !items) return;
@@ -410,16 +430,18 @@ export function DeskScreen({ actions }: { actions: Actions }) {
  * Where Desk's chips read their sessions (D-86): the sidebar's rows and
  * every card Desk has, so a chip in the chat or the session panel shows its
  * row's mark, dims once the row is gone, and opens its card under the
- * pointer; a press opens the session beside Desk.
+ * pointer; a press opens the session beside Desk, and the chip of the session
+ * open there is ringed (frame J).
  */
 function useSessionChipSource(room: RoomActions): SessionChipSource {
   const rows = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
   const section = useShellStore((s) => s.deskJobs);
+  const open = useUiStore((s) => s.deskRoom.session);
   return useMemo(() => {
     const byPane = new Map(rows.map((row) => [row.pane_id, row]));
     const cards = laneCards(section);
-    return { facts: (session) => sessionFacts(byPane, cards, session), onOpen: room.session };
-  }, [rows, section, room]);
+    return { facts: (session) => sessionFacts(byPane, cards, session), onOpen: room.session, open };
+  }, [rows, section, room, open]);
 }
 
 /** Every card Desk has: its jobs, their missions' workers, and the other sessions its conversation names. */

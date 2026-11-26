@@ -22,6 +22,8 @@ import { DeskPlanChip, JobLead, jobStateWords } from "./desk-job-card";
 export type SessionChipSource = {
   facts: (session: DeskSessionRef) => SessionFacts | null;
   onOpen: (session: DeskSessionRef) => void;
+  /** The pane of the session open beside Desk, whose chips are ringed as the open one (frame J); absent on a screen with no room. */
+  open?: string | null;
 };
 
 const SourceContext = createContext<SessionChipSource | null>(null);
@@ -79,13 +81,15 @@ export function SessionChip({ session, onPress, card: carded = true, className }
   // A listed session is called what its sidebar row calls it, whatever name the words that named it wrote.
   const name = (facts?.listed ? facts.name : null) ?? session.name;
   const lead = agent === null ? null : <><StatusMark mark={mark} /><AgentMark kind={agent} /></>;
-  const look = cn("inline-flex max-w-full min-w-0 items-center gap-xxs rounded-xs px-xxs align-middle", MENTION_TONE.session, gone && "opacity-(--opacity-dimmed)", className);
+  // The chip of the session open beside Desk wears the selection ring an output in front of the tab panel wears (B16).
+  const shown = !gone && session.pane_id != null && source?.open === session.pane_id;
+  const look = cn("inline-flex max-w-full min-w-0 items-center gap-xxs rounded-xs px-xxs align-middle", MENTION_TONE.session, gone && "opacity-(--opacity-dimmed)", shown && "ring-1 ring-ring", className);
   // A session no longer listed has nothing left to open.
   const press = gone ? undefined : onPress;
   const chip = !press ? (
-    <span className={look} aria-label={gone ? t("desk.chip.gone", { name }) : undefined} data-desk-session-chip={name} data-desk-session-gone={gone ? "true" : undefined}>{lead}<span className="truncate">{name}</span></span>
+    <span className={look} aria-label={gone ? t("desk.chip.gone", { name }) : undefined} data-desk-session-chip={name} data-desk-session-gone={gone ? "true" : undefined} data-desk-session-open={shown ? "true" : undefined}>{lead}<span className="truncate">{name}</span></span>
   ) : (
-    <Button variant="text" size="inline" className={cn(look, MENTION_PRESS.session)} aria-label={gone ? t("desk.chip.gone", { name }) : t("desk.mention.open", { name })} data-desk-session-chip={name} data-desk-session-gone={gone ? "true" : undefined} onClick={press}>
+    <Button variant="text" size="inline" className={cn(look, MENTION_PRESS.session)} aria-label={gone ? t("desk.chip.gone", { name }) : t("desk.mention.open", { name })} data-desk-session-chip={name} data-desk-session-gone={gone ? "true" : undefined} data-desk-session-open={shown ? "true" : undefined} aria-current={shown ? "true" : undefined} onClick={press}>
       {lead}
       <span className="truncate">{name}</span>
     </Button>

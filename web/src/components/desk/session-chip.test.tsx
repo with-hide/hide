@@ -84,3 +84,17 @@ it("draws each mission the reply item carries in place of its token, a title wit
   expect(host.textContent).not.toContain("@mission(mission-63");
   expect(host.textContent).toContain("@mission(mission-9 not read)");
 });
+
+it("marks the chip of the session open beside Desk as the open one, and no other (frame J, 가-2 and 나-1)", async () => {
+  const mentions: DeskMention[] = [
+    { kind: "session", id: "w1:p1", name: "Windows 설치 폴더 OneDrive 문제", mark: "going", agent_kind: "codex" },
+    { kind: "session", id: "w1:p2", name: "Mac mini 연결 검증", mark: "going", agent_kind: "claude" },
+  ];
+  const text = mentions.map((mention) => `@session(${mention.id} ${mention.name})`).join(" ");
+  const facts = (): SessionFacts => ({ listed: true, name: null, mark: "going", agent_kind: "codex", card: null, since: null, parent: null });
+  const open = (pane: string | null) => render(<SessionChipProvider source={{ facts, onOpen: () => undefined, open: pane }}><DeskReply text={text} mentions={mentions} onMention={() => undefined} /></SessionChipProvider>);
+  const marked = (host: HTMLElement) => [...host.querySelectorAll('[data-desk-session-open="true"]')].map((chip) => chip.textContent);
+  expect(marked(await open("w1:p1"))).toEqual(["Windows 설치 폴더 OneDrive 문제"]);
+  document.body.innerHTML = "";
+  expect(marked(await open("w1:p9"))).toEqual([]);
+});
