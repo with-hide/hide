@@ -164,10 +164,12 @@ export const liveTheme = EditorView.theme({
   // The syntax colours stay with Source; a drawn heading reads in its line's colour.
   "& [class*='cm-md-heading-'] span": { color: "inherit" },
   "& .cm-line .cm-md-link": { color: "var(--file-blue)" },
+  // Code inside a line reads as code (Doop N 1 가): its own ground inside a hairline, as the phone draws it.
   "& .cm-line .cm-md-code-inline": {
     fontFamily: "var(--font-mono)",
-    fontSize: "0.86em",
+    fontSize: "0.9em",
     padding: "var(--spacing-xxs) var(--spacing-xs)",
+    border: "var(--size-hairline) solid var(--border)",
     borderRadius: "var(--radius-xs)",
     backgroundColor: "var(--secondary)",
   },
@@ -210,7 +212,7 @@ export const liveTheme = EditorView.theme({
   // inline code has outside a table.
   ".cm-md-table": { display: "block", padding: "var(--spacing-xs) 0", fontFamily: "var(--font-sans)", lineHeight: "1.5", whiteSpace: "normal" },
   ".cm-md-table a[href]": { color: "var(--file-blue)", textDecoration: "underline" },
-  ".cm-md-table code": { fontSize: "0.86em" },
+  ".cm-md-table code": { fontSize: "0.9em" },
   // A Mermaid diagram: centred in the column and never wider than it; it
   // takes no room until it is drawn, and one that is not shows its source as
   // a code block would.

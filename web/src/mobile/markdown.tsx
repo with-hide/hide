@@ -2,8 +2,9 @@
 // with the grammar the editor's Markdown view uses (@lezer/markdown with GFM)
 // and drawn as plain elements, never an editor, so a page of messages costs a
 // few milliseconds. Nothing on the page navigates: a link is its text and an
-// image its description, as the terminal rows keep OSC 8 links as text. Code
-// wraps at the phone's width like everything else, without highlighting.
+// image its description, as the terminal rows keep OSC 8 links as text. A
+// code block is the desktop's (`CodeBlock`): its long lines scroll inside it,
+// without highlighting.
 //
 // A pull request's body is drawn the same way with `html` on (PRD
 // record-card-readability D-11, B19, B20): the HTML GitHub draws in a body
@@ -26,6 +27,7 @@
 import type { SyntaxNode } from "@lezer/common";
 import { GFM, parser } from "@lezer/markdown";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { CodeBlock } from "../components/code-block";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { drawMermaid, isMermaidInfo, showMermaidSvg, watchPalette, type MermaidDrawing } from "../markdownMermaid";
 import { appHost } from "./appHost";
@@ -38,6 +40,9 @@ const MARKS = new Set(["EmphasisMark", "CodeMark", "HeaderMark", "ListMark", "Qu
 const TARGETS = new Set(["URL", "LinkTitle", "LinkLabel"]);
 
 const HEADINGS = /^(ATXHeading[1-6]|SetextHeading[12])$/;
+
+/** Code inside a line reads as code (Doop N 1 가), as the editor's `cm-md-code-inline` draws it. */
+const INLINE_CODE = "rounded-xs border border-border bg-secondary px-xs py-xxs font-mono text-[0.9em]";
 
 /** One parse: the source and whether its HTML is drawn. */
 /** Which address a link may carry, or null when it stays its text. */
@@ -223,10 +228,6 @@ function MarkdownTable({ table, source }: { table: SyntaxNode; source: Source })
   );
 }
 
-function CodeBlock({ code }: { code: string }) {
-  return <pre className="m-none whitespace-pre-wrap wrap-anywhere rounded-md bg-secondary px-md py-sm font-mono">{code}</pre>;
-}
-
 /** A `mermaid` fence drawn as its diagram, drawn again when the colours change. */
 function MermaidBlock({ source }: { source: string }) {
   const { t } = useInterfaceTranslation();
@@ -309,7 +310,7 @@ function span(node: SyntaxNode, source: Source, key: number): ReactNode {
       // In a table cell `\|` is the cell's pipe, and GFM reads it as `|` inside code too.
       const code = inline(node, source);
       return (
-        <code key={key} className="rounded-xs bg-secondary px-xxs font-mono">
+        <code key={key} className={INLINE_CODE}>
           {source.cell ? code.map((part) => (typeof part === "string" ? part.replaceAll("\\|", "|") : part)) : code}
         </code>
       );
@@ -539,7 +540,7 @@ function element(tag: Tag, children: ReactNode[], key: number): ReactNode {
     case "em":
       return <em key={key}>{children}</em>;
     case "code":
-      return <code key={key} className="rounded-xs bg-secondary px-xxs font-mono">{children}</code>;
+      return <code key={key} className={INLINE_CODE}>{children}</code>;
     case "kbd":
       return <kbd key={key} className="rounded-xs border border-border bg-secondary px-xxs font-mono text-micro">{children}</kbd>;
     case "sub":
