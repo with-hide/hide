@@ -8,7 +8,8 @@
 // The fields no section carries (marked `wire gap` below) are a thread's
 // own, which the threads node reads from the session record.
 
-import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskItem, DeskOption, DeskOptionKind, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskMissionMention, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
+import { candidateAgent } from "./conductorSettings";
+import type { AgentRow, ConductorCandidate, DeskAgent, DeskAgentState, DeskAskKind, DeskItem, DeskOption, DeskOptionKind, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskMissionMention, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
 
 export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalState, DeskChoice, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskMissionMention, DeskOption, DeskOptionKind, DeskOutput, DeskOutputKind, DeskPermission, DeskQueuedMessage, DeskSteps } from "./snapshot";
 
@@ -479,6 +480,40 @@ export function namedText(text: string, mentions: readonly DeskMention[]): strin
 /** An agent Desk cannot be given (B4, D-79): one Settings › Agents switched off. One not ready or not signed in can be picked and says so (B6). */
 export function agentPickable(agent: DeskAgent): boolean {
   return agent.state !== "off";
+}
+
+/** A favorite model (Settings › Agents) as the agent menu offers it: one pick that sets the agent, its model and its effort together. */
+export type DeskFavorite = { key: string; agent: DeskAgent; model: string | null; effort: string | null; modelLabel: string; purpose: string };
+
+/**
+ * The favorite models Desk's agent menu lists first. A favorite is listed
+ * when Desk can start what it names: its agent is one the bar offers, it
+ * names no profile (Desk runs an agent's built-in setup), and its model and
+ * effort are ones the agent's last session offered. Before that session the
+ * agent has offered none, and a pick that switches to the agent is applied
+ * as it opens, so such a favorite is listed only while another agent is
+ * chosen.
+ */
+export function deskFavorites(candidates: readonly ConductorCandidate[], agents: readonly DeskAgent[], selection: DeskSection["selection"]): DeskFavorite[] {
+  const favorites: DeskFavorite[] = [];
+  candidates.forEach((candidate, index) => {
+    if (candidate.profile) return;
+    const kind = candidateAgent(candidate.agent);
+    const agent = agents.find((one) => one.id === kind);
+    if (!agent || !agentPickable(agent)) return;
+    const model = candidate.model ?? null;
+    const effort = candidate.effort ?? null;
+    const offered = (choices: readonly { id: string }[], id: string | null) => id === null || (choices.length === 0 ? selection.agent !== agent.id : choices.some((one) => one.id === id));
+    if (!offered(agent.models, model) || !offered(agent.efforts, effort)) return;
+    const modelLabel = model === null ? "" : (agent.models.find((one) => one.id === model)?.label ?? model);
+    favorites.push({ key: `${index}`, agent, model, effort, modelLabel, purpose: candidate.purpose });
+  });
+  return favorites;
+}
+
+/** Whether a favorite is what Desk's next message goes to now. */
+export function favoriteChosen(favorite: DeskFavorite, selection: DeskSection["selection"]): boolean {
+  return selection.agent === favorite.agent.id && (favorite.model === null || selection.model === favorite.model) && (favorite.effort === null || selection.effort === favorite.effort);
 }
 
 /** What the agent bar says beside an agent (D-81, B44): a ready agent's sign-in as Settings › Agents reads it, nothing while that is unread; otherwise its state. */
