@@ -30,8 +30,8 @@ pub enum HeldFor {
 
 /// The operator's part in `hold`, none for a hold that ends on its own
 /// (work, the quiet period, a launch, a moved state, an agent that left its
-/// pane, bells not taken) or that only another build would end (a kind that
-/// takes no bell). Every hold is named, so a hold the doorbell adds is
+/// pane, bells not taken, a progress letter riding the next handover) or
+/// that only another build would end (a kind that takes no bell). Every hold is named, so a hold the doorbell adds is
 /// placed here before it builds.
 pub(crate) fn held_for(hold: Hold) -> Option<HeldFor> {
     match hold {
@@ -53,7 +53,8 @@ pub(crate) fn held_for(hold: Hold) -> Option<HeldFor> {
         | Hold::Moved
         | Hold::Input
         | Hold::Letter
-        | Hold::ComposerUnread => None,
+        | Hold::ComposerUnread
+        | Hold::Rides => None,
     }
 }
 
