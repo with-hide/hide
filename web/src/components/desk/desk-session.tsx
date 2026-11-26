@@ -91,7 +91,7 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
           <Hint label={title} reveals>
             <span className="min-w-0 truncate text-body font-semibold text-foreground" aria-current="page" data-desk-session-title="true">{title}</span>
           </Hint>
-          {ended ? <span className="shrink-0 text-muted-foreground" data-desk-session-ended="true">{t("desk.job.done")}</span> : null}
+          {ended ? <span className="ml-xs shrink-0 text-muted-foreground" data-desk-session-ended="true">{t("desk.job.done")}</span> : null}
         </nav>
         {sleeping || !live ? null : <PaneHeadChildren paneId={paneId} actions={deskActions} />}
         {sleeping || !live ? null : (
