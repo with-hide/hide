@@ -438,10 +438,10 @@ mod tests {
         runtime.snapshot.navigator.agents.push(child_row());
         let by_id = Shown::read(&runtime, &parent(), &spawn)
             .unwrap()
-            .answer(TEST_NODE);
+            .answer(crate::address::Reader::On(TEST_NODE));
         let by_intent = Shown::read(&runtime, &parent(), "task-1")
             .unwrap()
-            .answer(TEST_NODE);
+            .answer(crate::address::Reader::On(TEST_NODE));
         assert_eq!(by_id, by_intent);
         assert_eq!(
             by_id["spawn"],
@@ -478,7 +478,7 @@ mod tests {
         let (_root, mut runtime, spawn) = spawned(false, 1_000);
         let unread = Shown::read(&runtime, &parent(), &spawn)
             .unwrap()
-            .answer(TEST_NODE);
+            .answer(crate::address::Reader::On(TEST_NODE));
         assert_eq!(unread["state"]["activity"], "unknown");
         assert_eq!(
             unread["state"]["waiting"],
@@ -490,7 +490,7 @@ mod tests {
         runtime.snapshot.navigator.agents.push(row);
         let stale = Shown::read(&runtime, &parent(), &spawn)
             .unwrap()
-            .answer(TEST_NODE);
+            .answer(crate::address::Reader::On(TEST_NODE));
         assert_eq!(stale["state"]["activity"], "unknown");
         assert_eq!(stale["state"]["waiting"]["cause"], "unknown");
     }
@@ -505,7 +505,7 @@ mod tests {
         let read = |runtime: &crate::runtime::Runtime| {
             Shown::read(runtime, &parent(), &spawn)
                 .unwrap()
-                .answer(TEST_NODE)["state"]
+                .answer(crate::address::Reader::On(TEST_NODE))["state"]
                 .clone()
         };
         assert_eq!(

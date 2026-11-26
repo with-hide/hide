@@ -881,7 +881,7 @@ fn a_delegated_spawn_makes_the_child_on_the_device_under_the_caller() {
     let spawner = spawner();
     let child = spawner.spawn(Some("here"), Some(DEVICE), "one").unwrap();
     assert_eq!(child["machine"], DEVICE);
-    assert_eq!(child["pane"], "w2:p1");
+    assert_eq!(child["pane"], "remote:mini:pane:w2:p1");
     assert_eq!(child["project"], WORKTREE);
     assert_eq!(child["parent"], "agent-1");
     assert_eq!(child["watch"]["parent"]["pane_id"], "sender");
@@ -1381,7 +1381,7 @@ fn a_spawn_whose_shell_never_finishes_starting_says_why_closes_its_tab_and_start
     // new tab.
     spawner.unmarked.store(0, Ordering::SeqCst);
     let child = ask().expect("the same intent starts the agent");
-    assert_eq!(child["pane"], "w2:p1");
+    assert_eq!(child["pane"], "remote:mini:pane:w2:p1");
     assert_eq!(spawner.count("launch_tab"), 2, "a new tab");
     assert_eq!(spawner.count("start_agent"), 1);
     assert_eq!(spawner.count("close_pane"), 1);
@@ -1535,7 +1535,7 @@ fn a_spawn_on_a_machine_at_its_holder_cap_names_the_machine_and_starts_once_one_
     let child = spawner
         .spawn(Some("here"), Some(DEVICE), "full")
         .expect("the same intent starts once a pane is free");
-    assert_eq!(child["pane"], "w2:p1");
+    assert_eq!(child["pane"], "remote:mini:pane:w2:p1");
 }
 
 /// The device's kit report with Codex's hook in `state` for `cause`, and

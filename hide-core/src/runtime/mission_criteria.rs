@@ -616,11 +616,7 @@ impl Runtime {
         now: u64,
     ) -> Result<(Value, bool), String> {
         let (pass, evidence, summary, commit, rerun) = result;
-        let evidence = evidence.trim().to_owned();
-        if evidence.is_empty() {
-            return Err("mission_evidence_missing".into());
-        }
-        let evidence = Some(evidence);
+        let evidence = Some(crate::missions::evidence_text(&evidence)?);
         let summary = crate::missions::summary_line(summary)?;
         // The Conductor's record on a node never worked needs no ledger; a
         // refusal that needed one says so (`record_refused`).
@@ -668,6 +664,8 @@ impl Runtime {
         let kind = line.kind;
         let signal_before = row.check_signal();
         let mut next = row.clone();
+        // The checker whose record this is: its record is its report.
+        let mut reported = None;
         let effect = match line.kind {
             CriterionKind::Review | CriterionKind::Verify => {
                 let Some(slot) = line
@@ -678,6 +676,7 @@ impl Runtime {
                     return Err(record_refused(&caller, &[mission], node, key, now));
                 };
                 let agent_id = line.checkers[slot].agent_id.clone();
+                reported.clone_from(&agent_id);
                 // The head an answer is for is the one the checker names: a
                 // guess from the pull request's head when it is recorded would
                 // put a review of one head on the next.
@@ -745,6 +744,9 @@ impl Runtime {
             }
         };
         if !effect.changed {
+            if let Some(agent) = &reported {
+                self.checker_reported(agent, &id, node, key);
+            }
             return Ok((
                 json!({"mission": self.mission_view_for(&id, &caller)}),
                 false,
@@ -787,6 +789,9 @@ impl Runtime {
             self.tell_worker(&id, node);
         }
         self.record_mission_events(&id, events);
+        if let Some(agent) = &reported {
+            self.checker_reported(agent, &id, node, key);
+        }
         Ok((
             json!({"mission": self.mission_view_for(&id, &caller)}),
             true,

@@ -158,13 +158,15 @@ fn show(client: &Client, actor: &Actor, key: &str) -> Result<Value, String> {
     let runtime = runtime.lock().map_err(|_| "delivery_unavailable")?;
     let shown = Shown::read(&runtime, actor, key)?;
     drop(runtime);
-    Ok(shown.answer(&actor.device_id))
+    Ok(shown.answer(actor.pane_reader()))
 }
 
 /// What `hide agent show` found, with the facts it copied under the
 /// runtime's lock.
 pub(crate) struct Shown {
     ledger: Arc<crate::delivery::ledger::Ledger>,
+    /// The core's own node, where a spawn whose machine nothing names runs.
+    node: String,
     sleeping: super::RegistrationFacts,
     found: Found,
 }
@@ -213,13 +215,14 @@ impl Shown {
         };
         Ok(Self {
             ledger,
+            node: runtime.node().as_str().to_owned(),
             sleeping,
             found,
         })
     }
 
-    /// The answer, for a caller on `device`.
-    pub(crate) fn answer(self, device: &str) -> Value {
+    /// The answer, as `reader` names panes.
+    pub(crate) fn answer(self, reader: crate::address::Reader<'_>) -> Value {
         match self.found {
             Found::Agent(record, facts) => {
                 let life = super::life(&record, &self.sleeping);
@@ -230,7 +233,7 @@ impl Shown {
                     state.waiting = Some(crate::delivery::answer::Waiting::human(turn));
                 }
                 json!(crate::delivery::answer::AgentShow {
-                    agent: super::agent_view(&record, &self.ledger, &self.sleeping),
+                    agent: super::agent_view(&record, &self.ledger, &self.sleeping, reader),
                     state,
                 })
             }
@@ -238,7 +241,7 @@ impl Shown {
                 let parent =
                     (spawn.mode == super::SpawnMode::Delegation).then_some(spawn.parent.as_str());
                 json!(crate::delivery::answer::SpawnShow {
-                    spawn: spawn_ref(&spawn, device),
+                    spawn: spawn_ref(&spawn, &self.ledger, &self.node, reader),
                     state: facts.state(None, parent),
                 })
             }
@@ -259,7 +262,13 @@ fn incomplete_spawn(client: &Client, actor: &Actor, command: &Command, code: Str
         return code;
     }
     let (bare, cause) = (bare.to_owned(), cause.map(str::to_owned));
-    let Ok(ledger) = state(client) else {
+    let Some((ledger, node)) = client.runtime.upgrade().and_then(|runtime| {
+        let runtime = runtime.lock().ok()?;
+        Some((
+            runtime.delivery_state().ok()?,
+            runtime.node().as_str().to_owned(),
+        ))
+    }) else {
         return code;
     };
     let parent = match parent.as_deref() {
@@ -276,7 +285,7 @@ fn incomplete_spawn(client: &Client, actor: &Actor, command: &Command, code: Str
     });
     match found {
         Some(spawn) => {
-            let spawn = spawn_ref(spawn, &actor.device_id);
+            let spawn = spawn_ref(spawn, &ledger, &node, actor.pane_reader());
             let mut detail = json!({"id": spawn.id, "pane": spawn.pane});
             if let Some(cause) = cause {
                 detail["cause"] = json!(cause);
@@ -287,12 +296,17 @@ fn incomplete_spawn(client: &Client, actor: &Actor, command: &Command, code: Str
     }
 }
 
-/// A spawn as an answer names it: its pane as `hide pane send` takes it from
-/// a caller on `device`, bare on the caller's own machine.
+/// A spawn as an answer to `reader` names it: its pane as `hide pane send`
+/// takes it from that reader (`address::pane_for_caller`), on the device the
+/// spawn named, else on its parent's machine (`spawn_machine`), else on the
+/// core's `node`.
 pub(crate) fn spawn_ref(
     spawn: &super::SpawnRecord,
-    device: &str,
+    ledger: &crate::delivery::ledger::Ledger,
+    node: &str,
+    reader: crate::address::Reader<'_>,
 ) -> crate::delivery::answer::SpawnRef {
+    let machine = super::spawn_machine(ledger, spawn).unwrap_or(node);
     crate::delivery::answer::SpawnRef {
         id: spawn.id.clone(),
         intent: spawn.intent.clone(),
@@ -302,10 +316,7 @@ pub(crate) fn spawn_ref(
         pane: spawn
             .pane
             .as_ref()
-            .map(|pane| match spawn.machine.as_deref() {
-                Some(machine) if machine != device => crate::address::scoped_pane_id(machine, pane),
-                _ => pane.clone(),
-            }),
+            .map(|pane| crate::address::pane_for_caller(reader, machine, pane)),
         child: spawn.child.clone(),
     }
 }
@@ -798,7 +809,9 @@ pub(crate) fn run(
                     .iter()
                     .filter(|record| !record.actor.code_owned())
                     .filter(|record| !live || !record.ended)
-                    .map(|record| super::agent_view(record, &ledger, &sleeping))
+                    .map(|record| {
+                        super::agent_view(record, &ledger, &sleeping, actor.pane_reader())
+                    })
                     .collect(),
             }))
         }
@@ -1558,6 +1571,7 @@ fn spawn(
                 .ok_or("child_unavailable")?,
             &ledger,
             &sleeping,
+            actor.pane_reader(),
         ));
     }
     // Everything the child needs happens on its own device; only the parent's
@@ -2318,6 +2332,7 @@ fn spawn(
                 .ok_or("child_unavailable")?,
             &ledger,
             &sleeping,
+            actor.pane_reader(),
         ))
     })();
     // Nothing after this creates anything, so a device that has gone quiet

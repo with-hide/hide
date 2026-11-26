@@ -62,7 +62,10 @@ const DEPENDENCY_LIMIT: usize = 16;
 /// Issue numbers and paths a node may declare it touches (B6).
 const TOUCH_LIMIT: usize = 32;
 const TITLE_LIMIT: usize = 200;
-const LINE_LIMIT: usize = 600;
+/// A line of words a command carries; a record's evidence was held to it
+/// before a checker's record carried every finding, and the missions
+/// section of the snapshot still is (`runtime::missions::for_snapshot`).
+pub(crate) const LINE_LIMIT: usize = 600;
 /// Steps a node's plan entry names: as many as a worker's own `hide task`
 /// plan takes, which starts from them.
 pub const STEP_LIMIT: usize = 8;
@@ -2985,19 +2988,17 @@ impl MissionCommand {
             }
             Self::Show { mission, node } => id_ok(mission) && id_ok(node),
             Self::Node { mission, node, .. } => id_ok(mission) && valid_key(node),
+            // The evidence is `evidence_text`'s to judge, with its way on.
             Self::Record {
                 mission,
                 node,
                 line,
-                evidence,
                 commit,
                 ..
             } => {
-                // A blank line is the core's own refusal, with its way on.
                 id_ok(mission)
                     && valid_key(node)
                     && valid_key(line)
-                    && (evidence.trim().is_empty() || valid_text(evidence, LINE_LIMIT))
                     && commit.as_deref().is_none_or(valid_commit)
             }
             Self::Skip {
@@ -4270,6 +4271,35 @@ pub(crate) fn summary_line(summary: Option<String>) -> Result<Option<String>, St
     Ok(Some(summary))
 }
 
+/// A record's `--evidence`, trimmed: what its result rests on, which for a
+/// checker is every finding, graded, since its record is its answer, so it
+/// may run to several lines. Refused empty (`mission_evidence_missing`),
+/// with a control character other than a line break or a tab
+/// (`mission_text_invalid`), or past a letter body's cap
+/// (`delivery::BODY_LIMIT`, `mission_evidence_too_long`, where it was one
+/// line of `LINE_LIMIT`), so the book, which keeps every line's and every
+/// checker's last answer, stays bounded.
+pub(crate) fn evidence_text(evidence: &str) -> Result<String, String> {
+    let evidence = evidence.trim();
+    if evidence.is_empty() {
+        return Err("mission_evidence_missing".into());
+    }
+    if !valid_text(evidence, usize::MAX) {
+        return Err("mission_text_invalid".into());
+    }
+    if evidence.len() > crate::delivery::BODY_LIMIT {
+        return Err(crate::coordination::refusal(
+            "mission_evidence_too_long",
+            &format!(
+                "{} bytes, at most {}",
+                evidence.len(),
+                crate::delivery::BODY_LIMIT
+            ),
+        ));
+    }
+    Ok(evidence.to_owned())
+}
+
 /// A commit as Git names one: 7 to 64 hexadecimal digits.
 pub fn valid_commit(value: &str) -> bool {
     (7..=64).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -4587,7 +4617,10 @@ pub fn next_action(code: &str) -> &'static str {
             "Give --summary as one line of at most 160 characters in the operator's language: what the result means for them, the details staying in --evidence"
         }
         "mission_evidence_missing" => {
-            "Give --evidence with the one line the result rests on: the command and what it printed, or what the review read"
+            "Give --evidence with what the result rests on: the command and what it printed, or, for a review or verification, every finding, graded"
+        }
+        "mission_evidence_too_long" => {
+            "Keep --evidence within 16 KiB: each finding in a line or two with its file:line, the long output left in the worktree"
         }
         "mission_checkout_unknown" => {
             "Record the check command from a pane in the checkout it ran in: Hide holds the line against that checkout's later commits"

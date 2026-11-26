@@ -456,7 +456,11 @@ impl Runtime {
         let mut moved = false;
         for (id, start) in self.profile_holds.completed() {
             if let (Some(pane), Some(record)) = (&start.pane, &start.record) {
-                let pane = crate::address::pane_id_on(self.node.as_str(), &start.machine, pane);
+                let pane = crate::address::pane_for_caller(
+                    crate::address::Reader::On(self.node.as_str()),
+                    &start.machine,
+                    pane,
+                );
                 if self
                     .snapshot
                     .ui_state

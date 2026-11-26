@@ -2159,6 +2159,7 @@ pub const COMMANDS: &[Spec] = &[
             "mission_commit_required",
             "mission_rerun_spent",
             "mission_evidence_missing",
+            "mission_evidence_too_long",
             "mission_summary_invalid",
             "mission_checkout_unknown",
             "mission_closed",

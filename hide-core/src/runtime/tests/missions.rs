@@ -19791,6 +19791,338 @@ fn a_check_wakes_the_nodes_reviewer_and_its_failure_goes_to_the_worker() {
     );
 }
 
+/// A checker's `hide mission record` of its line is its report: Hide ends
+/// its parent's watch on it and marks it to sleep at its next rest, as a
+/// confirmed `report` letter from it does, so a checker that never writes
+/// its Conductor (mission-104's two reviewers, whose watches warned every
+/// 20 minutes between rounds) is not watched past its answer. Its findings
+/// stay whole in the record the worker reads, the next round's ask is a
+/// cell that wakes it asleep, a worker's own record does neither, and a
+/// report letter the checker still sends changes nothing more.
+#[test]
+fn a_checkers_record_ends_its_parents_watch_and_sleeps_it_until_the_next_round() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    // Each pane's lineage is its session's digest and each registration
+    // holds that session, so the delivery store keeps the ledger this test
+    // hands it (`resumed_agent`), as `with_worker_and_reviewer`'s is not.
+    let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+        resumed_agent("sender", "codex", "sender-session"),
+        resumed_agent("recipient", "codex", "recipient-session"),
+        resumed_agent("reviewer", "codex", "reviewer-session"),
+    ]}))
+    .unwrap();
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
+    let panes = &mut runtime.snapshot.navigator.workspaces[0].checkouts[0].tabs[0].panes;
+    let mut reviewer = panes[1].clone();
+    reviewer.id = "reviewer".into();
+    panes.push(reviewer);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let actor = |runtime: &Runtime, pane: &str| runtime.delivery_observations[pane].actor.clone();
+    let conductor = actor(&runtime, "sender");
+    let mut ledger = crate::delivery::ledger::Ledger::default();
+    for (id, pane) in [
+        ("agent-1", "sender"),
+        ("agent-2", "recipient"),
+        ("agent-3", "reviewer"),
+    ] {
+        ledger.agents.push(crate::coordination::AgentRecord {
+            id: id.into(),
+            name: Some(pane.into()),
+            machine: crate::node::TEST_NODE.into(),
+            host_scope: "scope".into(),
+            native_machine: "fixture-machine".into(),
+            session: format!("{pane}-session"),
+            instance: pane.into(),
+            pane: pane.into(),
+            parent: (id != "agent-1").then(|| "agent-1".into()),
+            origin: None,
+            project: None,
+            actor: actor(&runtime, pane),
+            ended: false,
+            terminal_id: None,
+            forked: false,
+            successor: None,
+        });
+    }
+    ledger.next_id = 4;
+    // The Conductor watches its worker and its reviewer.
+    for pane in ["recipient", "reviewer"] {
+        crate::delivery::watch::start(&mut ledger, &conductor, &actor(&runtime, pane), 1).unwrap();
+    }
+    ledger.validate().unwrap();
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    checkout_at(&mut runtime, HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-2", "pr": 7, "reviewer": "agent-3"}}),
+    )
+    .unwrap();
+    let client = runtime.delivery_client.clone().unwrap();
+    // Whatever the commands so far asked of the store has landed.
+    let flush = || {
+        client
+            .submit(
+                crate::delivery::worker::Effect::HumanClaim,
+                Duration::from_secs(10),
+            )
+            .unwrap();
+    };
+    let marks = |runtime: &Runtime| {
+        runtime
+            .missions
+            .sleep_marks
+            .iter()
+            .map(|mark| (mark.agent_id.clone(), mark.origin.trigger()))
+            .collect::<Vec<_>>()
+    };
+    let watched = |runtime: &Runtime| {
+        runtime
+            .delivery_state()
+            .unwrap()
+            .watches
+            .iter()
+            .map(|watch| watch.target.pane_id.clone())
+            .collect::<Vec<_>>()
+    };
+
+    // The worker's own records mark nothing.
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert!(marks(&runtime).is_empty());
+    let asked = read_cells(&mut runtime, "agent-3");
+    assert!(
+        asked.len() == 1
+            && asked[0].contains(
+                "Record every finding, graded, in `--evidence`; your record is your answer, send your Conductor no letter about it."
+            ),
+        "{asked:?}"
+    );
+
+    // The reviewer records every finding: the record is its report.
+    // Past the 600 bytes a record's evidence was held to before.
+    let findings = format!(
+        "S1 serious: the parser drops v1 files at parse.rs:40\n{}",
+        (1..=12)
+            .map(|n| format!("M{n} minor: a stale comment about the v1 reader at parse.rs:{n}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    assert!(findings.len() > 600);
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of(
+            "fix",
+            "review",
+            json!({"commit": HEAD, "pass": false, "evidence": findings}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(marks(&runtime), [("agent-3".to_owned(), "record")]);
+    let review = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .node("fix")
+        .unwrap()
+        .criteria
+        .iter()
+        .find(|line| line.key == "review")
+        .unwrap()
+        .checkers[0]
+        .evidence
+        .clone();
+    assert_eq!(
+        review.as_deref(),
+        Some(findings.as_str()),
+        "the findings stay whole"
+    );
+    drop(runtime);
+    flush();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    assert_eq!(
+        watched(&runtime),
+        ["recipient"],
+        "the reviewer's watch ended, the worker's stands"
+    );
+
+    // A report letter the reviewer still sends out of habit changes nothing.
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    crate::delivery::mailbox::send(
+        &mut ledger,
+        &actor(&runtime, "reviewer"),
+        &conductor,
+        "fix-review-report",
+        "Review FAIL: S1",
+        "report",
+        None,
+        unix_milliseconds(),
+    )
+    .unwrap();
+    runtime.publish_delivery(Arc::new(ledger), true);
+    assert_eq!(marks(&runtime), [("agent-3".to_owned(), "record")]);
+
+    // A letter that would wake it drops the mark, as it drops a report's,
+    // and the same answer recorded again marks it again.
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    crate::delivery::mailbox::send(
+        &mut ledger,
+        &actor(&runtime, "recipient"),
+        &actor(&runtime, "reviewer"),
+        "fix-plan-s1",
+        "Plan for S1: keep v1 files in the reader",
+        "request",
+        None,
+        unix_milliseconds(),
+    )
+    .unwrap();
+    runtime.publish_delivery(Arc::new(ledger), true);
+    assert!(marks(&runtime).is_empty());
+    let (_, changed) = command(
+        &mut runtime,
+        "reviewer",
+        record_of(
+            "fix",
+            "review",
+            json!({"commit": HEAD, "pass": false, "evidence": findings}),
+        ),
+    )
+    .unwrap();
+    assert!(!changed, "the same answer changes no line");
+    assert_eq!(marks(&runtime), [("agent-3".to_owned(), "record")]);
+
+    // The worker's next check asks the reviewer again, by a cell that
+    // wakes it asleep.
+    checkout_at(&mut runtime, HEAD_2);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD_2})),
+    )
+    .unwrap();
+    assert!(
+        runtime
+            .worker_cells_unseen()
+            .iter()
+            .any(|(agent, ..)| agent == "agent-3"),
+        "the next round's ask is a cell that wakes the reviewer"
+    );
+    let again = read_cells(&mut runtime, "agent-3");
+    assert!(
+        again.len() == 1
+            && again[0].contains("again: you last checked commit a1b2c3d")
+            && again[0].contains("send your Conductor no letter about it"),
+        "{again:?}"
+    );
+}
+
+/// A record's evidence, a checker's findings included, is bounded by a
+/// letter body's cap: at the cap it is taken, one byte past it is refused
+/// with the reason and the size, and nothing is recorded.
+#[test]
+fn a_records_evidence_past_a_letters_cap_is_refused() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    let record = |evidence: String| {
+        record_of(
+            "fix",
+            "review",
+            json!({"commit": HEAD, "pass": false, "evidence": evidence}),
+        )
+    };
+    let limit = crate::delivery::BODY_LIMIT;
+    let refused = command(&mut runtime, "reviewer", record("x".repeat(limit + 1))).unwrap_err();
+    let (code, detail) = crate::coordination::split_refusal(&refused);
+    assert_eq!(code, "mission_evidence_too_long");
+    assert_eq!(
+        detail,
+        Some(format!("{} bytes, at most {limit}", limit + 1).as_str())
+    );
+    assert!(
+        runtime.missions.sleep_marks.is_empty(),
+        "a refused record reports nothing"
+    );
+    assert_eq!(line_state(&runtime, "review"), CriterionState::Open);
+    assert!(
+        command(&mut runtime, "reviewer", record("x".repeat(limit)))
+            .unwrap()
+            .1
+    );
+    assert_eq!(line_state(&runtime, "review"), CriterionState::Fail);
+}
+
+/// A checker's findings read whole in the answer `hide mission show`
+/// draws (`mission_view_for`), while the snapshot's missions section,
+/// compared on every read and sent whole on any mission's change, carries
+/// at most the 600 bytes a record's evidence was held to before, cut on a
+/// character boundary and ending in "…".
+#[test]
+fn a_long_evidence_reads_whole_in_show_and_cut_in_the_snapshot() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    let findings = format!("S1: {}", "가".repeat(700));
+    let (answer, _) = command(
+        &mut runtime,
+        "reviewer",
+        record_of(
+            "fix",
+            "review",
+            json!({"commit": HEAD, "pass": false, "evidence": findings}),
+        ),
+    )
+    .unwrap();
+    let shown = answer["mission"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["key"] == "fix")
+        .unwrap()["criteria"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|line| line["key"] == "review")
+        .unwrap()["checkers"][0]["evidence"]
+        .clone();
+    assert_eq!(shown, json!(findings), "show reads it whole");
+    runtime.refresh_missions();
+    let carried = runtime.snapshot.missions.items[0]
+        .nodes
+        .iter()
+        .find(|node| node.key == "fix")
+        .unwrap()
+        .criteria
+        .iter()
+        .find(|line| line.key == "review")
+        .unwrap()
+        .checkers[0]
+        .evidence
+        .clone()
+        .unwrap();
+    assert!(
+        carried.len() <= 600 && carried.len() > 590 && carried.ends_with('…'),
+        "{} bytes",
+        carried.len()
+    );
+    assert!(findings.starts_with(carried.trim_end_matches('…')));
+}
+
 /// PRD mission-speed-2 B5: a check while the node's reviewer ended asks
 /// the Conductor for a fresh one, naming the node and the line.
 #[test]
