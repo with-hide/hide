@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { agentPane, reportedMarker } from "./agent-pane";
 import { agentIn, sendKeys, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { seedLedger, startHided, type Daemon } from "./hided-fixture";
@@ -15,8 +16,9 @@ import { enterWorkspace, screenshot } from "./wire";
 // from the sidebar, ⌘J between that session and its Agent tab, a file of the
 // desk saved without leaving a draft behind, the corner's notices above
 // Desk's input boxes, a sleeping session woken from beside Desk, a child's
-// ancestors in its head, and Settings › Labs › Desk's switch, off on a new
-// install. Each test starts one stack and asserts one contract.
+// ancestors in its head, Settings › Labs › Desk's switch, off on a new
+// install, and the session's 뷰 N list (PRD desk-own-desk B21-B25). Each test
+// starts one stack and asserts one contract.
 //
 // A Desk job is a spawn of Desk's own identity in the delivery ledger. Only
 // Desk's agent makes one, and the stack runs none, so the fixture writes the
@@ -28,8 +30,8 @@ type Desk = { page: Page; engine: AgentFixture; daemon: Daemon; pane: string };
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
-/** The ledger with Desk registered and one completed spawn of Desk's whose child runs in `pane`. */
-function deskLedger(node: string, pane: string, repo: string): unknown {
+/** The ledger with Desk registered and one completed spawn of Desk's whose child runs in `pane` on `session`. */
+function deskLedger(node: string, pane: string, repo: string, session = "fixture-two"): unknown {
   const desk = { pane_id: "hide:desk", name: "hide:desk", kind: "hide", device_id: node, session: digest("hide:desk") };
   return {
     version: 1,
@@ -38,7 +40,7 @@ function deskLedger(node: string, pane: string, repo: string): unknown {
     watches: [],
     agents: [
       { id: "agent-1", name: "hide:desk", machine: node, host_scope: "hide", native_machine: "hide", session: "hide:desk", instance: "hide:desk", pane: "hide:desk", parent: null, origin: null, project: null, actor: desk, ended: false, forked: false },
-      { id: "agent-3", name: "gallery-compare", machine: node, host_scope: "claude", native_machine: "claude", session: "fixture-two", instance: pane, pane, parent: null, origin: "agent-1", project: repo, actor: { pane_id: pane, name: "gallery-compare", kind: "claude", device_id: node, session: digest("fixture-two") }, ended: false, forked: false },
+      { id: "agent-3", name: "gallery-compare", machine: node, host_scope: "claude", native_machine: "claude", session, instance: pane, pane, parent: null, origin: "agent-1", project: repo, actor: { pane_id: pane, name: "gallery-compare", kind: "claude", device_id: node, session: digest(session) }, ended: false, forked: false },
     ],
     spawns: [
       { names: { workspace: "pending", tab: "pending" }, id: "spawn-2", parent: "agent-1", mode: "handoff", machine: null, intent: "desk-room-intent", name: "gallery-compare", kind: "claude", repo, branch: "main", requested_path: null, args: [], path: repo, pane, terminal: null, typed: 0, shell: null, child: "agent-3", completed: true, auto_watch_id: null, reserved_at_unix_ms: 1 },
@@ -119,6 +121,62 @@ test("a sidebar row opens its session beside Desk, marked on its row, Escape clo
   } finally {
     desk.daemon.stop();
     desk.engine.stop();
+  }
+});
+
+test("the session's 뷰 N list holds 볼 것 above 본 것, newest first, previews a row under the pointer, and a row opens on Desk's desk and turns seen (PRD desk-own-desk B21-B25)", async ({ page }) => {
+  test.setTimeout(180_000);
+  // The session runs the stand-in in a shell pane, so `hide file open` runs as that agent; Desk's spawn names its reported session.
+  const engine = await startFixture({ agents: false });
+  const repo = path.join(engine.root, "fixture");
+  let daemon = await startHided(engine, "desk-room-views");
+  try {
+    fs.writeFileSync(path.join(repo, "notes.md"), "# Notes\n");
+    fs.writeFileSync(path.join(repo, "plan.md"), "# Plan\n");
+    const pane = engine.panes[0];
+    const agent = await agentPane(engine, daemon.stateDir, pane);
+    const session = fs.readFileSync(reportedMarker(engine.root, pane), "utf8");
+    daemon = await daemon.restart((stateDir) => {
+      seedLedger(stateDir, JSON.stringify(deskLedger(daemon.node, pane, repo, session)));
+    });
+    await page.goto("about:blank");
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await switchDesk(page, true);
+    await page.locator("[data-desk-sidebar-row]").click();
+    // Opened while the operator is on Desk, away from the agent's pane, both wait to be looked at.
+    for (const file of ["notes.md", "plan.md"]) {
+      const answer = await agent(["file", "open", file]);
+      expect(answer.status, answer.out).toBe(0);
+    }
+    await row(page, pane).click();
+    await expect(page.locator(`[data-desk-thread-panel="${pane}"]`)).toBeVisible();
+
+    const chip = page.locator("[data-desk-views]");
+    await expect(chip).toHaveAttribute("data-desk-views", "2");
+    await expect(chip).toHaveAttribute("data-desk-views-unseen", "true");
+    await chip.click();
+    const list = page.locator("[data-desk-views-list]");
+    const rows = list.locator("[data-desk-view-row]");
+    await expect(list.locator("[data-desk-views-group]")).toHaveCount(1);
+    await expect(rows).toHaveText([/plan\.md/, /notes\.md/]);
+    await rows.nth(1).hover();
+    await expect(page.locator("[data-desk-tile]")).toBeVisible();
+
+    await rows.nth(1).click();
+    await expect(list).toHaveCount(0);
+    await expect(page.locator('[data-desk-tab-panel] [role="tab"][aria-selected="true"]')).toContainText("notes.md");
+    await expect(page.locator("[data-desk-tab-panel]")).toHaveAttribute("data-desk-tab-panel", "beside_session");
+
+    await chip.click();
+    await expect(list.locator('[data-desk-views-group="to_look"]')).toContainText("1");
+    await expect(list.locator('[data-desk-views-group="seen"]')).toContainText("1");
+    await expect(rows).toHaveText([/plan\.md/, /notes\.md/]);
+    await expect(rows.nth(0)).toHaveAttribute("data-desk-view-unseen", "true");
+    await expect(rows.nth(1)).not.toHaveAttribute("data-desk-view-unseen", "true");
+  } finally {
+    daemon.stop();
+    engine.stop();
   }
 });
 
