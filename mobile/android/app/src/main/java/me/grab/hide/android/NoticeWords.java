@@ -43,28 +43,28 @@ public final class NoticeWords {
         "en", Map.ofEntries(
             Map.entry("needs_you", "Needs You"), Map.entry("done", "Unread"),
             Map.entry("observer_unconfirmed", "Observer has not confirmed a warning"), Map.entry("letter_undelivered", "Letter not delivered"), Map.entry("phone_paired", "New phone connected"),
-            Map.entry("status_error", "Blocked"), Map.entry("status_question", "Question"), Map.entry("status_approval", "Approval"), Map.entry("status_working", "Working"),
+            Map.entry("status_error", "Blocked"), Map.entry("status_question", "To check"), Map.entry("status_approval", "Approval"), Map.entry("status_working", "Working"),
             Map.entry("status_done", "Done"), Map.entry("status_idle", "Idle"), Map.entry("status_unknown", "Status unknown"), Map.entry("status_waiting", "Waiting"),
             Map.entry("status_unfinished", "Unfinished"), Map.entry("status_stopped", "Stopped"), Map.entry("status_look", "To look at")
         ),
         "ko", Map.ofEntries(
             Map.entry("needs_you", "내 차례"), Map.entry("done", "읽을 것"),
             Map.entry("observer_unconfirmed", "관찰자가 경고를 확인하지 않았어요"), Map.entry("letter_undelivered", "편지가 전달되지 않았어요"), Map.entry("phone_paired", "새 폰이 연결됐어요"),
-            Map.entry("status_error", "막힘"), Map.entry("status_question", "질문"), Map.entry("status_approval", "승인"), Map.entry("status_working", "작업 중"),
+            Map.entry("status_error", "막힘"), Map.entry("status_question", "확인할 것"), Map.entry("status_approval", "승인"), Map.entry("status_working", "작업 중"),
             Map.entry("status_done", "끝남"), Map.entry("status_idle", "쉬는 중"), Map.entry("status_unknown", "상태 모름"), Map.entry("status_waiting", "대기"),
             Map.entry("status_unfinished", "일 남음"), Map.entry("status_stopped", "멈춤"), Map.entry("status_look", "볼 것")
         ),
         "zh", Map.ofEntries(
             Map.entry("needs_you", "轮到你"), Map.entry("done", "待读"),
             Map.entry("observer_unconfirmed", "观察者尚未确认警告"), Map.entry("letter_undelivered", "信件未送达"), Map.entry("phone_paired", "新手机已连接"),
-            Map.entry("status_error", "受阻"), Map.entry("status_question", "提问"), Map.entry("status_approval", "批准"), Map.entry("status_working", "工作中"),
+            Map.entry("status_error", "受阻"), Map.entry("status_question", "待确认"), Map.entry("status_approval", "批准"), Map.entry("status_working", "工作中"),
             Map.entry("status_done", "已完成"), Map.entry("status_idle", "空闲"), Map.entry("status_unknown", "状态未知"), Map.entry("status_waiting", "等待"),
             Map.entry("status_unfinished", "未完成"), Map.entry("status_stopped", "已停止"), Map.entry("status_look", "待查看")
         ),
         "ja", Map.ofEntries(
             Map.entry("needs_you", "自分の番"), Map.entry("done", "未読"),
             Map.entry("observer_unconfirmed", "オブザーバーが警告を確認していません"), Map.entry("letter_undelivered", "レターが届いていません"), Map.entry("phone_paired", "新しいスマホが接続されました"),
-            Map.entry("status_error", "ブロック"), Map.entry("status_question", "質問"), Map.entry("status_approval", "承認"), Map.entry("status_working", "作業中"),
+            Map.entry("status_error", "ブロック"), Map.entry("status_question", "確認すること"), Map.entry("status_approval", "承認"), Map.entry("status_working", "作業中"),
             Map.entry("status_done", "完了"), Map.entry("status_idle", "アイドル"), Map.entry("status_unknown", "状態不明"), Map.entry("status_waiting", "待機"),
             Map.entry("status_unfinished", "未完了"), Map.entry("status_stopped", "停止"), Map.entry("status_look", "確認待ち")
         )

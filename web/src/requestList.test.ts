@@ -171,7 +171,7 @@ describe("the result line (D-12, B5, B10)", () => {
   });
 
   it("reads the label's verdict in the expanded row, and nothing without a label (B6)", () => {
-    expect(verdictLine(block("answer", { end: "question", line: "어느 쪽으로 할까요?" }), t)).toBe("AI 판정 · 질문 · 어느 쪽으로 할까요?");
+    expect(verdictLine(block("answer", { end: "question", line: "어느 쪽으로 할까요?" }), t)).toBe("AI 판정 · 확인할 것 · 어느 쪽으로 할까요?");
     expect(verdictLine(block("stopped", { end: "unfinished" }), t)).toBe("AI 판정 · 일 남음");
     expect(verdictLine(block("result"), t)).toBeNull();
     expect(verdictLine(undefined, t)).toBeNull();
@@ -246,7 +246,7 @@ describe("the words of a row follow the interface language", () => {
     expect(senderWords({ kind: "operator" }, english)).toBe("Me");
     expect(senderWords({ kind: "named", name: "Planner" }, english)).toBe("Planner");
     expect(senderWords({ kind: "agent" }, english)).toBe("Agent");
-    expect(verdictLine(block("answer", { end: "question", line: "Which one?" }), english)).toBe("AI assessment · Question · Which one?");
+    expect(verdictLine(block("answer", { end: "question", line: "Which one?" }), english)).toBe("AI assessment · To check · Which one?");
     expect(verdictLine(block("stopped", { end: "unfinished" }), english)).toBe("AI assessment · Unfinished");
   });
 

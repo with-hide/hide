@@ -377,6 +377,8 @@
   --size-device-way-picture: 280px;
   --size-mission-edge: 1.5px;
   --size-chip-bar: 44px;
+  --size-chip-track: 64px;
+  --size-chip-track-h: 5px;
   --size-chip-edge-bar: 2px;
   --size-mission-card-min: 168px;
   --size-mission-card-max: 280px;
@@ -622,7 +624,7 @@
   --kind-mission: #b8337f;
   --kind-task: #0e7490;
   --missed: #0f766e;
-  --open-ask: var(--agent-working);
+  --open-ask: var(--warning);
   --mission-done: var(--success);
   --mission-working: var(--agent-working);
   --automation-once: var(--pr-merged);
@@ -753,7 +755,7 @@
   --kind-mission: #f0a6d2;
   --kind-task: #4fd1e0;
   --missed: #2fc4b2;
-  --open-ask: var(--agent-working);
+  --open-ask: var(--warning);
   --mission-done: var(--success);
   --mission-working: var(--agent-working);
   --automation-once: var(--pr-merged);

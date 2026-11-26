@@ -78,6 +78,20 @@ pub struct DeskJobsSnapshot {
     /// title and opens the record beside Desk. A session with no record has
     /// none, and its chip stays dimmed.
     pub records: Vec<DeskRecordSnapshot>,
+    /// The sessions the newest lines name whose pane is gone and that run
+    /// now in another pane, the same session on the same machine (one
+    /// `이어서 하기` resumed): a chip naming the gone pane is the live
+    /// session's, drawn from its row and opening it, and has no record.
+    pub moved: Vec<DeskMovedSnapshot>,
+}
+
+/// A chip's gone pane and the pane its session runs in now.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DeskMovedSnapshot {
+    /// The pane the conversation's chips name it by.
+    pub pane_id: String,
+    /// The pane its session runs in now.
+    pub live_pane_id: String,
 }
 
 /// A session whose pane is gone, as its record keeps it (frame K): what its

@@ -30,12 +30,18 @@ describe("markdown live plan", () => {
     expect(shown("# Title", 3)).toEqual(["heading:# Title"]);
   });
 
-  it("draws a bullet in place of the list marker", () => {
-    expect(shown(`${AWAY}- one\n- two`)).toEqual(["bullet:-", "bullet:-"]);
+  it("draws a bullet in place of the list marker, and marks each item's lead for a read-only text to hang its lines", () => {
+    expect(shown(`${AWAY}- one\n- two`)).toEqual(["bullet:-", "listItem:- ", "bullet:-", "listItem:- "]);
   });
 
-  it("leaves an ordered list's number alone", () => {
-    expect(shown(`${AWAY}1. one`)).toEqual([]);
+  it("leaves an ordered list's number alone in the editor, and marks its lead with the number it draws", () => {
+    expect(shown(`${AWAY}1. one`)).toEqual(["listItem:1. "]);
+    expect(plan(`${AWAY}1. one`).find((range) => range.kind === "listItem")?.source).toBe("1.");
+  });
+
+  it("gives a nested item's lead its indent and its depth, and an item after a quote's mark none", () => {
+    const leads = plan(`${AWAY}- top\n  - inner\n\n> - quoted`).filter((range) => range.kind === "listItem");
+    expect(leads.map((range) => [range.depth, range.source, range.to - range.from])).toEqual([[0, "•", 2], [1, "•", 4]]);
   });
 
   it("draws a checkbox for a task item in either state", () => {

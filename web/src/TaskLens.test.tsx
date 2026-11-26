@@ -160,17 +160,17 @@ it.each(["status", "project"] as const)("in %s keeps a read question's core-owne
   expect(line.querySelector(".text-warning")).toBeNull();
 });
 
-// Operator decision 2026-11-23: 쉬는 중 stands the read asks first, newest ask first, then the rest by their latest
-// prompt; its head stays `쉬는 중 N` and no 내 차례 counts them.
-it.each(["status", "project"] as const)("in %s rests the read asks first in 쉬는 중, newest ask first, and counts them in no 내 차례", async (view) => {
+// Operator decision 2026-11-26, replacing the read asks first of 2026-11-23: 쉬는 중 stands every row newest first by the
+// time it shows, a read ask by its ask and the rest by their latest prompt; its head stays `쉬는 중 N` and no 내 차례 counts them.
+it.each(["status", "project"] as const)("in %s rests the read asks among the rest in 쉬는 중 by the time each shows, and counts them in no 내 차례", async (view) => {
   const asked = (id: string, since: number): AgentRow => row(id, { mark: "turn", group: "seen", demand: "question", activity: "idle", last_prompt_at_unix_ms: 50, revisit: { starred: false, read_ask: true, since_unix_ms: since } } as Partial<AgentRow>);
-  const agents = [row("rest_old", { last_prompt_at_unix_ms: 300 }), asked("read_old", 100), row("rest_new", { last_prompt_at_unix_ms: 400 }), asked("read_new", 200)];
+  const agents = [row("rest_old", { last_prompt_at_unix_ms: 150 }), asked("read_old", 100), row("rest_new", { last_prompt_at_unix_ms: 400 }), asked("read_new", 200)];
   const cards = agents.map((agent) => ({ ...card(agent.pane_id, "resting", "hide-main"), ...(agent.revisit ? { read: true as const } : {}) }));
   const { container } = await render(snapshot(agents, cards, view), agents);
   expect(container.querySelector('[data-task-group="needs_you"]')).toBeNull();
   expect(container.querySelector("[data-task-fold] > button")?.textContent).toContain("쉬는 중 4");
   await act(async () => container.querySelector<HTMLButtonElement>("[data-task-fold] > button")!.click());
-  expect(rows(container)).toEqual(["read_new", "read_old", "rest_new", "rest_old"]);
+  expect(rows(container)).toEqual(["rest_new", "read_new", "rest_old", "read_old"]);
 });
 
 it("keeps a read row's View chip where the row rests (operator decision 2026-11-23)", async () => {
@@ -654,7 +654,7 @@ it("rests a read question with a hollow ! and no 읽음 word, and its ☆ puts i
   expect(at("asked").querySelector("[data-mark]")?.getAttribute("data-mark")).toBe("turn");
   expect(at("asked").querySelector("[data-mark]")?.getAttribute("data-mark-read")).toBe("true");
   expect(at("asked").querySelector("[data-task-read-tag]")).toBeNull();
-  expect(at("asked").querySelector('[data-task-focus="row"]')?.getAttribute("aria-label")).toContain("쉬는 중 · 읽은 질문");
+  expect(at("asked").querySelector('[data-task-focus="row"]')?.getAttribute("aria-label")).toContain("쉬는 중 · 확인할 것 · 읽음");
   expect(at("kept").getAttribute("data-task-read")).toBeNull();
   const button = (id: string) => container.querySelector<HTMLButtonElement>(`[data-task-revisit="${id}"]`)!;
   expect(button("asked").getAttribute("aria-pressed")).toBe("false");

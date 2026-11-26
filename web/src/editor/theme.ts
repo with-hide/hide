@@ -201,6 +201,11 @@ export const liveTheme = EditorView.theme({
     color: "var(--subtle-foreground)",
   },
   ".cm-md-bullet": { color: "var(--subtle-foreground)" },
+  // A read-only text's list item (`listItem`): its mark one width, the line indented by its depth and that width, and its first
+  // line pulled back by the mark, so a wrapped line starts under the words; the step is an HTML list's indent.
+  // The depth defaults to a top-level item; each item's line sets its own inline.
+  ".cm-line.cm-md-list": { "--md-list-depth": "0", paddingLeft: "calc((var(--md-list-depth) + 1) * 1.5em)", textIndent: "-1.5em" },
+  ".cm-md-list-mark": { display: "inline-block", width: "1.5em", textIndent: "0" },
   ".cm-md-checkbox": { verticalAlign: "middle" },
   // Drawn HTML and images. The page's reset makes an image a block and strips
   // list and table styling, so each of those is put back to what HTML means.

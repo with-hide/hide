@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeTab, MAX_DESK_FILE_TABS, closePanel, closeSession, closeTab, DESK_ROOM_CLOSED, followFrom, keepTab, namesView, newSessionBeside, openSession, outputNamed, openTab, panelPlace, roomWidths, tabKey, tabNames, toggleExplorer, type DeskRoomWindow, type DeskTab, type NewSessionFollow } from "./deskRoom";
+import { activeTab, MAX_DESK_FILE_TABS, closePanel, closeSession, closeTab, DESK_ROOM_CLOSED, followFrom, followMoved, keepTab, namesView, newSessionBeside, openSession, outputNamed, openTab, panelPlace, roomWidths, tabKey, tabNames, toggleExplorer, type DeskRoomWindow, type DeskTab, type NewSessionFollow } from "./deskRoom";
 import type { DeskItem, DeskJob, DeskOutput } from "./snapshot";
 
 // Expected answers are PRD desk-2-ui D-05, D-08, D-14, D-15, D-22-D-25 and
@@ -247,5 +247,20 @@ describe("a session a Desk turn starts (frame J)", () => {
   it("reads every line of a new conversation as new", () => {
     const old = [user(5), jobLine(6, "j1")];
     expect(run([{ items: [user(1), jobLine(2, "j9")], cards: [card("j9", "p9")], generation: 2 }], DESK_ROOM_CLOSED, old)).toEqual(["p9"]);
+  });
+});
+
+// The review's S1: once a gone session runs again in another pane, the room itself is that pane, so every action of the panel reaches it.
+describe("the room after a gone session runs again", () => {
+  const panel = { tabs: [{ kind: "mission" as const, mission: "mission-1", title: "m" }], preview: null, active: "mission:mission-1", explorer: true, beside: null };
+  it("moves the open session and the one ⌘E reopens to the live pane, and keeps the tab panel", () => {
+    const moved = [{ pane_id: "w1:p9", live_pane_id: "w1:p20" }];
+    const room: DeskRoomWindow = { session: "w1:p9", panel, closed: null, answer: 2 };
+    expect(followMoved(room, moved)).toEqual({ session: "w1:p20", panel, closed: null, answer: 2 });
+    expect(followMoved({ ...DESK_ROOM_CLOSED, closed: "w1:p9" }, moved).closed).toBe("w1:p20");
+    // Another pane, or no pair, leaves the very same room.
+    const other: DeskRoomWindow = { session: "w1:p3", panel, closed: "w1:p4", answer: 0 };
+    expect(followMoved(other, moved)).toBe(other);
+    expect(followMoved(room, [])).toBe(room);
   });
 });

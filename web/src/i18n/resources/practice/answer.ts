@@ -6,9 +6,9 @@ const en = {
   "practice.answer.summary": "Pick an agent's choice on your phone, and your computer answers on its screen",
   "practice.answer.row.kick": "Your turn",
   "practice.answer.row.title": "An agent asks while you are away",
-  "practice.answer.row.text": "**Review fixes** asks which way to go. Its row waits in Needs You, and the same question is on your phone.",
+  "practice.answer.row.text": "**Review fixes** asks which way to go. Its row waits in Needs You, and the same thing to check is on your phone.",
   "practice.answer.phone.kick": "Your phone",
-  "practice.answer.phone.title": "The question, with each choice explained",
+  "practice.answer.phone.title": "To check, with each choice explained",
   "practice.answer.phone.text": "It stands at the foot of the agent's conversation, with what the agent wrote under each choice.",
   "practice.answer.pick.quest": "Pick a choice",
   "practice.answer.pick.kick": "Pick",
@@ -26,7 +26,7 @@ const en = {
   "practice.answer.running.text": "While the agent runs a command, the clock counts from its start. The command itself stays on your computer.",
   "practice.answer.end.kick": "End of chapter 11",
   "practice.answer.end.title": "Answer from anywhere",
-  "practice.answer.end.text": "Pair your phone in **Settings › Devices › + Add device › Phone**. A question, a plan or a permission waits there with its choices; an agent Hide has no keys for is answered in the Terminal tab.",
+  "practice.answer.end.text": "Pair your phone in **Settings › Devices › + Add device › Phone**. Something to check, a plan or a permission waits there with its choices; an agent Hide has no keys for is answered in the Terminal tab.",
 };
 
 const ko = {
@@ -34,10 +34,10 @@ const ko = {
   "practice.answer.summary": "폰에서 에이전트의 선택지를 고르면 컴퓨터가 그 화면에서 답해요",
   "practice.answer.row.kick": "내 차례",
   "practice.answer.row.title": "자리를 비운 사이 에이전트가 물어요",
-  "practice.answer.row.text": "**리뷰 반영**이 어느 쪽으로 할지 물어요. 내 차례에 줄이 서고, 같은 질문이 폰에도 와 있어요.",
+  "practice.answer.row.text": "**리뷰 반영**이 어느 쪽으로 할지 물어요. 내 차례에 줄이 서고, 같은 확인할 것이 폰에도 와 있어요.",
   "practice.answer.phone.kick": "내 폰",
-  "practice.answer.phone.title": "선택지마다 설명이 붙은 질문",
-  "practice.answer.phone.text": "에이전트 대화 맨 아래에 질문이 있고, 선택지마다 에이전트가 적은 설명이 붙어요.",
+  "practice.answer.phone.title": "선택지마다 설명이 붙은 확인할 것",
+  "practice.answer.phone.text": "에이전트 대화 맨 아래에 확인할 것이 있고, 선택지마다 에이전트가 적은 설명이 붙어요.",
   "practice.answer.pick.quest": "선택지 고르기",
   "practice.answer.pick.kick": "고르기",
   "practice.answer.pick.title": "누르면 표시만 돼요",
@@ -54,7 +54,7 @@ const ko = {
   "practice.answer.running.text": "에이전트가 명령을 실행하는 동안 시작부터 시간을 세요. 명령 자체는 컴퓨터에만 있어요.",
   "practice.answer.end.kick": "11장 끝",
   "practice.answer.end.title": "어디서든 답해요",
-  "practice.answer.end.text": "**설정 › 기기 › + 기기 추가 › 폰**에서 폰을 연결해요. 질문, 계획, 권한 요청이 선택지와 함께 폰에서 기다려요. Hide가 키를 모르는 에이전트는 터미널 탭에서 답해요.",
+  "practice.answer.end.text": "**설정 › 기기 › + 기기 추가 › 폰**에서 폰을 연결해요. 확인할 것, 계획, 권한 요청이 선택지와 함께 폰에서 기다려요. Hide가 키를 모르는 에이전트는 터미널 탭에서 답해요.",
 } satisfies Catalog<typeof en>;
 
 const zhCN = {
@@ -62,10 +62,10 @@ const zhCN = {
   "practice.answer.summary": "在手机上选好智能体的选项，电脑会在它的屏幕上作答",
   "practice.answer.row.kick": "轮到你",
   "practice.answer.row.title": "你不在时智能体提问了",
-  "practice.answer.row.text": "**处理评审意见**在问要怎么做。它在“轮到你”里等着，同一个问题也到了你的手机上。",
+  "practice.answer.row.text": "**处理评审意见**在问要怎么做。它在“轮到你”里等着，同一项待确认也到了你的手机上。",
   "practice.answer.phone.kick": "我的手机",
-  "practice.answer.phone.title": "每个选项都带说明的问题",
-  "practice.answer.phone.text": "问题在智能体对话的最下方，每个选项下面是智能体写的说明。",
+  "practice.answer.phone.title": "每个选项都带说明的待确认",
+  "practice.answer.phone.text": "待确认在智能体对话的最下方，每个选项下面是智能体写的说明。",
   "practice.answer.pick.quest": "选一个选项",
   "practice.answer.pick.kick": "选择",
   "practice.answer.pick.title": "点一下只是标记",
@@ -82,7 +82,7 @@ const zhCN = {
   "practice.answer.running.text": "智能体运行命令时，从开始计时。命令本身只留在电脑上。",
   "practice.answer.end.kick": "第 11 章结束",
   "practice.answer.end.title": "随时随地回答",
-  "practice.answer.end.text": "在 **设置 › 设备 › + 添加设备 › 手机** 连接手机。问题、计划和权限请求会带着选项在手机上等你；Hide 不知道按键的智能体，在终端标签页里回答。",
+  "practice.answer.end.text": "在 **设置 › 设备 › + 添加设备 › 手机** 连接手机。待确认、计划和权限请求会带着选项在手机上等你；Hide 不知道按键的智能体，在终端标签页里回答。",
 } satisfies Catalog<typeof en>;
 
 const ja = {
@@ -90,10 +90,10 @@ const ja = {
   "practice.answer.summary": "スマホでエージェントの選択肢を選ぶと、コンピュータがその画面で答えます",
   "practice.answer.row.kick": "自分の番",
   "practice.answer.row.title": "席を外している間にエージェントが尋ねます",
-  "practice.answer.row.text": "**レビュー対応** がどちらで進めるか尋ねています。行は「自分の番」で待ち、同じ質問がスマホにも届いています。",
+  "practice.answer.row.text": "**レビュー対応** がどちらで進めるか尋ねています。行は「自分の番」で待ち、同じ確認することがスマホにも届いています。",
   "practice.answer.phone.kick": "自分のスマホ",
-  "practice.answer.phone.title": "選択肢ごとに説明が付いた質問",
-  "practice.answer.phone.text": "エージェントの会話のいちばん下に質問があり、選択肢ごとにエージェントが書いた説明が付きます。",
+  "practice.answer.phone.title": "選択肢ごとに説明が付いた確認すること",
+  "practice.answer.phone.text": "エージェントの会話のいちばん下に確認することがあり、選択肢ごとにエージェントが書いた説明が付きます。",
   "practice.answer.pick.quest": "選択肢を選ぶ",
   "practice.answer.pick.kick": "選ぶ",
   "practice.answer.pick.title": "押しても印が付くだけです",
@@ -110,7 +110,7 @@ const ja = {
   "practice.answer.running.text": "エージェントがコマンドを実行している間、開始からの時間を数えます。コマンドそのものはコンピュータにだけあります。",
   "practice.answer.end.kick": "第 11 章 おわり",
   "practice.answer.end.title": "どこからでも答えられます",
-  "practice.answer.end.text": "**設定 › デバイス › + デバイスを追加 › スマートフォン** でスマホをつなぎます。質問、計画、権限の確認が選択肢と一緒にスマホで待ちます。Hide がキーを知らないエージェントは、ターミナルタブで答えます。",
+  "practice.answer.end.text": "**設定 › デバイス › + デバイスを追加 › スマートフォン** でスマホをつなぎます。確認すること、計画、権限の確認が選択肢と一緒にスマホで待ちます。Hide がキーを知らないエージェントは、ターミナルタブで答えます。",
 } satisfies Catalog<typeof en>;
 
 export default { en, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof en>;

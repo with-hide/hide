@@ -74,11 +74,11 @@ public class NoticeTest {
     @Test
     public void wordsTheBodyInThePhonesLanguageAndFallsBackToEnglish() throws Exception {
         Notice asking = read(NoticeSealer.notice(ROOM).put("detail", "Which branch?"));
-        assertEquals("질문 · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("ko-KR"))));
-        assertEquals("Question · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("en-US"))));
-        assertEquals("질문 · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("fr-FR", "ko"))));
-        assertEquals("Question · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("fr-FR"))));
-        assertEquals("提问 · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("zh-Hans-CN"))));
+        assertEquals("확인할 것 · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("ko-KR"))));
+        assertEquals("To check · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("en-US"))));
+        assertEquals("확인할 것 · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("fr-FR", "ko"))));
+        assertEquals("To check · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("fr-FR"))));
+        assertEquals("待确认 · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("zh-Hans-CN"))));
         Notice letter = read(NoticeSealer.notice(ROOM).put("state", "letter_undelivered").put("status_code", JSONObject.NULL).put("detail", JSONObject.NULL).put("place", "letter-7"));
         assertEquals("Letter not delivered · letter-7", letter.body(NoticeWords.forLanguages(List.of("en"))));
     }
@@ -98,7 +98,7 @@ public class NoticeTest {
     public void theDemoSampleIsWordedAsARealQuestionIs() {
         Notice sample = Notice.sample("Address review comments", "question", "needs_you", "Apply all 3 review comments?", "demo · fix/review");
         assertEquals("Address review comments", sample.title);
-        assertEquals("Question · Apply all 3 review comments? · demo · fix/review", sample.body(NoticeWords.forLanguages(List.of("en"))));
+        assertEquals("To check · Apply all 3 review comments? · demo · fix/review", sample.body(NoticeWords.forLanguages(List.of("en"))));
     }
 
     @Test

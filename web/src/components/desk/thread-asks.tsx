@@ -28,7 +28,7 @@ const LIST_HEIGHT = "max-h-[calc((2lh+var(--spacing-sm)*2)*3+var(--size-hairline
  * the same list 내 차례 reads (`open_asks`), oldest first, each in the agent's
  * own sentence Hide AI quoted for it (two lines at most; Hide AI's summary for
  * one kept before the sentence was), with when it was asked and `×`. The
- * question colour (`--open-ask`) is only on `질문` and each row's dot. It only
+ * question colour (`--open-ask`) is only on `확인할 것` and each row's dot. It only
  * shows: the answer is typed in the box below, and an agent's own choice card
  * stays in the conversation. Pressing a question goes to the message it was
  * asked in and lights its sentence (`onGo`); `lit` is the one lit now, and
@@ -36,8 +36,8 @@ const LIST_HEIGHT = "max-h-[calc((2lh+var(--spacing-sm)*2)*3+var(--size-hairline
  * 가): their words read dim and whole, end in a dim `대화에 없음`, their dot is
  * a hollow ring, and pressing them does nothing. `×` is 무시하기, which
  * takes the question out of 내 차례 and leaves it struck through with 되돌리기
- * while this session stays open (`useAwayAsks`). Several fold to `질문 N ·
- * first question ⌄` and unfold under a head of `질문 N` and `접기 ⌃`, one row
+ * while this session stays open (`useAwayAsks`). Several fold to `확인할 것 N ·
+ * first question ⌄` and unfold under a head of `확인할 것 N` and `접기 ⌃`, one row
  * each in a list three rows tall that scrolls inside, so the input box below
  * never moves for it; Esc folds it again.
  */
@@ -115,7 +115,7 @@ function whole(said: string): string {
 /**
  * One question: the whole row goes to where it was asked, with its words, when
  * it was asked and `×` or, once put away, struck through with 되돌리기. Alone
- * it is led by `질문`; in a list by its dot, the head above saying the rest.
+ * it is led by `확인할 것`; in a list by its dot, the head above saying the rest.
  */
 function AskRow({ ask, inList, away, lit, gone, onGo, onAway, onBack }: {
   ask: AskLine;

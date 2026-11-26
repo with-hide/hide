@@ -49,7 +49,7 @@ public class NoticeWordsTest {
     @Test
     public void leadsWithTheStatusWordElseTheGroup() {
         NoticeWords english = NoticeWords.forLanguages(java.util.List.of("en"));
-        assertEquals("Question", english.lead("question", "needs_you"));
+        assertEquals("To check", english.lead("question", "needs_you"));
         assertEquals("Needs You", english.lead("not_a_status", "needs_you"));
         assertEquals("Needs You", english.lead(null, "needs_you"));
         assertEquals(null, english.lead(null, "not_a_group"));

@@ -51,7 +51,7 @@ import { revealRow, sidebarFocusPane } from "./sidebarFocus";
 import { siblingsShown, type SidebarTreeLine } from "./sidebarTree";
 import { catalogWorkspaces, listedCatalog, localDeviceId, SIDEBAR_LENSES, type AgentRow, type TaskView } from "./snapshot";
 import { useShellStore } from "./store";
-import { drawnTasks, elsewhereTasks, restingRows, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type BandRow, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
+import { drawnTasks, elsewhereTasks, restingRows, restingSince, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type BandRow, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
 import { InToolCell, ToolLabel } from "./components/tool-mark";
 import type { TaskState, ToolCell } from "./agentScope";
@@ -539,7 +539,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
   const resolvable = !agent.resolved && agent.activity !== "working" && agent.group !== "working" && agent.demand !== "approval";
   const menu = useTaskMenu(agent, record, go, resolvable, disabled, actions, true);
   // The row's own mark words, as the sidebar row says them (status-marks B3, B33); a fold's rows say the fold.
-  // A task waiting in 다시 볼 것 wears the ★ in its mark's slot (PRD revisit-group B6). A read ask waits first in
+  // A task waiting in 다시 볼 것 wears the ★ in its mark's slot (PRD revisit-group B6). A read ask rests in
   // 쉬는 중 with a hollow `!` and a resting row's grey line; the mark says it was read, so no word repeats it
   // (operator decision 2026-11-23, replacing needs-you-cleanup B10).
   // The small ★ after the title steps aside where the time's slot shows the ☆/★ button, so the row never draws two.
@@ -703,7 +703,7 @@ function revisitOn(agent: AgentRow): boolean {
   return agent.revisit?.starred === true;
 }
 
-/** An ask the operator read and has not answered, not put off with ☆: it waits first in 쉬는 중 (operator decision 2026-11-23). */
+/** An ask the operator read and has not answered, not put off with ☆: it rests in 쉬는 중 (operator decision 2026-11-23). */
 function readAsk(agent: AgentRow): boolean {
   return agent.revisit?.read_ask === true && !agent.revisit.starred;
 }
@@ -749,10 +749,9 @@ const resting = (open: boolean) => (open ? "hidden" : "group-hover/task:hidden g
  * times read in order down the list (operator decisions 2026-11-14,
  * 2026-11-23); elsewhere its latest actual prompt.
  */
-function waitedSince({ agent, card }: TaskEntry): number | null | undefined {
-  if (card.read) return agent.revisit?.since_unix_ms ?? agent.last_prompt_at_unix_ms;
-  if (card.state !== "needs_you") return agent.last_prompt_at_unix_ms;
-  return agent.state.request_since ?? agent.last_prompt_at_unix_ms;
+function waitedSince(entry: TaskEntry): number | null | undefined {
+  if (entry.card.read || entry.card.state !== "needs_you") return restingSince(entry);
+  return entry.agent.state.request_since ?? entry.agent.last_prompt_at_unix_ms;
 }
 
 /**

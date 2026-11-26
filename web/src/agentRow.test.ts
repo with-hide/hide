@@ -75,7 +75,7 @@ describe("the mark and the badge (status-marks D-01, D-02, B19)", () => {
 
   it("names a mark with the word that leads its line (B3)", async () => {
     const { t } = await createInterfaceI18n("ko");
-    expect(markWords(t, { mark: "turn", status_code: "question" })).toBe("내 차례 · 질문");
+    expect(markWords(t, { mark: "turn", status_code: "question" })).toBe("내 차례 · 확인할 것");
     expect(markWords(t, { mark: "turn", status_code: "approval" })).toBe("내 차례 · 승인");
     expect(markWords(t, { mark: "going", status_code: "waiting" })).toBe("진행 중");
     expect(markWords(t, { mark: "done", status_code: "done" })).toBe("읽을 것 · 끝남");
@@ -100,7 +100,7 @@ describe("the mark and the badge (status-marks D-01, D-02, B19)", () => {
     expect(markWords(t, { mark: "waiting", status_code: "waiting" })).toBe("진행 중 · 대기");
     // A delegated child's own request waits on its parent's answer and names it (B24).
     expect(markWords(t, { mark: "waiting", status_code: "error" })).toBe("진행 중 · 막힘");
-    expect(markWords(t, { mark: "waiting", status_code: "question" })).toBe("진행 중 · 질문");
+    expect(markWords(t, { mark: "waiting", status_code: "question" })).toBe("진행 중 · 확인할 것");
   });
 });
 

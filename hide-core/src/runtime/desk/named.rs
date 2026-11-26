@@ -15,7 +15,7 @@ use super::super::Runtime;
 use super::jobs::FOLLOWED_CHIPS;
 use crate::desk::NamedSession;
 use crate::links::ledger::{LedgerAnswer, LedgerCall, SessionIdentity, SessionRecord};
-use crate::model::{DeskItem, DeskPullRequest, DeskRecordSnapshot, PrState};
+use crate::model::{DeskItem, DeskPullRequest, DeskRecordSnapshot};
 
 /// The pull requests a record's chip and card count at most.
 const RECORD_PULLS: usize = 8;
@@ -49,6 +49,10 @@ pub(super) struct Records {
 /// One answer of the reader.
 type Answer = (SessionIdentity, Result<LedgerAnswer, String>);
 
+/// The chipped panes that are gone, each with the pane its session runs in
+/// now (`desk_moved`); at most the newest lines' chips.
+pub(super) type Moved = Vec<(String, String)>;
+
 impl Runtime {
     /// The panes the newest lines' chips name (a reply's, a letter's, the
     /// operator's message), newest first, each once.
@@ -81,6 +85,20 @@ impl Runtime {
         panes
     }
 
+    /// The session `row` runs, as the link record names it: its machine (as
+    /// the one address owner reads it from the pane, as a row's is stamped),
+    /// its agent and its session id; none for a row that reported no session.
+    fn row_session(&self, row: &crate::model::SidebarAgentSnapshot) -> Option<SessionIdentity> {
+        let agent = super::super::links::session_agent(&row.agent_kind)?;
+        Some(SessionIdentity {
+            device_id: crate::address::split_pane(self.node.as_str(), &row.pane_id)
+                .0
+                .to_owned(),
+            agent: agent.to_owned(),
+            session_id: row.session_id.clone()?,
+        })
+    }
+
     /// Keeps the session each chipped pane runs now, as its row and its
     /// delivery observation say it; whether the store changed, for a save.
     pub(super) fn desk_keep_named(&mut self) -> bool {
@@ -93,18 +111,9 @@ impl Runtime {
             .into_iter()
             .filter_map(|pane| {
                 let row = rows.get(pane)?;
-                let agent = super::super::links::session_agent(&row.agent_kind)?;
-                // The machine as the one address owner reads it from the pane, as a row's is stamped.
-                let device_id = crate::address::split_pane(self.node.as_str(), pane)
-                    .0
-                    .to_owned();
                 Some(NamedSession {
                     pane_id: pane.to_owned(),
-                    session: SessionIdentity {
-                        device_id,
-                        agent: agent.to_owned(),
-                        session_id: row.session_id.clone()?,
-                    },
+                    session: self.row_session(row)?,
                     agent_kind: row.agent_kind.clone(),
                     thread: self
                         .delivery_observations
@@ -116,11 +125,74 @@ impl Runtime {
         self.desk.stored.keep_named(found)
     }
 
-    /// The records of the sessions the newest lines' chips name whose pane
-    /// no row holds now, in the chips' order; a session not read yet is
-    /// handed to the reader and joins once it answers.
-    pub(super) fn desk_records(&mut self) -> Vec<DeskRecordSnapshot> {
+    /// The chipped panes that are gone whose session runs now in another
+    /// pane (one `이어서 하기` resumed, or a wake opened anew), each with the
+    /// row it runs in: the same session, on the same machine, by its id, the
+    /// first such row in the sidebar's order. Only the newest lines' chips
+    /// are followed, so the pairs are at most the chips they name. Such a
+    /// chip is that row's, and its record is not drawn; a record is drawn
+    /// only for a session no row runs. A refresh reads it once and hands
+    /// it to each reader ([`Moved`]).
+    pub(super) fn desk_moved(&self) -> Moved {
         let rows: HashSet<&str> = self.agent_rows().map(|row| row.pane_id.as_str()).collect();
+        let gone: Vec<(&str, &SessionIdentity)> = self
+            .desk_chip_panes()
+            .into_iter()
+            .filter(|pane| !rows.contains(pane))
+            .filter_map(|pane| {
+                let named = self
+                    .desk
+                    .stored
+                    .named
+                    .iter()
+                    .find(|named| named.pane_id == pane)?;
+                Some((pane, &named.session))
+            })
+            .collect();
+        if gone.is_empty() {
+            return Vec::new();
+        }
+        // The same session in two rows (a resume that raced a wake) is the
+        // first row in the sidebar's order, so the answer never flips.
+        let mut running: HashMap<SessionIdentity, &crate::model::SidebarAgentSnapshot> =
+            HashMap::new();
+        for row in self.agent_rows() {
+            if let Some(session) = self.row_session(row) {
+                running.entry(session).or_insert(row);
+            }
+        }
+        gone.into_iter()
+            .filter_map(|(pane, session)| {
+                Some((pane.to_owned(), running.get(session)?.pane_id.clone()))
+            })
+            .collect()
+    }
+
+    /// The rows the newest lines' chips draw, by the pane each chip names: a
+    /// listed pane's own row, and a gone pane's whose session runs in another
+    /// pane ([`Self::desk_moved`]) that other pane's row.
+    pub(super) fn desk_chip_rows<'a>(
+        &'a self,
+        moved: &'a [(String, String)],
+    ) -> HashMap<&'a str, &'a crate::model::SidebarAgentSnapshot> {
+        let mut rows: HashMap<&str, &crate::model::SidebarAgentSnapshot> = self
+            .agent_rows()
+            .map(|row| (row.pane_id.as_str(), row))
+            .collect();
+        let gone: Vec<(&str, &crate::model::SidebarAgentSnapshot)> = moved
+            .iter()
+            .filter_map(|(pane, live)| Some((pane.as_str(), *rows.get(live.as_str())?)))
+            .collect();
+        rows.extend(gone);
+        rows
+    }
+
+    /// The records of the sessions the newest lines' chips name whose pane
+    /// no row holds now and that no other pane runs, in the chips' order; a
+    /// session not read yet is handed to the reader and joins once it
+    /// answers.
+    pub(super) fn desk_records(&mut self, moved: &[(String, String)]) -> Vec<DeskRecordSnapshot> {
+        let rows: HashSet<&str> = self.desk_chip_rows(moved).into_keys().collect();
         let mut records = Vec::new();
         let mut unread = Vec::new();
         for pane in self.desk_chip_panes() {
@@ -324,7 +396,7 @@ fn record_facts(record: &SessionRecord, agent_kind: String) -> DeskRecordSnapsho
             .take(RECORD_PULLS)
             .map(|output| DeskPullRequest {
                 number: u32::try_from(output.number).unwrap_or(u32::MAX),
-                state: pr_state(&output.state),
+                state: crate::agent_state::work::family::recorded_state(&output.state),
             })
             .collect(),
         cwd: record.cwd.clone(),
@@ -334,21 +406,10 @@ fn record_facts(record: &SessionRecord, agent_kind: String) -> DeskRecordSnapsho
     }
 }
 
-/// A record's pull request state as a PR mark draws it; an open one whose
-/// checks the record does not keep reads pending.
-fn pr_state(state: &str) -> PrState {
-    match state.to_ascii_lowercase().as_str() {
-        "merged" => PrState::Merged,
-        "closed" => PrState::Closed,
-        "draft" => PrState::Draft,
-        _ => PrState::Pending,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{DeskReplyState, DeskSessionChip, ThreadFailure, ThreadPane};
+    use crate::model::{DeskReplyState, DeskSessionChip, PrState, ThreadFailure, ThreadPane};
     use serde_json::json;
 
     const SESSION: &str = "0b9e2a4c-4c0e-4d7a-9a51-2f7f6a1e3c11";
@@ -468,6 +529,162 @@ mod tests {
         runtime.snapshot.navigator.agents = vec![row("p1", SESSION)];
         runtime.refresh_desk_jobs();
         assert!(records(&runtime).is_empty());
+    }
+
+    /// A gone session that 이어서 하기 brought back runs in a new pane: the
+    /// chip naming its old pane is the live session's (its row's mark and
+    /// agent, its row's card, the pane a press opens), not its record; one
+    /// whose session runs nowhere keeps its record.
+    #[test]
+    fn a_gone_pane_s_chip_whose_session_runs_in_a_new_pane_is_that_live_session_not_its_record() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _orders) = super::super::tests::runtime(root.path());
+        runtime.snapshot.navigator.agents = vec![row("p1", SESSION)];
+        reply_naming(&mut runtime, &["p1"]);
+        runtime.refresh_desk_jobs();
+        runtime.snapshot.navigator.agents.clear();
+        runtime.refresh_desk_jobs();
+        let built = runtime.desk.stored.named[0].session.clone();
+        let record = SessionRecord {
+            session: built.clone(),
+            title: "후보 빌드".into(),
+            ..SessionRecord::default()
+        };
+        runtime.desk_records_read(vec![(built, Ok(LedgerAnswer::Record(Box::new(record))))]);
+        assert_eq!(
+            records(&runtime).len(),
+            1,
+            "gone everywhere, it reads as its record"
+        );
+
+        // Another session in a new pane changes nothing.
+        runtime.snapshot.navigator.agents = vec![row("p5", "other")];
+        runtime.refresh_desk_jobs();
+        assert_eq!(records(&runtime).len(), 1);
+        assert!(
+            runtime
+                .snapshot
+                .desk_jobs
+                .as_ref()
+                .unwrap()
+                .moved
+                .is_empty()
+        );
+
+        // The same session resumed in p5.
+        runtime.snapshot.navigator.agents = vec![row("p5", SESSION)];
+        runtime.refresh_desk_jobs();
+        runtime.compose_desk();
+        let jobs = runtime.snapshot.desk_jobs.as_ref().unwrap();
+        assert!(
+            jobs.records.is_empty(),
+            "a session running somewhere has no record drawn"
+        );
+        assert_eq!(
+            jobs.moved,
+            [crate::model::DeskMovedSnapshot {
+                pane_id: "p1".into(),
+                live_pane_id: "p5".into(),
+            }],
+            "a press on the chip opens p5"
+        );
+        assert!(
+            jobs.named
+                .iter()
+                .any(|card| card.pane_id.as_deref() == Some("p5")),
+            "its hover card is the live row's"
+        );
+        let desk = runtime.snapshot.desk.as_ref().unwrap();
+        let Some(DeskItem::Reply { mentions, .. }) = desk.conversation.items.last() else {
+            panic!("no reply");
+        };
+        let live = row("p5", SESSION);
+        assert_eq!(
+            (mentions[0].mark, mentions[0].agent_kind.as_deref()),
+            (Some(live.mark), Some("codex")),
+            "the chip wears the live row's mark"
+        );
+
+        // An update that moves no pair sends nothing again.
+        let before = std::sync::Arc::clone(runtime.snapshot.desk_jobs.as_ref().unwrap());
+        runtime.refresh_desk_jobs();
+        assert!(std::sync::Arc::ptr_eq(
+            &before,
+            runtime.snapshot.desk_jobs.as_ref().unwrap()
+        ));
+
+        // The same session in two rows is the first row in the sidebar's
+        // order; the rows no chip names make no pair of their own.
+        runtime.snapshot.navigator.agents = vec![row("p7", SESSION), row("p5", SESSION)];
+        runtime.refresh_desk_jobs();
+        let moved: Vec<_> = runtime
+            .snapshot
+            .desk_jobs
+            .as_ref()
+            .unwrap()
+            .moved
+            .iter()
+            .map(|pair| (pair.pane_id.as_str(), pair.live_pane_id.as_str()))
+            .collect();
+        assert_eq!(moved, [("p1", "p7")]);
+
+        // Its live row gone again, the chip goes back to its record.
+        runtime.snapshot.navigator.agents.clear();
+        runtime.refresh_desk_jobs();
+        let jobs = runtime.snapshot.desk_jobs.as_ref().unwrap();
+        assert!(jobs.moved.is_empty());
+        assert_eq!(jobs.records.len(), 1);
+        assert_eq!(jobs.records[0].pane_id, "p1");
+    }
+
+    /// A gone session's chip marks its pull requests as the live card does,
+    /// by the one rule the record's states are read with: CI failed reads
+    /// failed, never pending.
+    #[test]
+    fn a_gone_session_s_pull_request_whose_ci_failed_reads_failed() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _orders) = super::super::tests::runtime(root.path());
+        runtime.snapshot.navigator.agents = vec![row("p1", SESSION)];
+        reply_naming(&mut runtime, &["p1"]);
+        runtime.refresh_desk_jobs();
+        runtime.snapshot.navigator.agents.clear();
+        runtime.refresh_desk_jobs();
+        let built = runtime.desk.stored.named[0].session.clone();
+        let pull = |number: u64, state: &str| crate::links::ledger::WorkOutput {
+            kind: "pr".into(),
+            repository: "acme/app".into(),
+            number,
+            title: String::new(),
+            url: format!("https://example.test/pull/{number}"),
+            state: state.into(),
+            stale: false,
+            last_read_at_unix_ms: None,
+            created_at_unix_ms: 0,
+            source: built.clone(),
+            source_name: String::new(),
+            sighted_at_unix_ms: 0,
+            settled_at_unix_ms: None,
+        };
+        let record = SessionRecord {
+            session: built.clone(),
+            title: "후보 빌드".into(),
+            outputs: vec![pull(1, "ci_failed"), pull(2, "merged"), pull(3, "review")],
+            ..SessionRecord::default()
+        };
+        runtime.desk_records_read(vec![(built, Ok(LedgerAnswer::Record(Box::new(record))))]);
+        let states: Vec<_> = records(&runtime)[0]
+            .pull_requests
+            .iter()
+            .map(|pull| (pull.number, pull.state))
+            .collect();
+        assert_eq!(
+            states,
+            [
+                (1, PrState::Failed),
+                (2, PrState::Merged),
+                (3, PrState::Pending)
+            ]
+        );
     }
 
     /// A read that failed (a timeout, a busy record) is not taken for "no

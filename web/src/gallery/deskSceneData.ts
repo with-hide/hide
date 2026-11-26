@@ -4,7 +4,7 @@
 // made up; nothing here is read from a machine.
 import type { AcpSessionUpdate, DeskAgent, DeskItem, DeskJob, DeskMention, DeskMission, DeskOption, DeskOutput, DeskSessionRef, DeskSteps, SessionFacts, SessionViewKind, ThreadHidePart } from "../desk";
 import { recordCard } from "../desk";
-import type { DeskRecord, DeskSessionChip, RowMark } from "../snapshot";
+import type { DeskRecord, DeskSessionChip, Mission, RowMark } from "../snapshot";
 import type { MentionProject, MentionSession } from "../components/desk/desk-mention-menu";
 import { planFixture } from "./PlanScene";
 
@@ -493,7 +493,7 @@ export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
   const facts = new Map<string, SessionFacts>();
   for (const named of every) {
     if (named.mark === null) {
-      facts.set(pane(named.name), { listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null, record: null });
+      facts.set(pane(named.name), { listed: false, pane_id: null, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null, record: null });
       continue;
     }
     const card = job(named.name, named.name, {
@@ -503,7 +503,7 @@ export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
       ...named.extra,
     });
     const parent = every.find((one) => one.name === named.parent);
-    facts.set(pane(named.name), { listed: true, name: named.name, mark: named.mark, agent_kind: named.kind, card: { ...card, mark: named.mark }, since: at(now, named.minutes ?? 1), parent: parent ? ref(parent) : null, record: null });
+    facts.set(pane(named.name), { listed: true, pane_id: pane(named.name), name: named.name, mark: named.mark, agent_kind: named.kind, card: { ...card, mark: named.mark }, since: at(now, named.minutes ?? 1), parent: parent ? ref(parent) : null, record: null });
   }
   const token = (named: Named) => `@session(${pane(named.name)} ${named.name})`;
   const text = [
@@ -529,8 +529,8 @@ export function endedScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
     pull_requests: [{ number: 2914, state: "merged" }], cwd: "/Users/me/projects/herdr-ide", path: null, project: "herdr-ide", thread: true,
   };
   const facts = new Map<string, SessionFacts>([
-    [record.pane_id, { listed: false, name: record.title, mark: null, agent_kind: record.agent_kind, card: recordCard(record), since: record.ended_at_unix_ms, parent: null, record }],
-    ["w1:old-probe", { listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null, record: null }],
+    [record.pane_id, { listed: false, pane_id: record.pane_id, name: record.title, mark: null, agent_kind: record.agent_kind, card: recordCard(record), since: record.ended_at_unix_ms, parent: null, record }],
+    ["w1:old-probe", { listed: false, pane_id: null, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null, record: null }],
   ]);
   const items: DeskItem[] = [
     { kind: "user", id: 1, text: "어제 릴리스 노트 세션 어떻게 끝났어?", at_ms: at(now, 2), mentions: [] },
@@ -540,4 +540,44 @@ export function endedScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
     ] },
   ];
   return { items, facts, record };
+}
+
+/**
+ * Doop frame Q 가: Desk's answer that sums up the missions in a table and a
+ * list item, each mission drawn once, on one line, in its name's place. The
+ * missions are the mission scene's one, copied with other names, states and
+ * counts, so their cells read as the store's.
+ */
+export function missionLayoutScene(base: Mission, now: number): { missions: Mission[]; items: DeskItem[] } {
+  const like = (status: string) => base.nodes.find((node) => node.status === status) ?? base.nodes[0]!;
+  const nodes = (done: number, working: number, planned: number) => [
+    ...Array.from({ length: done }, () => like("done")),
+    ...Array.from({ length: working }, () => like("working")),
+    ...Array.from({ length: planned }, () => like("planned")),
+  ].map((node, index) => ({ ...node, key: `n${index}`, title: `n${index}`, depends_on: [] }));
+  const mission = (id: string, title: string, status: Mission["status"], drawn: Mission["nodes"], decision: string | null = null): Mission => ({ ...base, id, title, status, nodes: drawn, decision, question: null, delay: null });
+  const missions = [
+    mission("mission-101", "Desk 2차 · 옆 세션과 뜨는 탭 패널", "running", nodes(25, 3, 2)),
+    mission("mission-63", "안드로이드 앱 출시", "running", nodes(8, 1, 1)),
+    mission("mission-105", "Phase 1 같이 보기 · 폴더 장부 읽기와 엮기", "planning", nodes(0, 0, 4)),
+    mission("mission-58", "에이전트별 편지 알림 지원표", "running", nodes(6, 0, 1), "지원표에 Pi를 넣을까요?"),
+    mission("mission-90", "CI 속도 · Windows는 머지 뒤, Linux는 나눠 돌리기", "running", nodes(3, 0, 1), "Linux 나눔을 4개로 할까요?"),
+    mission("mission-70", "flaky·CI 정리", "merge_wait", nodes(19, 0, 0), "머지할까요?"),
+    mission("mission-98", "체험판 5개 한도 · 메일과 메신저를 배포에서만 한 서비스로", "merge_wait", nodes(1, 0, 0), "머지할까요?"),
+  ];
+  const named = (id: string) => `@mission(${id} ${missions.find((one) => one.id === id)!.title})`;
+  const rows = [["mission-101", "running", "슬래시 메뉴 및 창 리디자인"], ["mission-63", "running", "Play Console 조직 계정 가입"], ["mission-105", "planning", "Phase 1 같이 보기 구현"], ["mission-58", "running", "지휘 세션 없음"], ["mission-90", "running", "지휘 세션 없음"]];
+  const text = [
+    "현재 이 Mac에서 에이전트 세션 약 40개가 돌고 있고, 진행 중인 미션은 5개입니다. 그중 3개에는 지휘 세션이 붙어 있습니다.",
+    "## 미션",
+    ["| 미션 | 상태 | 지휘 세션 |", "| --- | --- | --- |", ...rows.map(([id, state, conductor]) => `| ${named(id!)} | ${state} | ${conductor} |`)].join("\n"),
+    `- **머지 대기:** ${named("mission-70")}, ${named("mission-98")}`,
+  ].join("\n\n");
+  return {
+    missions,
+    items: [
+      { kind: "user", id: 51, text: "현재 돌고 있는 애들 지금 뭐뭐 있는지 + 미션도 같이 정리해줘", at_ms: at(now, 2), mentions: [] },
+      { kind: "reply", mentions: [], missions: missions.map(({ id, title }) => ({ id, title })), agent: "claude", id: 52, text, at_ms: at(now, 1), state: "done", thought_ms: 20_000, steps: { ...NO_STEPS, sessions: 5 } },
+    ],
+  };
 }

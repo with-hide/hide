@@ -14,8 +14,8 @@ import type { AgentRow, ArchivedSession, Device, TaskView, Workspace } from "./s
  * The open groups of the 상태별 view and the bands of a 프로젝트별 group, in
  * the order they are drawn (status-marks D-22, B32): 내 차례 (a question, an
  * approval or a block), 읽을 것, whose tasks want the operator's look, 다시 볼 것
- * (PRD revisit-group D-01), a task the operator starred (a read ask rests,
- * first in 쉬는 중, operator decision 2026-11-23),
+ * (PRD revisit-group D-01), a task the operator starred (a read ask rests
+ * in 쉬는 중, operator decision 2026-11-23),
  * above 작업 중, whose tasks are in progress: the ones whose agent works first,
  * then the ones that wait on proven work (CI, children, a reply), since
  * neither asks anything of the operator.
@@ -179,16 +179,16 @@ function automationOf(own: OwnAsk): string | null {
 
 /**
  * The rows of 쉬는 중 in the order drawn: its tasks in `restingOrder`, and
- * each item among them by when its run ended, newest first, as the rest stand
- * by their latest prompt, so the ages read in order down the fold; the read
- * asks stay first, and an item stands before a row with no known time.
+ * each item among them by when its run ended, newest first, as the tasks stand
+ * by the time they show, so the ages read in order down the fold; an item
+ * stands before a row with no known time.
  */
 export function restingRows(entries: readonly TaskEntry[], items: readonly OwnAsk[]): BandRow[] {
   const waiting = [...items].sort((a, b) => ownAskSince(b) - ownAskSince(a));
   const rows: BandRow[] = [];
   let next = 0;
   for (const entry of entries) {
-    if (entry.card.read !== true) while (next < waiting.length && ownAskSince(waiting[next]!) >= (entry.agent.last_prompt_at_unix_ms ?? -Infinity)) rows.push({ kind: "item", own: waiting[next++]! });
+    while (next < waiting.length && ownAskSince(waiting[next]!) >= (restingSince(entry) ?? -Infinity)) rows.push({ kind: "item", own: waiting[next++]! });
     rows.push({ kind: "task", entry });
   }
   for (const own of waiting.slice(next)) rows.push({ kind: "item", own });
@@ -196,17 +196,22 @@ export function restingRows(entries: readonly TaskEntry[], items: readonly OwnAs
 }
 
 /**
- * The order of 쉬는 중: the read asks first, newest ask first, so a question
- * read and left waits at the top where it is seen (operator decision
- * 2026-11-23), then the rest by their latest actual prompt, newest first, so
- * the order matches the age on each row; unknown times stand last and equal
- * times keep their order.
+ * The time a resting row shows and stands by: a read ask's since its ask
+ * (operator decision 2026-11-14), every other row's its latest actual prompt.
+ */
+export function restingSince({ agent, card }: TaskEntry): number | null | undefined {
+  return card.read === true ? (agent.revisit?.since_unix_ms ?? agent.last_prompt_at_unix_ms) : agent.last_prompt_at_unix_ms;
+}
+
+/**
+ * The order of 쉬는 중: newest first by the time each row shows, a read ask
+ * among the rest rather than above them (operator decision 2026-11-26,
+ * replacing the read asks first of 2026-11-23), so the order matches the age
+ * on each row; unknown times stand last and equal times keep their order.
  */
 function restingOrder(a: TaskEntry, b: TaskEntry): number {
-  const read = (entry: TaskEntry) => entry.card.read === true;
-  if (read(a) !== read(b)) return read(a) ? -1 : 1;
-  const at = read(a) ? a.agent.revisit?.since_unix_ms : a.agent.last_prompt_at_unix_ms;
-  const bt = read(b) ? b.agent.revisit?.since_unix_ms : b.agent.last_prompt_at_unix_ms;
+  const at = restingSince(a);
+  const bt = restingSince(b);
   if (at == null) return bt == null ? 0 : 1;
   if (bt == null) return -1;
   return bt - at;

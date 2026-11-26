@@ -51,10 +51,10 @@ final class NoticeTests: XCTestCase {
 
     func testWordsTheBodyInThePhonesLanguageAndFallsBackToEnglish() throws {
         let asking = try XCTUnwrap(Notice(json: notice(room: room)))
-        XCTAssertEqual(asking.body(words: NoticeWords.forLanguages(["ko-KR"])), "질문 · Which branch? · contong")
-        XCTAssertEqual(asking.body(words: NoticeWords.forLanguages(["en-US"])), "Question · Which branch? · contong")
-        XCTAssertEqual(asking.body(words: NoticeWords.forLanguages(["fr-FR", "ko"])), "질문 · Which branch? · contong")
-        XCTAssertEqual(asking.body(words: NoticeWords.forLanguages(["fr-FR"])), "Question · Which branch? · contong")
+        XCTAssertEqual(asking.body(words: NoticeWords.forLanguages(["ko-KR"])), "확인할 것 · Which branch? · contong")
+        XCTAssertEqual(asking.body(words: NoticeWords.forLanguages(["en-US"])), "To check · Which branch? · contong")
+        XCTAssertEqual(asking.body(words: NoticeWords.forLanguages(["fr-FR", "ko"])), "확인할 것 · Which branch? · contong")
+        XCTAssertEqual(asking.body(words: NoticeWords.forLanguages(["fr-FR"])), "To check · Which branch? · contong")
         let letter = try XCTUnwrap(Notice(json: notice(room: room, extra: ["state": "letter_undelivered", "status_code": NSNull(), "detail": NSNull(), "place": "letter-7"])))
         XCTAssertEqual(letter.body(words: NoticeWords.forLanguages(["en"])), "Letter not delivered · letter-7")
     }
@@ -73,6 +73,6 @@ final class NoticeTests: XCTestCase {
     func testTheDemoSampleIsWordedAsARealQuestionIs() {
         let sample = Notice(sampleTitle: "Address review comments", statusCode: "question", state: "needs_you", detail: "Apply all 3 review comments?", place: "demo · fix/review")
         XCTAssertEqual(sample.title, "Address review comments")
-        XCTAssertEqual(sample.body(words: NoticeWords.forLanguages(["en"])), "Question · Apply all 3 review comments? · demo · fix/review")
+        XCTAssertEqual(sample.body(words: NoticeWords.forLanguages(["en"])), "To check · Apply all 3 review comments? · demo · fix/review")
     }
 }

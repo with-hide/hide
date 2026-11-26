@@ -9,7 +9,6 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{Value, json};
 
 use super::super::Runtime;
-use crate::agent_state::RowMark;
 use crate::coordination::{Command as AgentCommand, SPAWN_BUSY};
 use crate::delivery::{Actor, Command, HIDE_DESK_ROLE};
 use crate::desk::{MAX_QUEUE, QueuedJob, QueuedState};
@@ -1096,11 +1095,17 @@ impl Runtime {
         &self,
         shown: &[&crate::model::DeskJobSnapshot],
         index: &CardIndex<'_>,
+        moved: &[(String, String)],
     ) -> Vec<crate::model::DeskJobSnapshot> {
         use crate::model::DeskItem;
         let carded: HashSet<&str> = shown
             .iter()
             .filter_map(|card| card.pane_id.as_deref())
+            .collect();
+        // A gone pane whose session runs in another pane is that pane's card.
+        let moved: HashMap<&str, &str> = moved
+            .iter()
+            .map(|(pane, live)| (pane.as_str(), live.as_str()))
             .collect();
         let mut seen: HashSet<&str> = HashSet::new();
         let mut named = Vec::new();
@@ -1126,6 +1131,7 @@ impl Runtime {
                 _ => continue,
             };
             for pane in panes {
+                let pane = moved.get(pane).copied().unwrap_or(pane);
                 if carded.contains(pane) || !seen.insert(pane) {
                     continue;
                 }
@@ -1581,16 +1587,22 @@ impl Runtime {
         if marked || started {
             self.save_desk();
         }
+        // The gone chips' live panes, read once for every reader below.
+        let moved = self.desk_moved();
         let index = self.desk_card_index();
         let mut cards = self.desk_cards(&index);
         cards.truncate(MAX_CARDS);
         let workers = self.desk_workers(&cards, &index);
-        let named = self.desk_named(&cards.iter().chain(&workers).collect::<Vec<_>>(), &index);
-        let records = self.desk_records();
-        self.publish_desk_jobs(cards, workers, named, records);
+        let named = self.desk_named(
+            &cards.iter().chain(&workers).collect::<Vec<_>>(),
+            &index,
+            &moved,
+        );
+        let records = self.desk_records(&moved);
+        self.publish_desk_jobs(cards, workers, named, records, moved_snapshot(&moved));
         self.compose_desk_mentions();
-        if letters_read || self.desk_chips_moved() {
-            self.compose_desk();
+        if letters_read || self.desk_chips_moved(&moved) {
+            self.compose_desk_moved(Some(&moved));
         }
     }
 
@@ -1599,13 +1611,18 @@ impl Runtime {
         if self.desk.worker.is_none() {
             return;
         }
+        let moved = self.desk_moved();
         let index = self.desk_card_index();
         let mut jobs = self.desk_cards(&index);
         jobs.truncate(MAX_CARDS);
         let workers = self.desk_workers(&jobs, &index);
-        let named = self.desk_named(&jobs.iter().chain(&workers).collect::<Vec<_>>(), &index);
-        let records = self.desk_records();
-        self.publish_desk_jobs(jobs, workers, named, records);
+        let named = self.desk_named(
+            &jobs.iter().chain(&workers).collect::<Vec<_>>(),
+            &index,
+            &moved,
+        );
+        let records = self.desk_records(&moved);
+        self.publish_desk_jobs(jobs, workers, named, records, moved_snapshot(&moved));
     }
 
     /// The cards of the workers `jobs` conduct: each worker pane's spawn,
@@ -1656,12 +1673,14 @@ impl Runtime {
         workers: Vec<crate::model::DeskJobSnapshot>,
         named: Vec<crate::model::DeskJobSnapshot>,
         records: Vec<crate::model::DeskRecordSnapshot>,
+        moved: Vec<crate::model::DeskMovedSnapshot>,
     ) {
         if self.snapshot.desk_jobs.as_ref().is_some_and(|section| {
             section.jobs == jobs
                 && section.workers == workers
                 && section.named == named
                 && section.records == records
+                && section.moved == moved
         }) {
             return;
         }
@@ -1670,6 +1689,7 @@ impl Runtime {
             workers,
             named,
             records,
+            moved,
         }));
     }
 
@@ -1687,17 +1707,27 @@ impl Runtime {
 
     /// Fills the session chips of the newest conversation lines with each
     /// row's mark and agent as the sidebar draws them now; an older line's
-    /// chip shows none.
-    pub(super) fn desk_fill_chips(&self, items: &mut [crate::model::DeskItem]) {
+    /// chip shows none. `moved` is the refresh's pairs when it read them,
+    /// else they are read here once there is a chip to fill.
+    pub(super) fn desk_fill_chips(
+        &self,
+        items: &mut [crate::model::DeskItem],
+        moved: Option<&[(String, String)]>,
+    ) {
         use crate::model::DeskItem;
         let followed = || items.iter().rev().take(FOLLOWED_CHIPS);
         if !followed().any(has_chips) {
             return;
         }
-        let rows: HashMap<&str, &SidebarAgentSnapshot> = self
-            .agent_rows()
-            .map(|row| (row.pane_id.as_str(), row))
-            .collect();
+        let read;
+        let moved = match moved {
+            Some(moved) => moved,
+            None => {
+                read = self.desk_moved();
+                &read
+            }
+        };
+        let rows = self.desk_chip_rows(moved);
         for item in items.iter_mut().rev().take(FOLLOWED_CHIPS) {
             match item {
                 DeskItem::Handed { pane_id, mark, .. } => {
@@ -1716,7 +1746,7 @@ impl Runtime {
     }
 
     /// Whether a chip the published conversation shows has another mark now.
-    fn desk_chips_moved(&self) -> bool {
+    fn desk_chips_moved(&self, moved: &[(String, String)]) -> bool {
         use crate::model::DeskItem;
         let Some(desk) = &self.snapshot.desk else {
             return false;
@@ -1725,11 +1755,8 @@ impl Runtime {
         if !followed().any(has_chips) {
             return false;
         }
-        let rows: HashMap<&str, RowMark> = self
-            .agent_rows()
-            .map(|row| (row.pane_id.as_str(), row.mark))
-            .collect();
-        let now = |pane: &str| rows.get(pane).copied();
+        let rows = self.desk_chip_rows(moved);
+        let now = |pane: &str| rows.get(pane).map(|row| row.mark);
         followed().any(|item| match item {
             DeskItem::Handed { pane_id, mark, .. } => now(pane_id) != *mark,
             DeskItem::Reply { mentions, .. } => {
@@ -1932,6 +1959,17 @@ impl Runtime {
         }
         false
     }
+}
+
+/// The gone chips' pairs as the `desk_jobs` section sends them.
+fn moved_snapshot(moved: &[(String, String)]) -> Vec<crate::model::DeskMovedSnapshot> {
+    moved
+        .iter()
+        .map(|(pane, live)| crate::model::DeskMovedSnapshot {
+            pane_id: pane.clone(),
+            live_pane_id: live.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
