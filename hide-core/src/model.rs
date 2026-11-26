@@ -12195,6 +12195,7 @@ mod wire_enum_tests {
             hide_session::thread::HideCall::View {
                 view: hide_session::thread::ViewKind::File,
                 target: String::new(),
+                view_id: None,
             },
             hide_session::thread::HideCall::Mission { mission: None },
         ];
