@@ -11,7 +11,7 @@ use crate::delivery::worker::Worker;
 use crate::delivery::{Actor, Command};
 use crate::handle::ChangeNotifier;
 use crate::runtime::access::AccessEvent;
-use crate::runtime::delivery::tests::{authority, fixture, set_live};
+use crate::runtime::delivery::tests::{authority, set_live};
 use crate::workspace_control::{DESK_CALLER, access_caller_id};
 use serde_json::{Value, json};
 
