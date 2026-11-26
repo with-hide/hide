@@ -205,11 +205,16 @@ export function SessionSleepingFoot({ title, sleep, state, onWake, onFresh }: { 
  * cannot resume, the one line the app gives why in its place.
  */
 export function SessionRecordFoot({ endedAt, resume, blocked }: { endedAt: number | null; resume: ReactNode; blocked: string | null }) {
+  const { t } = useInterfaceTranslation();
   const foot = useRef<HTMLDivElement>(null);
   useNoticeFloor(foot);
   return (
     <div ref={foot} className="flex min-w-0 shrink-0 items-center gap-xs border-t border-border px-md py-sm text-caption" data-desk-session-record-foot={blocked ? "blocked" : "resume"}>
-      {endedAt !== null ? <Elapsed since={endedAt} className="shrink-0 font-mono text-muted-foreground" /> : null}
+      {/* `끝남 · <time>`, as frame K 다 reads it; the time is the app's elapsed time. */}
+      <span className="flex shrink-0 items-center gap-xs text-muted-foreground" data-desk-session-record-ended="true">
+        {t("desk.job.done")}
+        {endedAt !== null ? <><span aria-hidden="true">·</span><Elapsed since={endedAt} className="font-mono" /></> : null}
+      </span>
       {blocked ? <span className="min-w-0 flex-1 text-right text-muted-foreground" data-desk-session-resume-blocked="true">{blocked}</span> : <span className="ml-auto flex shrink-0 items-center">{resume}</span>}
     </div>
   );

@@ -6,6 +6,9 @@ import { startReasonText } from "./startReason";
 import { agentFailure } from "./startDraft";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { resumeProvider } from "./linkPanel";
+import type { Actions } from "./actions";
+import type { TFunction } from "i18next";
 
 /** The sentence for a resume the core refused, by its kind. */
 function startRefusalKey(kind: string) {
@@ -15,6 +18,27 @@ function startRefusalKey(kind: string) {
 /** A resume in flight: the request it sent, then the core's refusal if it came. */
 type Resume = { request: string | null; failure: string | null; uncertain: boolean };
 type Send = (request: string, confirmOnly: boolean) => void;
+
+/** The session a resume continues, and the file its agent reads it from when Hide knows it. */
+export type ResumedSession = { device_id: string; agent: string; session_id: string; path: string | null };
+
+/**
+ * The one resume request every session line sends (B12): the session's own
+ * agent, id and file, in `checkout` on its own device; null when its agent
+ * cannot resume or no checkout takes it.
+ */
+export function resumeRequest(startAgent: Actions["startAgent"], session: ResumedSession, checkout: { path: string } | null, node: string): Send | null {
+  const provider = resumeProvider(session.agent);
+  if (!checkout || !provider) return null;
+  return (requestId, confirmOnly) => startAgent({ target: { checkoutPath: checkout.path }, deviceId: session.device_id === node ? undefined : session.device_id, provider, resumeSessionId: session.session_id, resumeSessionPath: session.path ?? undefined, requestId, confirmOnly });
+}
+
+/** What a resume that did not open says, in the words every session line uses; null while none failed. */
+export function resumeFailureText(resume: Resume, t: TFunction<"translation">): string | null {
+  if (resume.failure === null) return null;
+  if (resume.uncertain) return resume.failure;
+  return resume.failure ? t("links.resumeFailed", { reason: resume.failure }) : t("links.resumeFailedPlain");
+}
 
 /**
  * Follows one resume to its answer (B12, B14): a tab that opened moves the

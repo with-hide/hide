@@ -732,7 +732,7 @@ describe("Desk's room", () => {
     const record: DeskRecord = {
       pane_id: "w1:p9", session: { device_id: "local", agent: "codex", session_id: "s-9" }, agent_kind: "codex", title: "1.3.0 후보 빌드 만들기",
       started_at_unix_ms: 1, ended_at_unix_ms: 2, line: "후보 빌드를 만들어 서명까지 확인했어요", pull_requests: [{ number: 2930, state: "merged" }],
-      cwd: "/gone/worktree", path: "/home/.codex/sessions/s-9.jsonl", project: "/repo", thread: true,
+      cwd: "/gone/worktree", path: "/sessions/s-9.jsonl", project: "/repo", thread: true,
     };
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([{ kind: "user", id: 1, text: "@session(w1:p9 agent-9) @session(w1:p8 agent-8) 어제 뭐 했어?", at_ms: 0, mentions: [built, lost] }]));
@@ -758,6 +758,34 @@ describe("Desk's room", () => {
     expect(document.body.querySelector("[data-desk-session-record-foot]")?.getAttribute("data-desk-session-record-foot")).toBe("blocked");
     expect(document.body.querySelector("[data-desk-session-resume-blocked]")?.textContent).toBe("The worktree was cleaned up, so this session can't resume");
     expect(document.body.querySelector("[data-desk-session-panel] [data-desk-composer-input]")).toBeNull();
+  });
+
+  // Expected answers are frame K 다 (`이어서 하기`, the record row's resume) and the room's rule that a session Desk opens stands beside it.
+  it("resumes a gone session from its record with the record's agent, session, file and checkout, and opens it beside Desk (frame K 다)", async () => {
+    const built = { kind: "session" as const, id: "w1:p9", name: "agent-9" };
+    const record: DeskRecord = {
+      pane_id: "w1:p9", session: { device_id: "local", agent: "codex", session_id: "s-9" }, agent_kind: "codex", title: "1.3.0 후보 빌드 만들기",
+      started_at_unix_ms: 1, ended_at_unix_ms: 2, line: null, pull_requests: [], cwd: "/work/repo-fix", path: "/sessions/s-9.jsonl", project: "/work/repo-fix", thread: true,
+    };
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([{ kind: "user", id: 1, text: "@session(w1:p9 agent-9) 어제 뭐 했어?", at_ms: 0, mentions: [built] }]));
+    // The checkout the session ran in is still there, so the record row's rule lets it resume.
+    const navigator = rest.navigator!;
+    const kept = { ...rest, navigator: { ...navigator, workspaces: navigator.workspaces!.map((workspace) => ({ ...workspace, checkouts: workspace.checkouts.map((checkout) => ({ ...checkout, exists: true })) })) } } as SnapshotRest;
+    await act(async () => useShellStore.setState({ rest: kept, deskJobs: { jobs: [], workers: [], named: [], records: [record] } }));
+    await press(`[data-desk-session-chip="${record.title}"]`);
+    const foot = document.body.querySelector("[data-desk-session-record-foot]");
+    expect(foot?.getAttribute("data-desk-session-record-foot")).toBe("resume");
+    expect(foot?.querySelector("[data-desk-session-record-ended]")?.textContent).toContain("Done");
+    await press("[data-desk-session-record-foot] button");
+    const starts = sent("agent_start_in_checkout") as { request_id: string }[];
+    expect(starts).toEqual([expect.objectContaining({ checkout_path: "/work/repo-fix", provider: "codex", resume_session_id: "s-9", resume_session_path: "/sessions/s-9.jsonl" })]);
+    expect(starts[0]).not.toHaveProperty("device_id");
+    const operation = { id: 7, kind: "agent_start" as const, phase: "ready" as const, repository_root: "/work/repo-fix", branch: null, base_branch: null, path: "/work/repo-fix", pane_id: "w1:p20", agent_kind: "codex", failure: null, agent_phase: "started", agent_reason: null, agent_line: null, request_id: starts[0]!.request_id };
+    await act(async () => useShellStore.setState({ rest: { ...kept, task_operation: operation } as unknown as SnapshotRest }));
+    expect(useUiStore.getState().screen?.kind).toBe("desk");
+    expect(useUiStore.getState().deskRoom.session).toBe("w1:p20");
+    expect(useUiStore.getState().focusWhenListed).toBeNull();
   });
 
   it("opens beside Desk the session a turn starts, as soon as its pane is there (frame J, 가-2)", async () => {

@@ -22,8 +22,8 @@ import { ThreadPanel } from "./components/desk/thread-panel";
 import { SessionChipProvider, type SessionChipSource } from "./components/desk/session-chip";
 import { SessionAskCard, SessionHead, SessionRecordFoot, SessionSleepingFoot } from "./components/desk/desk-session";
 import { LineButton } from "./LinkSessions";
-import { resumeBlock, resumeCheckout, resumeProvider } from "./linkPanel";
-import { useSessionResume } from "./useSessionResume";
+import { resumeBlock, resumeCheckout } from "./linkPanel";
+import { resumeFailureText, resumeRequest, useSessionResume } from "./useSessionResume";
 import { OutputShelf } from "./components/desk/output-shelf";
 import { rowPulls } from "./prMark";
 import { useElapsed } from "./components/elapsed";
@@ -595,7 +595,7 @@ const NO_WIDTHS = { view_width: null, session_width: null };
  */
 function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: string; actions: Actions; deskActions: Actions; room: RoomActions }) {
   const listed = useShellStore((s) => agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(paneId));
-  const record = useShellStore((s) => (listed ? null : (s.deskJobs?.records.find((one) => one.pane_id === paneId) ?? null)));
+  const record = useShellStore((s) => (listed ? null : ((s.deskJobs?.records ?? []).find((one) => one.pane_id === paneId) ?? null)));
   if (record) return <DeskRecordPanel record={record} actions={actions} deskActions={deskActions} room={room} />;
   return <DeskLivePanel paneId={paneId} actions={actions} deskActions={deskActions} room={room} />;
 }
@@ -619,19 +619,19 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
   const device = record.session.device_id;
   // Only another device is named: this machine goes without saying (Doop H 다).
   const machine = device !== node ? machineName(devices, device, t) : null;
-  // Where it resumes and why it cannot, as the session record row decides it (`linkPanel.ts`); the record does not say
-  // whether its file is still there, so the resume's own answer does.
+  // Where it resumes and why it cannot, as the session record screen decides it (`SessionRecord.tsx`, `linkPanel.ts`).
   const checkout = resumeCheckout({ device_id: device, cwd: record.cwd }, catalogOf(workspaces, remote), null, node);
-  const blocked = resumeBlock({ agent: record.session.agent, file: "unknown", device_id: device }, checkout, devices, node);
+  const live = useShellStore((s) => s.connection === "live");
+  const blocked = resumeBlock({ agent: record.session.agent, file: record.path ? "present" : "missing", device_id: device }, checkout, devices, node);
+  const reason = blocked ? t(blocked.key, "device" in blocked ? { device: blocked.device } : {}) : !live ? t("devices.rail.notConnected") : null;
   // The resumed session opens beside Desk, as any session Desk opens does, not in its own tab.
   const { resume, start } = useSessionResume((pane) => actions.openDeskSession(pane));
   const resumeNow = () => {
-    const provider = resumeProvider(record.session.agent);
-    if (!checkout || !provider) return;
-    start((requestId, confirmOnly) => actions.startAgent({ target: { checkoutPath: checkout.path }, deviceId: device === node ? undefined : device, provider, resumeSessionId: record.session.session_id, resumeSessionPath: record.path ?? undefined, requestId, confirmOnly }));
+    const send = reason ? null : resumeRequest(actions.startAgent, { ...record.session, path: record.path }, checkout, node);
+    if (send) start(send);
   };
   const resuming = resume.request !== null && !resume.uncertain;
-  const failure = resume.failure !== null ? (resume.uncertain ? resume.failure : resume.failure ? t("links.resumeFailed", { reason: resume.failure }) : t("links.resumeFailedPlain")) : null;
+  const failure = resumeFailureText(resume, t);
   const button = (
     <>
       {failure ? <span role="alert" className="mr-xs min-w-0 break-words text-warning" data-desk-session-resume-failed="true">{failure}</span> : null}
@@ -665,7 +665,7 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
           onClose={() => actions.deskCloseSession()}
         />
       }
-      foot={<SessionRecordFoot endedAt={record.ended_at_unix_ms} resume={button} blocked={blocked ? t(blocked.key, "device" in blocked ? { device: blocked.device } : {}) : null} />}
+      foot={<SessionRecordFoot endedAt={record.ended_at_unix_ms} resume={button} blocked={reason} />}
       outputOf={(output) => output}
       onOutput={(output) => actions.deskOpen({ kind: "output", output })}
       onMission={room.mission}
