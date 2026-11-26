@@ -190,6 +190,26 @@ pub struct Resolved {
     pub url: String,
     pub source_url: String,
     pub load: u64,
+    /// A `file:` page's folder of its own files: the root of the checkout
+    /// that holds it (`BrowserRouteSource::checkout_path`), which the desktop
+    /// host confines a local page's requests to and reads a route's
+    /// addresses against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+}
+
+impl Resolved {
+    /// The answer for `source` loaded from `url`, this machine's own address
+    /// or a route's.
+    fn of(source: &BrowserRouteSource, url: String) -> Self {
+        Self {
+            url,
+            source_url: source.url.clone(),
+            load: source.load,
+            root: hide_platform::path::is_file_url(&source.url)
+                .then(|| source.checkout_path.clone()),
+        }
+    }
 }
 
 pub struct BrowserRoutes {
@@ -231,11 +251,7 @@ impl BrowserRoutes {
         .map_err(|_| "core_unavailable")??
         .ok_or("view_unavailable")?;
         if self.pages.own_node() == key.device {
-            return Ok(Resolved {
-                url: source.url.clone(),
-                source_url: source.url,
-                load,
-            });
+            return Ok(Resolved::of(&source, source.url.clone()));
         }
         let mut routes = self.routes.lock().await;
         if let Some(entry) = routes.get(&key)
@@ -245,11 +261,7 @@ impl BrowserRoutes {
         {
             match entry {
                 RouteEntry::Ready(route) => {
-                    return Ok(Resolved {
-                        url: route.url.clone(),
-                        source_url: source.url,
-                        load,
-                    });
+                    return Ok(Resolved::of(&source, route.url.clone()));
                 }
                 RouteEntry::Pending { result, .. } => {
                     let waiting = result.subscribe();
@@ -434,11 +446,7 @@ impl BrowserRoutes {
         }
         let outcome = match (current, built) {
             (true, Ok(Some(route))) => {
-                let resolved = Resolved {
-                    url: route.url.clone(),
-                    source_url: source.url.clone(),
-                    load: source.load,
-                };
+                let resolved = Resolved::of(&source, route.url.clone());
                 routes.insert(key, RouteEntry::Ready(route));
                 eprintln!(
                     "{}",
@@ -448,11 +456,7 @@ impl BrowserRoutes {
             }
             (true, Ok(None)) => {
                 routes.remove(&key);
-                Ok(Resolved {
-                    url: source.url.clone(),
-                    source_url: source.url,
-                    load: source.load,
-                })
+                Ok(Resolved::of(&source, source.url.clone()))
             }
             (false, Ok(Some(route))) => {
                 routes.remove(&key);
@@ -757,9 +761,11 @@ async fn serve_file(State(route): State<FileRoute>, uri: Uri) -> Response {
         let mut bytes = Vec::new();
         let mut stamp = None;
         loop {
+            // The page's own checkout, which holds its file even when
+            // another checkout's Workspace shows it.
             let range = node_access::read_bytes(
                 channel.as_ref(),
-                &key.checkout,
+                &source.checkout_path,
                 &decoded,
                 bytes.len() as u64,
                 hide_host::bytes::MAX_RANGE,

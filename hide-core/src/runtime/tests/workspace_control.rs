@@ -1429,6 +1429,7 @@ fn browser_file_source_is_confined_to_the_calling_checkout() {
         .unwrap();
     let elsewhere = crate::workspace_control::ActionSource::browser(
         root,
+        (expected.workspace_id.clone(), expected.checkout_id.clone()),
         channel,
         hide_platform::path::to_wire_lossy(&outside),
         false,
@@ -1464,6 +1465,121 @@ fn browser_file_source_is_confined_to_the_calling_checkout() {
             )
             .is_ok()
     );
+}
+
+/// An agent's open of a file or a page of another checkout of its device is
+/// read from that checkout, as a terminal link the operator presses is, and
+/// its View lands with the caller: the file stays that checkout's document,
+/// the page loads its own files from there, and that checkout shows no View
+/// of it. A diff stays the caller's own.
+#[test]
+fn an_open_of_another_checkouts_file_reads_there_and_lands_with_the_caller() {
+    let (mut runtime, dir) = caller_fixture();
+    let mut roots = Vec::new();
+    for (index, name) in ["a", "b"].into_iter().enumerate() {
+        let folder = dir.path().join(name);
+        std::fs::create_dir(&folder).unwrap();
+        let wire = hide_platform::path::to_wire_lossy(&folder);
+        runtime.snapshot.navigator.workspaces[index].path = wire.clone();
+        runtime.snapshot.navigator.workspaces[index].checkouts[0].path = wire.clone();
+        roots.push((folder, wire));
+    }
+    let [(a, a_wire), (_, b_wire)] = <[_; 2]>::try_from(roots).unwrap();
+    let expected = runtime
+        .workspace_control_query(crate::node::TEST_NODE, "pane-b", Query::Info)
+        .unwrap()
+        .context;
+    let report = a.join("report.md");
+    std::fs::write(&report, "# Report\n").unwrap();
+    let page = a.join("page.html");
+    std::fs::write(&page, "<title>Page</title>").unwrap();
+    let open = |runtime: &mut Runtime,
+                suffix: &str,
+                action: Action|
+     -> Result<
+        crate::workspace_control::ActionResult,
+        crate::workspace_control::Refusal,
+    > {
+        let id = action_id(suffix);
+        let material = match runtime.workspace_control_prepare_action(
+            crate::node::TEST_NODE,
+            "pane-b",
+            &expected,
+            &id,
+            &action,
+        )? {
+            ActionPreparation::Read(source) => Some(source.read()?),
+            ActionPreparation::Ready => None,
+            ActionPreparation::Cached(_) => panic!("a new request has no receipt"),
+        };
+        runtime.workspace_control_action(
+            crate::node::TEST_NODE,
+            "pane-b",
+            &expected,
+            &id,
+            action,
+            Ok(material),
+        )
+    };
+    let caller = (crate::node::TEST_NODE.to_owned(), b_wire);
+    let holder = (crate::node::TEST_NODE.to_owned(), a_wire);
+
+    let report_wire = hide_platform::path::to_wire_lossy(&report);
+    let file = open(
+        &mut runtime,
+        "file",
+        Action::OpenFile {
+            path: report_wire.clone(),
+        },
+    )
+    .unwrap();
+    let tab = runtime
+        .snapshot
+        .editor
+        .tabs
+        .iter()
+        .find(|tab| tab.path == report_wire)
+        .expect("the file's tab");
+    assert_eq!(
+        (tab.workspace_id.as_str(), tab.checkout_id.as_str()),
+        ("workspace-a", "checkout-a")
+    );
+    assert!(
+        runtime
+            .view_displays(&caller)
+            .any(|view| view.id == file.view_id)
+    );
+
+    let url = file_address(&page);
+    let shown = open(
+        &mut runtime,
+        "page",
+        Action::OpenBrowser {
+            url: url.clone(),
+            area_id: None,
+            new_target: false,
+        },
+    )
+    .unwrap();
+    assert!(
+        runtime
+            .view_displays(&caller)
+            .any(|view| view.id == shown.view_id && view.url.as_deref() == Some(url.as_str()))
+    );
+    assert_eq!(runtime.view_displays(&holder).count(), 0);
+    // The page reads its own files from the checkout that holds it.
+    let route = runtime
+        .browser_route_source(
+            crate::node::TEST_NODE,
+            &caller.1,
+            &shown.view_id,
+            shown.load.unwrap(),
+        )
+        .expect("the page's route");
+    assert_eq!(route.checkout_path, holder.1);
+
+    let diff = open(&mut runtime, "diff", Action::OpenDiff { path: report_wire });
+    assert_eq!(diff.err().unwrap().reason, "path_outside_checkout");
 }
 
 #[test]

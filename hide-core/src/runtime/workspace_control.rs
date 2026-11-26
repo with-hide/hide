@@ -181,10 +181,18 @@ impl Runtime {
         let display = self.view_displays(&key).find(|display| {
             display.id == view_id && display.kind == DisplayKind::Browser && display.load == load
         })?;
+        let url = display.url.clone()?;
+        // A local page's own files come from the checkout that holds it,
+        // which an agent's open or a terminal link may have shown in another
+        // checkout's Workspace.
+        let root = hide_platform::path::from_file_url(&url).map_or_else(
+            || checkout_path.to_owned(),
+            |(path, _)| self.display_source_key(&key, &path).1,
+        );
         Some(BrowserRouteSource {
             device_id: device_id.to_owned(),
-            checkout_path: checkout_path.to_owned(),
-            url: display.url.clone()?,
+            checkout_path: root,
+            url,
             load,
         })
     }
@@ -326,18 +334,19 @@ impl Runtime {
                     next_action: "Use a local file URL with an absolute path",
                 })?;
                 let local = context.device_id == self.node.as_str();
-                let (root, channel) = self
-                    .document_source(&context.workspace_id, &context.checkout_id)
-                    .map_err(|_| Refusal {
-                        reason: "host_unavailable",
-                        next_action: if local {
-                            CHECKOUT_FOLDER_GONE
-                        } else {
-                            "Reconnect the device and retry"
-                        },
-                    })?;
+                let checkout = self.open_source(&key, &context, &path);
+                let (root, channel) =
+                    self.document_source(&checkout.0, &checkout.1)
+                        .map_err(|_| Refusal {
+                            reason: "host_unavailable",
+                            next_action: if local {
+                                CHECKOUT_FOLDER_GONE
+                            } else {
+                                "Reconnect the device and retry"
+                            },
+                        })?;
                 return Ok(ActionPreparation::Read(ActionSource::browser(
-                    root, channel, path, local,
+                    root, checkout, channel, path, local,
                 )));
             }
             return Ok(ActionPreparation::Ready);
@@ -360,10 +369,19 @@ impl Runtime {
                 next_action: "Resolve the path from the caller's cwd and retry",
             });
         }
+        // A file of another checkout of the caller's device is read from
+        // that checkout and stays its document, as a terminal link the
+        // operator presses opens it (`open_file_in_front_view`); only the
+        // View is the caller's. A diff is the caller's checkout's change.
+        let checkout = if file {
+            self.open_source(&key, &context, path)
+        } else {
+            (context.workspace_id.clone(), context.checkout_id.clone())
+        };
         let already_open = file
             && self.snapshot.editor.tabs.iter().any(|tab| {
-                tab.workspace_id == context.workspace_id
-                    && tab.checkout_id == context.checkout_id
+                tab.workspace_id == checkout.0
+                    && tab.checkout_id == checkout.1
                     && tab.path == *path
                     && tab.kind == crate::model::EditorTabKind::File
                     && tab.unavailable_reason.is_none()
@@ -372,7 +390,7 @@ impl Runtime {
         // On this machine the read can only fail on the checkout's folder,
         // gone from where Hide opened it, as after a rename (#2624).
         let (root, channel) = self
-            .document_source(&context.workspace_id, &context.checkout_id)
+            .document_source(&checkout.0, &checkout.1)
             .map_err(|_| Refusal {
                 reason: "host_unavailable",
                 next_action: if local {
@@ -382,11 +400,25 @@ impl Runtime {
                 },
             })?;
         let source = if file {
-            ActionSource::file(root, channel, path.clone(), already_open, local)
+            ActionSource::file(root, checkout, channel, path.clone(), already_open, local)
         } else {
-            ActionSource::diff(root, channel, path.clone(), local)
+            ActionSource::diff(root, checkout, channel, path.clone(), local)
         };
         Ok(ActionPreparation::Read(source))
+    }
+
+    /// The checkout, by its catalog ids, a caller's open of `path` reads
+    /// from: the caller's own for a path under its root, else the checkout of
+    /// its device whose root holds the path (`display_source`), and the
+    /// caller's own again when none does, whose read then refuses it.
+    fn open_source(
+        &self,
+        key: &super::workspace_view::WorkspaceKey,
+        context: &Context,
+        path: &str,
+    ) -> (String, String) {
+        self.display_source(key, path)
+            .unwrap_or_else(|| (context.workspace_id.clone(), context.checkout_id.clone()))
     }
 
     pub fn workspace_control_action(
@@ -631,6 +663,15 @@ impl Runtime {
                 });
             };
             let path = &material.path;
+            let (workspace_id, checkout_id) = (&material.checkout.0, &material.checkout.1);
+            // The read let go of the lock, and the checkout that holds the
+            // file may have gone since; a tab for it would have no owner.
+            if self.catalog_checkout(workspace_id, checkout_id).is_none() {
+                return Err(Refusal {
+                    reason: "file_unavailable",
+                    next_action: "The checkout that holds the file is gone; open it from where it is now",
+                });
+            }
             let is_file = matches!(action, Action::OpenFile { .. });
             if !self.admit_view_open(
                 key,
@@ -657,8 +698,8 @@ impl Runtime {
                 .unwrap_or_default();
             let tab_id = if is_file {
                 let existing = self.snapshot.editor.tabs.iter().find(|tab| {
-                    tab.workspace_id == context.workspace_id
-                        && tab.checkout_id == context.checkout_id
+                    tab.workspace_id == *workspace_id
+                        && tab.checkout_id == *checkout_id
                         && tab.kind == crate::model::EditorTabKind::File
                         && tab.path == *path
                         && tab.unavailable_reason.is_none()
@@ -682,16 +723,15 @@ impl Runtime {
                             next_action: "Retry the command with the same request ID",
                         });
                     };
-                    let tab_id =
-                        self.new_file_tab_id(&context.workspace_id, &context.checkout_id, path);
+                    let tab_id = self.new_file_tab_id(workspace_id, checkout_id, path);
                     self.insert_file_tab(
                         super::editor::PreparedFileTab::Read {
                             tab_id: tab_id.clone(),
                             document: Box::new(document),
                             place,
                         },
-                        &context.workspace_id,
-                        &context.checkout_id,
+                        workspace_id,
+                        checkout_id,
                         path,
                         false,
                     )
@@ -701,16 +741,9 @@ impl Runtime {
                     })?
                 }
             } else {
-                let tab_id =
-                    Self::diff_tab_id(&context.workspace_id, &context.checkout_id, path, false);
+                let tab_id = Self::diff_tab_id(workspace_id, checkout_id, path, false);
                 if !self.snapshot.editor.tabs.iter().any(|tab| tab.id == tab_id) {
-                    self.insert_diff_tab(
-                        &context.workspace_id,
-                        &context.checkout_id,
-                        path,
-                        false,
-                        false,
-                    );
+                    self.insert_diff_tab(workspace_id, checkout_id, path, false, false);
                 }
                 tab_id
             };

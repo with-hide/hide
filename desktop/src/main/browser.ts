@@ -108,7 +108,7 @@ type Page = {
   /** Three finite guard categories bound diagnostic state and output even
    * when a renderer repeatedly attempts file requests or opens windows. */
   readonly fileRefusals: Set<FileRefusal>;
-  /** A local file page's checkout, resolved once: what its files may load from. */
+  /** A local file page's checkout, resolved once per route: what its files may load from. */
   checkoutRoot?: string | null;
   /**
    * An outside HTML file's grant (PRD outside-path-in-hide): the page loads
@@ -152,7 +152,12 @@ type CoreLoad = { readonly load: number; readonly at: number; native: boolean; c
 /** Names a local file page may have resolved at once; past it a name is resolved on every request. */
 const MAX_HOST_VERDICTS = 64;
 
-export type ResolvedPage = { url: string; source_url: string; load: number };
+/**
+ * A page's route: `root`, for a file page, is the checkout that holds its
+ * file, even when another checkout's Workspace shows it: a local page loads
+ * its files from there alone, and a route's addresses are read against it.
+ */
+export type ResolvedPage = { url: string; source_url: string; load: number; root?: string };
 
 /** Why a page closes: a CDP retirement, or `idle` for one unloaded past `IDLE_UNLOAD_MS` (retired as `evicted`). */
 type Closing = CdpRetirement["reason"] | "idle";
@@ -851,14 +856,15 @@ export class BrowserViews {
   }
 
   /**
-   * Whether `file` is in the page's checkout, symbolic links resolved, so a
-   * link out of it does not carry a read out; for an outside file, in its
-   * grant's folder while the grant lasts (D-03, B14).
+   * Whether `file` is in the page's checkout, the one that holds its file
+   * (`ResolvedPage.root`), symbolic links resolved, so a link out of it does
+   * not carry a read out; for an outside file, in its grant's folder while
+   * the grant lasts (D-03, B14).
    */
   private insideCheckout(page: Page, file: string): boolean {
     if (page.grant) return this.externals.inside(page.grant, file);
     if (page.checkoutRoot === undefined) {
-      const root = page.workspace.split("\u0000")[1];
+      const root = page.route?.root ?? page.workspace.split("\u0000")[1];
       try { page.checkoutRoot = root ? fs.realpathSync.native(root) : null; } catch { page.checkoutRoot = null; }
     }
     if (!page.checkoutRoot) return false;
@@ -907,6 +913,7 @@ export class BrowserViews {
       if (!loadable(route.url)) throw new Error("Resolved page address cannot be loaded");
       if (!page.grant && browserPartition(page.workspace, route.source_url, this.node) !== page.partition) throw new Error("Resolved page requires a different browser partition");
       page.route = route;
+      page.checkoutRoot = undefined;
       this.loadStage(page, owned, "browser.load_routed");
       owned.native = true;
       // The call's own promise settles with this load alone, where the page's
@@ -1291,9 +1298,10 @@ export class BrowserViews {
       if (address.origin !== local.origin) return raw;
       if (source.protocol === "file:") {
         const workspace = page.workspace.split("\u0000");
+        const root = route.root ?? (workspace.length === 2 ? workspace[1] : undefined);
         const prefix = `/${local.pathname.split("/")[1]}/`;
-        if (workspace.length !== 2 || !address.pathname.startsWith(prefix)) return raw;
-        return `${pathToFileURL(path.join(workspace[1]!, decodeURIComponent(address.pathname.slice(prefix.length)))).href}${address.search}${address.hash}`;
+        if (!root || !address.pathname.startsWith(prefix)) return raw;
+        return `${pathToFileURL(path.join(root, decodeURIComponent(address.pathname.slice(prefix.length)))).href}${address.search}${address.hash}`;
       }
       address.host = source.host;
       address.protocol = source.protocol;
