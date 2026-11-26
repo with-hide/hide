@@ -232,7 +232,7 @@ function WorkLine({ line, words, actions }: { line: ThreadLine; words: Words; ac
 /**
  * The agent's words as Desk's answers read (Doop E2): Markdown in the
  * answer's type, an `@name` as its session's chip, `복사` of the original
- * words on hover and on every code block. `lit` is the sentence of it a
+ * words always under it and on every code block. `lit` is the sentence of it a
  * question Hide found asks, lit for a moment after the question line brought
  * it into view (Doop N3 가).
  */
@@ -282,7 +282,7 @@ function UserLine({ line, handed, copy, actions }: { line: Extract<ThreadLine, {
       {handed ? <span className="text-micro text-muted-foreground" data-desk-thread-handed="true">{t("desk.thread.handedByDesk")}</span> : null}
       <SentAttachments files={sent.files} />
       {sent.words ? (
-        <CopyableMessage text={sent.words} copy={copy} align="end">
+        <CopyableMessage text={sent.words} copy={copy} own>
           <p data-desk-thread-bubble="true" className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]">{sent.words}</p>
         </CopyableMessage>
       ) : null}
