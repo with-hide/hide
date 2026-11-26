@@ -2012,7 +2012,7 @@ pub(crate) fn apply_with(
                     .ok_or("agent_unavailable")?,
                 ledger,
                 &RegistrationFacts::NONE,
-                caller.reader(),
+                caller.pane_reader(),
             ))
         }
         Mutation::Reserve { parent, command } => {

@@ -1196,7 +1196,7 @@ fn apply(
                 stored.last_engine = target.engine.clone();
                 stored.status_changed_at_unix_ms = target.status_changed_at_unix_ms;
             }
-            Ok(json!(stored.read_by(actor.reader())))
+            Ok(json!(stored.read_by(actor.pane_reader())))
         }
         Command::WatchStop { id } => {
             watch::stop(ledger, actor, id)?;
@@ -1220,7 +1220,7 @@ fn apply(
                     *expected_generation,
                     approval.as_deref()
                 )?
-                .read_by(actor.reader())
+                .read_by(actor.pane_reader())
             ))
         }
         Command::WatchList => Ok(json!(
@@ -1228,7 +1228,7 @@ fn apply(
                 .watches
                 .iter()
                 .filter(|watch| watch.parent.same_identity(actor))
-                .map(|watch| watch.read_by(actor.reader()))
+                .map(|watch| watch.read_by(actor.pane_reader()))
                 .collect::<Vec<_>>()
         )),
         // A tool event's ask carries the caller's own pane as its target,
@@ -1287,7 +1287,7 @@ fn apply(
                     .iter()
                     .find(|letter| letter.id == id)
                     .map_or(value.clone(), |letter| {
-                        json!(letter.read_by(actor.reader()))
+                        json!(letter.read_by(actor.pane_reader()))
                     }),
                 _ => value,
             }

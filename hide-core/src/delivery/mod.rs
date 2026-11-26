@@ -220,7 +220,7 @@ impl Actor {
     /// Who an answer to this actor names panes to: an agent of another core
     /// (`Actor::core`, whose machine is this core's node) reads them as this
     /// core's, any other caller from its own machine.
-    pub(crate) fn reader(&self) -> crate::address::Reader<'_> {
+    pub(crate) fn pane_reader(&self) -> crate::address::Reader<'_> {
         if self.core_address().is_some() {
             crate::address::Reader::Core(&self.device_id)
         } else {

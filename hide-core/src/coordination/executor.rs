@@ -158,7 +158,7 @@ fn show(client: &Client, actor: &Actor, key: &str) -> Result<Value, String> {
     let runtime = runtime.lock().map_err(|_| "delivery_unavailable")?;
     let shown = Shown::read(&runtime, actor, key)?;
     drop(runtime);
-    Ok(shown.answer(actor.reader()))
+    Ok(shown.answer(actor.pane_reader()))
 }
 
 /// What `hide agent show` found, with the facts it copied under the
@@ -285,7 +285,7 @@ fn incomplete_spawn(client: &Client, actor: &Actor, command: &Command, code: Str
     });
     match found {
         Some(spawn) => {
-            let spawn = spawn_ref(spawn, &ledger, &node, actor.reader());
+            let spawn = spawn_ref(spawn, &ledger, &node, actor.pane_reader());
             let mut detail = json!({"id": spawn.id, "pane": spawn.pane});
             if let Some(cause) = cause {
                 detail["cause"] = json!(cause);
@@ -809,7 +809,9 @@ pub(crate) fn run(
                     .iter()
                     .filter(|record| !record.actor.code_owned())
                     .filter(|record| !live || !record.ended)
-                    .map(|record| { super::agent_view(record, &ledger, &sleeping, actor.reader()) })
+                    .map(|record| {
+                        super::agent_view(record, &ledger, &sleeping, actor.pane_reader())
+                    })
                     .collect(),
             }))
         }
@@ -1569,7 +1571,7 @@ fn spawn(
                 .ok_or("child_unavailable")?,
             &ledger,
             &sleeping,
-            actor.reader(),
+            actor.pane_reader(),
         ));
     }
     // Everything the child needs happens on its own device; only the parent's
@@ -2330,7 +2332,7 @@ fn spawn(
                 .ok_or("child_unavailable")?,
             &ledger,
             &sleeping,
-            actor.reader(),
+            actor.pane_reader(),
         ))
     })();
     // Nothing after this creates anything, so a device that has gone quiet
