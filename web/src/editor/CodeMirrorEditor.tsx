@@ -31,10 +31,11 @@ import {
   lineNumbers,
   type ViewUpdate,
 } from "@codemirror/view";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { viewComments } from "./comments";
 import { fileModel, useLineComments } from "./useLineComments";
 import type { PatchComments } from "./PatchView";
+import type { CopyText } from "../components/human-turn-copy";
 import { useInterfaceTranslation } from "../i18n/client";
 import { explorerContext, localDeviceId, type EditorDocumentSnapshot } from "../snapshot";
 import { useShellStore } from "../store";
@@ -87,7 +88,7 @@ function applyText(view: EditorView, text: string): void {
 }
 
 // Live reads as a page and numbers no lines; the comment gutter stays beside the text.
-const liveExtensions = (live: boolean, files: LiveFiles): Extension => (live ? [markdownLive({ files }), liveTheme, liveDocumentTheme] : []);
+const liveExtensions = (live: boolean, files: LiveFiles, copy: CopyText): Extension => (live ? [markdownLive({ files, copy }), liveTheme, liveDocumentTheme] : []);
 const numberExtensions = (live: boolean): Extension => (live ? [] : [lineNumbers(), highlightActiveLineGutter()]);
 
 function readonlyExtensions(readonly: boolean): Extension {
@@ -174,6 +175,10 @@ export function CodeMirrorEditor({
     }),
     [],
   );
+  // A code block's `복사` writes to the clipboard of the screen the operator looks at.
+  const copyRef = useRef(comments.actions.copyText);
+  copyRef.current = comments.actions.copyText;
+  const copy = useCallback<CopyText>((text, what) => copyRef.current(text, what), []);
   const readonly = held || document.readonly_reason !== null || document.document_kind !== "text" && document.document_kind !== "markdown";
   // The pane belongs to Live mode's markdown only; source mode and every
   // other kind keep one buffer (D-11).
@@ -257,7 +262,7 @@ export function CodeMirrorEditor({
           save,
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
           languageConf.of([]),
-          liveConf.of(liveExtensions(live, files)),
+          liveConf.of(liveExtensions(live, files, copy)),
           listeners("body"),
         ],
       }),
@@ -408,7 +413,7 @@ export function CodeMirrorEditor({
   }, [scale]);
 
   useEffect(() => {
-    bodyView.current?.dispatch({ effects: [liveConf.reconfigure(liveExtensions(live, files)), numbersConf.reconfigure(numberExtensions(live))] });
+    bodyView.current?.dispatch({ effects: [liveConf.reconfigure(liveExtensions(live, files, copy)), numbersConf.reconfigure(numberExtensions(live))] });
   }, [live, files]);
 
   // A request is an increment: the counter survives a display switch, so only

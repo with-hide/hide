@@ -165,14 +165,32 @@ export const liveTheme = EditorView.theme({
   // The syntax colours stay with Source; a drawn heading reads in its line's colour.
   "& [class*='cm-md-heading-'] span": { color: "inherit" },
   "& .cm-line .cm-md-link": { color: "var(--file-blue)" },
-  "& .cm-line .cm-md-code-inline": {
-    fontFamily: "var(--font-mono)",
-    fontSize: "0.86em",
-    padding: "var(--spacing-xxs) var(--spacing-xs)",
-    borderRadius: "var(--radius-xs)",
-    backgroundColor: "var(--secondary)",
+  // Code inside a line draws with `INLINE_CODE` (components/code-block.tsx), the classes the phone uses.
+  // A fenced block is one box (Doop N 1 나), drawn across its lines with the tokens `CodeBlock` uses:
+  // the head row (`CodeBlockHead`) on the opening fence's line, then the code on the block's ground
+  // inside one hairline, with the room and the corners on the first and last code line, never a
+  // border per line.
+  ".cm-line.cm-md-code-head": {
+    padding: "0",
+    backgroundColor: "var(--code-block)",
+    borderInline: "var(--size-hairline) solid var(--hairline)",
+    borderTop: "var(--size-hairline) solid var(--hairline)",
+    borderStartStartRadius: "var(--radius-sm)",
+    borderStartEndRadius: "var(--radius-sm)",
   },
-  ".cm-md-code": { fontFamily: "var(--font-mono)", fontSize: "0.9em", lineHeight: "1.6", backgroundColor: "var(--secondary)" },
+  // The head row is the line's only content: the caret buffers the editor puts beside a widget would add a line box above and below it.
+  ".cm-md-code-head-row": { display: "block" },
+  ".cm-line.cm-md-code-head .cm-widgetBuffer": { display: "none" },
+  ".cm-line.cm-md-code": {
+    fontFamily: "var(--font-mono)",
+    fontSize: "calc(var(--code-scale) * 1em)",
+    lineHeight: "var(--code-leading)",
+    backgroundColor: "var(--code-block)",
+    paddingInline: "var(--spacing-md)",
+    borderInline: "var(--size-hairline) solid var(--hairline)",
+  },
+  ".cm-line.cm-md-code-first, .cm-line.cm-md-code-only": { paddingTop: "var(--spacing-sm)" },
+  ".cm-line.cm-md-code-last, .cm-line.cm-md-code-only": { borderBottom: "var(--size-hairline) solid var(--hairline)", borderEndStartRadius: "var(--radius-sm)", borderEndEndRadius: "var(--radius-sm)", paddingBottom: "var(--spacing-sm)" },
   ".cm-md-link": { textDecoration: "underline" },
   ".cm-md-hidden-line": { display: "none" },
   ".cm-md-quote": {
@@ -211,7 +229,7 @@ export const liveTheme = EditorView.theme({
   // inline code has outside a table.
   ".cm-md-table": { display: "block", padding: "var(--spacing-xs) 0", fontFamily: "var(--font-sans)", lineHeight: "1.5", whiteSpace: "normal" },
   ".cm-md-table a[href]": { color: "var(--file-blue)", textDecoration: "underline" },
-  ".cm-md-table code": { fontSize: "0.86em" },
+  ".cm-md-table code": { fontSize: "calc(var(--code-scale) * 1em)" },
   // A Mermaid diagram: centred in the column and never wider than it; it
   // takes no room until it is drawn, and one that is not shows its source as
   // a code block would.
@@ -224,8 +242,8 @@ export const liveTheme = EditorView.theme({
     padding: "var(--spacing-xs) var(--spacing-sm)",
     whiteSpace: "pre-wrap",
     fontFamily: "var(--font-mono)",
-    fontSize: "0.9em",
-    lineHeight: "1.6",
-    backgroundColor: "var(--secondary)",
+    fontSize: "calc(var(--code-scale) * 1em)",
+    lineHeight: "var(--code-leading)",
+    backgroundColor: "var(--code-block)",
   },
 });

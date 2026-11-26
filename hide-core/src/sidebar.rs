@@ -3525,6 +3525,7 @@ mod tests {
                 AskSubject::OpenAsk {
                     id: "m1".to_owned(),
                     line: "배포할까요?".to_owned(),
+                    quote: None,
                 },
             ),
             ("plan:s@1", AskSubject::PlanReview { steps: 3 }),

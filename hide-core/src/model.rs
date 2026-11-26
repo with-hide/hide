@@ -2013,9 +2013,15 @@ pub enum AskSubject {
     },
     /// A question the agent put to the operator that still waits, as Hide
     /// AI recorded it in the session's `나를 기다리는 것`: the record's id
-    /// for it, which 무시하기 names, and its words (docs/status-model.md, A
-    /// question still waiting).
-    OpenAsk { id: String, line: String },
+    /// for it, which 무시하기 names, its words, and the sentence of the
+    /// answer that asks it, none on one recorded before Hide kept it
+    /// (docs/status-model.md, A question still waiting).
+    OpenAsk {
+        id: String,
+        line: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quote: Option<String>,
+    },
 }
 
 /// The questions a row's session put to the operator that still wait, as
@@ -2056,6 +2062,11 @@ pub struct OpenAskSnapshot {
     pub id: String,
     pub text: String,
     pub at_unix_ms: u64,
+    /// The sentence of the agent's answer that asks it, which the thread's
+    /// question line shows and lights in the message it was asked in; none
+    /// on one recorded before Hide kept it, whose line shows `text`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
 }
 
 /// A person's turn a row's own agent declared, as the row carries it.
@@ -9770,6 +9781,7 @@ mod wire_enum_tests {
             AskSubject::OpenAsk {
                 id: "m1".into(),
                 line: "line".into(),
+                quote: None,
             },
         ];
         for variant in &subjects {

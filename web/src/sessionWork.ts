@@ -6,6 +6,10 @@ export const workKey = (session: WorkSession) => `${session.device_id}\0${sessio
 export function sessionOfAgent(agent: AgentRow): WorkSession | null {
   return agent.session_id ? { device_id: agent.device_id, agent: agent.agent_kind, session_id: agent.session_id } : null;
 }
+/** The session an agent's open questions are put away and brought back in: the one the core listed them for, else the agent's own, so a line put away is undone also once the core lists none. */
+export function askingSession(agent: AgentRow): WorkSession | null {
+  return agent.open_asks?.session ?? sessionOfAgent(agent);
+}
 export function recordTitle(record: Pick<SessionRecord, "title" | "manual_title" | "native_title" | "fallback_title">, summaries: boolean): string {
   return record.manual_title ?? (summaries ? record.title : record.native_title ?? record.fallback_title);
 }
