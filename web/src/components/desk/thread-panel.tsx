@@ -160,6 +160,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
         }}
         onTerminal={onTerminal}
         onReachTop={reachTop}
+        olderLeft={thread?.has_older ?? false}
         {...parts}
       />
     </FileDropZone>

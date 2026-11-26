@@ -1,8 +1,8 @@
 // A Markdown text as the words it shows, for a line-clamped preview that has
 // no room for the editor's Live view (PRD overview-lenses-issues B8): the
 // same parser the Markdown document uses drops the marks, and each line is
-// trimmed with the blank ones gone. And the one block of a Markdown text that
-// holds a sentence, which the thread's question line shows (Doop N 2).
+// trimmed with the blank ones gone. And where a question's sentence stands in
+// a message, which the thread's question line lights (Doop N3 가).
 
 import { GFM, parser } from "@lezer/markdown";
 
@@ -58,29 +58,16 @@ function quoteForm(text: string): { form: string; at: number[] } {
 }
 
 /**
- * The block of the Markdown `text` that holds the sentence `quote`, as Hide
- * AI's quote check finds it: the list item it stands in, else the paragraph
- * or other block between blank lines, as Markdown reads them. Null when the
- * sentence is not there or runs across blocks, so the caller shows the whole
- * text rather than a cut it guessed.
+ * Where the sentence `quote` stands in the Markdown `text`, read as Hide AI's
+ * quote check reads it, from its first character to its last; null when the
+ * text does not hold it. The question line lights that sentence in the
+ * message it was asked in (Doop N3 가).
  */
-export function markdownBlockHolding(text: string, quote: string): string | null {
+export function sentenceIn(text: string, quote: string): { from: number; to: number } | null {
   const sentence = quoteForm(quote).form;
   if (sentence === "") return null;
   const { form, at } = quoteForm(text);
   const found = form.indexOf(sentence);
   if (found < 0) return null;
-  const from = at[found]!;
-  const to = at[found + sentence.length - 1]! + 1;
-  let held = null as { from: number; to: number } | null;
-  markdown.parse(text).iterate({
-    enter: (node) => {
-      if (node.name === "Document") return undefined;
-      if (node.from > from || node.to < to) return false;
-      const block = node.name === "ListItem" || node.node.parent?.name === "Document";
-      if (block && (!held || node.to - node.from < held.to - held.from)) held = { from: node.from, to: node.to };
-      return undefined;
-    },
-  });
-  return held ? text.slice(held.from, held.to) : null;
+  return { from: at[found]!, to: at[found + sentence.length - 1]! + 1 };
 }

@@ -31,8 +31,8 @@ const noop = () => undefined;
 
 /** The questions Hide found in the asking scene's conversation, oldest first, as `open_asks` lists them. */
 const ASKS = [
-  { id: "ask-1", text: "라이트 캡처 6장을 모두 비교할까요?", at_unix_ms: Date.now() - 9 * 60_000 },
-  { id: "ask-2", text: "다크 모드도 찍을까요?", at_unix_ms: Date.now() - 2 * 60_000 },
+  { id: "ask-1", text: "라이트 캡처 6장을 모두 비교할지", at_unix_ms: Date.now() - 9 * 60_000, quote: "라이트 캡처 6장을 모두 비교할까요?" },
+  { id: "ask-2", text: "다크 모드도 찍을지", at_unix_ms: Date.now() - 2 * 60_000, quote: "다크 모드도 찍을까요?" },
 ];
 
 /** The answer the questions were asked in: code in a line, a one-line block and a block of several lines, one too long for the column (Doop N 1 가). */

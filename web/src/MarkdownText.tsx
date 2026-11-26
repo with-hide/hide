@@ -218,34 +218,56 @@ function codeBlocks(copy: CopyText | undefined): Extension {
 
 const NO_CHIPS: readonly MarkdownChip[] = [];
 
+/** A stretch of the text lit for a moment: the sentence a question line pressed (Doop N3 가). */
+export type MarkdownMark = { from: number; to: number };
+
+const LIT = Decoration.mark({ class: "rounded-xs bg-warning/20", attributes: { "data-markdown-lit": "true" } });
+
+function markDecorations(mark: MarkdownMark | null, length: number): Extension {
+  if (!mark || mark.from >= mark.to || mark.to > length) return [];
+  return EditorView.decorations.of(Decoration.set([LIT.range(mark.from, mark.to)]));
+}
+
 /**
  * `size="chat"` sets the text at Desk's conversation size; `chips` draws
  * tokens of the text as parts (keep the array stable between renders);
  * `copyCode` puts `복사` in every code block's head row (Doop E2, N 1 나),
- * a block in a quote or a list included, always in view. The text can be
+ * a block in a quote or a list included, always in view; `mark` lights a
+ * stretch of the text, by offsets into it. The text can be
  * selected and copied as a page's text is.
  */
-export function MarkdownText({ text, size = "body", chips = NO_CHIPS, copyCode }: { text: string; size?: "body" | "chat"; chips?: readonly MarkdownChip[]; copyCode?: CopyText }) {
+export function MarkdownText({ text, size = "body", chips = NO_CHIPS, copyCode, mark = null }: { text: string; size?: "body" | "chat"; chips?: readonly MarkdownChip[]; copyCode?: CopyText; mark?: MarkdownMark | null }) {
   const host = useRef<HTMLDivElement>(null);
+  // The lit stretch changes without drawing the text again.
+  const lit = useRef<{ view: EditorView; compartment: Compartment } | null>(null);
+  const markNow = useRef(mark);
+  markNow.current = mark;
   useEffect(() => {
     const parent = host.current;
     if (!parent) return;
     const language = new Compartment();
+    const marked = new Compartment();
     const view = new EditorView({
       parent,
       state: EditorState.create({
         doc: text,
-        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false, parts: chips.filter((chip) => !chip.at), copy: copyCode }), chipDecorations(text, chips), codeBlocks(copyCode), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
+        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false, parts: chips.filter((chip) => !chip.at), copy: copyCode }), chipDecorations(text, chips), codeBlocks(copyCode), marked.of(markDecorations(markNow.current, text.length)), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
       }),
     });
+    lit.current = { view, compartment: marked };
     let live = true;
     void languageLoader("markdown", "issue.md")?.().then((extension) => {
       if (live) view.dispatch({ effects: language.reconfigure(extension) });
     });
     return () => {
       live = false;
+      lit.current = null;
       view.destroy();
     };
   }, [text, size, chips, copyCode]);
+  useEffect(() => {
+    const now = lit.current;
+    now?.view.dispatch({ effects: now.compartment.reconfigure(markDecorations(mark, now.view.state.doc.length)) });
+  }, [mark]);
   return <div ref={host} className="min-w-0" data-markdown-text="true" />;
 }

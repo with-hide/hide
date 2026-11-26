@@ -9,6 +9,7 @@
 // own, which the threads node reads from the session record.
 
 import { candidateAgent } from "./conductorSettings";
+import { sentenceIn } from "./markdownPlain";
 import type { AgentRow, ConductorCandidate, DeskAgent, DeskAgentState, DeskAskKind, DeskItem, DeskOption, DeskOptionKind, DeskJob, DeskJobsSection, DeskRecord, DeskMention as WireMention, DeskMission, DeskMissionMention, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
 
 export type { DeskAgent, DeskAgentId, DeskRecord, DeskAgentState, DeskApprovalState, DeskChoice, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskMissionMention, DeskOption, DeskOptionKind, DeskOutput, DeskOutputKind, DeskPermission, DeskQueuedMessage, DeskSteps } from "./snapshot";
@@ -634,17 +635,41 @@ export function threadTurns(lines: readonly ThreadLine[]): ThreadTurn[] {
 /**
  * The answer a question Hide found at a turn's end was asked in (B4 question
  * 나): the last answer written no later than the question was found, which
- * the question line scrolls to and whose words its 본문 보기 shows (N 2). Hide
+ * the question line goes to for a question kept without its sentence. Hide
  * AI lists a question only when the sentence that asks it is in the turn's
  * own answer, so that answer is where it stands; null when no answer of the
  * lines read says when it was written that early.
  */
 export function askedIn(turns: readonly ThreadTurn[], atUnixMs: number): Extract<ThreadLine, { kind: "agent" }> | null {
-  let found: Extract<ThreadLine, { kind: "agent" }> | null = null;
-  for (const turn of turns) {
-    for (const line of turn.answer) {
-      if (line.atMs !== null && line.atMs <= atUnixMs && (!found || line.atMs >= (found.atMs ?? 0))) found = line;
-    }
+  return answersBy(turns, atUnixMs)[0] ?? null;
+}
+
+/** The answer lines written no later than `atUnixMs`, newest first, the later in the conversation first among lines of one time. */
+function answersBy(turns: readonly ThreadTurn[], atUnixMs: number): Extract<ThreadLine, { kind: "agent" }>[] {
+  return turns
+    .flatMap((turn) => turn.answer)
+    .filter((line) => line.atMs !== null && line.atMs <= atUnixMs)
+    .reverse()
+    .sort((a, b) => (b.atMs ?? 0) - (a.atMs ?? 0));
+}
+
+/**
+ * Where a question Hide found stands in the lines read (Doop N3 가): for one
+ * kept with the agent's own sentence, the newest answer line written by the
+ * time it was found that holds that sentence, and where in it; the core
+ * checked the sentence against the turn's answer messages together, so it can
+ * stand in an earlier message of the turn than the last. For one kept without
+ * its sentence, the answer `askedIn` gives, with no place in it. Null when no
+ * line read holds it.
+ */
+export function askedAt(turns: readonly ThreadTurn[], ask: { at_unix_ms: number; quote?: string }): { line: Extract<ThreadLine, { kind: "agent" }>; sentence: { from: number; to: number } | null } | null {
+  if (!ask.quote) {
+    const line = askedIn(turns, ask.at_unix_ms);
+    return line && { line, sentence: null };
   }
-  return found;
+  for (const line of answersBy(turns, ask.at_unix_ms)) {
+    const sentence = sentenceIn(line.text, ask.quote);
+    if (sentence) return { line, sentence };
+  }
+  return null;
 }

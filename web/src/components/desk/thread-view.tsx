@@ -3,11 +3,10 @@ import { pullLabel } from "../../codeHost";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithRef, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
-import { askedIn, namedMention, threadPhase, threadTurns } from "../../desk";
+import { askedAt, askedIn, namedMention, threadPhase, threadTurns } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
-import { MarkdownText, type MarkdownChip } from "../../MarkdownText";
-import { markdownBlockHolding } from "../../markdownPlain";
+import { MarkdownText, type MarkdownChip, type MarkdownMark } from "../../MarkdownText";
 import { CopyableMessage } from "../copy-words";
 import type { CopyText } from "../human-turn-copy";
 import type { AskLine } from "../open-asks";
@@ -218,7 +217,7 @@ function WorkLine({ line, words, actions }: { line: ThreadLine; words: Words; ac
     case "user":
       return null;
     case "agent":
-      return <AgentWords line={line} words={words} lit={false} live={false} />;
+      return <AgentWords line={line} words={words} lit={null} live={false} />;
     case "thought":
       return <p className="line-clamp-2 min-w-0 whitespace-pre-wrap text-caption text-muted-foreground" title={line.text} data-desk-thread-line="thought">{t("desk.thread.thought")} · {line.text}</p>;
     case "tool":
@@ -233,17 +232,17 @@ function WorkLine({ line, words, actions }: { line: ThreadLine; words: Words; ac
 /**
  * The agent's words as Desk's answers read (Doop E2): Markdown in the
  * answer's type, an `@name` as its session's chip, `복사` of the original
- * words on hover and on every code block. `lit` lights the message a
- * question Hide found was asked in, for a moment after the question line
- * brought it into view.
+ * words on hover and on every code block. `lit` is the sentence of it a
+ * question Hide found asks, lit for a moment after the question line brought
+ * it into view (Doop N3 가).
  */
-function AgentWords({ line, words, lit, live }: { line: Extract<ThreadLine, { kind: "agent" }>; words: Words; lit: boolean; live: boolean }) {
+function AgentWords({ line, words, lit, live }: { line: Extract<ThreadLine, { kind: "agent" }>; words: Words; lit: MarkdownMark | null; live: boolean }) {
   // The file paths it names become chips once the turn has said them (feedback 2 frame M [2]).
   const files = useFilePathChips(line.text, words.place, live, words.file);
   const chips = useMemo(() => (files.length ? [...words.chips, ...files] : words.chips), [words.chips, files]);
   return (
-    <CopyableMessage text={line.text} copy={words.copy} className={cn("-mx-xs rounded-md px-xs transition-colors", lit && "bg-open-ask/10 ring-1 ring-open-ask")} data-desk-thread-line="agent" data-desk-thread-message={line.id} data-desk-thread-lit={lit ? "true" : undefined}>
-      <MarkdownText text={line.text} size="chat" chips={chips} copyCode={words.copy} />
+    <CopyableMessage text={line.text} copy={words.copy} className="-mx-xs rounded-md px-xs" data-desk-thread-line="agent" data-desk-thread-message={line.id} data-desk-thread-lit={lit ? "true" : undefined}>
+      <MarkdownText text={line.text} size="chat" chips={chips} copyCode={words.copy} mark={lit} />
     </CopyableMessage>
   );
 }
@@ -298,7 +297,7 @@ function UserLine({ line, handed, copy, actions }: { line: Extract<ThreadLine, {
  * work open, along a rail. A part that leads somewhere (a new session, a
  * letter, an output, a mission, a PR) stays in view while the work is folded.
  */
-function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; live: boolean; handed: boolean; words: Words; lit: string | null; actions: ThreadPartActions }) {
+function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; live: boolean; handed: boolean; words: Words; lit: Lit | null; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
   const [toggled, setToggled] = useState(false);
   const open = live !== toggled;
@@ -325,7 +324,7 @@ function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; l
             ))}
         </ol>
       ) : null}
-      {turn.answer.map((line) => <AgentWords key={line.id} line={line} words={words} lit={lit === line.id} live={live} />)}
+      {turn.answer.map((line) => <AgentWords key={line.id} line={line} words={words} lit={lit?.id === line.id ? lit.sentence : null} live={live} />)}
       {!open && turn.parts.length ? <FoldedParts parts={turn.parts} actions={actions} /> : null}
     </li>
   );
@@ -394,8 +393,11 @@ function useThreadScroll(lines: readonly ThreadLine[], onReachTop?: () => void) 
   return { ref, onScroll };
 }
 
-/** How long the message a question was asked in stays lit after the question line brought it into view (Doop B4). */
+/** How long the sentence a question asks stays lit after the question line brought it into view (Doop N3 가). */
 const LIT_MS = 2_000;
+
+/** The message a pressed question went to, the sentence of it lit (none for a question kept without its sentence), and the question. */
+type Lit = { id: string; sentence: MarkdownMark | null; ask: string };
 
 /**
  * The thread's `@name`s as chips and its clipboard, kept stable while the
@@ -429,7 +431,7 @@ function useWords(mentions: readonly DeskMention[], onSession: ThreadPartActions
  * line. A session asleep with no card any more (its sleep closed its pane,
  * B43) keeps its record above the foot that wakes it.
  */
-export function ThreadView({ job, lines, reading = false, failure = null, mentions = NO_MENTIONS, startedByDesk = false, composer, ask = null, asks = NO_ASKS, onAsk, foot = null, workingSince = null, onTerminal, onReachTop, ...actions }: {
+export function ThreadView({ job, lines, reading = false, failure = null, mentions = NO_MENTIONS, startedByDesk = false, composer, ask = null, asks = NO_ASKS, onAsk, foot = null, workingSince = null, onTerminal, onReachTop, olderLeft = false, ...actions }: {
   job: DeskJob | null;
   /** When the session's running turn started (its row's last prompt), for the working line's time. */
   workingSince?: number | null;
@@ -454,6 +456,8 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   onTerminal?: () => void;
   /** The conversation was scrolled to its top: the page before it can be read. */
   onReachTop?: () => void;
+  /** The record holds pages before the ones read, which `onReachTop` reads. */
+  olderLeft?: boolean;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
   const scroller = useThreadScroll(lines, onReachTop);
@@ -462,34 +466,45 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   // The session's own folder and machine, where its relative paths are read.
   const place = useShellStore(useShallow((s) => (job?.pane_id ? answerPlace(s.rest, job.pane_id) : null)));
   const words = useWords(mentions, actions.onSession, actions.onCopy, place, actions.onFile);
-  // A press again on the same question lights it again for the whole time.
-  const [lit, setLit] = useState<{ id: string; press: number } | null>(null);
+  // A pressed question is looked for in the lines read, then in the pages before them, one page at a time, until its message is found or the record holds no more.
+  const [seek, setSeek] = useState<{ ask: AskLine; press: number } | null>(null);
+  const [lit, setLit] = useState<(Lit & { press: number }) | null>(null);
+  const [gone, setGone] = useState<string | null>(null);
+  const goTo = (ask: AskLine) => setSeek((now) => ({ ask, press: Math.max(now?.press ?? 0, lit?.press ?? 0) + 1 }));
   useEffect(() => {
-    if (lit === null) return undefined;
-    const timer = window.setTimeout(() => setLit(null), LIT_MS);
-    return () => window.clearTimeout(timer);
-  }, [lit]);
-  // A question goes to the answer it was asked in; one asked before every page read so far goes to the top, which reads the page before.
-  const goTo = (ask: AskLine) => {
-    const box = scroller.ref.current;
-    if (!box) return;
-    const id = askedIn(turns, ask.at_unix_ms)?.id ?? null;
-    const message = id === null ? null : box.querySelector<HTMLElement>(`[data-desk-thread-message="${CSS.escape(id)}"]`);
-    if (id === null || !message) {
-      box.scrollTo({ top: 0 });
+    if (!seek || reading) return;
+    const found = askedAt(turns, seek.ask);
+    if (found) {
+      setSeek(null);
+      setGone(null);
+      setLit({ id: found.line.id, sentence: found.sentence, ask: seek.ask.id, press: seek.press });
       return;
     }
-    message.scrollIntoView({ block: "center" });
-    setLit((now) => ({ id, press: (now?.press ?? 0) + 1 }));
-  };
-  // 본문 보기: the block of the answer a question was asked in that holds the sentence asking it, as the conversation draws it; the whole answer for a question kept without its sentence, or one the answer read here does not hold.
-  // `askedIn` gives the last answer line written by then, while the core checked the sentence against the turn's assistant messages together, so a sentence in an earlier message of that turn is not found here and the whole of the last one shows.
-  const askedWords = (ask: AskLine) => {
-    const answer = askedIn(turns, ask.at_unix_ms);
-    if (!answer) return null;
-    const text = (ask.quote ? markdownBlockHolding(answer.text, ask.quote) : null) ?? answer.text;
-    return <MarkdownText text={text} chips={words.chips} copyCode={words.copy} />;
-  };
+    if (olderLeft) {
+      // At the top, the page before reads in above, where the operator is taken to look.
+      const box = scroller.ref.current;
+      if (box) box.scrollTop = 0;
+      onReachTop?.();
+      return;
+    }
+    // Every page read: a sentence the lines no longer hold goes to the answer it was asked in, unlit; with none, the conversation holds the question no more (a new record, or one cut short).
+    setSeek(null);
+    const answer = askedIn(turns, seek.ask.at_unix_ms);
+    if (answer) setLit({ id: answer.id, sentence: null, ask: seek.ask.id, press: seek.press });
+    else setGone(seek.ask.id);
+  }, [seek, turns, reading, olderLeft, onReachTop, scroller.ref]);
+  useEffect(() => {
+    if (!lit) return undefined;
+    const message = scroller.ref.current?.querySelector<HTMLElement>(`[data-desk-thread-message="${CSS.escape(lit.id)}"]`);
+    message?.scrollIntoView({ block: "center" });
+    // The sentence is drawn lit a frame later, inside the message's own editor.
+    const frame = window.requestAnimationFrame(() => message?.querySelector("[data-markdown-lit]")?.scrollIntoView({ block: "center" }));
+    const timer = window.setTimeout(() => setLit(null), LIT_MS);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [lit, scroller.ref]);
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job?.id ?? ""}>
       <div ref={scroller.ref} onScroll={scroller.onScroll} data-desk-thread-conversation="true" className="flex min-h-0 min-w-0 flex-1 flex-col gap-md overflow-y-auto px-md py-md">
@@ -505,14 +520,14 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
           <p className="text-caption text-muted-foreground" data-desk-thread-empty="true">{t("desk.thread.empty")}</p>
         ) : (
           <ol className="flex min-w-0 flex-col gap-lg" data-desk-thread-lines={lines.length}>
-            {turns.map((turn, index) => <Turn key={turn.key} turn={turn} live={running && index === turns.length - 1} handed={startedByDesk && index === 0} words={words} lit={lit?.id ?? null} actions={actions} />)}
+            {turns.map((turn, index) => <Turn key={turn.key} turn={turn} live={running && index === turns.length - 1} handed={startedByDesk && index === 0} words={words} lit={lit} actions={actions} />)}
           </ol>
         )}
         {/* The working line Desk's conversation draws too (feedback 1 c3), until the turn ends or waits on the operator. */}
         {running && !reading && !failure ? <WorkingLine phase={threadPhase(turns.at(-1))} since={workingSince} /> : null}
         {ask}
       </div>
-      {onAsk ? <ThreadAsks asks={asks} onGo={goTo} onSet={onAsk} body={askedWords} /> : null}
+      {onAsk ? <ThreadAsks asks={asks} onGo={goTo} onSet={onAsk} lit={seek?.ask.id ?? lit?.ask ?? null} gone={gone} /> : null}
       {foot ?? (
         <div className="shrink-0 px-sm pb-sm">
           <DeskComposer
