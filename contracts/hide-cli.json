@@ -8521,6 +8521,7 @@
                 "mission_commit_required",
                 "mission_rerun_spent",
                 "mission_evidence_missing",
+                "mission_evidence_too_long",
                 "mission_summary_invalid",
                 "mission_checkout_unknown",
                 "mission_closed"
@@ -9805,7 +9806,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:33fd5fc38fc71ab9f3f5a21f258820c6fae39d4ffb450664dd53dc93872c4016",
+    "digest": "sha256:b91d796896fde54d487e23389683aaeec71991874f4a71876ca58cda8037095f",
     "envelopes": {
         "access": {
             "answer": "value",

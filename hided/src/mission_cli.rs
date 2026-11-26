@@ -469,9 +469,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                     .get("--evidence")
                     .filter(|evidence| !evidence.trim().is_empty())
                     .cloned()
-                    .ok_or_else(|| {
-                        "give --evidence with the one line the result rests on".to_owned()
-                    })?,
+                    .ok_or_else(|| "give --evidence with what the result rests on".to_owned())?,
                 summary: values.get("--summary").cloned(),
                 commit: values
                     .get("--commit")
