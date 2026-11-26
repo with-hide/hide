@@ -1,4 +1,8 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initializeInterfaceI18n } from "../../../web/src/i18n/instance";
 import { REGISTRY, type Command } from "../../../web/src/shortcuts";
@@ -53,6 +57,45 @@ describe("native browser load generations", () => {
     } finally {
       vi.clearAllTimers();
       vi.useRealTimers();
+    }
+  });
+});
+
+// A page of one checkout that another checkout's Workspace shows (an agent's
+// `hide browser open`, a terminal link) loads the files beside it from the
+// checkout that holds it, which its route names, and nothing of the
+// Workspace that shows it.
+describe("a local file page's own files", () => {
+  it("come from the checkout that holds the page, whichever Workspace shows it", async () => {
+    vi.useFakeTimers();
+    const holder = fs.mkdtempSync(path.join(os.tmpdir(), "hide-holder-"));
+    const shower = fs.mkdtempSync(path.join(os.tmpdir(), "hide-shower-"));
+    try {
+      fs.writeFileSync(path.join(holder, "page.html"), '<link rel="stylesheet" href="style.css">');
+      fs.writeFileSync(path.join(holder, "style.css"), "");
+      fs.writeFileSync(path.join(shower, "secret.css"), "");
+      const address = pathToFileURL(path.join(holder, "page.html")).href;
+      const resolve = vi.fn(async (): Promise<ResolvedPage> => ({ url: address, source_url: address, load: 1, root: holder }));
+      const subject = new BrowserViews({ event: vi.fn() } as unknown as HostLog, () => true, resolve, vi.fn(), vi.fn(), () => english, new ExternalFiles(vi.fn()));
+      const workspace = `local\u0000${shower}`;
+      const loadURL = vi.fn().mockResolvedValue(undefined);
+      // A root the page had resolved before its route named one is dropped.
+      const page = {
+        key: "page", workspace, id: "page", applied: 1, partition: browserPartition(workspace, address, null), route: null, checkoutRoot: null,
+        state: { url: address, loading: true, failure: null }, report: null, settled: new Set(), view: { webContents: { loadURL } },
+      };
+      (Reflect.get(subject, "pages") as Map<string, unknown>).set(page.key, page);
+      Reflect.get(subject, "load").call(subject, page, address);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(loadURL).toHaveBeenCalledExactlyOnceWith(address);
+      const inside = (file: string) => Reflect.get(subject, "insideCheckout").call(subject, page, file) as boolean;
+      expect(inside(path.join(holder, "style.css"))).toBe(true);
+      expect(inside(path.join(shower, "secret.css"))).toBe(false);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      fs.rmSync(holder, { recursive: true, force: true });
+      fs.rmSync(shower, { recursive: true, force: true });
     }
   });
 });
