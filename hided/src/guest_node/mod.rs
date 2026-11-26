@@ -288,6 +288,39 @@ pub fn run(dir: &str) -> ! {
     };
 
     let install_root = launch::runs_from_install_root(&dir, &program);
+    // A node that runs from its guest's install root keeps that
+    // installation's hook entries on this account, which its core asks for
+    // as it asks any device's kit (D-77 (4)); a copy anywhere else, a
+    // development build among them, installs nothing. On a helper's folder
+    // the installation is the helper's, kept as the helper kept it.
+    let kit = match (
+        &helper,
+        &install_root,
+        program.parent().and_then(Path::file_name),
+    ) {
+        // The host's own Hide keeps its installation on this account; this
+        // node keeps the entries of the build it runs, as a guest's does.
+        (Some(helper), _, Some(version)) if helper.placed && helper.panes.is_some() => {
+            match &helper.root {
+                Some(root) => KitPlace::Guest {
+                    root: root.clone(),
+                    version: version.to_string_lossy().into_owned(),
+                },
+                None => KitPlace::Standalone,
+            }
+        }
+        (Some(helper), _, _) if helper.placed => KitPlace::Installed,
+        (None, Some(root), Some(version)) => KitPlace::Guest {
+            root: root.clone(),
+            version: version.to_string_lossy().into_owned(),
+        },
+        _ => KitPlace::Standalone,
+    };
+    // The panes this node starts name the installation whose hook entries
+    // that kit writes, before its terminals read the name; a node that
+    // installs nothing names none. The panes a split left here already
+    // answer as the host's own installation, said above, and keep it.
+    hide_host::kit::adopt_kit(&kit, &program, &[]);
     let hub = Arc::new(tap::TapHub::default());
     let terminals = Arc::new(NodeTerminals::resident(
         Arc::clone(&hub) as Arc<dyn hide_node::terminal::OutputSink>,
@@ -401,34 +434,6 @@ pub fn run(dir: &str) -> ! {
             &hide_kit::layout::state_dir_from_process(&helper.home),
         ),
         None => hide_kit::layout::worktree_facts(&dir),
-    };
-    // A node that runs from its guest's install root keeps that
-    // installation's hook entries on this account, which its core asks for
-    // as it asks any device's kit (D-77 (4)); a copy anywhere else, a
-    // development build among them, installs nothing. On a helper's folder
-    // the installation is the helper's, kept as the helper kept it.
-    let kit = match (
-        &helper,
-        &install_root,
-        program.parent().and_then(Path::file_name),
-    ) {
-        // The host's own Hide keeps its installation on this account; this
-        // node keeps the entries of the build it runs, as a guest's does.
-        (Some(helper), _, Some(version)) if helper.placed && helper.panes.is_some() => {
-            match &helper.root {
-                Some(root) => KitPlace::Guest {
-                    root: root.clone(),
-                    version: version.to_string_lossy().into_owned(),
-                },
-                None => KitPlace::Standalone,
-            }
-        }
-        (Some(helper), _, _) if helper.placed => KitPlace::Installed,
-        (None, Some(root), Some(version)) => KitPlace::Guest {
-            root: root.clone(),
-            version: version.to_string_lossy().into_owned(),
-        },
-        _ => KitPlace::Standalone,
     };
     for stream in next {
         let session = life.begin(stream.shutdown_handle());

@@ -1730,19 +1730,12 @@ fn own_node(
     // The install kit's parts ship beside this binary: in the app bundle, or
     // in the build folder a login item, a core update or a move before 1.2.0
     // placed in one of this account's install roots, which the login item's
-    // core runs on a machine that may have no app. A daemon anywhere else, a
-    // development build among them, installs nothing (PRD device-parity
-    // D-19).
-    // A login item's copy of the app's build installs the app's kit, from
-    // the package it stands in for (`always_on::app_package`).
-    if let Some(package) = crate::always_on::app_package() {
-        node = node.with_kit(hide_host::serve::KitPlace::Bundled(package.to_path_buf()));
-    } else if let Ok(executable) = std::env::current_exe() {
-        node = node.with_kit(hide_host::serve::KitPlace::of_program(
-            &executable,
-            Some(&home),
-        ));
-    }
+    // core runs on a machine that may have no app; a login item's copy of
+    // the app's build installs the app's kit, from the package it stands in
+    // for. A daemon anywhere else, a development build among them, installs
+    // nothing (PRD device-parity D-19). The start decided it once, with the
+    // installation the panes name (`always_on::adopt_core_kit`).
+    node = node.with_kit(crate::always_on::core_kit());
     Ok(node)
 }
 

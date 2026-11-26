@@ -375,11 +375,70 @@ pub fn pane_install(executable: &Path) -> Option<PaneInstall> {
         });
     }
     let (root, _) = build_layout(executable)?;
-    Some(PaneInstall {
-        id: hide_kit::layout::install_of_root(&root),
-        cli: hide_kit::layout::cli_of_root(&root),
-        path_first: hide_kit::current::path_folder(&root),
-    })
+    Some(of_root(&root))
+}
+
+/// The installation of the install root `root`: its name, the `hide` its
+/// `current` leads to, and the folder a pane's `PATH` starts with.
+fn of_root(root: &Path) -> PaneInstall {
+    PaneInstall {
+        id: hide_kit::layout::install_of_root(root),
+        cli: hide_kit::layout::cli_of_root(root),
+        path_first: hide_kit::current::path_folder(root),
+    }
+}
+
+/// The installation the panes of a process whose kit is `place` name, for
+/// the program `executable` it runs: the one whose hook entries that kit
+/// writes, so a pane's hooks are always ones a Hide on the account keeps.
+/// A desktop package names the app; a build in an install root, a guest's
+/// build and a device's helper name their root's installation; a process
+/// that installs nothing names none, as a development build does, and the
+/// hooks of the account's other installations act in its panes
+/// (docs/agent-hooks.md, More than one Hide on an account).
+pub fn install_of_kit(place: &KitPlace, executable: &Path) -> Option<PaneInstall> {
+    match place {
+        KitPlace::Bundled(kit_dir) => Some(PaneInstall {
+            id: hide_agent_hooks::route::APP_INSTALL.to_owned(),
+            cli: kit_dir.join(if cfg!(windows) { "hide.exe" } else { "hide" }),
+            path_first: None,
+        }),
+        KitPlace::Build { root, .. } | KitPlace::Guest { root, .. } => Some(of_root(root)),
+        KitPlace::Installed => pane_install(executable),
+        KitPlace::Standalone => None,
+    }
+}
+
+/// What a process whose kit is `place` answers as ([`install_of_kit`]) and
+/// the other names it answers the panes of: `also`, and the name its
+/// program carries by its folder ([`pane_install`]) when that is another,
+/// which the panes an earlier start of the same program named still carry.
+pub fn naming(
+    place: &KitPlace,
+    executable: &Path,
+    also: &[String],
+) -> (Option<PaneInstall>, Vec<String>) {
+    let named = install_of_kit(place, executable);
+    let mut others = also.to_vec();
+    if let Some(own) = pane_install(executable)
+        && named.as_ref().map(|named| &named.id) != Some(&own.id)
+        && !others.contains(&own.id)
+    {
+        others.push(own.id);
+    }
+    (named, others)
+}
+
+/// Makes the panes this process starts name the installation its kit
+/// writes, and its answers take the panes of its other names ([`naming`]).
+/// Said once, before anything reads [`running_install`]: a process that
+/// already said what it answers as ([`answer_as`]) keeps it.
+pub fn adopt_kit(place: &KitPlace, executable: &Path, also: &[String]) {
+    let (named, others) = naming(place, executable, also);
+    answer_as(named);
+    if !others.is_empty() {
+        also_answer_for(others);
+    }
 }
 
 /// The installation this running program belongs to ([`pane_install`] of
@@ -812,7 +871,7 @@ mod tests {
     /// the machine: the app's package on each system (a macOS bundle, a
     /// Linux or Windows package's resources, a Windows build's runtime
     /// copy), or a whole build in one of the account's own install roots
-    /// (`a_placed_core_installs_the_hooks_of_the_installation_its_panes_carry`).
+    /// (`a_process_s_panes_name_the_installation_its_kit_writes_the_hooks_of`).
     /// A copy of a build anywhere else, a
     /// lone `hided` in a build folder, a development build, or a node with
     /// no home installs nothing into the account.
@@ -863,39 +922,70 @@ mod tests {
         }
     }
 
-    /// A core run from a whole build in either install root Hide places
-    /// builds in for the account, the device helper's (`~/.hide/host-helper`)
-    /// and a login item's core (`~/.hide/core`), installs its kit from that
-    /// root, under the installation name the panes it starts carry, so its
-    /// hooks act in them. On 2026-11-26 a Mac connected as a server ran its
-    /// core from `~/.hide/core`, installed no hooks, and no agent it started
-    /// ever reported its session.
+    /// A process's panes name the installation whose hook entries its kit
+    /// writes (`naming`, over `KitPlace::of_program`), so their hooks act
+    /// in them: the app's package names the app, a whole build in either
+    /// install root Hide places builds in for the account names that root,
+    /// and a program that installs nothing names none while it still
+    /// answers the panes an earlier start named by its folder, which
+    /// outlive a start. On 2026-11-26 a Mac connected as a server ran its
+    /// core from `~/.hide/core`, its panes named that root, its kit
+    /// installed nothing, and no agent it started ever reported its session.
     #[test]
-    fn a_placed_core_installs_the_hooks_of_the_installation_its_panes_carry() {
+    fn a_process_s_panes_name_the_installation_its_kit_writes_the_hooks_of() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         let whole = ["hided", "hide", "hide-agent-hooks"];
-        for root in [
-            hide_kit::layout::helper_root(&home),
-            hide_kit::layout::core_root(&home),
-        ] {
-            let program = programs(&root.join("0123456789abcdef"), &whole);
-            assert_eq!(
-                KitPlace::of_program(&program, Some(&home)),
-                KitPlace::Build {
-                    root: root.clone(),
-                    version: "0123456789abcdef".to_owned(),
-                },
-                "{}",
-                program.display()
-            );
-            assert_eq!(
-                pane_install(&program).map(|install| install.id),
-                Some(hide_kit::layout::install_of_root(&root)),
-                "{}",
-                program.display()
-            );
-        }
+        let helper_root = hide_kit::layout::helper_root(&home);
+        let core_root = hide_kit::layout::core_root(&home);
+        let downloads = dir.path().join("Downloads");
+        let in_helper_root = programs(&helper_root.join("0123456789abcdef"), &whole);
+        let in_core_root = programs(&core_root.join("0123456789abcdef"), &whole);
+        let lone_in_core_root = programs(&core_root.join("fedcba9876543210"), &["hided"]);
+        let stray = programs(&downloads.join("0123456789abcdef"), &whole);
+        let bundle = Path::new("/Applications/hide.app/Contents/Resources/hided");
+        let named = |place: &KitPlace, program: &Path, also: &[String]| {
+            let (named, others) = naming(place, program, also);
+            (named.map(|install| install.id), others)
+        };
+        let of_program = |program: &Path| KitPlace::of_program(program, Some(&home));
+        let root = |root: &Path| format!("root:{}", root.display());
+        let none: Vec<String> = Vec::new();
+
+        assert_eq!(
+            named(&of_program(bundle), bundle, &[]),
+            (Some("app".to_owned()), none.clone())
+        );
+        assert_eq!(
+            named(&of_program(&in_helper_root), &in_helper_root, &[]),
+            (Some(root(&helper_root)), none.clone())
+        );
+        assert_eq!(
+            named(&of_program(&in_core_root), &in_core_root, &[]),
+            (Some(root(&core_root)), none.clone())
+        );
+        assert_eq!(
+            named(&of_program(&lone_in_core_root), &lone_in_core_root, &[]),
+            (None, vec![root(&core_root)])
+        );
+        assert_eq!(
+            named(&of_program(&stray), &stray, &[]),
+            (None, vec![root(&downloads)])
+        );
+        // A login item's copy of the app's build installs the app's kit and
+        // answers as the app, and still for the panes of its own root.
+        let package = PathBuf::from("/Applications/hide.app/Contents/Resources");
+        assert_eq!(
+            named(
+                &KitPlace::Bundled(package),
+                &in_core_root,
+                &["app".to_owned()]
+            ),
+            (
+                Some("app".to_owned()),
+                vec!["app".to_owned(), root(&core_root)]
+            )
+        );
     }
 
     /// A moved core's pass installs from the build it runs and keeps the

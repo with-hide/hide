@@ -1437,7 +1437,7 @@ The kit folder is a path that survives a rebuild: the installed app bundle's `Co
 
 A `hided` outside a desktop package and outside a build Hide placed in one of the account's install roots installs nothing, and This machine's row in Settings says the packaged app is where the kit comes from.
 `hide_kit::bundled_kit_dir` decides the package from the layout: macOS `*.app/Contents/Resources`, or Windows/Linux `resources` with `app.asar` inside and Electron `hide[.exe]` in its parent folder; a build is `~/.hide/core/<16 hex>/` or `~/.hide/host-helper/<16 hex>/` in the account's own home (`hide_kit::layout::placed_roots`), holding `hide` and `hide-agent-hooks` beside `hided`: the folder a login item's core runs from and a core update makes, or the one a core move before 1.2.0 made (`KitPlace::of_program`, held by `a_core_installs_from_its_package_or_a_placed_build_and_never_from_another_copy`).
-Its hook entries carry that root's installation name, the one its panes carry, so they act in the panes that core starts (`a_placed_core_installs_the_hooks_of_the_installation_its_panes_carry`).
+Its hook entries carry that root's installation name, and the panes that core starts carry the same name, taken from the same kit place (`a_process_s_panes_name_the_installation_its_kit_writes_the_hooks_of`, [More than one Hide on an account](#more-than-one-hide-on-an-account)).
 A folder merely named `resources` grants no install authority.
 The rule exists because a hook command outlives the process that wrote it.
 It is a path stored in the operator's own configuration file and run by every future session of that agent, so the only path worth writing is one that survives a rebuild.
@@ -1468,7 +1468,7 @@ Install and remove are deliberately not CLI subcommands: writing to the operator
 
 ### More than one Hide on an account
 
-An account can hold more than one Hide installation: the desktop app, one per account and named `app`, and a device helper another machine's Hide put under a helper root, or a build Hide placed there, named `root:<helper root>` (`hide_agent_hooks::route::install_of_root`).
+An account can hold more than one Hide installation: the desktop app, one per account and named `app`; a device helper another machine's Hide put under a helper root, or a build Hide placed there, named `root:<helper root>` (`hide_agent_hooks::route::install_of_root`); and a login item's core run from `~/.hide/core` with no app, as on a machine connected as a server, named `root:<home>/.hide/core`.
 Each installation's kit writes its own entries and acts only in its own panes, so a Windows PC that runs Hide and is also a Mac's device keeps both sets of agents reporting.
 Every entry carries its installation (`--install-b64`), and OpenCode's, Pi's and omp's plugin files carry it in their names: the app's keep the names earlier builds wrote, and another installation's add a 16-hex mark (`route::mark`).
 A pass judges, installs and takes out only its own entries: those that name its installation, those an earlier build wrote without naming one, which read as an older version and are replaced, and those whose helper is gone.
@@ -1482,6 +1482,7 @@ That start is what a guest costs every other agent's event on its host, and `hid
 Codex trusts an exact command, so each installation's pass trusts its own entries.
 
 A pane holder's pane names the installation that started it (`HIDE_INSTALL`) and that installation's own `hide` (`HIDE_INSTALL_CLI`, the `hide` in its `current` for a helper root, which a Windows device pane also finds first on its `PATH`).
+The name comes from the kit place: a core or a guest's node names its panes by the installation whose entries its kit writes, decided once at its start before its first pane (`hide_host::kit::adopt_kit`, `install_of_kit`), so a pane never names an installation whose entries nobody writes; one that installs nothing, a development build among them, names none, and still answers the panes an earlier start named by its folder (`also_answer_for`).
 An entry another installation wrote exits at once in such a pane, with nothing to say and no report: Cursor's permission hook answers allow and agy's tool hook ask, as when the helper is gone, and a plugin's helper call prints nothing, which the script reads as nothing to do.
 Each event therefore also starts the other installation's helper once, which ends before it reads its input.
 Claude Code and Codex start an event's matching hooks together, so that costs little time: on a Windows PC, where each entry starts `powershell.exe`, the other installation's entry added about 50 ms to a 1.6 s Stop event at the median (2026-11-04), and on a Mac the helper alone takes about 5 ms.
