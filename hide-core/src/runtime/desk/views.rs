@@ -241,6 +241,21 @@ impl Runtime {
         let Some(display) = self.view_display(&key, id).cloned() else {
             return super::refused("desk_output_gone");
         };
+        // A View already on Desk's desk (one Desk's agent opened, listed in
+        // 한눈에) comes in front where it is, and is seen.
+        if is_desk_key(&key) {
+            let focused =
+                self.change_desk_views(|layout, stamp| Ok(((), layout.focus(id, stamp)?)));
+            if let Err(error) = focused {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "desk",
+                    "kind": "desk_views.output_focus_failed",
+                    "error": error.kind(),
+                }));
+            }
+            self.mark_view_seen(&key, id);
+            return true;
+        }
         let opened = match display.kind {
             DisplayKind::File | DisplayKind::Diff => {
                 match self.display_source(&key, &display.path) {

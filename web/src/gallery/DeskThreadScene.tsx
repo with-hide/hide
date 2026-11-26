@@ -117,7 +117,7 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
     <TooltipProvider>
       <div className="flex h-screen min-w-0 justify-end bg-background text-foreground" data-desk-thread-scene={state}>
         <div className="flex min-h-0 w-full max-w-(--size-lane-ideal) min-w-0 flex-col border-l border-border">
-          <ThreadPanel job={job} paneId={job.pane_id} actions={actions} mentions={mentions} startedByDesk={state === "asking"} asks={state === "asking" ? ASKS : undefined} onAsk={noop} head={<SessionHead paneId={job.pane_id!} title={job.title} job={job} row={null} pane={null} machine={state === "live" ? "Mac mini" : null} disconnected={false} sleeping={false} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={() => Promise.resolve(true)} />
+          <ThreadPanel job={job} paneId={job.pane_id} actions={actions} mentions={mentions} startedByDesk={state === "asking"} asks={state === "asking" ? ASKS : undefined} onAsk={noop} head={<SessionHead paneId={job.pane_id!} title={job.title} job={job} row={null} pane={null} machine={state === "live" ? "Mac mini" : null} disconnected={false} sleeping={false} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} />} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={() => Promise.resolve(true)} />
         </div>
       </div>
     </TooltipProvider>

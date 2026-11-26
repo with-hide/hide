@@ -51,6 +51,18 @@ export function openSession(room: DeskRoomWindow, pane: string, options: { answe
   return { ...room, session: pane, explorer: false, answer };
 }
 
+/**
+ * What stands at Desk's right: the session open beside Desk, else 한눈에
+ * unless the operator folded it (`desk.lane.glance_folded`), else nothing
+ * and Desk's chat takes the room's width.
+ */
+export type RightSide = "session" | "glance" | null;
+
+export function rightSide(room: DeskRoomWindow, folded: boolean): RightSide {
+  if (room.session !== null) return "session";
+  return folded ? null : "glance";
+}
+
 /** Something opened on Desk's desk: the desk shows with every tab it holds (B9-B11, B14). */
 export function showDesk(room: DeskRoomWindow): DeskRoomWindow {
   return room.desk ? room : { ...room, desk: true };

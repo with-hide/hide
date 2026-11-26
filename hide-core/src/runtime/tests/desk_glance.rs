@@ -139,6 +139,22 @@ fn a_file_desks_agent_opens_is_listed_as_desks_to_look_at_until_seen_on_its_desk
     );
 
     let node = runtime.node.as_str().to_owned();
+    // Pressed in 한눈에, the row brings that tab in front where it is and
+    // marks it seen; no second tab opens.
+    runtime.dispatch_json(&explorer_event(
+        "desk_view_open",
+        json!({"kind": "output", "device_id": node, "checkout": crate::workspace_control::DESK_CALLER, "id": view}),
+    ));
+    assert_eq!(desk_views(&mut runtime).len(), 1);
+    assert_eq!(
+        files(&glance(&mut runtime)),
+        [("plan.md".into(), None, true)]
+    );
+    agent_open(&mut runtime, "r-2", &file).expect("Desk opens it again");
+    assert_eq!(
+        files(&glance(&mut runtime)),
+        [("plan.md".into(), None, false)]
+    );
     seen_on_desk(
         &mut runtime,
         &node,

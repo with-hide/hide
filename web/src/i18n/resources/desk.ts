@@ -270,6 +270,15 @@ export const deskEnglish = {
   "desk.views.toLook": "To look at {{count}}",
   "desk.views.seen": "Seen {{count}}",
   "desk.views.older": "Older views are not listed",
+  "desk.glance.title": "At a glance",
+  "desk.glance.fold": "Fold At a glance",
+  "desk.glance.unfold": "Show At a glance",
+  "desk.glance.back": "Back to At a glance",
+  "desk.glance.sessions": "Sessions {{count}}",
+  "desk.glance.turn": "Needs You {{count}}",
+  "desk.glance.files": "Files sessions opened {{count}}",
+  "desk.glance.more": "… {{count}} more",
+  "desk.glance.empty": "Sessions Desk hands work to, and the ones you open beside Desk, gather here with the files they open.",
   "desk.pulls.chip": "PR {{count}}",
 };
 
@@ -539,6 +548,15 @@ const ko: Catalog<typeof deskEnglish> = {
   "desk.views.toLook": "볼 것 {{count}}",
   "desk.views.seen": "본 것 {{count}}",
   "desk.views.older": "오래된 뷰는 목록에 없어요",
+  "desk.glance.title": "한눈에",
+  "desk.glance.fold": "한눈에 접기",
+  "desk.glance.unfold": "한눈에 펼치기",
+  "desk.glance.back": "한눈에로 돌아가기",
+  "desk.glance.sessions": "세션 {{count}}",
+  "desk.glance.turn": "내 차례 {{count}}",
+  "desk.glance.files": "세션들이 연 파일 {{count}}",
+  "desk.glance.more": "… {{count}}개 더",
+  "desk.glance.empty": "Desk가 맡긴 세션과 Desk 옆에 연 세션, 그 세션들이 연 파일이 여기 모여요.",
   "desk.pulls.chip": "PR {{count}}",
 };
 
@@ -808,6 +826,15 @@ const zh: Catalog<typeof deskEnglish> = {
   "desk.views.toLook": "待看 {{count}}",
   "desk.views.seen": "已看 {{count}}",
   "desk.views.older": "更早的视图未列出",
+  "desk.glance.title": "一览",
+  "desk.glance.fold": "收起一览",
+  "desk.glance.unfold": "展开一览",
+  "desk.glance.back": "返回一览",
+  "desk.glance.sessions": "会话 {{count}}",
+  "desk.glance.turn": "轮到你 {{count}}",
+  "desk.glance.files": "会话打开的文件 {{count}}",
+  "desk.glance.more": "… 还有 {{count}} 个",
+  "desk.glance.empty": "Desk 交给的会话、你在 Desk 旁打开的会话，以及它们打开的文件都汇集在这里。",
   "desk.pulls.chip": "PR {{count}}",
 };
 
@@ -1077,6 +1104,15 @@ const ja: Catalog<typeof deskEnglish> = {
   "desk.views.toLook": "見るもの {{count}}",
   "desk.views.seen": "見たもの {{count}}",
   "desk.views.older": "古いビューは一覧にありません",
+  "desk.glance.title": "ひと目で",
+  "desk.glance.fold": "ひと目でを畳む",
+  "desk.glance.unfold": "ひと目でを開く",
+  "desk.glance.back": "ひと目でに戻る",
+  "desk.glance.sessions": "セッション {{count}}",
+  "desk.glance.turn": "自分の番 {{count}}",
+  "desk.glance.files": "セッションが開いたファイル {{count}}",
+  "desk.glance.more": "… ほか {{count}} 件",
+  "desk.glance.empty": "Desk が任せたセッションと Desk の横で開いたセッション、それらが開いたファイルがここに集まります。",
   "desk.pulls.chip": "PR {{count}}",
 };
 

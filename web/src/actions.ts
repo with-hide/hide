@@ -2822,7 +2822,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     deskOpen(open: DeskOpen, options: { preview?: boolean; beside?: boolean } = {}) {
       if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
-      const listed = (output: import("./snapshot").DeskOutput) => laneCards(useShellStore.getState().deskJobs).some((job) => job.outputs.some((one) => one.id === output.id && one.device_id === output.device_id && one.checkout === output.checkout));
+      const jobs = useShellStore.getState().deskJobs;
+      const same = (output: import("./snapshot").DeskOutput) => (one: import("./snapshot").DeskOutput) => one.id === output.id && one.device_id === output.device_id && one.checkout === output.checkout;
+      // A View a session's card lists, or one 한눈에 lists (a file Desk's own agent opened is on Desk's desk already).
+      const listed = (output: import("./snapshot").DeskOutput) => laneCards(jobs).some((job) => job.outputs.some(same(output))) || (jobs?.glance.files.some(same(output)) ?? false);
       const sent = deskOpenSend(rest(), open, listed, options);
       if ("refused" in sent) return diagnostic(sent.refused);
       if ("link" in sent) return this.openLink(sent.link, true);
@@ -2866,6 +2869,22 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** The session beside Desk's `✕`, or Escape with no layer open; Desk's desk stays (B13). */
     deskCloseSession() {
       ui().setDeskRoom(closeDeskSession);
+    },
+
+    /** `⟩` on 한눈에, or its button in Desk's head: 한눈에 folds or unfolds, which the core keeps with the panels' widths. */
+    deskGlanceFold(folded: boolean) {
+      dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_folded: folded } });
+    },
+
+    /** `‹ 한눈에` above the session beside Desk: the session closes, kept for ⌘E, and 한눈에 stands there again, unfolded. */
+    deskGlanceBack() {
+      ui().setDeskRoom(closeDeskSession);
+      if (useShellStore.getState().desk?.lane.glance_folded) dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_folded: false } });
+    },
+
+    /** A View the operator looked at outside its own View areas: in front of Desk's desk while the desk shows. */
+    deskOutputSeen(view: { device_id: string; checkout: string; id: string }) {
+      dispatch({ schema_version: 2, kind: "desk_output_seen", payload: view });
     },
 
     /** The desk's `✕`, Escape or a press on the dimmed outside (B18): the desk hides and its tabs stay. */

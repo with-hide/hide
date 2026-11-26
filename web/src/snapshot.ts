@@ -3483,7 +3483,7 @@ export type DeskOutputKind = "image" | "page" | "doc" | "pr";
  */
 export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thumb: string | null; seen: boolean; pr_state: PrState | null; device_id: string | null; checkout: string | null; path: string | null; url: string | null };
 /** The widths of Desk's two panels as the operator last dragged them, in CSS pixels; null until dragged (PRD desk-2-ui B22, B23). */
-export type DeskLane = { view_width: number | null; session_width: number | null };
+export type DeskLane = { view_width: number | null; session_width: number | null; /** 한눈에 folded (`⟩`); absent while unfolded. */ glance_folded?: boolean };
 /** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
 /** What of an open mission waits on the operator, as every mission chip marks it: its decision, or a node raised to the operator (a stall among them). */
 export type MissionTurn = "decision" | "attention";
@@ -3709,7 +3709,20 @@ export type DeskJobsSection = {
   records: DeskRecord[];
   /** The sessions the newest lines name whose pane is gone and that run now in another pane, the same session on the same machine (one `이어서 하기` resumed): a chip naming the gone pane is the live session's, drawn from its row and opening it, with no record. */
   moved: DeskMoved[];
+  /** 한눈에 at Desk's right: the sessions Desk started or the operator opened beside it, and the Views they and Desk's agent opened. */
+  glance: DeskGlance;
 };
+/** 한눈에's section (`desk_jobs.glance`). */
+export type DeskGlance = {
+  /** The sessions by pane, newest first, at most 32; each has its card among `jobs`, `workers` and `named`. */
+  sessions: string[];
+  /** The Views those sessions and Desk's agent opened: not looked at first, then newest first, at most 32. */
+  files: DeskGlanceFile[];
+  /** How many more such Views there are than `files` holds. */
+  files_more: number;
+};
+/** One View 한눈에 lists, with the pane of the session that opened it, null for Desk's own agent. */
+export type DeskGlanceFile = DeskOutput & { pane_id: string | null };
 /** A chip's gone pane and the pane its session runs in now (`desk_jobs.moved`). */
 export type DeskMoved = { pane_id: string; live_pane_id: string };
 /**

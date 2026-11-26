@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closeSession, DESK_ROOM_CLOSED, deskShown, followFrom, followMoved, hideDesk, namesView, newSessionBeside, openSession, outputNamed, panelPlace, roomWidths, showDesk, toggleExpanded, toggleExplorer, type DeskRoomWindow, type NewSessionFollow } from "./deskRoom";
+import { closeSession, rightSide, DESK_ROOM_CLOSED, deskShown, followFrom, followMoved, hideDesk, namesView, newSessionBeside, openSession, outputNamed, panelPlace, roomWidths, showDesk, toggleExpanded, toggleExplorer, type DeskRoomWindow, type NewSessionFollow } from "./deskRoom";
 import type { DeskItem, DeskJob, DeskOutput } from "./snapshot";
 
 // Expected answers are PRD desk-2-ui D-05, D-15, B16-B26 and PRD
@@ -248,5 +248,14 @@ describe("the room after a gone session runs again", () => {
     const other: DeskRoomWindow = { ...DESK_ROOM_CLOSED, session: "w1:p3", desk: true, closed: "w1:p4" };
     expect(followMoved(other, moved)).toBe(other);
     expect(followMoved(room, [])).toBe(room);
+  });
+});
+
+describe("rightSide", () => {
+  it("is the session beside Desk, else 한눈에 unless folded, else nothing", () => {
+    expect(rightSide(openSession(DESK_ROOM_CLOSED, "p1"), true)).toBe("session");
+    expect(rightSide(DESK_ROOM_CLOSED, false)).toBe("glance");
+    expect(rightSide(closeSession(openSession(DESK_ROOM_CLOSED, "p1")), false)).toBe("glance");
+    expect(rightSide(DESK_ROOM_CLOSED, true)).toBeNull();
   });
 });
