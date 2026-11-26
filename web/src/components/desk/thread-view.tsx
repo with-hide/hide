@@ -18,7 +18,7 @@ import { Button } from "../ui/button";
 import { Hint } from "../ui/tooltip";
 import { DeskComposer, SentAttachments } from "./desk-composer";
 import { sentWords, type ComposerTray } from "../../deskComposer";
-import { DeskMissionChip } from "./desk-job-card";
+import { DeskMissionChip } from "../mission-chip";
 import { WorkingLine } from "./working-line";
 import { SessionChip, useSessionChipBridge } from "./session-chip";
 import { DeskOutputs } from "./desk-outputs";
@@ -447,7 +447,8 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   asks?: readonly AskLine[];
   /** Drawn in the input box's place, as a sleeping session's wake line is (B43). */
   foot?: ReactNode;
-  onTerminal: () => void;
+  /** The session's terminal, which a record it cannot read points to; none for a session whose pane is gone. */
+  onTerminal?: () => void;
   /** The conversation was scrolled to its top: the page before it can be read. */
   onReachTop?: () => void;
 } & ThreadPartActions) {
@@ -485,7 +486,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
           <p role="alert" className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" data-desk-thread-failure={failure}>
             <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-warning" />
             <span className="min-w-0 text-subtle-foreground">{t(failure === "no_record" ? "desk.thread.readFailed.no_record" : "desk.thread.readFailed.refused")}</span>
-            <Button variant="text-link" size="inline" onClick={onTerminal}>{t("desk.thread.toTerminal")}</Button>
+            {onTerminal ? <Button variant="text-link" size="inline" onClick={onTerminal}>{t("desk.thread.toTerminal")}</Button> : null}
           </p>
         ) : reading ? (
           <p role="status" className="animate-pulse text-caption text-muted-foreground" data-desk-thread-reading="true">{t("desk.thread.reading")}</p>

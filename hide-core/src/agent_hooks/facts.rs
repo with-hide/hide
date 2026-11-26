@@ -18,7 +18,11 @@
 //! and no timer ends it. A turn no hook reports the end of is ended by the
 //! signal the agent does give (Claude Code's `idle_prompt` notification after
 //! an interrupt, Codex's `Interrupt`), and a pane whose agent the engine no longer
-//! lists drops its facts.
+//! lists drops its facts. The one reading of the screen a wait follows is its
+//! permission dialog's: the engine read it on the screen and then read the
+//! agent go on past it, which is the operator's answer, and no hook event
+//! comes between that answer and the end of the call it allowed
+//! ([`follow_dialog`]).
 //!
 //! The store has its own small lock, never held across I/O and always taken
 //! under the runtime lock (runtime, then facts): to record a report, and in
@@ -96,6 +100,10 @@ struct SessionFact {
     /// its approval (a refusal in the dialog sends no hook event).
     #[serde(skip)]
     waiting_seq: Option<Laid>,
+    /// Where the permission dialog of the session's open wait stands on the
+    /// screen, as the engine reads it ([`follow_dialog`]).
+    #[serde(skip)]
+    dialog: Dialog,
     /// Why the provider refused the turn that ended (`StopFailure`), with
     /// when the hook said so; memory only, as the turn is, and gone once
     /// the turn is anything but ended.
@@ -167,6 +175,22 @@ impl Laid {
             Self::BeforeThisEngine => true,
         }
     }
+}
+
+/// Where the permission dialog of a session's open wait stands on the
+/// screen. No hook event comes between the operator's answer and the end of
+/// the call it allowed (Claude Code's `PermissionRequest` names the call, and
+/// only that call's `PostToolUse` follows), so the engine's reading of the
+/// screen is what says the operator answered.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum Dialog {
+    /// No read of this engine has shown the dialog since the wait opened.
+    #[default]
+    Unseen,
+    /// The engine read the agent blocked on it.
+    Shown,
+    /// The engine read the agent go on past it: the operator answered.
+    Answered,
 }
 
 /// The most open approvals one session reports; the hook keeps the same
@@ -426,6 +450,7 @@ impl HookFacts {
                 waiting: Vec::new(),
                 asked: None,
                 waiting_seq: None,
+                dialog: Dialog::Unseen,
                 refused: None,
                 account: None,
                 account_start: 0,
@@ -451,6 +476,7 @@ impl HookFacts {
             fact.turn = None;
             fact.waiting.clear();
             fact.asked = None;
+            fact.dialog = Dialog::Unseen;
         }
         // Every report is a hook event of the session, and an approval's
         // end sends none that is certain (a patch allowed or a command refused
@@ -459,6 +485,11 @@ impl HookFacts {
         if let Some(waiting) = &report.waiting
             && *waiting != fact.waiting
         {
+            // A call that asks now has a dialog of its own, which no read has
+            // shown yet; a call that ended leaves the others' dialog as it was.
+            if waiting.iter().any(|call| !fact.waiting.contains(call)) {
+                fact.dialog = Dialog::Unseen;
+            }
             fact.waiting.clone_from(waiting);
             fact.waiting_seq = None;
         }
@@ -470,6 +501,9 @@ impl HookFacts {
         };
         if fact.turn != turn_before {
             fact.turn_seq = None;
+            if fact.turn == Some(HookTurn::Waiting) {
+                fact.dialog = Dialog::Unseen;
+            }
         }
         // A refusal is the ended turn's: a turn that ends again without one
         // (a `Stop`), or any other turn, has none, while the prompt that
@@ -590,13 +624,17 @@ impl HookFacts {
                 continue;
             };
             end_by_session_read(fact, agent);
+            follow_dialog(fact, agent);
             if fact.settle_busy() {
                 moved = true;
             }
-            agent.hook = if fact.waiting.is_empty() {
-                fact.turn
-            } else {
-                Some(HookTurn::Waiting)
+            // An answered dialog leaves the call it allowed running, and the
+            // turn that waited on it going on.
+            let asks = fact.dialog != Dialog::Answered;
+            agent.hook = match fact.turn {
+                _ if asks && !fact.waiting.is_empty() => Some(HookTurn::Waiting),
+                Some(HookTurn::Waiting) if !asks => Some(HookTurn::Working),
+                turn => turn,
             };
             // The dialog still holds the pane, but it asks a question: the
             // session read words it while it holds for the engine's state, and
@@ -611,7 +649,8 @@ impl HookFacts {
                         .as_deref()
                         .is_some_and(crate::operator_input::permission_by_hook)
             });
-            agent.hook_question = !fact.waiting.is_empty()
+            agent.hook_question = asks
+                && !fact.waiting.is_empty()
                 && fact
                     .waiting
                     .iter()
@@ -678,6 +717,10 @@ impl HookFacts {
                 }
                 if !fact.waiting.is_empty() {
                     fact.waiting_seq = Some(Laid::BeforeThisEngine);
+                }
+                // Only the next engine's own read of the dialog shows it.
+                if fact.dialog == Dialog::Shown {
+                    fact.dialog = Dialog::Unseen;
                 }
             }
         }
@@ -773,6 +816,26 @@ fn close_answered_waits(fact: &mut SessionFact, agent: &SessionAgentPayload) {
     }
 }
 
+/// Follows the permission dialog of the session's open wait, a call's
+/// approval or a turn that waits on the operator, on the screen: the engine
+/// reading the agent blocked shows it, and a later read of the agent working
+/// or at rest says the operator answered it, which no hook event says until
+/// the call it allowed ends. A read of the agent blocked again (the next
+/// call's dialog, or this one drawn again) holds the row again; a wait whose
+/// dialog the engine never read blocked stands until the hook or the session
+/// read ends it, as before.
+fn follow_dialog(fact: &mut SessionFact, agent: &SessionAgentPayload) {
+    if fact.waiting.is_empty() && fact.turn != Some(HookTurn::Waiting) {
+        fact.dialog = Dialog::Unseen;
+        return;
+    }
+    fact.dialog = match (agent.agent_status.as_deref(), fact.dialog) {
+        (Some("blocked"), _) => Dialog::Shown,
+        (Some("working" | "idle" | "done"), Dialog::Shown) => Dialog::Answered,
+        (_, kept) => kept,
+    };
+}
+
 /// The session fact that speaks for `agent`: of the agent's runtime, and the
 /// session the engine reports for it when the engine names one by id. Where none has
 /// that id and a hook reported since the engine last changed the id it names, the
@@ -828,6 +891,7 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
             waiting: Vec::new(),
             asked: None,
             waiting_seq: None,
+            dialog: Dialog::Unseen,
             account: None,
             account_start: 0,
         })

@@ -8,9 +8,9 @@
 // The fields no section carries (marked `wire gap` below) are a thread's
 // own, which the threads node reads from the session record.
 
-import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskItem, DeskOption, DeskOptionKind, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskMissionMention, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
+import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskItem, DeskOption, DeskOptionKind, DeskJob, DeskJobsSection, DeskRecord, DeskMention as WireMention, DeskMission, DeskMissionMention, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
 
-export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalState, DeskChoice, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskMissionMention, DeskOption, DeskOptionKind, DeskOutput, DeskOutputKind, DeskPermission, DeskQueuedMessage, DeskSteps } from "./snapshot";
+export type { DeskAgent, DeskAgentId, DeskRecord, DeskAgentState, DeskApprovalState, DeskChoice, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskMissionMention, DeskOption, DeskOptionKind, DeskOutput, DeskOutputKind, DeskPermission, DeskQueuedMessage, DeskSteps } from "./snapshot";
 
 export type DeskSelection = DeskSection["selection"];
 
@@ -70,6 +70,8 @@ export type SessionFacts = {
   /** When its row's time counts from (`last_prompt_at_unix_ms`). */
   since: number | null;
   parent: DeskSessionRef | null;
+  /** What Hide's record keeps of a session the sidebar no longer lists (frame K): its chip draws it, a press opens it beside Desk read-only; null for a listed session or one with no record. */
+  record: DeskRecord | null;
 };
 
 /** A row as a chip names it. */
@@ -83,9 +85,13 @@ function rowSession(row: AgentRow): DeskSessionRef {
  * chip is dimmed; one named only by a name no row carries is not known, and
  * its chip keeps the values it came with.
  */
-export function sessionFacts(rows: ReadonlyMap<string, AgentRow>, cards: readonly DeskJob[], session: DeskSessionRef): SessionFacts | null {
+export function sessionFacts(rows: ReadonlyMap<string, AgentRow>, cards: readonly DeskJob[], session: DeskSessionRef, records: readonly DeskRecord[] = []): SessionFacts | null {
   const row = session.pane_id ? rows.get(session.pane_id) : [...rows.values()].find((one) => one.identity_label === session.name);
-  if (!row) return session.pane_id ? { listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null } : null;
+  if (!row) {
+    if (!session.pane_id) return null;
+    const record = records.find((one) => one.pane_id === session.pane_id) ?? null;
+    return { listed: false, name: record?.title ?? null, mark: null, agent_kind: record?.agent_kind ?? null, card: record ? recordCard(record) : null, since: record?.ended_at_unix_ms ?? null, parent: null, record };
+  }
   const parent = row.lineage_parent_pane_id ? rows.get(row.lineage_parent_pane_id) : undefined;
   return {
     listed: true,
@@ -95,6 +101,52 @@ export function sessionFacts(rows: ReadonlyMap<string, AgentRow>, cards: readonl
     card: cardOfSession(cards, { ...session, pane_id: row.pane_id }),
     since: row.last_prompt_at_unix_ms ?? null,
     parent: parent ? rowSession(parent) : null,
+    record: null,
+  };
+}
+
+/** A wire path's last name (`/` between names on every system), as a card's ⌂ names a folder. */
+function lastName(path: string): string {
+  return path.replace(/\/+$/u, "").split("/").pop() || path;
+}
+
+/**
+ * A record as the app's `SessionCard` draws a session (frame K, 나): ended
+ * (`끝남` with the time since it ended), ⌂ its project and the folder it
+ * worked in, its last result line, and its pull requests. Every fact is the
+ * record's; one it does not keep is left out.
+ */
+export function recordCard(record: DeskRecord): DeskJob {
+  const project = record.project ?? record.cwd;
+  const folder = record.cwd ? lastName(record.cwd) : "";
+  return {
+    id: `record:${record.session.device_id}:${record.session.agent}:${record.session.session_id}`,
+    agent_id: null,
+    pane_id: record.pane_id,
+    title: record.title,
+    agent_kind: record.agent_kind,
+    project: { workspace_id: null, label: project ? lastName(project) : "" },
+    location: { kind: "checkout", label: folder },
+    state: "done",
+    queue_position: null,
+    now: record.line,
+    plan: null,
+    question: null,
+    summary: record.line,
+    pull_requests: record.pull_requests,
+    outputs: [],
+    joined: false,
+    reason: null,
+    failure: null,
+    ask: null,
+    mark: null,
+    mark_read: false,
+    machine: null,
+    disconnected: false,
+    changed_at_unix_ms: record.ended_at_unix_ms ?? 0,
+    read: true,
+    mission: null,
+    workers: [],
   };
 }
 

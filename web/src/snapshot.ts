@@ -3682,6 +3682,27 @@ export type DeskJobsSection = {
   workers: DeskJob[];
   /** The other sessions the newest lines of the conversation name, as cards read from their sidebar rows: a chip's hover card and the thread it opens (D-86); never drawn in the chat or listed in Threads. */
   named: DeskJob[];
+  /** The sessions the newest lines name whose pane is gone, as Hide's record keeps them (feedback 2, frame K): a chip draws its record and opens it beside Desk; a session with no record has none. */
+  records: DeskRecord[];
+};
+/**
+ * A session whose pane is gone, as its record keeps it: what its chip, its
+ * hover card and its read-only thread draw, and where `이어서 하기` resumes it.
+ * `thread` is whether Hide kept where its conversation is read.
+ */
+export type DeskRecord = {
+  pane_id: string;
+  session: WorkSession;
+  agent_kind: string;
+  title: string;
+  started_at_unix_ms: number | null;
+  ended_at_unix_ms: number | null;
+  line: string | null;
+  pull_requests: { number: number; state: PrState }[];
+  cwd: string | null;
+  path: string | null;
+  project: string | null;
+  thread: boolean;
 };
 
 /** The `desk_live` section: the reply being written, `null` between turns. */
