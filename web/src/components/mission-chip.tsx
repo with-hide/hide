@@ -6,7 +6,7 @@ import type { DeskMission } from "../desk";
 import type { Mission, MissionTurn } from "../snapshot";
 import { cn } from "../lib/utils";
 import { CheckIcon, PauseIcon, WaypointsIcon } from "lucide-react";
-import type { ComponentProps } from "react";
+import type { ComponentProps, Ref } from "react";
 import { useRemaining } from "./elapsed";
 import { MissionChipFace, ProgressCells, TONE_TEXT } from "./mission-tone";
 import { InToolCell } from "./tool-mark";
@@ -32,6 +32,9 @@ export function MissionChip({ agent, onOpen }: { agent: ConductorOwner; onOpen: 
   return mission ? <HeldMissionChip mission={mission} onOpen={onOpen} /> : null;
 }
 
+/** What a hover card puts on the chip that anchors it: its handlers and states, and the ref it is placed by. */
+type ChipAnchor = { anchor?: ComponentProps<"button">; ref?: Ref<HTMLButtonElement> };
+
 /**
  * Desk's mission chip, in two lines (Doop N2 가): the mission's mark, number
  * and name, then its cells, `k/n` or its state's word, and `! 내 차례` while
@@ -41,7 +44,7 @@ export function MissionChip({ agent, onOpen }: { agent: ConductorOwner; onOpen: 
  * Conductor row keeps its one-line chip. Only the name is cut short, its
  * whole in the hint.
  */
-function MissionChipCard({ id, title, status, done, total, cells, tone, turn, delay, onOpen, anchor }: { anchor?: ComponentProps<typeof Button>; id: string; title: string; status: Mission["status"]; done: number; total: number; cells: readonly CellTone[]; tone: CellTone; turn: MissionTurn | null; delay: MissionDelay | null; onOpen: (missionId: string) => void }) {
+function MissionChipCard({ id, title, status, done, total, cells, tone, turn, delay, onOpen, anchor, ref }: ChipAnchor & { id: string; title: string; status: Mission["status"]; done: number; total: number; cells: readonly CellTone[]; tone: CellTone; turn: MissionTurn | null; delay: MissionDelay | null; onOpen: (missionId: string) => void }) {
   const { t } = useInterfaceTranslation();
   const held = useDelayWords(delay);
   const left = useRemaining(delay?.until);
@@ -54,6 +57,7 @@ function MissionChipCard({ id, title, status, done, total, cells, tone, turn, de
       <Button
         variant="text"
         size="inline"
+        ref={ref}
         aria-label={label}
         data-mission-chip={id}
         data-mission-chip-card="true"
@@ -88,10 +92,10 @@ function MissionChipCard({ id, title, status, done, total, cells, tone, turn, de
   return anchor ? button : <Hint label={label}>{button}</Hint>;
 }
 
-/** Desk's chip of a mission as the store holds it now: its cells are the nodes', its colour the one every chip wears; `anchor` makes it the anchor of a hover card (the Conductor pane's). */
-export function StoredMissionChip({ mission, onOpen, anchor }: { mission: Mission; onOpen: (missionId: string) => void; anchor?: ComponentProps<typeof Button> }) {
+/** Desk's chip of a mission as the store holds it now: its cells are the nodes', its colour the one every chip wears; `anchor` and `ref` make it the anchor of a hover card (the Conductor pane's). */
+export function StoredMissionChip({ mission, onOpen, anchor, ref }: ChipAnchor & { mission: Mission; onOpen: (missionId: string) => void }) {
   const { done, total } = missionCounts(mission);
-  return <MissionChipCard id={mission.id} title={mission.title} status={mission.status} done={done} total={total} cells={missionCells(mission)} tone={missionTone(mission)} turn={missionTurn(mission)} delay={heldBy(mission)} onOpen={onOpen} anchor={anchor} />;
+  return <MissionChipCard id={mission.id} title={mission.title} status={mission.status} done={done} total={total} cells={missionCells(mission)} tone={missionTone(mission)} turn={missionTurn(mission)} delay={heldBy(mission)} onOpen={onOpen} anchor={anchor} ref={ref} />;
 }
 
 /** Desk's job card carries a mission's counts, not its nodes' states, so a mission the store does not hold draws its cells from the counts and a running one in the working colour. */
@@ -120,11 +124,7 @@ function HeldMissionChip({ mission, onOpen }: { mission: Mission; onOpen: (missi
   return <MissionChipView id={mission.id} title={mission.title} words={t(key)} counts={counts} tone={inCell && tone === "hold" ? "waiting" : tone} turn={missionTurn(mission)} delay={heldBy(mission)} status={mission.status} onOpen={onOpen} />;
 }
 
-/**
- * The chip itself, from its values alone: Desk's cards and its thread draw a
- * mission they were handed, not one the store holds (PRD
- * session-docs-and-assistant B34), in this same shape.
- */
+/** The sidebar's one-line chip itself, from its values alone. */
 export function MissionChipView({ id, title, words, counts, tone, turn, delay, status, onOpen }: {
   id: string;
   title: string;

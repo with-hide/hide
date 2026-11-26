@@ -322,7 +322,7 @@ const BUTTON_WORD: Record<ApprovalWord, MessageKey> = {
  * only for one with no allow-once answer. The command on one grey block,
  * folded to two lines when longer, the folder, Desk's reason when it gave
  * one, and the agent's own answers (`approvalButtons`), `거절…` as words, `항상 허용`
- * secondary and `한 번 허용` the one primary in the ask colour (`BUTTON_VARIANT`): `거절…` opens one line whose words go to Desk with the
+ * secondary and `한 번 허용` the one primary in the ask colour (`buttonVariant`): `거절…` opens one line whose words go to Desk with the
  * refusal, `항상 허용` and `한 번 허용` go to the agent as its own options, so
  * what the agent keeps allowed is the agent's, as in the terminal. Every
  * button names the agent's own option on hover. Once answered it folds to one
