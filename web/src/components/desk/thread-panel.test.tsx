@@ -9,7 +9,7 @@ import { keepSent } from "../../deskComposer";
 import type { CopyText } from "../human-turn-copy";
 import type { AskLine } from "../open-asks";
 import type { DeskJob } from "../../desk";
-import type { SessionThreadSection, ThreadPage } from "../../snapshot";
+import type { AgentRow, DeskMentions, SessionThreadSection, SnapshotRest, ThreadPage } from "../../snapshot";
 import { useShellStore } from "../../store";
 import { useUiStore } from "../../ui";
 import { TooltipProvider } from "../ui/tooltip";
@@ -31,7 +31,7 @@ const job: DeskJob = {
 const said = (text: string) => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
 
 function section(extra: Partial<SessionThreadSection> = {}): SessionThreadSection {
-  return { generation: 4, state: "ready", pane_id: "w1:p2", machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", input: null,
+  return { generation: 4, state: "ready", pane_id: "w1:p2", machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", input: null, choice: {},
     tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는 끝났어요")], parts: {}, sessions: {} }, ...extra };
 }
 
@@ -58,8 +58,8 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], onCopy = () => Promise.resolve(true), onAsk = () => undefined }: { asks?: AskLine[]; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void } = {}) {
-  const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn() };
+async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void } = {}) {
+  const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn(), switchThread: vi.fn(() => "switch-1"), observeCatalog: vi.fn(() => noop), requestFileIndex: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -67,7 +67,7 @@ async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks 
   const noop = () => undefined;
   await act(async () => root.render(
     <TooltipProvider>
-      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
+      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} ask={ask} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
     </TooltipProvider>,
   ));
   const box = () => container.querySelector("textarea")!;
@@ -526,4 +526,119 @@ it("draws a code block under a head row with its language and 복사, the code b
   expect(copied).toEqual(["pnpm --dir web install\npnpm --dir web build", "echo hi"]);
   // 복사 says it copied, in its own words.
   expect(several!.querySelector('[data-copy-words="code block"]')?.textContent).toBe("Copied");
+});
+
+// mission-106: the session's box has Desk's `/` and `@` menus and its model and effort under it, its agent fixed.
+const claudeRow = { pane_id: "w1:p2", agent_kind: "claude" } as AgentRow;
+const projectRest = { navigator: { workspaces: [{ id: "w", device_id: "mac", label: "herdr-ide", path: "/repo", checkouts: [{ id: "c", path: "/repo", tabs: [{ panes: [{ id: "w1:p2" }] }] }] }] } } as unknown as SnapshotRest;
+const deskSessions: DeskMentions = {
+  sessions: [
+    { id: "w1:p9", name: "grab-market 기준선", agent_kind: "claude", mark: "going", detail: null, parent: null, project: "shop", branch: null, last_prompt_at_unix_ms: null },
+    { id: "w1:p2", name: "갤러리 캡처 비교", agent_kind: "claude", mark: "going", detail: null, parent: null, project: "herdr-ide", branch: null, last_prompt_at_unix_ms: null },
+  ],
+  projects: [{ id: "/shop", name: "shop", sessions: ["w1:p9"] }],
+};
+const key = (box: HTMLTextAreaElement, name: string) => act(async () => { box.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })); });
+
+it("opens the session's agent's own commands on `/`, in Desk's panel, and writes the one picked into the box", async () => {
+  const { box, type } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section(), agents: [claudeRow], deskCommands: { lists: { claude: [{ name: "/compact", description: "Free up context" }, { name: "/review", description: "Review the diff" }], codex: [{ name: "/codex-only", description: "" }] } } }));
+  await type("/re");
+  const rows = Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-command]")).map((row) => row.dataset.deskCommand);
+  expect(rows).toEqual(["/review"]);
+  await key(box(), "Enter");
+  expect(box().value).toBe("/review ");
+  // A pick is no send: the words go when the operator sends them, as the agent's own command.
+  expect(events).toEqual([]);
+});
+
+it("says an agent that never listed its commands has none known, and sends `/` words as typed", async () => {
+  const { box, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section(), agents: [claudeRow], deskCommands: { lists: {} } }));
+  await type("/compact");
+  expect(document.body.querySelector('[data-desk-command-menu="unknown"]')).not.toBeNull();
+  await enter();
+  expect(events[0]).toMatchObject({ kind: "thread_input", payload: { text: "/compact" } });
+  expect(box().value).toBe("/compact");
+});
+
+it("lists the project's files above Desk's sessions on `@`, without the session itself, and writes each as its agent reads it", async () => {
+  const { actions, box, type } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section(), agents: [claudeRow], rest: projectRest, deskMentions: deskSessions }));
+  vi.useFakeTimers();
+  await type("고쳐줘 @gr");
+  await act(async () => { vi.advanceTimersByTime(200); });
+  vi.useRealTimers();
+  expect(actions.requestFileIndex).toHaveBeenCalledWith("/repo", "gr", "mac");
+  await act(async () => useShellStore.setState({ fileIndex: { device_id: "mac", root_path: "/repo", query: "gr", files: [{ path: "/repo/docs/grab market.md", relative_path: "docs/grab market.md" }, { path: "/repo/scripts/grader.ts", relative_path: "scripts/grader.ts" }], truncated: false, indexing: false, unavailable: null } }));
+  const groups = Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-mention-group]")).map((group) => group.dataset.deskMentionGroup);
+  expect(groups).toEqual(["files", "sessions"]);
+  expect(Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-mention-session]")).map((row) => row.dataset.deskMentionSession)).toEqual(["w1:p9"]);
+  // No project group: a session's `@` names files and sessions.
+  expect(document.body.querySelector('[data-desk-mention-group="projects"]')).toBeNull();
+  await key(box(), "Enter");
+  expect(box().value).toBe('고쳐줘 @"docs/grab market.md" ');
+  await type(`${box().value}@grab`);
+  await key(box(), "Enter");
+  expect(box().value).toBe('고쳐줘 @"docs/grab market.md" @grab-market 기준선 (pane w1:p9) ');
+});
+
+it("shows the session's model and effort with its agent fixed, and a change types the agent's own line through the core", async () => {
+  const { actions, container } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section({ choice: { model: "opus" } }), agents: [claudeRow] }));
+  const bar = container.querySelector<HTMLElement>('[data-session-agent-bar="claude"]')!;
+  expect(bar.querySelector('[data-session-bar="agent"]')?.textContent).toContain("Claude");
+  expect(bar.querySelector('[data-session-bar="agent"]')?.tagName).toBe("SPAN");
+  expect(bar.querySelector('[data-session-bar="model"]')?.textContent).toContain("opus");
+  expect(bar.querySelector('[data-session-bar="effort"]')?.textContent).toContain("Default");
+  const effort = bar.querySelector<HTMLButtonElement>('[data-session-bar="effort"]')!;
+  await act(async () => {
+    effort.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+  });
+  const high = document.body.querySelector<HTMLElement>('[data-session-bar-choice="high"]')!;
+  await act(async () => high.click());
+  expect(actions.switchThread).toHaveBeenCalledWith(4, "w1:p2", { effort: "high" });
+});
+
+it("says the reason a change typed nothing and keeps the session's choice", async () => {
+  const { actions, container } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section({ choice: { model: "opus" } }), agents: [claudeRow] }));
+  for (const [reason, words] of [
+    ["agent_asking", "The agent is asking something: answer it first"],
+    ["agent_busy", "The agent is working: change it once the turn ends"],
+    ["draft", "The terminal's input holds words not sent yet: send or clear them first"],
+  ]) {
+    actions.switchThread.mockReturnValueOnce(`switch-${reason}`);
+    const effort = container.querySelector<HTMLButtonElement>('[data-session-bar="effort"]')!;
+    await act(async () => {
+      effort.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    });
+    await act(async () => document.body.querySelector<HTMLElement>('[data-session-bar-choice="high"]')!.click());
+    await act(async () => useShellStore.setState({ sessionThread: section({ choice: { model: "opus" }, input: { request_id: `switch-${reason}`, state: "refused", reason } }) }));
+    expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe(words);
+    expect(container.querySelector('[data-session-bar="model"]')?.textContent).toContain("opus");
+  }
+  // Each refusal leaves the bar free for the next pick.
+  expect(actions.switchThread).toHaveBeenCalledTimes(3);
+});
+
+it("holds the bar while the agent's question card is on screen: a change's Enter would answer it", async () => {
+  const { actions, container } = await mount(job, null, { ask: <div data-ask-card="true" /> });
+  await act(async () => useShellStore.setState({ sessionThread: section({ choice: { model: "opus" } }), agents: [claudeRow] }));
+  const effort = container.querySelector<HTMLButtonElement>('[data-session-bar="effort"]')!;
+  expect(effort.disabled).toBe(true);
+  await act(async () => {
+    effort.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+  });
+  expect(document.body.querySelector('[data-session-bar-choice="high"]')).toBeNull();
+  expect(actions.switchThread).not.toHaveBeenCalled();
+});
+
+it("keeps a slot Hide cannot change in a running session read-only, and says so", async () => {
+  const { container } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section(), agents: [{ pane_id: "w1:p2", agent_kind: "opencode" } as AgentRow] }));
+  const model = container.querySelector<HTMLElement>('[data-session-bar="model"]')!;
+  expect(model.dataset.sessionBarFixed).toBe("true");
+  expect(model.getAttribute("aria-label")).toContain("cannot change the model here yet");
+  expect(container.querySelector('[data-session-bar="effort"]')?.getAttribute("data-session-bar-fixed")).toBe("true");
 });

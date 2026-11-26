@@ -1818,7 +1818,7 @@ impl Runtime {
             lane: desk.stored.lane,
             opens: desk.opens.snapshot(),
         }));
-        // The `/` menu follows the agent chosen.
+        // The section is composed once the worker stands.
         self.compose_desk_commands();
     }
 
@@ -1875,25 +1875,22 @@ impl Runtime {
         self.desk.commands.get(&agent).map_or(&[], Vec::as_slice)
     }
 
-    /// The `desk_commands` section, the selected agent's list, sent again
-    /// only when that agent or its list moved.
+    /// The `desk_commands` section, every agent's last list, sent again
+    /// only when a list moved.
     fn compose_desk_commands(&mut self) {
         if self.desk.worker.is_none() {
             return;
         }
-        let agent = self.desk.stored.selection.agent;
-        let commands = agent.and_then(|agent| self.desk.commands.get(&agent));
         if self
             .snapshot
             .desk_commands
             .as_deref()
-            .is_some_and(|shown| shown.agent == agent && shown.commands.as_ref() == commands)
+            .is_some_and(|shown| shown.lists == self.desk.commands)
         {
             return;
         }
         self.snapshot.desk_commands = Some(Arc::new(crate::model::DeskCommandsSnapshot {
-            agent,
-            commands: commands.cloned(),
+            lists: self.desk.commands.clone(),
         }));
     }
 
@@ -4109,17 +4106,19 @@ mod tests {
         });
     }
 
+    /// The selected agent and its list as Desk's composer reads them.
     fn slash(runtime: &Runtime) -> (Option<AdapterId>, Vec<String>) {
         let section = runtime
             .snapshot
             .desk_commands
             .as_ref()
             .expect("desk_commands");
+        let agent = runtime.desk.stored.selection.agent;
         (
-            section.agent,
-            section
-                .commands
-                .iter()
+            agent,
+            agent
+                .and_then(|agent| section.lists.get(&agent))
+                .into_iter()
                 .flatten()
                 .map(|command| command.name.clone())
                 .collect(),
@@ -4142,8 +4141,9 @@ mod tests {
                 .desk_commands
                 .as_ref()
                 .unwrap()
-                .commands
-                .clone()
+                .lists
+                .get(&AdapterId::CLAUDE)
+                .cloned()
         };
         assert_eq!(commands(&runtime), None);
         opened(&mut runtime, AdapterId::CLAUDE);
@@ -4160,8 +4160,13 @@ mod tests {
                 vec!["/compact".to_owned(), "/context".to_owned()]
             )
         );
-        // Another agent's list never shows under Claude.
+        // Another agent's list never shows under Claude, and the section
+        // carries it for a session of that agent.
         listed(&mut runtime, AdapterId::PI, &["session"]);
+        assert_eq!(
+            runtime.snapshot.desk_commands.as_ref().unwrap().lists[&AdapterId::PI][0].name,
+            "/session"
+        );
         assert_eq!(slash(&runtime).1, ["/compact", "/context"]);
         event(&mut runtime, "desk_select", json!({"agent": "pi"}));
         assert_eq!(

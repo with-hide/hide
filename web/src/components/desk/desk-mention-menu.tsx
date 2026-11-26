@@ -1,5 +1,7 @@
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, HouseIcon, PlusIcon } from "lucide-react";
-import type { MentionProject, MentionRow, MentionSession, MentionTree } from "../../deskComposer";
+import type { MentionFile, MentionProject, MentionRow, MentionSession, MentionTree } from "../../deskComposer";
+import { fileIcon } from "../../fileIcons";
+import { FileMark } from "../file-mark";
 import { AgentMark } from "../../AgentMark";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
@@ -11,7 +13,7 @@ import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import { DeskMenuList } from "./desk-menu";
 
-export type { MentionProject, MentionSession } from "../../deskComposer";
+export type { MentionFile, MentionProject, MentionSession } from "../../deskComposer";
 
 /** How far a child row sits in under its parent, by depth (D-84); a deeper one stays at the last. */
 const INDENT = ["", "pl-xl", "pl-xxl", "pl-xxxl"] as const;
@@ -25,11 +27,14 @@ const INDENT = ["", "pl-xl", "pl-xxl", "pl-xxxl"] as const;
  * session hands the task to it, on a project starts a new thread there, and
  * `⇥` on a project enters it: then the menu lists its running sessions under
  * `＋ 새 스레드`, and `⇧⇥` or Esc goes back. `active` is the highlighted
- * row's value, `session:<pane>` or `project:<path>`; the composer moves it
- * and folds a row with → and ←, and pressing `하위 n` folds it here.
+ * row's value, `session:<pane>`, `project:<path>` or `file:<path>`; the
+ * composer moves it and folds a row with → and ←, and pressing `하위 n`
+ * folds it here. A session's box lists its project's files that match above
+ * the sessions (`files`, mission-106), each its mark, its name and its folder.
  */
-export function DeskMentionMenu({ tree, searching = false, entered = null, active, onActive, onSession, onProject, onFold, onBack }: {
+export function DeskMentionMenu({ tree, files = [], searching = false, entered = null, active, onActive, onSession, onProject, onFile, onFold, onBack }: {
   tree: MentionTree;
+  files?: readonly MentionFile[];
   /** Words follow `@`: the session group is the search's. */
   searching?: boolean;
   /** The project entered with ⇥, and its running sessions. */
@@ -38,6 +43,7 @@ export function DeskMentionMenu({ tree, searching = false, entered = null, activ
   onActive: (value: string) => void;
   onSession: (session: MentionSession) => void;
   onProject: (project: MentionProject) => void;
+  onFile?: (file: MentionFile) => void;
   onFold: (session: MentionSession, open: boolean) => void;
   onBack: () => void;
 }) {
@@ -103,9 +109,24 @@ export function DeskMentionMenu({ tree, searching = false, entered = null, activ
           </>
         ) : (
           <>
+            {files.length ? (
+              <CommandGroup heading={t("desk.mention.files")} data-desk-mention-group="files">
+                {files.map((file) => {
+                  const parts = file.relative_path.split("/");
+                  return (
+                    <CommandItem key={file.relative_path} value={`file:${file.relative_path}`} onSelect={() => onFile?.(file)} data-desk-mention-file={file.relative_path}>
+                      <FileMark icon={fileIcon(file.relative_path)} />
+                      <span className="min-w-0 shrink truncate">{parts.at(-1)}</span>
+                      <span className="min-w-0 flex-1 truncate text-micro text-muted-foreground">{parts.slice(0, -1).join("/")}</span>
+                    </CommandItem>
+                  );
+                })}
+              </CommandGroup>
+            ) : null}
+            {files.length && (tree.rows.length || tree.found.length) ? <CommandSeparator /> : null}
             {tree.rows.length ? <CommandGroup heading={t(searching ? "desk.mention.matched" : "desk.mention.sessions")} data-desk-mention-group="sessions">{tree.rows.map(session)}</CommandGroup> : null}
             {tree.found.length ? <CommandGroup heading={t("desk.mention.childSessions")} data-desk-mention-group="children">{tree.found.map(session)}</CommandGroup> : null}
-            {tree.rows.length + tree.found.length + tree.projects.length === 0 ? <p className="px-sm py-md text-caption text-muted-foreground" data-desk-mention-empty="true">{t("desk.mention.none")}</p> : null}
+            {files.length + tree.rows.length + tree.found.length + tree.projects.length === 0 ? <p className="px-sm py-md text-caption text-muted-foreground" data-desk-mention-empty="true">{t("desk.mention.none")}</p> : null}
             {(tree.rows.length || tree.found.length) && tree.projects.length ? <CommandSeparator /> : null}
             {tree.projects.length ? (
               <CommandGroup heading={t("desk.mention.projects")} data-desk-mention-group="projects">

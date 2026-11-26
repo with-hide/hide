@@ -27,6 +27,11 @@ session = ["-s", "{session}"]
 [desk]
 compaction_meta = "/_meta/opencode~1compaction"
 
+# No [switch] (docs/ARCHITECTURE.md, A session's model and effort): OpenCode
+# 2.0.29's `/models` and `/effort` open its own dialogs and take no word (a
+# word after them goes to the model as a prompt, checked 2026-11-26), so a
+# session input cannot change them.
+
 # Where an account's folders are (docs/ARCHITECTURE.md, Agent profiles and
 # accounts): OpenCode moves only with all three XDG folders.
 [account]

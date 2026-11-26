@@ -10,7 +10,7 @@ import { DiamondIcon, FileTextIcon, ImageIcon, MapIcon, PlayIcon } from "lucide-
 import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { createActions } from "../actions";
 import { AgentMark } from "../AgentMark";
-import { DeskAgentBar, DeskComposer, DeskPermissionMenu } from "../components/desk/desk-composer";
+import { DeskAgentBar, DeskComposer, DeskPermissionMenu, SessionAgentBar } from "../components/desk/desk-composer";
 import { sampleShot } from "../components/sample-shot";
 import { DeskApprovalCard, DeskChat, DeskEmpty, DeskHandedLine, type DeskChatActions, type DeskLiveAnswer } from "../components/desk/desk-chat";
 import { DeskPaneReturn } from "../components/desk/desk-entry";
@@ -216,7 +216,17 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, se
     <OutputShelf outputs={job.outputs} pulls={scenePulls(job)} selected={selectedOutput} onOpen={noop} onPull={noop} />
     <ThreadView
       job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk
-      composer={{ value: text, tray: sceneTray(files), focused, onChange: setText, onSend: noop }}
+      composer={{ value: text, tray: sceneTray(files), focused, onChange: setText, onSend: noop, bar: (
+        // The session's bar (mission-106): the agent fixed, its model a menu, and an effort Hide cannot change for OpenCode-like agents yet.
+        <SessionAgentBar
+          agent={{ kind: job.agent_kind ?? "claude", label: "Claude" }}
+          model={{ value: "opus", label: "Opus 5.5", choices: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }], fixed: null }}
+          effort={{ value: null, label: null, choices: [], fixed: "OpenCode: Hide cannot change the effort here yet: change it in the terminal" }}
+          switchHint={{ model: "/model", effort: null }}
+          onModel={noop}
+          onEffort={noop}
+        />
+      ) }}
       ask={choice}
       asks={asks}
       onAsk={noop}
