@@ -580,6 +580,13 @@ impl BrowserRoutes {
     }
 }
 
+/// Whether `path` names a place a page of a View can stand: a checkout's
+/// absolute path, or Desk's own desk, the one View tree no checkout holds,
+/// keyed by Desk's caller name (PRD desk-own-desk D-01).
+pub(crate) fn is_page_checkout(path: &str) -> bool {
+    hide_platform::path::is_wire_absolute(path) || path == hide_core::workspace_control::DESK_CALLER
+}
+
 /// What the desktop host sends to resolve or release a View's route.
 #[derive(Deserialize)]
 pub(crate) struct RouteRequest {
@@ -594,7 +601,7 @@ impl RouteRequest {
     fn valid(&self) -> bool {
         !self.device_id.is_empty()
             && self.device_id.len() <= 256
-            && hide_platform::path::is_wire_absolute(&self.checkout_path)
+            && is_page_checkout(&self.checkout_path)
             && self.checkout_path.len() <= 8192
             && !self.id.is_empty()
             && self.id.len() <= 256
@@ -854,6 +861,25 @@ fn decoded_path_for_mime(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn route_request(checkout_path: &str) -> RouteRequest {
+        RouteRequest {
+            device_id: "node-1".to_owned(),
+            checkout_path: checkout_path.to_owned(),
+            id: "view-1".to_owned(),
+            load: 1,
+            owner_pid: 42,
+        }
+    }
+
+    #[test]
+    fn a_page_of_desks_own_desk_is_a_route_the_host_may_ask_for() {
+        assert!(is_page_checkout("hide:desk"));
+        assert!(route_request("hide:desk").valid());
+        assert!(route_request("/work/repo").valid());
+        assert!(!route_request("hide:other").valid());
+        assert!(!route_request("relative/repo").valid());
+    }
 
     #[test]
     fn every_admitted_loopback_address_has_a_loopback_target() {

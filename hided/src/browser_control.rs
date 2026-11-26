@@ -902,7 +902,7 @@ impl BrowserAction {
         self.owner_pid > 0
             && !self.device_id.is_empty()
             && self.device_id.len() <= 256
-            && hide_platform::path::is_wire_absolute(&self.checkout_path)
+            && crate::browser_routes::is_page_checkout(&self.checkout_path)
             && self.checkout_path.len() <= 8192
             && !self.area_id.is_empty()
             && self.area_id.len() <= 256
