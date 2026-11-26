@@ -3547,18 +3547,24 @@ impl Runtime {
             .collect()
     }
 
-    /// The checkout, by its catalog ids, that a display of the Workspace
+    /// The checkout, as its Workspace key, that a display of the Workspace
     /// `key` reads the file `path` from (`source_key`).
+    pub(super) fn display_source_key(&self, key: &WorkspaceKey, path: &str) -> WorkspaceKey {
+        if hide_platform::path::wire_relative(&key.1, path).is_ok() {
+            key.clone()
+        } else {
+            source_key(key, path, &self.checkout_roots())
+        }
+    }
+
+    /// The checkout, by its catalog ids, that a display of the Workspace
+    /// `key` reads the file `path` from (`display_source_key`).
     pub(super) fn display_source(
         &self,
         key: &WorkspaceKey,
         path: &str,
     ) -> Option<(String, String)> {
-        let source = if hide_platform::path::wire_relative(&key.1, path).is_ok() {
-            key.clone()
-        } else {
-            source_key(key, path, &self.checkout_roots())
-        };
+        let source = self.display_source_key(key, path);
         self.catalog_workspaces()
             .filter(|workspace| workspace.device_id == source.0)
             .find_map(|workspace| {

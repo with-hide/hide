@@ -1708,8 +1708,10 @@ export class DesktopHost {
       throw new Error(reason);
     }
     if (!result || typeof result !== "object" || !("url" in result) || !("source_url" in result) || !("load" in result)
-      || typeof result.url !== "string" || typeof result.source_url !== "string" || result.load !== load) throw new Error("Invalid Browser route answer");
-    return result as ResolvedPage;
+      || typeof result.url !== "string" || typeof result.source_url !== "string" || result.load !== load
+      || ("root" in result && (typeof result.root !== "string" || result.root.length === 0 || result.root.length > 8192))) throw new Error("Invalid Browser route answer");
+    const { url, source_url, root } = result as ResolvedPage;
+    return { url, source_url, load, ...(root === undefined ? {} : { root }) };
   }
 
   private releaseBrowserRoute(workspace: string, id: string, load: number): void {

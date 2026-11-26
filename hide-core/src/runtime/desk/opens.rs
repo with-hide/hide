@@ -184,6 +184,7 @@ impl Runtime {
             .map_err(|_| CHECKOUT_UNAVAILABLE)?;
         Ok(ActionPreparation::Read(ActionSource::file(
             root,
+            (target.workspace_id, target.checkout_id),
             channel,
             path.to_owned(),
             false,

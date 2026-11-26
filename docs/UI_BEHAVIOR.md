@@ -242,7 +242,7 @@ Tabs close only from their own close control or menu; closing a tab's only pane 
 An unavailable or retired keyboard target never falls through to closing a different pane or a whole tab.
 When a connected pane selects, splits, moves, or closes a View through `hide view`, the same View layout rules apply to that pane's Workspace even while another Workspace is in front.
 These commands do not move the keyboard target; a close that would lose the last View of an unsaved document reports the refusal and keeps the draft.
-`hide file open` and `hide diff open` put the calling pane's file or changed-file diff into its own Workspace and never select that Workspace or another tab.
+`hide file open` puts a file into the calling pane's own Workspace, a file of another checkout of its device included, which stays that checkout's document, and `hide diff open` puts the calling pane's changed-file diff there; neither selects that Workspace or another tab.
 Each of them, and `hide browser open` for a page, opens one View, or finds the same file, diff or address where it already is; an agent never splits the View areas, which only the operator does (PRD unseen-agent-views D-24).
 An open with `--beside` opens nothing and is refused with the next action to run it again without `--beside`.
 What an agent opens is unseen until the operator looks at it, and waits in Needs You as `볼 것` (To look at) on its row ([status-model.md](status-model.md#a-view-to-look-at)).
