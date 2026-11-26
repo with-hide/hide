@@ -410,8 +410,9 @@ it("draws a question whose message is gone dim, whole and inert, with a hollow d
     { id: "missed-2-0", text: "다크도 찍을지", at_unix_ms: 1_500, quote: "다크도 찍을까요?" },
   ];
   const { container } = await mount(job, null, { asks });
-  const thread = (said: string) => useShellStore.setState({ sessionThread: section({ has_older: false, tail: asked(answer(said, 400), answer("라이트를 찍었어요. 다크도 찍을까요?", 1_000)) }), sessionThreadHistory: { generation: 4, pages: [] } });
-  await act(async () => thread("새로 시작했어요."));
+  const thread = (...lines: ThreadPage["updates"]) => useShellStore.setState({ sessionThread: section({ has_older: false, tail: asked(...lines, answer("라이트를 찍었어요. 다크도 찍을까요?", 1_000)) }), sessionThreadHistory: { generation: 4, pages: [] } });
+  // No answer written by the time the first was found: the record holds no message of it.
+  await act(async () => thread());
   // Folded, the line takes the first question's look: dim.
   const folded = container.querySelector<HTMLElement>("[data-desk-thread-asks-more]")!;
   expect(folded.querySelector("[data-desk-thread-ask-lead]")?.className).toContain("text-open-ask");
@@ -434,7 +435,7 @@ it("draws a question whose message is gone dim, whole and inert, with a hollow d
   expect(look("missed-1-0")).toEqual({ dot: "ring", dim: true, clamped: false, said: `${Array.from(long).slice(0, 200).join("")}…`, tail: "Not in the conversation", pressable: false, dismissable: true });
   expect(look("missed-2-0")).toEqual({ dot: "true", dim: false, clamped: true, said: "다크도 찍을까요?", tail: null, pressable: true, dismissable: true });
   // Read again with the message in it: the row is N3 가 at once.
-  await act(async () => thread(long));
+  await act(async () => thread(answer(long, 400)));
   expect(look("missed-1-0")).toEqual({ dot: "true", dim: false, clamped: true, said: long, tail: null, pressable: true, dismissable: true });
 });
 

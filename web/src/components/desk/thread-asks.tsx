@@ -11,7 +11,12 @@ import { Hint } from "../ui/tooltip";
 
 const NO_GONE: ReadonlySet<string> = new Set();
 
-/** How much of a question whose message is gone it shows: the whole sentence, since there is nowhere else to read it, up to this many characters. */
+/**
+ * How much of a question whose message is gone it shows: the whole sentence,
+ * since there is nowhere else to read it, up to this many characters. The
+ * core keeps no longer sentence (`QUOTE_CHARS`, hide-core/src/links/ledger.rs),
+ * so this only cuts a summary or a line from an older core; change the two together.
+ */
 const GONE_CHARS = 200;
 
 // One row is two lines of the question at most, with room above and below;

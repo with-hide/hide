@@ -641,36 +641,44 @@ function answersBy(turns: readonly ThreadTurn[], atUnixMs: number): Extract<Thre
     .sort((a, b) => (b.atMs ?? 0) - (a.atMs ?? 0));
 }
 
-/** A place in a message: where the sentence a question asks stands in it. */
+/** A place in a message: where the sentence a question asks stands in it, or the whole message. */
 export type AskSentence = { from: number; to: number };
 
 /**
  * Whether the question line can take the operator to where a question was
  * asked (Doop N3 가), the one place that decides it: `found`, with the message
- * and the sentence of it; `unknown` while the record is being read or holds
+ * and what of it to light; `unknown` while the record is being read or holds
  * pages before the ones read, which a press reads first; `gone` once every
- * page is read and none holds it (the agent compacted it away or started a
- * new record), a row a press does nothing on.
+ * page is read and no answer was written by the time Hide found the question
+ * (the agent started a new record, or the record was cut short), a row a
+ * press does nothing on.
  *
- * A question kept with the agent's own sentence is found in the newest answer
- * line written by the time it was found that holds that sentence; the core
- * checked the sentence against the turn's answer messages together, so it can
- * stand in an earlier message of the turn than the last. Only a question kept
- * before its sentence was goes by time alone, to the last answer written no
- * later than it was found, with no sentence lit.
+ * Time decides whether the message is there: the answer lines written no
+ * later than the question was found (`_meta.hide.at_ms`). The agent's own
+ * sentence only decides what of it to light: the newest of them that holds
+ * the sentence, lit at the sentence, since the core checked it against the
+ * turn's answer messages together; when none holds it as the core read it (a
+ * reader that writes the message a little differently), the newest of them,
+ * lit whole. A question kept before its sentence was goes to the newest of
+ * them with nothing lit.
  */
 export function askPlace(turns: readonly ThreadTurn[], ask: { at_unix_ms: number; quote?: string }, { olderLeft, settled }: { olderLeft: boolean; settled: boolean }):
   | { state: "found"; line: Extract<ThreadLine, { kind: "agent" }>; sentence: AskSentence | null }
   | { state: "unknown" | "gone" } {
   const answers = answersBy(turns, ask.at_unix_ms);
-  if (!ask.quote) {
-    const line = answers[0];
-    if (line) return { state: "found", line, sentence: null };
-  } else {
+  const newest = answers[0];
+  if (newest) {
+    if (!ask.quote) return { state: "found", line: newest, sentence: null };
     for (const line of answers) {
       const sentence = sentenceIn(line.text, ask.quote);
       if (sentence) return { state: "found", line, sentence };
     }
+    return { state: "found", line: newest, sentence: wholeOf(newest.text) };
   }
   return { state: olderLeft || !settled ? "unknown" : "gone" };
+}
+
+/** The whole of a message's text, its white space at either end left out. */
+function wholeOf(text: string): AskSentence {
+  return { from: text.length - text.trimStart().length, to: text.trimEnd().length };
 }

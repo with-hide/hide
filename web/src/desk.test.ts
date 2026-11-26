@@ -165,9 +165,19 @@ describe("where a question Hide found was asked (Doop N3 가)", () => {
     };
     expect(at("다크도 찍을까요?")).toEqual(["라이트를 찍었어요. 다크도 찍을까요?", "다크도 찍을까요?"]);
     expect(at("본인 확인은 직접 해 줄 수 있어?", 2_500)).toEqual(["본인 확인은 직접 해 줄 수 있어?", "본인 확인은 직접 해 줄 수 있어?"]);
-    // A sentence written after the question was found, or in no line read, is not where it was asked.
-    expect(at("끝났어요.", 2_500)).toBe("gone");
-    expect(at("배포할까요?")).toBe("gone");
+    // A sentence written after the question was found is not where it was asked.
+    expect(at("끝났어요.", 2_500)).toEqual(["본인 확인은 직접 해 줄 수 있어?", "본인 확인은 직접 해 줄 수 있어?"]);
+  });
+
+  it("goes to the newest answer by then, lit whole, when no answer holds the sentence as the core read it, and is gone only when no answer was written by then", () => {
+    // A reader that wrote the message a little differently: the message is there, so the question goes to it.
+    const place = askPlace(turns, { at_unix_ms: 2_500, quote: "본인 확인을 직접 해 주실 수 있나요?" }, read);
+    expect(place.state === "found" ? [place.line.text, place.line.text.slice(place.sentence!.from, place.sentence!.to)] : place.state).toEqual(["본인 확인은 직접 해 줄 수 있어?", "본인 확인은 직접 해 줄 수 있어?"]);
+    const padded = threadTurns(threadLines([text("user_message_chunk", "해줘"), answer("\n다크도 찍을까요\n", 1_000)]));
+    const whole = askPlace(padded, { at_unix_ms: 1_500, quote: "다크도 찍을까요?" }, read);
+    expect(whole.state === "found" ? whole.line.text.slice(whole.sentence!.from, whole.sentence!.to) : whole.state).toBe("다크도 찍을까요");
+    // No answer written by the time it was found: gone, whatever its sentence.
+    expect(askPlace(turns, { at_unix_ms: 900, quote: "라이트를 찍었어요." }, read).state).toBe("gone");
   });
 
   it("goes by time alone only for a question kept without its sentence: the last answer written no later than it was found", () => {
