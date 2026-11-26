@@ -6805,7 +6805,7 @@ mod tests {
             ("plan_delegate_full\u{1f}3", "do this step yourself"),
             (
                 "plan_candidate_refused\u{1f}Codex · team",
-                "worker candidates",
+                "favorite models",
             ),
         ] {
             let (code, detail) = hide_core::coordination::split_refusal(reason);
