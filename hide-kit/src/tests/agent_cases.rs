@@ -268,7 +268,7 @@ fn earlier_builds_retired_stubs_give_way_to_the_current_ones() {
             .text()
             .contains(hide_agent_hooks::intent_table!())
     );
-    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@13:"));
+    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@14:"));
     assert!(!GUIDE_SKILL.text().contains("hide task help"));
     // The mission's stub names missions and the Conductor for the agent
     // choosing it, and sends it to the help that owns the commands.
@@ -1790,8 +1790,8 @@ fn a_stub_text_changes_only_with_its_version() {
     let pinned = [
         (
             "hide",
-            13,
-            "3e69a619f7dc1e811a134043fc37b9d47f345c2d59d68541b0820aaac8787cb1",
+            14,
+            "f0810ceb00cce0dd6deeedb960af4d7f942bc8ed8b24f17e14f2f2e7a08222e5",
         ),
         (
             "hide-mission",
