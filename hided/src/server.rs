@@ -2977,7 +2977,7 @@ fn handle_client_text(
             if let KeyTarget::Pane(pane) = &target {
                 screen_input(state, connection, pane);
             }
-            input.send_to(state.core.terminals.as_ref(), target, unix_ms_now());
+            state.core.terminals.type_into(target, input, unix_ms_now());
             return Ok(ClientAction::Replies(Vec::new()));
         }
         Some("terminal_mouse") => {

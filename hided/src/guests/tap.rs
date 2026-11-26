@@ -24,7 +24,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use hide_core::guest_panes::{MAX_PANES, pane_is_listed};
 use hide_node::terminal::OutputSink;
 use hide_node_link::address::guest_pane_id;
-use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalNode};
+use hide_node_link::terminal::{GridSize, KeyTarget, ScreenInput, TerminalControl, TerminalNode};
 use hide_peer::protocol::core::Work;
 use hide_peer::protocol::panes::{self, Pane, Panes};
 use hide_peer::protocol::tap::{self, PaneSize, ToHost, ToNode};
@@ -586,24 +586,20 @@ impl TerminalNode for GuestTap {
         });
     }
 
-    fn key(&self, target: KeyTarget, bytes: Vec<u8>, _typed_at_unix_ms: u64) {
-        if let KeyTarget::Pane(pane) = target {
-            self.send(&ToNode::Input { pane, bytes });
-        }
-    }
-
     /// A paste goes to a node that reads one as a paste, for the pane's
     /// holder to wrap; to a node of an older build, which would skip it, as
     /// the keys it was before.
-    fn paste(&self, target: KeyTarget, text: Vec<u8>, _typed_at_unix_ms: u64) {
-        if let KeyTarget::Pane(pane) = target {
-            let frame = if lock(&self.state).version >= tap::PASTE_TAP {
+    fn type_into(&self, target: KeyTarget, input: ScreenInput, _typed_at_unix_ms: u64) {
+        let KeyTarget::Pane(pane) = target else {
+            return;
+        };
+        let frame = match input {
+            ScreenInput::Paste(text) if lock(&self.state).version >= tap::PASTE_TAP => {
                 ToNode::Paste { pane, text }
-            } else {
-                ToNode::Input { pane, bytes: text }
-            };
-            self.send(&frame);
-        }
+            }
+            ScreenInput::Keys(bytes) | ScreenInput::Paste(bytes) => ToNode::Input { pane, bytes },
+        };
+        self.send(&frame);
     }
 
     fn view(&self, pane: &str, size: GridSize, new_view: bool) {
@@ -726,7 +722,11 @@ pub(crate) mod tests {
                 },
             );
             changed.recv_timeout(WITHIN).expect("the welcome was read");
-            tap.paste(KeyTarget::Pane(pane.into()), b"a\rb".to_vec(), 1);
+            tap.type_into(
+                KeyTarget::Pane(pane.into()),
+                ScreenInput::Paste(b"a\rb".to_vec()),
+                1,
+            );
             let expected = match pasted_as {
                 "input" => ToNode::Input {
                     pane: pane.to_owned(),
@@ -817,7 +817,11 @@ pub(crate) mod tests {
 
         // What a screen of this machine does reaches the node by the
         // node's own pane id.
-        tap.key(KeyTarget::Pane("w1:p1".to_owned()), b"ls\n".to_vec(), 0);
+        tap.type_into(
+            KeyTarget::Pane("w1:p1".to_owned()),
+            ScreenInput::Keys(b"ls\n".to_vec()),
+            0,
+        );
         assert_eq!(
             heard(&mut node),
             ToNode::Input {

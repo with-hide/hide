@@ -268,55 +268,6 @@ impl Router {
         Self::route_in(&lock(&self.routes), pane)
     }
 
-    /// A screen's key or paste, to the node that holds its pane: a request
-    /// to this machine's node, which opened it.
-    fn type_into(&self, target: KeyTarget, input: ScreenInput, typed_at_unix_ms: u64) {
-        let KeyTarget::Pane(scoped) = target else {
-            input.send_to(self.local.as_ref(), target, typed_at_unix_ms);
-            return;
-        };
-        let route = {
-            let mut routes = lock(&self.routes);
-            let now = Instant::now();
-            match &mut routes.keyed {
-                Some((keyed, at)) if *keyed == scoped => *at = now,
-                keyed => *keyed = Some((scoped.clone(), now)),
-            }
-            let route = Self::route_in(&routes, &scoped);
-            // A key for a device with no link is refused, never kept for a
-            // later link (D-19, B17), and a flood of them is reported once
-            // a window and counted after that, like a node's own refusals.
-            let counted = matches!(route, Route::Unrouted)
-                && routes
-                    .refusals
-                    .refuse(&scoped, "terminal.device_disconnected", now)
-                    != Refusal::Report;
-            let due = routes.due();
-            drop(routes);
-            log_due(due);
-            if counted {
-                return;
-            }
-            route
-        };
-        match route {
-            Route::Local => input.send_to(
-                self.local.as_ref(),
-                KeyTarget::Pane(scoped),
-                typed_at_unix_ms,
-            ),
-            Route::Device { node, pane, .. } | Route::Guest { node, pane } => {
-                input.send_to(node.as_ref(), KeyTarget::Pane(pane), typed_at_unix_ms)
-            }
-            Route::Unrouted => self.reports.report(TerminalReport::Error {
-                pane: scoped,
-                kind: "terminal.device_disconnected".to_owned(),
-                message: "This device's terminals are not connected, so the key was not sent"
-                    .to_owned(),
-            }),
-        }
-    }
-
     fn route_in(routes: &Routes, pane: &str) -> Route {
         if let Some((guest, source)) = hide_node_link::address::guest_pane(pane) {
             return match routes.guests.get(guest) {
@@ -607,12 +558,51 @@ impl TerminalNode for Router {
         }
     }
 
-    fn key(&self, target: KeyTarget, bytes: Vec<u8>, typed_at_unix_ms: u64) {
-        self.type_into(target, ScreenInput::Keys(bytes), typed_at_unix_ms);
-    }
-
-    fn paste(&self, target: KeyTarget, text: Vec<u8>, typed_at_unix_ms: u64) {
-        self.type_into(target, ScreenInput::Paste(text), typed_at_unix_ms);
+    /// A screen's key or paste, to the node that holds its pane: a request
+    /// to this machine's node, which opened it.
+    fn type_into(&self, target: KeyTarget, input: ScreenInput, typed_at_unix_ms: u64) {
+        let KeyTarget::Pane(scoped) = target else {
+            self.local.type_into(target, input, typed_at_unix_ms);
+            return;
+        };
+        let route = {
+            let mut routes = lock(&self.routes);
+            let now = Instant::now();
+            match &mut routes.keyed {
+                Some((keyed, at)) if *keyed == scoped => *at = now,
+                keyed => *keyed = Some((scoped.clone(), now)),
+            }
+            let route = Self::route_in(&routes, &scoped);
+            // A key for a device with no link is refused, never kept for a
+            // later link (D-19, B17), and a flood of them is reported once
+            // a window and counted after that, like a node's own refusals.
+            let counted = matches!(route, Route::Unrouted)
+                && routes
+                    .refusals
+                    .refuse(&scoped, "terminal.device_disconnected", now)
+                    != Refusal::Report;
+            let due = routes.due();
+            drop(routes);
+            log_due(due);
+            if counted {
+                return;
+            }
+            route
+        };
+        match route {
+            Route::Local => self
+                .local
+                .type_into(KeyTarget::Pane(scoped), input, typed_at_unix_ms),
+            Route::Device { node, pane, .. } | Route::Guest { node, pane } => {
+                node.type_into(KeyTarget::Pane(pane), input, typed_at_unix_ms)
+            }
+            Route::Unrouted => self.reports.report(TerminalReport::Error {
+                pane: scoped,
+                kind: "terminal.device_disconnected".to_owned(),
+                message: "This device's terminals are not connected, so the key was not sent"
+                    .to_owned(),
+            }),
+        }
     }
 
     fn view(&self, pane: &str, size: GridSize, new_view: bool) {
@@ -805,11 +795,11 @@ mod tests {
         fn control(&self, control: TerminalControl) {
             self.controls.lock().unwrap().push(control);
         }
-        fn key(&self, target: KeyTarget, bytes: Vec<u8>, _typed_at_unix_ms: u64) {
-            self.keys.lock().unwrap().push((target, bytes));
-        }
-        fn paste(&self, target: KeyTarget, text: Vec<u8>, _typed_at_unix_ms: u64) {
-            self.pastes.lock().unwrap().push((target, text));
+        fn type_into(&self, target: KeyTarget, input: ScreenInput, _typed_at_unix_ms: u64) {
+            match input {
+                ScreenInput::Keys(bytes) => self.keys.lock().unwrap().push((target, bytes)),
+                ScreenInput::Paste(text) => self.pastes.lock().unwrap().push((target, text)),
+            }
         }
         fn view(&self, _pane: &str, _size: GridSize, _new_view: bool) {}
         fn redraw(&self, _pane: &str) {}
@@ -886,12 +876,16 @@ mod tests {
                 TerminalControl::Focus { pane: None }
             ]
         );
-        router.key(
+        router.type_into(
             KeyTarget::Pane("remote:mini:pane:w2:p3".into()),
-            b"a".to_vec(),
+            ScreenInput::Keys(b"a".to_vec()),
             1,
         );
-        router.key(KeyTarget::Pane("w1:p1".into()), b"b".to_vec(), 1);
+        router.type_into(
+            KeyTarget::Pane("w1:p1".into()),
+            ScreenInput::Keys(b"b".to_vec()),
+            1,
+        );
         router.control(attach("remote:mini:pane:w2:p3"));
         assert_eq!(
             mini.keys.lock().unwrap().as_slice(),
@@ -939,9 +933,17 @@ mod tests {
             "remote:mini:pane:w2:p3",
             "guest:macbook:pane:w1:p1",
         ] {
-            router.paste(KeyTarget::Pane(pane.into()), b"a\rb".to_vec(), 1);
+            router.type_into(
+                KeyTarget::Pane(pane.into()),
+                ScreenInput::Paste(b"a\rb".to_vec()),
+                1,
+            );
         }
-        router.paste(KeyTarget::Request("new-pane".into()), b"c".to_vec(), 1);
+        router.type_into(
+            KeyTarget::Request("new-pane".into()),
+            ScreenInput::Paste(b"c".to_vec()),
+            1,
+        );
         let pasted = |node: &Recorder| node.pastes.lock().unwrap().clone();
         assert_eq!(
             pasted(&local),
@@ -963,9 +965,9 @@ mod tests {
         }
 
         router.remove_device("mini");
-        router.paste(
+        router.type_into(
             KeyTarget::Pane("remote:mini:pane:w2:p3".into()),
-            b"d".to_vec(),
+            ScreenInput::Paste(b"d".to_vec()),
             2,
         );
         assert_eq!(pasted(&mini).len(), 1);
@@ -985,9 +987,9 @@ mod tests {
         let tap = Arc::new(Recorder::default());
         router.install_device("macbook", Arc::clone(&device) as Arc<dyn TerminalNode>);
         router.install_guest("macbook", Arc::clone(&tap) as Arc<dyn TerminalNode>);
-        router.key(
+        router.type_into(
             KeyTarget::Pane("guest:macbook:pane:w1:p1".into()),
-            b"a".to_vec(),
+            ScreenInput::Keys(b"a".to_vec()),
             1,
         );
         router.control(attach("guest:macbook:pane:w1:p1"));
@@ -1009,9 +1011,9 @@ mod tests {
 
         // Without its guest the pane takes no key, and says so.
         router.remove_guest("macbook");
-        router.key(
+        router.type_into(
             KeyTarget::Pane("guest:macbook:pane:w1:p1".into()),
-            b"b".to_vec(),
+            ScreenInput::Keys(b"b".to_vec()),
             2,
         );
         assert_eq!(tap.keys.lock().unwrap().len(), 1);
@@ -1127,9 +1129,9 @@ mod tests {
             hub.forgotten.lock().unwrap().as_slice(),
             ["remote:mini:pane:w2:p3"]
         );
-        router.key(
+        router.type_into(
             KeyTarget::Pane("remote:mini:pane:w2:p3".into()),
-            b"a".to_vec(),
+            ScreenInput::Keys(b"a".to_vec()),
             1,
         );
         router.control(TerminalControl::Attach {
@@ -1347,9 +1349,9 @@ mod tests {
             submitted: false,
             focus: true,
         };
-        router.key(
+        router.type_into(
             KeyTarget::Pane("remote:mini:pane:w2:p3".into()),
-            b"a".to_vec(),
+            ScreenInput::Keys(b"a".to_vec()),
             1,
         );
         DeviceSink::report(&router, "mini", input("w2:p3"));
@@ -1359,12 +1361,16 @@ mod tests {
             .checked_sub(KEY_FOCUS_WINDOW)
             .expect("an instant that long ago");
         DeviceSink::report(&router, "mini", input("w2:p3"));
-        router.key(
+        router.type_into(
             KeyTarget::Pane("remote:mini:pane:w2:p3".into()),
-            b"a".to_vec(),
+            ScreenInput::Keys(b"a".to_vec()),
             1,
         );
-        router.key(KeyTarget::Pane("w1:p1".into()), b"b".to_vec(), 2);
+        router.type_into(
+            KeyTarget::Pane("w1:p1".into()),
+            ScreenInput::Keys(b"b".to_vec()),
+            2,
+        );
         DeviceSink::report(&router, "mini", input("w2:p3"));
         let focus = reports
             .0
@@ -1493,9 +1499,9 @@ mod tests {
         let (router, _local, _hub, reports) = router();
         let started = Instant::now();
         for index in 0..1_000 {
-            router.key(
+            router.type_into(
                 KeyTarget::Pane("remote:mini:pane:w2:p3".into()),
-                b"k".to_vec(),
+                ScreenInput::Keys(b"k".to_vec()),
                 index,
             );
         }

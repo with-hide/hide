@@ -30,8 +30,8 @@ use hide_node::terminal::OutputSink;
 use hide_node::terminal::copies::MAX_WAITING_COPIES;
 use hide_node_link::address::is_pane_of;
 use hide_node_link::terminal::{
-    TerminalClipboard, TerminalDown, TerminalLine, TerminalNode, TerminalOutput, TerminalUp,
-    decode_base64, encode_base64,
+    ScreenInput, TerminalClipboard, TerminalDown, TerminalLine, TerminalNode, TerminalOutput,
+    TerminalUp, decode_base64, encode_base64,
 };
 use serde_json::json;
 
@@ -776,11 +776,12 @@ fn take_down(text: &str, terminals: &dyn TerminalNode, own_node: &str) -> Result
             // Stamped here, on the core's clock, as a key from a screen of
             // this machine is.
             let now = crate::server::unix_ms_now();
-            if paste {
-                terminals.paste(target, bytes, now);
+            let input = if paste {
+                ScreenInput::Paste(bytes)
             } else {
-                terminals.key(target, bytes, now);
-            }
+                ScreenInput::Keys(bytes)
+            };
+            terminals.type_into(target, input, now);
         }
         // A node's screens send their views with their other events, so the
         // core decides the grid each is drawn at (`pane_sizes`).
@@ -808,11 +809,11 @@ mod tests {
 
     impl TerminalNode for Keys {
         fn control(&self, _: hide_node_link::terminal::TerminalControl) {}
-        fn key(&self, _: hide_node_link::terminal::KeyTarget, bytes: Vec<u8>, _: u64) {
+        fn type_into(&self, _: hide_node_link::terminal::KeyTarget, input: ScreenInput, _: u64) {
+            let ScreenInput::Keys(bytes) = input else {
+                unreachable!("these tests relay keys only")
+            };
             lock(&self.0).push(bytes);
-        }
-        fn paste(&self, _: hide_node_link::terminal::KeyTarget, _: Vec<u8>, _: u64) {
-            unreachable!("these tests relay keys only");
         }
         fn view(&self, _: &str, _: hide_node_link::terminal::GridSize, _: bool) {}
         fn redraw(&self, _: &str) {}
@@ -843,14 +844,21 @@ mod tests {
 
     impl TerminalNode for Typed {
         fn control(&self, _: hide_node_link::terminal::TerminalControl) {}
-        fn key(&self, _: hide_node_link::terminal::KeyTarget, bytes: Vec<u8>, _: u64) {
-            lock(&self.keys).push(bytes);
-        }
-        fn paste(&self, target: hide_node_link::terminal::KeyTarget, text: Vec<u8>, _: u64) {
-            let hide_node_link::terminal::KeyTarget::Pane(pane) = target else {
-                unreachable!("these tests paste into panes")
-            };
-            lock(&self.pastes).push((pane, text));
+        fn type_into(
+            &self,
+            target: hide_node_link::terminal::KeyTarget,
+            input: ScreenInput,
+            _: u64,
+        ) {
+            match input {
+                ScreenInput::Keys(bytes) => lock(&self.keys).push(bytes),
+                ScreenInput::Paste(text) => {
+                    let hide_node_link::terminal::KeyTarget::Pane(pane) = target else {
+                        unreachable!("these tests paste into panes")
+                    };
+                    lock(&self.pastes).push((pane, text));
+                }
+            }
         }
         fn view(&self, _: &str, _: hide_node_link::terminal::GridSize, _: bool) {}
         fn redraw(&self, _: &str) {}

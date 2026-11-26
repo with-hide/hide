@@ -337,11 +337,8 @@ impl ScreenTerminals {
                     "This machine's panes are not reachable now; this key was not sent".to_owned(),
                 );
             };
-            input.send_to(
-                link.terminals.as_ref(),
-                KeyTarget::Pane(own.to_owned()),
-                typed_at_unix_ms,
-            );
+            link.terminals
+                .type_into(KeyTarget::Pane(own.to_owned()), input, typed_at_unix_ms);
             return Ok(());
         }
         let (bytes, paste) = match input {

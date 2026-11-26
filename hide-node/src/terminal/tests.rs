@@ -499,13 +499,19 @@ impl Harness {
     }
 
     fn key(&self, pane: &str, bytes: &[u8]) {
-        self.service
-            .key(KeyTarget::Pane(pane.into()), bytes.to_vec(), unix_ms());
+        self.service.type_into(
+            KeyTarget::Pane(pane.into()),
+            ScreenInput::Keys(bytes.to_vec()),
+            unix_ms(),
+        );
     }
 
     fn paste(&self, pane: &str, text: &[u8]) {
-        self.service
-            .paste(KeyTarget::Pane(pane.into()), text.to_vec(), unix_ms());
+        self.service.type_into(
+            KeyTarget::Pane(pane.into()),
+            ScreenInput::Paste(text.to_vec()),
+            unix_ms(),
+        );
     }
 }
 
@@ -1009,18 +1015,18 @@ fn a_paste_for_a_sleeping_pane_waits_for_the_agent() {
 #[test]
 fn keys_sent_before_the_core_names_their_creation_reach_the_pane_it_makes() {
     let harness = harness(RetryPolicy::Automatic);
-    harness.service.key(
+    harness.service.type_into(
         KeyTarget::Request("req-1".into()),
-        b"echo".to_vec(),
+        ScreenInput::Keys(b"echo".to_vec()),
         unix_ms(),
     );
     harness.service.control(TerminalControl::RequestOpen {
         request: "req-1".into(),
         fork: false,
     });
-    harness.service.key(
+    harness.service.type_into(
         KeyTarget::Request("req-1".into()),
-        b" hi\r".to_vec(),
+        ScreenInput::Keys(b" hi\r".to_vec()),
         unix_ms(),
     );
     harness.service.control(TerminalControl::RequestResolve {

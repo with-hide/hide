@@ -858,7 +858,7 @@ impl hide_host::serve::Terminals for NodeTerminals {
                     } else {
                         ScreenInput::Keys(bytes)
                     };
-                    self.with_service(|service| input.send_to(service, target, typed_at_unix_ms))
+                    self.with_service(|service| service.type_into(target, input, typed_at_unix_ms))
                 }
                 Err(message) => crate::diagnostic!(json!({
                     "component": "node_terminal",
@@ -924,12 +924,8 @@ impl TerminalNode for NodeTerminals {
         self.take_control(control);
     }
 
-    fn key(&self, target: KeyTarget, bytes: Vec<u8>, typed_at_unix_ms: u64) {
-        self.with_service(|service| service.key(target, bytes, typed_at_unix_ms));
-    }
-
-    fn paste(&self, target: KeyTarget, text: Vec<u8>, typed_at_unix_ms: u64) {
-        self.with_service(|service| service.paste(target, text, typed_at_unix_ms));
+    fn type_into(&self, target: KeyTarget, input: ScreenInput, typed_at_unix_ms: u64) {
+        self.with_service(|service| service.type_into(target, input, typed_at_unix_ms));
     }
 
     fn view(&self, pane: &str, size: GridSize, new_view: bool) {
@@ -1407,30 +1403,6 @@ impl TerminalNode for DeviceTerminals {
         self.send(TerminalDown::Control { control });
     }
 
-    fn key(&self, target: KeyTarget, bytes: Vec<u8>, typed_at_unix_ms: u64) {
-        self.type_into(target, ScreenInput::Keys(bytes), typed_at_unix_ms);
-    }
-
-    fn paste(&self, target: KeyTarget, text: Vec<u8>, typed_at_unix_ms: u64) {
-        self.type_into(target, ScreenInput::Paste(text), typed_at_unix_ms);
-    }
-
-    fn view(&self, pane: &str, size: GridSize, new_view: bool) {
-        self.send(TerminalDown::View {
-            pane: pane.to_owned(),
-            size,
-            new_view,
-        });
-    }
-
-    fn redraw(&self, pane: &str) {
-        self.send(TerminalDown::Redraw {
-            pane: pane.to_owned(),
-        });
-    }
-}
-
-impl DeviceTerminals {
     /// A screen's key or paste for one of the device's panes, queued for
     /// the link in the order typed and bounded as keys are.
     fn type_into(&self, target: KeyTarget, input: ScreenInput, typed_at_unix_ms: u64) {
@@ -1513,6 +1485,20 @@ impl DeviceTerminals {
             return;
         }
         self.shared.ready.notify_one();
+    }
+
+    fn view(&self, pane: &str, size: GridSize, new_view: bool) {
+        self.send(TerminalDown::View {
+            pane: pane.to_owned(),
+            size,
+            new_view,
+        });
+    }
+
+    fn redraw(&self, pane: &str) {
+        self.send(TerminalDown::Redraw {
+            pane: pane.to_owned(),
+        });
     }
 }
 

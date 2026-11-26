@@ -154,7 +154,11 @@ fn a_shell_on_an_earlier_builds_holder_is_renewed_under_its_id_and_a_current_one
             while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
                 typing.recv_timeout(Duration::from_millis(2))
             {
-                service.key(KeyTarget::Pane(PANE.to_owned()), b"x".to_vec(), 0);
+                service.type_into(
+                    KeyTarget::Pane(PANE.to_owned()),
+                    ScreenInput::Keys(b"x".to_vec()),
+                    0,
+                );
             }
         });
         let renewed = renew_pane(&next.linked, &shell_start(&folder));
@@ -523,8 +527,11 @@ fn keeps_a_pane_whose_writes_do_not_settle(released: bool) {
     // that answer immediate, which is a different path.
     let piece = hide_node_link::terminal::MAX_UNSENT_KEY_BYTES / 8;
     for _ in 0..8 {
-        next.service
-            .key(KeyTarget::Pane(PANE.to_owned()), vec![b' '; piece], 0);
+        next.service.type_into(
+            KeyTarget::Pane(PANE.to_owned()),
+            ScreenInput::Keys(vec![b' '; piece]),
+            0,
+        );
     }
     thread::scope(|scope| {
         // The holder is stopped, so the input can never be written: it is

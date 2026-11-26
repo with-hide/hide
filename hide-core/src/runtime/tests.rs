@@ -386,12 +386,13 @@ impl hide_node_link::terminal::TerminalNode for RecordedTerminals {
         self.controls.lock().unwrap().push(control);
     }
 
-    fn key(&self, _: hide_node_link::terminal::KeyTarget, _: Vec<u8>, _: u64) {
+    fn type_into(
+        &self,
+        _: hide_node_link::terminal::KeyTarget,
+        _: hide_node_link::terminal::ScreenInput,
+        _: u64,
+    ) {
         unreachable!("keys reach the node beside the screen, never through the core");
-    }
-
-    fn paste(&self, _: hide_node_link::terminal::KeyTarget, _: Vec<u8>, _: u64) {
-        unreachable!("pastes reach the node beside the screen, never through the core");
     }
 
     fn view(&self, _: &str, _: GridSize, _: bool) {

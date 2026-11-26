@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use hide_node::terminal::OutputSink;
 use hide_node::terminal::device::NodeTerminals;
-use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalNode};
+use hide_node_link::terminal::{GridSize, KeyTarget, ScreenInput, TerminalControl, TerminalNode};
 use hide_peer::protocol::tap::{self, PaneSize, ToHost, ToNode};
 use hide_platform::ipc::{LocalListener, LocalStream, ShutdownHandle};
 use serde_json::json;
@@ -348,10 +348,18 @@ impl TapHub {
             match frame {
                 ToNode::Hello { .. } => {}
                 ToNode::Input { pane, bytes } => {
-                    node.key(KeyTarget::Pane(pane), bytes, now_unix_ms());
+                    node.type_into(
+                        KeyTarget::Pane(pane),
+                        ScreenInput::Keys(bytes),
+                        now_unix_ms(),
+                    );
                 }
                 ToNode::Paste { pane, text } => {
-                    node.paste(KeyTarget::Pane(pane), text, now_unix_ms());
+                    node.type_into(
+                        KeyTarget::Pane(pane),
+                        ScreenInput::Paste(text),
+                        now_unix_ms(),
+                    );
                 }
                 ToNode::Resize { pane, rows, cols } => {
                     node.size_from_tap(&pane, GridSize { rows, cols });

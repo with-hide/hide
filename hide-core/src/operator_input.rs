@@ -880,10 +880,7 @@ mod tests {
         fn control(&self, _: TerminalControl) {
             panic!("an operator write must not attach or focus");
         }
-        fn key(&self, _: KeyTarget, _: Vec<u8>, _: u64) {
-            panic!("an operator write goes to the engine, not the key path");
-        }
-        fn paste(&self, _: KeyTarget, _: Vec<u8>, _: u64) {
+        fn type_into(&self, _: KeyTarget, _: hide_node_link::terminal::ScreenInput, _: u64) {
             panic!("an operator write goes to the engine, not the key path");
         }
         fn view(&self, _: &str, _: GridSize, _: bool) {

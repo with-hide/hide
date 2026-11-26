@@ -38,8 +38,13 @@ impl TerminalNode for NoTerminals {
             "control": serde_json::to_value(&control).ok().and_then(|value| value.get("op").cloned()),
         }));
     }
-    fn key(&self, _target: hide_node_link::terminal::KeyTarget, _bytes: Vec<u8>, _at: u64) {}
-    fn paste(&self, _target: hide_node_link::terminal::KeyTarget, _text: Vec<u8>, _at: u64) {}
+    fn type_into(
+        &self,
+        _target: hide_node_link::terminal::KeyTarget,
+        _input: hide_node_link::terminal::ScreenInput,
+        _at: u64,
+    ) {
+    }
     fn view(&self, _pane: &str, _size: GridSize, _new_view: bool) {}
     fn redraw(&self, _pane: &str) {}
 }

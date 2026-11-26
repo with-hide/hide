@@ -41,7 +41,7 @@ use hide_node_link::device::{
 use hide_node_link::holders::{HolderStart, PaneHolders};
 use hide_node_link::link_panes::LinkPanes;
 use hide_node_link::protocol::{Call, KitAction, RootOpened, RootRef};
-use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalReport};
+use hide_node_link::terminal::{GridSize, KeyTarget, ScreenInput, TerminalControl, TerminalReport};
 use hide_node_link::{NodeLink, call_as};
 use serde_json::Value;
 
@@ -327,7 +327,11 @@ fn typed<T>(
         .terminals
         .as_ref()
         .expect("terminals ride the link");
-    terminals.key(KeyTarget::Pane(pane.to_owned()), line.to_vec(), 1);
+    terminals.type_into(
+        KeyTarget::Pane(pane.to_owned()),
+        ScreenInput::Keys(line.to_vec()),
+        1,
+    );
     wait_for("the typed line's output", || {
         until(&String::from_utf8_lossy(&sink.output.lock().unwrap()))
     })

@@ -4017,7 +4017,7 @@ On Windows the window asks Windows once for the firewall rules when the operator
 
 Terminal bytes never pass the core (PRD core-host-node-terminal D-02, D-11).
 A key goes from the screen to the node that holds its pane, and the pane's output goes from that node to the screen, while the core decides which panes attach and hears only facts about them.
-A paste goes the same way as the `key` event marked `paste` (`TerminalNode::paste`, `hide_node_link::terminal::ScreenInput`), its line breaks carriage returns, and reaches the pane's holder as a paste, which the holder wraps in bracketed paste only when the program turned that mode on: the screen draws from fragments that never carry the mode, so xterm's own paste sent every line break as Enter (with-hide/hide issue 2952).
+A paste goes the same way as the `key` event marked `paste` (`TerminalNode::type_into` with `hide_node_link::terminal::ScreenInput::Paste`), its line breaks carriage returns, and reaches the pane's holder as a paste, which the holder wraps in bracketed paste only when the program turned that mode on: the screen draws from fragments that never carry the mode, so xterm's own paste sent every line break as Enter (with-hide/hide issue 2952).
 It is held, capped and refused as a key is, and travels down a device's link as a `key` line marked `paste` (node link protocol 106), up a node's terminals relay to its core the same way, and over a guest's tap as a `paste` frame (tap 2) to a node that welcomed that version, or as the keys it was to an older one.
 Three parts carry the bytes, all outside `Mutex<Runtime>`.
 

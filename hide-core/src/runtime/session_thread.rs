@@ -1233,11 +1233,13 @@ mod tests {
 
     impl hide_node_link::terminal::TerminalNode for GrantingTerminals {
         fn control(&self, _: hide_node_link::terminal::TerminalControl) {}
-        fn key(&self, _: hide_node_link::terminal::KeyTarget, _: Vec<u8>, _: u64) {
-            unreachable!("a thread's input never types keys");
-        }
-        fn paste(&self, _: hide_node_link::terminal::KeyTarget, _: Vec<u8>, _: u64) {
-            unreachable!("a thread's input never pastes through a screen's path");
+        fn type_into(
+            &self,
+            _: hide_node_link::terminal::KeyTarget,
+            _: hide_node_link::terminal::ScreenInput,
+            _: u64,
+        ) {
+            unreachable!("a thread's input never types through a screen's path");
         }
         fn view(&self, _: &str, _: hide_node_link::terminal::GridSize, _: bool) {
             unreachable!("a thread never attaches its pane");

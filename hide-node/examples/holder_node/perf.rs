@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use hide_node_link::terminal::{KeyTarget, TerminalNode};
+use hide_node_link::terminal::{KeyTarget, ScreenInput, TerminalNode};
 use serde_json::{Value, json};
 
 use crate::{Node, number, text, wait_limit};
@@ -64,9 +64,11 @@ fn latency(node: &Node, request: &Value) -> Result<Value, String> {
         let token = format!("<{body}>");
         node.screens.arm(&pane, body.as_bytes());
         let typed = Instant::now();
-        node.terminals
-            .service
-            .key(KeyTarget::Pane(pane.clone()), token.clone().into_bytes(), 0);
+        node.terminals.service.type_into(
+            KeyTarget::Pane(pane.clone()),
+            ScreenInput::Keys(token.clone().into_bytes()),
+            0,
+        );
         match node.screens.wait_seen(limit) {
             Some(seen) => micros.push(seen.saturating_duration_since(typed).as_micros() as u64),
             None => lost.push(index),

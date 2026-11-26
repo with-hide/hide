@@ -4,7 +4,7 @@
 //! The core decides which panes attach and says so with
 //! [`TerminalControl`]; this service attaches, holds, writes and reads, and
 //! tells the core what changed with [`TerminalReport`]. A key from the screen
-//! reaches a pane's writer through [`TerminalNode::key`] and a frame reaches
+//! reaches a pane's writer through [`TerminalNode::type_into`] and a frame reaches
 //! the screen through the [`OutputSink`], neither passing the core.
 //!
 //! The rules are the ones the core ran before this layer (D-12): an attach
@@ -41,7 +41,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hide_node_link::terminal::{
     AttachmentInputOutcome, GridSize, KeyTarget, MAX_ATTACHED_PANES, MAX_ATTACHMENT_INPUT_BYTES,
-    MAX_FRAME_WATCHES, PaneTerminalState, TerminalControl, TerminalNode, TerminalReport,
+    MAX_FRAME_WATCHES, PaneTerminalState, ScreenInput, TerminalControl, TerminalNode,
+    TerminalReport,
 };
 use serde_json::json;
 
@@ -944,12 +945,12 @@ impl TerminalNode for Service {
             .run(|inner, shared| inner.control(shared, control));
     }
 
-    fn key(&self, target: KeyTarget, bytes: Vec<u8>, typed_at_unix_ms: u64) {
-        self.operator_input(target, Typed::Bytes(bytes), typed_at_unix_ms);
-    }
-
-    fn paste(&self, target: KeyTarget, text: Vec<u8>, typed_at_unix_ms: u64) {
-        self.operator_input(target, Typed::Paste(text), typed_at_unix_ms);
+    fn type_into(&self, target: KeyTarget, input: ScreenInput, typed_at_unix_ms: u64) {
+        let typed = match input {
+            ScreenInput::Keys(bytes) => Typed::Bytes(bytes),
+            ScreenInput::Paste(text) => Typed::Paste(text),
+        };
+        self.operator_input(target, typed, typed_at_unix_ms);
     }
 
     fn view(&self, pane: &str, size: GridSize, new_view: bool) {

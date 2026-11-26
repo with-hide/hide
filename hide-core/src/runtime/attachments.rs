@@ -859,18 +859,16 @@ impl Runtime {
                 );
                 self.fail_attachment(&error, true);
             }
-            Ok(paths) => {
-                match ingress::quoted_paths(&paths, pending.remote.is_some()) {
-                    Ok(paste) => {
-                        pending.paste = Some(paste);
-                        self.deliver_attachment();
-                    }
-                    Err(error) => {
-                        self.fail_attachment(&error, false);
-                        return true;
-                    }
+            Ok(paths) => match ingress::quoted_paths(&paths, pending.remote.is_some()) {
+                Ok(paste) => {
+                    pending.paste = Some(paste);
+                    self.deliver_attachment();
                 }
-            }
+                Err(error) => {
+                    self.fail_attachment(&error, false);
+                    return true;
+                }
+            },
         }
         self.sync_async_operations();
         true

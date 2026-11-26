@@ -273,7 +273,7 @@ pub enum TerminalDown {
         data: String,
         typed_at_unix_ms: u64,
         /// The text was pasted: the pane's holder wraps it for the program's
-        /// paste mode when it writes it ([`TerminalNode::paste`]).
+        /// paste mode when it writes it ([`TerminalNode::type_into`]).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         paste: bool,
     },
@@ -429,17 +429,13 @@ pub trait TerminalNode: Send + Sync {
         reply(Err(InputPermitError::Unavailable));
     }
 
-    /// A key from the screen, typed at `typed_at_unix_ms`. A key the node
-    /// cannot take is reported, never written elsewhere.
-    fn key(&self, target: KeyTarget, bytes: Vec<u8>, typed_at_unix_ms: u64);
-
-    /// Text a screen pasted, at `typed_at_unix_ms`, its line breaks carriage
-    /// returns as a terminal sends them. It goes to the pane's holder as a
-    /// paste, which the holder wraps in bracketed paste only when the
-    /// program turned that mode on: a screen draws from fragments that never
-    /// carry the mode, so it cannot know (with-hide/hide issue 2952). Taken,
-    /// held and refused as a key is.
-    fn paste(&self, target: KeyTarget, text: Vec<u8>, typed_at_unix_ms: u64);
+    /// What a screen typed into a pane at `typed_at_unix_ms`: keys, or text
+    /// it pasted. A paste goes to the pane's holder as a paste, which the
+    /// holder wraps in bracketed paste only when the program turned that mode
+    /// on: a screen draws from fragments that never carry the mode, so it
+    /// cannot know (with-hide/hide issue 2952). Input the node cannot take is
+    /// reported, never written elsewhere.
+    fn type_into(&self, target: KeyTarget, input: ScreenInput, typed_at_unix_ms: u64);
 
     /// The grid the screen draws the pane at; `new_view` is a view that has
     /// nothing drawn yet and needs a full frame.
@@ -449,9 +445,9 @@ pub trait TerminalNode: Send + Sync {
     fn redraw(&self, pane: &str);
 }
 
-/// What a screen typed into a pane, for a caller that passes keys and pastes
-/// on alike: keys already encoded ([`TerminalNode::key`]), or pasted text
-/// ([`TerminalNode::paste`]).
+/// What a screen typed into a pane ([`TerminalNode::type_into`]): keys
+/// already encoded, or pasted text, its line breaks carriage returns as a
+/// terminal sends them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ScreenInput {
     Keys(Vec<u8>),
@@ -459,19 +455,6 @@ pub enum ScreenInput {
 }
 
 impl ScreenInput {
-    /// Hands it to `node` as what it is.
-    pub fn send_to<N: TerminalNode + ?Sized>(
-        self,
-        node: &N,
-        target: KeyTarget,
-        typed_at_unix_ms: u64,
-    ) {
-        match self {
-            Self::Keys(bytes) => node.key(target, bytes, typed_at_unix_ms),
-            Self::Paste(text) => node.paste(target, text, typed_at_unix_ms),
-        }
-    }
-
     /// Its bytes, which a cap counts.
     pub fn len(&self) -> usize {
         match self {

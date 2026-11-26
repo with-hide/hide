@@ -2883,11 +2883,8 @@ mod tests {
             assert!(self.0.send(reply).is_ok());
         }
         fn control(&self, _: TerminalControl) {}
-        fn key(&self, _: KeyTarget, _: Vec<u8>, _: u64) {
+        fn type_into(&self, _: KeyTarget, _: hide_node_link::terminal::ScreenInput, _: u64) {
             panic!("no raw phone keys");
-        }
-        fn paste(&self, _: KeyTarget, _: Vec<u8>, _: u64) {
-            panic!("no raw phone pastes");
         }
         fn view(&self, _: &str, _: GridSize, _: bool) {
             panic!("no phone attach");
