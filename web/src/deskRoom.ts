@@ -283,38 +283,41 @@ export function tabNames(tabs: readonly DeskTab[], projectOf: (tab: Extract<Desk
 
 /**
  * Whether `written`, a file as a session's call typed it, names the View
- * `made` opened (B16): the same file once a relative spelling is read under
- * `folder`, the session's own folder, as the call read it; with no folder a
- * relative spelling names nothing, since its end alone would take a file of
- * the same name in another folder. A View's path is spelled as the wire
- * spells it, `/` between names on every system, so a Windows device's
- * backslashes are read as `/` and its drive letter in either case
- * (docs/ARCHITECTURE.md, The platform layer).
+ * `made` opened (B16): only an absolute path, the same file once `.` and
+ * `..` are read. A relative spelling names nothing, since the folder the
+ * call read it from may not be the pane's (the agent can `cd` first), and a
+ * file of the same name elsewhere would be taken for it. A View's path is
+ * spelled as the wire spells it, `/` between names on every system, so a
+ * Windows device's backslashes are read as `/` and its drive letter in
+ * either case (docs/ARCHITECTURE.md, The platform layer).
  */
-export function namesView(made: DeskOutput, written: string, folder: string | null): boolean {
+export function namesView(made: DeskOutput, written: string): boolean {
   if (made.path === null) return false;
   const windows = /^[A-Za-z]:\//u.test(made.path) || made.path.startsWith("//");
   const wire = windows ? written.replaceAll("\\", "/") : written;
-  const full = absolutePathRoot(wire) ? normalize(wire) : folder !== null && absolutePathRoot(folder) ? underFolder(folder, wire) : null;
-  if (full === null) return false;
+  if (!absolutePathRoot(wire)) return false;
+  const full = normalize(wire);
   return windows ? full.toLowerCase() === made.path.toLowerCase() : full === made.path;
 }
 
+/** An address that names its scheme, so it is the same page whatever folder the call ran in. */
+const SCHEMED = /^[a-z][a-z0-9+.-]*:\/\//iu;
+
 /**
  * The output a session's own line names, as its card lists it when it does. A line whose call's answer named its View
- * (`viewId`, the View id `hide browser|file|diff open` printed) is that View and no other: never found again from the
- * words the call typed, which the CLI completed on the session's machine (a relative path, a host without a scheme).
- * A line with no such answer (a refused open, an older reader) is the card's output of the same id, address or file.
+ * (`viewId`, the View id `hide browser|file|diff open` printed) is that View and no other. A line with no such answer
+ * (a refused open, an older reader) is the card's output only when its words name one alone: the same id, an address
+ * with its scheme, or an absolute path; a relative spelling or a host without a scheme stays the words it typed, since
+ * reading it again could take another View for it (wrongly linked is worse than not linked).
  * A line the card does not list names a file as the session typed it, read where the session runs (B27): a relative
  * spelling under the session's own folder (`folder`, its pane's folder), and with that session's device and checkout
  * when they are another machine's; read without them it would go to this machine's boundary, which refuses a path of
  * another machine's checkout.
  */
 export function outputNamed(listed: readonly DeskOutput[], output: DeskOutput, place: { device: string; checkout: string; folder: string } | null, node: string, viewId: string | null = null): DeskOutput {
-  const folder = place?.folder ?? null;
   const made = viewId !== null
     ? listed.find((one) => one.id === viewId)
-    : listed.find((one) => one.id === output.id || (output.url !== null && one.url === output.url) || (output.path !== null && namesView(one, output.path, folder)));
+    : listed.find((one) => one.id === output.id || (output.url !== null && SCHEMED.test(output.url) && one.url === output.url) || (output.path !== null && namesView(one, output.path)));
   if (made) return made;
   if (!place || output.path === null || output.device_id !== null) return output;
   const path = absolutePathRoot(place.folder) ? underFolder(place.folder, output.path) : output.path;
