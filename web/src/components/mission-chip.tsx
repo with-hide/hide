@@ -64,7 +64,7 @@ function MissionChipCard({ id, title, status, done, total, cells, tone, turn, de
   const name = <span className={cn("min-w-0 truncate font-medium", status === "done" ? "text-mission-done" : "text-foreground")}>{title}</span>;
   const counts = line.counts ? <span className={cn("shrink-0 font-mono font-semibold tabular-nums", status === "done" && "text-mission-done")}>{line.counts}</span> : null;
   const wordTone = status === "merge_wait" ? "text-mission-review" : status === "done" ? "text-mission-done" : "text-muted-foreground";
-  const paused = delay ? <span className="flex shrink-0 items-center gap-xxs text-muted-foreground" data-mission-chip-delay="true"><PauseIcon aria-hidden="true" className="size-(--size-icon-sm)" />{left && left !== "past" ? left.text : null}</span> : null;
+  const paused = (place?: string) => delay ? <span className={cn("flex shrink-0 items-center gap-xxs text-muted-foreground", place)} data-mission-chip-delay="true"><PauseIcon aria-hidden="true" className="size-(--size-icon-sm)" />{left && left !== "past" ? left.text : null}</span> : null;
   const press = (event: { stopPropagation: () => void }) => {
     event.stopPropagation();
     onOpen(id);
@@ -91,7 +91,7 @@ function MissionChipCard({ id, title, status, done, total, cells, tone, turn, de
         {line.cells ? <ProgressCells tones={cells} size="track" /> : null}
         {counts}
         {turn ? <span aria-hidden="true" className="shrink-0 font-semibold text-warning" data-mission-chip-word="true">!</span> : word ? <span className={cn("shrink-0 text-micro", wordTone)} data-mission-chip-word="true">{word}</span> : null}
-        {paused}
+        {paused()}
       </Button>
   ) : (
       <Button
@@ -117,7 +117,7 @@ function MissionChipCard({ id, title, status, done, total, cells, tone, turn, de
           {line.cells ? <ProgressCells tones={cells} size="head" className="min-w-(--size-chip-bar)" /> : null}
           {counts}
           {word ? <span className={cn("min-w-0 truncate", turn ? "font-semibold text-warning" : wordTone)} data-mission-chip-word="true">{turn ? `! ${word}` : word}</span> : null}
-          {paused ? <span className="ml-auto flex shrink-0">{paused}</span> : null}
+          {paused("ml-auto")}
         </span>
       </Button>
   );

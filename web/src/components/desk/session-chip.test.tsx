@@ -108,12 +108,42 @@ it("puts the chips of the missions a paragraph names in one row right behind it,
     const missions = [{ id: "mission-63", title: "결제 흐름 정리" }, { id: "mission-9", title: "모르는 미션" }];
     const text = "@mission(mission-63 결제 흐름 정리) and @mission(mission-9 모르는 미션) run.\n\nSecond paragraph names no mission.";
     const host = await render(<DeskReply text={text} missions={missions} onMission={() => {}} />);
+    // The row stands once the lazily loaded Markdown language has parsed the paragraph.
+    await act(() => vi.waitFor(() => expect(host.querySelector("[data-markdown-chip-row]")).not.toBeNull()));
     const rows = [...host.querySelectorAll("[data-markdown-chip-row]")];
     expect(rows.map((row) => [row.getAttribute("data-markdown-chip-row"), row.querySelectorAll("[data-mission-chip]").length])).toEqual([["0", 1]]);
     // The paragraph's words keep both titles and hold no chip; the row follows its line and comes before the next paragraph.
     const line = host.querySelector(".cm-line")!;
     expect([line.textContent, line.querySelector("[data-mission-chip]")]).toEqual(["결제 흐름 정리 and 모르는 미션 run.", null]);
     expect(rows[0]!.compareDocumentPosition(host.querySelectorAll(".cm-line")[2]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  } finally {
+    useShellStore.setState(saved, true);
+  }
+});
+
+it("draws a mission a table's cell or a list's item names as the one-line chip in its name's place, with no row after the block, and keeps the two-line row behind a paragraph (Doop Q 가)", async () => {
+  const saved = useShellStore.getState();
+  const mission = (id: string, title: string, decision: string | null = null) => ({ id, title, status: "running", nodes: [], conductor: { present: true }, decision, question: null, delay: null, closed_at_unix_ms: null });
+  useShellStore.setState({ rest: { missions: { items: [mission("mission-63", "결제 흐름 정리"), mission("mission-64", "설치 정리", "뼈대의 check 줄을 건너뛸까요?"), mission("mission-65", "문서 정리")] } } as unknown as SnapshotRest });
+  try {
+    const missions = [{ id: "mission-63", title: "결제 흐름 정리" }, { id: "mission-64", title: "설치 정리" }, { id: "mission-65", title: "문서 정리" }];
+    const text = "| 미션 | 상태 |\n| --- | --- |\n| @mission(mission-63 결제 흐름 정리) | running |\n\n- 머지 대기: @mission(mission-64 설치 정리)\n\n@mission(mission-65 문서 정리)도 돌아요.";
+    const host = await render(<DeskReply text={text} missions={missions} onMission={() => {}} />);
+    // The table is drawn once the lazily loaded Markdown language parsed the reply.
+    await act(() => vi.waitFor(() => expect(host.querySelector(".cm-md-table [data-mission-chip]")).not.toBeNull()));
+    const chips = [...host.querySelectorAll("[data-mission-chip]")];
+    // Each mission is drawn once: no title stands for it and no chip repeats it after its block.
+    expect(chips.map((chip) => [chip.getAttribute("data-mission-chip"), chip.getAttribute("data-mission-chip-lines") ?? "2", chip.closest(".cm-md-table") !== null, chip.closest("[data-markdown-chip-row]") !== null])).toEqual([
+      ["mission-63", "1", true, false],
+      ["mission-64", "1", false, false],
+      ["mission-65", "2", false, true],
+    ]);
+    expect([...host.querySelectorAll("[data-desk-mission-mention]")].map((title) => title.textContent)).toEqual(["문서 정리"]);
+    expect([...host.querySelectorAll("[data-markdown-chip-row]")].map((row) => row.textContent?.includes("문서 정리"))).toEqual([true]);
+    // The list item reads on: its words, then the chip where the name was; the operator's turn is the chip's `!`, its words in the hint.
+    const item = chips[1]!.closest(".cm-line")!;
+    expect(item.textContent).toContain("머지 대기: ");
+    expect([chips[1]!.getAttribute("data-mission-chip-turn"), chips[1]!.textContent?.endsWith("!"), chips[1]!.textContent?.includes("내 차례")]).toEqual(["decision", true, false]);
   } finally {
     useShellStore.setState(saved, true);
   }
@@ -131,8 +161,8 @@ it("redraws no answer when a mission changes unless the answer names that missio
     // A mission changes (its title, a node): both answers keep their editors, so a text selection in either is not lost.
     await act(async () => useShellStore.setState({ rest: { missions: { items: [held("결제 흐름 정리 (개정)")] } } as unknown as SnapshotRest }));
     expect(editors().every((editor, at) => editor === before[at])).toBe(true);
-    // The chip itself follows the store, in its own root.
-    expect(host.querySelector("[data-mission-chip]")?.textContent).toContain("개정");
+    // The chip itself follows the store, in its own root, in the row the parse put behind the paragraph.
+    await act(() => vi.waitFor(() => expect(host.querySelector("[data-mission-chip]")?.textContent).toContain("개정")));
   } finally {
     useShellStore.setState(saved, true);
   }

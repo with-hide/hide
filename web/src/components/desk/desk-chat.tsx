@@ -96,7 +96,8 @@ export function DeskQueuedBubble({ message, held = false, onRemove, onMention }:
 /**
  * A mission a Desk answer names (`@mission(<id> <title>)`): its title where
  * the answer names it, in the title the app holds while it holds the mission;
- * its chip, two lines, stands in a row behind the paragraph (`DeskReply`).
+ * its chip, two lines, stands in a row behind the paragraph, and in a table's
+ * cell or a list's item the one-line chip takes the title's place (`DeskReply`).
  */
 function DeskMissionMention({ mention }: { mention: DeskMissionMention }) {
   const title = useShellStore((s) => s.rest?.missions?.items.find((one) => one.id === mention.id)?.title) ?? mention.title;
@@ -109,7 +110,8 @@ function DeskMissionMention({ mention }: { mention: DeskMissionMention }) {
 
 /**
  * Desk's answer as plain Markdown (D-75), where a session it names is that
- * session's chip and a mission its title, with its mission chip in a row behind the paragraph, each pressed to
+ * session's chip and a mission its title, with its mission chip in a row behind the paragraph (in a table's cell
+ * or a list's item, the one-line chip in the title's place and no row), each pressed to
  * open it; the core reads both from the finished answer, so a `live` one
  * streams its text alone; a stopped answer keeps what it said and says it
  * stopped (B7). Given `copy`, it offers `복사` of its original words, each
@@ -132,7 +134,15 @@ export function DeskReply({ text, stopped = false, live = false, mentions = [], 
       token: markedMention(mention),
       node: bridge(<SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id }} onPress={onMention ? () => onMention(mention) : undefined} />),
     })),
-    ...missions.map((mission) => ({ token: markedMission(mission), node: bridge(<DeskMissionMention mention={mission} />), after: onMission && heldIds.split(" ").includes(mission.id) ? bridge(<MissionChipOf id={mission.id} onOpen={onMission} />) : undefined })),
+    ...missions.map((mission) => {
+      const held = onMission && heldIds.split(" ").includes(mission.id);
+      return {
+        token: markedMission(mission),
+        node: bridge(<DeskMissionMention mention={mission} />),
+        after: held ? bridge(<MissionChipOf id={mission.id} onOpen={onMission} />) : undefined,
+        item: held ? bridge(<MissionChipOf id={mission.id} lines={1} onOpen={onMission} />) : undefined,
+      };
+    }),
     ...files,
   ], [mentions, missions, heldIds, onMention, onMission, bridge, files]);
   const words = <MarkdownText text={text} size="chat" chips={chips} copyCode={copy} />;

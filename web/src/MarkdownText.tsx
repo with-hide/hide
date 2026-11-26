@@ -43,9 +43,11 @@ const chat = EditorView.theme({
  * draw the ones without `at`. `after` is a part that does not fit a line of
  * words: the token's place keeps `node`, and `after` stands in a row of its
  * own right behind the paragraph that holds the token, with the other parts
- * that paragraph has.
+ * that paragraph has. `item` is the part a table's cell or a list's item
+ * draws in the token's place instead, with no row after it (Doop Q 가): there
+ * the token stands among other names, so the part takes the name's place.
  */
-export type MarkdownChip = InlinePart & { at?: readonly number[]; after?: ReactNode };
+export type MarkdownChip = InlinePart & { at?: readonly number[]; after?: ReactNode; item?: ReactNode };
 
 const roots = new WeakMap<HTMLElement, Root>();
 
@@ -111,29 +113,45 @@ function paragraphEnd(text: string, at: number): number {
 }
 
 /**
- * Every place a chip's token stands in the text, replaced by the chip, and each paragraph's `after` parts in a row behind it;
- * where two chips would cover the same letters, the one that starts first, then the earlier chip, wins.
+ * Whether the editor's parse puts the stretch in a table or a list item, or
+ * `null` while the lazily loaded language has not parsed that far: the text
+ * is read once, by the parse that draws it, never by a second parser.
  */
-function chipDecorations(text: string, chips: readonly MarkdownChip[]): Extension {
-  const spans: { from: number; to: number; index: number }[] = [];
+function inItem(state: EditorState, from: number, to: number): boolean | null {
+  const tree = syntaxTree(state);
+  if (tree.length < to) return null;
+  for (let node: SyntaxNode | null = tree.resolveInner(from, 1); node; node = node.parent) if (node.name === "ListItem" || node.name === "Table") return true;
+  return false;
+}
+
+/**
+ * Every place a chip's token stands in the text, replaced by the chip, and each paragraph's `after` parts in a row behind it;
+ * where two chips would cover the same letters, the one that starts first, then the earlier chip, wins. In a table's cell or a
+ * list's item a chip with `item` draws it there and adds no row; until the parse has reached a chip that has `item` or `after`,
+ * it draws `node` and no row, so a row never comes and goes. A chip whose part did not change keeps its DOM (`ChipWidget.eq`).
+ */
+function chipSet(state: EditorState, chips: readonly MarkdownChip[]): DecorationSet {
+  const text = state.doc.toString();
+  const found: { from: number; to: number; index: number }[] = [];
   chips.forEach((chip, index) => {
     if (!chip.token) return;
     if (chip.at) {
-      for (const at of chip.at) if (text.startsWith(chip.token, at)) spans.push({ from: at, to: at + chip.token.length, index });
+      for (const at of chip.at) if (text.startsWith(chip.token, at)) found.push({ from: at, to: at + chip.token.length, index });
       return;
     }
-    for (let at = text.indexOf(chip.token); at >= 0; at = text.indexOf(chip.token, at + chip.token.length)) spans.push({ from: at, to: at + chip.token.length, index });
+    for (let at = text.indexOf(chip.token); at >= 0; at = text.indexOf(chip.token, at + chip.token.length)) found.push({ from: at, to: at + chip.token.length, index });
   });
-  spans.sort((a, b) => a.from - b.from || a.index - b.index);
+  found.sort((a, b) => a.from - b.from || a.index - b.index);
   const ranges: Range<Decoration>[] = [];
   const rows = new Map<number, Set<number>>();
   let end = 0;
-  for (const span of spans) {
+  for (const span of found) {
     if (span.from < end) continue;
-    const chip = chips[span.index]!;
-    ranges.push(Decoration.replace({ widget: new ChipWidget(span.index, chip.node) }).range(span.from, span.to));
     end = span.to;
-    if (chip.after) {
+    const chip = chips[span.index]!;
+    const listed = chip.item !== undefined || chip.after !== undefined ? inItem(state, span.from, span.to) : false;
+    ranges.push(Decoration.replace({ widget: new ChipWidget(span.index, listed && chip.item !== undefined ? chip.item : chip.node) }).range(span.from, span.to));
+    if (chip.after && listed === false) {
       const close = paragraphEnd(text, span.from);
       rows.set(close, (rows.get(close) ?? new Set()).add(span.index));
     }
@@ -142,7 +160,22 @@ function chipDecorations(text: string, chips: readonly MarkdownChip[]): Extensio
     const indexes = [...held].sort((a, b) => a - b);
     ranges.push(Decoration.widget({ widget: new ChipRowWidget(indexes.join(" "), indexes.map((index) => chips[index]!.after)), block: true, side: 1 }).range(at));
   }
-  return [chipRow, EditorView.decorations.of(Decoration.set(ranges, true))];
+  return Decoration.set(ranges, true);
+}
+
+/** The chips, placed again when the text changes or the parse moves (the lazily loaded language parsing it), never on other updates. */
+function chipDecorations(chips: readonly MarkdownChip[]): Extension {
+  const field = StateField.define<DecorationSet>({
+    create: (state) => chipSet(state, chips),
+    update: (placed, transaction) => (transaction.docChanged || syntaxTree(transaction.state) !== syntaxTree(transaction.startState) ? chipSet(transaction.state, chips) : placed),
+    provide: (own) => EditorView.decorations.from(own),
+  });
+  return [chipRow, field];
+}
+
+/** What a table's cells draw for the chips (`markdownLive`'s parts): every chip without offsets, as its `item` where it has one. */
+function cellParts(chips: readonly MarkdownChip[]): InlinePart[] {
+  return chips.filter((chip) => !chip.at).map((chip) => (chip.item !== undefined ? { token: chip.token, node: chip.item } : chip));
 }
 
 /** A code block drawn whole by `CodeBlock`, with `복사` in its gutter, in a root of its own unmounted after the editor lets it go. */
@@ -251,7 +284,7 @@ export function MarkdownText({ text, size = "body", chips = NO_CHIPS, copyCode, 
       parent,
       state: EditorState.create({
         doc: text,
-        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false, parts: chips.filter((chip) => !chip.at), copy: copyCode }), chipDecorations(text, chips), codeBlocks(copyCode), marked.of(markDecorations(markNow.current, text.length)), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
+        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false, parts: cellParts(chips), copy: copyCode }), chipDecorations(chips), codeBlocks(copyCode), marked.of(markDecorations(markNow.current, text.length)), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
       }),
     });
     lit.current = { view, compartment: marked };
