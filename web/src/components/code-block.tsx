@@ -8,8 +8,12 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 
+// Code reads at `--code-scale` of the text around it, so the mono face's wider letters keep the prose's measure, on
+// `--code-leading` in a block; the editor's theme (`editor/theme.ts`) draws its code from the same two tokens.
+const CODE_SIZE = "text-[length:calc(var(--code-scale)*1em)]";
+
 /** Code inside a line: mono on its own ground inside a hairline, with room and a radius. The editor's Live view and the phone both draw it with these classes. */
-export const INLINE_CODE = "rounded-xs border border-border bg-secondary px-xs py-xxs font-mono text-[0.9em]";
+export const INLINE_CODE = `rounded-xs border border-hairline bg-secondary px-xs py-xxs font-mono ${CODE_SIZE}`;
 
 // A long line's scrollbar stays thin and in view, under the code, as the frame draws it.
 const THIN_SCROLLBAR = "[&::-webkit-scrollbar]:h-(--spacing-xxs) [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-muted-foreground/50 [&::-webkit-scrollbar-track]:bg-transparent";
@@ -24,7 +28,7 @@ const FADE = "[mask-image:linear-gradient(to_left,transparent,currentColor_var(-
 export function CodeBlockHead({ language, action }: { language: string | null; action?: ReactNode }) {
   const { t } = useInterfaceTranslation();
   return (
-    <div className="flex h-(--size-control-compact) min-w-0 items-center justify-between gap-xs border-b border-border px-md font-sans text-caption text-muted-foreground" data-code-block-head="true">
+    <div className="flex h-(--size-control-compact) min-w-0 items-center justify-between gap-xs border-b border-hairline px-md font-sans text-caption text-muted-foreground" data-code-block-head="true">
       <span className="min-w-0 truncate" data-code-block-language={language ?? ""}>{language ?? t("common.code")}</span>
       {action ? <span className="flex shrink-0 items-center" data-code-block-action="true">{action}</span> : null}
     </div>
@@ -55,9 +59,9 @@ export function CodeBlock({ code, language = null, action }: { code: string; lan
   }, [code]);
   return (
     // Its width is the column's, never its longest line's: an editor that sizes its content to what it holds would otherwise widen past the column.
-    <div className="min-w-0 overflow-hidden rounded-sm border border-border bg-secondary text-foreground [contain:inline-size]" data-code-block="true">
+    <div className="min-w-0 overflow-hidden rounded-sm border border-hairline bg-code-block text-foreground [contain:inline-size]" data-code-block="true">
       <CodeBlockHead language={language} action={action} />
-      <pre ref={scroller} className={cn("m-none overflow-x-auto whitespace-pre px-md py-sm font-mono text-[0.9em] leading-relaxed", THIN_SCROLLBAR, hidden && FADE)} data-code-block-fade={hidden ? "true" : undefined}>
+      <pre ref={scroller} className={cn("m-none overflow-x-auto whitespace-pre px-md py-sm font-mono leading-(--code-leading)", CODE_SIZE, THIN_SCROLLBAR, hidden && FADE)} data-code-block-fade={hidden ? "true" : undefined}>
         {code}
       </pre>
     </div>

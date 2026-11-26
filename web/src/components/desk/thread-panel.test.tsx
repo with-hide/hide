@@ -352,7 +352,7 @@ it("shows a question in the agent's own sentence above the box and lights only t
   expect(line.compareDocumentPosition(container.querySelector("textarea")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   // The question colour is only on 질문: the box is the neutral ground inside a hairline.
   expect(row.querySelector("[data-desk-thread-ask-lead]")?.className).toContain("text-open-ask");
-  expect([/warning|open-ask/.test(line.className), line.className.includes("border-border")]).toEqual([false, true]);
+  expect([/warning|open-ask/.test(line.className), line.className.includes("border-hairline"), line.className.includes("bg-code-block")]).toEqual([false, true, true]);
 
   vi.useFakeTimers();
   try {

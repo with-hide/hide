@@ -64,7 +64,7 @@ export function ThreadAsks({ asks, onGo, onSet, lit = null, gone = NO_GONE }: {
   return (
     <div className="shrink-0 px-sm pt-xs">
       <div
-        className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-secondary text-body"
+        className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-hairline bg-code-block text-body"
         data-desk-thread-asks={open.length}
         data-desk-thread-asks-open={several ? (listOpen ? "true" : "false") : undefined}
       >
@@ -77,7 +77,7 @@ export function ThreadAsks({ asks, onGo, onSet, lit = null, gone = NO_GONE }: {
               <FoldButton open onClick={() => setListOpen(false)} label={t("paneTurn.fold")} data-desk-thread-asks-fold="true" />
             </div>
             <ol className={cn("min-w-0 overflow-y-auto", LIST_HEIGHT)} data-desk-thread-asks-list={lines.length}>
-              {lines.map((ask) => <li key={ask.id} className="min-w-0 border-t border-border">{row(ask, true)}</li>)}
+              {lines.map((ask) => <li key={ask.id} className="min-w-0 border-t border-hairline">{row(ask, true)}</li>)}
             </ol>
           </>
         ) : (

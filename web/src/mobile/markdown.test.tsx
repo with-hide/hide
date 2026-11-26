@@ -11,7 +11,7 @@ describe("renderMarkdown", () => {
     expect(out).toContain('<p class="whitespace-pre-line font-semibold" data-markdown-heading="2">결과</p>');
     expect(out).toContain('<strong class="font-semibold">굵게</strong>');
     expect(out).toContain("<em>기울임</em>");
-    expect(out).toContain('<code class="rounded-xs border border-border bg-secondary px-xs py-xxs font-mono text-[0.9em]">code</code>');
+    expect(out).toContain('<code class="rounded-xs border border-hairline bg-secondary px-xs py-xxs font-mono text-[length:calc(var(--code-scale)*1em)]">code</code>');
     expect(out).toContain("<s>취소</s>");
     expect(out).toMatch(/<ul[^>]*><li[^>]*><p[^>]*>하나<\/p><\/li><li[^>]*><p[^>]*>둘<\/p><\/li><\/ul>/);
     expect(out).toMatch(/<ol start="1"[^>]*>/);
@@ -77,7 +77,7 @@ describe("renderMarkdown", () => {
   it("reads an escaped pipe as text inside its cell, in code too, and a row without outer pipes as the same row", () => {
     expect(tableRows("a | b\n--- | ---:\nx \\| y | `p \\| q`")).toEqual([
       ["th[left]:a", "th[right]:b"],
-      ["td[left]:x | y", 'td[right]:<code class="rounded-xs border border-border bg-secondary px-xs py-xxs font-mono text-[0.9em]">p | q</code>'],
+      ["td[left]:x | y", 'td[right]:<code class="rounded-xs border border-hairline bg-secondary px-xs py-xxs font-mono text-[length:calc(var(--code-scale)*1em)]">p | q</code>'],
     ]);
     // Outside a table a code span keeps its backslash, as GFM reads it.
     expect(html("`p \\| q`")).toContain(">p \\| q</code>");
@@ -97,7 +97,7 @@ describe("renderMarkdown", () => {
   it("draws a cell's emphasis, code and, with HTML on, its links and line breaks", () => {
     const [, row] = tableRows("| a | b |\n|---|---|\n| **굵게** `c` | [링크](https://example.com/x)<br>다음 |", { html: true });
     expect(row).toEqual([
-      'td[left]:<strong class="font-semibold">굵게</strong> <code class="rounded-xs border border-border bg-secondary px-xs py-xxs font-mono text-[0.9em]">c</code>',
+      'td[left]:<strong class="font-semibold">굵게</strong> <code class="rounded-xs border border-hairline bg-secondary px-xs py-xxs font-mono text-[length:calc(var(--code-scale)*1em)]">c</code>',
       expect.stringMatching(/^td\[left\]:<a href="https:\/\/example.com\/x"[^>]*>링크<\/a><br\/>다음$/),
     ]);
   });

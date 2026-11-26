@@ -213,6 +213,8 @@
   --text-editor-heading-5: 15px;
   --text-editor-heading-6: 15px;
   --text-editor-property: 13px;
+  --code-scale: 0.9;
+  --code-leading: 1.6;
   --text-preview-slant: 12;
   --proposed-conversation-measure: 640px;
   --proposed-conversation-time-rail: 64px;

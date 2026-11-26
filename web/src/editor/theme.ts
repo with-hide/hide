@@ -172,9 +172,9 @@ export const liveTheme = EditorView.theme({
   // border per line.
   ".cm-line.cm-md-code-head": {
     padding: "0",
-    backgroundColor: "var(--secondary)",
-    borderInline: "var(--size-hairline) solid var(--border)",
-    borderTop: "var(--size-hairline) solid var(--border)",
+    backgroundColor: "var(--code-block)",
+    borderInline: "var(--size-hairline) solid var(--hairline)",
+    borderTop: "var(--size-hairline) solid var(--hairline)",
     borderStartStartRadius: "var(--radius-sm)",
     borderStartEndRadius: "var(--radius-sm)",
   },
@@ -183,14 +183,14 @@ export const liveTheme = EditorView.theme({
   ".cm-line.cm-md-code-head .cm-widgetBuffer": { display: "none" },
   ".cm-line.cm-md-code": {
     fontFamily: "var(--font-mono)",
-    fontSize: "0.9em",
-    lineHeight: "1.6",
-    backgroundColor: "var(--secondary)",
+    fontSize: "calc(var(--code-scale) * 1em)",
+    lineHeight: "var(--code-leading)",
+    backgroundColor: "var(--code-block)",
     paddingInline: "var(--spacing-md)",
-    borderInline: "var(--size-hairline) solid var(--border)",
+    borderInline: "var(--size-hairline) solid var(--hairline)",
   },
   ".cm-line.cm-md-code-first, .cm-line.cm-md-code-only": { paddingTop: "var(--spacing-sm)" },
-  ".cm-line.cm-md-code-last, .cm-line.cm-md-code-only": { borderBottom: "var(--size-hairline) solid var(--border)", borderEndStartRadius: "var(--radius-sm)", borderEndEndRadius: "var(--radius-sm)", paddingBottom: "var(--spacing-sm)" },
+  ".cm-line.cm-md-code-last, .cm-line.cm-md-code-only": { borderBottom: "var(--size-hairline) solid var(--hairline)", borderEndStartRadius: "var(--radius-sm)", borderEndEndRadius: "var(--radius-sm)", paddingBottom: "var(--spacing-sm)" },
   ".cm-md-link": { textDecoration: "underline" },
   ".cm-md-hidden-line": { display: "none" },
   ".cm-md-quote": {
@@ -229,7 +229,7 @@ export const liveTheme = EditorView.theme({
   // inline code has outside a table.
   ".cm-md-table": { display: "block", padding: "var(--spacing-xs) 0", fontFamily: "var(--font-sans)", lineHeight: "1.5", whiteSpace: "normal" },
   ".cm-md-table a[href]": { color: "var(--file-blue)", textDecoration: "underline" },
-  ".cm-md-table code": { fontSize: "0.9em" },
+  ".cm-md-table code": { fontSize: "calc(var(--code-scale) * 1em)" },
   // A Mermaid diagram: centred in the column and never wider than it; it
   // takes no room until it is drawn, and one that is not shows its source as
   // a code block would.
@@ -242,8 +242,8 @@ export const liveTheme = EditorView.theme({
     padding: "var(--spacing-xs) var(--spacing-sm)",
     whiteSpace: "pre-wrap",
     fontFamily: "var(--font-mono)",
-    fontSize: "0.9em",
-    lineHeight: "1.6",
-    backgroundColor: "var(--secondary)",
+    fontSize: "calc(var(--code-scale) * 1em)",
+    lineHeight: "var(--code-leading)",
+    backgroundColor: "var(--code-block)",
   },
 });
