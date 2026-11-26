@@ -111,11 +111,13 @@ export function SentAttachments({ files }: { files: readonly SentAttachment[] })
  * mentions stand as chips (D-85) and `value` is the draft's text; without,
  * it is a plain text box.
  */
-export function DeskComposer({ value, draft, inputRef, label, placeholder, tray, answering = false, focused = false, held = false, notice = null, menu = null, menuOpen = false, menuEmpty = false, onChange, onCaret, onKeyDown, onSend, onStop, onMenuOpenChange, children }: {
+export function DeskComposer({ value, draft, inputRef, textRef, label, placeholder, tray, answering = false, focused = false, held = false, notice = null, menu = null, menuOpen = false, menuEmpty = false, onChange, onCaret, onKeyDown, onSend, onStop, onMenuOpenChange, children }: {
   value: string;
   /** Desk's draft: its mentions are drawn as chips in the box. */
   draft?: DeskDraft;
   inputRef?: Ref<MentionInputHandle>;
+  /** The plain box, for a caller that places the caret after a pick. */
+  textRef?: Ref<HTMLTextAreaElement>;
   label: string;
   placeholder: string;
   /** The files attached so far; without it the box takes none. */
@@ -134,7 +136,7 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, tray,
   menuEmpty?: boolean;
   /** The words changed, and where the caret stands in them. */
   onChange: (value: string, caret: number) => void;
-  /** The caret moved in the chip box without the words changing. */
+  /** The caret moved without the words changing. */
   onCaret?: (caret: number) => void;
   /** The box's keys before it takes them, such as the `@` menu's moves; one it prevents is not sent. */
   onKeyDown?: (event: KeyboardEvent<HTMLElement>) => void;
@@ -182,7 +184,7 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, tray,
             {draft ? (
               <MentionInput ref={inputRef} draft={draft} label={label} placeholder={placeholder} autoFocus={focused} className="max-h-(--size-search-sheet-h) min-h-[calc(var(--text-body)*1.5*2+var(--spacing-xxs)*2)]" onChange={onChange} onCaret={onCaret} onKeyDown={keyDown} />
             ) : (
-              <Textarea bare rows={1} value={value} aria-label={label} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-[calc(var(--text-body)*1.5*2+var(--spacing-xxs)*2)] py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value, event.target.selectionStart)} data-desk-composer-input="true" onKeyDown={keyDown} />
+              <Textarea ref={textRef} bare rows={1} value={value} aria-label={label} onSelect={(event) => onCaret?.(event.currentTarget.selectionStart)} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-[calc(var(--text-body)*1.5*2+var(--spacing-xxs)*2)] py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value, event.target.selectionStart)} data-desk-composer-input="true" onKeyDown={keyDown} />
             )}
             <div className="flex min-w-0 items-center gap-xs">
               {tray ? (
@@ -258,11 +260,11 @@ function AgentWord({ word, ...data }: { word: DeskAgentWord } & Record<`data-${s
 }
 
 /** One of the bar's three menus: its trigger names the value, and pressing it opens the choices. */
-function BarMenu({ name, value, open, onOpenChange, highlight = false, wide = false, children, ...data }: { name: string; value: ReactNode; open?: boolean; onOpenChange?: (open: boolean) => void; highlight?: boolean; /** A menu whose choices carry a line under their name. */ wide?: boolean; children: ReactNode } & Record<`data-${string}`, string>) {
+function BarMenu({ name, hint, value, open, onOpenChange, highlight = false, wide = false, disabled = false, children, ...data }: { name: string; /** The trigger's hint, its name by default. */ hint?: string; value: ReactNode; open?: boolean; onOpenChange?: (open: boolean) => void; highlight?: boolean; /** A menu whose choices carry a line under their name. */ wide?: boolean; disabled?: boolean; children: ReactNode } & Record<`data-${string}`, string>) {
   return (
     <DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
-      <Hint label={name}>
-        <DropdownMenuTrigger asChild>
+      <Hint label={hint ?? name}>
+        <DropdownMenuTrigger asChild disabled={disabled}>
           <Button variant="ghost" size="sm" className={cn("h-(--size-control-compact) gap-xxs border px-xs text-caption font-normal", highlight ? "border-hairline bg-secondary text-foreground" : "border-transparent text-subtle-foreground")} aria-label={name} {...data}>
             {value}
             <ChevronDownIcon className="size-(--size-icon-sm) text-muted-foreground" />
@@ -342,6 +344,68 @@ export function DeskAgentBar({ agents, selection, open = null, onAgent, onModel,
           </BarMenu>
         </>
       ) : null}
+    </div>
+  );
+}
+
+/** A slot of the bar that shows its value and cannot be changed here, with why on hover; no chevron, since it opens nothing. */
+function BarValue({ name, hint, children, ...data }: { name: string; hint: string; children: ReactNode } & Record<`data-${string}`, string>) {
+  return (
+    <Hint label={hint}>
+      <span tabIndex={0} aria-label={`${name} · ${hint}`} className="flex h-(--size-control-compact) min-w-0 items-center gap-xxs rounded-md px-xs text-caption text-subtle-foreground" {...data}>
+        {children}
+      </span>
+    </Hint>
+  );
+}
+
+/**
+ * One slot of a session's bar: the value the session runs with (null for the
+ * CLI's own) and its name, the choices a change can make, and, for a slot the
+ * agent changes only in a menu of its own, why it cannot change here.
+ */
+export type SessionBarSlot = { value: string | null; label: string | null; choices: readonly DeskChoice[]; fixed: string | null };
+
+/**
+ * Under a session's input (mission-106): the bar Desk's composer has, with
+ * the agent shown and fixed, since a session keeps the agent it runs. The
+ * model and the effort are menus while the agent changes them by a typed
+ * line in a running session (`[switch]` of its definition), each pick sent
+ * as that line and shown as the session's once typed; `switchHint` says the
+ * line a change types. A slot the agent changes only in its own menu shows
+ * its value and says so on hover. `held` waits while a send is on its way.
+ */
+export function SessionAgentBar({ agent, model, effort, switchHint, held = false, open = null, onModel, onEffort }: {
+  agent: { kind: string; label: string };
+  model: SessionBarSlot;
+  effort: SessionBarSlot;
+  /** The command a change types, named in each menu's hint. */
+  switchHint: { model: string | null; effort: string | null };
+  held?: boolean;
+  /** Opens one menu, for review. */
+  open?: "model" | "effort" | null;
+  onModel: (model: string) => void;
+  onEffort: (effort: string) => void;
+}) {
+  const { t } = useInterfaceTranslation();
+  const shown = (slot: SessionBarSlot) => slot.label ?? slot.value ?? t("desk.bar.default");
+  const slot = (which: "model" | "effort", one: SessionBarSlot, pick: (value: string) => void) => {
+    const name = t(which === "model" ? "desk.bar.model" : "desk.bar.effort");
+    if (one.fixed !== null) return <BarValue name={name} hint={one.fixed} data-session-bar={which} data-session-bar-fixed="true">{shown(one)}</BarValue>;
+    const command = switchHint[which];
+    return (
+      <BarMenu name={name} hint={command ? t("desk.bar.switchHint", { command }) : name} value={shown(one)} open={open === which ? true : undefined} disabled={held} data-session-bar={which}>
+        <DropdownMenuRadioGroup value={one.value ?? undefined} onValueChange={(value) => value !== one.value && pick(value)}>
+          {one.choices.map((choice) => <DropdownMenuRadioItem key={choice.id} value={choice.id} data-session-bar-choice={choice.id}>{choice.label}</DropdownMenuRadioItem>)}
+        </DropdownMenuRadioGroup>
+      </BarMenu>
+    );
+  };
+  return (
+    <div className="flex min-w-0 items-center justify-end gap-xxs" data-session-agent-bar={agent.kind}>
+      <BarValue name={t("desk.bar.agent")} hint={t("desk.bar.agentFixed")} data-session-bar="agent"><AgentMark kind={agent.kind} />{agent.label}</BarValue>
+      {slot("model", model, onModel)}
+      {slot("effort", effort, onEffort)}
     </div>
   );
 }

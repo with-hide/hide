@@ -64,6 +64,96 @@ struct File {
     /// built-in files' alone.
     #[serde(default)]
     pub desk: Option<Desk>,
+    /// How a running session changes its model and its effort ([`Switch`]);
+    /// the built-in files' alone.
+    #[serde(default)]
+    pub switch: Option<Switch>,
+}
+
+/// How a running session of the agent changes its model and its reasoning
+/// effort (`[switch]`): the line typed into its prompt, as the operator
+/// would type it in the terminal, with `{model}` and `{effort}` standing for
+/// the values (docs/ARCHITECTURE.md, A session's model and effort). A slot
+/// with no line is one the agent changes only through a menu of its own,
+/// which Hide does not drive; a session input shows that slot and cannot
+/// change it.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Switch {
+    /// The line that changes the model; it names `{model}`.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The line that changes the effort; it names `{effort}`, and `{model}`
+    /// too for an agent whose command takes both (Grok's `/model`).
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// The efforts `effort` takes, in the agent's order; empty without it.
+    #[serde(default)]
+    pub efforts: Vec<String>,
+    /// A model change puts the effort back to the new model's own default
+    /// (Codex's `/model`).
+    #[serde(default)]
+    pub model_resets_effort: bool,
+}
+
+/// The most bytes in a `[switch]` line, and the most efforts it lists.
+pub const MAX_SWITCH_LINE_BYTES: usize = 128;
+pub const MAX_SWITCH_EFFORTS: usize = 16;
+
+/// The placeholders a `[switch]` line may name.
+const SWITCH_MODEL: &str = "{model}";
+const SWITCH_EFFORT: &str = "{effort}";
+
+/// Whether `effort` can stand in a `[switch]` line: lower-case letters,
+/// digits and `-`, at most 16 bytes.
+pub fn switch_effort_is_valid(effort: &str) -> bool {
+    (1..=16).contains(&effort.len())
+        && effort
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn check_switch(name: &str, switch: &Switch) -> Result<(), String> {
+    let line = |field: &str, line: &str, needs: &str| -> Result<(), String> {
+        let rest = line.replace(SWITCH_MODEL, "").replace(SWITCH_EFFORT, "");
+        if line.len() > MAX_SWITCH_LINE_BYTES
+            || line.chars().any(char::is_control)
+            || !line.contains(needs)
+            || rest.contains(['{', '}'])
+        {
+            return Err(format!(
+                "{name}: switch.{field} {line:?} is not one line of at most {MAX_SWITCH_LINE_BYTES} bytes naming {needs}"
+            ));
+        }
+        Ok(())
+    };
+    if let Some(model) = &switch.model {
+        line("model", model, SWITCH_MODEL)?;
+        if model.contains(SWITCH_EFFORT) {
+            return Err(format!("{name}: switch.model {model:?} names {SWITCH_EFFORT}"));
+        }
+    }
+    if let Some(effort) = &switch.effort {
+        line("effort", effort, SWITCH_EFFORT)?;
+    }
+    if switch.effort.is_some() == switch.efforts.is_empty()
+        || switch.efforts.len() > MAX_SWITCH_EFFORTS
+    {
+        return Err(format!(
+            "{name}: switch.efforts lists 1 to {MAX_SWITCH_EFFORTS} efforts with switch.effort, and none without"
+        ));
+    }
+    if let Some(bad) = switch.efforts.iter().find(|effort| !switch_effort_is_valid(effort)) {
+        return Err(format!(
+            "{name}: switch.efforts {bad:?} is not 1 to 16 lowercase letters, digits and dashes"
+        ));
+    }
+    if switch.model_resets_effort && switch.model.is_none() {
+        return Err(format!(
+            "{name}: switch.model_resets_effort needs switch.model"
+        ));
+    }
+    Ok(())
 }
 
 /// What Desk, which talks to the agent over ACP, keeps out of the commands
@@ -497,6 +587,7 @@ pub struct Fields {
     pub screen: Option<toml::Table>,
     pub answer: Option<Answer>,
     pub desk: Option<Desk>,
+    pub switch: Option<Switch>,
 }
 
 /// Parse one file and check every field it carries: the one reading of a
@@ -535,6 +626,12 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
     }
     if let Some(desk) = &file.desk {
         check_desk(name, desk)?;
+    }
+    if origin == Origin::User && file.switch.is_some() {
+        return Err(format!("{name}: switch is for the built-in agents' files"));
+    }
+    if let Some(switch) = &file.switch {
+        check_switch(name, switch)?;
     }
     if let Some(display) = &file.name
         && (display.trim().is_empty()
@@ -600,6 +697,7 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
         screen: file.screen,
         answer: file.answer,
         desk: file.desk,
+        switch: file.switch,
     })
 }
 
@@ -1441,6 +1539,47 @@ mod tests {
         assert_eq!(
             read("x.toml", &file("left_out = [\"logout\"]\n"), Origin::User).unwrap_err(),
             "x.toml: desk is for the built-in agents' files"
+        );
+    }
+
+    /// `[switch]` is one line per slot naming its value, an effort line
+    /// comes with its efforts, and only a built-in file may set it.
+    #[test]
+    fn a_switch_table_names_one_line_per_slot_and_is_the_built_in_files_alone() {
+        let file = |switch: &str| {
+            format!(
+                "schema = 1\nid = \"x\"\nname = \"X\"\nexecutables = [\"x\"]\nhooks = \"none\"\n[switch]\n{switch}"
+            )
+        };
+        let switch = read(
+            "x.toml",
+            &file("model = \"/model {model}\"\neffort = \"/model {model} {effort}\"\nefforts = [\"low\", \"x-high\"]\n"),
+            Origin::Builtin,
+        )
+        .unwrap()
+        .switch
+        .unwrap();
+        assert_eq!(switch.efforts, ["low", "x-high"]);
+        for refused in [
+            "model = \"/model\"\n",
+            "model = \"/model {model} {effort}\"\n",
+            "model = \"/model {name}\"\n",
+            "model = \"/model {model}\\n\"\n",
+            "effort = \"/effort {effort}\"\n",
+            "efforts = [\"low\"]\n",
+            "effort = \"/effort {effort}\"\nefforts = [\"Low\"]\n",
+            "effort = \"/effort\"\nefforts = [\"low\"]\n",
+            "model_resets_effort = true\n",
+            "ask = true\n",
+        ] {
+            assert!(
+                read("x.toml", &file(refused), Origin::Builtin).is_err(),
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            read("x.toml", &file("model = \"/model {model}\"\n"), Origin::User).unwrap_err(),
+            "x.toml: switch is for the built-in agents' files"
         );
     }
 }

@@ -94,3 +94,12 @@ any = [
   { line_regex = ['^── [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Working ─+$'] },
   { line_regex = ['^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Working$'] },
 ]
+
+# How a running session changes its model and its thinking level
+# (docs/ARCHITECTURE.md, A session's model and effort), each checked in a
+# terminal of Pi 1.0.4 on 2026-11-26; the levels are the ones it names for a
+# word it does not know.
+[switch]
+model = "/model {model}"
+effort = "/thinking {effort}"
+efforts = ["off", "low", "medium", "high", "xhigh", "max"]

@@ -3527,12 +3527,13 @@ export type DeskCompaction = { done: boolean; reason: string | null };
 export type DeskCommand = { name: string; description: string; hint?: string };
 
 /**
- * The `desk_commands` section, the `/` menu: the selected agent's commands as
- * its last session listed them, saved across a restart, with what Desk keeps
- * from the agent already gone; null until the agent has ever sent a list, and
- * empty while its open session has sent none.
+ * The `desk_commands` section, the `/` menus: each agent's commands as its
+ * last session listed them, saved across a restart, with what Desk keeps from
+ * the agent already gone. Desk's composer reads its selected agent's, and a
+ * session's input its session's agent's. An agent is absent until it has ever
+ * sent a list, and its list empty while its open session has sent none.
  */
-export type DeskCommands = { agent: DeskAgentId | null; commands: DeskCommand[] | null };
+export type DeskCommands = { lists: Partial<Record<DeskAgentId, DeskCommand[]>> };
 
 /**
  * The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes.
@@ -3926,6 +3927,8 @@ export type SessionThreadSection = {
   /** The page the session is still writing. */
   tail: ThreadPage | null;
   input: SessionThreadInput | null;
+  /** The model and effort the session runs with as Hide knows them: its start's, or the last the session input changed; each absent for the CLI's own. */
+  choice: { model?: string; effort?: string };
 };
 /** The whole pages before the live one, oldest first. */
 export type SessionThreadHistorySection = { generation: number; pages: ThreadPage[] };

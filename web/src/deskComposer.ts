@@ -16,6 +16,8 @@ import type { DeskDraft } from "./ui";
 
 export type MentionSession = DeskMentions["sessions"][number];
 export type MentionProject = DeskMentions["projects"][number];
+/** A file of the session's project the `@` menu of a session's box lists: its path in the checkout. */
+export type MentionFile = { relative_path: string };
 
 /** The `@` word the caret ends: where its `@` is and what follows it; none unless the caret is right after one that starts a word. */
 export function mentionAt(text: string, caret: number): { start: number; query: string } | null {
@@ -131,6 +133,24 @@ export function pickMention(draft: DeskDraft, at: { start: number; query: string
   const text = draft.text.slice(0, at.start) + word + after;
   const known = draft.mentions.some((one) => one.kind === mention.kind && one.id === mention.id);
   return { draft: { text, mentions: known ? draft.mentions : [...draft.mentions, mention] }, caret: at.start + token.length + 1 };
+}
+
+/**
+ * A session's box holds plain words, as its agent reads them in its terminal
+ * (mission-106): a picked `@` word becomes `words` and one space, and the
+ * caret goes after the space. A file is written `@<path>`, as every agent
+ * Hide starts reads a file named in a prompt; a session as its reference
+ * (`agentReference.ts`), which the agent hands to `hide pane read`.
+ */
+export function pickWords(text: string, at: { start: number; query: string }, words: string): { text: string; caret: number } {
+  const after = text.slice(at.start + 1 + at.query.length);
+  const word = `${words}${/^\s/.test(after) ? "" : " "}`;
+  return { text: text.slice(0, at.start) + word + after, caret: at.start + words.length + 1 };
+}
+
+/** How a session's box writes a picked file: `@` and its path in the checkout, quoted when it holds a space. */
+export function fileWords(file: MentionFile): string {
+  return /\s/.test(file.relative_path) ? `@"${file.relative_path}"` : `@${file.relative_path}`;
 }
 
 /** The draft with `start`..`end` replaced by `words`, and the caret after them. */

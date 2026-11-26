@@ -1880,6 +1880,7 @@ pub(super) enum Event {
     SessionThreadOlder(super::session_thread::ThreadOlderPayload),
     SessionThreadClose,
     SessionThreadInput(super::session_thread::ThreadInputPayload),
+    SessionThreadSwitch(super::session_thread::ThreadSwitchPayload),
     SessionWorkSearch(super::links::RecordSearchPayload),
     SessionMissedStatus(super::links::MissedStatusPayload),
     BacklogAdd(super::backlog::BacklogAddPayload),
@@ -2218,6 +2219,12 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             )
         }
         "session_thread_close" => Ok(Event::SessionThreadClose),
+        "session_thread_switch" => {
+            decode!(
+                super::session_thread::ThreadSwitchPayload,
+                SessionThreadSwitch
+            )
+        }
         // Made by hided from a screen's `thread_input`; hided refuses a
         // client that sends it.
         "session_thread_input" => {
@@ -2580,6 +2587,7 @@ impl Runtime {
             Event::SessionThreadOlder(payload) => self.read_older_session_thread(payload),
             Event::SessionThreadClose => self.close_session_thread(),
             Event::SessionThreadInput(payload) => self.send_session_thread_input(payload),
+            Event::SessionThreadSwitch(payload) => self.switch_session_thread(payload),
             Event::SessionWorkSearch(payload) => self.search_work_sessions(payload),
             Event::SessionMissedStatus(payload) => self.set_missed_status(payload),
             Event::BacklogAdd(payload) => self.add_backlog(payload),
