@@ -1,7 +1,7 @@
 import { ArrowUpRightIcon, CircleAlertIcon, EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, WaypointsIcon, XIcon } from "lucide-react";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, type ReactNode } from "react";
 import type { Actions } from "../../actions";
-import type { DeskJob } from "../../desk";
+import type { DeskJob, DeskPullRequest } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { missionNumber, missionWorkedIn } from "../../missions";
@@ -11,11 +11,14 @@ import { PanePlanChip } from "../../PanePlanChip";
 import { planOfPane } from "../../plans";
 import { useShellStore } from "../../store";
 import { DeviceChip } from "../device-chip";
+import { Elapsed } from "../elapsed";
 import { AncestorPath, usePaneMenu } from "../../PaneRelations";
 import { useNoticeFloor } from "../../noticeFloor";
 import { wakeFailureReason, wakingLine } from "../../sleep";
 import type { AgentRow, AgentSleep, PaneRow } from "../../snapshot";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { PrMark } from "../pr-mark";
 import { Hint } from "../ui/tooltip";
 import { AskCardView } from "../../mobile/AskCard";
 import { JobLead } from "./desk-job-card";
@@ -34,8 +37,13 @@ import { StatusMark } from "../status-mark";
  * connected, the mission it conducts as the app's mission chip and its name,
  * or the one it works a node of by its number and name, and its plan as the
  * pane's plan chip. What it made and its PRs are on the shelf below.
+ *
+ * A session whose pane is gone, opened from its record (`ended`, feedback 2,
+ * frame K), reads `끝남` after its title and keeps only `✕`: it has no pane,
+ * terminal, files or menu; its second line names its machine and its pull
+ * requests, which no shelf lists for it.
  */
-export function SessionHead({ paneId, title, job, row, pane, machine, disconnected, sleeping, explorerOpen, filesChord, terminalChord, deskActions, onFiles, onTerminal, onOwnTab, onClose }: {
+export function SessionHead({ paneId, title, job, row, pane, machine, disconnected, sleeping, ended = null, explorerOpen, filesChord, terminalChord, deskActions, onFiles, onTerminal, onOwnTab, onClose }: {
   paneId: string;
   /** The session's work name, kept by the panel when its row and card are gone. */
   title: string;
@@ -47,6 +55,8 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
   machine: string | null;
   disconnected: boolean;
   sleeping: boolean;
+  /** The pull requests of a session opened from its record, its pane gone; null for a session with a pane. */
+  ended?: { pulls: readonly DeskPullRequest[] } | null;
   explorerOpen: boolean;
   filesChord: string | null;
   terminalChord: string | null;
@@ -67,10 +77,13 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
   const works = useMemo(() => (row && !conducts ? missionWorkedIn(rest, row, agentId) : null), [rest, row, conducts, agentId]);
   const plan = useShellStore((s) => (sleeping ? null : planOfPane(s.rest, paneId)));
   const lead = job ? <JobLead job={job} /> : row ? <><StatusMark mark={row.mark} /><AgentMark kind={row.agent_kind} /></> : null;
-  const known = machine !== null || disconnected || conducts !== null || works !== null || plan !== null;
+  const pulls = ended?.pulls ?? [];
+  const known = machine !== null || disconnected || conducts !== null || works !== null || plan !== null || pulls.length > 0;
   const tool = "text-muted-foreground";
+  // A session with no pane has nothing but its record to show and its `✕`.
+  const live = ended === null;
   return (
-    <header className="flex shrink-0 flex-col gap-xxs border-b border-border px-md py-xs text-caption" data-desk-session-head={sleeping ? "sleeping" : (job?.state ?? "pending")}>
+    <header className="flex shrink-0 flex-col gap-xxs border-b border-border px-md py-xs text-caption" data-desk-session-head={ended ? "ended" : sleeping ? "sleeping" : (job?.state ?? "pending")}>
       <div className="flex h-(--size-control-sm) min-w-0 items-center gap-xs">
         {sleeping ? <MoonIcon aria-label={t("desk.job.sleeping")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-desk-session-asleep="true" /> : lead}
         <nav className="flex min-w-0 flex-1 items-center gap-xxs text-subtle-foreground" aria-label={t("desk.thread.path")}>
@@ -78,18 +91,21 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
           <Hint label={title} reveals>
             <span className="min-w-0 truncate text-body font-semibold text-foreground" aria-current="page" data-desk-session-title="true">{title}</span>
           </Hint>
+          {ended ? <span className="shrink-0 text-muted-foreground" data-desk-session-ended="true">{t("desk.job.done")}</span> : null}
         </nav>
-        {sleeping ? null : <PaneHeadChildren paneId={paneId} actions={deskActions} />}
-        {sleeping ? null : (
+        {sleeping || !live ? null : <PaneHeadChildren paneId={paneId} actions={deskActions} />}
+        {sleeping || !live ? null : (
           // Its words live in its hint: at the panel's first width the head keeps its room for the session's path and name.
           <Hint label={`${t("desk.room.openOwn")} · ${t("desk.room.openOwnHint")}`}>
             <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("desk.room.openOwn")} data-desk-session-own-tab="true" onClick={onOwnTab}><ArrowUpRightIcon /></Button>
           </Hint>
         )}
-        <Hint label={t("desk.room.files")} shortcut={filesChord ?? undefined}>
-          <Button variant="ghost" size="icon-sm" aria-label={t("desk.room.files")} aria-pressed={explorerOpen} className={cn(tool, explorerOpen && "bg-secondary text-foreground")} data-desk-session-files="true" onClick={onFiles}><FolderIcon /></Button>
-        </Hint>
-        {sleeping ? null : (
+        {live ? (
+          <Hint label={t("desk.room.files")} shortcut={filesChord ?? undefined}>
+            <Button variant="ghost" size="icon-sm" aria-label={t("desk.room.files")} aria-pressed={explorerOpen} className={cn(tool, explorerOpen && "bg-secondary text-foreground")} data-desk-session-files="true" onClick={onFiles}><FolderIcon /></Button>
+          </Hint>
+        ) : null}
+        {sleeping || !live ? null : (
           <Hint label={t("desk.room.terminal")} shortcut={terminalChord ?? undefined}>
             <Button variant="ghost" size="icon-sm" aria-label={t("desk.room.terminal")} className={tool} data-desk-session-terminal="true" onClick={onTerminal}><SquareTerminalIcon /></Button>
           </Hint>
@@ -117,6 +133,11 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
             </Button>
           ) : null}
           {plan && !conducts ? <PanePlanChip paneId={paneId} actions={deskActions} /> : null}
+          {pulls.map((pull) => (
+            <Badge key={pull.number} variant="secondary" className="gap-xxs" data-desk-session-pr={pull.number}>
+              <PrMark state={pull.state} compact />#{pull.number}
+            </Badge>
+          ))}
         </div>
       ) : null}
     </header>
@@ -173,6 +194,23 @@ export function SessionSleepingFoot({ title, sleep, state, onWake, onFresh }: { 
         {failed && onFresh ? <Button variant="ghost" size="sm" data-desk-session-wake-fresh="true" onClick={onFresh}>{t("panes.sleep.newSession")}</Button> : null}
       </div>
       {reason ? <p role="alert" className="pl-(--size-control-sm) text-caption text-muted-foreground" data-desk-session-wake-reason="true">{reason}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Where the input box stood for a session opened from its record, its pane
+ * gone (feedback 2, frame K, 다): how long ago it ended and the app's
+ * `이어서 하기` (`resume`, the session record row's button), or, when it
+ * cannot resume, the one line the app gives why in its place.
+ */
+export function SessionRecordFoot({ endedAt, resume, blocked }: { endedAt: number | null; resume: ReactNode; blocked: string | null }) {
+  const foot = useRef<HTMLDivElement>(null);
+  useNoticeFloor(foot);
+  return (
+    <div ref={foot} className="flex min-w-0 shrink-0 items-center gap-xs border-t border-border px-md py-sm text-caption" data-desk-session-record-foot={blocked ? "blocked" : "resume"}>
+      {endedAt !== null ? <Elapsed since={endedAt} className="shrink-0 font-mono text-muted-foreground" /> : null}
+      {blocked ? <span className="min-w-0 flex-1 text-right text-muted-foreground" data-desk-session-resume-blocked="true">{blocked}</span> : <span className="ml-auto flex shrink-0 items-center">{resume}</span>}
     </div>
   );
 }

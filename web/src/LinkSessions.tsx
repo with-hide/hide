@@ -270,8 +270,8 @@ function SessionLineView({ entry, project, checkoutBranch, opener, item, actions
   );
 }
 
-/** A button under an ended line; off, it stays reachable so its tooltip says why (B10). */
-function LineButton({ icon, label, blocked, busy = false, onClick, data, id }: { icon: ReactNode; label: string; blocked: Blocked; busy?: boolean; onClick: () => void; data: string; id: string }) {
+/** A button under an ended line; off, it stays reachable so its tooltip says why (B10). Desk's session opened from its record takes its `이어서 하기` (feedback 2, frame K). */
+export function LineButton({ icon, label, blocked, busy = false, onClick, data, id }: { icon: ReactNode; label: string; blocked: Blocked; busy?: boolean; onClick: () => void; data: string; id: string }) {
   const { t } = useInterfaceTranslation();
   const off = blocked !== null || busy;
   const button = (
