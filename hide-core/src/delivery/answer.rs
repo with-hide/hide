@@ -28,7 +28,7 @@ pub struct AgentView {
     /// The agent's pane as the caller uses it: bare on the caller's own
     /// machine, `remote:<device>:pane:<id>` for one this core runs on another
     /// machine, `core:<device>:pane:<id>` for one another machine's own core
-    /// keeps (`address::pane_for_caller`, `core_calls::answer_from_core`).
+    /// keeps. Pass it as written.
     pub pane: String,
     pub parent: Option<String>,
     /// The spawner, independently of responsibility; null for ordinary roots.
@@ -214,8 +214,8 @@ pub struct SpawnRef {
     pub kind: String,
     /// The device the child is on when it is not the caller's own.
     pub machine: Option<String>,
-    /// The pane as the caller passes it to `hide pane send`, in the form
-    /// `AgentView::pane` says; absent until the spawn made one.
+    /// The pane as the caller passes it to `hide pane send`, written as an
+    /// agent's `pane` is; absent until the spawn made one.
     pub pane: Option<String>,
     /// The child's registration id once it registered.
     pub child: Option<String>,
@@ -276,9 +276,9 @@ pub struct PsPane {
     pub worktree: bool,
     pub tab: Option<String>,
     pub tab_id: Option<String>,
-    /// The pane's address as the caller uses it, in the form
-    /// `AgentView::pane` says: bare on the caller's own machine, and with
-    /// `machine` the key a child's `parent_machine` and `parent_pane` name.
+    /// The pane's address as the caller uses it: bare on the caller's own
+    /// machine, `remote:<device>:pane:<id>` on another. With `machine` it is
+    /// the key a child's `parent_machine` and `parent_pane` name.
     pub pane: String,
     /// The pane's own title, for a pane that holds no agent.
     pub title: Option<String>,
@@ -299,7 +299,8 @@ pub struct PsAgent {
     /// The row's second line: what it asks, did or waits on.
     pub line: Option<String>,
     pub machine: String,
-    /// The agent's pane as the caller uses it, as `PsPane::pane` is.
+    /// The agent's pane as the caller uses it, written as a pane row's
+    /// `pane` is.
     pub pane: String,
     /// The live agent this one was delegated by, as the screen nests it: its
     /// machine and its pane, the parent row's `machine` and `pane`.

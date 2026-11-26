@@ -6104,7 +6104,7 @@ mod tests {
                 assert!(ended.ended);
                 assert_eq!(ended.parent, expected_parent);
                 assert_eq!(
-                    view(ended, &ledger, &RegistrationFacts::NONE)["origin"],
+                    view(ended, &ledger, &RegistrationFacts::NONE, "local")["origin"],
                     origin
                 );
                 assert!(ledger.watches.is_empty());
@@ -6135,7 +6135,7 @@ mod tests {
                 assert!(!child.ended);
                 assert_eq!(child.parent, expected_parent);
                 assert_eq!(
-                    view(child, &ledger, &RegistrationFacts::NONE)["origin"],
+                    view(child, &ledger, &RegistrationFacts::NONE, "local")["origin"],
                     origin
                 );
                 assert_eq!(ledger.watches.len(), 1);
@@ -6248,7 +6248,7 @@ mod tests {
                 .unwrap();
             assert!(!live.ended);
             assert_eq!(
-                view(live, &restored, &RegistrationFacts::NONE)["origin"],
+                view(live, &restored, &RegistrationFacts::NONE, "local")["origin"],
                 origin
             );
             apply(
