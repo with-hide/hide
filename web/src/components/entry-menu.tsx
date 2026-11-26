@@ -303,7 +303,7 @@ export function EntryPointMenu<Id extends string>({
 } & Record<`data-${string}`, string>) {
   useEscapeLayer(at !== null, onClose);
   const returnFocus = useReturnFocus(at !== null);
-  const guard = useOpeningPressGuard(at !== null);
+  const guard = useOpeningPressGuard(at);
   return (
     <MenuPrimitive.Root open={at !== null} onOpenChange={(open) => (open ? undefined : onClose())}>
       <MenuPrimitive.Trigger asChild>

@@ -136,10 +136,11 @@ function ContextMenuTrigger({ asChild = false, className, onContextMenu, onKeyDo
  * The content swallows that release; the next press inside the menu ends the guard, so every later click chooses.
  * A press dragged onto an item and released there therefore opens the menu without choosing.
  */
-export function useOpeningPressGuard(open: boolean): Pick<ComponentProps<"div">, "onPointerDownCapture" | "onPointerUpCapture"> {
+export function useOpeningPressGuard(at: Point | null): Pick<ComponentProps<"div">, "onPointerDownCapture" | "onPointerUpCapture"> {
   const opening = useRef(false);
-  // Set in the commit that opens the menu, before the browser can deliver the release.
-  useLayoutEffect(() => { opening.current = open; }, [open]);
+  // Set in the commit that opens the menu, or moves it to a new point, before the browser can deliver the release.
+  const open = at !== null;
+  useLayoutEffect(() => { opening.current = open; }, [open, at?.x, at?.y]);
   return {
     onPointerDownCapture: () => { opening.current = false; },
     onPointerUpCapture: (event) => {
@@ -152,7 +153,7 @@ export function useOpeningPressGuard(open: boolean): Pick<ComponentProps<"div">,
 
 function ContextMenuContent({ className, onCloseAutoFocus, ...props }: ComponentProps<typeof MenuPrimitive.Content>) {
   const { point, host, returnToInput } = useContextMenu();
-  const guard = useOpeningPressGuard(point !== null);
+  const guard = useOpeningPressGuard(point);
   // Return to the real context target rather than the invisible anchor, unless
   // a newer control or layer already took the keyboard before Radix's timer.
   const returnFocus = useReturnFocus(point !== null, returnToInput ? undefined : {
