@@ -13,8 +13,8 @@ use super::analysis::{
     RequestLine, normalize_goal, normalize_text_field, truncate_phrase,
 };
 use crate::links::ledger::{
-    MISSED_CHARS, MissedKind, NEW_MISSED_LIMIT, NewMissedWork, ResolvedMissedWork, SUMMARY_BATCH,
-    SUMMARY_CHARS, TURN_MISSED_LIMIT, TurnJudgment,
+    MISSED_CHARS, MissedKind, NEW_MISSED_LIMIT, NewMissedWork, QUOTE_CHARS, ResolvedMissedWork,
+    SUMMARY_BATCH, SUMMARY_CHARS, TURN_MISSED_LIMIT, TurnJudgment,
 };
 use crate::suggestions::ledger::ImprovementKind;
 use crate::suggestions::policy::{IMPROVEMENT_CHARS, IMPROVEMENTS_PER_TURN};
@@ -291,7 +291,7 @@ fn end_schema(limits: LabelLimits) -> Value {
             "work":{
                 "type":"object","additionalProperties":false,"required":["missed","resolved"],
                 "properties":{
-                    "missed":{"type":"array","maxItems":TURN_MISSED_LIMIT,"items":{"type":"object","additionalProperties":false,"required":["kind","text","same_as","quote","ask_type","addressed_to"],"properties":{"kind":{"type":"string","enum":["problem","follow_up","ask"]},"text":{"type":"string","minLength":1,"maxLength":MISSED_CHARS},"same_as":{"type":["string","null"]},"quote":{"type":"string"},"ask_type":{"type":["string","null"],"enum":["decision","human_only",null]},"addressed_to":{"type":["string","null"],"enum":["operator","parent",null]}}}},
+                    "missed":{"type":"array","maxItems":TURN_MISSED_LIMIT,"items":{"type":"object","additionalProperties":false,"required":["kind","text","same_as","quote","ask_type","addressed_to"],"properties":{"kind":{"type":"string","enum":["problem","follow_up","ask"]},"text":{"type":"string","minLength":1,"maxLength":MISSED_CHARS},"same_as":{"type":["string","null"]},"quote":{"type":"string","maxLength":QUOTE_CHARS},"ask_type":{"type":["string","null"],"enum":["decision","human_only",null]},"addressed_to":{"type":["string","null"],"enum":["operator","parent",null]}}}},
                     "resolved":{"type":"array","maxItems":200,"items":{"type":"object","additionalProperties":false,"required":["id","issue_number","reason"],"properties":{"id":{"type":"string"},"issue_number":{"type":["integer","null"],"minimum":1},"reason":{"type":"string","maxLength":MISSED_CHARS}}}},
                     "only_asks_again":{"type":"boolean"}
                 }
@@ -512,10 +512,18 @@ impl JudgedWork {
             .into_iter()
             .filter_map(|line| {
                 let ask = line.kind == MissedKind::Ask;
+                // The sentence that asks it, kept only when it is in the answer, so
+                // the question line can show where it was asked; one asked again
+                // brings its new sentence. One longer than [`QUOTE_CHARS`] still
+                // proves the question but is not kept: its line shows the summary.
+                let form = quote_form(&line.quote);
+                let found = ask && !form.is_empty() && answer.contains(&form);
+                let quote = line.quote.trim();
+                let quote =
+                    (found && quote.chars().count() <= QUOTE_CHARS).then(|| quote.to_owned());
                 if ask && line.same_as.is_none() {
                     checks.listed += 1;
-                    let quote = quote_form(&line.quote);
-                    if quote.is_empty() || !answer.contains(&quote) {
+                    if !found {
                         checks.unquoted += 1;
                         return None;
                     }
@@ -527,6 +535,7 @@ impl JudgedWork {
                     kind: line.kind,
                     text: line.text,
                     same_as: line.same_as,
+                    quote,
                 })
             })
             .collect::<Vec<_>>();
@@ -566,6 +575,9 @@ impl JudgedWork {
 /// `text` as a quote is compared in: Markdown emphasis and quotation marks
 /// left out and every run of white space one space, so a sentence the
 /// judgment copied without the answer's `**` or line break still matches.
+/// The web's question line finds a kept sentence in the message to light it
+/// by the same reading (`quoteForm` in web/src/markdownPlain.ts); change the
+/// two together.
 fn quote_form(text: &str) -> String {
     /// Markdown emphasis and code marks and the quotation marks a model
     /// may add or leave out around a copied sentence.
@@ -1022,8 +1034,8 @@ mod tests {
     }
 
     /// A new question stays only when the sentence it quotes is in the
-    /// turn's own answer, however the answer marked it up; a repeated one
-    /// carries none. A question for the parent agent is kept
+    /// turn's own answer, however the answer marked it up, and keeps that
+    /// sentence; a repeated one carries none. A question for the parent agent is kept
     /// folded unless only a person can take its step, which stays the
     /// operator's own (B12).
     #[test]
@@ -1092,6 +1104,21 @@ mod tests {
             ]
         );
         assert_eq!(judgment.missed[1].same_as.as_deref(), Some("missed-1-0"));
+        // Each keeps the sentence it was found by, as the judgment quoted it,
+        // for the question line to show and light in the message.
+        assert_eq!(
+            judgment
+                .missed
+                .iter()
+                .map(|line| line.quote.as_deref())
+                .collect::<Vec<_>>(),
+            [
+                Some("배포: 지금 main에 배포할까요?"),
+                None,
+                Some("127번 칩은 하나로 줄일지 알려 주세요."),
+                Some("머지는 운영자 캡처 확인을 기다립니다."),
+            ]
+        );
         assert_eq!(
             checks,
             AskChecks {
@@ -1105,6 +1132,33 @@ mod tests {
 
     /// Past three new lines the rest are dropped, the operator's first, so
     /// the ledger keeps the turn instead of refusing it whole.
+    /// A sentence past [`QUOTE_CHARS`] still proves the question, which
+    /// stays, but is not kept, so its line shows the summary; the prompt asks
+    /// for the same cap the schema holds.
+    #[test]
+    fn a_question_quoted_past_the_cap_stays_without_its_sentence() {
+        let long = format!("{}할까요?", "가".repeat(QUOTE_CHARS - 3));
+        let at_cap = format!("{}할까요?", "나".repeat(QUOTE_CHARS - 4));
+        let answer = format!("{long}\n{at_cap}");
+        let (judgment, checks) = checked(
+            vec![
+                line("ask", &long, None, Some("decision"), Some("operator")),
+                line("ask", &at_cap, None, Some("decision"), Some("operator")),
+            ],
+            &answer,
+        );
+        assert_eq!(
+            judgment
+                .missed
+                .iter()
+                .map(|line| line.quote.as_ref().map(|quote| quote.chars().count()))
+                .collect::<Vec<_>>(),
+            [None, Some(QUOTE_CHARS)]
+        );
+        assert_eq!(checks.unquoted, 0);
+        assert!(ASKS.contains(&format!("at most {QUOTE_CHARS} characters")));
+    }
+
     #[test]
     fn past_three_new_lines_the_operators_come_first_and_the_rest_are_dropped() {
         let answer = "하나? 둘? 셋? 넷? 부모?";

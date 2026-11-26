@@ -69,15 +69,27 @@ describe("markdown live plan", () => {
     ]);
   });
 
-  it("collapses a fenced code block to its body and styles those lines", () => {
+  it("draws a fenced code block's opening fence as its head row, with its language and code, and hides the closing one", () => {
     expect(shown(`${AWAY}\`\`\`rust\nfn main() {}\n\`\`\`\n`)).toEqual([
-      "hide:```",
-      "fenceLine:```rust",
-      "hide:rust",
+      "codeHead:```rust",
       "codeBlock:fn main() {}",
       "hide:```",
       "fenceLine:```",
     ]);
+    const head = plan(`${AWAY}\`\`\`rust edition=2024\nfn main() {}\n\`\`\`\n`).find((range) => range.kind === "codeHead");
+    expect([head?.language, head?.source]).toEqual(["rust", "fn main() {}"]);
+  });
+
+  it("copies a block opened in a quote or a list item without the container's marks, and names no language for a bare fence", () => {
+    const heads = plan(`${AWAY}> \`\`\`\n> echo hi\n>   indented\n> \`\`\`\n\n- item\n\n  \`\`\`sh\n  ls\n  \`\`\`\n`).filter((range) => range.kind === "codeHead");
+    expect(heads.map((range) => [range.language, range.source])).toEqual([[null, "echo hi\n  indented"], ["sh", "ls"]]);
+  });
+
+  it("marks where each code line stands in its block, so the block is drawn as one box, a blank line inside it included", () => {
+    const edges = plan(`${AWAY}\`\`\`\npnpm install\n\npnpm build\n\`\`\`\n\n\`\`\`\nopen https://example.com\n\`\`\`\n`, 0)
+      .filter((range) => range.kind === "codeBlock")
+      .map((range) => range.edge ?? "middle");
+    expect(edges).toEqual(["first", "middle", "last", "only"]);
   });
 
   it("reveals the whole fenced block while the caret is inside it", () => {

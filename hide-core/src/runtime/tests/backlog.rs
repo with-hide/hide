@@ -1208,6 +1208,7 @@ pub(super) fn seed_missed_turn(
                     same_as: None,
                     operator_only: None,
                     to_parent: false,
+                    quote: None,
                 }],
                 ..Default::default()
             },

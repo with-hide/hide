@@ -218,6 +218,7 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, se
       composer={{ value: text, tray: sceneTray(files), focused, onChange: setText, onSend: noop }}
       ask={choice}
       asks={asks}
+      onAsk={noop}
       onTerminal={noop} {...PART_ACTIONS}
     />
   </>;

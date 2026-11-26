@@ -51,6 +51,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { composingKey } from "./keys";
 import { machineName } from "./screenMachine";
 import { catalogOf, catalogWorkspaces, checkoutAtRoot, checkoutOfPane, localDeviceId, paneRowOf, type AgentRow, type DeskCommand, type SleepingSession, type ViewDisplaySnapshot } from "./snapshot";
+import { askingSession } from "./sessionWork";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { windowIsActive } from "./viewFocus";
@@ -830,6 +831,10 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
       }
       ask={job?.state === "asking" ? <DeskSessionAsk paneId={paneId} deviceId={row?.device_id ?? null} job={job} row={row} actions={actions} onWrite={write} /> : null}
       asks={row?.open_asks?.items}
+      onAsk={(id, status) => {
+        const asking = row ? askingSession(row) : null;
+        if (asking) actions.setMissedStatus(asking, id, status);
+      }}
       foot={sleeping ? (
         <SessionSleepingFoot
           title={title}

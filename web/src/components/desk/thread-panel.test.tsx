@@ -9,8 +9,9 @@ import { keepSent } from "../../deskComposer";
 import type { CopyText } from "../human-turn-copy";
 import type { AskLine } from "../open-asks";
 import type { DeskJob } from "../../desk";
-import type { SessionThreadSection } from "../../snapshot";
+import type { SessionThreadSection, ThreadPage } from "../../snapshot";
 import { useShellStore } from "../../store";
+import { useUiStore } from "../../ui";
 import { TooltipProvider } from "../ui/tooltip";
 import { ThreadPanel } from "./thread-panel";
 import { clearPreviews } from "../../filePreview";
@@ -57,7 +58,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], onCopy = () => Promise.resolve(true) }: { asks?: AskLine[]; onCopy?: CopyText } = {}) {
+async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], onCopy = () => Promise.resolve(true), onAsk = () => undefined }: { asks?: AskLine[]; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void } = {}) {
   const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
@@ -66,7 +67,7 @@ async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks 
   const noop = () => undefined;
   await act(async () => root.render(
     <TooltipProvider>
-      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} asks={asks} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
+      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
     </TooltipProvider>,
   ));
   const box = () => container.querySelector("textarea")!;
@@ -296,7 +297,7 @@ it("draws a turn an agent recorded as interrupted as one quiet line, never as th
 });
 
 /** Waits until the lazily loaded Markdown language parsed the messages, so a code block carries its copy button. */
-const codeCopyDrawn = (container: HTMLElement) => act(() => vi.waitFor(() => expect(container.querySelector("[data-markdown-code-copy]")).not.toBeNull()));
+const codeCopyDrawn = (container: HTMLElement) => act(() => vi.waitFor(() => expect(container.querySelector("[data-code-block-action]")).not.toBeNull()));
 
 it("draws the agent's words as Markdown and copies a message's original words and a code block's code (Doop E2)", async () => {
   const copied: [string, string][] = [];
@@ -308,7 +309,7 @@ it("draws the agent's words as Markdown and copies a message's original words an
   const message = container.querySelector('[data-desk-thread-line="agent"]')!;
   expect(message.querySelector('[data-markdown-text="true"]')).not.toBeNull();
   await act(async () => message.querySelector<HTMLElement>('[data-message-copy] [data-copy-words="message"]')!.click());
-  await act(async () => message.querySelector<HTMLElement>('[data-markdown-code-copy] [data-copy-words="code block"]')!.click());
+  await act(async () => message.querySelector<HTMLElement>('[data-code-block-action] [data-copy-words="code block"]')!.click());
   expect(copied).toEqual([[words, "message"], ["open https://play.google.com/console", "code block"]]);
   // A copy that took says so on the button that made it.
   expect(message.querySelector('[data-copy-words="message"]')?.getAttribute("data-copied")).toBe("true");
@@ -331,37 +332,198 @@ it("keeps every message's view while the operator types and while the last messa
   expect(container.textContent).toContain("쓰는 중, 더 썼어요");
 });
 
-it("shows the questions Hide found above the box and goes to the answer each was asked in, lit for 2 s (Doop B4)", async () => {
+const answer = (text: string, at: number) => ({ sessionUpdate: "agent_message_chunk", messageId: text, content: { type: "text", text }, _meta: { hide: { at_ms: at } } });
+const asked = (...updates: ThreadPage["updates"]) => ({ updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, ...updates], parts: {}, sessions: {} });
+
+it("shows a question in the agent's own sentence above the box and lights only that sentence in its message for 2 s (Doop N3 가)", async () => {
   const scrolled: string[] = [];
   vi.stubGlobal("CSS", { escape: (value: string) => value });
   Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this.textContent ?? ""); };
-  const answer = (text: string, at: number) => ({ sessionUpdate: "agent_message_chunk", messageId: text, content: { type: "text", text }, _meta: { hide: { at_ms: at } } });
-  const asks: AskLine[] = [
-    { id: "missed-1-0", text: "다크도 찍을지 물었어요", at_unix_ms: 1_500 },
-    { id: "missed-2-0", text: "본인 확인을 직접 해 줄 수 있는지 물었어요", at_unix_ms: 2_500 },
-  ];
-  const { container } = await mount(job, null, { asks });
-  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, answer("라이트를 찍었어요. 다크도 찍을까요?", 1_000), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "결제해놨어" } }, answer("본인 확인은 직접 해 줄 수 있어?", 2_000)], parts: {}, sessions: {} };
-  await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
-  // One line above the box says the newest question and how many more there are.
+  const { container } = await mount(job, null, { asks: [{ id: "missed-1-0", text: "다크 화면을 넣을지", at_unix_ms: 1_500, quote: "다크 화면도 넣을까요?" }] });
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: asked(answer("라이트를 찍었어요. 다크 화면도 넣을까요? 넣으면 두 배예요.", 1_000)) }), sessionThreadHistory: { generation: 4, pages: [] } }));
   const line = container.querySelector("[data-desk-thread-asks]")!;
-  expect(line.querySelector('[data-desk-thread-ask="missed-2-0"]')?.textContent).toContain("본인 확인을 직접 해 줄 수 있는지 물었어요");
-  expect(line.querySelector("[data-desk-thread-asks-more]")?.getAttribute("data-desk-thread-asks-more")).toBe("1");
+  const row = line.querySelector('[data-desk-thread-ask-row="missed-1-0"]')!;
+  // One row above the box: 질문, the agent's sentence, when it was asked and ×; no message unfolds under it.
+  expect(row.querySelector("[data-desk-thread-ask-lead]")?.textContent).toBe("Question");
+  expect(row.querySelector('[data-desk-thread-ask-words="missed-1-0"]')?.textContent).toBe("다크 화면도 넣을까요?");
+  expect(row.querySelector("[data-desk-thread-ask-ago]")?.textContent).toMatch(/\S ago$/);
+  expect(row.querySelector('[data-desk-thread-ask-dismiss="missed-1-0"]')).not.toBeNull();
+  expect(line.querySelector("[data-desk-thread-ask-body]")).toBeNull();
   expect(line.compareDocumentPosition(container.querySelector("textarea")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  // It wears the amber the sidebar's 내 차례 question rows wear (`text-warning`), not the pane's working blue (Doop B4, question 나).
-  expect([line.className.includes("border-warning"), line.className.includes("open-ask")]).toEqual([true, false]);
+  // The question colour is only on 질문: the box is the neutral ground inside a hairline.
+  expect(row.querySelector("[data-desk-thread-ask-lead]")?.className).toContain("text-open-ask");
+  expect([/warning|open-ask/.test(line.className), line.className.includes("border-hairline"), line.className.includes("bg-code-block")]).toEqual([false, true, true]);
 
   vi.useFakeTimers();
   try {
-    await act(async () => line.querySelector<HTMLElement>('[data-desk-thread-ask="missed-2-0"]')!.click());
-    const lit = () => Array.from(container.querySelectorAll('[data-desk-thread-lit="true"]')).map((one) => one.textContent);
-    expect(scrolled.at(-1)).toContain("본인 확인은 직접 해 줄 수 있어?");
-    expect(lit()).toEqual([expect.stringContaining("본인 확인은 직접 해 줄 수 있어?")]);
+    await act(async () => row.querySelector<HTMLElement>('[data-desk-thread-ask="missed-1-0"]')!.click());
+    const lit = () => Array.from(container.querySelectorAll("[data-desk-thread-message] [data-markdown-lit]")).map((one) => one.textContent);
+    expect(lit()).toEqual(["다크 화면도 넣을까요?"]);
+    expect(scrolled.some((text) => text.includes("라이트를 찍었어요."))).toBe(true);
+    expect(row.getAttribute("data-lit")).toBe("true");
     await act(async () => vi.advanceTimersByTime(1_999));
     expect(lit()).toHaveLength(1);
     await act(async () => vi.advanceTimersByTime(1));
     expect(lit()).toEqual([]);
+    expect(row.getAttribute("data-lit")).toBeNull();
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("goes to the answer of a question kept without its sentence, in Hide AI's words, lighting nothing", async () => {
+  const scrolled: string[] = [];
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this.textContent ?? ""); };
+  const { container } = await mount(job, null, { asks: [{ id: "missed-1-0", text: "다크 화면을 넣을지", at_unix_ms: 1_500 }] });
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: asked(answer("라이트를 찍었어요. 다크도 넣을까요?", 1_000)) }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  const row = container.querySelector('[data-desk-thread-ask-row="missed-1-0"]')!;
+  expect(row.querySelector("[data-desk-thread-ask-words]")?.textContent).toBe("다크 화면을 넣을지");
+  await act(async () => row.querySelector<HTMLElement>('[data-desk-thread-ask="missed-1-0"]')!.click());
+  expect(scrolled.at(-1)).toContain("라이트를 찍었어요.");
+  expect(container.querySelector("[data-markdown-lit]")).toBeNull();
+});
+
+it("reads the pages before for a question asked further up, and says so when the conversation no longer holds it", async () => {
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  Element.prototype.scrollIntoView = () => undefined;
+  const { actions, container } = await mount(job, null, { asks: [{ id: "missed-1-0", text: "배포할지", at_unix_ms: 500, quote: "지금 배포할까요?" }] });
+  await act(async () => useShellStore.setState({ sessionThread: section({ has_older: true, tail: asked(answer("새로 시작했어요.", 1_000)) }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  await act(async () => container.querySelector<HTMLElement>('[data-desk-thread-ask="missed-1-0"]')!.click());
+  expect(actions.readOlderThread).toHaveBeenCalledWith(4);
+  expect(container.querySelector("[data-desk-thread-ask-gone]")).toBeNull();
+  // Every page read and still not there: one quiet line says so, and the question stays.
+  await act(async () => useShellStore.setState({ sessionThread: section({ has_older: false, tail: asked(answer("새로 시작했어요.", 1_000)) }) }));
+  expect(container.querySelector('[data-desk-thread-ask-gone="missed-1-0"]')?.textContent).toBe("Not in the conversation");
+  expect(container.querySelector('[data-desk-thread-ask-row="missed-1-0"]')).not.toBeNull();
+  // A gone row has nothing to press, and reads no more pages.
+  expect(container.querySelector('[data-desk-thread-ask="missed-1-0"]')).toBeNull();
+  expect(actions.readOlderThread).toHaveBeenCalledTimes(1);
+});
+
+it("draws a question whose message is gone dim, whole and inert, with a hollow dot, and back as N3 가 once its message is found (Doop N3b 가)", async () => {
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  Element.prototype.scrollIntoView = () => undefined;
+  const long = `${"이 화면을 어떻게 나눌지 정해야 해요. ".repeat(12)}어느 쪽으로 할까요?`;
+  const asks: AskLine[] = [
+    { id: "missed-1-0", text: "화면을 나눌지", at_unix_ms: 500, quote: long },
+    { id: "missed-2-0", text: "다크도 찍을지", at_unix_ms: 1_500, quote: "다크도 찍을까요?" },
+  ];
+  const { container } = await mount(job, null, { asks });
+  const thread = (...lines: ThreadPage["updates"]) => useShellStore.setState({ sessionThread: section({ has_older: false, tail: asked(...lines, answer("라이트를 찍었어요. 다크도 찍을까요?", 1_000)) }), sessionThreadHistory: { generation: 4, pages: [] } });
+  // No answer written by the time the first was found: the record holds no message of it.
+  await act(async () => thread());
+  // Folded, the line takes the first question's look: dim.
+  const folded = container.querySelector<HTMLElement>("[data-desk-thread-asks-more]")!;
+  expect(folded.querySelector("[data-desk-thread-ask-lead]")?.className).toContain("text-open-ask");
+  expect(folded.textContent).toContain("이 화면을");
+  expect(folded.querySelector("span.truncate")?.className).toContain("text-muted-foreground");
+  await act(async () => folded.click());
+  const look = (id: string) => {
+    const row = container.querySelector(`[data-desk-thread-ask-row="${id}"]`)!;
+    const words = row.querySelector<HTMLElement>("[data-desk-thread-ask-words]")!;
+    return {
+      dot: row.querySelector("[data-desk-thread-ask-dot]")?.getAttribute("data-desk-thread-ask-dot"),
+      dim: words.className.includes("text-muted-foreground"),
+      clamped: words.className.includes("line-clamp-2"),
+      said: words.textContent,
+      tail: row.querySelector("[data-desk-thread-ask-gone]")?.textContent ?? null,
+      pressable: row.querySelector("[data-desk-thread-ask]") !== null,
+      dismissable: row.querySelector("[data-desk-thread-ask-dismiss]") !== null,
+    };
+  };
+  expect(look("missed-1-0")).toEqual({ dot: "ring", dim: true, clamped: false, said: `${Array.from(long).slice(0, 200).join("")}…`, tail: "Not in the conversation", pressable: false, dismissable: true });
+  expect(look("missed-2-0")).toEqual({ dot: "true", dim: false, clamped: true, said: "다크도 찍을까요?", tail: null, pressable: true, dismissable: true });
+  // Read again with the message in it: the row is N3 가 at once.
+  await act(async () => thread(answer(long, 400)));
+  expect(look("missed-1-0")).toEqual({ dot: "true", dim: false, clamped: true, said: long, tail: null, pressable: true, dismissable: true });
+});
+
+it("folds several questions to 질문 N and the first, unfolds them under 질문 N alone, oldest first, and keeps 무시하기 struck through with 되돌리기 (Doop N3 가)", async () => {
+  const set: [string, string][] = [];
+  const asks: AskLine[] = [
+    { id: "missed-2-0", text: "본인 확인을 직접 해 줄 수 있는지", at_unix_ms: 2_500, quote: "본인 확인을 직접 해 줄 수 있어?" },
+    { id: "missed-1-0", text: "다크도 찍을지", at_unix_ms: 1_500, quote: "다크도 찍을까요?" },
+  ];
+  const { container } = await mount(job, null, { asks, onAsk: (id, status) => set.push([id, status]) });
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: asked(answer("라이트를 찍었어요. 다크도 찍을까요?", 1_000), answer("본인 확인을 직접 해 줄 수 있어?", 2_000)) }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  const line = () => container.querySelector("[data-desk-thread-asks]")!;
+  const rows = () => Array.from(line().querySelectorAll("[data-desk-thread-ask-row]")).map((row) => row.getAttribute("data-desk-thread-ask-row"));
+  const more = line().querySelector<HTMLElement>("[data-desk-thread-asks-more]")!;
+  expect(more.textContent).toBe("Questions 2 ·다크도 찍을까요?");
+  expect(rows()).toEqual([]);
+
+  await act(async () => more.click());
+  expect(line().getAttribute("data-desk-thread-asks-open")).toBe("true");
+  // The head says how many wait and folds; the rows follow, oldest first, each with its dot, its time and ×.
+  const head = () => line().querySelector("[data-desk-thread-ask-lead]")?.textContent;
+  expect(head()).toBe("Questions 2");
+  expect(line().querySelector("[data-desk-thread-asks-fold]")?.textContent).toBe("Collapse");
+  expect(rows()).toEqual(["missed-1-0", "missed-2-0"]);
+  expect(line().querySelectorAll("[data-desk-thread-ask-dot]")).toHaveLength(2);
+  expect(line().querySelectorAll("[data-desk-thread-ask-ago]")).toHaveLength(2);
+
+  // × is 무시하기: the core is told, and the row stays struck through with 되돌리기 until it is brought back.
+  await act(async () => line().querySelector<HTMLElement>('[data-desk-thread-ask-dismiss="missed-2-0"]')!.click());
+  expect(set).toEqual([["missed-2-0", "dismissed"]]);
+  const away = line().querySelector('[data-desk-thread-ask-row="missed-2-0"]')!;
+  expect(away.getAttribute("data-dismissed")).toBe("true");
+  expect(head()).toBe("Questions 1");
+  await act(async () => away.querySelector<HTMLElement>('[data-desk-thread-ask-undo="missed-2-0"]')!.click());
+  expect(set).toEqual([["missed-2-0", "dismissed"], ["missed-2-0", "open"]]);
+  expect(head()).toBe("Questions 2");
+  await act(async () => line().querySelector<HTMLElement>("[data-desk-thread-asks-fold]")!.click());
+  expect(line().getAttribute("data-desk-thread-asks-open")).toBe("false");
+});
+
+it("folds the unfolded question list on Esc before Esc reaches the panel it stands in", async () => {
+  const asks: AskLine[] = [
+    { id: "missed-1-0", text: "다크도 찍을지", at_unix_ms: 1_500 },
+    { id: "missed-2-0", text: "본인 확인을 직접 해 줄 수 있는지", at_unix_ms: 2_500 },
+  ];
+  const panel = vi.fn();
+  const pop = useUiStore.getState().pushEscape(panel);
+  try {
+    const { container } = await mount(job, null, { asks });
+    await act(async () => useShellStore.setState({ sessionThread: section(), sessionThreadHistory: { generation: 4, pages: [] } }));
+    const line = () => container.querySelector("[data-desk-thread-asks]")!;
+    await act(async () => line().querySelector<HTMLElement>("[data-desk-thread-asks-more]")!.click());
+    expect(line().getAttribute("data-desk-thread-asks-open")).toBe("true");
+    // Esc runs the innermost layer, as keyboard.ts does.
+    await act(async () => useUiStore.getState().escapeLayers.at(-1)!());
+    expect(line().getAttribute("data-desk-thread-asks-open")).toBe("false");
+    expect(panel).not.toHaveBeenCalled();
+    // Folded, the next Esc is the panel's again.
+    expect(useUiStore.getState().escapeLayers.at(-1)).toBe(panel);
+  } finally {
+    pop();
+  }
+});
+
+it("draws a code block under a head row with its language and 복사, the code below it, a block in a quote too (Doop N 1 나)", async () => {
+  const copied: string[] = [];
+  const { container } = await mount(job, null, { onCopy: async (text) => { copied.push(text); return true; } });
+  const words = "한 줄:\n\n```\nopen https://play.google.com/console\n```\n\n여러 줄:\n\n```bash\npnpm --dir web install\npnpm --dir web build\n```\n\n> 인용 안:\n> ```sh\n> echo hi\n> ```";
+  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "알려 줘" } }, said(words)], parts: {}, sessions: {} };
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  await act(() => vi.waitFor(() => expect(container.querySelectorAll("[data-code-block-head]")).toHaveLength(3)));
+  const [one, several] = Array.from(container.querySelectorAll<HTMLElement>("[data-code-block]"));
+  // The head names the fence's language, or says it is code when it names none.
+  expect([one, several].map((block) => block!.querySelector("[data-code-block-language]")?.textContent)).toEqual(["Code", "bash"]);
+  // The code is the block's own text, without its fences, and 복사 stands in the head, never in the code.
+  expect(one!.querySelector("pre")?.textContent).toBe("open https://play.google.com/console");
+  expect(several!.querySelector("pre")?.textContent).toBe("pnpm --dir web install\npnpm --dir web build");
+  for (const block of [one!, several!]) {
+    const button = block.querySelector('[data-code-block-head] [data-copy-words="code block"]');
+    expect(button?.textContent).toBe("Copy");
+    expect(block.querySelector("pre")?.contains(button!)).toBe(false);
+  }
+  await act(async () => several!.querySelector<HTMLElement>('[data-copy-words="code block"]')!.click());
+  // A block opened in a quote keeps its lines in the text and still has its head and 복사, which copies the code without the quote's marks.
+  const quoted = container.querySelector<HTMLElement>(".cm-md-code-head-row [data-code-block-head]")!;
+  expect(quoted.querySelector("[data-code-block-language]")?.textContent).toBe("sh");
+  await act(async () => quoted.querySelector<HTMLElement>('[data-copy-words="code block"]')!.click());
+  expect(copied).toEqual(["pnpm --dir web install\npnpm --dir web build", "echo hi"]);
+  // 복사 says it copied, in its own words.
+  expect(several!.querySelector('[data-copy-words="code block"]')?.textContent).toBe("Copied");
 });
