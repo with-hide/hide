@@ -134,14 +134,12 @@ impl AdapterId {
     }
 
     /// Where the adapter tells a compaction's end, when it tells it outside
-    /// the reply ([`CompactionMark`]).
+    /// the reply ([`CompactionMark`]), as its definition file names it
+    /// (`[desk] compaction_meta`).
     pub fn compaction_mark(self) -> Option<CompactionMark> {
-        match self.0 {
-            AgentId::OpenCode => Some(CompactionMark {
-                pointer: "/_meta/opencode~1compaction",
-            }),
-            _ => None,
-        }
+        hide_agent_adapter::definition::builtin(self.catalog().id)
+            .and_then(|definition| definition.desk.compaction_meta.as_deref())
+            .map(|pointer| CompactionMark { pointer })
     }
 
     /// The commands Desk keeps out of the agent's own list, as its definition
@@ -447,6 +445,8 @@ mod tests {
     #[test]
     fn opencode_s_compaction_end_reads_from_its_meta_field() {
         let mark = AdapterId::OPENCODE.compaction_mark().unwrap();
+        // An adapter whose definition names no field tells it in its reply.
+        assert_eq!(AdapterId::CLAUDE.compaction_mark(), None);
         // The updates OpenCode 2.0.29 sent for `/compact` (mission-101 slash-research probe).
         let update = |status: Value| json!({"sessionUpdate": "session_info_update", "_meta": {"opencode/compaction": status}});
         assert_eq!(

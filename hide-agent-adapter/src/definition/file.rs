@@ -79,11 +79,19 @@ pub struct Desk {
     /// list, and a message that starts with any entry's words is never sent.
     #[serde(default)]
     pub left_out: Vec<String>,
+    /// Where the agent's ACP adapter tells a compaction's end outside the
+    /// reply: a JSON pointer into a `session_info_update`, to an object
+    /// whose `status` is `completed` or `failed` (with `error.message`).
+    /// None for an adapter that tells it in its reply.
+    #[serde(default)]
+    pub compaction_meta: Option<String>,
 }
 
 /// The most entries a `[desk] left_out` holds, and the most bytes in one.
 pub const MAX_LEFT_OUT: usize = 32;
 pub const MAX_LEFT_OUT_BYTES: usize = 64;
+/// A longer `compaction_meta` pointer is refused with its file.
+pub const MAX_COMPACTION_META_BYTES: usize = 128;
 
 fn check_desk(name: &str, desk: &Desk) -> Result<(), String> {
     if desk.left_out.len() > MAX_LEFT_OUT {
@@ -104,6 +112,15 @@ fn check_desk(name: &str, desk: &Desk) -> Result<(), String> {
     }) {
         return Err(format!(
             "{name}: desk.left_out {bad:?} is not a command name, and at most one argument, without the slash"
+        ));
+    }
+    if let Some(pointer) = &desk.compaction_meta
+        && (!pointer.starts_with('/')
+            || pointer.len() > MAX_COMPACTION_META_BYTES
+            || pointer.chars().any(|c| c.is_whitespace() || c.is_control()))
+    {
+        return Err(format!(
+            "{name}: desk.compaction_meta {pointer:?} is not a JSON pointer of at most {MAX_COMPACTION_META_BYTES} bytes"
         ));
     }
     Ok(())
@@ -1394,7 +1411,21 @@ mod tests {
         .desk
         .unwrap();
         assert_eq!(desk.left_out, ["logout", "session delete"]);
+        let meta = read(
+            "x.toml",
+            &file("compaction_meta = \"/_meta/x~1compaction\"\n"),
+            Origin::Builtin,
+        )
+        .unwrap()
+        .desk
+        .unwrap();
+        assert_eq!(
+            meta.compaction_meta.as_deref(),
+            Some("/_meta/x~1compaction")
+        );
         for refused in [
+            "compaction_meta = \"_meta\"\n",
+            "compaction_meta = \"/a b\"\n",
             "left_out = [\"/logout\"]\n",
             "left_out = [\"\"]\n",
             "left_out = [\"a b c\"]\n",

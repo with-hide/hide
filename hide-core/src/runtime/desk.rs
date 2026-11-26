@@ -89,6 +89,14 @@ pub(super) struct Desk {
     /// session opens; replaced whole by each list the agent sends. Never
     /// stored: the next session sends its own (letter-48308).
     commands: BTreeMap<AdapterId, Vec<hide_desk::commands::Command>>,
+    /// The running session that opened new on a command and has not been
+    /// told Desk's guide yet, which goes with its first ordinary message
+    /// (`hide_desk::Guide`). It joins `stored.sessions` only once that
+    /// message's turn ended done (`desk_session_told`), so a session loaded
+    /// again is always one that was told: when the process ends first (its
+    /// end, a failed open, a switch, a new conversation, Desk off), the next
+    /// message opens a new session that carries the conversation.
+    untold: Option<(AdapterId, String)>,
     /// The queued starts the queue handed to be run, in order; tests answer
     /// them themselves.
     #[cfg(test)]
@@ -139,6 +147,8 @@ struct Turn {
     now: Option<crate::model::DeskStepKind>,
     /// The compaction the agent told outside its reply.
     compaction: Option<crate::model::DeskCompaction>,
+    /// How its message goes: a command opens no session to load again.
+    kind: hide_desk::commands::Kind,
 }
 
 /// A card waiting for the operator, and how to answer the agent.
@@ -633,6 +643,9 @@ impl Runtime {
     /// in it end with it.
     fn desk_close_turn(&mut self, outcome: TurnOutcome) {
         self.close_approvals();
+        if matches!(outcome, TurnOutcome::Done) {
+            self.desk_session_told();
+        }
         match outcome {
             TurnOutcome::Done => self.finish_turn(DeskReplyState::Done),
             TurnOutcome::Cancelled | TurnOutcome::Ended => {
@@ -777,6 +790,7 @@ impl Runtime {
             steps: Default::default(),
             now: None,
             compaction: None,
+            kind,
         });
         let resume = self
             .desk
@@ -969,8 +983,34 @@ impl Runtime {
 
     /// Ends the Desk process from the room: the reply under way stops, and
     /// each waiting card closes as a refusal.
+    /// An ordinary message's turn that ended done told the untold session
+    /// its guide, so the session is stored to load again.
+    fn desk_session_told(&mut self) {
+        let Some(agent) = self
+            .desk
+            .turn
+            .as_ref()
+            .filter(|turn| turn.kind == hide_desk::commands::Kind::Message)
+            .map(|turn| turn.agent)
+        else {
+            return;
+        };
+        if !self.desk.host.open {
+            return;
+        }
+        if let Some((untold, session)) = self.desk.untold.take_if(|(untold, _)| *untold == agent) {
+            self.desk
+                .stored
+                .sessions
+                .retain(|(stored, _)| *stored != untold);
+            self.desk.stored.sessions.push((untold, session));
+            self.save_desk();
+        }
+    }
+
     fn end_desk_process(&mut self) {
         self.order(Order::End);
+        self.desk.untold = None;
         self.close_approvals();
         self.forget_refusal();
         self.finish_turn(DeskReplyState::Stopped);
@@ -1014,11 +1054,13 @@ impl Runtime {
                 to: agent,
                 carried,
             });
-            // The new agent's session starts with the conversation carried.
+            // The new agent's session starts with the conversation carried,
+            // and the one left, ended by the next send, is told nothing more.
             self.desk
                 .stored
                 .sessions
                 .retain(|(adapter, _)| *adapter != agent);
+            self.desk.untold = None;
             self.desk.stored.selection = crate::model::DeskSelection {
                 agent: Some(agent),
                 model: payload.model,
@@ -1289,11 +1331,30 @@ impl Runtime {
                 self.desk
                     .agents
                     .insert(adapter, (DeskAgentState::Ready, None));
+                let new = resume_failed
+                    || !self
+                        .desk
+                        .stored
+                        .sessions
+                        .iter()
+                        .any(|(stored, _)| *stored == adapter);
                 self.desk
                     .stored
                     .sessions
                     .retain(|(stored, _)| *stored != adapter);
-                self.desk.stored.sessions.push((adapter, session_id));
+                // A new session whose first message is a command is not told
+                // the guide yet; it is kept to load again once it is.
+                let command = self
+                    .desk
+                    .turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.kind == hide_desk::commands::Kind::Command);
+                self.desk.untold = None;
+                if new && command {
+                    self.desk.untold = Some((adapter, session_id));
+                } else {
+                    self.desk.stored.sessions.push((adapter, session_id));
+                }
                 self.learn_choices(adapter, &choices);
                 self.forget_stopped();
                 self.desk.held = false;
@@ -1313,6 +1374,7 @@ impl Runtime {
                 // the operator sends again or restarts. A turn started since,
                 // by `다시 시작` or a new conversation, is not this one.
                 self.desk.held = true;
+                self.desk.untold = None;
                 if turn.is_some() && self.desk_turn_tag() == turn {
                     self.desk_requeue_untaken();
                     self.desk_close_turn(TurnOutcome::Cancelled);
@@ -1512,6 +1574,9 @@ impl Runtime {
                 self.save_desk();
             }
             Report::Commands { adapter, commands } => {
+                if self.desk.commands.get(&adapter) == Some(&commands.commands) {
+                    return false;
+                }
                 if commands.cut > 0 {
                     crate::diagnostic!(json!({
                         "component": "desk",
@@ -1520,9 +1585,6 @@ impl Runtime {
                         "kept": commands.commands.len(),
                         "cut": commands.cut,
                     }));
-                }
-                if self.desk.commands.get(&adapter) == Some(&commands.commands) {
-                    return false;
                 }
                 self.desk.commands.insert(adapter, commands.commands);
                 self.compose_desk_commands();
@@ -1567,6 +1629,7 @@ impl Runtime {
                 }
                 self.close_approvals();
                 self.forget_refusal();
+                self.desk.untold = None;
                 if unexpected {
                     self.desk.host = Host {
                         state: Some(DeskHostState::Stopped),
@@ -4052,6 +4115,102 @@ mod tests {
         event(&mut runtime, "desk_select", json!({"agent": "pi"}));
         event(&mut runtime, "desk_send", json!({"text": "/logout"}));
         assert_eq!(sent(&received).text, "/logout");
+    }
+
+    /// A session that opened new on a command has not been told Desk's
+    /// guide: if its process ends before an ordinary message, the next
+    /// message opens a new session (which the worker tells the guide and
+    /// the conversation) rather than load the untold one; once an ordinary
+    /// message went, the session is loaded again.
+    #[test]
+    fn a_session_opened_on_a_command_is_loaded_again_only_once_told() {
+        let ended = |runtime: &mut Runtime| {
+            runtime.desk_report(Report::Ended {
+                unexpected: false,
+                detail: None,
+                turn: None,
+            });
+        };
+        let finished = |runtime: &mut Runtime, tag: u64| {
+            runtime.desk_report(Report::TurnEnded {
+                tag,
+                outcome: TurnOutcome::Done,
+            });
+        };
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        listed(&mut runtime, AdapterId::CLAUDE, &["context"]);
+        event(&mut runtime, "desk_send", json!({"text": "/context"}));
+        let first = sent(&received);
+        assert_eq!(
+            (first.kind, first.resume),
+            (hide_desk::commands::Kind::Command, None)
+        );
+        opened(&mut runtime, AdapterId::CLAUDE);
+        finished(&mut runtime, first.tag);
+        // Desk off and on, 다시 시작, a switch and back, a restart: the
+        // process ends before the guide went.
+        ended(&mut runtime);
+        event(&mut runtime, "desk_send", json!({"text": "what is in it?"}));
+        let next = sent(&received);
+        assert_eq!(next.resume, None);
+        assert!(
+            next.carried
+                .as_deref()
+                .is_some_and(|carried| carried.contains("Operator: /context")),
+            "{:?}",
+            next.carried
+        );
+        // The new session hears the guide with that message, so it is the
+        // one loaded after the next end.
+        runtime.desk_report(Report::Opened {
+            adapter: AdapterId::CLAUDE,
+            session_id: "told-session".into(),
+            resume_failed: false,
+            choices: Choices::default(),
+        });
+        finished(&mut runtime, next.tag);
+        ended(&mut runtime);
+        event(&mut runtime, "desk_send", json!({"text": "and now?"}));
+        assert_eq!(sent(&received).resume.as_deref(), Some("told-session"));
+
+        // An ordinary message in the same process tells the session opened
+        // on a command, which is then loaded again.
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = self::runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        listed(&mut runtime, AdapterId::CLAUDE, &["context"]);
+        event(&mut runtime, "desk_send", json!({"text": "/context"}));
+        let first = sent(&received);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        finished(&mut runtime, first.tag);
+        event(&mut runtime, "desk_send", json!({"text": "what is in it?"}));
+        let told = sent(&received);
+        finished(&mut runtime, told.tag);
+        ended(&mut runtime);
+        event(&mut runtime, "desk_send", json!({"text": "and now?"}));
+        assert_eq!(sent(&received).resume.as_deref(), Some("claude-session"));
+
+        // An ordinary message whose turn failed may never have reached the
+        // agent: the session stays untold and is not loaded again.
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = self::runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        listed(&mut runtime, AdapterId::CLAUDE, &["context"]);
+        event(&mut runtime, "desk_send", json!({"text": "/context"}));
+        let first = sent(&received);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        finished(&mut runtime, first.tag);
+        event(&mut runtime, "desk_send", json!({"text": "what is in it?"}));
+        let failed = sent(&received);
+        runtime.desk_report(Report::TurnEnded {
+            tag: failed.tag,
+            outcome: TurnOutcome::Failed(None),
+        });
+        ended(&mut runtime);
+        event(&mut runtime, "desk_send", json!({"text": "and now?"}));
+        assert_eq!(sent(&received).resume, None);
     }
 
     /// OpenCode tells `/compact`'s end only in its session's `_meta`: the
