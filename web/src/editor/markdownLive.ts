@@ -40,6 +40,8 @@ export type LiveRange = {
   title?: string;
   /** `mermaid`: the diagram's source, the text between the fences; `table`: the table's source. */
   source?: string;
+  /** `codeBlock`: the line opens its block, closes it, or is all of it, so the block is drawn as one box. */
+  edge?: "first" | "last" | "only";
 };
 
 /** The Live view's whole-document byte bound: above
@@ -166,10 +168,12 @@ export function markdownLivePlan(tree: Tree, doc: Text, selection: { from: numbe
       if (name === "CodeText") {
         const block = enclosing(node, "FencedCode");
         if (block && !overlaps(block.from, block.to)) {
-          for (let pos = node.from; pos < node.to; ) {
-            const line = doc.lineAt(pos);
-            ranges.push({ from: line.from, to: line.to, kind: "codeBlock" });
-            pos = line.to + 1;
+          const first = doc.lineAt(node.from).number;
+          const last = doc.lineAt(node.to).number;
+          for (let number = first; number <= last; number += 1) {
+            const line = doc.line(number);
+            const edge = first === last ? "only" : number === first ? "first" : number === last ? "last" : undefined;
+            ranges.push({ from: line.from, to: line.to, kind: "codeBlock", ...(edge ? { edge } : {}) });
           }
         }
         return;

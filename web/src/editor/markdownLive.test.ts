@@ -67,6 +67,13 @@ describe("markdown live plan", () => {
     ]);
   });
 
+  it("marks where each code line stands in its block, so the block is drawn as one box, a blank line inside it included", () => {
+    const edges = plan(`${AWAY}\`\`\`\npnpm install\n\npnpm build\n\`\`\`\n\n\`\`\`\nopen https://example.com\n\`\`\`\n`, 0)
+      .filter((range) => range.kind === "codeBlock")
+      .map((range) => range.edge ?? "middle");
+    expect(edges).toEqual(["first", "middle", "last", "only"]);
+  });
+
   it("reveals the whole fenced block while the caret is inside it", () => {
     expect(shown("```rust\nfn main() {}\n```\n", 12)).toEqual([]);
   });

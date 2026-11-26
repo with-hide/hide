@@ -406,7 +406,7 @@ function build(state: EditorState, reveal: boolean, drawing: Drawing): Decoratio
         ranges.push(Decoration.line({ class: `cm-md-heading-${range.level ?? 1}` }).range(range.from));
         break;
       case "codeBlock":
-        ranges.push(Decoration.line({ class: "cm-md-code" }).range(range.from));
+        ranges.push(Decoration.line({ class: range.edge ? `cm-md-code cm-md-code-${range.edge}` : "cm-md-code" }).range(range.from));
         break;
       case "fenceLine":
         ranges.push(Decoration.line({ class: "cm-md-hidden-line" }).range(range.from));
