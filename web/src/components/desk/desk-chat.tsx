@@ -300,6 +300,9 @@ function answeredWord(item: DeskApproval): MessageKey {
   }
 }
 
+/** A card's buttons: the refusal as words, the agent's allow-once option as the card's one primary, any other as secondary. */
+const BUTTON_VARIANT: Record<ApprovalWord | "other", "text" | "secondary" | "ask"> = { reject: "text", other: "secondary", allow_always: "secondary", allow_once: "ask" };
+
 const BUTTON_WORD: Record<ApprovalWord, MessageKey> = {
   reject: "desk.approval.reject",
   allow_always: "desk.approval.allowAlways",
@@ -308,12 +311,14 @@ const BUTTON_WORD: Record<ApprovalWord, MessageKey> = {
 
 /**
  * What Desk's agent asks to run, waiting for the operator (D-92, frame A2 가):
- * the one `!` card without an agent mark, since it is Desk's own. It comes
+ * the card on the ask surface (`border-warning/50 bg-warning/10`) without an
+ * agent mark, since it is Desk's own, its kind (`셸 명령`) first in the ask
+ * colour and then `Desk가 이 일을 하려고 해요`. It comes
  * under `에이전트대로` for each request the agent makes, and under `다 허용`
  * only for one with no allow-once answer. The command on one grey block,
  * folded to two lines when longer, the folder, Desk's reason when it gave
- * one, and the agent's own answers as grey buttons, none the default
- * (`approvalButtons`): `거절…` opens one line whose words go to Desk with the
+ * one, and the agent's own answers (`approvalButtons`), `거절…` as words, `항상 허용`
+ * secondary and `한 번 허용` the one primary in the ask colour (`BUTTON_VARIANT`): `거절…` opens one line whose words go to Desk with the
  * refusal, `항상 허용` and `한 번 허용` go to the agent as its own options, so
  * what the agent keeps allowed is the agent's, as in the terminal. Every
  * button names the agent's own option on hover. Once answered it folds to one
@@ -339,14 +344,12 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
   }
   const refuse = ({ option }: ApprovalButton) => onAnswer(option?.id ?? null, line.trim() || undefined);
   return (
-    <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={t(APPROVAL_CARD[item.card])} data-desk-item="approval" data-desk-approval={item.state}>
-      <p className="flex min-w-0 items-center gap-sm">
-        <StatusMark mark="turn" />
-        <span className="font-medium text-foreground">{t("desk.approval.title")}</span>
-        <span className="-ml-xs min-w-0 truncate text-caption text-muted-foreground">{t(APPROVAL_CARD[item.card])}</span>
+    <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-warning/50 bg-warning/10 px-md py-sm" aria-label={t(APPROVAL_CARD[item.card])} data-desk-item="approval" data-desk-approval={item.state}>
+      <p className="flex min-w-0 items-baseline gap-sm">
+        <span className="shrink-0 text-micro font-semibold text-warning" data-desk-approval-kind-label={item.card}>{t(APPROVAL_CARD[item.card])}</span>
+        <span className="min-w-0 truncate font-medium text-foreground">{t("desk.approval.title")}</span>
       </p>
-      {/* What follows the title starts where the title does, so the card reads as one item under its mark. */}
-      <div className="flex min-w-0 flex-col gap-xs pl-[calc(var(--size-agent-mark)+var(--spacing-sm))]">
+      <div className="flex min-w-0 flex-col gap-xs">
       <ApprovalCommand command={item.command} />
       {item.folder ? (
         <p className="flex min-w-0 items-baseline gap-xs text-micro text-muted-foreground">
@@ -384,7 +387,7 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
             // The button keeps its own word as its name; the hint adds the agent's own name for the option when the word is Hide's.
             return (
               <Hint key={option?.id ?? "reject"} label={option?.name ?? label} active={word !== null && option !== null}>
-                <Button variant="secondary" size="sm" aria-label={label} data-desk-approval-option={option?.id} data-desk-approval-kind={option?.kind ?? "reject"} onClick={() => (refuses(button) ? setRefusing(button) : onAnswer(option?.id ?? null))}>
+                <Button variant={BUTTON_VARIANT[word ?? "other"]} size="sm" aria-label={label} data-desk-approval-option={option?.id} data-desk-approval-kind={option?.kind ?? "reject"} onClick={() => (refuses(button) ? setRefusing(button) : onAnswer(option?.id ?? null))}>
                   {label}
                 </Button>
               </Hint>

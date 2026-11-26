@@ -562,6 +562,12 @@ describe("Desk's room", () => {
       expect(card).toContain("npm run build");
       expect(card).toContain("~/repo/web");
       expect(buttons()).toEqual([["reject", "Reject…"], ["allow-with-updates", "Always allow"], ["allow-once", "Allow once"]]);
+      // Frame A2 가: the card stands on the ask surface with its kind first, the refusal is words, and only allow-once is the primary.
+      const surface = document.body.querySelector("[data-desk-item='approval']")!;
+      expect(surface.className).toContain("border-warning");
+      expect(surface.querySelector("p")!.textContent).toBe("Shell commandDesk wants to do this");
+      const fill = (id: string) => document.body.querySelector<HTMLElement>(`[data-desk-approval-option='${id}']`)!.className;
+      expect([fill("reject").includes("border"), fill("allow-with-updates").includes("bg-secondary"), fill("allow-once").includes("bg-warning")]).toEqual([false, true, true]);
       await press("[data-desk-approval-option='allow-with-updates']");
       await press("[data-desk-approval-option='allow-once']");
       expect(sent("desk_approval")).toEqual([{ id: 7, option: "allow-with-updates" }, { id: 7, option: "allow-once" }]);

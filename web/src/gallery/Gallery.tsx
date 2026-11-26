@@ -120,6 +120,8 @@ const renderers: Renderers = {
     "Practice Hover": () => <Button variant="practice" data-gallery-state="hover">Start</Button>,
     "Tint": () => <Button variant="tint" size="sm">Update now</Button>,
     "Tint Hover": () => <Button variant="tint" size="sm" data-gallery-state="hover">Update now</Button>,
+    "Ask": () => <Button variant="ask" size="sm">Allow once</Button>,
+    "Ask Hover": () => <Button variant="ask" size="sm" data-gallery-state="hover">Allow once</Button>,
     "Small": () => <Button size="sm">Retry</Button>,
     "Large": () => <Button size="lg">Register project</Button>,
     "Icon": () => (
