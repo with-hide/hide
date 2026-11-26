@@ -856,7 +856,7 @@ mod tests {
         fn redraw(&self, _: &str) {}
     }
 
-    /// with-hide/hide#2952: a node's screen pastes into this machine's pane
+    /// with-hide/hide issue 2952: a node's screen pastes into this machine's pane
     /// as a paste, for that pane's holder to wrap; its own pane is still not
     /// the relay's.
     #[test]

@@ -791,7 +791,7 @@ fn a_waiting_run_of_keys_stops_at_a_pane_a_control_an_enter_and_an_escape() {
     assert_eq!(control, d + 1);
 }
 
-/// with-hide/hide#2952: a screen's paste for a device's pane goes down as a
+/// with-hide/hide issue 2952: a screen's paste for a device's pane goes down as a
 /// key line of its own marked `paste`, so the device's node hands its holder
 /// a paste; keys typed around it never join it, and an older line with no
 /// mark reads as keys.

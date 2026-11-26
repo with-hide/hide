@@ -38,7 +38,7 @@ describe("an agent's prompt in a practice world", () => {
     expect(after.draft).toBe("left");
   });
 
-  // with-hide/hide#2952: a paste submits nothing, as a real agent's prompt
+  // with-hide/hide issue 2952: a paste submits nothing, as a real agent's prompt
   // takes one in bracketed paste; its lines join the one-line practice draft.
   it("takes a paste's lines into the draft without submitting them", () => {
     const sent: string[] = [];

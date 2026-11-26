@@ -5367,7 +5367,7 @@ pub(crate) fn device_root_known(
 /// A `key` event: the pane or creation it is typed into, and what was typed.
 /// `paste: true` marks text the screen pasted, its line breaks carriage
 /// returns, which the pane's holder wraps for the program's paste mode
-/// (with-hide/hide#2952); a daemon before it reads the same event as keys.
+/// (with-hide/hide issue 2952); a daemon before it reads the same event as keys.
 pub(crate) fn terminal_key(event: &Value) -> Result<(KeyTarget, ScreenInput), String> {
     let field = |name: &str| {
         event
@@ -6673,7 +6673,7 @@ mod tests {
         assert!(view(&too_long).is_err());
     }
 
-    /// with-hide/hide#2952: a screen marks the text it pasted, which goes on
+    /// with-hide/hide issue 2952: a screen marks the text it pasted, which goes on
     /// as a paste for the pane's holder to wrap; an unmarked key, or one a
     /// page built before the mark sends, is keys, and a mark that is no
     /// boolean is refused rather than guessed.

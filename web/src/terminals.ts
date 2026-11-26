@@ -1047,7 +1047,7 @@ export async function terminalLinkAt(paneId: string, point: { clientX: number; c
  * line breaks carriage returns as a terminal sends them. The pane's holder
  * wraps it in bracketed paste when the program turned that mode on, which
  * this terminal cannot know: it draws from fragments that never carry the
- * mode, so xterm's own paste sent every line as Enter (with-hide/hide#2952).
+ * mode, so xterm's own paste sent every line as Enter (with-hide/hide issue 2952).
  */
 export function pasteText(paneId: string, text: string) {
   const instance = instances.get(paneId);

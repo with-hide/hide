@@ -1,4 +1,4 @@
-// with-hide/hide#2952: a paste into a pane reaches its program in bracketed
+// with-hide/hide issue 2952: a paste into a pane reaches its program in bracketed
 // paste exactly when the program turned that mode on. The page never sees the
 // mode (the holder's screen fragments do not carry it), so the pane's holder
 // wraps the paste: the browser to hided to the node and the holder to the PTY.

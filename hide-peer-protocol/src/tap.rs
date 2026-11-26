@@ -16,7 +16,7 @@ pub const OLDEST_TAP: u16 = 1;
 pub const NEWEST_TAP: u16 = PASTE_TAP;
 /// The first tap that carries [`ToNode::Paste`]: a screen's paste, which the
 /// node hands the pane's holder to wrap for the program's paste mode
-/// (with-hide/hide#2952). A node on 1 skips that kind, so a host sends it
+/// (with-hide/hide issue 2952). A node on 1 skips that kind, so a host sends it
 /// only to a node that welcomed it at this version or later, and types a
 /// paste as [`ToNode::Input`] to one on 1, as it did before.
 pub const PASTE_TAP: u16 = 2;

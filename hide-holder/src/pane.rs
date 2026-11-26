@@ -989,7 +989,7 @@ mod tests {
     }
 
     /// A screen sends a paste's line breaks as carriage returns, as a
-    /// terminal does (with-hide/hide#2952): inside bracketed paste they stay
+    /// terminal does (with-hide/hide issue 2952): inside bracketed paste they stay
     /// carriage returns, so the program reads the lines as one paste.
     #[test]
     fn a_pasted_carriage_return_stays_one_inside_bracketed_paste() {

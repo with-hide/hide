@@ -1447,7 +1447,7 @@ fn a_paste_is_written_before_the_keys_typed_behind_it() {
     });
 }
 
-/// with-hide/hide#2952: a screen's paste reaches the pane's writer as a
+/// with-hide/hide issue 2952: a screen's paste reaches the pane's writer as a
 /// paste, for its holder to wrap in the program's paste mode, never as keys
 /// in which each line break would be an Enter; it is the operator's input
 /// and submits nothing.

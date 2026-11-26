@@ -924,7 +924,7 @@ mod tests {
         );
     }
 
-    /// with-hide/hide#2952: a screen's paste reaches the node that holds its
+    /// with-hide/hide issue 2952: a screen's paste reaches the node that holds its
     /// pane as a paste, never as keys, so that node's holder can wrap it for
     /// the program; a pane no link reaches refuses it as it refuses a key.
     #[test]

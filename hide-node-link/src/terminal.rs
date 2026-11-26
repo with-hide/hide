@@ -435,7 +435,7 @@ pub trait TerminalNode: Send + Sync {
     /// returns as a terminal sends them. It goes to the pane's holder as a
     /// paste, which the holder wraps in bracketed paste only when the
     /// program turned that mode on: a screen draws from fragments that never
-    /// carry the mode, so it cannot know (with-hide/hide#2952). Taken,
+    /// carry the mode, so it cannot know (with-hide/hide issue 2952). Taken,
     /// held and refused as a key is.
     fn paste(&self, target: KeyTarget, text: Vec<u8>, typed_at_unix_ms: u64);
 

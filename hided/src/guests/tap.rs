@@ -699,7 +699,7 @@ pub(crate) mod tests {
             .collect()
     }
 
-    /// with-hide/hide#2952: a screen's paste reaches a node that welcomed
+    /// with-hide/hide issue 2952: a screen's paste reaches a node that welcomed
     /// the tap at its paste version as a paste, for the pane's holder to
     /// wrap, and one of an older build, which would skip that frame, as the
     /// keys it took before.

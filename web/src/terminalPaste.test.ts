@@ -38,7 +38,7 @@ function terminal(pane: string) {
     .map(({ payload }) => ({ ...payload, bytes_base64: new TextDecoder().decode(Uint8Array.from(atob(String(payload.bytes_base64)), (char) => char.charCodeAt(0))) }));
 }
 
-// with-hide/hide#2952: the terminal never sees the program turn bracketed
+// with-hide/hide issue 2952: the terminal never sees the program turn bracketed
 // paste on, so a paste goes marked as one for the pane's holder to wrap, its
 // line breaks carriage returns as a terminal sends them, never as keys.
 it("a paste goes to the pane marked as one, its line breaks carriage returns", () => {
