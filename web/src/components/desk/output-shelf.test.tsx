@@ -49,7 +49,7 @@ it("shows a thing alone of its kind as itself and opens it with one press; a lar
   expect(opened).toEqual(["notes.md", `#${2532}`, `github #${2532}`]);
   expect(host.querySelector("[data-desk-shelf-list]")).toBeNull();
   await act(async () => host.querySelector<HTMLElement>('[data-desk-shelf-group="image"]')!.click());
-  await act(async () => host.querySelector<HTMLElement>('[data-desk-shelf-list="image"] [data-desk-shelf-item="b.png"]')!.click());
+  await act(async () => host.querySelector<HTMLElement>('[data-desk-shelf-list="image"] [data-desk-shelf-item="b.png"] [data-desk-tile-open]')!.click());
   expect(opened).toEqual(["notes.md", `#${2532}`, `github #${2532}`, "b.png"]);
 });
 
