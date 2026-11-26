@@ -217,11 +217,11 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, se
     <ThreadView
       job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk
       composer={{ value: text, tray: sceneTray(files), focused, onChange: setText, onSend: noop, bar: (
-        // The session's bar (mission-106): the agent fixed, its model a menu, and an effort OpenCode-like agents change only in the terminal.
+        // The session's bar (mission-106): the agent fixed, its model a menu, and an effort Hide cannot change for OpenCode-like agents yet.
         <SessionAgentBar
           agent={{ kind: job.agent_kind ?? "claude", label: "Claude" }}
           model={{ value: "opus", label: "Opus 5.5", choices: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }], fixed: null }}
-          effort={{ value: null, label: null, choices: [], fixed: "OpenCode: changes its effort only in its own menu: change it in the terminal" }}
+          effort={{ value: null, label: null, choices: [], fixed: "OpenCode: Hide cannot change the effort here yet: change it in the terminal" }}
           switchHint={{ model: "/model", effort: null }}
           onModel={noop}
           onEffort={noop}

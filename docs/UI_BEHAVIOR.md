@@ -1547,15 +1547,18 @@ The words stay in the box until the pane took them, so a refused send loses noth
 
 The box has Desk's composer's `/` and `@` menus, in the same panel, from the one hook both boxes use (`useComposerMenus`, `web/src/components/desk/composer-menus.tsx`; mission-106).
 `/` at the start of the words lists the session's agent's own commands, the list Desk keeps for that agent (`desk_commands`, [ARCHITECTURE.md: Desk's commands](ARCHITECTURE.md#desks-commands)); before Desk has ever opened that agent no list is known, and the panel says so in one line while ↵ sends the words as typed.
+The list is Desk's: it leaves out what the agent's `[desk] left_out` names for Desk's shared session, and it was read in Desk's folder, so a command only the session's project defines is not in it; typed by hand, it still reaches the agent.
 A picked command is written into the box with one space after it, and a send types it as the agent's own command, as the terminal would.
 `@` lists the session's project's files that match what follows it, five at most from the index ⌘P reads (`file_index`), above Desk's `@` session tree without the session itself and without a session its agent could not address; it lists no projects.
 A pick is written as the agent reads it in its terminal: a file as `@<path in the checkout>`, quoted when the path holds a space, and a session as its reference, `@<name> (pane <id>)` (`agentReference.ts`).
 
 Under the box stands Desk's agent bar with the session's agent shown and fixed (`SessionAgentBar`): a session keeps the agent it runs, so the agent is a mark and a name whose hint says so.
 The model and the effort are menus where the agent changes them by a line in a running session, its definition's `[switch]` ([ARCHITECTURE.md: A session's model and effort](ARCHITECTURE.md#a-sessions-model-and-effort)): the models are the agent's own list the start surfaces read, the efforts the ones its line takes, and each hint names the command a change types (`/model`, `/effort`, `/thinking`).
-A pick sends one event, `session_thread_switch`; the core types the agent's line through the thread's input, so it waits for the agent as any input does, holds the box's send while it goes and keeps the box's words, and a refusal says why under the box.
+A pick sends one event, `session_thread_switch`; the core types the agent's line through the thread's input, holds the box's send while it goes and keeps the box's words, and a refusal says why under the box.
+The line ends with Enter, which answers whatever the agent shows, so it is typed as a letter is: only while the agent asks nothing, is not in a turn and holds no words that were never sent (`묻고 있어요`, `작업 중이에요`, `보내지 않은 글이 있어요`); nothing is typed then, and the slot keeps its value. The bar is held while the agent's question card is on screen.
+A typed line is taken as the change: Hide does not read the agent's answer to it, and the models listed are this Mac's default profile's, so a model the session's profile or device does not offer shows in the slot even when the agent refused it; the terminal shows what it runs.
 Each slot shows the value the session runs with as Hide knows it: its start's, or the last the bar changed; `기본` is the CLI's own.
-A slot the agent changes only in a menu of its own (OpenCode's model and effort, omp's model) shows its value read-only, and its hint says to change it in the terminal; an effort whose line names the model (Grok's) waits, with a hint, until the session's model is known.
+A slot Hide has no line for (OpenCode's model and effort, omp's model, whose own commands open a menu or are sent as a prompt) shows its value read-only, and its hint says to change it in the terminal; an effort whose line names the model (Grok's) waits, with a hint, until the session's model is known.
 
 ## Overview
 

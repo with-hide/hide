@@ -23,7 +23,7 @@ import { NO_MENTIONS, ThreadView, type ThreadPartActions } from "./thread-view";
 const NO_CHOICE: { model?: string; effort?: string } = {};
 
 /** The refusals a thread's input words itself; any other is an attachment's, worded as a terminal attachment's is. */
-const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "uncertain", "unavailable", "device_unreachable", "too_long", "control_characters", "attachment_failed", "input_refused", "switch_unsupported", "needs_model", "invalid_model", "invalid_effort", "invalid_request"]);
+const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "uncertain", "unavailable", "device_unreachable", "too_long", "control_characters", "attachment_failed", "input_refused", "switch_unsupported", "needs_model", "invalid_model", "invalid_effort", "invalid_request", "agent_asking", "agent_busy", "draft"]);
 
 /**
  * A session's conversation on screen, connected to the core (PRD desk-2-ui
@@ -167,7 +167,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   const choice = thread?.choice ?? NO_CHOICE;
   const slots = adapter ? sessionBarSlots(adapter.agent_cli, choice, catalog, t) : null;
   const change = (to: { model: string } | { effort: string }) => {
-    if (!thread?.pane_id || held !== null || sent) return;
+    if (!thread?.pane_id || held !== null || sent || ask !== null) return;
     const request = actions.switchThread(thread.generation, thread.pane_id, to);
     if (request) {
       setSent({ request, tiles: [], keepWords: true });
@@ -182,7 +182,8 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
       model={slots.model}
       effort={slots.effort}
       switchHint={{ model: switchCommand(adapter.switch?.model), effort: switchCommand(adapter.switch?.effort) }}
-      held={held !== null || sent !== null}
+      // A question card on screen is answered first: the line's Enter would answer it.
+      held={held !== null || sent !== null || ask !== null}
       onModel={(model) => change({ model })}
       onEffort={(effort) => change({ effort })}
     />

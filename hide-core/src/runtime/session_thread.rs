@@ -123,13 +123,17 @@ pub(super) struct ThreadWork {
     open: Option<OpenThread>,
     /// The model and effort a session input changed in a session whose pane
     /// keeps no launch record (an agent started by hand), by the session the
-    /// agent reports, at most [`SWITCHED_SESSIONS`]; a session with a record
-    /// keeps its change there, so its restarts take it too.
-    switched: BTreeMap<String, hide_agent_adapter::LaunchChoice>,
+    /// agent reports, each with the count of the change that made it, at
+    /// most [`SWITCHED_SESSIONS`]; a session with a record keeps its change
+    /// there, so its restarts take it too.
+    switched: BTreeMap<String, (u64, hide_agent_adapter::LaunchChoice)>,
+    /// The count the next kept change takes.
+    switches: u64,
 }
 
 /// The most sessions whose change from a session input is kept beside the
-/// launch records; past it the first by name is let go.
+/// launch records; past it the session changed longest ago is let go, and
+/// shows its start's choice again.
 const SWITCHED_SESSIONS: usize = 256;
 
 struct OpenThread {
@@ -577,8 +581,11 @@ impl Runtime {
 
     /// Changes the model or the effort of the session the thread shows the
     /// way its agent does in its terminal: the line its definition's
-    /// `[switch]` names, typed through the thread's input, so it waits for
-    /// the agent as any input does and is answered on the same input state.
+    /// `[switch]` names, typed through the thread's input and answered on
+    /// the same input state, but as a letter is typed: only while the agent
+    /// is at rest, asks nothing and holds no unsent words, so its Enter never
+    /// answers a question or sends someone's draft. Refused otherwise, with
+    /// the reason, and nothing is typed.
     /// Once typed, the session's choice is what the line made it, kept on
     /// its pane's launch record when one describes the agent (a restart
     /// starts it so), else beside it by session.
@@ -597,12 +604,30 @@ impl Runtime {
         }) {
             return self.settle_thread_input(&payload.request_id, Err("closed"));
         }
-        let switch = self
-            .delivery_observations
-            .get(&payload.pane_id)
-            .and_then(|observation| hide_agent_adapter::adapter(&observation.actor.kind))
-            .and_then(|adapter| hide_agent_adapter::definition::builtin(adapter.id))
-            .map(|definition| &definition.switch);
+        let Some(observation) = self.delivery_observations.get(&payload.pane_id) else {
+            return self.settle_thread_input(&payload.request_id, Err("switch_unsupported"));
+        };
+        // The line ends with Enter, which answers whatever the agent shows: a
+        // question on screen (a permission's Enter allows it) or a turn under
+        // way refuses it here, as the doorbell holds a letter
+        // (`doorbell::takes_keys`); the engine's letter rule is the last
+        // door for a state that moves after this read. Words in the input
+        // that were never sent are someone's: the line would follow them
+        // and send them with it (`Hold::Draft`).
+        let busy = match observation.status.as_str() {
+            "blocked" => Some("agent_asking"),
+            "working" => Some("agent_busy"),
+            _ if observation.unsent_draft() => Some("draft"),
+            _ => None,
+        };
+        if let Some(reason) = busy {
+            return self.settle_thread_input(&payload.request_id, Err(reason));
+        }
+        let switch = hide_agent_adapter::definition::find(
+            hide_agent_adapter::definition::builtins(),
+            &observation.actor.kind,
+        )
+        .map(|definition| &definition.switch);
         let Some(switch) = switch else {
             return self.settle_thread_input(&payload.request_id, Err("switch_unsupported"));
         };
@@ -627,7 +652,7 @@ impl Runtime {
     fn session_choice(&self, pane_id: &str) -> hide_agent_adapter::LaunchChoice {
         self.reported_session(pane_id)
             .and_then(|session| self.session_thread.switched.get(session))
-            .cloned()
+            .map(|(_, choice)| choice.clone())
             .or_else(|| {
                 self.agent_rows()
                     .find(|row| row.pane_id == pane_id)
@@ -655,12 +680,20 @@ impl Runtime {
                 self.session_thread.switched.remove(session);
             }
         } else if let Some(session) = session {
-            if !self.session_thread.switched.contains_key(&session)
-                && self.session_thread.switched.len() >= SWITCHED_SESSIONS
-            {
-                self.session_thread.switched.pop_first();
+            let work = &mut self.session_thread;
+            if !work.switched.contains_key(&session) && work.switched.len() >= SWITCHED_SESSIONS {
+                let oldest = work
+                    .switched
+                    .iter()
+                    .min_by_key(|(_, (at, _))| *at)
+                    .map(|(session, _)| session.clone());
+                if let Some(oldest) = oldest {
+                    work.switched.remove(&oldest);
+                }
             }
-            self.session_thread.switched.insert(session, choice.clone());
+            work.switches += 1;
+            work.switched
+                .insert(session, (work.switches, choice.clone()));
         }
     }
 
@@ -724,8 +757,14 @@ impl Runtime {
             open.inputting = true;
         }
         // Before the write, so the doorbell cannot judge the pane clean while
-        // the words are landing; a refused write only holds the pane.
-        self.note_delivery_key_at(&payload.pane_id, unix_milliseconds());
+        // the words are landing; a refused write only holds the pane. A
+        // switch line is typed as a letter, which the holder keeps in line
+        // with any other, and a refused one must not leave a draft behind
+        // that refuses the next switch.
+        if choice.is_none() {
+            self.note_delivery_key_at(&payload.pane_id, unix_milliseconds());
+        }
+        let command = choice.is_some();
         let request_id = payload.request_id.clone();
         self.set_session_thread(|thread| {
             thread.input = Some(ThreadInputSnapshot {
@@ -746,7 +785,11 @@ impl Runtime {
                     &gate,
                     &core_pane,
                     &raw_pane,
-                    crate::operator_input::Typed::Words(&text),
+                    if command {
+                        crate::operator_input::Typed::Command(&text)
+                    } else {
+                        crate::operator_input::Typed::Words(&text)
+                    },
                     &|| still().map(|()| engine.clone()),
                 )
                 .map_err(crate::operator_input::Unwritten::reason)
@@ -2012,6 +2055,12 @@ mod tests {
             .map(|call| call["text"].as_str().unwrap().to_owned())
             .collect();
         assert_eq!(typed, ["/model sonnet", "/effort high"]);
+        assert!(
+            fake.calls_of("prompt_agent")
+                .iter()
+                .all(|call| call["by"] == "Letter"),
+            "a switch line waits for the agent as a letter does"
+        );
         assert_eq!(
             thread(&runtime).choice,
             hide_agent_adapter::LaunchChoice {
@@ -2045,6 +2094,194 @@ mod tests {
             );
         }
         assert_eq!(fake.calls_of("prompt_agent").len(), 2);
+    }
+
+    /// A switch line ends with Enter, which answers whatever the agent shows:
+    /// it is typed only while the agent asks nothing, is not in a turn and
+    /// holds no unsent words; otherwise nothing is typed, the reason is
+    /// said and the choice stays.
+    #[test]
+    fn a_switch_is_typed_only_to_an_agent_at_rest_with_nothing_unsent() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        runtime.set_terminals(Arc::new(GrantingTerminals::default()) as _);
+        let refusal: Arc<Mutex<Option<&'static str>>> = Arc::default();
+        let fake = crate::engine::fake::FakeEngine::start({
+            let refusal = Arc::clone(&refusal);
+            move |_, _| match *refusal.lock().unwrap() {
+                Some(code) => crate::engine::fake::refused(code, "refused"),
+                None => crate::engine::fake::reply(()),
+            }
+        });
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
+        open(&mut runtime);
+        let generation = thread(&runtime).generation;
+        let switch = |runtime: &mut Runtime, model: &str| {
+            runtime.switch_session_thread(ThreadSwitchPayload {
+                generation,
+                pane_id: "w1:p1".to_owned(),
+                request_id: INPUT.to_owned(),
+                model: Some(model.to_owned()),
+                effort: None,
+            });
+            thread(runtime)
+                .input
+                .map(|input| (input.state, input.reason))
+        };
+        let refused = |reason: &str| Some((ThreadInputState::Refused, Some(reason.to_owned())));
+        let status = |runtime: &mut Runtime, status: &str| {
+            runtime
+                .delivery_observations
+                .get_mut("w1:p1")
+                .unwrap()
+                .status = status.to_owned();
+        };
+        // A permission or plan question on screen (its Enter would allow
+        // it) and a turn under way, as the core reads the pane: the engine
+        // is not asked.
+        status(&mut runtime, "blocked");
+        assert_eq!(switch(&mut runtime, "sonnet"), refused("agent_asking"));
+        status(&mut runtime, "working");
+        assert_eq!(switch(&mut runtime, "sonnet"), refused("agent_busy"));
+        assert!(fake.calls_of("prompt_agent").is_empty());
+        // The pane moved after that read: the engine's letter rule refuses.
+        status(&mut runtime, "idle");
+        for (code, reason) in [
+            ("agent_blocked", "agent_asking"),
+            ("agent_not_ready", "agent_busy"),
+        ] {
+            *refusal.lock().unwrap() = Some(code);
+            assert_eq!(switch(&mut runtime, "sonnet"), refused(reason), "{code}");
+        }
+        assert_eq!(fake.calls_of("prompt_agent").len(), 2);
+        assert_eq!(
+            thread(&runtime).choice,
+            hide_agent_adapter::LaunchChoice::default()
+        );
+
+        // A refused line left nothing behind that reads as a draft: picked
+        // again at rest with an empty input, it is typed, as a letter.
+        assert!(!runtime.delivery_observations["w1:p1"].unsent_draft());
+        *refusal.lock().unwrap() = None;
+        node.answer(Ok(page(100, 100, false, Vec::new())));
+        assert_eq!(
+            switch(&mut runtime, "sonnet"),
+            Some((ThreadInputState::Sent, None))
+        );
+        let sent = fake.calls_of("prompt_agent");
+        assert_eq!(sent.len(), 3);
+        assert_eq!(
+            (&sent[2]["text"], &sent[2]["by"]),
+            (&json!("/model sonnet"), &json!("Letter"))
+        );
+        assert_eq!(thread(&runtime).choice.model.as_deref(), Some("sonnet"));
+
+        // Words someone typed in the terminal and did not send: the line
+        // would follow them and send them, so nothing is typed.
+        let observation = runtime.delivery_observations.get_mut("w1:p1").unwrap();
+        observation.last_input_at_unix_ms = observation.last_submit_at_unix_ms + 1;
+        assert!(observation.unsent_draft());
+        assert_eq!(switch(&mut runtime, "haiku"), refused("draft"));
+        assert_eq!(fake.calls_of("prompt_agent").len(), 3);
+        assert_eq!(thread(&runtime).choice.model.as_deref(), Some("sonnet"));
+    }
+
+    /// A session whose pane keeps a launch record keeps its change there, so
+    /// a wake, a fork or a resume Hide makes of it starts it with that
+    /// choice; nothing is kept beside it.
+    #[test]
+    fn a_switch_is_kept_on_the_launch_record_its_restarts_read() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        runtime.set_terminals(Arc::new(GrantingTerminals::default()) as _);
+        let fake = crate::engine::fake::FakeEngine::start(|_, _| crate::engine::fake::reply(()));
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
+        observe(&mut runtime, "idle", 1, "t1", true);
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+            {"pane_id": "w1:p1", "agent_status": "idle", "agent": "claude", "name": "worker",
+             "state_change_seq": 1},
+        ]}))
+        .unwrap();
+        let row = crate::sidebar::project_agents(payload).agents.remove(0);
+        assert_eq!(row.started_name.as_deref(), Some("worker"));
+        runtime.snapshot.navigator.agents = vec![row];
+        runtime.snapshot.ui_state.pane_launches.insert(
+            "w1:p1".to_owned(),
+            crate::model::PaneLaunch {
+                pending: false,
+                start: 0,
+                kind: "claude".to_owned(),
+                name: "worker".to_owned(),
+                choice: hide_agent_adapter::LaunchChoice {
+                    model: Some("opus".to_owned()),
+                    effort: Some("high".to_owned()),
+                },
+                session: None,
+                profile: None,
+            },
+        );
+        node.answer(Ok(page(0, 100, false, Vec::new())));
+        open(&mut runtime);
+        assert_eq!(thread(&runtime).choice.model.as_deref(), Some("opus"));
+        node.answer(Ok(page(100, 100, false, Vec::new())));
+        runtime.switch_session_thread(ThreadSwitchPayload {
+            generation: thread(&runtime).generation,
+            pane_id: "w1:p1".to_owned(),
+            request_id: INPUT.to_owned(),
+            model: Some("sonnet".to_owned()),
+            effort: None,
+        });
+        assert_eq!(
+            runtime.snapshot.ui_state.pane_launches["w1:p1"].choice,
+            hide_agent_adapter::LaunchChoice {
+                model: Some("sonnet".to_owned()),
+                effort: Some("high".to_owned()),
+            }
+        );
+        assert!(runtime.session_thread.switched.is_empty());
+    }
+
+    /// Past [`SWITCHED_SESSIONS`], the session changed longest ago is let
+    /// go, not the first by name, and a session changed again keeps its
+    /// place without letting another go.
+    #[test]
+    fn the_kept_switches_let_go_of_the_session_changed_longest_ago() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        observe(&mut runtime, "idle", 1, "t1", true);
+        let choice = hide_agent_adapter::LaunchChoice {
+            model: Some("sonnet".to_owned()),
+            effort: None,
+        };
+        let keep = |runtime: &mut Runtime, session: &str| {
+            runtime
+                .delivery_observations
+                .get_mut("w1:p1")
+                .unwrap()
+                .actor
+                .session = Some(session.to_owned());
+            runtime.keep_session_choice("w1:p1", &choice);
+        };
+        keep(&mut runtime, "z-oldest");
+        for index in 1..SWITCHED_SESSIONS {
+            keep(&mut runtime, &format!("a-{index:03}"));
+        }
+        assert_eq!(runtime.session_thread.switched.len(), SWITCHED_SESSIONS);
+        keep(&mut runtime, "a-001");
+        assert_eq!(runtime.session_thread.switched.len(), SWITCHED_SESSIONS);
+        assert!(runtime.session_thread.switched.contains_key("z-oldest"));
+        keep(&mut runtime, "m-new");
+        let kept = &runtime.session_thread.switched;
+        assert_eq!(kept.len(), SWITCHED_SESSIONS);
+        assert!(!kept.contains_key("z-oldest"));
+        assert!(kept.contains_key("a-001") && kept.contains_key("m-new"));
+        keep(&mut runtime, "m-newer");
+        assert!(
+            !runtime.session_thread.switched.contains_key("a-002"),
+            "a-001 was changed again after a-002"
+        );
     }
 
     /// An agent whose model is changed only in a menu of its own (OpenCode)
@@ -2302,6 +2539,22 @@ mod tests {
             thread(&runtime).input.map(|input| input.state),
             Some(ThreadInputState::Sent)
         );
+        // A switch reaches the device's engine the same way, as a letter, and
+        // the device session shows the choice it made.
+        runtime.switch_session_thread(ThreadSwitchPayload {
+            generation,
+            pane_id: pane.to_owned(),
+            request_id: INPUT.to_owned(),
+            model: Some("sonnet".to_owned()),
+            effort: None,
+        });
+        let sent = device.calls_of("prompt_agent");
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert_eq!(
+            (&sent[1]["target"], &sent[1]["text"], &sent[1]["by"]),
+            (&json!("w1:p1"), &json!("/model sonnet"), &json!("Letter"))
+        );
+        assert_eq!(thread(&runtime).choice.model.as_deref(), Some("sonnet"));
     }
 
     /// A letter's addressee, a spawn's agent and a received letter's sender

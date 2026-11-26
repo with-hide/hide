@@ -58,7 +58,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], onCopy = () => Promise.resolve(true), onAsk = () => undefined }: { asks?: AskLine[]; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void } = {}) {
+async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void } = {}) {
   const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn(), switchThread: vi.fn(() => "switch-1"), observeCatalog: vi.fn(() => noop), requestFileIndex: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
@@ -67,7 +67,7 @@ async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks 
   const noop = () => undefined;
   await act(async () => root.render(
     <TooltipProvider>
-      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
+      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} ask={ask} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
     </TooltipProvider>,
   ));
   const box = () => container.querySelector("textarea")!;
@@ -600,11 +600,45 @@ it("shows the session's model and effort with its agent fixed, and a change type
   expect(actions.switchThread).toHaveBeenCalledWith(4, "w1:p2", { effort: "high" });
 });
 
-it("keeps a slot the agent changes only in its own menu read-only, and says so", async () => {
+it("says the reason a change typed nothing and keeps the session's choice", async () => {
+  const { actions, container } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section({ choice: { model: "opus" } }), agents: [claudeRow] }));
+  for (const [reason, words] of [
+    ["agent_asking", "The agent is asking something: answer it first"],
+    ["agent_busy", "The agent is working: change it once the turn ends"],
+    ["draft", "The terminal's input holds words not sent yet: send or clear them first"],
+  ]) {
+    actions.switchThread.mockReturnValueOnce(`switch-${reason}`);
+    const effort = container.querySelector<HTMLButtonElement>('[data-session-bar="effort"]')!;
+    await act(async () => {
+      effort.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    });
+    await act(async () => document.body.querySelector<HTMLElement>('[data-session-bar-choice="high"]')!.click());
+    await act(async () => useShellStore.setState({ sessionThread: section({ choice: { model: "opus" }, input: { request_id: `switch-${reason}`, state: "refused", reason } }) }));
+    expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe(words);
+    expect(container.querySelector('[data-session-bar="model"]')?.textContent).toContain("opus");
+  }
+  // Each refusal leaves the bar free for the next pick.
+  expect(actions.switchThread).toHaveBeenCalledTimes(3);
+});
+
+it("holds the bar while the agent's question card is on screen: a change's Enter would answer it", async () => {
+  const { actions, container } = await mount(job, null, { ask: <div data-ask-card="true" /> });
+  await act(async () => useShellStore.setState({ sessionThread: section({ choice: { model: "opus" } }), agents: [claudeRow] }));
+  const effort = container.querySelector<HTMLButtonElement>('[data-session-bar="effort"]')!;
+  expect(effort.disabled).toBe(true);
+  await act(async () => {
+    effort.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+  });
+  expect(document.body.querySelector('[data-session-bar-choice="high"]')).toBeNull();
+  expect(actions.switchThread).not.toHaveBeenCalled();
+});
+
+it("keeps a slot Hide cannot change in a running session read-only, and says so", async () => {
   const { container } = await mount();
   await act(async () => useShellStore.setState({ sessionThread: section(), agents: [{ pane_id: "w1:p2", agent_kind: "opencode" } as AgentRow] }));
   const model = container.querySelector<HTMLElement>('[data-session-bar="model"]')!;
   expect(model.dataset.sessionBarFixed).toBe("true");
-  expect(model.getAttribute("aria-label")).toContain("only in its own menu");
+  expect(model.getAttribute("aria-label")).toContain("cannot change the model here yet");
   expect(container.querySelector('[data-session-bar="effort"]')?.getAttribute("data-session-bar-fixed")).toBe("true");
 });
