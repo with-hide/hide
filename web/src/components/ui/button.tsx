@@ -13,7 +13,9 @@ import { cn } from "../../lib/utils";
 // practice reads as one place apart from Hide's lime. `tint` is a primary
 // action in a small surface that is not a screen or a dialog, such as a
 // corner notice: the accent's light fill and the accent as its words, so it
-// stands out without the full lime a screen's one primary action has.
+// stands out without the full lime a screen's one primary action has. `ask`
+// is the primary action of a card on the ask surface (`border-warning/50
+// bg-warning/10`), in the colour the sidebar's 내 차례 rows ask with.
 const buttonVariants = cva(
   "inline-flex shrink-0 items-center justify-center gap-xs whitespace-nowrap rounded-sm font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-(--opacity-disabled) aria-invalid:ring-1 aria-invalid:ring-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-(--size-icon)",
   {
@@ -30,6 +32,7 @@ const buttonVariants = cva(
         "row-action": "font-normal text-muted-foreground hover:bg-secondary hover:text-foreground data-[state=open]:bg-secondary",
         practice: "font-semibold bg-practice-accent text-practice-ink hover:bg-practice-accent-strong",
         tint: "bg-selected text-primary hover:bg-primary/20",
+        ask: "bg-warning text-status-foreground hover:bg-warning/90",
       },
       size: {
         default: "h-(--size-control) px-md text-body",

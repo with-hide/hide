@@ -1,4 +1,6 @@
 import { CheckIcon, PauseIcon, WaypointsIcon } from "lucide-react";
+import type { ComponentProps, ReactNode } from "react";
+import { StoredMissionChip } from "./components/mission-chip";
 import type { Actions } from "./actions";
 import { formatElapsed } from "./components/elapsed";
 import { ProgressCells, TONE_TEXT } from "./components/mission-tone";
@@ -56,7 +58,6 @@ const CHIP_TONE: Record<PaneChipState, string> = {
 
 function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission: Mission; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const chip = usePaneChipPopover(paneId, true);
   const words = paneChipWords(mission);
   const number = missionNumber(mission.id);
   const [first] = liveNodes(mission);
@@ -68,36 +69,55 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
   // The mark wears the colour every mission chip wears (`missionTone`): the working colour while a node works, the stopped one once none moves, the merge colour while merges wait (operator decision 2026-11-20).
   const tone = missionTone(mission);
   return (
+    <MissionHover paneId={paneId} mission={mission} actions={actions}>
+      {(anchor) => (
+            <button
+              {...anchor}
+              aria-label={label}
+              data-pane-mission-chip={mission.id}
+              data-mission-chip-state={words.state}
+              className={cn(
+                "relative flex h-(--size-sidebar-line-detail) shrink-0 items-center overflow-hidden gap-xs rounded-xs border border-border bg-background px-xs text-micro text-muted-foreground outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground",
+                CHIP_TONE[words.state],
+              )}
+            >
+              <Mark aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0", TONE_TEXT[tone])} data-mission-chip-tone={tone} />
+              {words.turn ? <span aria-hidden="true" className="font-semibold" data-mission-chip-turn={words.turn}>!</span> : null}
+              {/* A mission delay holds every new start: a grey pause, said by the chip's name with its reason and how long it still holds. */}
+              {delay ? <PauseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-mission-chip-delay="true" /> : null}
+              {/* A narrow pane keeps the mark, the count and the cells along the bottom edge; the word comes back as it widens, and the chip's name always says it. */}
+              {/* The mission's number stands where the word "mission" stood (`⚑ M39 · ●●●●● 1/6`): quiet, as a name, then a dot, then the progress in bold, so the two never read as one number. A state word (계획 중, 머지 대기) follows the dot; the chip's name keeps the title. */}
+              {number ? <MissionNumber mission={mission} /> : null}
+              {number ? <span aria-hidden="true" className={cn("text-muted-foreground", !words.counts && "pane-head-narrow:hidden")} data-mission-chip-dot="true">·</span> : null}
+              {number && words.key === "mission.chip" ? null : <span className="whitespace-nowrap pane-head-narrow:hidden">{t(words.key)}</span>}
+              {words.counts ? <span className="font-mono font-semibold tabular-nums">{words.counts}</span> : null}
+              {mission.nodes.length > 0 ? <ProgressCells tones={missionCells(mission)} size="edge" /> : null}
+            </button>
+      )}
+    </MissionHover>
+  );
+}
+
+/**
+ * The pane's mission hover card around any chip of the mission: the pointer or
+ * focus shows the popover, the Show task steps chord pins it, and a press
+ * opens the map rather than pinning the popover. `children` draws the chip
+ * from the anchor props the card needs on it.
+ */
+export function MissionHover({ paneId, mission, actions, children }: { paneId: string; mission: Mission; actions: Actions; children: (anchor: ComponentProps<"button">) => ReactNode }) {
+  const chip = usePaneChipPopover(paneId, true);
+  const anchor: ComponentProps<"button"> = {
+    ...chip.anchor,
+    "aria-pressed": undefined,
+    onClick: () => {
+      chip.close();
+      actions.openMission(mission.id);
+    },
+  };
+  return (
     <Popover {...chip.popover}>
       <PopoverAnchor asChild>
-        <button
-          {...chip.anchor}
-          // The press opens the map rather than pinning the popover; the Show task steps chord still pins it.
-          aria-pressed={undefined}
-          onClick={() => {
-            chip.close();
-            actions.openMission(mission.id);
-          }}
-          aria-label={label}
-          data-pane-mission-chip={mission.id}
-          data-mission-chip-state={words.state}
-          className={cn(
-            "relative flex h-(--size-sidebar-line-detail) shrink-0 items-center overflow-hidden gap-xs rounded-xs border border-border bg-background px-xs text-micro text-muted-foreground outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground",
-            CHIP_TONE[words.state],
-          )}
-        >
-          <Mark aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0", TONE_TEXT[tone])} data-mission-chip-tone={tone} />
-          {words.turn ? <span aria-hidden="true" className="font-semibold" data-mission-chip-turn={words.turn}>!</span> : null}
-          {/* A mission delay holds every new start: a grey pause, said by the chip's name with its reason and how long it still holds. */}
-          {delay ? <PauseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-mission-chip-delay="true" /> : null}
-          {/* A narrow pane keeps the mark, the count and the cells along the bottom edge; the word comes back as it widens, and the chip's name always says it. */}
-          {/* The mission's number stands where the word "mission" stood (`⚑ M39 · ●●●●● 1/6`): quiet, as a name, then a dot, then the progress in bold, so the two never read as one number. A state word (계획 중, 머지 대기) follows the dot; the chip's name keeps the title. */}
-          {number ? <MissionNumber mission={mission} /> : null}
-          {number ? <span aria-hidden="true" className={cn("text-muted-foreground", !words.counts && "pane-head-narrow:hidden")} data-mission-chip-dot="true">·</span> : null}
-          {number && words.key === "mission.chip" ? null : <span className="whitespace-nowrap pane-head-narrow:hidden">{t(words.key)}</span>}
-          {words.counts ? <span className="font-mono font-semibold tabular-nums">{words.counts}</span> : null}
-          {mission.nodes.length > 0 ? <ProgressCells tones={missionCells(mission)} size="edge" /> : null}
-        </button>
+        {children(anchor)}
       </PopoverAnchor>
       <PopoverContent
         side="bottom"
@@ -121,6 +141,15 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
         />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** The mission chip of the session that conducts it in Desk's head: the two-line chip with the pane's hover card. */
+export function PaneMissionCard({ paneId, mission, actions }: { paneId: string; mission: Mission; actions: Actions }) {
+  return (
+    <MissionHover paneId={paneId} mission={mission} actions={actions}>
+      {(anchor) => <StoredMissionChip mission={mission} onOpen={actions.openMission} anchor={anchor} />}
+    </MissionHover>
   );
 }
 
