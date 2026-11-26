@@ -9,7 +9,7 @@
 import { MapIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Actions } from "./actions";
-import type { FoundAnswerPath } from "./answerPaths";
+import { answerPlace, type FoundAnswerPath } from "./answerPaths";
 import { hostBridge } from "./host";
 import { deskFavorites, deskOn, deskPhase, holdsFoot, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
 import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
@@ -676,7 +676,7 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
         />
       ) : null}
       onTerminal={() => actions.deskTerminal()}
-      outputOf={(output) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath, folder: pane?.cwd || checkoutPath } : null)}
+      outputOf={(output) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath, folder: answerPlace(useShellStore.getState().rest, paneId)?.cwd ?? checkoutPath } : null)}
       onOutput={(output) => actions.deskOpen({ kind: "output", output })}
       onMission={room.mission}
       onSession={room.session}

@@ -6,7 +6,7 @@
 // (`desk.lane`, B23).
 
 import type { DeskOutput } from "./snapshot";
-import { absolutePathRoot, normalize } from "./terminalLinks";
+import { absolutePathRoot, underFolder } from "./terminalLinks";
 
 /**
  * A tab of the tab panel (B18, B19): an output the session opened (a page,
@@ -261,23 +261,11 @@ export function outputNamed(listed: readonly DeskOutput[], output: DeskOutput, p
   const made = listed.find((one) => one.id === output.id || (output.url !== null && one.url === output.url) || (output.path !== null && namesView(one, output.path)));
   if (made) return made;
   if (!place || output.path === null || output.device_id !== null) return output;
-  const path = underFolder(place.folder, output.path);
+  const path = absolutePathRoot(place.folder) ? underFolder(place.folder, output.path) : output.path;
   if (place.device !== node) return { ...output, path, device_id: place.device, checkout: place.checkout };
   return path === output.path ? output : { ...output, path };
 }
 
-/**
- * `written` as a path of the machine `folder` belongs to: as written when it
- * is absolute, else read under `folder`, the session's own folder, the way
- * the session's shell read it. Spelled as the wire spells a path, `/` between
- * names, a Windows folder's backslashes read as `/`.
- */
-function underFolder(folder: string, written: string): string {
-  const windows = /^[A-Za-z]:\//u.test(folder) || folder.startsWith("//");
-  const wire = windows ? written.replaceAll("\\", "/") : written;
-  if (absolutePathRoot(wire)) return wire;
-  return absolutePathRoot(folder) ? normalize(`${folder}/${wire}`) : written;
-}
 
 /**
  * The panels' first widths before the operator drags one, and their floors

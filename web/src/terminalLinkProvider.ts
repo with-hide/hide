@@ -24,7 +24,7 @@ import { windowDeviceId } from "./screenMachine";
 import { bufferRow, type CellRow } from "./selection";
 import { catalogWorkspaces, localDeviceId, type Checkout, type SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
-import { absolutePathRoot, JOIN_ROWS, linkCandidates, normalize, osc8Target, type LinkCandidate, type LinkTarget } from "./terminalLinks";
+import { absolutePathRoot, JOIN_ROWS, linkCandidates, longestRoot, normalize, osc8Target, underFolder, type LinkCandidate, type LinkTarget } from "./terminalLinks";
 import { paneRowWraps } from "./terminalWrap";
 
 /** A path the host found: its physical spelling and kind. */
@@ -110,7 +110,7 @@ export function pathLookups(written: string, cwd: string | null, root: string | 
   if (absolutePathRoot(written)) return [normalize(written)];
   if (written.startsWith("~/")) return [written];
   const bases = [cwd, root].filter((base): base is string => !!base && absolutePathRoot(base) !== null);
-  return [...new Set(bases.map((base) => normalize(`${base}/${written}`)))];
+  return [...new Set(bases.map((base) => underFolder(base, written)))];
 }
 
 /**
@@ -137,14 +137,12 @@ export function paneContext(rest: SnapshotRest | null, paneId: string, screen: s
  * no root does. `roots` answers each checkout's path.
  */
 export function owningCheckout<C extends { path: string }>(real: string, checkouts: C[], roots: Map<string, ProbedPath>): { checkout: C; root: string } | null {
-  let best: { checkout: C; root: string } | null = null;
-  for (const checkout of checkouts) {
+  const probed = checkouts.flatMap((checkout) => {
     const root = roots.get(checkout.path);
-    if (root?.kind !== "directory") continue;
-    if (real !== root.real && !real.startsWith(`${root.real}/`)) continue;
-    if (!best || root.real.length > best.root.length) best = { checkout, root: root.real };
-  }
-  return best;
+    return root?.kind === "directory" ? [{ root: root.real, owner: checkout }] : [];
+  });
+  const found = longestRoot(real, probed);
+  return found ? { checkout: found.owner, root: found.root } : null;
 }
 
 /** `sourceInHide`: an HTML file's Open source opens its text in Hide, in a checkout or as an outside file. */

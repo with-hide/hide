@@ -87,7 +87,8 @@ function pump(): void {
     if (!kept.has(next.key)) continue;
     running += 1;
     const started = generation;
-    void within(make(next.path, next.source), MAKE_WAIT_MS).then((preview) => {
+    const stop = new AbortController();
+    void within(make(next.path, next.source, stop.signal), MAKE_WAIT_MS, stop).then((preview) => {
       if (started !== generation) return;
       running -= 1;
       settle(next.key, preview);
@@ -96,10 +97,16 @@ function pump(): void {
   }
 }
 
-/** `work`'s answer, or `failed` once `ms` pass without one: a read nothing answers (a device gone quiet) never holds a slot for good. */
-function within(work: Promise<Preview>, ms: number): Promise<Preview> {
+/**
+ * `work`'s answer, or `failed` once `ms` pass without one: a read nothing
+ * answers (a device gone quiet) never holds a slot for good. A make past its
+ * time is stopped: a PDF's pdf.js task is destroyed and a video's load given
+ * up at once, and a read it still waits on is followed by nothing more.
+ */
+function within(work: Promise<Preview>, ms: number, stop: AbortController): Promise<Preview> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
+      stop.abort();
       useShellStore.getState().noteDiagnostic(`desk preview: no answer within ${ms} ms`);
       resolve({ state: "failed" });
     }, ms);
@@ -167,7 +174,7 @@ export function clearPreviews(): void {
   generation += 1;
 }
 
-async function make(path: string, source: FileSource): Promise<Preview> {
+async function make(path: string, source: FileSource, signal: AbortSignal): Promise<Preview> {
   const kind = previewKind(path);
   if (kind === null) return { state: "none" };
   try {
@@ -177,9 +184,11 @@ async function make(path: string, source: FileSource): Promise<Preview> {
       return { state: "text", ...textHead(new TextDecoder().decode(bytes)) };
     }
     const head = await requestFileBytesWithTotal(path, { length: 1 }, source);
+    if (signal.aborted) return { state: "failed" };
     if (head.total > CAP[kind]) return { state: "too_large", bytes: head.total };
     const { bytes } = await requestFileBytesWithTotal(path, undefined, source);
-    return await drawPreview(kind, bytes, path);
+    if (signal.aborted) return { state: "failed" };
+    return await drawPreview(kind, bytes, path, signal);
   } catch {
     return { state: "failed" };
   }

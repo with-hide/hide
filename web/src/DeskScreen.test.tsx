@@ -484,6 +484,25 @@ describe("Desk's room", () => {
     expect(useUiStore.getState().deskRoom.panel?.tabs).toEqual([expect.objectContaining({ kind: "file", device_id: "local", root: "/work/repo-home", path: "/work/repo-home/docs/report.md" })]);
   });
 
+  it("reveals a path outside every project from its ↗ chip in the file manager, and never reads or opens it (feedback 2 frame M [2])", async () => {
+    const outside = "/Users/me/Downloads/crash.log";
+    const revealPath = vi.fn();
+    const probePaths = vi.fn(async (paths: string[]) => paths.map((path) => (path === outside ? { real: path, kind: "file" as const } : null)));
+    window.hideHost = { kind: "electron", platform: "darwin", probePaths, revealPath } as never;
+    const asked: unknown[] = [];
+    configureFileBytes((event) => asked.push(event.payload));
+    try {
+      await render(desk([{ kind: "reply", id: 1, text: `크래시 로그는 ${outside} 에 있어요.`, agent: "claude", at_ms: 0, state: "done", mentions: [], missions: [], thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } }]));
+      await vi.waitFor(() => expect(document.body.querySelector("[data-desk-file-chip='outside']")).not.toBeNull());
+      await act(async () => document.body.querySelector<HTMLElement>("[data-desk-file-chip='outside']")!.click());
+      expect(revealPath).toHaveBeenCalledWith(outside);
+      expect(asked).toEqual([]);
+      expect(useUiStore.getState().deskRoom.panel?.tabs ?? []).toEqual([]);
+    } finally {
+      delete (window as { hideHost?: unknown }).hideHost;
+    }
+  });
+
   it("opens the checkout a project chip names", async () => {
     await render(desk([{ kind: "user", id: 1, text: "@project(/work/repo-home repo) fix the build", at_ms: 0, mentions: [repo] }]));
     await press("[data-mention-chip='project']");

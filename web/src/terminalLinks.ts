@@ -466,6 +466,35 @@ export function absolutePathRoot(path: string): string | null {
   return path.startsWith("/") ? "/" : null;
 }
 
+/**
+ * The root among `roots` that holds `path` and is longest, so a worktree
+ * nested in another checkout wins; null when none does. A Windows drive
+ * letter is the same drive in either case.
+ */
+export function longestRoot<T>(path: string, roots: Iterable<{ root: string; owner: T }>): { root: string; owner: T } | null {
+  let best: { root: string; owner: T } | null = null;
+  for (const one of roots) {
+    const root = one.root.replace(/\/+$/u, "");
+    const windows = /^[A-Za-z]:\//u.test(root);
+    const [held, under] = windows ? [path.toLowerCase(), root.toLowerCase()] : [path, root];
+    if (held !== under && !held.startsWith(`${under}/`)) continue;
+    if (!best || root.length > best.root.length) best = { root, owner: one.owner };
+  }
+  return best;
+}
+
+/**
+ * `written` as a path of the machine `folder`, an absolute wire path, belongs
+ * to: as written when absolute, else read under `folder`, `.` and `..`
+ * resolved. A Windows folder's backslashes are read as `/`, so a session on
+ * Windows that writes `out\run.log` names the same file wherever it is read.
+ */
+export function underFolder(folder: string, written: string): string {
+  const windows = /^[A-Za-z]:\//u.test(folder) || folder.startsWith("//");
+  const wire = windows ? written.replaceAll("\\", "/") : written;
+  return normalize(absolutePathRoot(wire) ? wire : `${folder}/${wire}`);
+}
+
 /** `.` and `..` resolved while keeping the wire path's drive, share or POSIX root. */
 export function normalize(path: string): string {
   const root = absolutePathRoot(path);

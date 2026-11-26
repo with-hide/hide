@@ -17,13 +17,18 @@
 // device answers itself, and an outside path through the desktop host's
 // check (`probePaths`, cached as the terminal's links are); both answers are
 // kept `CHECK_TTL_MS`, at most `CHECKS_KEPT` of them, the oldest let go first.
+// Every answer on screen shares one line of project file checks: at most
+// `CHECKING` read at once, one read per file however many answers name it,
+// and a read that gets no answer in `CHECK_WAIT_MS` counts as no file (with a
+// diagnostic), so a device gone quiet keeps no answer's chips from showing.
 
 import { requestFileBytesWithTotal } from "./fileBytes";
 import { hostBridge } from "./host";
 import { windowDeviceId } from "./screenMachine";
 import { catalogWorkspaces, type SnapshotRest } from "./snapshot";
+import { useShellStore } from "./store";
 import { pathLookups, probePaths, terminalPathOwner } from "./terminalLinkProvider";
-import { absolutePathRoot, normalize, parseToken } from "./terminalLinks";
+import { absolutePathRoot, longestRoot, normalize, parseToken } from "./terminalLinks";
 
 /** Paths one answer looks up; the rest stay words. */
 export const MAX_PATHS = 32;
@@ -31,6 +36,10 @@ export const MAX_PATHS = 32;
 export const CHECK_TTL_MS = 10_000;
 /** Project file checks kept; the oldest goes first. */
 export const CHECKS_KEPT = 512;
+/** Project file checks read at once, across every answer on screen; the rest wait their turn. */
+export const CHECKING = 4;
+/** How long one check waits for its read before it counts as no file. */
+export const CHECK_WAIT_MS = 10_000;
 
 /** A path as an answer wrote it: where it stands (`from` to `to`, a code span's backticks included) and its spelling. */
 export type WrittenPath = { from: number; to: number; written: string };
@@ -107,43 +116,67 @@ export function answerPlace(rest: SnapshotRest | null, paneId: string): AnswerPl
   return null;
 }
 
-/** The registered checkout of `device` whose root holds `path` and is longest, so a worktree nested in another wins. */
+/** The registered checkout of `device` that holds `path`, by the longest root as the terminal's links choose (`longestRoot`). */
 function lexicalOwner(rest: SnapshotRest | null, device: string, path: string): string | null {
-  let best: string | null = null;
-  for (const workspace of catalogWorkspaces(rest)) {
-    if (workspace.device_id !== device) continue;
-    for (const checkout of workspace.checkouts) {
-      const root = checkout.path.replace(/\/+$/, "");
-      if ((path === root || path.startsWith(`${root}/`)) && (!best || root.length > best.length)) best = root;
-    }
-  }
-  return best;
+  const roots = catalogWorkspaces(rest)
+    .filter((workspace) => workspace.device_id === device)
+    .flatMap((workspace) => workspace.checkouts.map((checkout) => ({ root: checkout.path, owner: checkout.path })));
+  return longestRoot(path, roots)?.owner ?? null;
 }
 
 type Check = { exists: boolean; at: number };
 const checks = new Map<string, Check>();
+/** Checks being read now, so a second answer naming the same file waits on the same read. */
+const reading = new Map<string, Promise<boolean>>();
+/** Checks waiting for one of the `CHECKING` turns. */
+const turns: (() => void)[] = [];
+let checking = 0;
 
 /** Whether a project's file exists, read as its first byte under its checkout on its machine; a folder or a refused read is no file. */
-async function projectFileExists(path: string, device: string, root: string, here: string, now: number): Promise<boolean> {
+function projectFileExists(path: string, device: string, root: string, here: string, now: number): Promise<boolean> {
   const key = `${device}\n${path}`;
   const hit = checks.get(key);
-  if (hit && now - hit.at < CHECK_TTL_MS) return hit.exists;
-  let exists: boolean;
-  try {
-    await requestFileBytesWithTotal(path, { length: 1 }, device === here ? null : { device, root });
-    exists = true;
-  } catch {
-    exists = false;
-  }
-  checks.delete(key);
-  checks.set(key, { exists, at: now });
-  while (checks.size > CHECKS_KEPT) checks.delete(checks.keys().next().value!);
-  return exists;
+  if (hit && now - hit.at < CHECK_TTL_MS) return Promise.resolve(hit.exists);
+  const pending = reading.get(key);
+  if (pending) return pending;
+  const read = (async () => {
+    if (checking >= CHECKING) await new Promise<void>((turn) => turns.push(turn));
+    checking += 1;
+    let exists: boolean;
+    try {
+      exists = await withinCheck(requestFileBytesWithTotal(path, { length: 1 }, device === here ? null : { device, root }), device, path);
+    } finally {
+      checking -= 1;
+      turns.shift()?.();
+    }
+    reading.delete(key);
+    checks.delete(key);
+    checks.set(key, { exists, at: now });
+    while (checks.size > CHECKS_KEPT) checks.delete(checks.keys().next().value!);
+    return exists;
+  })();
+  reading.set(key, read);
+  return read;
+}
+
+/** Whether `read` answered with the file: a refusal is no file, and so is no answer within `CHECK_WAIT_MS`. */
+function withinCheck(read: Promise<unknown>, device: string, path: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      useShellStore.getState().noteDiagnostic(`answer path: no answer within ${CHECK_WAIT_MS} ms device=${device} path=${path}`);
+      resolve(false);
+    }, CHECK_WAIT_MS);
+    read.then(() => true, () => false).then((exists) => {
+      clearTimeout(timer);
+      resolve(exists);
+    });
+  });
 }
 
 /** Forgets every check (tests). */
 export function clearAnswerPathChecks(): void {
   checks.clear();
+  reading.clear();
 }
 
 /**

@@ -1,6 +1,6 @@
 import { LoaderCircleIcon, PlayIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { browserStillOf } from "../../browserViews";
+import { browserStillOf, useBrowserStore } from "../../browserViews";
 import type { DeskOutput } from "../../desk";
 import { deviceConnected } from "../../devices";
 import { fileIcon } from "../../fileIcons";
@@ -38,6 +38,8 @@ function usePreview(file: TileFile): { preview: Preview; retry: () => void } {
   const [attempt, setAttempt] = useState(0);
   const key = JSON.stringify([source?.device ?? null, source?.root ?? null, file.path, changes, attempt]);
   const [made, setMade] = useState<Preview>({ state: "reading" });
+  // A page's still taken after the tile appeared redraws it.
+  useBrowserStore((s) => (file.url ? s.stills[file.id] : null));
   const path = offline ? null : file.path;
   useEffect(() => {
     if (path === null) return undefined;
@@ -112,15 +114,16 @@ function TileFace({ file, preview, onRetry }: { file: TileFile; preview: Preview
  * Markdown or text file its title and first three lines; with no preview,
  * its kind icon and why (읽는 중, 못 읽음 · 다시, 너무 큼, 기기 연결 끊김).
  * Pressing it opens it (`onOpen`); without, it is the picture alone, as in
- * a chip's card. `fill` sizes it to its grid cell instead of 150 wide.
+ * a chip's card. `fill` sizes it to its grid cell instead of 150 wide;
+ * `named={false}` leaves out the name under it, where a card says the path.
  */
-export function PreviewTile({ file, ...rest }: { file: TileFile; selected?: boolean; unseen?: boolean; fill?: boolean; onOpen?: () => void } & Record<`data-${string}`, string>) {
+export function PreviewTile({ file, ...rest }: { file: TileFile; selected?: boolean; unseen?: boolean; fill?: boolean; named?: boolean; onOpen?: () => void } & Record<`data-${string}`, string>) {
   const { preview, retry } = usePreview(file);
   return <PreviewTileView file={file} preview={preview} onRetry={retry} {...rest} />;
 }
 
 /** A tile drawn from a preview a caller holds: `PreviewTile`'s face, and the gallery's for each state. */
-export function PreviewTileView({ file, preview, onRetry, selected = false, unseen = false, fill = false, onOpen, ...data }: { file: TileFile; preview: Preview; onRetry: () => void; selected?: boolean; unseen?: boolean; fill?: boolean; onOpen?: () => void } & Record<`data-${string}`, string>) {
+export function PreviewTileView({ file, preview, onRetry, selected = false, unseen = false, fill = false, named = true, onOpen, ...data }: { file: TileFile; preview: Preview; onRetry: () => void; selected?: boolean; unseen?: boolean; fill?: boolean; named?: boolean; onOpen?: () => void } & Record<`data-${string}`, string>) {
   const { t } = useInterfaceTranslation();
   return (
     <span className={cn("flex min-w-0 flex-col gap-xxs", !fill && "w-(--size-desk-output-thumb)")} data-desk-tile={preview.state} {...data}>
@@ -129,7 +132,7 @@ export function PreviewTileView({ file, preview, onRetry, selected = false, unse
         <span className={cn("pointer-events-none relative block size-full", onOpen && "z-20")}><TileFace file={file} preview={preview} onRetry={onRetry} /></span>
         {unseen ? <UnseenMark className="absolute top-xxs right-xxs z-20" /> : null}
       </span>
-      <span className="min-w-0 truncate text-caption text-subtle-foreground" title={file.label}>{file.label}</span>
+      {named ? <span className="min-w-0 truncate text-caption text-subtle-foreground" title={file.label}>{file.label}</span> : null}
     </span>
   );
 }

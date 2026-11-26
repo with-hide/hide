@@ -314,13 +314,38 @@ function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; l
       ) : null}
       {open && turn.work.length ? (
         <ol className="ml-xxs flex min-w-0 flex-col gap-xs border-l border-border pl-sm" data-desk-thread-work={turn.work.length}>
-          {turn.work.map((line) => <li key={line.id} className="min-w-0"><WorkLine line={line} words={words} actions={actions} /></li>)}
+          {workRows(turn.work).map((row) =>
+            Array.isArray(row) ? (
+              <li key={row[0]!.id} className="min-w-0">
+                <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={row.map((line) => actions.outputOf(line.part.output))} onOpen={actions.onOutput} /></div>
+              </li>
+            ) : (
+              <li key={row.id} className="min-w-0"><WorkLine line={row} words={words} actions={actions} /></li>
+            ))}
         </ol>
       ) : null}
       {turn.answer.map((line) => <AgentWords key={line.id} line={line} words={words} lit={lit === line.id} live={live} />)}
       {!open && turn.parts.length ? <FoldedParts parts={turn.parts} actions={actions} /> : null}
     </li>
   );
+}
+
+type ViewLine = Extract<ThreadLine, { kind: "hide" }> & { part: Extract<ThreadHidePart, { kind: "view" }> };
+
+/** A turn's work as its open fold draws it: views opened one after another share one row of tiles, as the folded turn's do (feedback 2, frame M 나). */
+function workRows(work: readonly ThreadLine[]): (ThreadLine | ViewLine[])[] {
+  const rows: (ThreadLine | ViewLine[])[] = [];
+  for (const line of work) {
+    const last = rows.at(-1);
+    if (!isViewLine(line)) rows.push(line);
+    else if (Array.isArray(last)) last.push(line);
+    else rows.push([line]);
+  }
+  return rows;
+}
+
+function isViewLine(line: ThreadLine): line is ViewLine {
+  return line.kind === "hide" && line.part.kind === "view";
 }
 
 /** What a folded turn keeps in view (B26): its lines that lead somewhere, then the outputs it opened as one row of pictures. */

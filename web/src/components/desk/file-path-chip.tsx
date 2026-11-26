@@ -45,7 +45,7 @@ export function FilePathChip({ file, onOpen }: { file: FoundAnswerPath; onOpen: 
   return (
     <Hint label={file.path} side="bottom" content={(
       <span className="flex w-(--size-desk-output-thumb) flex-col gap-xxs" data-desk-file-chip-card={file.path}>
-        <PreviewTile file={{ id: `file:${file.device}:${file.path}`, label: name, path: file.path, url: null, device: file.device, root: file.root }} />
+        <PreviewTile file={{ id: `file:${file.device}:${file.path}`, label: name, path: file.path, url: null, device: file.device, root: file.root }} named={false} />
         <span className="break-all text-micro text-muted-foreground">{file.path}</span>
       </span>
     )}>

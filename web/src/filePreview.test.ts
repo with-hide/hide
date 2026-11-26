@@ -85,6 +85,18 @@ it("makes at most two at once, frees a turn nothing answers, and keeps at most 6
   expect(reads.filter((read) => read.path === `/repo/kept-${KEPT}.txt`)).toHaveLength(1);
 });
 
+it("stops a make past its time: a read that answers later is followed by no other read and no drawing, and the tile says failed", async () => {
+  vi.useFakeTimers();
+  const pdf = watch("/repo/late.pdf");
+  expect(reads).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(MAKE_WAIT_MS);
+  expect(pdf.last()).toEqual({ state: "failed" });
+  reads[0]!.answer([37], 1024);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(reads.filter((read) => read.path === "/repo/late.pdf")).toHaveLength(1);
+  expect(drawPreview).not.toHaveBeenCalled();
+});
+
 it("reads a heading-less text's first line as its title", () => {
   expect(textHead("first\nsecond\n\nthird\nfourth\nfifth")).toEqual({ title: "first", lines: ["second", "third", "fourth"] });
 });

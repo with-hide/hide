@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clearAnswerPathChecks, findAnswerPaths, MAX_PATHS, writtenPaths } from "./answerPaths";
+import { CHECK_WAIT_MS, CHECKING, clearAnswerPathChecks, findAnswerPaths, MAX_PATHS, writtenPaths } from "./answerPaths";
 import { requestFileBytesWithTotal } from "./fileBytes";
 import { hostBridge, type ProbedPath } from "./host";
 import type { SnapshotRest } from "./snapshot";
@@ -36,14 +36,15 @@ describe("writtenPaths", () => {
 describe("findAnswerPaths", () => {
   const rest = {
     navigator: {
-      devices: [{ id: "core", kind: "local" }, { id: "deepbox", kind: "remote" }],
+      devices: [{ id: "core", kind: "local" }, { id: "deepbox", kind: "remote" }, { id: "winbox", kind: "remote" }],
       workspaces: [
         { id: "w1", device_id: "core", checkouts: [{ id: "c1", path: "/work/hide", exists: true, tabs: [{ panes: [{ id: "p1", cwd: "/work/hide/web" }] }] }] },
         { id: "w2", device_id: "deepbox", checkouts: [{ id: "c2", path: "/home/me/repo", exists: true, tabs: [{ panes: [{ id: "p2", cwd: "/home/me/repo" }] }] }] },
+        { id: "w3", device_id: "winbox", checkouts: [{ id: "c3", path: "C:/src/repo", exists: true, tabs: [{ panes: [{ id: "p3", cwd: "C:/src/repo" }] }] }] },
       ],
     },
   } as unknown as SnapshotRest;
-  const files = new Set(["/work/hide/web/src/App.tsx", "/home/me/repo/notes.md"]);
+  const files = new Set(["/work/hide/web/src/App.tsx", "/home/me/repo/notes.md", "C:/src/repo/out/run.log", "c:/src/repo/README.md"]);
   const outside: Record<string, ProbedPath> = { "/Users/me/Downloads/crash.log": { real: "/Users/me/Downloads/crash.log", kind: "file" }, "/tmp/link.md": { real: "/work/hide/docs/link.md", kind: "file" }, "/work/hide": { real: "/work/hide", kind: "directory" } };
   const probe = vi.fn(async (paths: string[]) => paths.map((path) => outside[path] ?? null));
 
@@ -79,6 +80,41 @@ describe("findAnswerPaths", () => {
     expect([...found]).toEqual([["notes.md", { kind: "project", path: "/home/me/repo/notes.md", device: "deepbox", root: "/home/me/repo" }]]);
     expect(vi.mocked(requestFileBytesWithTotal).mock.calls[0]).toEqual(["/home/me/repo/notes.md", { length: 1 }, { device: "deepbox", root: "/home/me/repo" }]);
     expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("reads a Windows session's backslashes and either case of its drive letter under that session's project", async () => {
+    const found = await findAnswerPaths(["out\\run.log", "c:/src/repo/README.md"], { device: "winbox", cwd: "C:/src/repo" }, rest, "core");
+    expect(Object.fromEntries(found)).toEqual({
+      "out\\run.log": { kind: "project", path: "C:/src/repo/out/run.log", device: "winbox", root: "C:/src/repo" },
+      "c:/src/repo/README.md": { kind: "project", path: "c:/src/repo/README.md", device: "winbox", root: "C:/src/repo" },
+    });
+  });
+
+  it("reads each file once however many answers name it, at most four at once, and counts a read nothing answers as no file", async () => {
+    vi.useFakeTimers();
+    try {
+      const held: { path: string; answer: (ok: boolean) => void }[] = [];
+      vi.mocked(requestFileBytesWithTotal).mockImplementation((path) => new Promise((resolve, reject) => {
+        held.push({ path, answer: (ok) => (ok ? resolve({ bytes: new Uint8Array([1]), total: 1 }) : reject(new Error("not_found"))) });
+      }));
+      const written = ["a.md", "b.md", "c.md", "d.md", "e.md", "quiet.md"];
+      const place = { device: "core", cwd: "/work/hide" };
+      // Two answers naming the same six files, as a conversation on screen does.
+      const first = findAnswerPaths(written, place, rest, "core");
+      const second = findAnswerPaths(written, place, rest, "core");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(held).toHaveLength(CHECKING);
+      for (const read of held.slice(0, CHECKING)) if (read.path !== "/work/hide/quiet.md") read.answer(true);
+      await vi.advanceTimersByTimeAsync(0);
+      for (const read of held.slice(CHECKING)) if (read.path !== "/work/hide/quiet.md") read.answer(true);
+      await vi.advanceTimersByTimeAsync(CHECK_WAIT_MS);
+      const [one, two] = await Promise.all([first, second]);
+      expect(held.map((read) => read.path).sort()).toEqual(written.map((name) => `/work/hide/${name}`).sort());
+      expect([...one.keys()].sort()).toEqual(["a.md", "b.md", "c.md", "d.md", "e.md"]);
+      expect([...two.keys()].sort()).toEqual([...one.keys()].sort());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("looks up at most 32 paths in one answer", async () => {

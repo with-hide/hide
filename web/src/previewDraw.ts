@@ -14,9 +14,9 @@ const TILE_PIXELS = 300;
 const VIDEO_WAIT_MS = 10_000;
 
 /** The picture of a file of `kind` whose whole bytes are `bytes`; `path` names its type. */
-export async function drawPreview(kind: Exclude<PreviewKind, "text">, bytes: Uint8Array, path: string): Promise<Preview> {
-  if (kind === "pdf") return await pdfPreview(bytes);
-  if (kind === "video") return await videoPreview(bytes, videoMime(path));
+export async function drawPreview(kind: Exclude<PreviewKind, "text">, bytes: Uint8Array, path: string, signal: AbortSignal): Promise<Preview> {
+  if (kind === "pdf") return await pdfPreview(bytes, signal);
+  if (kind === "video") return await videoPreview(bytes, videoMime(path), signal);
   return await imagePreview(bytes, path.toLowerCase().endsWith(".svg") ? "image/svg+xml" : "image/*");
 }
 
@@ -33,10 +33,14 @@ function jpeg(canvas: HTMLCanvasElement): string {
   return canvas.toDataURL("image/jpeg", 0.82);
 }
 
-async function pdfPreview(bytes: Uint8Array): Promise<Preview> {
+async function pdfPreview(bytes: Uint8Array, signal: AbortSignal): Promise<Preview> {
   const pdfjs = await loadPdfjs();
+  if (signal.aborted) return { state: "failed" };
   // pdf.js detaches the buffer it is handed, so it gets a copy.
   const task = pdfjs.getDocument({ data: bytes.slice() });
+  // A make stopped for its time ends its task now; what waits on it fails.
+  const end = () => void task.destroy();
+  signal.addEventListener("abort", end, { once: true });
   try {
     const pdf = await task.promise;
     const page = await pdf.getPage(1);
@@ -47,6 +51,7 @@ async function pdfPreview(bytes: Uint8Array): Promise<Preview> {
     await page.render({ canvas, canvasContext: context, viewport: page.getViewport({ scale }) }).promise;
     return { state: "picture", picture: jpeg(canvas), pages: pdf.numPages, seconds: null };
   } finally {
+    signal.removeEventListener("abort", end);
     void task.destroy();
   }
 }
@@ -67,7 +72,7 @@ async function imagePreview(bytes: Uint8Array, type: string): Promise<Preview> {
   }
 }
 
-async function videoPreview(bytes: Uint8Array, type: string): Promise<Preview> {
+async function videoPreview(bytes: Uint8Array, type: string, signal: AbortSignal): Promise<Preview> {
   const url = URL.createObjectURL(new Blob([bytes.slice()], { type }));
   const video = document.createElement("video");
   try {
@@ -76,6 +81,11 @@ async function videoPreview(bytes: Uint8Array, type: string): Promise<Preview> {
     video.src = url;
     await new Promise<void>((resolve, reject) => {
       const timer = window.setTimeout(() => reject(new Error("video_timeout")), VIDEO_WAIT_MS);
+      if (signal.aborted) reject(new Error("video_stopped"));
+      signal.addEventListener("abort", () => {
+        window.clearTimeout(timer);
+        reject(new Error("video_stopped"));
+      }, { once: true });
       video.onloadeddata = () => {
         // The very first frame is often black; a tenth of a second in is the picture.
         video.currentTime = Math.min(0.1, video.duration || 0);

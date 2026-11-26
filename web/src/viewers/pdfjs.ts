@@ -6,12 +6,16 @@ type Pdfjs = typeof import("pdfjs-dist");
 
 let loading: Promise<Pdfjs> | null = null;
 
+/** pdf.js, loaded on the first ask; a load that failed (a chunk the network dropped) is tried again on the next ask. */
 export function loadPdfjs(): Promise<Pdfjs> {
   loading ??= (async () => {
     const pdfjs = await import("pdfjs-dist");
     const worker = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
     pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
     return pdfjs;
-  })();
+  })().catch((error: unknown) => {
+    loading = null;
+    throw error;
+  });
   return loading;
 }
