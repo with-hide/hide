@@ -78,7 +78,7 @@ export function AddByLink({ actions, onStarted }: { actions: Actions; onStarted:
   );
 }
 
-export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { actions: Actions; devices: Device[]; helperRoot: string | null; cliDir: string | null; onPaired: () => void }) {
+export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired, onShowDevice }: { actions: Actions; devices: Device[]; helperRoot: string | null; cliDir: string | null; onPaired: () => void; onShowDevice?: (deviceId: string) => void }) {
   const { t } = useInterfaceTranslation();
   const hosts = useShellStore((s) => s.rest?.status?.ssh_hosts);
   const answered = useShellStore((s) => s.pairingResult);
@@ -130,6 +130,8 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
   // Hide as a helper device: the press waits for the answer.
   const looking = look !== null && look.alias === chosen && !look.answered;
   const blocked = pending || looking || chosen === null || (distro === null && !connects && !name.trim());
+  // An added machine's row opens that device's row, where its 서버로 연결 is, when the dialog sits on Settings › Devices.
+  const shown = (device: Device | undefined) => (device && onShowDevice ? () => onShowDevice(device.id) : null);
   const choose = (next: string) => {
     setAlias(next);
     setPairing(null);
@@ -189,10 +191,10 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
         }}
       >
         {distributions.map((choice) => (
-          <WslRow key={choice.value} choice={choice} disabled={pending} />
+          <WslRow key={choice.value} choice={choice} disabled={pending} onShow={shown(choice.kind === "added" ? devices.find((device) => device.wsl_distro === choice.distro) : undefined)} />
         ))}
         {choices.map((choice) => (
-          <HostRow key={choice.alias} choice={choice} disabled={pending} />
+          <HostRow key={choice.alias} choice={choice} disabled={pending} onShow={shown(choice.kind === "added" ? addedHost(devices, choice.alias, choice.name) : undefined)} />
         ))}
       </RadioGroup>
       {unreadable}
@@ -236,50 +238,75 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
 }
 
 /** One Host: chosen with a radio, or dimmed with why it cannot be (B51, B52). */
-function HostRow({ choice, disabled }: { choice: HostChoice; disabled: boolean }) {
+function HostRow({ choice, disabled, onShow }: { choice: HostChoice; disabled: boolean; onShow: (() => void) | null }) {
   const { t } = useInterfaceTranslation();
   const note = useId();
   const unavailable = choice.kind !== "available";
-  const reason = choice.kind === "added" ? t("devices.hostAdded", { name: choice.name }) : choice.kind === "unresolved" ? t(choice.reason) : null;
+  const reason = choice.kind === "added" ? t("pairing.ssh.addedOverSsh", { name: choice.name }) : choice.kind === "unresolved" ? t(choice.reason) : null;
   const address = choice.kind === "unresolved" ? null : choice.address;
+  // A row with a button of its own is no label, which would hold two controls.
+  const Outer = onShow ? "div" : "label";
   return (
-    <label className={cn("flex items-start gap-md px-md py-sm", unavailable ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer")} data-ssh-host={choice.alias} data-ssh-host-state={choice.kind}>
+    <Outer className={cn("flex items-start gap-md px-md py-sm", unavailable ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer")} data-ssh-host={choice.alias} data-ssh-host-state={choice.kind}>
       <RadioGroupItem value={choice.alias} disabled={unavailable || disabled} aria-label={choice.alias} aria-describedby={reason ? note : undefined} className="mt-xxs" />
       <span className="flex min-w-0 flex-1 flex-col gap-xxs">
         <span className={cn("break-all text-subhead", unavailable ? "text-muted-foreground" : "text-foreground")}>{choice.alias}</span>
         {address ? <span className="break-all font-mono text-body text-muted-foreground">{address}</span> : null}
       </span>
       {reason ? (
-        <span id={note} className="max-w-1/2 shrink-0 break-words break-keep text-right text-body text-muted-foreground" data-ssh-host-note={choice.alias}>
-          {reason}
+        <span className="flex max-w-1/2 shrink-0 flex-col items-end gap-xxs text-right text-body text-muted-foreground">
+          <span id={note} className="break-words break-keep" data-ssh-host-note={choice.alias}>
+            {reason}
+          </span>
+          <AddedWay onShow={onShow} data-ssh-host-server={choice.alias} />
         </span>
       ) : null}
-    </label>
+    </Outer>
+  );
+}
+
+/**
+ * The way from a machine this computer already reaches, over SSH or wsl.exe,
+ * to Hide of its own there: that device's 서버로 연결, which this opens on its
+ * row in Settings › Devices. Adding the machine again would only answer with
+ * the helper this computer runs there (with-hide/hide issue 3007).
+ */
+function AddedWay({ onShow, ...data }: { onShow: (() => void) | null } & Record<`data-${string}`, string>) {
+  const { t } = useInterfaceTranslation();
+  if (!onShow) return null;
+  return (
+    <Button variant="text" size="inline" onClick={onShow} {...data}>
+      {t("pairing.ssh.openServer")}
+    </Button>
   );
 }
 
 /** One WSL distribution of this PC: chosen like a Host, or dimmed with why it cannot be (PRD wsl-device B4, B28). */
-function WslRow({ choice, disabled }: { choice: WslChoice; disabled: boolean }) {
+function WslRow({ choice, disabled, onShow }: { choice: WslChoice; disabled: boolean; onShow: (() => void) | null }) {
   const { t } = useInterfaceTranslation();
   const note = useId();
   const unavailable = choice.kind !== "available";
   const reason = choice.kind === "added" ? t("devices.hostAdded", { name: choice.name }) : choice.kind === "unavailable" ? t(choice.reason) : null;
   const command = choice.kind === "unavailable" ? choice.command : null;
+  const Outer = onShow ? "div" : "label";
   return (
-    <label className={cn("flex items-start gap-md px-md py-sm", unavailable ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer")} data-wsl-distro={choice.distro} data-wsl-distro-state={choice.kind}>
+    <Outer className={cn("flex items-start gap-md px-md py-sm", unavailable ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer")} data-wsl-distro={choice.distro} data-wsl-distro-state={choice.kind}>
       <RadioGroupItem value={choice.value} disabled={unavailable || disabled} aria-label={choice.deviceName} aria-describedby={reason ? note : undefined} className="mt-xxs" />
       <span className="flex min-w-0 flex-1 flex-col gap-xxs">
         <span className={cn("break-all text-subhead", unavailable ? "text-muted-foreground" : "text-foreground")}>{choice.deviceName}</span>
         <span className="break-keep text-body text-muted-foreground">{t("devices.wsl.thisPc")}</span>
       </span>
       {reason ? (
-        <span id={note} className="flex max-w-1/2 shrink-0 flex-col gap-xxs text-right text-body text-muted-foreground">
-          <span className="break-words break-keep" data-wsl-distro-note={choice.distro}>{reason}</span>
-          {/* The command the reason ends on, under it, wrapping only between its words. */}
-          {command ? <span className="break-words font-mono text-subtle-foreground" data-wsl-command={choice.distro}>{command}</span> : null}
+        <span className="flex max-w-1/2 shrink-0 flex-col items-end gap-xxs text-right text-body text-muted-foreground">
+          <span id={note} className="flex flex-col gap-xxs">
+            <span className="break-words break-keep" data-wsl-distro-note={choice.distro}>{reason}</span>
+            {/* The command the reason ends on, under it, wrapping only between its words. */}
+            {command ? <span className="break-words font-mono text-subtle-foreground" data-wsl-command={choice.distro}>{command}</span> : null}
+          </span>
+          <AddedWay onShow={onShow} data-wsl-distro-server={choice.distro} />
         </span>
       ) : null}
-    </label>
+    </Outer>
   );
 }
 
@@ -304,4 +331,9 @@ function NoHosts() {
       <pre className="overflow-x-auto rounded-md border border-border bg-card px-md py-sm font-mono text-body text-subtle-foreground">{HOST_EXAMPLE}</pre>
     </div>
   );
+}
+
+/** The device an added Host names: the one dialed by that alias, or the one the core named for reaching the same machine. */
+function addedHost(devices: Device[], alias: string, name: string): Device | undefined {
+  return devices.find((device) => device.ssh_alias === alias) ?? devices.find((device) => device.kind === "remote" && device.label === name);
 }

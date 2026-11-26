@@ -1994,7 +1994,6 @@ impl Runtime {
                     kind,
                     repo,
                     branch,
-                    launch,
                     profile,
                     intent,
                     brief,
@@ -2041,32 +2040,20 @@ impl Runtime {
                     self.spawn_place(&context, machine.as_deref(), repo.take(), branch.as_deref())?
                 }
             };
-            let repo: &str = repo.insert(place);
-            let worker = crate::runtime::missions::SpawnWorker {
-                machine: machine.as_deref(),
-                kind,
-                profile: profile.as_deref(),
-                repo,
-                launch,
-                finished,
-            };
-            // The item the candidates judge is picked once, here, and the
-            // start takes it (PRD agent-profiles-phase2 D-08, B13). A node's
-            // worker named by no `--profile` starts as its plan shows it
-            // (D-02): that item is the pick, while the spawn keeps the
-            // arguments its caller sent, so the same command asked again is
-            // the same spawn, and one that finished answers its worker before
-            // the plan or the profiles are read again (engineering 11).
-            let mut picked = if profile.is_none() && !finished {
+            *repo = Some(place);
+            // A node's worker named by no `--profile` starts as its plan
+            // shows it (PRD agent-profiles-phase2 D-02): that item is picked
+            // here, while the spawn keeps the arguments its caller sent, so
+            // the same command asked again is the same spawn, and one that
+            // finished answers its worker before the plan or the profiles are
+            // read again (engineering 11).
+            let picked = if profile.is_none() && !finished {
                 self.planned_request(&actor, machine.as_deref(), kind, intent)?
             } else {
                 None
             };
-            if plan.is_some() {
-                self.plan_candidates_admit(&actor, &worker, &mut picked)?;
-            }
             *mission = self
-                .mission_spawn_admission(&actor, &worker, &mut picked, intent, brief.is_some())?
+                .mission_spawn_admission(&actor, machine.as_deref(), intent, brief.is_some())?
                 .map(Box::new);
             if mission
                 .as_ref()

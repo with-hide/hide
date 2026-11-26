@@ -1,8 +1,8 @@
-import { ArrowUpIcon, CheckIcon, ChevronDownIcon, HandIcon, LoaderCircleIcon, PaperclipIcon, ShieldIcon, SquareIcon, XIcon, type LucideIcon } from "lucide-react";
+import { ArrowUpIcon, ChevronDownIcon, HandIcon, LoaderCircleIcon, PaperclipIcon, ShieldIcon, SquareIcon, XIcon, type LucideIcon } from "lucide-react";
 import { useRef, type ClipboardEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { MAX_BATCH_BYTES, MAX_FILE_BYTES, MAX_FILES } from "../../attachments";
-import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskFavorite, DeskPermission, DeskSelection } from "../../desk";
-import { agentPickable, deskAgentWord, favoriteChosen } from "../../desk";
+import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskPermission, DeskSelection } from "../../desk";
+import { agentPickable, deskAgentWord } from "../../desk";
 import { traySendable, type ComposerTray, type SentAttachment, type TrayFile } from "../../deskComposer";
 import { fileIcon } from "../../fileIcons";
 import { useInterfaceTranslation } from "../../i18n/client";
@@ -283,11 +283,8 @@ function BarMenu({ name, value, open, onOpenChange, highlight = false, wide = fa
  * only the agent menu shows; before its first session the model and effort
  * read as the agent's default. `open` opens one menu, for review.
  */
-export function DeskAgentBar({ agents, selection, favorites = [], open = null, onAgent, onFavorite, onModel, onEffort, onAgentSettings }: {
+export function DeskAgentBar({ agents, selection, open = null, onAgent, onModel, onEffort, onAgentSettings }: {
   agents: readonly DeskAgent[];
-  /** The favorite models Settings › Agents keeps, listed first (`deskFavorites`). */
-  favorites?: readonly DeskFavorite[];
-  onFavorite?: (favorite: DeskFavorite) => void;
   selection: DeskSelection;
   open?: "agent" | "model" | "effort" | null;
   onAgent: (agent: DeskAgentId) => void;
@@ -310,22 +307,6 @@ export function DeskAgentBar({ agents, selection, favorites = [], open = null, o
           <span>{t("desk.bar.agent")}</span>
           <span className="font-normal text-muted-foreground" data-desk-agent-count={registered}>{t("desk.bar.registered", { n: registered })}</span>
         </DropdownMenuLabel>
-        {favorites.length > 0 ? (
-          <>
-            <DropdownMenuLabel className="font-normal text-muted-foreground" data-desk-favorites={String(favorites.length)}>{t("desk.bar.favorites")}</DropdownMenuLabel>
-            {favorites.map((favorite) => (
-              <DropdownMenuItem key={favorite.key} onSelect={() => onFavorite?.(favorite)} className="items-start gap-sm" data-desk-favorite={favorite.key} data-desk-favorite-chosen={String(favoriteChosen(favorite, selection))}>
-                <AgentMark kind={favorite.agent.id} />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate">{favorite.modelLabel || favorite.agent.label}{favorite.modelLabel ? <span className="ml-xs font-normal text-muted-foreground">{favorite.agent.label}</span> : null}</span>
-                  {favorite.purpose ? <span className="truncate text-caption text-muted-foreground">{favorite.purpose}</span> : null}
-                </span>
-                {favoriteChosen(favorite, selection) ? <CheckIcon aria-hidden="true" className="size-(--size-icon) shrink-0" /> : null}
-              </DropdownMenuItem>
-            ))}
-            <DropdownMenuSeparator />
-          </>
-        ) : null}
         <DropdownMenuRadioGroup value={selection.agent ?? undefined} onValueChange={(value) => onAgent(value as DeskAgentId)}>
           {agents.map((one) => {
             const pickable = agentPickable(one);

@@ -7,6 +7,11 @@ pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] -
 
 pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> [--repo <path> [--branch <branch> [--path <path>]]] [--profile <name>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
 
+Choose whom to start from the operator's list:
+  hide agent catalog answers it as candidates: each row's agent, profile, model, effort and what it is for.
+  Take the row whose purpose fits the work, unless the operator named the agent or model. It is a reference,
+  not a limit: choose outside it when no row fits.
+
 Choose the model and effort with --model and --effort, not after --:
   Hide starts the agent with them and starts it with them again whenever it wakes, forks or reopens the agent.
   Native arguments after -- reach this start only; a restart resumes the conversation without them.

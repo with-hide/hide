@@ -13,6 +13,11 @@
 //! `models_read_timeout` with the CLI's default model, so a plan made from
 //! it is never empty.
 //!
+//! `candidates` is the operator's agent list (Settings › Models by purpose): whom
+//! they want work handed to and what each row is for. Every agent that
+//! chooses who to start reads it here; nothing is refused for being outside
+//! it.
+//!
 //! A row is one agent item (PRD agent-profiles-phase2 B11): the agent's
 //! built-in default, `profile` `default`, then each of the machine's
 //! profiles of it a start may take, `profile` its name, which is the
@@ -120,6 +125,7 @@ impl Runtime {
                 // lands names the models.
                 "models_read_pending": pending,
                 "items": items,
+                "candidates": self.candidate_items(),
             }));
         };
         for item in &mut items {
@@ -173,6 +179,7 @@ impl Runtime {
             "installed_known": kit.is_some(),
             "models_read_pending": pending,
             "items": items,
+            "candidates": self.candidate_items(),
             // Each of the operator's files left out, with why in one line.
             "definitions_rejected": definitions
                 .catalog

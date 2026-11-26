@@ -68,9 +68,41 @@ pub struct Reach {
     pub command_folder: Option<String>,
     /// The words that start the target's `hide`, for a caller that knows
     /// where it is: the node of a core moved before 1.2.0 runs the `hide`
-    /// beside that core's program (`moved_core`). None reads the command
-    /// folder.
+    /// beside that core's program (`moved_core`), and a helper device's
+    /// read and switch the one beside its node's ([`Reach::running`]).
+    /// None reads the command folder.
     pub hide: Option<Vec<String>>,
+}
+
+impl Reach {
+    /// This reach for a helper device whose node runs `node` there (its
+    /// `hided`, where the connection that started it put it): every `hide`
+    /// asked of the account is the one beside that program, this machine's
+    /// own build, never the one the account links, which follows a build
+    /// only once that build's kit has run there and may still name an
+    /// older helper's (with-hide/hide#3007). A device with no node this
+    /// core started there reads the command folder, as any account does.
+    pub fn running(&self, node: Option<&str>) -> Reach {
+        let mut reach = self.clone();
+        if let Some(hide) = node.and_then(hide_beside) {
+            reach.hide = Some(vec![hide]);
+        }
+        reach
+    }
+}
+
+/// The `hide` in the folder of `program`, a path as two machines spell it to
+/// each other (`/` between names on every system), with the `.exe` a
+/// Windows program is found by. None for a program that names no folder,
+/// which no install writes.
+pub(crate) fn hide_beside(program: &str) -> Option<String> {
+    let (folder, file) = program.rsplit_once('/')?;
+    let name = if file.ends_with(".exe") {
+        "hide.exe"
+    } else {
+        "hide"
+    };
+    Some(format!("{folder}/{name}"))
 }
 
 /// What a target said about pairing over SSH, before anything is asked of
@@ -361,13 +393,15 @@ pub(crate) fn start_core(login: &dyn Login, reach: &Reach) -> Result<(), &'stati
     }
 }
 
-/// Whether a refusal is a Hide's answer to a command or a request it does
-/// not know: its `hide` refused the words (`usage`), or its daemon the ask
-/// (`invalid_request`). Only that says the Hide there is older.
+/// Whether a refusal says the Hide there is older: its `hide` refused the
+/// words (`usage`), its daemon the ask (`invalid_request`), or it is a 1.2.11
+/// build, which kept connections between two Hides behind a switch and
+/// refused every verb that pairs (`device_connect_unavailable`). Only that
+/// says the Hide there is older.
 fn unknown_there(answer: &Value) -> bool {
     matches!(
         answer["error"]["code"].as_str(),
-        Some("usage" | "invalid_request")
+        Some("usage" | "invalid_request" | "device_connect_unavailable")
     )
 }
 
@@ -707,6 +741,7 @@ pub(crate) fn may_move(
         Ok(Said::Answer(answer)) if answer["ok"] == true => answer["value"].clone(),
         Ok(Said::NoProgram) => return Err("ssh_hide_absent"),
         Ok(Said::Unread) => return Err("ssh_update_there"),
+        Ok(Said::Answer(answer)) if unknown_there(&answer) => return Err("ssh_update_there"),
         Ok(Said::Answer(answer)) => {
             let code = answer["error"]["code"].as_str().unwrap_or_default();
             return Err(refused_there(login, "unattended", code));
@@ -1469,6 +1504,207 @@ mod tests {
             vec![Candidate::Ip("127.0.0.1:7842".parse().unwrap())]
         );
         assert_eq!(login_addresses("127.0.0.1", &own[..1]), Vec::new());
+    }
+
+    /// A helper device's account where Hide's node of this build runs and
+    /// the `hide` the account links is still a 1.2.11 helper's, as on the
+    /// Mac mini of with-hide/hide#3007, whose kit never pointed the link at
+    /// the newer build: it records which `hide` answered what, and its own
+    /// Hide runs once a `hide connect` was asked of the node's.
+    struct Linked {
+        asked: std::sync::Mutex<Vec<(&'static str, String)>>,
+    }
+
+    /// Where Linked's node runs from, and the `hide` beside it.
+    const NODE: &str = "/home/me/.hide/host-helper/0123456789abcdef/hided";
+    const NODE_HIDE: &str = "/home/me/.hide/host-helper/0123456789abcdef/hide";
+
+    impl Linked {
+        fn asked(&self) -> Vec<(&'static str, String)> {
+            self.asked.lock().unwrap().clone()
+        }
+    }
+
+    impl Login for Linked {
+        fn channel(&self) -> Channel {
+            Channel::Ssh
+        }
+
+        fn name(&self) -> &str {
+            "mini"
+        }
+
+        fn system(&self) -> Result<String, String> {
+            Ok("linux".to_owned())
+        }
+
+        fn on(&self) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        fn run(&self, argv: &[String], _cap: usize, _within: Duration) -> Result<Ran, String> {
+            let (who, words) = match argv {
+                [hide, words @ ..] if hide == NODE_HIDE => ("node", words),
+                [sh, _, _, link, words @ ..] if sh == "sh" && link == ".local/bin/hide" => {
+                    ("link", words)
+                }
+                other => return Err(format!("not scripted: {other:?}")),
+            };
+            let words: Vec<&str> = words.iter().map(String::as_str).take(2).collect();
+            let mut asked = self.asked.lock().unwrap();
+            let runs = asked.contains(&("node", "connect".to_owned()));
+            asked.push((who, words.join(" ")));
+            let (status, answer) = match (who, words.as_slice()) {
+                // 1.2.11 knows no `always-on unattended`, and prints its
+                // usage; it keeps every verb that pairs behind its switch.
+                ("link", ["always-on", ..]) => (2, None),
+                ("link", ["device", ..]) => (
+                    1,
+                    Some(json!({"ok":false,"error":{
+                        "code":"device_connect_unavailable",
+                        "message":"This build does not offer connections between two Hides yet: add a machine by its SSH alias",
+                    }})),
+                ),
+                ("node", ["always-on", "unattended"]) => {
+                    (0, Some(json!({"ok":true,"value":{"unattended":true}})))
+                }
+                ("node", ["connect"]) => (0, Some(json!({"ok":true}))),
+                ("node", ["device", "look-ssh"]) if runs => (
+                    0,
+                    Some(json!({"ok":true,"value":{"look":{"system":"linux","core":true}}})),
+                ),
+                ("node", ["device", "look-ssh"]) => (
+                    1,
+                    Some(json!({"ok":false,"error":{"code":"hide_unavailable"},
+                        "look":{"system":"linux","core":false}})),
+                ),
+                // Another machine holds the helper's folder: the switch
+                // reached the pairing, which is all this test follows.
+                ("node", ["device", "accept-ssh"]) => (
+                    0,
+                    Some(json!({"ok":true,"value":{"helper":"held","by":"Studio"}})),
+                ),
+                other => return Err(format!("not scripted: {other:?}")),
+            };
+            Ok(Ran {
+                status,
+                stdout: answer.map(line).unwrap_or_default(),
+                stderr: Vec::new(),
+            })
+        }
+
+        fn first(&self, _own: &[Candidate]) -> Vec<Candidate> {
+            Vec::new()
+        }
+
+        fn install(&self, _packages: &HelperPackages, _root: &str) -> Result<String, NotInstalled> {
+            Err(NotInstalled::Failed("not scripted".to_owned()))
+        }
+    }
+
+    /// A helper device's read and switch run the `hide` beside its node,
+    /// this machine's own build, so a `hide` the account still links to an
+    /// older helper neither refuses the switch nor starts that older build
+    /// (with-hide/hide#3007); with no node of this machine's known there,
+    /// the account's own `hide` answers, and a 1.2.11 one reads as a Hide
+    /// to update, never as a refusal with nothing to do.
+    #[test]
+    fn a_helper_devices_switch_runs_the_hide_beside_its_node_not_the_linked_one() {
+        let reach = Reach {
+            home: PathBuf::from("/nonexistent"),
+            command_folder: None,
+            hide: None,
+        };
+        let me = Me {
+            device: "this-device".to_owned(),
+            name: "This Mac".to_owned(),
+        };
+        let key = PeerKey::from_bytes([7; 32]);
+        let switched = |login: &Linked, reach: &Reach| {
+            switch_on(
+                login,
+                &Switch {
+                    reach,
+                    request: "req-1",
+                    me: &me,
+                    key: &key,
+                    helper_root: Some("~/.hide/host-helper"),
+                    projects: &[],
+                    admitted: &|_| false,
+                    install: true,
+                    step: &|_| {},
+                },
+            )
+        };
+
+        let node = Linked {
+            asked: std::sync::Mutex::default(),
+        };
+        let running = reach.running(Some(NODE));
+        assert_eq!(
+            may_move(&node, &running, Asked::Switch),
+            Ok(Move {
+                condition: Condition::LingerOn,
+                user: None,
+            })
+        );
+        let done = switched(&node, &running);
+        assert!(
+            matches!(&done, Ok(Switched::HeldBy(by)) if by == "Studio"),
+            "{:?}",
+            done.err()
+        );
+        let asked: Vec<(&str, String)> = [
+            "always-on unattended",
+            "device look-ssh",
+            "connect",
+            "device look-ssh",
+            "device accept-ssh",
+        ]
+        .into_iter()
+        .map(|words| ("node", words.to_owned()))
+        .collect();
+        assert_eq!(node.asked(), asked);
+
+        let linked = Linked {
+            asked: std::sync::Mutex::default(),
+        };
+        let unknown = reach.running(None);
+        assert_eq!(
+            may_move(&linked, &unknown, Asked::Switch),
+            Err("ssh_update_there")
+        );
+        assert_eq!(switched(&linked, &unknown).err(), Some("ssh_update_there"));
+        assert_eq!(
+            linked.asked(),
+            [
+                ("link", "always-on unattended".to_owned()),
+                ("link", "device look-ssh".to_owned()),
+            ]
+        );
+    }
+
+    /// The `hide` beside a node is named as the node's own program is, so a
+    /// Windows node's is the `.exe` beside it; a program with no folder
+    /// names none.
+    #[test]
+    fn the_hide_beside_a_node_is_spelled_as_its_program_is() {
+        assert_eq!(hide_beside(NODE).as_deref(), Some(NODE_HIDE));
+        assert_eq!(
+            hide_beside("C:/Users/me/.hide/host-helper/0123456789abcdef/hided.exe").as_deref(),
+            Some("C:/Users/me/.hide/host-helper/0123456789abcdef/hide.exe")
+        );
+        assert_eq!(hide_beside("hided"), None);
+        let reach = Reach {
+            home: PathBuf::from("/Users/example"),
+            command_folder: Some("/opt/hide/bin".to_owned()),
+            hide: None,
+        };
+        assert_eq!(program(&reach.running(Some(NODE)), "linux"), [NODE_HIDE]);
+        assert_eq!(
+            program(&reach.running(None), "linux"),
+            ["/opt/hide/bin/hide"]
+        );
     }
 
     #[test]

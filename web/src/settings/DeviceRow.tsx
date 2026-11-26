@@ -88,7 +88,7 @@ export function DeviceRow({ device, status, place, actions, handlers }: { device
                 open,
                 onToggle: () => useUiStore.getState().toggleDeviceOpen(device.id),
                 label: t(open ? "devices.ways.close" : "devices.ways.open", { name: place.name }),
-                body: <DeviceWays state={{ deviceId: device.id, name: place.name, way, windows, connected, look: switching.look, step: device.switch_step ?? null, pressed: switching.pressed, onRead: switching.read, onSwitch: switching.press }} actions={actions} />,
+                body: <DeviceWays state={{ deviceId: device.id, name: place.name, way, direct: way, windows, connected, look: switching.look, step: device.switch_step ?? null, pressed: switching.pressed, onRead: switching.read, onSwitch: switching.press }} actions={actions} />,
               }
       }
       label={
