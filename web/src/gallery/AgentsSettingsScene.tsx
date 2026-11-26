@@ -63,14 +63,7 @@ export function AgentsSettingsScene({ params }: { params: URLSearchParams }) {
     useShellStore.setState({
       connection: "live",
       rest: {
-        status: {
-          ...(state === "definitions" ? { agent_definitions: LEFT_OUT } : {}),
-          // The start panel's model lists the favorite models' menus read: invented names.
-          background_ai: { provider: "claude", chosen: false, unavailable_reason: null, providers: [
-            { id: "claude", label: "Claude Code", agent: "claude-code", state: "ready", headline: "", message: null, model: "", models: ["opus", "sonnet", "haiku"], model_labels: { opus: "Opus 5.5", sonnet: "Sonnet 5.5", haiku: "Haiku 5.5" }, models_unavailable_reason: null, profile_models: [] },
-            { id: "codex", label: "Codex", agent: "codex", state: "ready", headline: "", message: null, model: "", models: ["gpt", "gpt-mini"], model_labels: { gpt: "GPT-6", "gpt-mini": "GPT-6 mini" }, models_unavailable_reason: null, profile_models: [] },
-          ] },
-        },
+        status: state === "definitions" ? { agent_definitions: LEFT_OUT } : {},
         navigator: {
           siblings_shown: 5,
           focused_device_id: "local",
@@ -80,12 +73,6 @@ export function AgentsSettingsScene({ params }: { params: URLSearchParams }) {
           interface_language: lang,
           agent_permissions: { codex: { mode: "custom", text: "--full-auto", options: ["--full-auto"] } },
           device_agent_permissions: {},
-          conductor_settings: { concurrency: 4, default_scope: "pr", default_strength: "normal", clean_merged: true, candidates: [
-            { agent: "claude", model: "opus", effort: null, purpose: "범용 (더 어려운 작업)" },
-            { agent: "claude", model: "sonnet", effort: null, purpose: "범용" },
-            { agent: "claude", model: "haiku", effort: null, purpose: "간단한 작업" },
-            { agent: "codex", model: "gpt", effort: "high", purpose: "리뷰·검증 전용" },
-          ] },
         },
       },
     } as never);

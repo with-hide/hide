@@ -1,20 +1,23 @@
-import { Group } from "../components/settings-rows";
+import { Group, Note } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { Actions } from "../actions";
 import { CandidateAdd, CandidateRows, ConductorError, useConductorEdit } from "./ConductorControls";
 
-// Settings › Agents › Favorite models (operator decision 2026-11-26): the
-// agent, model and effort Hide offers first wherever work is handed to an
-// agent, each with a line on what it is for. The value is the Conductor's
-// candidate list (`conductor_settings.candidates`), now read by missions and
-// by Desk's agent menu alike; the rows and their edit events are
-// `ConductorControls.tsx`'s, so a row edited here is the row a mission reads.
+// Settings › Delegation (operator decision 2026-11-26): the agents and models
+// the operator wants work handed to, each with a line on what it is for. Desk,
+// a mission's Conductor and any agent that starts another read it as `hide
+// agent catalog`'s `candidates`; it limits none of them. The value is
+// `conductor_settings.candidates`, and the rows and their edit events are
+// `ConductorControls.tsx`'s.
 
-export function FavoriteModelsGroup({ actions }: { actions: Actions }) {
+export function DelegationTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const { settings, send, error } = useConductorEdit(actions);
   return (
-    <>
+    <div data-settings-delegation="true">
+      <div className="mb-lg">
+        <Note>{t("delegation.intro")}</Note>
+      </div>
       <Group title={t("conductor.candidates")} action={<CandidateAdd settings={settings} send={send} />} note={t("conductor.footer")} data-conductor-candidates={String(settings.candidates.length)}>
         {settings.candidates.length > 0 ? (
           // One grid for the head and every row, so the effort column is as wide as its widest row and every row's columns line up.
@@ -32,6 +35,6 @@ export function FavoriteModelsGroup({ actions }: { actions: Actions }) {
         ) : null}
       </Group>
       <ConductorError error={error} />
-    </>
+    </div>
   );
 }

@@ -67,7 +67,7 @@ Until then, install the previous release from the [Releases page](https://github
 Your `~/.hide` folder and the app's profile stay as they are.
 
 Read this before you install an earlier release by hand.
-After you have used a profile in the favorite models (a mission's worker candidates) or in Hide AI's agent items, version 1.2.6 or earlier cannot read those choices, and version 1.2.5 or earlier also drops a session's profile from its launch record when it saves.
+After you have used a profile in the agent list (Settings > Delegation) or in Hide AI's agent items, version 1.2.6 or earlier cannot read those choices, and version 1.2.5 or earlier also drops a session's profile from its launch record when it saves.
 Read the profile rows of [What each system supports](https://github.com/with-hide/hide/blob/main/docs/INSTALL.md#what-each-system-supports) in the install guide first.
 The app never installs a lower version by itself.
 

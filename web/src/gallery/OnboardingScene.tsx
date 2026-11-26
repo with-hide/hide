@@ -192,6 +192,16 @@ const SCENE_MOBILE: MobileState = {
   push_mode: "app_closed",
   now_ms: 0,
 };
+/** Settings › Delegation's list and Settings › Mission's values, in invented words. */
+const SCENE_CONDUCTOR = {
+  concurrency: 4, default_scope: "pr", default_strength: "normal", clean_merged: true,
+  candidates: [
+    { agent: "claude", model: "opus", effort: "high", purpose: "어려운 작업" },
+    { agent: "claude", model: "sonnet", effort: null, purpose: "범용" },
+    { agent: "codex", model: "gpt-6-astra", effort: null, purpose: "리뷰·검증 전용" },
+  ],
+};
+
 const PLATFORM: Record<OnboardingSystem, string> = { mac: "darwin", windows: "win32", linux: "linux" };
 
 /** The kit's agents in its order, each as KitAgentSnapshot reports it on a Mac whose kit has not run. */
@@ -362,6 +372,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
       first_run: { version: 1, step },
       first_run_choices: { devices: state === "devices-partial" ? ["build", "research"] : state === "devices" ? ["ssh:config-ubuntu", "mini"] : state === "devices-signin" ? ["ssh:mini", "ssh:config-ubuntu", "ssh:office", "ssh:lab", "ssh:home-nas"] : state === "devices-ssh-failed" ? ["ssh:office", "ssh:lab", "ssh:home-nas"] : state.startsWith("devices-wsl") ? null : [], project_form: { view: state === "project-add" ? "add" : "" } },
       agent_onboarding: state === "agents-refused" ? null : step === "agents" ? "pending" : "done",
+      conductor_settings: SCENE_CONDUCTOR,
       desktop_notifications: enabled,
       desktop_notifications_done: state === "settings-done-only" || state === "settings-both",
       workspace_registrations: [...projects.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false }))],

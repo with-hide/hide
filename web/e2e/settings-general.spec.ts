@@ -229,7 +229,7 @@ test("General and About read without sideways scrolling in Korean and English, l
       const pages = sheet.locator("[data-settings-page-list]");
       expect(await pages.evaluate(node => node.scrollHeight - node.clientHeight)).toBeGreaterThan(0);
       await sheet.locator('[data-settings-tab="general"]').focus();
-      for (const name of ["general", "notifications", "usage", "devices", "shortcuts", "agents", "skills", "hideAi", "conductor", "externalTools", "github", "labs", "about", "privacy"]) {
+      for (const name of ["general", "notifications", "usage", "devices", "shortcuts", "agents", "delegation", "skills", "hideAi", "conductor", "externalTools", "github", "labs", "about", "privacy"]) {
         const tab = sheet.locator(`[data-settings-tab="${name}"]`);
         await expect(tab).toBeFocused();
         await expect(tab).toBeInViewport({ ratio: 1 });

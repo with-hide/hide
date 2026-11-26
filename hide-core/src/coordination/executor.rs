@@ -1461,8 +1461,8 @@ fn spawn(
         }
         _ => None,
     };
-    // The item an admission judged is the one that starts; a spawn none
-    // judged picks here, once, before its hook is judged, and keeps that
+    // The item a mission's plan names is the one that starts; any other
+    // spawn picks here, once, before its hook is judged, and keeps that
     // same request through node resolution. Completed retries need no
     // new choice.
     let agent = if earlier.as_ref().is_some_and(|record| record.completed) {

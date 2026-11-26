@@ -10,11 +10,11 @@ import { clientI18n } from "../i18n/translator";
 import type { ConductorSettings } from "../snapshot";
 import { useShellStore } from "../store";
 import type { DispatchFn } from "../ws";
-import { FavoriteModelsGroup } from "./FavoriteModelsGroup";
+import { DelegationTab } from "./DelegationTab";
 
-// Settings › Agents › Favorite models: the Conductor's candidate list as the
-// operator edits it for missions and Desk alike, with Hide's suggested
-// wording for a row's purpose beside the free text.
+// Settings › Delegation: the agent list as the operator edits it for whoever
+// hands work to an agent, with Hide's suggested wording for a row's purpose
+// beside the free text.
 
 const browserLayout = vi.hoisted(() => {
   const canvas = HTMLCanvasElement.prototype.getContext;
@@ -44,7 +44,7 @@ async function mount(settings: ConductorSettings, rest: Record<string, unknown> 
   await act(async () => {
     await clientI18n.changeLanguage("en");
     useShellStore.setState({ connection: "live", rest: { ...rest, ui_state: { conductor_settings: settings } } } as never);
-    root.render(<TooltipProvider><FavoriteModelsGroup actions={actions} /></TooltipProvider>);
+    root.render(<TooltipProvider><DelegationTab actions={actions} /></TooltipProvider>);
   });
   return {
     container,
@@ -59,13 +59,13 @@ async function mount(settings: ConductorSettings, rest: Record<string, unknown> 
   };
 }
 
-it("titles the list Favorite models, says missions and Desk both read it, and draws a row for each candidate", async () => {
+it("says Desk, missions and agents all read the list, titles it, and draws a row for each entry", async () => {
   const group = await mount({ ...DEFAULT_CONDUCTOR, candidates: [{ agent: "claude", model: "opus", purpose: "General" }, { agent: "codex", purpose: "Review and verification only" }] });
   try {
     const root = group.container.querySelector("[data-conductor-candidates]")!;
     expect(root.getAttribute("data-conductor-candidates")).toBe("2");
-    expect(root.querySelector("h3")?.textContent).toBe("Favorite models");
-    expect(root.textContent).toContain("Missions and Desk pick from this list first.");
+    expect(root.querySelector("h3")?.textContent).toBe("Agents and models to hand work to");
+    expect(group.container.textContent).toContain("Desk, missions and agents refer to this list when they hand work to another agent.");
     expect(root.querySelectorAll("[data-conductor-candidate]")).toHaveLength(2);
   } finally { await group.unmount(); }
 });

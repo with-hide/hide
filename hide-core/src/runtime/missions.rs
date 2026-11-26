@@ -21,10 +21,10 @@ use crate::mission_criteria::{CheckKind, Criterion, CriterionKind, CriterionStat
 use crate::mission_events::History;
 use crate::mission_store::{Restored, Visiting};
 use crate::missions::{
-    AnswerFailure, AttentionTo, Blocked, CI_FAILED_NAMED, Candidate, Checks, CiNews, CiResult,
-    Conductor, ConductorSettings, Delivery, Mission, MissionBook, MissionCommand, MissionEnd,
-    MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
-    PendingWake, PrSeen, Question, RoundWake, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
+    AnswerFailure, AttentionTo, Blocked, CI_FAILED_NAMED, Checks, CiNews, CiResult, Conductor,
+    ConductorSettings, Delivery, Mission, MissionBook, MissionCommand, MissionEnd, MissionNode,
+    MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT, PendingWake, PrSeen,
+    Question, RoundWake, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
 };
 use crate::model::{PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
@@ -781,21 +781,6 @@ pub struct AttentionView {
     /// read from the book the way the close reads it, so the row can say
     /// how much is missing; 0 for every other reason.
     pub unmet_nodes: u32,
-}
-
-/// The spawn an admission judges: the machine its child starts on (none
-/// for the caller's own), its agent, the profile it names by name, the
-/// project it starts in, the model and effort it starts with, and whether
-/// it retries a spawn that finished, which answers with the child it
-/// started and is judged by what it did (engineering 11).
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct SpawnWorker<'a> {
-    pub(crate) machine: Option<&'a str>,
-    pub(crate) kind: &'a str,
-    pub(crate) profile: Option<&'a str>,
-    pub(crate) repo: &'a str,
-    pub(crate) launch: &'a hide_agent_adapter::LaunchChoice,
-    pub(crate) finished: bool,
 }
 
 /// A spawn admitted as one of a mission's workers: its cap is checked in
@@ -2776,7 +2761,6 @@ impl Runtime {
                     scope: scope.unwrap_or(settings.default_scope),
                     destination,
                     cap,
-                    candidates: settings.candidates.clone(),
                     strength: Some(settings.default_strength),
                     checkers: None,
                     exempt: false,
@@ -2833,7 +2817,6 @@ impl Runtime {
                 // the operator's press, and the shell shows a first plan on
                 // the Conductor pane's own chip (PRD mission-pane-chip D-02).
                 let mut next = crate::missions::apply_plan(&current, &plan, now)?;
-                self.plan_candidates(&current, &plan)?;
                 // A replan does not make a node an agent on another machine
                 // works or checks one only the project's machine runs.
                 for node in next.nodes.iter().filter(|node| !node.runs_elsewhere()) {
@@ -4396,8 +4379,7 @@ impl Runtime {
     /// The admission of a spawn `actor` asks for (B4, B8, B11, B12): none
     /// when it conducts no open mission, a refusal while its plan is not
     /// approved, when the worker would run on another machine than the
-    /// project's that may not run it (`admit_elsewhere`), or when it is none
-    /// of the operator's worker candidates,
+    /// project's that may not run it (`admit_elsewhere`),
     /// and otherwise the mission whose cap the ledger checks.
     /// Why the node `intent` names in `mission` may not start now, if it
     /// may not (`MissionNode::start_refusal`): its worker's spawn is refused
@@ -4443,12 +4425,10 @@ impl Runtime {
     pub(crate) fn mission_spawn_admission(
         &self,
         actor: &Actor,
-        worker: &SpawnWorker<'_>,
-        pick: &mut Option<crate::launch::Request>,
+        machine: Option<&str>,
         intent: &str,
         briefed: bool,
     ) -> Result<Option<MissionAdmission>, String> {
-        let machine = worker.machine;
         let Some(mission) = self.missions.book.conducted_open(actor) else {
             return Ok(None);
         };
@@ -4472,14 +4452,6 @@ impl Runtime {
         if worker_machine != mission.device_id {
             self.admit_elsewhere(mission, worker_machine, node)?;
         }
-        if let Some(started) =
-            self.outside_candidates(actor, worker, pick, self.mission_candidates(mission))?
-        {
-            return Err(crate::coordination::refusal(
-                "mission_candidate_refused",
-                &started,
-            ));
-        }
         // The destination is a branch of the mission's project. A worker on
         // another machine was admitted above as the same GitHub repository;
         // one on the mission's machine is judged by the spawn against the
@@ -4496,14 +4468,16 @@ impl Runtime {
         }))
     }
 
-    /// Settings › Mission's candidates as `hide mission settings` names
-    /// them (PRD agent-profiles-phase2 B11, B15): each row's agent item as
+    /// The operator's agent list (Settings › Delegation) as `hide agent
+    /// catalog` and `hide mission settings` name it for whoever chooses whom
+    /// to start; nothing is refused for being outside it (PRD
+    /// agent-profiles-phase2 B11, B15): each row's agent item as
     /// the operator reads it (`item`, `Claude · work`) and the `--profile`
     /// value that starts it (`profile`, `default` for the built-in), from
     /// this machine's profiles, which the rows name; a row whose profile this
     /// machine no longer lists has neither and says `profile_gone`, since no
     /// worker can start as it.
-    fn candidate_items(&self) -> Vec<Value> {
+    pub(super) fn candidate_items(&self) -> Vec<Value> {
         let profiles = self.machine_profiles(self.node.as_str());
         self.snapshot
             .ui_state
@@ -4545,59 +4519,6 @@ impl Runtime {
             .collect()
     }
 
-    /// The candidates a worker or checker of `mission` is held to (B48):
-    /// the ones it was created with and Settings › Mission's as they are
-    /// now, so a candidate added or changed applies to a running mission at
-    /// once, and one removed only from the next mission, which is created
-    /// without it; none for a mission created with none (or from before
-    /// candidates), which admits any agent and is not narrowed by
-    /// candidates added since. A plan and a spawn both ask it.
-    fn mission_candidates<'a>(&'a self, mission: &'a Mission) -> Vec<&'a Candidate> {
-        if mission.candidates.is_empty() {
-            return Vec::new();
-        }
-        mission
-            .candidates
-            .iter()
-            .chain(&self.snapshot.ui_state.conductor_settings.candidates)
-            .collect()
-    }
-
-    /// What the spawn `worker` would start, in the operator's words
-    /// (`Claude · work (opus, high)`), when it is none of `candidates`;
-    /// `None` when it is one, when there are none to hold it to, or when it
-    /// retries a spawn that finished. The item judged is the one the spawn
-    /// starts with: the one it names, else its caller's, the project's or
-    /// the agent's default, never the name alone (PRD agent-profiles-phase2
-    /// D-08, B13), picked once into `pick` (`spawn_request`), which the
-    /// start then takes, so every admission and the start see one item.
-    pub(crate) fn outside_candidates<'c>(
-        &self,
-        actor: &Actor,
-        worker: &SpawnWorker<'_>,
-        pick: &mut Option<crate::launch::Request>,
-        candidates: impl IntoIterator<Item = &'c Candidate>,
-    ) -> Result<Option<String>, String> {
-        let mut candidates = candidates.into_iter().peekable();
-        if candidates.peek().is_none() || worker.finished {
-            return Ok(None);
-        }
-        let request = match pick {
-            Some(request) => request,
-            None => pick.insert(self.spawn_request(
-                actor,
-                worker.machine,
-                worker.kind,
-                worker.profile,
-                worker.repo,
-            )?),
-        };
-        if candidates.any(|candidate| candidate.admits(&request.target, worker.launch)) {
-            return Ok(None);
-        }
-        Ok(Some(item_words(request.shown(), worker.launch)))
-    }
-
     /// The plan `plan` for `mission` with each worker's and checker's
     /// profile, which a plan names by the name `--profile` takes, as its id
     /// on the mission's machine, none for the built-in default (PRD
@@ -4614,8 +4535,7 @@ impl Runtime {
         let profiles = self.machine_profiles(&mission.device_id);
         for node in &mut plan.nodes {
             // A node that started keeps the items its workers and checkers
-            // were judged with, as `plan_candidates` holds it to nothing new:
-            // each the plan names again, of the same agent, keeps the profile
+            // started with: each the plan names again, of the same agent, keeps the profile
             // id the book has, so a profile renamed or removed since does not
             // refuse a replan of work that ran.
             let kept = mission.node(&node.key).filter(|kept| kept.started());
@@ -4667,56 +4587,6 @@ impl Runtime {
                         )
                     })?;
                 worker.profile = Some(id).filter(|id| !id.is_default());
-            }
-        }
-        Ok(())
-    }
-
-    /// Refuses a plan whose work still to start none of `mission`'s
-    /// candidates (`mission_candidates`) admits (`mission_candidate_refused`,
-    /// naming the node and the item, as a spawn's refusal does): the worker
-    /// and the checkers of each node not yet started, each judged as a start
-    /// of it would be (`Worker::admitted_by`, PRD agent-profiles-phase2
-    /// D-08). A node that started had its workers judged when they were
-    /// spawned, and a mission created with no candidates holds none to them.
-    pub(super) fn plan_candidates(
-        &self,
-        mission: &Mission,
-        plan: &crate::missions::PlanInput,
-    ) -> Result<(), String> {
-        let candidates = self.mission_candidates(mission);
-        if candidates.is_empty() {
-            return Ok(());
-        }
-        let profiles = self.machine_profiles(&mission.device_id);
-        for node in &plan.nodes {
-            if mission.node(&node.key).is_some_and(MissionNode::started) {
-                continue;
-            }
-            let workers = node
-                .worker
-                .iter()
-                .chain(node.checks.iter().flat_map(|check| &check.by));
-            for worker in workers {
-                if candidates
-                    .iter()
-                    .any(|candidate| worker.admitted_by(candidate))
-                {
-                    continue;
-                }
-                let target = worker.target();
-                let request = crate::launch::Request::new(
-                    &worker.agent,
-                    crate::launch::listed(&worker.agent, &target.profile, profiles),
-                );
-                let launch = hide_agent_adapter::LaunchChoice {
-                    model: worker.model.clone(),
-                    effort: worker.effort.clone(),
-                };
-                return Err(crate::coordination::refusal(
-                    "mission_candidate_refused",
-                    &format!("{}: {}", node.key, item_words(request.shown(), &launch)),
-                ));
             }
         }
         Ok(())
@@ -5208,9 +5078,8 @@ impl Runtime {
         recorded
     }
 
-    /// Settings › Mission (D-31, B48): a value checked before it is kept;
-    /// a mission already planned keeps its own, though a worker candidate
-    /// added or changed here admits in it at once (`mission_candidates`).
+    /// Settings › Mission and the agent list (D-31, B48): a value checked
+    /// before it is kept; a mission already planned keeps its own values.
     /// The cleanup switch applies to every mission: turned on, the merged
     /// worktrees are looked at now.
     pub(super) fn set_conductor_settings(&mut self, settings: ConductorSettings) -> bool {
@@ -6261,20 +6130,5 @@ fn node_stage(node: &MissionNode, pr_state: Option<PrState>) -> Option<u8> {
         (Some(Delivery::Direct), NodeStatus::Done) => Some(4),
         (Some(Delivery::Direct), _) if node.branch.is_some() => Some(2),
         _ => Some(1),
-    }
-}
-
-/// An item as a refusal names it, with the model and effort a start of it
-/// names (`Claude · work (opus, high)`).
-fn item_words(shown: String, launch: &hide_agent_adapter::LaunchChoice) -> String {
-    let choice = [&launch.model, &launch.effort]
-        .into_iter()
-        .flatten()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    if choice.is_empty() {
-        shown
-    } else {
-        format!("{shown} ({})", choice.join(", "))
     }
 }

@@ -283,7 +283,7 @@
     "example": "hide mission list"
   },
   "mission settings": {
-    "line": "Shows the mission defaults: how many agents may run at once, the default scope and the worker candidates.",
+    "line": "Shows the mission defaults: how many agents may run at once, the default scope and the list of agents to hand work to.",
     "example": "hide mission settings"
   },
   "task help": {

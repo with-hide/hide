@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, approvalButtons, deskFavorites, favoriteChosen, askedIn, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
+import { agentPickable, approvalButtons, askedIn, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
 import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -259,34 +259,5 @@ describe("holdsFoot", () => {
 
   it("stays held when content shrinking under the foot pulls the view up", () => {
     expect(holdsFoot(true, 3386, 3350, 0, 48)).toBe(true);
-  });
-});
-
-describe("the favorite models the agent menu lists first", () => {
-  const agent = (id: DeskAgent["id"], models: string[] = [], efforts: string[] = [], state: DeskAgent["state"] = "ready"): DeskAgent => ({ id, label: id, state, detail: null, signed_in: true, login_command: "", models: models.map((model) => ({ id: model, label: model.toUpperCase() })), efforts: efforts.map((effort) => ({ id: effort, label: effort })) });
-  const selection = (agentId: DeskAgent["id"] | null) => ({ agent: agentId, model: null, effort: null });
-
-  it("lists a favorite whose agent the bar offers and whose model and effort that agent's last session offered", () => {
-    const agents = [agent("claude", ["opus", "sonnet"], ["high"]), agent("codex")];
-    const list = deskFavorites([{ agent: "claude", model: "opus", effort: "high", purpose: "General" }, { agent: "claude", model: "haiku", purpose: "" }], agents, selection("claude"));
-    expect(list.map((favorite) => [favorite.agent.id, favorite.model, favorite.effort, favorite.modelLabel, favorite.purpose])).toEqual([["claude", "opus", "high", "OPUS", "General"]]);
-  });
-
-  it("leaves out a favorite that names a profile or an agent that is off, which Desk cannot start", () => {
-    const agents = [agent("claude", ["opus"]), agent("codex", [], [], "off")];
-    expect(deskFavorites([{ agent: "claude", profile: "p-work", model: "opus", purpose: "" }, { agent: "codex", purpose: "" }], agents, selection("claude"))).toEqual([]);
-  });
-
-  it("lists a favorite of an agent that has offered no models yet only while another agent is chosen, since a switch applies it as the session opens", () => {
-    const agents = [agent("claude"), agent("codex")];
-    const candidates = [{ agent: "claude", model: "opus", purpose: "" }];
-    expect(deskFavorites(candidates, agents, selection("codex"))).toHaveLength(1);
-    expect(deskFavorites(candidates, agents, selection("claude"))).toEqual([]);
-  });
-
-  it("reads a favorite as chosen when the agent, model and effort it fixes are the ones Desk goes to", () => {
-    const favorite = deskFavorites([{ agent: "claude", model: "opus", purpose: "" }], [agent("claude", ["opus"])], selection("claude"))[0]!;
-    expect(favoriteChosen(favorite, { agent: "claude", model: "opus", effort: "high" })).toBe(true);
-    expect(favoriteChosen(favorite, { agent: "claude", model: "sonnet", effort: null })).toBe(false);
   });
 });
