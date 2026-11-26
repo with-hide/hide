@@ -254,7 +254,7 @@ impl Runtime {
         };
         // A View already on Desk's desk (one Desk's agent opened, listed in
         // 한눈에) comes in front where it is, and is seen.
-        if is_desk_key(&key) {
+        if self.is_desk_key(&key) {
             let focused =
                 self.change_desk_views(|layout, stamp| Ok(((), layout.focus(id, stamp)?)));
             if let Err(error) = focused {
