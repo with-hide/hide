@@ -68,7 +68,7 @@ describe("Desk's room", () => {
     expect(roomWidths(800, 0, stored, true)).toMatchObject({ session: 520, view: 280, panelCovers: true, sessionFloats: true });
   });
 
-  it("opens the tab panel first over the sidebar up to the window's margin, and keeps a dragged width (Doop ③-다)", () => {
+  it("opens Desk's desk first over the sidebar up to the window's margin, and keeps a dragged width (Doop ③-다)", () => {
     const fresh = { view_width: null, session_width: null };
     // A 1440 window with a 340 sidebar: the panel's left edge lands at 140.
     expect(roomWidths(1100, 340, fresh, true)).toMatchObject({ session: 500, view: 800, viewMax: 940 });

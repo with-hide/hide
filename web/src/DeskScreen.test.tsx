@@ -602,7 +602,7 @@ describe("Desk's room", () => {
     expect(asked).toEqual(["/work/repo-home/notes/live.md"]);
   });
 
-  it("draws a file an answer names inside a project as a chip that opens it in the tab panel, and leaves a missing path and code as words (feedback 2 frame M [2])", async () => {
+  it("draws a file an answer names inside a project as a chip that opens it on Desk's desk, and leaves a missing path and code as words (feedback 2 frame M [2])", async () => {
     const asked: Record<string, unknown>[] = [];
     configureFileBytes((event) => {
       const read = event.payload as Record<string, unknown>;
@@ -881,7 +881,7 @@ describe("Desk's room", () => {
     });
   });
 
-  it("opens a session a chip names beside Desk, stays in Desk, and closes the tab panel before the session on Escape (D-09, B2, B21)", async () => {
+  it("opens a session a chip names beside Desk, stays in Desk, and closes Desk's desk before the session on Escape (D-09, B2, B21)", async () => {
     // `fixer` runs in the sidebar but Desk did not start it: it has no card until its conversation opens.
     const row = { pane_id: "w1:p2", identity_label: "fixer", agent_kind: "claude", mark: "going" } as never;
     const card: DeskJob = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
