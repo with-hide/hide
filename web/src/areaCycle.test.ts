@@ -441,16 +441,18 @@ describe("recent place cycle: missions, automations and Desk", () => {
     expect(reported).toEqual([automation("auto-1"), desk]);
   });
 
-  it("leaves Desk for the place used before it, which is where the first chord from Desk lands", () => {
+  it("leaves Desk for a mission used just before it, where the first chord from Desk lands, and otherwise for the tab used before it", () => {
     const rest = places(); draw(rest);
+    const checkout = rest.navigator!.workspaces![0]!.checkouts[0]!;
+    observeEntries(rest, tabSurface(checkout, "t3", "local"));
     for (const place of [pane("t2-pane"), mission("m-here"), desk]) observePlace(rest, place);
     useUiStore.setState({ screen: { kind: "desk" } });
     const cycle = placeCycle(rest, { kind: "none" })!;
     expect(keys(cycle)).toEqual(["desk", "mission:m-here", "pane:t2-pane"]);
     expect(cycle.index).toBe(0);
     expect(deskReturn(rest)?.key).toBe(cycle.items[1]!.key);
-    // A place that is no row now is passed over.
+    // A mission that is no row now gives way to the tab used before Desk, as it does after a pane, one running no agent too.
     rest.missions = { items: [] } as never;
-    expect(deskReturn(rest)?.key).toBe(paneKey("t2-pane"));
+    expect(deskReturn(rest)?.key).toBe(tabSurface(checkout, "t3", "local").key);
   });
 });

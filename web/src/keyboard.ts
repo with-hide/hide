@@ -139,12 +139,17 @@ export function commitCycle(cycle: Cycle, actions: Actions): boolean {
 }
 
 /**
- * Where leaving Desk goes: the place used before it, the first of the recent
- * places that is not Desk and still a row, which is where the recent place
- * cycle's first chord lands from Desk; none when none is left.
+ * Where leaving Desk goes: the mission or automation used just before it
+ * while it is still a row, which is where the recent place cycle's first
+ * chord from Desk lands; otherwise the tab or screen used before it, the
+ * head of Recent Panels, so a terminal running no agent, or a Workspace the
+ * keyboard never went into, is still where Desk goes back to. None when
+ * neither is left.
  */
 export function deskReturn(rest: SnapshotRest | null): CycleItem | null {
-  return recentPlaces(rest).filter((place) => place.kind !== "desk").map((place) => placeItem(rest, place)).find((item) => item !== null) ?? null;
+  const before = recentPlaces(rest).find((place) => place.kind !== "desk");
+  const place = before && before.kind !== "pane" ? placeItem(rest, before) : null;
+  return place ?? recentEntries().map((entry) => panelItem(rest, entry)).find((item) => item !== null) ?? null;
 }
 
 /** Where `deskReturn` goes, in words: its project and checkout, then its title (`herdr-ide › 집중 모드 뷰 탭`); none when there is nowhere. */
@@ -157,9 +162,8 @@ export function deskReturnWords(item: CycleItem | null): string | null {
 /**
  * Leaving Desk (PRD session-docs-and-assistant B41, feedback 1 D2): its head's
  * `나가기 ✕`, a press on the sidebar's Desk row while Desk is in front, and
- * Desk switched off while its room is in front all go back to the place used
- * before it (`deskReturn`), where ⌃⇥ from Desk lands too, or All projects
- * when none is left.
+ * Desk switched off while its room is in front all go back to where the
+ * operator was before it (`deskReturn`), or All projects when nothing is left.
  */
 export function leaveDesk(actions: Actions): void {
   const before = deskReturn(useShellStore.getState().rest);
