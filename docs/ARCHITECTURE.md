@@ -2914,7 +2914,7 @@ Every report that ends a turn names that turn and is the only one that tells its
 The worker's death and cap paths are tested against a real process, this test binary started again in an idle role (`hide-core/src/runtime/desk/worker.rs`, `idle_process`).
 
 The conversation keeps 500 items and 2 MiB of text, dropping the oldest; a message is at most 64 KiB and a reply 256 KiB.
-The reply being written is its own section, `desk_live`, so a streamed chunk resends that text alone and never the conversation; the cards (`desk_jobs`) and the `@` menu (`desk_mentions`) are sections of their own for the same reason, so a session's change moves only them.
+The reply being written is its own section, `desk_live`, so a streamed chunk resends that text alone and never the conversation, with the sessions and missions it names so far: the turn keeps the answer as `hide_desk::Answer`, which reads a token as its chip the moment its `)` arrives and reads, per chunk, only that chunk and the one token the chunk before left open (a line and 1 KiB at most), never the whole answer again; the cards (`desk_jobs`) and the `@` menu (`desk_mentions`) are sections of their own for the same reason, so a session's change moves only them.
 A publish whose rows moved builds the cards once, from one index of the archive, rows, devices, plans, missions and open Views, and sends a section only when it differs.
 
 

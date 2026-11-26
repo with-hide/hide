@@ -12,6 +12,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "./actions";
 import { answerPlace, type AnswerPlace, type FoundAnswerPath } from "./answerPaths";
 import { hostBridge } from "./host";
+import { keepScroll, keptScroll, placeAt, scrollPlace, stillAt } from "./conversationScroll";
 import { deskOn, deskPhase, holdsFoot, laneCards, livePane, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
 import { activeTab, closePanel, closeSide, closeTab, fileName, followFrom, followMoved, keepTab, newSessionBeside, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab, type NewSessionFollow } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
@@ -180,6 +181,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const turn = live?.started_at_ms ?? null;
   const answering = turn !== null;
   const liveText = live?.text ? live.text : null;
+  const liveAnswer = useMemo(() => (liveText === null ? null : { text: liveText, mentions: live?.mentions ?? [], missions: live?.missions ?? [] }), [liveText, live?.mentions, live?.missions]);
   // The working line stands from the send to the turn's end, and goes while an approval card waits on the operator (feedback 1 c3).
   const turnLine = useMemo(() => (answering && desk?.approvals_waiting === 0 ? { phase: deskPhase(live?.step, liveText), since: turn } : null), [answering, desk?.approvals_waiting, live?.step, liveText, turn]);
   const agent = desk?.selection.agent ? desk.agents.find((one) => one.id === desk.selection.agent) : undefined;
@@ -216,16 +218,32 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   // The conversation keeps its foot in view while the operator reads there (`stick`), and stays where they
   // scrolled otherwise. It follows sizes, not events: a reply's text fills its editor after this pass, a card
   // grows, the box under it grows a line, and Desk opened again would otherwise show the conversation's top.
+  // Left above its foot for another screen, it comes back to the item the operator was reading (`keptScroll`),
+  // held there while the items around it are drawn again, until the operator scrolls.
   const empty = shown.length === 0 && !answering && queued.length === 0;
   const drawn = desk !== null;
+  const scrollKey = `desk:${desk?.conversation.generation ?? 0}`;
+  // The conversation the effect last followed: one that changed while Desk stayed open (a new conversation) never
+  // comes back, so its place is let go, never read from the new conversation's lines.
+  const followed = useRef<string | null>(null);
   useLayoutEffect(() => {
     const box = scroller.current;
     if (!box) return;
+    if (followed.current !== null && followed.current !== scrollKey) keepScroll(followed.current, null);
+    followed.current = scrollKey;
+    let anchor = keptScroll(scrollKey);
+    stick.current = anchor === null;
     const pin = () => {
       if (stick.current) box.scrollTop = box.scrollHeight;
+      else if (anchor) placeAt(box, anchor);
     };
     let last = box.scrollTop;
     const follow = () => {
+      if (anchor && stillAt(box, anchor)) {
+        last = box.scrollTop;
+        return;
+      }
+      anchor = null;
       stick.current = holdsFoot(stick.current, last, box.scrollTop, box.scrollHeight - box.scrollTop - box.clientHeight, STICK_PX);
       last = box.scrollTop;
     };
@@ -235,10 +253,11 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     resized.observe(box);
     for (const child of box.children) resized.observe(child);
     return () => {
+      keepScroll(scrollKey, stick.current ? null : (anchor ?? scrollPlace(box)));
       box.removeEventListener("scroll", follow);
       resized.disconnect();
     };
-  }, [empty, drawn]);
+  }, [empty, drawn, scrollKey]);
 
   useReadShownCards(scroller, jobs, actions.deskJobRead);
   useNewSessionBeside(actions, desk?.conversation.generation, items, byId);
@@ -501,7 +520,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
-                <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} held={queuedHeld} live={liveText} working={turnLine} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
+                <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} held={queuedHeld} live={liveAnswer} working={turnLine} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
               )}
             </DeskChatColumn>
           )}

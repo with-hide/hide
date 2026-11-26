@@ -4,6 +4,7 @@
 //! conversation, the choices and the one [`host::Host`] it runs.
 
 pub mod adapter;
+mod answer;
 pub mod commands;
 mod escapes;
 pub mod host;
@@ -13,6 +14,7 @@ pub mod rpc;
 pub mod session;
 
 pub use adapter::AdapterId;
+pub use answer::Answer;
 
 /// What the Desk agent is told before the operator's first message in a
 /// session: its role, that it acts through the `hide` CLI, and to answer in
@@ -138,135 +140,6 @@ pub fn refusal_message(kind: permission::CardKind, command: &str, line: Option<&
     }
 }
 
-/// The sessions a reply names as `@session(<pane> <name>)`, in order, each
-/// once. Every one is a chip (PRD session-docs-and-assistant D-86): the
-/// reply's own byte cap bounds how many it can name, so no count cap leaves a
-/// later one as raw text. A name the agent quoted is read without its quotes.
-pub fn session_mentions(text: &str) -> Vec<(String, String)> {
-    mentions(text, SESSION_OPEN)
-}
-
-/// The missions a reply names as `@mission(<id> <title>)`, read as
-/// [`session_mentions`] reads sessions.
-pub fn mission_mentions(text: &str) -> Vec<(String, String)> {
-    mentions(text, MISSION_OPEN)
-}
-
-/// `text` with each `@session(..)` and `@mission(..)` token naming its name
-/// as [`session_mentions`] and [`mission_mentions`] read it, without the one
-/// pair of quotes an agent may put around it, so the reply Desk keeps writes
-/// each chip's token the way the chip names it.
-pub fn unquoted_mentions(text: &str) -> String {
-    let mut out = text.to_owned();
-    for open in [SESSION_OPEN, MISSION_OPEN] {
-        let mut kept = String::with_capacity(out.len());
-        let mut at = 0;
-        for token in tokens(&out, open) {
-            if token.quoted {
-                kept.push_str(&out[at..token.start]);
-                kept.push_str(open);
-                kept.push_str(token.id);
-                kept.push(' ');
-                kept.push_str(token.name);
-                kept.push(')');
-                at = token.end;
-            }
-        }
-        kept.push_str(&out[at..]);
-        out = kept;
-    }
-    out
-}
-
-const SESSION_OPEN: &str = "@session(";
-const MISSION_OPEN: &str = "@mission(";
-
-/// One `<open><id> <name>)` token: where it stands in the text (`start` at
-/// its `@`, `end` past its `)`), its id, and its name trimmed and without
-/// one pair of matching quotes, `quoted` saying whether it had them.
-struct Token<'a> {
-    start: usize,
-    end: usize,
-    id: &'a str,
-    name: &'a str,
-    quoted: bool,
-}
-
-/// Each `<open><id> <name>)` in `text`, in order and once per id. The name
-/// may hold parentheses of its own, `(11-25)`, as long as they close; a
-/// token the line ends before it closes, or with no name, stays text.
-fn mentions(text: &str, open: &str) -> Vec<(String, String)> {
-    let mut found: Vec<(String, String)> = Vec::new();
-    for token in tokens(text, open) {
-        if !found.iter().any(|(seen, _)| seen == token.id) {
-            found.push((token.id.to_owned(), token.name.to_owned()));
-        }
-    }
-    found
-}
-
-/// Every well-formed `<open><id> <name>)` in `text`, in order, repeats
-/// included.
-fn tokens<'a>(text: &'a str, open: &str) -> Vec<Token<'a>> {
-    let mut found = Vec::new();
-    let mut from = 0;
-    while let Some(at) = text[from..].find(open) {
-        let start = from + at;
-        let inner_start = start + open.len();
-        from = inner_start;
-        let Some(close) = closing(&text[inner_start..]) else {
-            continue;
-        };
-        let inner = &text[inner_start..inner_start + close];
-        from = inner_start + close + 1;
-        let Some((id, name)) = inner.trim().split_once(char::is_whitespace) else {
-            continue;
-        };
-        let name = name.trim();
-        let unquoted = unquote(name);
-        if unquoted.is_empty() {
-            continue;
-        }
-        found.push(Token {
-            start,
-            end: from,
-            id,
-            name: unquoted,
-            quoted: unquoted.len() != name.len(),
-        });
-    }
-    found
-}
-
-/// `name` without one pair of matching quotes around it (`"..."`, `'...'`,
-/// `“...”`, `‘...’`); any other name as it is.
-fn unquote(name: &str) -> &str {
-    for (left, right) in [('"', '"'), ('\'', '\''), ('“', '”'), ('‘', '’')] {
-        if let Some(inner) = name
-            .strip_prefix(left)
-            .and_then(|rest| rest.strip_suffix(right))
-        {
-            return inner.trim();
-        }
-    }
-    name
-}
-
-/// Where the parenthesis already open before `text` closes, on its line.
-fn closing(text: &str) -> Option<usize> {
-    let mut depth = 0usize;
-    for (at, char) in text.char_indices() {
-        match char {
-            '\n' => return None,
-            '(' => depth += 1,
-            ')' if depth == 0 => return Some(at),
-            ')' => depth -= 1,
-            _ => {}
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,67 +228,5 @@ mod tests {
                 Placement::Worktree.line()
             )
         );
-    }
-
-    #[test]
-    fn a_reply_s_missions_are_read_with_parentheses_in_their_titles() {
-        let text = "@mission(mission-63 결제 흐름 정리 (11-25)) runs; again \
-                    @mission(mission-63 결제 흐름 정리 (11-25)), @mission(mission-9) and \
-                    @mission(mission-7 open (one\nline) then @mission(mission-8 last)";
-        assert_eq!(
-            mission_mentions(text),
-            [
-                ("mission-63".to_owned(), "결제 흐름 정리 (11-25)".to_owned()),
-                ("mission-8".to_owned(), "last".to_owned()),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_reply_s_session_names_are_read_once_each_in_order() {
-        let text = "@session(w1:p2 fix login) is done; @session(w3:p1 docs) waits. \
-                    Again @session(w1:p2 fix login), then @session(broken) and @session(w4:p1 tail";
-        assert_eq!(
-            session_mentions(text),
-            [
-                ("w1:p2".to_owned(), "fix login".to_owned()),
-                ("w3:p1".to_owned(), "docs".to_owned()),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_quoted_session_name_is_read_without_its_quotes_and_the_kept_reply_writes_it_so() {
-        let text = "@session(h1:p2 \"note-claude\") wrote it; @session(h1:p3 'pi run') too, \
-                    @session(h1:p4 “결제”), @session(h1:p5 \"\") and @session(h1:p6 say \"hi\")";
-        assert_eq!(
-            session_mentions(text),
-            [
-                ("h1:p2".to_owned(), "note-claude".to_owned()),
-                ("h1:p3".to_owned(), "pi run".to_owned()),
-                ("h1:p4".to_owned(), "결제".to_owned()),
-                ("h1:p6".to_owned(), "say \"hi\"".to_owned()),
-            ]
-        );
-        assert_eq!(
-            unquoted_mentions(text),
-            "@session(h1:p2 note-claude) wrote it; @session(h1:p3 pi run) too, \
-             @session(h1:p4 결제), @session(h1:p5 \"\") and @session(h1:p6 say \"hi\")"
-        );
-        assert_eq!(
-            unquoted_mentions("@mission(mission-9 \"정리 (11-25)\") ok"),
-            "@mission(mission-9 정리 (11-25)) ok"
-        );
-    }
-
-    #[test]
-    fn every_session_a_long_reply_names_is_read_past_the_sixteenth() {
-        let text: String = (1..=40)
-            .map(|n| format!("- @session(w{n}:p1 job-{n}) runs\n"))
-            .collect();
-        let found = session_mentions(&text);
-        assert_eq!(found.len(), 40);
-        assert_eq!(found[16], ("w17:p1".to_owned(), "job-17".to_owned()));
-        assert_eq!(found[39], ("w40:p1".to_owned(), "job-40".to_owned()));
     }
 }
