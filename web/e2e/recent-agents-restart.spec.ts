@@ -73,7 +73,7 @@ test("the recent agent pane order survives a daemon restart and a reload", async
     await screenshot(page, "recent-agents-after-restart");
     await page.keyboard.up("Alt");
     await expect(canvas).toHaveAttribute("data-canvas", beta.tab);
-    await expect.poll(stored).toEqual([betaPane, fixturePane]);
+    await expect.poll(stored).toEqual([{ kind: "pane", pane_id: betaPane }, { kind: "pane", pane_id: fixturePane }]);
   } finally {
     daemon?.stop();
     fixture.stop();

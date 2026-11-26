@@ -18,7 +18,7 @@ test.describe.configure({ timeout: 180_000 }); // wait-ok: a fixture with an age
 
 /** Makes an automation through the same call the form sends, answered to this window. */
 async function add(page: Page, daemon: Daemon, name: string): Promise<string> {
-  const frame = await sendEvent(page, daemon, "automation_call", { request_id: `e2e-${Date.now()}`, call: { call: "add", name, task: "Look", schedule: { kind: "daily", time: "09:00" }, worktree: false, run_now: false } }, "automation_result");
+  const frame = await sendEvent(page, daemon, "automation_call", { request_id: `e2e-${Date.now()}`, call: { call: "add", name, task: "Look", agent: { kind: "claude" }, schedule: { kind: "daily", time: "09:00" }, worktree: false, run_now: false } }, "automation_result");
   const answer = (frame?.payload ?? {}) as { ok?: boolean; value?: { id?: string }; code?: string };
   if (!answer.ok || !answer.value?.id) throw new Error(`the core refused the automation: ${answer.code}`);
   return answer.value.id;
