@@ -1033,7 +1033,10 @@ mod restart_tests {
         let read = decode(&serde_json::to_vec(&over).unwrap()).unwrap();
         assert_eq!(read.named.len(), MAX_NAMED_SESSIONS);
         assert_eq!(read.named.last().unwrap().pane_id, "p99");
-        assert_eq!(read.named[0].pane_id, "p2");
+        assert_eq!(
+            read.named[0].pane_id, stored.named[1].pane_id,
+            "the oldest kept goes"
+        );
     }
 
     /// A later Hide may keep a session with an agent or a field this build
