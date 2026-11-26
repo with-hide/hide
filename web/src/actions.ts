@@ -2973,12 +2973,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_job_read", payload: { id } });
     },
 
-    /** The operator looked at a job's output in the lane's 보기 column (B31): its View is seen where it was opened. */
-    deskOutputSeen(output: import("./snapshot").DeskOutput) {
-      if (output.seen || !output.device_id || !output.checkout) return;
-      dispatch({ schema_version: 2, kind: "desk_output_seen", payload: { device_id: output.device_id, checkout: output.checkout, id: output.id } });
-    },
-
     /**
      * A Desk panel's width let go after a drag (PRD desk-2-ui B22, B23), in whole CSS pixels from 1 to
      * 8192, which this rounds and clamps to: the core refuses any other. One event per drag, and a

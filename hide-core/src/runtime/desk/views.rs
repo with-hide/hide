@@ -4,7 +4,7 @@
 //!
 //! The tree is kept in Desk's store (`Stored::views`, written off the lock
 //! with the rest of it) and reached by the runtime's View code under its own
-//! key, [`desk_key`], whose place is always [`Place::Desk`]: a `view_layout`,
+//! key, [`Runtime::desk_key`], whose place is always [`Place::Desk`]: a `view_layout`,
 //! `browser_open` or `browser_state` that names that key acts on Desk's desk,
 //! and the shell reads it from the snapshot's `desk_view`. A file on it names
 //! its checkout (`Display::origin`) and is that checkout's own document,

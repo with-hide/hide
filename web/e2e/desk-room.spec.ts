@@ -13,7 +13,7 @@ import { enterWorkspace, screenshot } from "./wire";
 // PRD desk-2-ui B2-B7, B19, B21, B28, B35, B36, B43, B44, B47 and PRD
 // session-docs-and-assistant B41: Desk's room with a session opened beside it
 // from the sidebar, ⌘J between that session and its Agent tab, a file of the
-// tab panel saved without leaving a draft behind, the corner's notices above
+// desk saved without leaving a draft behind, the corner's notices above
 // Desk's input boxes, a sleeping session woken from beside Desk, a child's
 // ancestors in its head, and Settings › Labs › Desk's switch, off on a new
 // install. Each test starts one stack and asserts one contract.
@@ -86,13 +86,14 @@ async function startDesk(page: Page, name: string, open = true, agents = true): 
 const room = (page: Page) => page.locator("[data-desk-room]");
 const row = (page: Page, pane: string) => page.locator(`[data-agent-open="${pane}"]`);
 
-/** Opens `name` from the session's Explorer in Desk's tab panel, with the session beside Desk, and gives its editor. */
+/** Opens `name` from the session's Explorer on Desk's desk, with the session beside Desk, and gives its editor. */
 async function openDeskFile(page: Page, desk: Desk, name: string) {
   await row(page, desk.pane).click();
   await expect(page.locator(`[data-desk-thread-panel="${desk.pane}"]`)).toBeVisible();
   await page.locator("[data-desk-session-files]").click();
   await page.locator(`[data-desk-tab-panel] [data-explorer-row$="/${name}"]`).dblclick();
-  return page.locator(`[data-desk-file$="/${name}"] [data-editor-body] .cm-content`);
+  await expect(page.locator('[data-desk-tab-panel] [role="tab"][aria-selected="true"]')).toContainText(name);
+  return page.locator("[data-desk-tab-panel] [data-editor-body] .cm-content");
 }
 
 test("a sidebar row opens its session beside Desk, marked on its row, Escape closes it, and a ⌘-click goes to its tab (PRD desk-2-ui B2-B6, B21) @platform", async ({ page }) => {
@@ -147,7 +148,7 @@ test("⌘J goes from the session beside Desk to its Agent tab and back to Desk w
   }
 });
 
-test("the session's Explorer opens a file in the tab panel as its checkout's own document, ⌘S saves it, and no Workspace View takes it in (PRD desk-2-ui B19, B28, B35, B36) @platform", async ({ page }) => {
+test("the session's Explorer opens a file on Desk's desk as its checkout's own document, ⌘S saves it, and no Workspace View takes it in (PRD desk-2-ui B19, B35, B36, desk-own-desk B2) @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-room-file");
   try {
@@ -163,20 +164,20 @@ test("the session's Explorer opens a file in the tab panel as its checkout's own
     await expect.poll(() => fs.readFileSync(file, "utf8")).toBe("plan saved\n");
     // Desk is still in front, and the Workspace's View never showed the file.
     await expect(page.locator("[data-desk-screen]")).toBeVisible();
-    await expect(page.locator('[data-view-area] [data-editor-path]')).toHaveCount(0);
+    await expect(page.locator('[data-workspace-screen]:not([data-workspace-screen="hide:desk"]) [data-editor-path]')).toHaveCount(0);
 
-    // B28: a file the core cannot read says why, and 다시 시도 reads it once it can.
+    // A file the core cannot read is an unavailable tab, and Retry reads it once it can (PRD desk-own-desk B2).
     // A mode bit locks a file only for an account that is not root, on a system that has them.
     if (process.platform !== "win32" && process.getuid?.() !== 0) {
       const locked = path.join(path.dirname(file), "locked.md");
       fs.writeFileSync(locked, "unlocked\n");
       fs.chmodSync(locked, 0o000);
       await page.locator('[data-desk-tab-panel] [data-explorer-row$="/locked.md"]').dblclick();
-      const retry = page.locator('[data-desk-file-retry$="/locked.md"]');
+      const retry = page.locator("[data-desk-tab-panel] [data-retry-unavailable]");
       await expect(retry).toBeVisible();
       fs.chmodSync(locked, 0o644);
       await retry.click();
-      await expect(page.locator('[data-desk-file$="/locked.md"] [data-editor-body] .cm-content')).toContainText("unlocked");
+      await expect(page.locator("[data-desk-tab-panel] [data-editor-body] .cm-content")).toContainText("unlocked");
     }
   } finally {
     desk.daemon.stop();
@@ -184,7 +185,7 @@ test("the session's Explorer opens a file in the tab panel as its checkout's own
   }
 });
 
-test("a file saved with ⌘S in Desk's tab panel leaves no unsaved draft in the browser, so a reload raises no draft notice (PRD desk-2-ui B36) @platform", async ({ page }) => {
+test("a file saved with ⌘S on Desk's desk leaves no unsaved draft in the browser, so a reload raises no draft notice (PRD desk-2-ui B36) @platform", async ({ page }) => {
   // e2e: the draft lives in the page's IndexedDB across a save through the core and a reload of the page.
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-room-saved-draft");
