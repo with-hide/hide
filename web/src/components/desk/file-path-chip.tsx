@@ -23,7 +23,7 @@ function fileName(path: string): string {
 /**
  * A file an answer names (feedback 2 frame M [2]), drawn as the session chip
  * is (its kind's icon and its name). A project's file shows its tile and
- * full path under the pointer and opens in the tab panel; a file outside
+ * full path under the pointer and opens on Desk's desk; a file outside
  * every project carries a small ↗, says in one line that it shows in the
  * system's file manager (`Finder에서 보기 · <path>`), and a press only
  * reveals it there, never opening or running it.

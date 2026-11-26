@@ -47,7 +47,7 @@ export function DeskChatColumn({ head, children, composer, tray = null, dragging
 
 /**
  * One of the room's two drag edges (PRD desk-2-ui D-06, B22): the tab
- * panel's left edge sets the view width, the edge between the tab panel and
+ * panel's left edge sets the view width, the edge between Desk's desk and
  * the session panel sets the session width. Both widen leftwards. Nothing at
  * rest; on hover, keyboard focus and while dragging the lane divider's grip.
  * A drag moves a guide and lands once on release (`onLand`, one event); a

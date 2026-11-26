@@ -3691,9 +3691,9 @@ export type DeskSection = {
 
 /**
  * The `desk_view` rest section (PRD desk-own-desk D-01, D-02): Desk's own
- * desk of Views, under the reserved workspace `{device_id: "", path:
- * "hide:desk"}` every `view_layout`, `browser_open` and `browser_state` names
- * it by. Absent while Desk is off. `opened` moves each time Desk's agent puts
+ * desk of Views, under the reserved workspace `{device_id: <the core's
+ * node>, path: "hide:desk"}` every `view_layout`, `browser_open` and
+ * `browser_state` names it by. Absent while Desk is off. `opened` moves each time Desk's agent puts
  * a file in front (B35), so a window showing Desk shows its desk.
  */
 export type DeskViewSnapshot = { device_id: string; path: string; layout: ViewLayoutSnapshot; opened: number };

@@ -1,6 +1,6 @@
 // ⌘P and ⌘K while Desk is in front (PRD desk-2-ui D-23, D-24, B37-B39): where
 // ⌘P searches, how an all-projects answer is put in order, and what a ⌘K
-// pick opens in the tab panel. The palettes themselves are the app's own;
+// pick opens on Desk's desk. The palettes themselves are the app's own;
 // these are the decisions Desk adds, kept as functions of values so they are
 // testable without a browser.
 

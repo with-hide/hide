@@ -91,6 +91,17 @@ describe("the desk's ✕ in focus mode (UI_BEHAVIOR, Focus mode)", () => {
     expect(container.querySelector("[data-editor-path]")?.textContent).toBe(`${project.label} › docs › plan.md`);
   });
 
+  it("offers Retry on a file of Desk's desk waiting for its device, and only there (PRD desk-own-desk B41)", async () => {
+    const waiting = { state: "waiting" as const, reason: "Waiting for mini to connect", path: "/srv/app/plan.md", label: "plan.md" };
+    await draw(FOCUS_WORLD.initial(), waiting);
+    expect(container.querySelector("[data-retry-unavailable]")).toBeNull();
+    await draw(FOCUS_WORLD.initial(), { ...waiting, origin: { device_id: "mini", path: "/srv/app" } });
+    expect(container.querySelector('[data-area-empty="view-waiting"]')?.textContent).toContain("Waiting for mini to connect");
+    const retry = container.querySelector<HTMLButtonElement>("[data-retry-unavailable]");
+    await act(async () => retry!.click());
+    expect(events.map((event) => event.kind)).toContain("view_layout");
+  });
+
   it("keeps its ◧ and closes the documents outside the mode", async () => {
     await draw(FOCUS_WORLD.initial());
     expect(container.querySelector("[data-desk-pair]")).not.toBeNull();

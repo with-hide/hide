@@ -680,9 +680,11 @@ function useDeskAgentOpens() {
   const opened = useShellStore((s) => deskViewOf(s.rest)?.opened ?? null);
   const seen = useRef(opened);
   useEffect(() => {
-    if (opened === seen.current) return;
+    const before = seen.current;
     seen.current = opened;
-    if (opened !== null) useUiStore.getState().setDeskRoom(showDesk);
+    // Only a count that grew is an open: Desk switched on again, or a core
+    // that restarted from zero, shows nothing.
+    if (opened !== null && before !== null && opened > before) useUiStore.getState().setDeskRoom(showDesk);
   }, [opened]);
 }
 

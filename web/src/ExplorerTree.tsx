@@ -319,7 +319,7 @@ export function ExplorerTree({ actions, hint, footer, scope }: { actions: Action
       const matches = operation.path === expected || (operation.kind === "refused" && operation.path === submitted.parent);
       if (matches) {
         pendingName.current = null;
-        // Desk's Explorer opens the file it created in the tab panel; the
+        // Desk's Explorer opens the file it created on Desk's desk; the
         // Workspace's core opens its own from the same result.
         if (scope && submitted.kind === "file" && operation.phase === "finished") actions.openFile(operation.destination, false);
         // The failed operation leaves its typed name in an editable row, so

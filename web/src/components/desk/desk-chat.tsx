@@ -468,7 +468,7 @@ export type DeskChatActions = DeskJobCardActions & {
   onCopy: CopyText;
   onMention: (mention: DeskMention) => void;
   onHanded: (paneId: string) => void;
-  /** A file path an answer names, pressed: a project's file opens in the tab panel, an outside one shows in the file manager. */
+  /** A file path an answer names, pressed: a project's file opens on Desk's desk, an outside one shows in the file manager. */
   onFile?: (file: FoundAnswerPath) => void;
 };
 

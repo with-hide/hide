@@ -233,16 +233,18 @@ function DisplayBody({ display, workspace: desk, actions }: { display: ViewDispl
   if (display.state === "open") {
     return <DisplayEditor display={display} workspace={workspace} placeKey={placeKey(workspaceKey(desk), display)} actions={actions} place={place} />;
   }
-  const state = display.state === "opening" ? <AreaEmpty state="view-opening" text={t("documents.view.openingNamed", { label: display.label })} /> : display.state === "waiting" ? <AreaEmpty state="view-waiting" text={display.reason ?? t("documents.view.waitingPath", { path: display.path })} /> : (
+  const retry = <Button variant="ghost" onPointerDown={(event) => event.stopPropagation()} onClick={() => actions.retryView(display.id)} data-retry-unavailable={display.id}>
+    {t("common.retry")}
+  </Button>;
+  // A file of Desk's desk waits on its own device, and offers Retry there (PRD desk-own-desk B41).
+  const state = display.state === "opening" ? <AreaEmpty state="view-opening" text={t("documents.view.openingNamed", { label: display.label })} /> : display.state === "waiting" ? <AreaEmpty state="view-waiting" text={display.reason ?? t("documents.view.waitingPath", { path: display.path })}>{display.origin ? retry : null}</AreaEmpty> : (
     <AreaEmpty state="view-unavailable" text={display.reason ? t("documents.view.unavailableReason", { path: display.path, reason: display.reason }) : t("documents.view.unavailable", { path: display.path })}>
       {/* Each button is one action on this view alone, like a tab's ×: its
           press does not also make the area active (one action, one event). */}
       <Button variant="secondary" data-keyboard-stays="true" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }} onClick={() => actions.closeView(display.id)} data-close-unavailable={display.id}>
         {t("documents.view.closeView")}
       </Button>
-      <Button variant="ghost" onPointerDown={(event) => event.stopPropagation()} onClick={() => actions.retryView(display.id)} data-retry-unavailable={display.id}>
-        {t("common.retry")}
-      </Button>
+      {retry}
     </AreaEmpty>
   );
   return <>

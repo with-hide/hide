@@ -233,14 +233,15 @@ export function DocumentKeeper({ tabId, actions }: { tabId: string; actions: Act
   return null;
 }
 
+/** Where a file on Desk's desk comes from: its checkout's folder and the project the catalog names it by (PRD desk-own-desk B2). */
+export type DeskFilePlace = { root: string; project: string };
+
 /**
  * One open display (S7 B4): its header and its document or diff. `placeKey`
  * names the display and its document within its Workspace, so the selection
  * and scroll it had in that document come back with it, and a preview
  * retargeted to another document starts that one at its own place.
  */
-/** Where a file on Desk's desk comes from: its checkout's folder and the project the catalog names it by (PRD desk-own-desk B2). */
-export type DeskFilePlace = { root: string; project: string };
 
 export function DisplayEditor({ display, workspace, placeKey, actions, place }: { display: ViewDisplaySnapshot; workspace: ViewWorkspace; placeKey: string; actions: Actions; place?: DeskFilePlace }) {
   const tab = useShellStore((s) => editorTabFor(s.editor, display.tab_id));
