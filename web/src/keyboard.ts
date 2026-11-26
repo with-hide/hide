@@ -173,12 +173,6 @@ export function pressDeskRow(actions: Actions): void {
   else actions.openDesk();
 }
 
-/** A commit to a screen of the page's own closes the Overview over it first, as a commit to a pane does through `openAgent`. */
-function leaveOverview() {
-  const ui = useUiStore.getState();
-  if (ui.overviewOpen) ui.setOverviewOpen(false);
-}
-
 function goToItem(chosen: CycleItem, actions: Actions): boolean {
   const target = chosen.target;
   switch (target.kind) {
@@ -194,7 +188,6 @@ function goToItem(chosen: CycleItem, actions: Actions): boolean {
       return true;
     case "mission":
       expectPlace(chosen.key);
-      leaveOverview();
       // As a row of the mission screen: its detail beside the list, on the mission's device or its tool's cell.
       actions.showMissionOnScreen(target.missionId);
       return true;
@@ -204,7 +197,6 @@ function goToItem(chosen: CycleItem, actions: Actions): boolean {
       return true;
     case "desk":
       expectPlace(chosen.key);
-      leaveOverview();
       actions.openDesk();
       return true;
     case "screen":

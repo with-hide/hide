@@ -2393,6 +2393,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_open: no mission ${missionId}`);
       const state = ui();
+      if (state.overviewOpen) state.setOverviewOpen(false);
       const projectId = state.missions.projectId === mission.workspace_id ? state.missions.projectId : null;
       // A tool's mission screen lists the tool's missions on every device, so its row opens beside the list and the cell stays (B40).
       if (state.screen?.kind === "missions" && state.screen.tool !== undefined && keptBy(mission, state.screen.tool)) return state.setMissions({ selected: missionId, projectId });
@@ -2772,7 +2773,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** Opens Desk's room (PRD Desk 1차 B1); switched off in Settings › Labs › Desk, there is no room to open (D-76). */
     openDesk() {
       if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
-      ui().setScreen({ kind: "desk" });
+      const state = ui();
+      // The Overview closes over it, as it does over a pane `openAgent` brings forward.
+      if (state.overviewOpen) state.setOverviewOpen(false);
+      state.setScreen({ kind: "desk" });
     },
 
     /**
