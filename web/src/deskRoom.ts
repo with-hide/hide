@@ -7,7 +7,6 @@
 
 import { ENDED_JOB_STATES, livePane } from "./desk";
 import type { DeskItem, DeskJob, DeskMoved, DeskOutput } from "./snapshot";
-import { addressUrl, filePath } from "./browserViews";
 import { absolutePathRoot, normalize, underFolder } from "./terminalLinks";
 
 /**
@@ -302,30 +301,20 @@ export function namesView(made: DeskOutput, written: string, folder: string | nu
 }
 
 /**
- * Whether `written`, a page as a session's `hide browser open` typed it,
- * names the page View `made` opened: the address the CLI completes from it
- * (`addressUrl`: a loopback host over http, any other over https), or the
- * HTML file it names, absolute or relative to the session's folder, as
- * `namesView` reads a file (`hided/src/browser_cli.rs`, `address`).
- */
-function namesPage(made: DeskOutput, written: string, folder: string | null): boolean {
-  if (made.kind !== "page" || made.url === null) return false;
-  if (made.url === addressUrl(written)) return true;
-  const path = filePath(made.url);
-  return path !== null && namesView({ ...made, path }, written, folder);
-}
-
-/**
- * The output a session's own line names, as its card lists it when it does: the View's id, or its address or file.
+ * The output a session's own line names, as its card lists it when it does. A line whose call's answer named its View
+ * (`viewId`, the View id `hide browser|file|diff open` printed) is that View and no other: never found again from the
+ * words the call typed, which the CLI completed on the session's machine (a relative path, a host without a scheme).
+ * A line with no such answer (a refused open, an older reader) is the card's output of the same id, address or file.
  * A line the card does not list names a file as the session typed it, read where the session runs (B27): a relative
  * spelling under the session's own folder (`folder`, its pane's folder), and with that session's device and checkout
  * when they are another machine's; read without them it would go to this machine's boundary, which refuses a path of
  * another machine's checkout.
  */
-export function outputNamed(listed: readonly DeskOutput[], output: DeskOutput, place: { device: string; checkout: string; folder: string } | null, node: string): DeskOutput {
-  const typedPage = output.kind === "page" && output.device_id === null ? output.url : null;
+export function outputNamed(listed: readonly DeskOutput[], output: DeskOutput, place: { device: string; checkout: string; folder: string } | null, node: string, viewId: string | null = null): DeskOutput {
   const folder = place?.folder ?? null;
-  const made = listed.find((one) => one.id === output.id || (output.url !== null && one.url === output.url) || (output.path !== null && namesView(one, output.path, folder)) || (typedPage !== null && namesPage(one, typedPage, folder)));
+  const made = viewId !== null
+    ? listed.find((one) => one.id === viewId)
+    : listed.find((one) => one.id === output.id || (output.url !== null && one.url === output.url) || (output.path !== null && namesView(one, output.path, folder)));
   if (made) return made;
   if (!place || output.path === null || output.device_id !== null) return output;
   const path = absolutePathRoot(place.folder) ? underFolder(place.folder, output.path) : output.path;

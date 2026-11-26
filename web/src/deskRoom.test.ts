@@ -169,30 +169,31 @@ describe("the output a session's own line names (B27)", () => {
     expect(outputNamed([], typed(".\\out\\run.log"), { device: "winbox", checkout: "C:/src/repo", folder: "C:/src/repo" }, "mac")).toMatchObject({ path: "C:/src/repo/out/run.log" });
   });
 
-  it("is the session's page View for a page its `hide browser open` typed: a relative or absolute HTML file, an address without its scheme", () => {
-    // As the core lists a session's pages (`desk/jobs.rs`): the View's id, device and checkout, its address, no path.
+  it("is the View its call's answer named, never another View of the same name in another folder, for a page and a file alike", () => {
+    // As the core lists a session's Views (`desk/jobs.rs`): two folders each hold an index.html and a notes.md.
     const page = (id: string, url: string): DeskOutput => ({ ...output(id, "page"), label: id, path: null, device_id: "mac", checkout: "/work/repo", url });
-    const html = page("view-html", "file:///work/repo/agents/runs/copy-pos/index.html");
-    const pull = page("view-pr", "https://github.com/with-hide/hide/pull/2529/files");
-    const dev = page("view-dev", "http://localhost:5173/gallery");
-    const windows = page("view-win", "file:///C:/src/repo/out/report.html");
-    const listed = [html, pull, dev, windows];
+    const file = (id: string, path: string): DeskOutput => ({ ...output(id, "doc"), path, device_id: "mac", checkout: "/work/repo" });
+    const pageA = page("v1", "file:///work/repo/a/index.html");
+    const pageB = page("v2", "file:///work/repo/b/index.html");
+    const notesA = file("v3", "/work/repo/a/notes.md");
+    const notesB = file("v4", "/work/repo/b/notes.md");
+    const listed = [pageA, pageB, notesA, notesB];
     // As a thread's view line carries it (`threadView.ts`): the call's argument as typed.
     const typedPage = (target: string): DeskOutput => ({ ...output(target, "page"), label: target, device_id: null, checkout: null, path: null, url: target });
-    const place = { device: "mac", checkout: "/work/repo", folder: "/work/repo" };
-    expect(outputNamed(listed, typedPage("agents/runs/copy-pos/index.html"), place, "mac")).toBe(html);
-    expect(outputNamed(listed, typedPage("./agents/runs/copy-pos/index.html"), place, "mac")).toBe(html);
-    expect(outputNamed(listed, typedPage("/work/repo/agents/runs/copy-pos/index.html"), place, "mac")).toBe(html);
-    expect(outputNamed(listed, typedPage("github.com/with-hide/hide/pull/2529/files"), place, "mac")).toBe(pull);
-    expect(outputNamed(listed, typedPage("https://github.com/with-hide/hide/pull/2529/files"), place, "mac")).toBe(pull);
-    expect(outputNamed(listed, typedPage("localhost:5173/gallery"), place, "mac")).toBe(dev);
-    expect(outputNamed(listed, typedPage("out\\report.html"), { device: "winbox", checkout: "C:/src/repo", folder: "C:/src/repo" }, "mac")).toBe(windows);
-    // Another file or page is not one of them, nor a page of the same name in another folder than the session's.
-    expect(outputNamed(listed, typedPage("index.html"), { ...place, folder: "/work/repo/web" }, "mac").id).toBe("index.html");
-    expect(outputNamed(listed, typedPage("copy-pos/index.html"), { ...place, folder: "/work/repo/agents/other" }, "mac").id).toBe("copy-pos/index.html");
-    const other = typedPage("agents/runs/other/index.html");
-    expect(outputNamed(listed, other, place, "mac")).toBe(other);
-    expect(outputNamed(listed, typedPage("github.com/with-hide/hide/pull/2530"), place, "mac").id).toBe("github.com/with-hide/hide/pull/2530");
+    const place = { device: "mac", checkout: "/work/repo", folder: "/work/repo/a" };
+    expect(outputNamed(listed, typedPage("index.html"), place, "mac", "v2")).toBe(pageB);
+    expect(outputNamed(listed, typedPage("github.com/with-hide/hide/pull/2529/files"), place, "mac", "v1")).toBe(pageA);
+    expect(outputNamed(listed, typed("notes.md"), place, "mac", "v4")).toBe(notesB);
+  });
+
+  it("leaves a page line whose call named no View, or a View the card no longer lists, as the words it typed", () => {
+    const pageA = { ...output("v1", "page"), path: null, url: "file:///work/repo/a/index.html" };
+    const typedPage = (target: string): DeskOutput => ({ ...output(target, "page"), label: target, device_id: null, checkout: null, path: null, url: target });
+    const place = { device: "mac", checkout: "/work/repo", folder: "/work/repo/a" };
+    const refused = typedPage("index.html");
+    expect(outputNamed([pageA], refused, place, "mac", null)).toBe(refused);
+    const closed = typedPage("github.com/with-hide/hide/pull/2529/files");
+    expect(outputNamed([pageA], closed, place, "mac", "v9")).toBe(closed);
   });
 
   it("leaves a file of this machine's own session as typed", () => {

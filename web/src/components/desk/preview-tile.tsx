@@ -1,9 +1,8 @@
-import { GlobeIcon, LoaderCircleIcon, PlayIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
+import { LoaderCircleIcon, PlayIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { browserStillOf, filePath, useBrowserStore } from "../../browserViews";
+import { browserStillOf, useBrowserStore } from "../../browserViews";
 import type { DeskOutput } from "../../desk";
 import { deviceConnected } from "../../devices";
-import { fileIcon } from "../../fileIcons";
 import { forgetPreview, watchPreview, type Preview } from "../../filePreview";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { formatBytes } from "../../i18n/format";
@@ -13,10 +12,10 @@ import { cn } from "../../lib/utils";
 import { machineName } from "../../screenMachine";
 import { localDeviceId } from "../../snapshot";
 import { useShellStore } from "../../store";
-import { FileMark } from "../file-mark";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { RowOverlayButton } from "../ui/row-button";
+import { ViewKindMark } from "../../viewMark";
 import { UnseenMark } from "./desk-job-card";
 
 /**
@@ -96,24 +95,14 @@ function TileFace({ file, preview, onRetry }: { file: TileFile; preview: Preview
   const icon = preview.state === "reading" ? <LoaderCircleIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground motion-safe:animate-spin" />
     : preview.state === "failed" ? <TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
     : preview.state === "offline" ? <WifiOffIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
-    : <KindMark file={file} />;
+    // A page (an address and no path) is marked as a page View is, never by its label, which is its title.
+    : <ViewKindMark kind={file.path === null && file.url !== null ? "browser" : "file"} label={file.path ?? file.label} />;
   return (
     <span className="flex size-full min-w-0 flex-col items-center justify-center gap-xxs px-xs text-center" data-desk-tile-reason={preview.state}>
       {icon}
       {reason ? <span className="line-clamp-2 text-micro text-muted-foreground">{reason}</span> : null}
     </span>
   );
-}
-
-/**
- * A tile's kind when it has no preview: a file's type mark, a local page's
- * by its file, and a web page's globe, as the shelf marks a page; never its
- * label, which for a page is its title.
- */
-function KindMark({ file }: { file: TileFile }) {
-  const path = file.path ?? (file.url !== null ? filePath(file.url) : null);
-  if (path === null && file.url !== null) return <GlobeIcon aria-hidden="true" data-desk-tile-mark="page" className="size-(--size-icon-sm) text-muted-foreground" />;
-  return <FileMark icon={fileIcon(path ?? file.label)} />;
 }
 
 /**
