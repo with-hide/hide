@@ -156,10 +156,7 @@ describe("the answer a question Hide found was asked in (B4 question 나)", () =
     answer("끝났어요.", 3_000),
   ]);
   const turns = threadTurns(lines);
-  const said = (id: string | null) => {
-    const line = lines.find((one) => one.id === id);
-    return line?.kind === "agent" ? line.text : null;
-  };
+  const said = (line: { text: string } | null) => line?.text ?? null;
 
   it("is the last answer written no later than the question was found", () => {
     expect(said(askedIn(turns, 2_500))).toBe("본인 확인은 직접 해 줄 수 있어?");

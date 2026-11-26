@@ -51,7 +51,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], onCopy = () => Promise.resolve(true) }: { asks?: AskLine[]; onCopy?: CopyText } = {}) {
+async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], onCopy = () => Promise.resolve(true), onAsk = () => undefined }: { asks?: AskLine[]; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void } = {}) {
   const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
@@ -60,7 +60,7 @@ async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks 
   const noop = () => undefined;
   await act(async () => root.render(
     <TooltipProvider>
-      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} asks={asks} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
+      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
     </TooltipProvider>,
   ));
   const box = () => container.querySelector("textarea")!;
@@ -252,7 +252,7 @@ it("draws a turn an agent recorded as interrupted as one quiet line, never as th
 });
 
 /** Waits until the lazily loaded Markdown language parsed the messages, so a code block carries its copy button. */
-const codeCopyDrawn = (container: HTMLElement) => act(() => vi.waitFor(() => expect(container.querySelector("[data-markdown-code-copy]")).not.toBeNull()));
+const codeCopyDrawn = (container: HTMLElement) => act(() => vi.waitFor(() => expect(container.querySelector("[data-code-block-action]")).not.toBeNull()));
 
 it("draws the agent's words as Markdown and copies a message's original words and a code block's code (Doop E2)", async () => {
   const copied: [string, string][] = [];
@@ -264,7 +264,7 @@ it("draws the agent's words as Markdown and copies a message's original words an
   const message = container.querySelector('[data-desk-thread-line="agent"]')!;
   expect(message.querySelector('[data-markdown-text="true"]')).not.toBeNull();
   await act(async () => message.querySelector<HTMLElement>('[data-message-copy] [data-copy-words="message"]')!.click());
-  await act(async () => message.querySelector<HTMLElement>('[data-markdown-code-copy] [data-copy-words="code block"]')!.click());
+  await act(async () => message.querySelector<HTMLElement>('[data-code-block-action] [data-copy-words="code block"]')!.click());
   expect(copied).toEqual([[words, "message"], ["open https://play.google.com/console", "code block"]]);
   // A copy that took says so on the button that made it.
   expect(message.querySelector('[data-copy-words="message"]')?.getAttribute("data-copied")).toBe("true");
@@ -299,18 +299,19 @@ it("shows the questions Hide found above the box and goes to the answer each was
   const { container } = await mount(job, null, { asks });
   const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, answer("라이트를 찍었어요. 다크도 찍을까요?", 1_000), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "결제해놨어" } }, answer("본인 확인은 직접 해 줄 수 있어?", 2_000)], parts: {}, sessions: {} };
   await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
-  // One line above the box says the newest question and how many more there are.
+  // One line above the box says the first question asked and how many more there are (N 2).
   const line = container.querySelector("[data-desk-thread-asks]")!;
-  expect(line.querySelector('[data-desk-thread-ask="missed-2-0"]')?.textContent).toContain("본인 확인을 직접 해 줄 수 있는지 물었어요");
-  expect(line.querySelector("[data-desk-thread-asks-more]")?.getAttribute("data-desk-thread-asks-more")).toBe("1");
+  expect(line.querySelector('[data-desk-thread-ask="missed-1-0"]')?.textContent).toContain("다크도 찍을지 물었어요");
+  expect(line.querySelector('[data-desk-thread-ask="missed-2-0"]')).toBeNull();
+  expect(line.querySelector("[data-desk-thread-asks-more]")?.textContent).toBe("+1 more");
   expect(line.compareDocumentPosition(container.querySelector("textarea")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
   vi.useFakeTimers();
   try {
-    await act(async () => line.querySelector<HTMLElement>('[data-desk-thread-ask="missed-2-0"]')!.click());
+    await act(async () => line.querySelector<HTMLElement>('[data-desk-thread-ask="missed-1-0"]')!.click());
     const lit = () => Array.from(container.querySelectorAll('[data-desk-thread-lit="true"]')).map((one) => one.textContent);
-    expect(scrolled.at(-1)).toContain("본인 확인은 직접 해 줄 수 있어?");
-    expect(lit()).toEqual([expect.stringContaining("본인 확인은 직접 해 줄 수 있어?")]);
+    expect(scrolled.at(-1)).toContain("라이트를 찍었어요. 다크도 찍을까요?");
+    expect(lit()).toEqual([expect.stringContaining("라이트를 찍었어요. 다크도 찍을까요?")]);
     await act(async () => vi.advanceTimersByTime(1_999));
     expect(lit()).toHaveLength(1);
     await act(async () => vi.advanceTimersByTime(1));
@@ -318,4 +319,62 @@ it("shows the questions Hide found above the box and goes to the answer each was
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("unfolds several questions one per line, oldest first, each with its message and 무시하기 that stays struck through with 되돌리기 (Doop N 2)", async () => {
+  const set: [string, string][] = [];
+  const answer = (text: string, at: number) => ({ sessionUpdate: "agent_message_chunk", messageId: text, content: { type: "text", text }, _meta: { hide: { at_ms: at } } });
+  const asks: AskLine[] = [
+    { id: "missed-2-0", text: "본인 확인을 직접 해 줄 수 있는지", at_unix_ms: 2_500 },
+    { id: "missed-1-0", text: "다크도 찍을지", at_unix_ms: 1_500 },
+  ];
+  const { container } = await mount(job, null, { asks, onAsk: (id, status) => set.push([id, status]) });
+  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, answer("라이트를 찍었어요. 다크도 찍을까요?", 1_000), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "결제해놨어" } }, answer("Play Console에 올리려면 **본인 확인**이 필요해요. 직접 해 줄 수 있어?", 2_000)], parts: {}, sessions: {} };
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  const line = () => container.querySelector("[data-desk-thread-asks]")!;
+  const rows = () => Array.from(line().querySelectorAll("[data-desk-thread-ask-row]")).map((row) => row.getAttribute("data-desk-thread-ask-row"));
+
+  await act(async () => line().querySelector<HTMLElement>("[data-desk-thread-asks-more]")!.click());
+  expect(line().getAttribute("data-desk-thread-asks-open")).toBe("true");
+  expect(rows()).toEqual(["missed-1-0", "missed-2-0"]);
+  expect(line().querySelectorAll("[data-desk-thread-ask-body]")).toHaveLength(2);
+  expect(line().querySelectorAll("[data-desk-thread-ask-dismiss]")).toHaveLength(2);
+
+  // 본문 보기 draws the words of the answer the question was asked in, here, with a way to it in the conversation.
+  await act(async () => line().querySelector<HTMLElement>('[data-desk-thread-ask-body="missed-2-0"]')!.click());
+  const words = line().querySelector('[data-desk-thread-ask-words="missed-2-0"]')!;
+  await act(() => vi.waitFor(() => expect(words.textContent).toContain("Play Console에 올리려면")));
+  expect(words.querySelector("[data-desk-thread-ask-go]")).not.toBeNull();
+
+  // × is 무시하기: the core is told, and the line stays struck through with 되돌리기 until it is brought back.
+  await act(async () => line().querySelector<HTMLElement>('[data-desk-thread-ask-dismiss="missed-2-0"]')!.click());
+  expect(set).toEqual([["missed-2-0", "dismissed"]]);
+  const away = line().querySelector('[data-desk-thread-ask-row="missed-2-0"]')!;
+  expect(away.getAttribute("data-dismissed")).toBe("true");
+  expect(line().querySelector('[data-desk-thread-ask-words="missed-2-0"]')).toBeNull();
+  await act(async () => away.querySelector<HTMLElement>('[data-desk-thread-ask-undo="missed-2-0"]')!.click());
+  expect(set).toEqual([["missed-2-0", "dismissed"], ["missed-2-0", "open"]]);
+  expect(line().querySelector('[data-desk-thread-ask-row="missed-2-0"]')?.getAttribute("data-dismissed")).toBeNull();
+});
+
+it("draws a code block with room around the code and its copy button in a gutter of its own (Doop N 1 가)", async () => {
+  const copied: string[] = [];
+  const { container } = await mount(job, null, { onCopy: async (text) => { copied.push(text); return true; } });
+  const words = "한 줄:\n\n```\nopen https://play.google.com/console\n```\n\n여러 줄:\n\n```bash\npnpm --dir web install\npnpm --dir web build\n```";
+  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "알려 줘" } }, said(words)], parts: {}, sessions: {} };
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  await act(() => vi.waitFor(() => expect(container.querySelectorAll("[data-code-block]")).toHaveLength(2)));
+  const [one, several] = Array.from(container.querySelectorAll<HTMLElement>("[data-code-block]"));
+  expect(one!.getAttribute("data-code-block")).toBe("line");
+  expect(several!.getAttribute("data-code-block")).toBe("lines");
+  // The code is the block's own text, without its fences; the button stands beside it, never inside it.
+  expect(one!.querySelector("pre")?.textContent).toBe("open https://play.google.com/console");
+  expect(several!.querySelector("pre")?.textContent).toBe("pnpm --dir web install\npnpm --dir web build");
+  for (const block of [one!, several!]) {
+    const button = block.querySelector('[data-code-block-action] [data-copy-words="code block"]');
+    expect(button).not.toBeNull();
+    expect(block.querySelector("pre")?.contains(button!)).toBe(false);
+  }
+  await act(async () => several!.querySelector<HTMLElement>('[data-copy-words="code block"]')!.click());
+  expect(copied).toEqual(["pnpm --dir web install\npnpm --dir web build"]);
 });

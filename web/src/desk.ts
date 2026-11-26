@@ -546,17 +546,18 @@ export function threadTurns(lines: readonly ThreadLine[]): ThreadTurn[] {
 
 /**
  * The answer a question Hide found at a turn's end was asked in (B4 question
- * 나): the last answer written no later than the question was found, whose
- * line id it returns. Hide AI lists a question only when the sentence that
- * asks it is in the turn's own answer, so that answer is where it stands;
- * null when no answer of the lines read says when it was written that early.
+ * 나): the last answer written no later than the question was found, which
+ * the question line scrolls to and whose words its 본문 보기 shows (N 2). Hide
+ * AI lists a question only when the sentence that asks it is in the turn's
+ * own answer, so that answer is where it stands; null when no answer of the
+ * lines read says when it was written that early.
  */
-export function askedIn(turns: readonly ThreadTurn[], atUnixMs: number): string | null {
-  let found: { id: string; at: number } | null = null;
+export function askedIn(turns: readonly ThreadTurn[], atUnixMs: number): Extract<ThreadLine, { kind: "agent" }> | null {
+  let found: Extract<ThreadLine, { kind: "agent" }> | null = null;
   for (const turn of turns) {
     for (const line of turn.answer) {
-      if (line.atMs !== null && line.atMs <= atUnixMs && (!found || line.atMs >= found.at)) found = { id: line.id, at: line.atMs };
+      if (line.atMs !== null && line.atMs <= atUnixMs && (!found || line.atMs >= (found.atMs ?? 0))) found = line;
     }
   }
-  return found?.id ?? null;
+  return found;
 }

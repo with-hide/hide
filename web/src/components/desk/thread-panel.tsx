@@ -25,7 +25,7 @@ const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "u
  * the outputs shelf under it), the agent's choice card, the questions Hide
  * found and what stands in the box's place while it sleeps are the caller's.
  */
-export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = 0, head = null, ask = null, asks, foot = null, onTerminal, ...parts }: {
+export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = 0, head = null, ask = null, asks, onAsk, foot = null, onTerminal, ...parts }: {
   /** The session's card; a session that is no job of Desk's opens before its card arrives, by its pane (D-87). */
   job: DeskJob | null;
   /** The pane whose thread this is; its card's when not given. */
@@ -40,6 +40,8 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   head?: ReactNode;
   ask?: ReactNode;
   asks?: readonly AskLine[];
+  /** 무시하기 and 되돌리기 on one of `asks`, for the session they wait in. */
+  onAsk: (id: string, status: "open" | "dismissed") => void;
   foot?: ReactNode;
   onTerminal: () => void;
 } & ThreadPartActions) {
@@ -142,6 +144,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
         startedByDesk={startedByDesk}
         ask={ask}
         asks={asks}
+        onAsk={onAsk}
         foot={foot}
         composer={{
           value: text,

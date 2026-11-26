@@ -385,14 +385,14 @@ function useWords(mentions: readonly DeskMention[], onSession: ThreadPartActions
 /**
  * A thread (D-61, D-75, B25-B27, B29): the session's record as turns, what
  * the agent's own screen asks at its end (a choice card answered in place),
- * the questions Hide found in one line above the input box (Doop B4), and
+ * the questions Hide found in one line above the input box (Doop B4, N 2), and
  * the box that types into its terminal. Its state is in the head, said once.
  * A record that cannot be read says why in one line and offers the
  * terminal; one being read, or with nothing in it yet, says so in one quiet
  * line. A session asleep with no card any more (its sleep closed its pane,
  * B43) keeps its record above the foot that wakes it.
  */
-export function ThreadView({ job, lines, reading = false, failure = null, mentions = NO_MENTIONS, startedByDesk = false, composer, ask = null, asks = NO_ASKS, foot = null, workingSince = null, onTerminal, onReachTop, ...actions }: {
+export function ThreadView({ job, lines, reading = false, failure = null, mentions = NO_MENTIONS, startedByDesk = false, composer, ask = null, asks = NO_ASKS, onAsk, foot = null, workingSince = null, onTerminal, onReachTop, ...actions }: {
   job: DeskJob | null;
   /** When the session's running turn started (its row's last prompt), for the working line's time. */
   workingSince?: number | null;
@@ -409,6 +409,8 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   ask?: ReactNode;
   /** The questions Hide found that still wait on the operator, oldest first (`open_asks`, the list 내 차례 reads). */
   asks?: readonly AskLine[];
+  /** 무시하기 and 되돌리기 on one of `asks`, as 내 차례 does it for the session. */
+  onAsk: (id: string, status: "open" | "dismissed") => void;
   /** Drawn in the input box's place, as a sleeping session's wake line is (B43). */
   foot?: ReactNode;
   onTerminal: () => void;
@@ -431,7 +433,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   const goTo = (ask: AskLine) => {
     const box = scroller.ref.current;
     if (!box) return;
-    const id = askedIn(turns, ask.at_unix_ms);
+    const id = askedIn(turns, ask.at_unix_ms)?.id ?? null;
     const message = id === null ? null : box.querySelector<HTMLElement>(`[data-desk-thread-message="${CSS.escape(id)}"]`);
     if (id === null || !message) {
       box.scrollTo({ top: 0 });
@@ -439,6 +441,11 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
     }
     message.scrollIntoView({ block: "center" });
     setLit((now) => ({ id, press: (now?.press ?? 0) + 1 }));
+  };
+  // 본문 보기: the words of the answer a question was asked in, as the conversation draws them.
+  const askedWords = (ask: AskLine) => {
+    const answer = askedIn(turns, ask.at_unix_ms);
+    return answer ? <MarkdownText text={answer.text} chips={words.chips} copyCode={words.copy} /> : null;
   };
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job?.id ?? ""}>
@@ -462,7 +469,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
         {running && !reading && !failure ? <WorkingLine phase={threadPhase(turns.at(-1))} since={workingSince} /> : null}
         {ask}
       </div>
-      {asks.length ? <div className="shrink-0 px-sm pt-xs"><ThreadAsks asks={asks} onGo={goTo} /></div> : null}
+      <ThreadAsks asks={asks} onGo={goTo} onSet={onAsk} body={askedWords} />
       {foot ?? (
         <div className="shrink-0 px-sm pb-sm">
           <DeskComposer
