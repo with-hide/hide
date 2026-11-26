@@ -379,6 +379,27 @@ impl DeskJobFailure {
     }
 }
 
+/// The `desk_commands` section, the `/` menu: the commands the selected
+/// agent listed last, in its order, with what Desk leaves out already gone
+/// (`hide_desk::commands`). The list is the agent's last session's, saved
+/// in `desk/commands.json` across a restart, so a new conversation's first
+/// `/` has it before its session opens. `commands` is none until the agent
+/// has ever sent a list, and empty while its open session has sent none.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct DeskCommandsSnapshot {
+    pub agent: Option<AdapterId>,
+    pub commands: Option<Vec<hide_desk::commands::Command>>,
+}
+
+/// A compaction the agent told outside its reply (OpenCode's), shown as the
+/// reply's one line: done, or failed with the agent's own reason.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeskCompaction {
+    pub done: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 /// The `desk_mentions` section, the `@` menu: recent sessions, then
 /// projects (B18).
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
@@ -569,6 +590,10 @@ pub enum DeskItem {
         /// the app's mission chip.
         #[serde(default)]
         missions: Vec<DeskMissionMention>,
+        /// The compaction the turn did, when the agent told it outside its
+        /// reply, which may then be empty.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compaction: Option<DeskCompaction>,
     },
     /// The operator switched agents; `carried` says how much of the
     /// conversation went with the switch.
@@ -689,12 +714,21 @@ impl DeskItem {
                         .map(|file| file.name.len() + file.path.len())
                         .sum::<usize>()
             }
-            Self::Reply { text, mentions, .. } => {
+            Self::Reply {
+                text,
+                mentions,
+                compaction,
+                ..
+            } => {
                 text.len()
                     + mentions
                         .iter()
                         .map(|chip| chip.pane_id.len() + chip.name.len())
                         .sum::<usize>()
+                    + compaction
+                        .as_ref()
+                        .and_then(|compaction| compaction.reason.as_ref())
+                        .map_or(0, String::len)
             }
             Self::Approval {
                 command,
@@ -874,6 +908,9 @@ pub enum DeskNotice {
     /// A file the message named was gone, so the agent was not asked and the
     /// message went back to the operator's input (PRD desk-2-ui B41).
     AttachmentsGone,
+    /// The message starts with a command Desk keeps from this agent (its
+    /// definition's `[desk] left_out`), so it was not sent.
+    CommandLeftOut,
     /// A notice this build no longer makes or does not know, read from a
     /// store written by another (`blocked` and `no_ask_mode` before D-92):
     /// reading the store drops it, so it is never sent.

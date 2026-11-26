@@ -26,6 +26,7 @@ import type { Preview } from "../filePreview";
 import { MarkdownText } from "../MarkdownText";
 import { SidebarHeader } from "../components/sidebar-header";
 import { DeskMentionMenu } from "../components/desk/desk-mention-menu";
+import { DeskCommandMenu, type DeskCommandPanel } from "../components/desk/desk-command-menu";
 import { DeskOutputs } from "../components/desk/desk-outputs";
 import { DeskSettingsTab } from "../components/desk/desk-settings";
 import { SessionCard, SessionChip, SessionChipProvider } from "../components/desk/session-chip";
@@ -35,7 +36,7 @@ import { StatusMark } from "../components/status-mark";
 import { Separator } from "../components/ui/separator";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { askingCount, outputKindOf, recordCard, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskPermission, type DeskSelection, type DeskSessionRef, type ThreadReadFailure, type WorkingPhase } from "../desk";
-import { keepSent, mentionTree, type ComposerTray, type TrayFile } from "../deskComposer";
+import { commandRows, keepSent, mentionTree, type ComposerTray, type TrayFile } from "../deskComposer";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
@@ -44,7 +45,7 @@ import { useBrowserStore } from "../browserViews";
 import { DeskViewAreas } from "../ViewAreas";
 import { cn } from "../lib/utils";
 import { useShellStore } from "../store";
-import type { DeskRecord, SessionPull, SnapshotRest, ViewDisplaySnapshot, ViewLayoutSnapshot } from "../snapshot";
+import type { DeskCommand, DeskRecord, SessionPull, SnapshotRest, ViewDisplaySnapshot, ViewLayoutSnapshot } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
   AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_CARD, PLAN_EXIT_OPTIONS, WAITING_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, endedScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
@@ -69,6 +70,13 @@ export const DESK_SCENES = [
   { state: "mention-search", label: "@리뷰: 부모 먼저, 그다음 하위 세션 (B48)" },
   { state: "mention-project", label: "@ 프로젝트에서 ⇥ (B18)" },
   { state: "mention-empty", label: "@ 맞는 것이 없을 때" },
+  { state: "command", label: "/ 메뉴: 에이전트 명령과 내 스킬, 입력 힌트" },
+  { state: "command-search", label: "/co: 앞이 맞는 것 먼저, 친 글자는 진하게" },
+  { state: "command-codex", label: "/ 메뉴: Codex, 스킬은 $ 그대로" },
+  { state: "command-none", label: "/ 메뉴: 맞는 명령 없음 (↵ 는 그대로 보내요)" },
+  { state: "command-waiting", label: "/ 메뉴: 세션이 열리는 중, 목록을 받는 중" },
+  { state: "command-first", label: "/ 메뉴: 세션을 연 적 없음, 첫 메시지 뒤에 와요" },
+  { state: "command-answers", label: "명령 답: OpenCode 압축 한 줄, Desk가 보내지 않는 명령" },
   { state: "composer-chips", label: "입력창 칩 · 보낸 말 칩 (B49)" },
   { state: "attachments", label: "첨부: 입력칸 타일, 20MB 넘는 파일, 올리는 중, 보낸 말 (desk-2-ui B41, B42)" },
   { state: "parts", label: "스레드 속 Hide 부품 (B26)" },
@@ -146,7 +154,25 @@ function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "",
 }
 
 const CLAUDE: DeskSelection = { agent: "claude", model: "opus", effort: "high" };
+
+/** What Claude Code lists over ACP, its built-ins and the operator's own skills (mission-101 slash-research probe), shortened. */
+const SCENE_COMMANDS: DeskCommand[] = [
+  { name: "/compact", description: "Clear conversation history but keep a summary in context.", hint: "<optional custom summarization instructions>" },
+  { name: "/context", description: "Show current context usage" },
+  { name: "/code-review", description: "현재 diff를 리뷰해요. 정확성 버그와 규칙 위반을 찾아요.", hint: "[low|medium|high] [target]" },
+  { name: "/hide-mission", description: "Conduct a mission of agents in Hide." },
+  { name: "/init", description: "Initialize a new CLAUDE.md file with codebase documentation" },
+  { name: "/model", description: "Set the AI model for Claude Code", hint: "[model]" },
+  { name: "/usage", description: "Show plan usage limits" },
+  { name: "/explain", description: "AI가 한 일이나 찾은 것을 한 장짜리 그림 페이지로 설명해요. 아주 긴 설명은 한 줄로 잘려 보여요." },
+];
 const CODEX: DeskSelection = { agent: "codex", model: "gpt", effort: "medium" };
+const CODEX_COMMANDS: DeskCommand[] = [
+  { name: "/review", description: "Review my current changes and find issues" },
+  { name: "$hide-mission", description: "Conduct a mission of agents in Hide." },
+  { name: "$explain", description: "AI가 한 일이나 찾은 것을 한 장짜리 그림 페이지로 설명해요." },
+  { name: "/status", description: "Show current session configuration and token usage" },
+];
 
 /** A tray that holds `files` as a scene sets them. */
 function sceneTray(files: readonly TrayFile[]): ComposerTray {
@@ -336,6 +362,34 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       const active = state === "mention-project" ? "session:agent-record-now" : state === "mention-empty" ? "" : `session:${(state === "mention-open" ? tree.rows[2] : tree.rows[0] ?? tree.found[0])!.session.id}`;
       const menu = <DeskMentionMenu tree={tree} searching={query !== ""} entered={entered} active={active} onActive={noop} onSession={noop} onProject={noop} onFold={noop} onBack={noop} />;
       body = <Room chat={chat(mentionItems(now), <ChatComposer selection={CLAUDE} value={state === "mention-project" ? "@herdr-ide " : `@${query}`} mention={menu} />)} />;
+      break;
+    }
+    case "command":
+    case "command-search":
+    case "command-codex":
+    case "command-none":
+    case "command-waiting":
+    case "command-first": {
+      // Feedback 1 frame P 가: the panel as wide as the box, eight pixels over it.
+      const codex = state === "command-codex";
+      const query = state === "command-search" ? "co" : state === "command-none" ? "xyz" : "";
+      const rows = commandRows(codex ? CODEX_COMMANDS : SCENE_COMMANDS, query);
+      const panel: DeskCommandPanel = state === "command-waiting" ? { kind: "waiting" } : state === "command-first" ? { kind: "first" } : rows.length ? { kind: "rows", commands: rows } : { kind: "none" };
+      const menu = <DeskCommandMenu agent={codex ? "Codex" : "Claude Code"} panel={panel} query={query} active={(codex ? rows[1] : rows[0])?.name ?? ""} onActive={noop} onPick={noop} />;
+      body = <Room chat={chat(mentionItems(now), <ChatComposer selection={codex ? CODEX : CLAUDE} value={`/${query}`} mention={menu} />)} />;
+      break;
+    }
+    case "command-answers": {
+      const steps = { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 };
+      const items: DeskItem[] = [
+        { kind: "user", id: 91, text: "/compact", at_ms: now - 120_000, mentions: [] },
+        { kind: "reply", id: 92, agent: "opencode", text: "", at_ms: now - 118_000, state: "done", thought_ms: null, steps, mentions: [], missions: [], compaction: { done: false, reason: "Nothing to compact yet" } },
+        { kind: "user", id: 93, text: "/compact", at_ms: now - 60_000, mentions: [] },
+        { kind: "reply", id: 94, agent: "opencode", text: "", at_ms: now - 50_000, state: "done", thought_ms: null, steps, mentions: [], missions: [], compaction: { done: true, reason: null } },
+        { kind: "user", id: 95, text: "/logout", at_ms: now - 10_000, mentions: [] },
+        { kind: "notice", id: 96, notice: "command_left_out", agent: "codex", detail: null },
+      ];
+      body = <Room chat={chat(items, <ChatComposer selection={CLAUDE} />)} />;
       break;
     }
     case "composer-chips":

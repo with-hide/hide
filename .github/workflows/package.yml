@@ -373,6 +373,11 @@ jobs:
       # `--init` reaps the daemons `hide stop` ends: bash execs the last
       # command, so no shell is left as PID 1 to reap them, and an unreaped
       # daemon reads as still running to the smoke's end check.
+      # The install is tried up to three times, with a pause and a fresh
+      # `apt-get update` between: one archive backend can lag the others and
+      # answer 404 for a file the index names (libasound2 from
+      # security.ubuntu.com, four runs of PR 3011), and a new connection can
+      # reach another backend. Each failed try is logged; three fail the step.
       - name: Install the deb in a bare Ubuntu and start it without a window
         timeout-minutes: 15
         run: |
@@ -380,7 +385,13 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             bash scripts/ci-apt-dns.sh
             apt-get update -q
-            apt-get install -y -q --no-install-recommends "/w/desktop/out/release/hide-v'"$HIDE_VERSION"'-linux-x64.deb"
+            for try in 1 2 3; do
+              if apt-get install -y -q --no-install-recommends "/w/desktop/out/release/hide-v'"$HIDE_VERSION"'-linux-x64.deb"; then break; fi
+              echo "::warning::installing the deb failed, try $try of 3"
+              [ "$try" -lt 3 ] || { echo "::error::installing the deb failed 3 times"; exit 1; }
+              sleep 15
+              apt-get update -q
+            done
             [ -s /etc/machine-id ] || tr -d - </proc/sys/kernel/random/uuid >/etc/machine-id
             useradd -m person
             runuser -u person -- node desktop/scripts/smoke-package.mjs /opt/hide

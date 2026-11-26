@@ -301,7 +301,7 @@ fn a_loaded_session_s_replay_arrives_before_the_next_prompt_s_mark() {
 
     // As Desk's worker does: the mark read just before the prompt, and
     // every message read only after it, the replay still waiting.
-    let mut turn = session::TurnReader::new(opened.prelude.clone(), None);
+    let mut turn = session::TurnReader::new(opened.prelude.clone(), None, None);
     let from = arrivals.next();
     session::prompt(&connection, "s1", "델타넷째", 9).unwrap();
     turn.start(9, from);

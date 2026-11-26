@@ -138,6 +138,7 @@ export type Frame = {
     desk_live?: import("./snapshot").DeskLive;
     desk_jobs?: import("./snapshot").DeskJobsSection;
     desk_mentions?: import("./snapshot").DeskMentions;
+    desk_commands?: import("./snapshot").DeskCommands;
     access?: import("./snapshot").AccessSection;
     automations?: import("./snapshot").AutomationsSection;
     link_panel?: import("./snapshot").LinkPanel;
@@ -228,9 +229,10 @@ type Store = {
   desk: import("./snapshot").DeskSection | null;
   /** The Desk reply being written (`desk_live`), apart so a chunk never resends the conversation. */
   deskLive: import("./snapshot").DeskLive | null;
-  /** Desk's cards (`desk_jobs`) and `@` menu (`desk_mentions`), each its own section. */
+  /** Desk's cards (`desk_jobs`), `@` menu (`desk_mentions`) and `/` menu (`desk_commands`), each its own section. */
   deskJobs: import("./snapshot").DeskJobsSection | null;
   deskMentions: import("./snapshot").DeskMentions | null;
+  deskCommands: import("./snapshot").DeskCommands | null;
   /** Settings › External tools (`access`): its own section, absent until the core sends it. */
   access: import("./snapshot").AccessSection | null;
   /** The automations of this window's core (`automations`, PRD automations D-02): its own section, absent until the core restored its book. */
@@ -438,6 +440,7 @@ export const useShellStore = create<Store>((set, get) => ({
   deskLive: null,
   deskJobs: null,
   deskMentions: null,
+  deskCommands: null,
   access: null,
   automations: null,
   linkPanel: null,
@@ -553,6 +556,7 @@ export const useShellStore = create<Store>((set, get) => ({
         deskLive: payload.desk_live ?? null,
         deskJobs: payload.desk_jobs ?? null,
         deskMentions: payload.desk_mentions ?? null,
+        deskCommands: payload.desk_commands ?? null,
         access: payload.access ?? null,
         automations: payload.automations ?? null,
         linkPanel: payload.link_panel ?? null,
@@ -569,7 +573,7 @@ export const useShellStore = create<Store>((set, get) => ({
       payload.memory !== undefined ||
       payload.suggestions !== undefined ||
       payload.desk !== undefined || payload.desk_live !== undefined ||
-      payload.desk_jobs !== undefined || payload.desk_mentions !== undefined || payload.access !== undefined || payload.automations !== undefined ||
+      payload.desk_jobs !== undefined || payload.desk_mentions !== undefined || payload.desk_commands !== undefined || payload.access !== undefined || payload.automations !== undefined ||
       payload.link_panel !== undefined || payload.link_summaries !== undefined ||
       payload.session_record !== undefined || payload.session_work_search !== undefined ||
       payload.session_thread !== undefined || payload.session_thread_history !== undefined
@@ -584,6 +588,7 @@ export const useShellStore = create<Store>((set, get) => ({
         deskLive: payload.desk_live ?? get().deskLive,
         deskJobs: payload.desk_jobs ? share(get().deskJobs, payload.desk_jobs) : get().deskJobs,
         deskMentions: payload.desk_mentions ? share(get().deskMentions, payload.desk_mentions) : get().deskMentions,
+        deskCommands: payload.desk_commands ? share(get().deskCommands, payload.desk_commands) : get().deskCommands,
         access: payload.access ? share(get().access, payload.access) : get().access,
         automations: payload.automations ? share(get().automations, payload.automations) : get().automations,
         linkPanel: payload.link_panel ? share(get().linkPanel, payload.link_panel) : get().linkPanel,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chipDelete, chipStep, keepSent, mentionAt, mentionTree, outgoing, pickMention, sentAttachment, sentWords, traySendable, trayEntries, type MentionSession, type TrayFile } from "./deskComposer";
+import { chipDelete, chipStep, commandAt, commandRows, keepSent, mentionAt, mentionTree, outgoing, pickCommand, pickMention, sentAttachment, sentWords, traySendable, trayEntries, type MentionSession, type TrayFile } from "./deskComposer";
 
 const session = { kind: "session" as const, id: "w1:p2", name: "record-now", mark: "going" as const, agent_kind: "codex" };
 const project = { kind: "project" as const, id: "/work/herdr-ide", name: "herdr-ide" };
@@ -17,6 +17,39 @@ describe("Desk's @ menu (B18)", () => {
     expect(mentionAt("mail me@host", 12)).toBeNull();
     expect(mentionAt("ask @rec now", 12)).toBeNull();
     expect(mentionAt(`${SESSION}`, SESSION.length)).toBeNull();
+  });
+});
+
+describe("Desk's / menu", () => {
+  const commands = [
+    { name: "/review", description: "review the diff" },
+    { name: "/compact", description: "compact the context", hint: "what to keep" },
+    { name: "$codex-review", description: "a skill" },
+    { name: "/context", description: "show the context" },
+  ];
+  const names = (rows: { name: string }[]) => rows.map((one) => one.name);
+
+  it("opens only on a / that starts the box, up to the caret, before any space", () => {
+    expect(commandAt("/co", 3)).toEqual({ query: "co" });
+    expect(commandAt("/", 1)).toEqual({ query: "" });
+    expect(commandAt("/compact now", 12)).toBeNull();
+    expect(commandAt("/compact now", 3)).toEqual({ query: "co" });
+    expect(commandAt("say /co", 7)).toBeNull();
+    expect(commandAt(" /co", 4)).toBeNull();
+  });
+
+  it("filters by the name without its /, case aside, names that start with the words first", () => {
+    expect(names(commandRows(commands, ""))).toEqual(["/review", "/compact", "$codex-review", "/context"]);
+    expect(names(commandRows(commands, "CO"))).toEqual(["/compact", "/context", "$codex-review"]);
+    expect(names(commandRows(commands, "review"))).toEqual(["/review", "$codex-review"]);
+    expect(commandRows(commands, "nothing")).toEqual([]);
+  });
+
+  it("writes the picked command and one space over the / word and keeps the words after it", () => {
+    const draft = (text: string) => ({ text, mentions: [] });
+    expect(pickCommand(draft("/co"), { query: "co" }, commands[1]!)).toEqual({ draft: draft("/compact "), caret: 9 });
+    expect(pickCommand(draft("/co keep the plan"), { query: "co" }, commands[1]!)).toEqual({ draft: draft("/compact keep the plan"), caret: 9 });
+    expect(pickCommand(draft("/"), { query: "" }, commands[2]!)).toEqual({ draft: draft("$codex-review "), caret: 14 });
   });
 });
 

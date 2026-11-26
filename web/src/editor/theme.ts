@@ -165,6 +165,8 @@ export const liveTheme = EditorView.theme({
   // The syntax colours stay with Source; a drawn heading reads in its line's colour.
   "& [class*='cm-md-heading-'] span": { color: "inherit" },
   "& .cm-line .cm-md-link": { color: "var(--file-blue)" },
+  // Words in brackets that are no link take none of a link's syntax colour.
+  "& .cm-line .cm-md-plain, & .cm-line .cm-md-plain span": { color: "inherit", textDecoration: "none" },
   // Code inside a line draws with `INLINE_CODE` (components/code-block.tsx), the classes the phone uses.
   // A fenced block is one box (Doop N 1 나), drawn across its lines with the tokens `CodeBlock` uses:
   // the head row (`CodeBlockHead`) on the opening fence's line, then the code on the block's ground

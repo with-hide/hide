@@ -308,6 +308,12 @@ pub fn desk_store(state_dir: &Path) -> PathBuf {
     desk_dir(state_dir).join("desk.json")
 }
 
+/// Each Desk agent's last command list, so `/` lists it before a session
+/// opens after a restart; its owner is the core's Desk.
+pub fn desk_commands(state_dir: &Path) -> PathBuf {
+    desk_dir(state_dir).join("commands.json")
+}
+
 /// The ACP adapters Desk installs from their pinned locks, one folder per
 /// adapter version (`<id>-<version>`). Account-wide like the helper root: an
 /// installed version is the same for every state folder.

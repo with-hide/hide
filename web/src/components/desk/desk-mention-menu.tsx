@@ -6,9 +6,10 @@ import { cn } from "../../lib/utils";
 import { Elapsed } from "../elapsed";
 import { SessionRowBody } from "../session-row";
 import { StatusMark } from "../status-mark";
-import { Command, CommandGroup, CommandItem, CommandList, CommandSeparator, CommandShortcut } from "../ui/command";
+import { Command, CommandGroup, CommandItem, CommandSeparator, CommandShortcut } from "../ui/command";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
+import { DeskMenuList } from "./desk-menu";
 
 export type { MentionProject, MentionSession } from "../../deskComposer";
 
@@ -16,7 +17,8 @@ export type { MentionProject, MentionSession } from "../../deskComposer";
 const INDENT = ["", "pl-xl", "pl-xxl", "pl-xxxl"] as const;
 
 /**
- * The `@` menu (D-70, D-84, B18, B48): the sessions as a tree of two-line
+ * The `@` menu (D-70, D-84, B18, B48), in the panel Desk's composer menus
+ * share (`desk-menu.tsx`, feedback 1 frame P 가): the sessions as a tree of two-line
  * rows, parents first with their children folded under `▸ 하위 n`, then the
  * projects, all filtered by what follows `@`; a search adds a `하위 세션`
  * group of the children it found, each with its parent's name. `↵` on a
@@ -44,7 +46,7 @@ export function DeskMentionMenu({ tree, searching = false, entered = null, activ
     const one = row.session;
     const line = [one.project, one.branch, one.detail].filter((part): part is string => Boolean(part)).join(" · ");
     return (
-      <CommandItem key={one.id} value={`session:${one.id}`} onSelect={() => onSession(one)} className={cn("items-start py-xxs", INDENT[Math.min(row.depth, INDENT.length - 1)])} data-desk-mention-session={one.id} data-desk-mention-depth={row.depth}>
+      <CommandItem key={one.id} value={`session:${one.id}`} onSelect={() => onSession(one)} className={cn("items-start", INDENT[Math.min(row.depth, INDENT.length - 1)])} data-desk-mention-session={one.id} data-desk-mention-depth={row.depth}>
         <SessionRowBody
           mark={<><StatusMark mark={one.mark} /><AgentMark kind={one.agent_kind} /></>}
           head={<>
@@ -80,8 +82,8 @@ export function DeskMentionMenu({ tree, searching = false, entered = null, activ
   };
   const enteredRows = (entered?.sessions ?? []).map((one) => ({ session: one, depth: 0, children: 0, open: false, crumb: null }));
   return (
-    <Command value={active} onValueChange={onActive} shouldFilter={false} loop aria-label={t("desk.mention.menu")} data-desk-mention-menu={entered ? "project" : "top"}>
-      <CommandList>
+    <Command value={active} onValueChange={onActive} shouldFilter={false} loop aria-label={t("desk.mention.menu")} className="bg-transparent" data-desk-mention-menu={entered ? "project" : "top"}>
+      <DeskMenuList>
         {entered ? (
           <>
             <Button variant="ghost" size="sm" className="w-full justify-start gap-xs px-sm text-caption font-normal text-muted-foreground" onClick={onBack} data-desk-mention-back="true">
@@ -119,7 +121,7 @@ export function DeskMentionMenu({ tree, searching = false, entered = null, activ
             ) : null}
           </>
         )}
-      </CommandList>
+      </DeskMenuList>
     </Command>
   );
 }

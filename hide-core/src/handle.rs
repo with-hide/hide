@@ -537,6 +537,9 @@ impl Core {
             let moving = matches!(restored, Restored::Moving(_));
             let desk = crate::desk::DeskStore::new(hide_kit::layout::desk_store(directory));
             let desk_restored = desk.restore();
+            let desk_commands =
+                crate::desk::DeskCommandsStore::new(hide_kit::layout::desk_commands(directory));
+            let desk_commands_restored = desk_commands.restore();
             let (access, access_restored) =
                 crate::runtime::access::restore(hide_kit::layout::access_store(directory));
             let (automations, automations_restored, zone) = crate::runtime::automations::restore(
@@ -551,6 +554,7 @@ impl Core {
                 guard.save_missions();
             }
             guard.install_desk_store(desk, desk_restored);
+            guard.install_desk_commands(desk_commands, desk_commands_restored);
             guard.install_access_store(access, access_restored);
             guard.install_automations_store(automations, automations_restored, zone);
             drop(guard);

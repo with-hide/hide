@@ -42,17 +42,30 @@ export function CopyWords({ text, what, copy, quiet = false, className }: { text
 }
 
 /**
- * A message with `복사` at its top right while the pointer is over it, it
- * holds the keyboard or it says it copied (Doop E2): the message's original
- * words, Markdown marks included, go to the clipboard. A surface with no
- * pointer shows it always.
+ * A message with `복사` under it (Doop E2, copy-pos 가): the message's
+ * original words, Markdown marks included, go to the clipboard. An answer
+ * (`own` false) shows it always, under its end at the left. The operator's
+ * own message (`own`) stands at the right and shows it under the bubble at
+ * the right while the pointer is over the message, the keyboard is in it or
+ * it says it copied, and always on a surface with no pointer; its row is held
+ * the whole time, so the message keeps its height when `복사` appears. It is
+ * the borderless words a code block's head holds, beside the message and
+ * never over its words or its edge.
  */
-export function CopyableMessage({ text, copy, align = "start", className, children, ...rest }: { text: string; copy: CopyText; align?: "start" | "end"; className?: string; children: ReactNode } & Record<`data-${string}`, string | undefined>) {
+export function CopyableMessage({ text, copy, own = false, className, children, ...rest }: { text: string; copy: CopyText; own?: boolean; className?: string; children: ReactNode } & Record<`data-${string}`, string | undefined>) {
   return (
-    <div className={cn("group/message relative flex min-w-0 flex-col", align === "end" ? "items-end" : "items-stretch", className)} {...rest}>
+    <div className={cn("group/message flex min-w-0 flex-col gap-xs", own ? "items-end" : "items-stretch", className)} {...rest}>
       {children}
-      <span className="pointer-events-none absolute right-0 top-0 z-10 -translate-y-1/2 flex opacity-0 group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100 has-data-copied:pointer-events-auto has-data-copied:opacity-100 hoverless:pointer-events-auto hoverless:opacity-100" data-message-copy="true">
-        <CopyWords text={text} what="message" copy={copy} />
+      <span
+        className={cn(
+          "flex",
+          own
+            ? "self-end pointer-events-none opacity-0 group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100 has-data-copied:pointer-events-auto has-data-copied:opacity-100 hoverless:pointer-events-auto hoverless:opacity-100"
+            : "self-start",
+        )}
+        data-message-copy={own ? "own" : "answer"}
+      >
+        <CopyWords quiet text={text} what="message" copy={copy} />
       </span>
     </div>
   );

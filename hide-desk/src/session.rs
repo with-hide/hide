@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::adapter::FailedTurnMark;
+use crate::adapter::{Compaction, CompactionMark, FailedTurnMark};
+use crate::escapes::Escapes;
 use crate::rpc::{CallError, Connection, Incoming, Sink};
 
 /// How long a control request may take: a first `session/new` starts the
@@ -264,6 +265,9 @@ pub enum Update {
     },
     /// The model or effort lists or values moved.
     Choices(Choices),
+    /// The agent's commands (`available_commands_update`), the whole list
+    /// again, read by [`crate::commands::read`] for the agent it came from.
+    Commands(Value),
     /// The session's own facts moved (`session_info_update`): its title, or
     /// what an adapter adds in `_meta`, such as a failed turn's mark.
     Info(Value),
@@ -295,6 +299,7 @@ pub fn read_update(params: &Value) -> Update {
                 call: update.clone(),
             }),
         Some("config_option_update") => Update::Choices(choices(update)),
+        Some("available_commands_update") => Update::Commands(update.clone()),
         Some("session_info_update") => Update::Info(update.clone()),
         _ => Update::Other,
     }
@@ -335,7 +340,7 @@ impl ReplyBlocks {
                 self.open = None;
                 None
             }
-            Update::Choices(_) | Update::Info(_) | Update::Other => None,
+            Update::Choices(_) | Update::Commands(_) | Update::Info(_) | Update::Other => None,
         }
     }
 }
@@ -380,6 +385,11 @@ pub struct Answered {
     /// The turn met its adapter's failed-turn mark: the text that came after
     /// it, which is the agent's error and not a reply.
     pub failed: Option<String>,
+    /// A compaction the adapter told outside the reply, in the turn.
+    pub compaction: Option<Compaction>,
+    /// The reply's last words, held as an escape string that never ended
+    /// (`Escapes::finish`): its owner adds them to the reply.
+    pub rest: Option<String>,
 }
 
 /// The turn an owner follows on a session: which one runs, what its reply
@@ -397,15 +407,27 @@ pub struct TurnReader {
     reply: ReplyBlocks,
     /// The adapter's mark of a failed turn, when it has one.
     mark: Option<FailedTurnMark>,
+    /// Where the adapter tells a compaction's end, when it does so outside
+    /// the reply.
+    compaction_mark: Option<CompactionMark>,
+    compaction: Option<Compaction>,
     /// The running turn met the mark: the text written since.
     failed: Option<String>,
+    /// What the turn's text has of a terminal's escape sequences is left
+    /// out of its reply and its failure words.
+    escapes: Escapes,
 }
 
 impl TurnReader {
-    pub fn new(prelude: Option<String>, mark: Option<FailedTurnMark>) -> Self {
+    pub fn new(
+        prelude: Option<String>,
+        mark: Option<FailedTurnMark>,
+        compaction_mark: Option<CompactionMark>,
+    ) -> Self {
         Self {
             prelude,
             mark,
+            compaction_mark,
             ..Self::default()
         }
     }
@@ -428,6 +450,8 @@ impl TurnReader {
         self.calls.clear();
         self.reply = ReplyBlocks::default();
         self.failed = None;
+        self.compaction = None;
+        self.escapes = Escapes::default();
     }
 
     /// What `update`, numbered `number`, adds to the running turn: its tag
@@ -448,8 +472,26 @@ impl TurnReader {
             if self.tag.is_some() && self.mark.is_some_and(|mark| mark.marks(info)) {
                 self.failed.get_or_insert_with(String::new);
             }
+            if let Some(compaction) = self
+                .compaction_mark
+                .filter(|_| self.tag.is_some())
+                .and_then(|mark| mark.read(info))
+            {
+                self.compaction = Some(compaction);
+            }
             return None;
         }
+        let plain;
+        let update = match update {
+            Update::Text { text, message } => {
+                plain = Update::Text {
+                    text: self.escapes.strip(text),
+                    message: message.clone(),
+                };
+                &plain
+            }
+            other => other,
+        };
         if let (Some(words), Update::Text { text, .. }) = (&mut self.failed, update) {
             keep_failure(words, text);
             return None;
@@ -471,9 +513,20 @@ impl TurnReader {
             return None;
         }
         self.tag = None;
+        let rest = self.escapes.finish();
+        let mut failed = self.failed.take();
+        let rest = match &mut failed {
+            Some(words) => {
+                keep_failure(words, &rest);
+                None
+            }
+            None => (!rest.is_empty()).then_some(rest),
+        };
         Some(Answered {
             calls: std::mem::take(&mut self.calls),
-            failed: self.failed.take(),
+            failed,
+            compaction: self.compaction.take(),
+            rest,
         })
     }
 }
@@ -523,7 +576,7 @@ mod tests {
     }
 
     fn numbered(updates: &[(u64, Value)]) -> (TurnReader, Vec<String>) {
-        let mut turn = TurnReader::new(Some("pi v1 started".into()), None);
+        let mut turn = TurnReader::new(Some("pi v1 started".into()), None, None);
         turn.start(7, 3);
         let text = updates
             .iter()
@@ -558,10 +611,36 @@ mod tests {
             Some(Answered {
                 calls: vec!["new".to_owned()],
                 failed: None,
+                compaction: None,
+                rest: None,
             })
         );
         assert_eq!(turn.running(), None);
         assert_eq!(turn.end(7), None);
+    }
+
+    /// letter-48464 (omp's `/context`, frames from the audit): a command's
+    /// answer written for a terminal reaches the reply as its words only,
+    /// a colour split between two chunks included.
+    #[test]
+    fn a_reply_keeps_no_terminal_escape_sequence() {
+        let (_, text) = numbered(&[
+            (3, said("\x1b[38;5;243m░░\x1b[39m Context\x1b[38;5")),
+            (4, said(";243m 12%\x1b[0m")),
+        ]);
+        assert_eq!(text.concat(), "░░ Context 12%");
+    }
+
+    /// letter-48550: a link an agent never closed loses its head only; what
+    /// it held comes with the turn's end as the reply's last words.
+    #[test]
+    fn a_reply_s_unclosed_escape_string_gives_its_words_back_at_the_end() {
+        let (mut turn, text) = numbered(&[(3, said("see \x1b]8;;")), (4, said("the answer"))]);
+        assert_eq!(text.concat(), "see ");
+        assert_eq!(
+            turn.end(7).and_then(|answered| answered.rest).as_deref(),
+            Some("8;;the answer")
+        );
     }
 
     /// codex-acp 2.5.0 with a model that failed (letter-47671, frames
@@ -586,7 +665,7 @@ mod tests {
         let title =
             json!({"sessionUpdate": "session_info_update", "title": "fail please @@fail429"});
         let read = |mark, updates: &[Value]| {
-            let mut turn = TurnReader::new(None, mark);
+            let mut turn = TurnReader::new(None, mark, None);
             turn.start(7, 0);
             let text: String = updates
                 .iter()
@@ -652,7 +731,7 @@ mod tests {
     /// cap still gives the failure line its first words.
     #[test]
     fn a_failed_turn_s_words_are_cut_at_the_cap_and_say_so() {
-        let mut turn = TurnReader::new(None, AdapterId::CODEX.failed_turn_mark());
+        let mut turn = TurnReader::new(None, AdapterId::CODEX.failed_turn_mark(), None);
         turn.start(7, 0);
         let long = "한도를 넘었어요 ".repeat(400);
         assert!(long.len() > MAX_FAILURE_BYTES);

@@ -4,6 +4,8 @@
 //! conversation, the choices and the one [`host::Host`] it runs.
 
 pub mod adapter;
+pub mod commands;
+mod escapes;
 pub mod host;
 pub mod install;
 pub mod permission;
@@ -47,19 +49,57 @@ impl Placement {
     }
 }
 
-/// A later message in a session, with the setting's line before it when the
-/// operator changed it since the session was told.
-pub fn next_message(placement: Option<Placement>, message: &str) -> String {
-    match placement {
-        Some(placement) => format!("{}\n\nThe operator's message:\n{message}", placement.line()),
-        None => message.to_owned(),
+/// What one session has been told of Desk's guide, which decides how each
+/// message goes to it. A session that opened new gets the guide
+/// ([`INSTRUCTIONS`]), where work goes and the conversation carried from
+/// the agent before with its first ordinary message; a later message gets
+/// the line of where work goes before it when the operator changed that
+/// setting since the session was told. A message that runs one of the
+/// agent's commands ([`commands::Kind::Command`]) goes as written, with
+/// nothing before it, so the agent reads it as its command: what it would
+/// have carried goes with the next ordinary message.
+#[derive(Debug, Default)]
+pub struct Guide {
+    /// The guide is still to be told, with the conversation carried.
+    pending: Option<Option<String>>,
+    /// The setting the session was last told.
+    placement: Option<Placement>,
+}
+
+impl Guide {
+    /// A session that opened new, with the conversation it carries.
+    pub fn new_session(carried: Option<String>) -> Self {
+        Self {
+            pending: Some(carried),
+            placement: None,
+        }
+    }
+
+    /// A session loaded again, which was told the guide when it was new.
+    pub fn resumed() -> Self {
+        Self::default()
+    }
+
+    /// The text the session gets for the operator's `message`.
+    pub fn message(&mut self, placement: Placement, kind: commands::Kind, message: &str) -> String {
+        if kind == commands::Kind::Command {
+            return message.to_owned();
+        }
+        let told = self.placement.replace(placement);
+        match self.pending.take() {
+            Some(carried) => first_message(placement, carried.as_deref(), message),
+            None if told != Some(placement) => {
+                format!("{}\n\nThe operator's message:\n{message}", placement.line())
+            }
+            None => message.to_owned(),
+        }
     }
 }
 
 /// The first message a session gets: Desk's instructions, where work goes,
 /// the conversation carried from the agent before (when the operator
 /// switched agents), then the operator's message.
-pub fn first_message(placement: Placement, carried: Option<&str>, message: &str) -> String {
+fn first_message(placement: Placement, carried: Option<&str>, message: &str) -> String {
     let mut text = String::from(INSTRUCTIONS);
     text.push('\n');
     text.push_str(placement.line());
@@ -230,6 +270,7 @@ fn closing(text: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use commands::Kind;
 
     #[test]
     fn a_plain_refusal_forbids_another_way_and_a_line_is_the_operator_s_word() {
@@ -250,6 +291,70 @@ mod tests {
         );
         assert!(line.ends_with("The operator's message:\nkeep build, clean dist"));
         assert!(!line.contains(REFUSED_DO_NOT_RETRY));
+    }
+
+    #[test]
+    fn a_new_session_s_first_command_goes_alone_and_the_guide_goes_with_the_next_message() {
+        let mut guide = Guide::new_session(Some("operator: hi".into()));
+        assert_eq!(
+            guide.message(Placement::Worktree, Kind::Command, "/compact"),
+            "/compact"
+        );
+        assert_eq!(
+            guide.message(Placement::Worktree, Kind::Command, "/context"),
+            "/context"
+        );
+        let next = guide.message(Placement::Worktree, Kind::Message, "fix the login");
+        assert!(next.starts_with(INSTRUCTIONS), "{next}");
+        assert!(next.contains(Placement::Worktree.line()));
+        assert!(next.contains("<conversation>\noperator: hi\n</conversation>"));
+        assert!(next.ends_with("The operator's message:\nfix the login"));
+        // Told once: the guide goes no more.
+        assert_eq!(
+            guide.message(Placement::Worktree, Kind::Message, "and the docs"),
+            "and the docs"
+        );
+    }
+
+    #[test]
+    fn a_new_session_s_first_message_carries_the_guide() {
+        let mut guide = Guide::new_session(None);
+        let first = guide.message(Placement::PerTask, Kind::Message, "hello");
+        assert!(first.starts_with(INSTRUCTIONS));
+        assert!(!first.contains("<conversation>"));
+        assert_eq!(
+            guide.message(Placement::PerTask, Kind::Message, "again"),
+            "again"
+        );
+    }
+
+    #[test]
+    fn a_changed_setting_s_line_waits_past_a_command_for_the_next_message() {
+        let mut guide = Guide::resumed();
+        // A loaded session was told the guide once; the setting's line goes
+        // before its first message here.
+        assert_eq!(
+            guide.message(Placement::Checkout, Kind::Message, "go"),
+            format!(
+                "{}\n\nThe operator's message:\ngo",
+                Placement::Checkout.line()
+            )
+        );
+        assert_eq!(
+            guide.message(Placement::Checkout, Kind::Message, "on"),
+            "on"
+        );
+        assert_eq!(
+            guide.message(Placement::Worktree, Kind::Command, "/compact"),
+            "/compact"
+        );
+        assert_eq!(
+            guide.message(Placement::Worktree, Kind::Message, "next"),
+            format!(
+                "{}\n\nThe operator's message:\nnext",
+                Placement::Worktree.line()
+            )
+        );
     }
 
     #[test]

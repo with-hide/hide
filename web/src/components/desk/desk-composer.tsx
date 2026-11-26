@@ -1,4 +1,4 @@
-import { ArrowUpIcon, ChevronDownIcon, LoaderCircleIcon, PaperclipIcon, ShieldIcon, SquareIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, ChevronDownIcon, HandIcon, LoaderCircleIcon, PaperclipIcon, ShieldIcon, SquareIcon, XIcon, type LucideIcon } from "lucide-react";
 import { useRef, type ClipboardEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { MAX_BATCH_BYTES, MAX_FILE_BYTES, MAX_FILES } from "../../attachments";
 import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskPermission, DeskSelection } from "../../desk";
@@ -22,6 +22,7 @@ import { Hint } from "../ui/tooltip";
 import { composingKey } from "../../keys";
 import { useNoticeFloor } from "../../noticeFloor";
 import type { DeskDraft } from "../../ui";
+import { DESK_MENU_DROPDOWN, DESK_MENU_GAP, DESK_MENU_HEADING, DESK_MENU_PANEL } from "./desk-menu";
 import { useFileDropOver } from "./file-drop";
 import { MentionInput, type MentionInputHandle } from "./mention-input";
 
@@ -203,7 +204,7 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, tray,
           </div>
         </PopoverAnchor>
         {menu ? (
-          <PopoverContent side="top" align="start" className="p-none" onOpenAutoFocus={(event) => event.preventDefault()} data-desk-mention-popover="true">
+          <PopoverContent side="top" align="start" sideOffset={DESK_MENU_GAP} className={DESK_MENU_PANEL} onOpenAutoFocus={(event) => event.preventDefault()} data-desk-mention-popover="true">
             {menu}
           </PopoverContent>
         ) : null}
@@ -268,7 +269,7 @@ function BarMenu({ name, value, open, onOpenChange, highlight = false, wide = fa
           </Button>
         </DropdownMenuTrigger>
       </Hint>
-      <DropdownMenuContent align="end" side="top" className={wide ? "w-(--size-picker-popover) max-w-(--radix-dropdown-menu-content-available-width)" : "min-w-(--size-tab-preferred)"}>{children}</DropdownMenuContent>
+      <DropdownMenuContent align="end" side="top" sideOffset={DESK_MENU_GAP} className={cn(DESK_MENU_DROPDOWN, wide ? "w-(--size-picker-popover) max-w-(--radix-dropdown-menu-content-available-width)" : "min-w-(--size-tab-preferred)")}>{children}</DropdownMenuContent>
     </DropdownMenu>
   );
 }
@@ -302,7 +303,7 @@ export function DeskAgentBar({ agents, selection, open = null, onAgent, onModel,
     <div className="flex min-w-0 items-center justify-end gap-xxs" data-desk-agent-bar="true">
       {chosenWord && chosenWord !== "signed_in" ? <span className="mr-auto min-w-0 truncate"><AgentWord word={chosenWord} data-desk-agent-bar-state={chosenWord} /></span> : null}
       <BarMenu name={t("desk.bar.agent")} value={agent ? <><AgentMark kind={agent.id} />{agent.label}</> : t("desk.bar.agent")} open={open === "agent" ? true : undefined} highlight={open === "agent"} data-desk-bar="agent">
-        <DropdownMenuLabel className="flex items-center justify-between gap-sm">
+        <DropdownMenuLabel className={cn("flex items-center justify-between gap-sm", DESK_MENU_HEADING)}>
           <span>{t("desk.bar.agent")}</span>
           <span className="font-normal text-muted-foreground" data-desk-agent-count={registered}>{t("desk.bar.registered", { n: registered })}</span>
         </DropdownMenuLabel>
@@ -352,6 +353,12 @@ const PERMISSION_NAME: Record<DeskPermission, MessageKey> = {
   agent: "desk.permission.agent",
 };
 
+/** Each level's mark (feedback 1 frame P 가): a shield for `다 허용`, a raised hand for `에이전트대로`, which stops at each ask. */
+const PERMISSION_ICON: Record<DeskPermission, LucideIcon> = {
+  allow_all: ShieldIcon,
+  agent: HandIcon,
+};
+
 /**
  * Under Desk's composer, before the agent (D-92, feedback 1 frame A2): how
  * Desk answers what its agent asks to run, the same for every agent. `다
@@ -368,23 +375,28 @@ export function DeskPermissionMenu({ permission, agent, open, onPermission }: {
   onPermission: (permission: DeskPermission) => void;
 }) {
   const { t } = useInterfaceTranslation();
+  const Chosen = PERMISSION_ICON[permission];
   return (
-    <BarMenu name={t("desk.permission.name")} value={<><ShieldIcon aria-hidden="true" className="size-(--size-icon-sm)" />{t(PERMISSION_NAME[permission])}</>} open={open} highlight={open} wide data-desk-bar="permissions" data-desk-permission={permission}>
-      <DropdownMenuLabel className="font-normal text-muted-foreground">{t("desk.permission.heading")}</DropdownMenuLabel>
+    <BarMenu name={t("desk.permission.name")} value={<><Chosen aria-hidden="true" className="size-(--size-icon-sm)" />{t(PERMISSION_NAME[permission])}</>} open={open} highlight={open} wide data-desk-bar="permissions" data-desk-permission={permission}>
+      <DropdownMenuLabel className={DESK_MENU_HEADING}>{t("desk.permission.heading")}</DropdownMenuLabel>
       <DropdownMenuRadioGroup value={permission} onValueChange={(value) => value !== permission && onPermission(value as DeskPermission)}>
-        {PERMISSIONS.map((one) => (
-          <DropdownMenuRadioItem key={one} value={one} mark="check" className="items-start" data-desk-permission-choice={one}>
+        {PERMISSIONS.map((one) => {
+          const Icon = PERMISSION_ICON[one];
+          return (
+          <DropdownMenuRadioItem key={one} value={one} className="items-start gap-sm" data-desk-permission-choice={one}>
+            <Icon aria-hidden="true" className="mt-xxs size-(--size-icon) text-foreground" data-desk-permission-icon={one} />
             <span className="flex min-w-0 flex-col gap-xxs">
               <span className="flex items-center gap-xs text-foreground">
                 {t(PERMISSION_NAME[one])}
-                {one === "allow_all" ? <Badge variant="secondary">{t("desk.permission.default")}</Badge> : null}
+                {one === "allow_all" ? <Badge variant="outline">{t("desk.permission.default")}</Badge> : null}
               </span>
               <span className="whitespace-normal break-keep text-caption text-subtle-foreground">
                 {one === "allow_all" ? t("desk.permission.allow_allDetail") : t("desk.permission.agentDetail", { agent: agent ?? t("desk.bar.agent") })}
               </span>
             </span>
           </DropdownMenuRadioItem>
-        ))}
+          );
+        })}
       </DropdownMenuRadioGroup>
     </BarMenu>
   );

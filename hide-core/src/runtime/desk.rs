@@ -93,6 +93,25 @@ pub(super) struct Desk {
     /// opened: their word reads signed out whatever Hide AI's read of the
     /// login says, since a login file can outlive its sign-in.
     sign_in_refused: BTreeSet<AdapterId>,
+    /// Each agent's commands as its last session listed them, so a new
+    /// conversation's first `/` has a list before its session opens, after
+    /// a restart too (`commands_store`, letter-48626); empty from a
+    /// session's open until the agent sends one, then replaced whole by each
+    /// list it sends; none for an agent that never sent one.
+    commands: crate::desk::CommandLists,
+    /// The file each list the agents send is saved to, off the lock.
+    commands_store: Option<crate::desk::DeskCommandsStore>,
+    /// The session that opened new on a command and has not been told
+    /// Desk's guide yet, which goes with its first ordinary message
+    /// (`hide_desk::Guide`). It joins `stored.sessions` only once that
+    /// message's turn ended done in an open session (`desk_session_told`),
+    /// so a session loaded again is always one that was told. Each open
+    /// sets it afresh, so one left by a process that ended first (its end,
+    /// a failed open, a switch, a new conversation, Desk off) is never
+    /// stored: the next message opens a new session that carries the
+    /// conversation. It lives in memory only, since a session never told
+    /// is never loaded again.
+    untold: Option<(AdapterId, String)>,
     /// The queued starts the queue handed to be run, in order; tests answer
     /// them themselves.
     #[cfg(test)]
@@ -141,6 +160,10 @@ struct Turn {
     steps: crate::model::DeskSteps,
     /// What its newest tool call does, until the agent writes again.
     now: Option<crate::model::DeskStepKind>,
+    /// The compaction the agent told outside its reply.
+    compaction: Option<crate::model::DeskCompaction>,
+    /// How its message goes: a command opens no session to load again.
+    kind: hide_desk::commands::Kind,
 }
 
 /// A card waiting for the operator, and how to answer the agent.
@@ -331,6 +354,18 @@ impl Runtime {
         self.desk.store = Some(store);
         self.desk.stored = stored;
         self.compose_desk_sections();
+    }
+
+    /// The command lists the last run kept, read before the lock by the
+    /// caller, and the file the lists sent from now on are saved to.
+    pub(crate) fn install_desk_commands(
+        &mut self,
+        store: crate::desk::DeskCommandsStore,
+        lists: crate::desk::CommandLists,
+    ) {
+        self.desk.commands_store = Some(store);
+        self.desk.commands = lists;
+        self.compose_desk_commands();
     }
 
     /// Starts Desk's worker with what `hided` provides, and looks at the
@@ -533,6 +568,22 @@ impl Runtime {
         if self.desk_agent_state(agent) != DeskAgentState::Ready {
             return refused("agent_not_ready");
         }
+        // A command Desk keeps from this agent never goes: the message
+        // stays in the conversation with the notice that says so.
+        if hide_desk::commands::kind(agent, self.desk_commands_of(agent), text)
+            == hide_desk::commands::Kind::LeftOut
+        {
+            let id = self.desk.stored.conversation.next_id();
+            self.desk.stored.conversation.push(DeskItem::User {
+                id,
+                text: text.to_owned(),
+                at_ms: crate::links::now_ms(),
+                mentions: payload.mentions,
+                attachments: files,
+            });
+            self.push_notice(DeskNotice::CommandLeftOut, Some(agent), None);
+            return true;
+        }
         // While a reply is being written, or earlier messages still wait,
         // the message waits its turn with its files (letter-47148).
         if self.desk.turn.is_some() || !self.desk.stored.queued.is_empty() {
@@ -605,6 +656,9 @@ impl Runtime {
     /// in it end with it.
     fn desk_close_turn(&mut self, outcome: TurnOutcome) {
         self.close_approvals();
+        if matches!(outcome, TurnOutcome::Done) {
+            self.desk_session_told();
+        }
         match outcome {
             TurnOutcome::Done => self.finish_turn(DeskReplyState::Done),
             TurnOutcome::Cancelled | TurnOutcome::Ended => {
@@ -708,8 +762,19 @@ impl Runtime {
         attachments: Vec<DeskAttachment>,
     ) {
         let files: Vec<String> = attachments.iter().map(|file| file.path.clone()).collect();
-        let quoted: String = files.iter().map(|path| format!("\"{path}\" ")).collect();
-        let sent = format!("{quoted}{sent}");
+        let kind = hide_desk::commands::kind(agent, self.desk_commands_of(agent), &sent);
+        // A command is the prompt's first words, so its files follow it.
+        let sent = match (kind, files.is_empty()) {
+            (_, true) => sent,
+            (hide_desk::commands::Kind::Command, false) => {
+                let quoted: Vec<String> = files.iter().map(|path| format!("\"{path}\"")).collect();
+                format!("{sent} {}", quoted.join(" "))
+            }
+            (_, false) => {
+                let quoted: String = files.iter().map(|path| format!("\"{path}\" ")).collect();
+                format!("{quoted}{sent}")
+            }
+        };
         let node = (!files.is_empty()).then(|| self.own_node());
         let carried = (!self.desk.host.open)
             .then(|| self.desk.stored.conversation.carried())
@@ -737,6 +802,8 @@ impl Runtime {
             first_text_at_ms: None,
             steps: Default::default(),
             now: None,
+            compaction: None,
+            kind,
         });
         let resume = self
             .desk
@@ -753,6 +820,7 @@ impl Runtime {
             resume,
             model: self.desk.stored.selection.model.clone(),
             effort: self.desk.stored.selection.effort.clone(),
+            kind,
             placement: match self.desk.stored.settings.location {
                 DeskLocation::Desk => hide_desk::Placement::PerTask,
                 DeskLocation::Worktree => hide_desk::Placement::Worktree,
@@ -926,6 +994,31 @@ impl Runtime {
         }
     }
 
+    /// An ordinary message's turn that ended done told the untold session
+    /// its guide, so the session is stored to load again.
+    fn desk_session_told(&mut self) {
+        let Some(agent) = self
+            .desk
+            .turn
+            .as_ref()
+            .filter(|turn| turn.kind == hide_desk::commands::Kind::Message)
+            .map(|turn| turn.agent)
+        else {
+            return;
+        };
+        if !self.desk.host.open {
+            return;
+        }
+        if let Some((untold, session)) = self.desk.untold.take_if(|(untold, _)| *untold == agent) {
+            self.desk
+                .stored
+                .sessions
+                .retain(|(stored, _)| *stored != untold);
+            self.desk.stored.sessions.push((untold, session));
+            self.save_desk();
+        }
+    }
+
     /// Ends the Desk process from the room: the reply under way stops, and
     /// each waiting card closes as a refusal.
     fn end_desk_process(&mut self) {
@@ -973,7 +1066,8 @@ impl Runtime {
                 to: agent,
                 carried,
             });
-            // The new agent's session starts with the conversation carried.
+            // The new agent's session starts with the conversation carried,
+            // and the one left, ended by the next send, is told nothing more.
             self.desk
                 .stored
                 .sessions
@@ -1137,12 +1231,18 @@ impl Runtime {
         self.desk.stored.selection.agent
     }
 
-    /// Ends the turn: its reply joins the conversation.
+    /// Ends the turn: its reply joins the conversation. A command that ends
+    /// as it should without a word, and without a compaction its adapter
+    /// tells, still answers: its empty reply is the line that it finished,
+    /// whichever agent ran it (letter-48464).
     fn finish_turn(&mut self, state: DeskReplyState) {
         let Some(turn) = self.desk.turn.take() else {
             return;
         };
-        if !turn.text.is_empty() {
+        let finished_command = state == DeskReplyState::Done
+            && !turn.cut
+            && turn.kind == hide_desk::commands::Kind::Command;
+        if !turn.text.is_empty() || turn.compaction.is_some() || finished_command {
             let id = self.desk.stored.conversation.next_id();
             // Each chip's token is kept as the chip names it, a quoted name without its quotes.
             let text = hide_desk::unquoted_mentions(&turn.text);
@@ -1175,6 +1275,7 @@ impl Runtime {
                 steps: turn.steps,
                 mentions,
                 missions,
+                compaction: turn.compaction,
             });
             // The sessions it names get their cards (D-86).
             self.compose_desk_jobs();
@@ -1250,12 +1351,34 @@ impl Runtime {
                 self.desk
                     .agents
                     .insert(adapter, (DeskAgentState::Ready, None));
+                let new = resume_failed
+                    || !self
+                        .desk
+                        .stored
+                        .sessions
+                        .iter()
+                        .any(|(stored, _)| *stored == adapter);
                 self.desk
                     .stored
                     .sessions
                     .retain(|(stored, _)| *stored != adapter);
-                self.desk.stored.sessions.push((adapter, session_id));
+                // A new session whose first message is a command is not told
+                // the guide yet; it is kept to load again once it is.
+                let command = self
+                    .desk
+                    .turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.kind == hide_desk::commands::Kind::Command);
+                self.desk.untold = None;
+                if new && command {
+                    self.desk.untold = Some((adapter, session_id));
+                } else {
+                    self.desk.stored.sessions.push((adapter, session_id));
+                }
                 self.learn_choices(adapter, &choices);
+                // An open session has its list, empty until the agent sends
+                // one: the `/` menu no longer waits for it.
+                self.desk.commands.entry(adapter).or_default();
                 self.forget_stopped();
                 self.desk.held = false;
                 self.desk.sign_in_refused.remove(&adapter);
@@ -1472,6 +1595,48 @@ impl Runtime {
                 });
                 self.save_desk();
             }
+            Report::Commands { adapter, commands } => {
+                if self.desk.commands.get(&adapter) == Some(&commands.commands) {
+                    return false;
+                }
+                if commands.cut > 0 {
+                    crate::diagnostic!(json!({
+                        "component": "desk",
+                        "kind": "desk.commands_cut",
+                        "adapter": adapter.as_str(),
+                        "kept": commands.commands.len(),
+                        "cut": commands.cut,
+                    }));
+                }
+                self.desk.commands.insert(adapter, commands.commands);
+                // The lists the agents sent, not the empty ones an open
+                // stands in with: an agent never heard from still says the
+                // list comes with the first message.
+                if let Some(store) = &self.desk.commands_store {
+                    let mut sent = self.desk.commands.clone();
+                    sent.retain(|_, list| !list.is_empty());
+                    store.save(sent);
+                }
+                self.compose_desk_commands();
+                return true;
+            }
+            Report::Compacted { tag, compaction } => {
+                if let Some(turn) = self.desk.turn.as_mut().filter(|turn| turn.tag == tag) {
+                    turn.compaction = Some(match compaction {
+                        hide_desk::adapter::Compaction::Done => crate::model::DeskCompaction {
+                            done: true,
+                            reason: None,
+                        },
+                        hide_desk::adapter::Compaction::Failed(reason) => {
+                            crate::model::DeskCompaction {
+                                done: false,
+                                reason,
+                            }
+                        }
+                    });
+                }
+                return false;
+            }
             Report::Choices { adapter, choices } => {
                 if !self.learn_choices(adapter, &choices) {
                     return false;
@@ -1650,6 +1815,8 @@ impl Runtime {
             settings: desk.stored.settings,
             lane: desk.stored.lane,
         }));
+        // The `/` menu follows the agent chosen.
+        self.compose_desk_commands();
     }
 
     /// Desk's agents as the catalog says them now, in its order.
@@ -1697,6 +1864,34 @@ impl Runtime {
         self.compose_desk();
         self.compose_desk_jobs();
         self.compose_desk_mentions();
+    }
+
+    /// The commands `agent` listed last, while hided runs; none before it
+    /// sent a list.
+    fn desk_commands_of(&self, agent: AdapterId) -> &[hide_desk::commands::Command] {
+        self.desk.commands.get(&agent).map_or(&[], Vec::as_slice)
+    }
+
+    /// The `desk_commands` section, the selected agent's list, sent again
+    /// only when that agent or its list moved.
+    fn compose_desk_commands(&mut self) {
+        if self.desk.worker.is_none() {
+            return;
+        }
+        let agent = self.desk.stored.selection.agent;
+        let commands = agent.and_then(|agent| self.desk.commands.get(&agent));
+        if self
+            .snapshot
+            .desk_commands
+            .as_deref()
+            .is_some_and(|shown| shown.agent == agent && shown.commands.as_ref() == commands)
+        {
+            return;
+        }
+        self.snapshot.desk_commands = Some(Arc::new(crate::model::DeskCommandsSnapshot {
+            agent,
+            commands: commands.cloned(),
+        }));
     }
 
     fn compose_desk_live(&mut self) {
@@ -3852,5 +4047,350 @@ mod tests {
             );
         }
         assert_eq!(lane(&runtime), crate::model::DeskLane::default());
+    }
+
+    fn listed(runtime: &mut Runtime, adapter: AdapterId, names: &[&str]) {
+        let update = json!({"sessionUpdate": "available_commands_update", "availableCommands":
+            names.iter().map(|name| json!({"name": name, "description": format!("{name} it")})).collect::<Vec<_>>()});
+        runtime.desk_report(Report::Commands {
+            adapter,
+            commands: hide_desk::commands::read(adapter, &update),
+        });
+    }
+
+    fn slash(runtime: &Runtime) -> (Option<AdapterId>, Vec<String>) {
+        let section = runtime
+            .snapshot
+            .desk_commands
+            .as_ref()
+            .expect("desk_commands");
+        (
+            section.agent,
+            section
+                .commands
+                .iter()
+                .flatten()
+                .map(|command| command.name.clone())
+                .collect(),
+        )
+    }
+
+    /// The `/` menu is the selected agent's last list, with what its
+    /// definition leaves out gone, and it stays for the next conversation,
+    /// whose session has not opened yet.
+    #[test]
+    fn the_slash_section_is_the_selected_agent_s_last_list_and_outlives_its_conversation() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        // No list until the agent's session opens, then the one it sends,
+        // empty until it sends one.
+        let commands = |runtime: &Runtime| {
+            runtime
+                .snapshot
+                .desk_commands
+                .as_ref()
+                .unwrap()
+                .commands
+                .clone()
+        };
+        assert_eq!(commands(&runtime), None);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        assert_eq!(commands(&runtime), Some(Vec::new()));
+        listed(
+            &mut runtime,
+            AdapterId::CLAUDE,
+            &["compact", "config", "context", "remote-control"],
+        );
+        assert_eq!(
+            slash(&runtime),
+            (
+                Some(AdapterId::CLAUDE),
+                vec!["/compact".to_owned(), "/context".to_owned()]
+            )
+        );
+        // Another agent's list never shows under Claude.
+        listed(&mut runtime, AdapterId::PI, &["session"]);
+        assert_eq!(slash(&runtime).1, ["/compact", "/context"]);
+        event(&mut runtime, "desk_select", json!({"agent": "pi"}));
+        assert_eq!(
+            slash(&runtime),
+            (Some(AdapterId::PI), vec!["/session".to_owned()])
+        );
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        event(&mut runtime, "desk_new_conversation", json!({}));
+        assert_eq!(slash(&runtime).1, ["/compact", "/context"]);
+        // A new list replaces the old one whole.
+        listed(&mut runtime, AdapterId::CLAUDE, &["review"]);
+        assert_eq!(slash(&runtime).1, ["/review"]);
+    }
+
+    /// letter-48626: each agent's last list outlives hided, so after a
+    /// restart `/` lists it before any session opens; a list the agent then
+    /// sends replaces it on disk too, and an agent that sent none (or only
+    /// an open's empty stand-in) is saved as none.
+    #[test]
+    fn an_agent_s_last_list_is_listed_again_after_a_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("state/desk/commands.json");
+        let start = |root: &std::path::Path| {
+            let (mut runtime, received) = runtime(root);
+            let store = crate::desk::DeskCommandsStore::new(path.clone());
+            let lists = store.restore();
+            runtime.install_desk_commands(store, lists);
+            event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+            (runtime, received)
+        };
+        let (mut runtime, _received) = start(root.path());
+        assert_eq!(slash(&runtime), (Some(AdapterId::CLAUDE), Vec::new()));
+        opened(&mut runtime, AdapterId::PI);
+        listed(&mut runtime, AdapterId::CLAUDE, &["compact", "context"]);
+        // Dropping the runtime joins its save, as quitting does.
+        drop(runtime);
+        let (mut runtime, _received) = start(root.path());
+        assert_eq!(slash(&runtime).1, ["/compact", "/context"]);
+        let saved = crate::desk::DeskCommandsStore::new(path.clone()).restore();
+        assert_eq!(
+            saved.keys().copied().collect::<Vec<_>>(),
+            [AdapterId::CLAUDE]
+        );
+        listed(&mut runtime, AdapterId::CLAUDE, &["review"]);
+        drop(runtime);
+        let (runtime, _received) = start(root.path());
+        assert_eq!(slash(&runtime).1, ["/review"]);
+    }
+
+    /// A message whose first word is a command the agent listed goes as
+    /// written, its files after it; any other message, and a command the
+    /// agent has not listed, is a message.
+    #[test]
+    fn a_listed_command_goes_as_a_command_with_its_files_after_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        let turn = |runtime: &mut Runtime, payload: Value| {
+            event(runtime, "desk_send", payload);
+            let send = sent(&received);
+            runtime.desk_report(Report::TurnEnded {
+                tag: send.tag,
+                outcome: TurnOutcome::Done,
+            });
+            (send.kind, send.text)
+        };
+        use hide_desk::commands::Kind;
+        // No list yet: a `/` word is the operator's words.
+        assert_eq!(
+            turn(&mut runtime, json!({"text": "/compact"})),
+            (Kind::Message, "/compact".to_owned())
+        );
+        listed(&mut runtime, AdapterId::CLAUDE, &["compact"]);
+        assert_eq!(
+            turn(&mut runtime, json!({"text": "/compact keep the plan"})),
+            (Kind::Command, "/compact keep the plan".to_owned())
+        );
+        let file = json!([{"name": "a.png", "bytes": 3, "path": "/d/a.png"}]);
+        assert_eq!(
+            turn(&mut runtime, json!({"text": "/compact", "files": file})),
+            (Kind::Command, "/compact \"/d/a.png\"".to_owned())
+        );
+        assert_eq!(
+            turn(&mut runtime, json!({"text": "look", "files": file})),
+            (Kind::Message, "\"/d/a.png\" look".to_owned())
+        );
+        assert_eq!(
+            turn(&mut runtime, json!({"text": "/compactly"})),
+            (Kind::Message, "/compactly".to_owned())
+        );
+    }
+
+    /// A command the agent's definition leaves out never reaches it, listed
+    /// or not: the message stays in the conversation with a notice.
+    #[test]
+    fn a_left_out_command_is_never_sent_and_the_conversation_says_so() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        assert!(event(&mut runtime, "desk_send", json!({"text": "/logout"})));
+        assert!(
+            received
+                .try_iter()
+                .all(|order| !matches!(order, Order::Send(_)))
+        );
+        // The last two lines: the operator's message and the notice under it.
+        let items = items(&runtime);
+        assert!(
+            matches!(&items[items.len().saturating_sub(2)..], [
+                DeskItem::User { text, .. },
+                DeskItem::Notice { notice: DeskNotice::CommandLeftOut, agent: Some(AdapterId::CODEX), .. },
+            ] if text == "/logout"),
+            "{items:?}"
+        );
+        // The same words to an agent that keeps the command go.
+        event(&mut runtime, "desk_select", json!({"agent": "pi"}));
+        event(&mut runtime, "desk_send", json!({"text": "/logout"}));
+        assert_eq!(sent(&received).text, "/logout");
+    }
+
+    /// A session that opened new on a command has not been told Desk's
+    /// guide: if its process ends before an ordinary message, the next
+    /// message opens a new session (which the worker tells the guide and
+    /// the conversation) rather than load the untold one; once an ordinary
+    /// message went, the session is loaded again.
+    #[test]
+    fn a_session_opened_on_a_command_is_loaded_again_only_once_told() {
+        let ended = |runtime: &mut Runtime| {
+            runtime.desk_report(Report::Ended {
+                unexpected: false,
+                detail: None,
+                turn: None,
+            });
+        };
+        let finished = |runtime: &mut Runtime, tag: u64| {
+            runtime.desk_report(Report::TurnEnded {
+                tag,
+                outcome: TurnOutcome::Done,
+            });
+        };
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        listed(&mut runtime, AdapterId::CLAUDE, &["context"]);
+        event(&mut runtime, "desk_send", json!({"text": "/context"}));
+        let first = sent(&received);
+        assert_eq!(
+            (first.kind, first.resume),
+            (hide_desk::commands::Kind::Command, None)
+        );
+        opened(&mut runtime, AdapterId::CLAUDE);
+        finished(&mut runtime, first.tag);
+        // Desk off and on, 다시 시작, a switch and back, a restart: the
+        // process ends before the guide went.
+        ended(&mut runtime);
+        event(&mut runtime, "desk_send", json!({"text": "what is in it?"}));
+        let next = sent(&received);
+        assert_eq!(next.resume, None);
+        assert!(
+            next.carried
+                .as_deref()
+                .is_some_and(|carried| carried.contains("Operator: /context")),
+            "{:?}",
+            next.carried
+        );
+        // The new session hears the guide with that message, so it is the
+        // one loaded after the next end.
+        runtime.desk_report(Report::Opened {
+            adapter: AdapterId::CLAUDE,
+            session_id: "told-session".into(),
+            resume_failed: false,
+            choices: Choices::default(),
+        });
+        finished(&mut runtime, next.tag);
+        ended(&mut runtime);
+        event(&mut runtime, "desk_send", json!({"text": "and now?"}));
+        assert_eq!(sent(&received).resume.as_deref(), Some("told-session"));
+
+        // An ordinary message in the same process tells the session opened
+        // on a command, which is then loaded again.
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = self::runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        listed(&mut runtime, AdapterId::CLAUDE, &["context"]);
+        event(&mut runtime, "desk_send", json!({"text": "/context"}));
+        let first = sent(&received);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        finished(&mut runtime, first.tag);
+        event(&mut runtime, "desk_send", json!({"text": "what is in it?"}));
+        let told = sent(&received);
+        finished(&mut runtime, told.tag);
+        ended(&mut runtime);
+        event(&mut runtime, "desk_send", json!({"text": "and now?"}));
+        assert_eq!(sent(&received).resume.as_deref(), Some("claude-session"));
+
+        // An ordinary message whose turn failed may never have reached the
+        // agent: the session stays untold and is not loaded again.
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = self::runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        listed(&mut runtime, AdapterId::CLAUDE, &["context"]);
+        event(&mut runtime, "desk_send", json!({"text": "/context"}));
+        let first = sent(&received);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        finished(&mut runtime, first.tag);
+        event(&mut runtime, "desk_send", json!({"text": "what is in it?"}));
+        let failed = sent(&received);
+        runtime.desk_report(Report::TurnEnded {
+            tag: failed.tag,
+            outcome: TurnOutcome::Failed(None),
+        });
+        ended(&mut runtime);
+        event(&mut runtime, "desk_send", json!({"text": "and now?"}));
+        assert_eq!(sent(&received).resume, None);
+    }
+
+    /// Antigravity's `/compact` (letter-48464): a command that ends as it
+    /// should with no words leaves an empty reply, the line that it
+    /// finished; a message that ends so, or a command stopped, leaves none.
+    #[test]
+    fn a_command_that_ends_without_a_word_still_answers() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        listed(&mut runtime, AdapterId::CLAUDE, &["compact"]);
+        let ends = |runtime: &mut Runtime, text: &str, outcome: TurnOutcome| {
+            event(runtime, "desk_send", json!({"text": text}));
+            let tag = sent(&received).tag;
+            if !runtime.desk.host.open {
+                opened(runtime, AdapterId::CLAUDE);
+            }
+            runtime.desk_report(Report::TurnEnded { tag, outcome });
+            items(runtime).pop()
+        };
+        let last = ends(&mut runtime, "/compact", TurnOutcome::Done);
+        assert!(
+            matches!(&last, Some(DeskItem::Reply { text, compaction: None, state: DeskReplyState::Done, .. }) if text.is_empty()),
+            "{last:?}"
+        );
+        let last = ends(&mut runtime, "hello", TurnOutcome::Done);
+        assert!(
+            matches!(&last, Some(DeskItem::User { text, .. }) if text == "hello"),
+            "{last:?}"
+        );
+        let last = ends(&mut runtime, "/compact", TurnOutcome::Cancelled);
+        assert!(
+            matches!(&last, Some(DeskItem::User { text, .. }) if text == "/compact"),
+            "{last:?}"
+        );
+    }
+
+    /// OpenCode tells `/compact`'s end only in its session's `_meta`: the
+    /// answer is that one line, not an empty reply.
+    #[test]
+    fn a_compaction_told_outside_the_reply_is_the_answer_s_line() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "opencode"}));
+        event(&mut runtime, "desk_send", json!({"text": "/compact"}));
+        let tag = sent(&received).tag;
+        opened(&mut runtime, AdapterId::OPENCODE);
+        runtime.desk_report(Report::Compacted {
+            tag,
+            compaction: hide_desk::adapter::Compaction::Failed(Some(
+                "Nothing to compact yet".into(),
+            )),
+        });
+        runtime.desk_report(Report::TurnEnded {
+            tag,
+            outcome: TurnOutcome::Done,
+        });
+        let last = items(&runtime).pop();
+        assert!(
+            matches!(&last, Some(DeskItem::Reply { text, compaction: Some(compaction), .. })
+            if text.is_empty()
+                && *compaction == crate::model::DeskCompaction {
+                    done: false,
+                    reason: Some("Nothing to compact yet".into()),
+                }),
+            "{last:?}"
+        );
     }
 }

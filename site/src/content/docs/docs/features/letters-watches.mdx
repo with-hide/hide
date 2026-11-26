@@ -21,15 +21,16 @@ You do not write letters. Agents do, with `hide` commands. You see their effects
 | --- | --- | --- |
 | `request` | Asks the other agent to do or answer something. | Yes |
 | `block` | Says the sender cannot go on without a reply. | Yes |
-| `progress` | An interim report, such as a plan or a checkpoint. Ends nothing. | No |
+| `progress` | An interim report, such as a plan or a checkpoint. Ends nothing and rings no bell: it arrives with the recipient's next letter. | No |
 | `report` | Says the work is finished. Ends the parent's watch on its sender. | No |
 
 An answer wait ends when the recipient replies, the sender cancels, either agent ends, or 24 hours pass.
 
 ### How a letter reaches an agent
 
-- **At rest.** Hide types one line into the agent's prompt: the owl `🦉`, the writer's name, the kind and the letter's first line, for example `🦉 label-end-fix report: label end fix opened PR #881`. The agent's hook then hands over the whole letter. Agents that Hide cannot type into take the letter on their next prompt.
+- **At rest.** For every letter but `progress`, Hide types one line into the agent's prompt: the owl `🦉`, the writer's name, the kind and the letter's first line, for example `🦉 label-end-fix report: label end fix opened PR #881`. The agent's hook then hands over the whole letter. Agents that Hide cannot type into take the letter on their next prompt.
 - **While it works.** A letter waits five minutes of unbroken work, then goes at the agent's next tool call or turn gap. A letter sent with `--now` skips the wait.
+- **Progress.** A `progress` letter rings no bell, at rest or while the agent works, even with `--now`: it arrives with the agent's next letter, at a tool call where the agent takes letters there, or through `hide inbox`. Anything the agent has to act on is a `request` or a `block`.
 - **Forced.** `--force` types the letter into the agent's input now, even while it works. Hide first reads the input: if someone is typing there, the send is refused with `composer_not_empty`.
 - **Asleep.** A `request` or `block` wakes a sleeping agent and resumes its conversation, at most four wakes at a time. A `report` or `progress` waits for the next wake. The time a letter waits does not run while the recipient sleeps, with one exception: a `request` or `block` whose bell already rang, or whose one wake had begun before the sleep, wakes no one, and its hour keeps running through the sleep.
 

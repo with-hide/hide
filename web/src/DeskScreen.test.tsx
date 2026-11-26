@@ -11,7 +11,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import type { DeskAgent, DeskItem, DeskJob, DeskOption, DeskOutput } from "./desk";
 import { DeskScreen, DeskSettingsPage } from "./DeskScreen";
 import { clientI18n } from "./i18n/translator";
-import type { DeskMentions, DeskRecord, DeskSection, SnapshotRest } from "./snapshot";
+import type { DeskCommands, DeskMentions, DeskRecord, DeskSection, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { DESK_ROOM_CLOSED } from "./deskRoom";
@@ -311,6 +311,115 @@ describe("Desk's room", () => {
   const box = () => document.body.querySelector<HTMLElement>("[data-desk-composer-input]")!;
   const key = async (name: string) => act(async () => { box().dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })); });
   const listed = () => Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-mention-session]")).map((row) => row.dataset.deskMentionSession);
+
+  const commands: DeskCommands = { agent: "claude", commands: [
+    { name: "/compact", description: "Clear history but keep a summary", hint: "what to keep" },
+    { name: "/context", description: "Show the context use" },
+    { name: "/code-review", description: "Review the diff" },
+  ] };
+  // Each draft mounts the room anew, so the caret starts at the draft's end as it does when Desk opens.
+  const withCommands = async (text: string, section: DeskCommands | null = commands) => {
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    useUiStore.setState({ deskDraft: { text, mentions: [] } });
+    await render(desk([]));
+    await act(async () => { useShellStore.setState({ deskCommands: section }); });
+  };
+  const commandRowsShown = () => Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-command]")).map((row) => row.dataset.deskCommand);
+
+  it("opens the agent's commands on a / at the box's start, filtered as typed, each with its hint and what it does", async () => {
+    await withCommands("/");
+    expect(commandRowsShown()).toEqual(["/compact", "/context", "/code-review"]);
+    const compact = document.body.querySelector("[data-desk-command='/compact']")!;
+    expect(compact.querySelector("[data-desk-command-hint]")?.textContent).toBe("what to keep");
+    expect(compact.querySelector("[data-desk-command-description]")?.textContent).toBe("Clear history but keep a summary");
+    expect(document.body.querySelector("[data-desk-command-menu]")?.textContent).toContain("Claude Code commands");
+
+    await withCommands("/con");
+    expect(commandRowsShown()).toEqual(["/context"]);
+    // A name that holds the words further in comes after the ones it starts.
+    await withCommands("/co");
+    expect(commandRowsShown()).toEqual(["/compact", "/context", "/code-review"]);
+    await withCommands("/review");
+    expect(commandRowsShown()).toEqual(["/code-review"]);
+  });
+
+  it("writes the picked command and one space with ↵, sends nothing, and closes with Esc", async () => {
+    await withCommands("/con");
+    await key("Enter");
+    expect(useUiStore.getState().deskDraft.text).toBe("/context ");
+    expect(sent("desk_send")).toEqual([]);
+    expect(commandRowsShown()).toEqual([]);
+
+    await withCommands("/co");
+    await key("ArrowDown");
+    await press("[data-desk-command='/code-review']");
+    expect(useUiStore.getState().deskDraft.text).toBe("/code-review ");
+
+    await withCommands("/co");
+    await key("Escape");
+    expect(commandRowsShown()).toEqual([]);
+    await key("Enter");
+    expect(sent("desk_send")).toEqual([{ text: "/co", mentions: [] }]);
+  });
+
+  it("opens no / menu for an agent whose session sent an empty list, past the first word or for a / inside the words", async () => {
+    const cases: [string, DeskCommands | null][] = [
+      ["/", { agent: "claude", commands: [] }],
+      ["/compact now", commands],
+      ["see /compact", commands],
+    ];
+    for (const [text, section] of cases) {
+      await withCommands(text, section);
+      expect(document.body.querySelector("[data-desk-command-menu]"), text).toBeNull();
+    }
+    // Another agent's list is never the chosen one's rows.
+    await withCommands("/", { agent: "codex", commands: commands.commands });
+    expect(commandRowsShown()).toEqual([]);
+    // With no menu ↵ sends the words as they are.
+    await withCommands("/", { agent: "claude", commands: [] });
+    await key("Enter");
+    expect(sent("desk_send")).toEqual([{ text: "/", mentions: [] }]);
+  });
+
+  it("says when no command matches, and ↵ then sends the words", async () => {
+    await withCommands("/zzz");
+    const line = document.body.querySelector<HTMLElement>("[data-desk-command-menu]");
+    expect(line?.dataset.deskCommandMenu).toBe("none");
+    expect(line?.textContent).toContain("No command matches");
+    expect(line?.textContent).toContain("Claude Code commands");
+    await key("Enter");
+    expect(sent("desk_send")).toEqual([{ text: "/zzz", mentions: [] }]);
+  });
+
+  it("says the list comes with the first message before the agent's session opened, and that it is on its way while the session opens", async () => {
+    await withCommands("/", null);
+    expect(document.body.querySelector<HTMLElement>("[data-desk-command-menu]")?.dataset.deskCommandMenu).toBe("first");
+    await act(async () => { useShellStore.setState({ desk: { ...desk([]), host: { state: "starting", detail: null } } }); });
+    const waiting = document.body.querySelector<HTMLElement>("[data-desk-command-menu]");
+    expect(waiting?.dataset.deskCommandMenu).toBe("waiting");
+    expect(waiting?.textContent).toContain("Getting the command list");
+  });
+
+  it("keeps the words typed after / bright in each name and mutes the rest", async () => {
+    await withCommands("/co");
+    expect(Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-command-match]")).map((name) => name.dataset.deskCommandMatch)).toEqual(["co", "co", "co"]);
+    await withCommands("/");
+    expect(document.body.querySelector("[data-desk-command-match]")).toBeNull();
+  });
+
+  it("shows a compaction the agent told outside its words as the answer's one line, a command that ended without a word as its own, and a left-out command's notice", async () => {
+    const reply = (compaction: { done: boolean; reason: string | null } | undefined, id: number): DeskItem => ({ kind: "reply", id, agent: "opencode", text: "", at_ms: 0, state: "done", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 }, mentions: [], missions: [], compaction });
+    await render(desk([
+      reply({ done: false, reason: "Nothing to compact yet" }, 1),
+      reply({ done: true, reason: null }, 2),
+      { kind: "notice", id: 3, notice: "command_left_out", agent: "codex", detail: null },
+      reply(undefined, 4),
+    ]));
+    const lines = Array.from(document.body.querySelectorAll("[data-desk-reply-compaction], [data-desk-reply-command-done]")).map((line) => line.textContent);
+    expect(lines).toEqual(["Couldn't compact the conversation · Nothing to compact yet", "Compacted the conversation", "Command finished"]);
+    expect(document.body.querySelector("[data-desk-notice='command_left_out']")?.textContent).toBe("Desk doesn't send this command to Codex");
+  });
 
   it("lists parents only in the @ menu, opens one with → or its fold and closes it with ← (B48)", async () => {
     useUiStore.setState({ deskDraft: { text: "@", mentions: [] } });
@@ -661,9 +770,9 @@ describe("Desk's room", () => {
         ["allow_all", "checked", "Allow allDefaultDoes it right away without asking."],
         ["agent", "unchecked", "As the agentAsks each time Claude Code asks, with its own answers."],
       ]);
-      // The chosen row is lit with a green ✓; the other has neither.
+      // Each row carries its level's mark, and only the chosen one the dot the composer's other menus mark theirs with.
       const rows = [...document.body.querySelectorAll<HTMLElement>("[data-desk-permission-choice]")];
-      expect(rows.map((row) => [row.className.includes("data-[state=checked]:bg-accent"), row.querySelector("svg")?.getAttribute("class")?.includes("text-success") ?? false])).toEqual([[true, true], [true, false]]);
+      expect(rows.map((row) => [row.querySelector("[data-desk-permission-icon]") !== null, row.querySelector(".lucide-circle") !== null])).toEqual([[true, true], [true, false]]);
       await press("[data-desk-permission-choice='agent']");
       expect(sent("desk_settings_set")).toEqual([{ permission: "agent" }]);
 
