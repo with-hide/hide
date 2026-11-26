@@ -858,11 +858,14 @@ fn an_output_that_does_not_open_on_desks_desk_stays_to_look_at() {
     );
 
     // An outside file is the desktop window's grant, which Desk's desk never holds.
+    let shot = directory
+        .with_file_name("own-desk-outside")
+        .join("shot.png");
     let outside = session_view(
         &mut runtime,
         &key,
         DisplayKind::External,
-        "/Users/x/Downloads/shot.png",
+        &shot.to_string_lossy(),
     );
     open_output(&mut runtime, &key, &outside);
     assert!(unseen(&runtime, &key, &outside));
