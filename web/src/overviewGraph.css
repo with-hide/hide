@@ -28,7 +28,7 @@
 .og-waiting-alone { padding: 0 var(--spacing-lg); }
 
 /* The operator at the center of the map. */
-.og-operator { position: relative; display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; border: var(--size-hairline) solid var(--foreground); border-radius: 50%; background: var(--secondary); color: var(--foreground); font-size: var(--text-body); font-weight: 600; }
+.og-operator { position: relative; display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; border: var(--size-hairline) solid var(--foreground); border-radius: 50%; background: var(--raised); color: var(--foreground); font-size: var(--text-body); font-weight: 600; }
 
 /* A project is a soft light of its color behind its sessions, with its name above them as the
    project's drag handle. Nothing but the name takes the pointer, so the canvas pans everywhere else. */

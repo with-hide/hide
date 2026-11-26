@@ -210,7 +210,7 @@ const TabButton = memo(function TabButton({
         <Button
           variant="ghost"
           size="icon-sm"
-          className={`shrink-0 hover:bg-popover hover:text-foreground ${fit.close} focus-visible:visible group-hover:visible ${active ? "visible" : "invisible"}`}
+          className={`shrink-0 hover:bg-accent hover:text-foreground ${fit.close} focus-visible:visible group-hover:visible ${active ? "visible" : "invisible"}`}
           aria-label={closeLabel}
           disabled={closeDisabled}
           onPointerDown={(event) => event.stopPropagation()}

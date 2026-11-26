@@ -76,7 +76,8 @@ export function Toast({ level, actions, onDismiss, dismissLabel, timeout, classN
       }}
       className={cn(
         "pointer-events-auto relative flex items-start gap-sm overflow-hidden rounded-md border bg-popover py-sm pl-md pr-xs text-caption text-popover-foreground shadow-overlay",
-        level === "important" ? "border-warning" : "border-border",
+        // An important toast is edged in warning; any other stands on --elevation-overlay's hairline ring.
+        level === "important" ? "border-warning" : "border-transparent",
         className,
       )}
       {...props}

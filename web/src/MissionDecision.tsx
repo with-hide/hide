@@ -102,7 +102,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
         <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", bare && "basis-(--size-flow-title)")} title={mission.decision ?? undefined} data-mission-question="true">{mission.decision}</span>
         {stopped ? (
           // The node chip picks its node on the map below (PRD mission-map-git-criteria B25).
-          <button type="button" onClick={() => onNode(stopped.key)} className="max-w-(--size-flow-title) shrink-0 truncate rounded-xs bg-secondary px-xs text-caption text-mission-hold outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" title={t("mission.banner.stopped", { node: stopped.title })} data-mission-banner-node={stopped.key}>
+          <button type="button" onClick={() => onNode(stopped.key)} className="max-w-(--size-flow-title) shrink-0 truncate rounded-xs bg-secondary px-xs text-caption text-mission-hold outline-none hover:fill-hovered focus-visible:ring-1 focus-visible:ring-ring" title={t("mission.banner.stopped", { node: stopped.title })} data-mission-banner-node={stopped.key}>
             {t("mission.banner.stopped", { node: stopped.title })}
           </button>
         ) : null}
