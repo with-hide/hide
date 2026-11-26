@@ -49,6 +49,11 @@ pub(super) struct Records {
 /// One answer of the reader.
 type Answer = (SessionIdentity, Result<LedgerAnswer, String>);
 
+
+/// The chipped panes that are gone, each with the pane its session runs in
+/// now (`desk_moved`); at most the newest lines' chips.
+pub(super) type Moved = Vec<(String, String)>;
+
 impl Runtime {
     /// The panes the newest lines' chips name (a reply's, a letter's, the
     /// operator's message), newest first, each once.
@@ -127,8 +132,9 @@ impl Runtime {
     /// first such row in the sidebar's order. Only the newest lines' chips
     /// are followed, so the pairs are at most the chips they name. Such a
     /// chip is that row's, and its record is not drawn; a record is drawn
-    /// only for a session no row runs.
-    pub(super) fn desk_moved(&self) -> Vec<(&str, &crate::model::SidebarAgentSnapshot)> {
+    /// only for a session no row runs. A refresh reads it once and hands
+    /// it to each reader ([`Moved`]).
+    pub(super) fn desk_moved(&self) -> Moved {
         let rows: HashSet<&str> = self.agent_rows().map(|row| row.pane_id.as_str()).collect();
         let gone: Vec<(&str, &SessionIdentity)> = self
             .desk_chip_panes()
@@ -157,19 +163,28 @@ impl Runtime {
             }
         }
         gone.into_iter()
-            .filter_map(|(pane, session)| Some((pane, *running.get(session)?)))
+            .filter_map(|(pane, session)| {
+                Some((pane.to_owned(), running.get(session)?.pane_id.clone()))
+            })
             .collect()
     }
 
     /// The rows the newest lines' chips draw, by the pane each chip names: a
     /// listed pane's own row, and a gone pane's whose session runs in another
     /// pane ([`Self::desk_moved`]) that other pane's row.
-    pub(super) fn desk_chip_rows(&self) -> HashMap<&str, &crate::model::SidebarAgentSnapshot> {
+    pub(super) fn desk_chip_rows<'a>(
+        &'a self,
+        moved: &'a [(String, String)],
+    ) -> HashMap<&'a str, &'a crate::model::SidebarAgentSnapshot> {
         let mut rows: HashMap<&str, &crate::model::SidebarAgentSnapshot> = self
             .agent_rows()
             .map(|row| (row.pane_id.as_str(), row))
             .collect();
-        rows.extend(self.desk_moved());
+        let gone: Vec<(&str, &crate::model::SidebarAgentSnapshot)> = moved
+            .iter()
+            .filter_map(|(pane, live)| Some((pane.as_str(), *rows.get(live.as_str())?)))
+            .collect();
+        rows.extend(gone);
         rows
     }
 
@@ -177,8 +192,8 @@ impl Runtime {
     /// no row holds now and that no other pane runs, in the chips' order; a
     /// session not read yet is handed to the reader and joins once it
     /// answers.
-    pub(super) fn desk_records(&mut self) -> Vec<DeskRecordSnapshot> {
-        let rows: HashSet<&str> = self.desk_chip_rows().into_keys().collect();
+    pub(super) fn desk_records(&mut self, moved: &[(String, String)]) -> Vec<DeskRecordSnapshot> {
+        let rows: HashSet<&str> = self.desk_chip_rows(moved).into_keys().collect();
         let mut records = Vec::new();
         let mut unread = Vec::new();
         for pane in self.desk_chip_panes() {

@@ -1579,6 +1579,12 @@ impl Runtime {
 
     /// The `desk` section, a new `Arc` whenever it is composed.
     fn compose_desk(&mut self) {
+        self.compose_desk_moved(None);
+    }
+
+    /// [`Self::compose_desk`] with the gone chips' pairs a refresh already
+    /// read, so its chips do not read them again.
+    fn compose_desk_moved(&mut self, moved: Option<&[(String, String)]>) {
         if self.desk.worker.is_none() {
             return;
         }
@@ -1639,7 +1645,7 @@ impl Runtime {
                 generation: *generation,
                 items: {
                     let mut items = items.clone();
-                    self.desk_fill_chips(&mut items);
+                    self.desk_fill_chips(&mut items, moved);
                     items
                 },
                 dropped: *dropped,
