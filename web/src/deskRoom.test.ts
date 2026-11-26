@@ -150,17 +150,23 @@ describe("the output a session's own line names (B27)", () => {
   const typed = (path: string): DeskOutput => ({ ...output(path), id: path, device_id: null, checkout: null, path });
 
   it("is the card's output, with its device and checkout, when the card lists the file", () => {
-    expect(outputNamed([listed], typed("/home/me/repo/shot.png"), { device: "deepbox", checkout: "/home/me/repo" }, "mac")).toBe(listed);
+    expect(outputNamed([listed], typed("/home/me/repo/shot.png"), { device: "deepbox", checkout: "/home/me/repo", folder: "/home/me/repo" }, "mac")).toBe(listed);
   });
 
   it("takes the session's device and checkout for a file the card does not list, so it is read there and not on this machine", () => {
-    const read = outputNamed([], typed("/home/me/repo/new.md"), { device: "deepbox", checkout: "/home/me/repo" }, "mac");
+    const read = outputNamed([], typed("/home/me/repo/new.md"), { device: "deepbox", checkout: "/home/me/repo", folder: "/home/me/repo" }, "mac");
     expect(read).toMatchObject({ device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" });
+  });
+
+  it("reads a relative spelling under the session's own folder, on this machine and on a device, a Windows one's backslashes as /", () => {
+    expect(outputNamed([], typed("docs/report.pdf"), { device: "mac", checkout: "/work/repo", folder: "/work/repo/web" }, "mac")).toMatchObject({ device_id: null, path: "/work/repo/web/docs/report.pdf" });
+    expect(outputNamed([], typed("../shot.png"), { device: "deepbox", checkout: "/home/me/repo", folder: "/home/me/repo/app" }, "mac")).toMatchObject({ device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/shot.png" });
+    expect(outputNamed([], typed(".\\out\\run.log"), { device: "winbox", checkout: "C:/src/repo", folder: "C:/src/repo" }, "mac")).toMatchObject({ path: "C:/src/repo/out/run.log" });
   });
 
   it("leaves a file of this machine's own session as typed", () => {
     const own = typed("/work/repo/a.md");
-    expect(outputNamed([], own, { device: "mac", checkout: "/work/repo" }, "mac")).toBe(own);
+    expect(outputNamed([], own, { device: "mac", checkout: "/work/repo", folder: "/work/repo" }, "mac")).toBe(own);
     expect(outputNamed([], own, null, "mac")).toBe(own);
   });
 });

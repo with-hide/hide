@@ -4,7 +4,7 @@ import { localDeviceId } from "./snapshot";
 import { useShellStore } from "./store";
 
 /** Bytes past this draw the file's mark instead: a tile is no place to read a large file. */
-const IMAGE_BYTES = 8 * 1024 * 1024;
+export const IMAGE_BYTES = 8 * 1024 * 1024;
 
 /**
  * Where a file a session showed is read from: this machine's own channel

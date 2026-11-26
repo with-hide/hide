@@ -5,7 +5,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { configureAttachments } from "./attachments";
-import { configureFileBytes } from "./fileBytes";
+import { configureFileBytes, receiveBytes, receiveBytesError } from "./fileBytes";
+import { clearPreviews } from "./filePreview";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { DeskAgent, DeskItem, DeskJob, DeskOption, DeskOutput } from "./desk";
 import { DeskScreen, DeskSettingsPage } from "./DeskScreen";
@@ -76,6 +77,7 @@ describe("Desk's room", () => {
     useShellStore.setState(saved, true);
     useUiStore.setState(savedUi, true);
     vi.unstubAllGlobals();
+    clearPreviews();
   });
 
   let actions = createActions(() => true);
@@ -162,12 +164,12 @@ describe("Desk's room", () => {
     expect(sent("desk_send")).toEqual([{ text: "@project(/work/repo-home repo) fix the build", mentions: [repo], again: 1 }]);
   });
 
-  const dropFile = async (name: string, bytes: number[]) => {
+  const dropFile = async (name: string, bytes: number[], at = "[data-desk-composer-frame]") => {
     const file = new File([new Uint8Array(bytes)], name);
     file.stream = () => new NodeBlob([new Uint8Array(bytes)]).stream() as ReadableStream<Uint8Array<ArrayBuffer>>;
     const drop = new Event("drop", { bubbles: true, cancelable: true });
     Object.defineProperty(drop, "dataTransfer", { value: { types: ["Files"], files: [file] } });
-    await act(async () => { document.body.querySelector("[data-desk-composer-frame]")!.dispatchEvent(drop); });
+    await act(async () => { document.body.querySelector(at)!.dispatchEvent(drop); });
     await vi.waitFor(() => expect(document.body.querySelector('[data-desk-attachment="reading"]')).toBeNull());
   };
   const tiles = () => [...document.body.querySelectorAll("[data-desk-composer-frame] [data-desk-attachment]")].map((tile) => [tile.getAttribute("data-desk-attachment"), tile.textContent]);
@@ -176,7 +178,8 @@ describe("Desk's room", () => {
     configureAttachments({ dispatch: (event) => { events.push(event); return true; }, sendBinary: () => undefined });
     useUiStore.setState({ deskDraft: { text: "왜 끊기는지 봐 줘", mentions: [] } });
     await render(desk([]));
-    await dropFile("install.log", [7, 8]);
+    // Dropped on the column's head, far from the box, the file still lands in it (Doop L 가).
+    await dropFile("install.log", [7, 8], "[data-desk-chat-head]");
 
     await press("[data-desk-composer-send]");
     const [message] = sent("desk_send") as { request_id: string; stages: string[] }[];
@@ -404,6 +407,7 @@ describe("Desk's room", () => {
           { id: "c-deep", workspace_id: "w-deep", path: "/home/me/repo", label: "main", active_tab_id: "t1", strip: [], tabs: [{ id: "t1", panes: [{ id: "d:p1" }] }] },
         ] }],
       },
+      status: { remote: [{ target_id: "deepbox", state: "connected" }] },
     } as unknown as SnapshotRest;
     const row = { pane_id: "d:p1", identity_label: "remote worker", agent_kind: "claude", mark: "going", device_id: "deepbox" } as never;
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
@@ -421,8 +425,7 @@ describe("Desk's room", () => {
     });
     // The core answers the open with the session's thread.
     await act(async () => useShellStore.setState({ sessionThread: thread as never, sessionThreadHistory: { generation: 1, pages: [] } }));
-    // The tab strip reads its sizes from the design tokens, which jsdom has no stylesheet for.
-    for (const [name, value] of [["--size-tab-preferred", "160"], ["--size-tab-title-min", "48"], ["--size-tab-selected-max", "240"], ["--size-tab-icon-identity", "16"], ["--size-control-sm", "24"]] as const) document.documentElement.style.setProperty(name, value);
+    stubTabStripTokens();
     return reads;
   }
 
@@ -430,9 +433,9 @@ describe("Desk's room", () => {
 
   it("draws and opens a file a connected device's session showed from that device, which no card lists (PRD desk-2-ui B27)", async () => {
     const reads = await remoteSessionShowed(["/home/me/repo/new.md", "/home/me/repo/shot.png"], []);
-    // The image it showed is drawn from the file on that device, as the open below reads it.
-    expect(reads).toMatchObject([{ path: "/home/me/repo/shot.png", device_id: "deepbox", root: "/home/me/repo" }]);
-    await press("[data-desk-output='/home/me/repo/new.md']");
+    // Each tile's preview is read from the file on that device, as the open below reads it: the text's head, the image's size first.
+    expect(reads).toMatchObject([{ path: "/home/me/repo/new.md", length: 4096, device_id: "deepbox", root: "/home/me/repo" }, { path: "/home/me/repo/shot.png", length: 1, device_id: "deepbox", root: "/home/me/repo" }]);
+    await press("[data-desk-output='/home/me/repo/new.md'] [data-desk-tile-open]");
     expect(frontOutput()).toMatchObject({ kind: "output", output: { device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" } });
   });
 
@@ -440,8 +443,8 @@ describe("Desk's room", () => {
     const listed: DeskOutput = { id: "view-9", kind: "image", label: "shot.png", thumb: null, seen: true, pr_state: null, device_id: "deepbox", checkout: "/home/me/wt", path: "/home/me/wt/shot.png", url: null };
     const reads = await remoteSessionShowed(["/home/me/wt/shot.png"], [listed]);
     // The shelf and the conversation draw the same file, read once.
-    expect(reads).toMatchObject([{ path: "/home/me/wt/shot.png", device_id: "deepbox", root: "/home/me/wt" }]);
-    await press("[data-desk-hide-part='view'] [data-desk-output='view-9']");
+    expect(reads).toMatchObject([{ path: "/home/me/wt/shot.png", length: 1, device_id: "deepbox", root: "/home/me/wt" }]);
+    await press("[data-desk-hide-part='view'] [data-desk-output='view-9'] [data-desk-tile-open]");
     expect(frontOutput()).toMatchObject({ kind: "output", output: listed });
   });
 
@@ -461,6 +464,43 @@ describe("Desk's room", () => {
     await show(desk([]));
     await act(async () => useShellStore.setState({ deskLive: { text: null, started_at_ms: null } }));
     expect(line()).toBeNull();
+  });
+
+  it("draws a file an answer names inside a project as a chip that opens it in the tab panel, and leaves a missing path and code as words (feedback 2 frame M [2])", async () => {
+    const asked: Record<string, unknown>[] = [];
+    configureFileBytes((event) => {
+      const read = event.payload as Record<string, unknown>;
+      asked.push(read);
+      queueMicrotask(() => (read.path === "/work/repo-home/docs/report.md" ? answerBytes(read, [35], 40) : receiveBytesError({ request_id: read.request_id as string, reason: "not_found" })));
+    });
+    await render(desk([{ kind: "reply", id: 1, text: "정리는 /work/repo-home/docs/report.md 에, 옛 메모는 /work/repo-home/old/notes.md 에 있어요.\n```\ncat /work/repo-home/docs/report.md\n```", agent: "claude", at_ms: 0, state: "done", mentions: [], missions: [], thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } }]));
+    await vi.waitFor(() => expect(document.body.querySelectorAll("[data-desk-file-chip]")).toHaveLength(1));
+    const chip = document.body.querySelector<HTMLElement>("[data-desk-file-chip='project']")!;
+    expect(chip.textContent).toBe("report.md");
+    expect(document.body.textContent).toContain("/work/repo-home/old/notes.md");
+    expect(asked.map((read) => read.path).sort()).toEqual(["/work/repo-home/docs/report.md", "/work/repo-home/old/notes.md"]);
+    stubTabStripTokens();
+    await act(async () => chip.click());
+    expect(useUiStore.getState().deskRoom.panel?.tabs).toEqual([expect.objectContaining({ kind: "file", device_id: "local", root: "/work/repo-home", path: "/work/repo-home/docs/report.md" })]);
+  });
+
+  it("reveals a path outside every project from its ↗ chip in the file manager, and never reads or opens it (feedback 2 frame M [2])", async () => {
+    const outside = "/Users/me/Downloads/crash.log";
+    const revealPath = vi.fn();
+    const probePaths = vi.fn(async (paths: string[]) => paths.map((path) => (path === outside ? { real: path, kind: "file" as const } : null)));
+    window.hideHost = { kind: "electron", platform: "darwin", probePaths, revealPath } as never;
+    const asked: unknown[] = [];
+    configureFileBytes((event) => asked.push(event.payload));
+    try {
+      await render(desk([{ kind: "reply", id: 1, text: `크래시 로그는 ${outside} 에 있어요.`, agent: "claude", at_ms: 0, state: "done", mentions: [], missions: [], thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } }]));
+      await vi.waitFor(() => expect(document.body.querySelector("[data-desk-file-chip='outside']")).not.toBeNull());
+      await act(async () => document.body.querySelector<HTMLElement>("[data-desk-file-chip='outside']")!.click());
+      expect(revealPath).toHaveBeenCalledWith(outside);
+      expect(asked).toEqual([]);
+      expect(useUiStore.getState().deskRoom.panel?.tabs ?? []).toEqual([]);
+    } finally {
+      delete (window as { hideHost?: unknown }).hideHost;
+    }
   });
 
   it("opens the checkout a project chip names", async () => {
@@ -705,8 +745,7 @@ describe("Desk's room", () => {
     expect(document.body.querySelector("[data-desk-session-head]")?.textContent).toContain("fixer");
     expect(sent("session_thread_open")).toHaveLength(1);
 
-    // The tab strip reads its sizes from the design tokens, which jsdom has no stylesheet for.
-    for (const [name, value] of [["--size-tab-preferred", "160"], ["--size-tab-title-min", "48"], ["--size-tab-selected-max", "240"], ["--size-tab-icon-identity", "16"], ["--size-control-sm", "24"]] as const) document.documentElement.style.setProperty(name, value);
+    stubTabStripTokens();
     await act(async () => useUiStore.getState().setDeskRoom((now) => ({ ...now, panel: { tabs: [{ kind: "mission", mission: "mission-39", title: "1.3.0" }], preview: null, active: "mission:mission-39", explorer: false, beside: null } })));
     expect(document.body.querySelector("[data-desk-tab-panel]")?.getAttribute("data-desk-tab-panel")).toBe("beside_session");
     // Escape runs the innermost layer the shell's Escape owner holds, and with none open closes the session beside Desk,
@@ -839,3 +878,18 @@ describe("Desk's room", () => {
     expect(sent("pane_ask")).toHaveLength(asks + 1);
   });
 });
+
+/** The file channel's answer to `read`: one frame with `bytes` of a file `total` long. */
+function answerBytes(read: Record<string, unknown>, bytes: number[], total: number) {
+  const header = new TextEncoder().encode(JSON.stringify({ type: "file_bytes", request_id: read.request_id, path: read.path, offset: 0, total, eof: true }));
+  const frame = new Uint8Array(4 + header.length + bytes.length);
+  new DataView(frame.buffer).setUint32(0, header.length, false);
+  frame.set(header, 4);
+  frame.set(bytes, 4 + header.length);
+  receiveBytes(frame.buffer);
+}
+
+/** The tab strip reads its sizes from the design tokens, which jsdom has no stylesheet for. */
+function stubTabStripTokens() {
+  for (const [name, value] of [["--size-tab-preferred", "160"], ["--size-tab-title-min", "48"], ["--size-tab-selected-max", "240"], ["--size-tab-icon-identity", "16"], ["--size-control-sm", "24"]] as const) document.documentElement.style.setProperty(name, value);
+}
