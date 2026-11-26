@@ -28,7 +28,7 @@ More: [Tasks and status](/docs/features/tasks-status/).
 
 <iframe src="/embed/docs-embed.html?part=turn-card&theme=dark" title="The turn card, live component" height="560" loading="lazy"></iframe>
 
-Press the turn line under an agent's pane header and the card opens under it: your request, then the agent's answer. A question the agent waits on is your turn, marked **Question** in yellow, and a finished turn is **Done** in green.
+Press the turn line under an agent's pane header and the card opens under it: your request, then the agent's answer. A question the agent waits on is your turn, marked **To check** in yellow, and a finished turn is **Done** in green.
 
 More: [Tasks and status](/docs/features/tasks-status/).
 
