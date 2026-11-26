@@ -12,14 +12,14 @@ import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { revealHost } from "./host";
-import { CommentCount, FeedbackRow } from "./ViewComments";
+import { CommentCount, FeedbackRow, ViewCommentsOff } from "./ViewComments";
 import { CardBody, DetailIcon, useCardTitle } from "./CardBody";
 import { cardTitle } from "./cardTitle";
 import { StatusMark } from "./components/status-mark";
 import { DisplayEditor, DocumentKeeper, PendingDocumentHeader } from "./Editor";
 import { useInterfaceTranslation } from "./i18n/client";
 import { windowDeviceId } from "./screenMachine";
-import { editorTabFor, frontCheckout, type ViewDisplaySnapshot, type ViewLayoutSnapshot } from "./snapshot";
+import { catalogWorkspaces, checkoutAtRoot, editorTabFor, frontCheckout, type SnapshotRest, type ViewDisplaySnapshot, type ViewLayoutSnapshot } from "./snapshot";
 import { useShellStore } from "./store";
 import { ViewKindMark } from "./viewMark";
 import { caughtUp } from "./operatorFocus";
@@ -28,7 +28,8 @@ import { commandLabel } from "./shortcutLabels";
 import { keyboardInputRevision, noteDrawnViews, useKeyboardOwner } from "./viewFocus";
 import { displayIdentity, displayMenu, displayName, focusRequestArrived, isFixedDisplay, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
 import { findArea, locateDisplay } from "./areaLayout";
-import { DeskExpandButton, DeskPairButton, PairOthers } from "./DeskPairControls";
+import { DeskExpandButton, DeskPairButton, DeskWideButton, PairOthers } from "./DeskPairControls";
+import { DESK_SCREEN, type DeskWorkspace } from "./deskDesk";
 import { drawnPair } from "./pairView";
 import { workspaceViewOf } from "./workspace";
 
@@ -54,6 +55,24 @@ export function ViewAreas({ actions }: { actions: Actions }) {
   return <ViewTree key={workspaceKey({ device_id: view.device_id, path: view.path })} layout={layout} deviceId={view.device_id} path={view.path} actions={actions} />;
 }
 
+/** What Desk's own desk draws differently (PRD desk-own-desk D-01, D-16, B18, B40): its strip's `⤢` and `✕`, which hide the desk and leave its tabs. */
+export type DeskTreeEnds = { onClose: () => void; expanded: boolean; onExpand: () => void };
+
+/**
+ * Desk's own desk (PRD desk-own-desk D-01, B1-B6, B12): the same View areas
+ * a Workspace's Agent tab draws, kept by the core under Desk's reserved
+ * workspace. A file names the checkout it belongs to (`origin`), and its
+ * project follows its name when another tab has the same name; a View here
+ * takes no comments (non-goal).
+ */
+export function DeskViewAreas({ view, ends, actions }: { view: DeskWorkspace; ends: DeskTreeEnds; actions: Actions }) {
+  return (
+    <ViewCommentsOff value={true}>
+      <ViewTree layout={view.layout} deviceId={view.device_id} path={view.path} actions={actions} desk={ends} />
+    </ViewCommentsOff>
+  );
+}
+
 const SharedViewTree = createAreaTree<ViewDisplaySnapshot>("view");
 /**
  * An editor still on its way: a document or diff whose text is being read
@@ -67,10 +86,12 @@ const READING = [
 ].join(", ");
 /** The editor an open gives the keyboard: a Markdown Live body before its frontmatter pane, which keeps drawn until the operator clicks in it. */
 const editorContent = (area: HTMLElement) => area.querySelector<HTMLElement>("[data-editor-body] .cm-content") ?? area.querySelector<HTMLElement>(".cm-content");
-function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnapshot; deviceId: string; path: string; actions: Actions }) {
+function ViewTree({ layout, deviceId, path, actions, desk = null }: { layout: ViewLayoutSnapshot; deviceId: string; path: string; actions: Actions; desk?: DeskTreeEnds | null }) {
   const { t } = useInterfaceTranslation();
   const owner = useKeyboardOwner();
-  const checkoutId = useShellStore((s) => frontCheckout(s.rest)?.id ?? null);
+  const frontId = useShellStore((s) => frontCheckout(s.rest)?.id ?? null);
+  // The keyboard owner names Desk's room as a Workspace's screen names its checkout (`DESK_SCREEN`).
+  const checkoutId = desk ? DESK_SCREEN : frontId;
   const workspace = useMemo(() => ({ device_id: deviceId, path }), [deviceId, path]);
   const key = workspaceKey(workspace);
   const [body, setBody] = useState<HTMLDivElement | null>(null);
@@ -151,7 +172,10 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
   // every tab the left pane does not own, but for what the operator opened
   // since the mode came on, into one menu at its end; the ◧ beside ✕ only
   // enters it and is not drawn while it is on.
-  const pair = useShellStore((s) => drawnPair(workspaceViewOf(s.rest)));
+  const pair = useShellStore((s) => (desk ? null : drawnPair(workspaceViewOf(s.rest))));
+  // B12: a file's project follows its name only while another tab of this desk has the same name.
+  const projects = useShellStore((s) => (desk ? s.rest : null));
+  const suffix = useMemo(() => (desk ? projectSuffixes(layout.root, projects, t) : null), [desk, layout.root, projects, t]);
   const front = findArea(layout.root, layout.active_area)?.active ?? null;
   // The core names the folded tabs (D-60); the strip leaves them out and nothing else.
   const folded = pair?.folded ?? [];
@@ -163,11 +187,11 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
     keyboardArea: owner.kind === "view" && owner.workspace === checkoutId ? owner.areaId : null,
     label: (display) => tabLabel(display, t),
     sameContent: showsSameDocument,
-    tab: (display, interaction) => <DisplayTab display={display} workspace={workspace} interaction={interaction} actions={actions} />,
+    tab: (display, interaction) => <DisplayTab display={display} workspace={workspace} interaction={interaction} actions={actions} project={suffix?.get(display.id) ?? null} />,
     body: (display) => (
       <div key={display.id} className="flex min-h-0 min-w-0 flex-1 flex-col">
         <DisplayBody display={display} workspace={workspace} actions={actions} />
-        <FeedbackRow display={display} workspace={workspace} actions={actions} />
+        {desk ? null : <FeedbackRow display={display} workspace={workspace} actions={actions} />}
       </div>
     ),
     empty: () => <AreaEmpty state="no-view" text={t("documents.view.empty")} />,
@@ -185,7 +209,9 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
     tabListLabel: t("documents.view.tabList"),
     actionsLabel: t("documents.view.actions"),
     // The desk's ✕ is the same part in focus mode, where it folds the desk as ⌘E does (`closeDocuments`, D-57, D-63); Expand stands beside it in both, and the ◧ is a way in only and is not drawn there (D-42).
-    close: { label: pair === null ? t("panes.lane.closeDocuments") : t("panes.lane.foldDesk", { chord: commandLabel("toggle_lane") }), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: <><DeskExpandButton />{pair === null ? <DeskPairButton displayId={front} actions={actions} /> : null}</> },
+    close: desk
+      ? { label: t("desk.room.closePanel"), onClose: desk.onClose, attributes: { "data-desk-panel-close": "true" }, beside: <DeskWideButton expanded={desk.expanded} onExpand={desk.onExpand} /> }
+      : { label: pair === null ? t("panes.lane.closeDocuments") : t("panes.lane.foldDesk", { chord: commandLabel("toggle_lane") }), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: <><DeskExpandButton />{pair === null ? <DeskPairButton displayId={front} actions={actions} /> : null}</> },
     onDraw: (frame) => noteDrawnViews(frame ? { ...frame, workspace } : null),
     onBody: setBody,
   };
@@ -195,13 +221,16 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
 }
 
 /** A display's body: its document or diff, or the state it is in (B16, contract 3). */
-function DisplayBody({ display, workspace, actions }: { display: ViewDisplaySnapshot; workspace: ViewWorkspace; actions: Actions }) {
+function DisplayBody({ display, workspace: desk, actions }: { display: ViewDisplaySnapshot; workspace: ViewWorkspace; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  if (display.kind === "browser") return <BrowserDisplay display={display} workspace={workspace} actions={actions} />;
-  if (display.kind === "external") return <ExternalDisplay display={display} workspace={workspace} actions={actions} />;
+  // A file on Desk's desk is its own checkout's document, named from that checkout's folder (PRD desk-own-desk B2).
+  const workspace = display.origin ?? desk;
+  const root = display.origin?.path;
+  if (display.kind === "browser") return <BrowserDisplay display={display} workspace={desk} actions={actions} />;
+  if (display.kind === "external") return <ExternalDisplay display={display} workspace={desk} actions={actions} />;
   if (display.kind === "card") return display.card ? <CardBody item={display.card} ownerPane={display.owner_pane ?? null} actions={actions} /> : <AreaEmpty state="view-unavailable" text={display.reason ?? ""} />;
   if (display.state === "open") {
-    return <DisplayEditor display={display} workspace={workspace} placeKey={placeKey(workspaceKey(workspace), display)} actions={actions} />;
+    return <DisplayEditor display={display} workspace={workspace} placeKey={placeKey(workspaceKey(desk), display)} actions={actions} root={root} />;
   }
   const state = display.state === "opening" ? <AreaEmpty state="view-opening" text={t("documents.view.openingNamed", { label: display.label })} /> : display.state === "waiting" ? <AreaEmpty state="view-waiting" text={display.reason ?? t("documents.view.waitingPath", { path: display.path })} /> : (
     <AreaEmpty state="view-unavailable" text={display.reason ? t("documents.view.unavailableReason", { path: display.path, reason: display.reason }) : t("documents.view.unavailable", { path: display.path })}>
@@ -216,14 +245,14 @@ function DisplayBody({ display, workspace, actions }: { display: ViewDisplaySnap
     </AreaEmpty>
   );
   return <>
-    <PendingDocumentHeader display={display} actions={actions} />
+    <PendingDocumentHeader display={display} actions={actions} root={root} />
     {state}
   </>;
 
 }
 
 /** One display's tab: its kind's mark, italic while a preview, its save marks, and its whole identity (B2, B21). */
-export function DisplayTab({ display: sent, workspace, interaction, actions }: { display: ViewDisplaySnapshot; workspace?: ViewWorkspace; interaction: AreaTabInteraction; actions: Actions }) {
+export function DisplayTab({ display: sent, workspace, interaction, actions, project = null }: { display: ViewDisplaySnapshot; workspace?: ViewWorkspace; interaction: AreaTabInteraction; actions: Actions; /** The dim project after the name, on Desk's desk while another tab has the same name (PRD desk-own-desk B12). */ project?: string | null }) {
   // A card's name is the shell's to give (`cardTitle`): its short name on
   // the tab, its full name in the tab's tooltip (PRD lane-desk-pair-view D-30).
   const named = useCardTitle(sent.card ?? null, true);
@@ -246,6 +275,7 @@ export function DisplayTab({ display: sent, workspace, interaction, actions }: {
   const look = display.unseen ? <StatusMark mark="look" data-view-unseen={display.id} /> : null;
   const identity = [
     displayIdentity(sent.kind === "card" ? { ...sent, label: full } : display, t),
+    project,
     display.unseen ? t("agents.mark.look") : null,
     display.opener ? [
       display.opener.pane_id ? display.opener.name : t("feedback.mark.closed", { name: display.opener.name }),
@@ -305,6 +335,7 @@ export function DisplayTab({ display: sent, workspace, interaction, actions }: {
       {attached ? <Badge aria-hidden="true" data-browser-attached="true"><Link2Icon /></Badge> : null}
       <span data-tab-title="true" className={`min-w-0 flex-1 truncate ${fit.title} ${display.preview ? "italic" : ""} ${unavailable ? "text-muted-foreground line-through" : ""} ${elsewhere ? "text-muted-foreground opacity-[var(--opacity-dimmed)]" : ""}`}>
         {name}
+        {project ? <span className="text-muted-foreground" data-desk-tab-project="true"> · {project}</span> : null}
         {saving ? <span className="text-muted-foreground"> {t("documents.tabSaving")}</span> : dirty ? <span className="text-warning"> ●</span> : null}
         {tabOnly ? <span className="text-muted-foreground"> {t("documents.tabOnly")}</span> : null}
       </span>
@@ -348,6 +379,29 @@ function ExternalBadge({ path }: { path: string | null }) {
       </Badge>
     </Hint>
   );
+}
+
+/**
+ * The project each file display's name is followed by on Desk's desk (B12):
+ * only where another file there has the same name and another checkout or
+ * path, and then its checkout's project as the catalog names it.
+ */
+function projectSuffixes(root: ViewLayoutSnapshot["root"], rest: SnapshotRest | null, t: Parameters<typeof cardTitle>[1]): Map<string, string> {
+  const files = shownDisplays(root).filter((display) => display.kind === "file" && display.origin);
+  const byName = new Map<string, ViewDisplaySnapshot[]>();
+  for (const display of files) byName.set(displayName(display, t), [...(byName.get(displayName(display, t)) ?? []), display]);
+  const projects = catalogWorkspaces(rest);
+  const named = new Map<string, string>();
+  for (const same of byName.values()) {
+    if (new Set(same.map((display) => `${display.origin!.device_id}\u0000${display.origin!.path}\u0000${display.path}`)).size < 2) continue;
+    for (const display of same) {
+      const origin = display.origin!;
+      const place = checkoutAtRoot(rest, origin.device_id, origin.path);
+      const project = projects.find((row) => row.id === place?.workspace && row.device_id === origin.device_id);
+      named.set(display.id, project?.label ?? origin.path.split("/").filter(Boolean).at(-1) ?? origin.path);
+    }
+  }
+  return named;
 }
 
 /** A display's name on its tab, a card's short one from what the shell holds of its subject. */

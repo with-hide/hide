@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
+import { DESK_ROOM_CLOSED } from "./deskRoom";
 import { closeCovering, installKeyboard, pressDeskRow } from "./keyboard";
 import type { AgentRow, DeskSection, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
@@ -59,7 +60,7 @@ beforeEach(() => {
   vi.stubGlobal("document", { ...events, visibilityState: "visible" });
   // The sessions beside Desk are listed in the sidebar's rows, which ⌘E reopening reads.
   useShellStore.setState({ rest: null, desk: { settings: { enabled: true } } as unknown as DeskSection, agents: ["w1:p2", "w1:p3"].map((pane_id) => ({ pane_id })) as unknown as AgentRow[] });
-  useUiStore.setState({ hint: null, cycle: null, overlay: "none", escapeLayers: [], workspaceDialog: null, pendingClose: null, pendingTrash: null, overviewOpen: false, screen: { kind: "desk" }, deskRoom: { session: "w1:p2", panel: null, closed: null, answer: 0 } });
+  useUiStore.setState({ hint: null, cycle: null, overlay: "none", escapeLayers: [], workspaceDialog: null, pendingClose: null, pendingTrash: null, overviewOpen: false, screen: { kind: "desk" }, deskRoom: { ...DESK_ROOM_CLOSED, session: "w1:p2" } });
   remove = installKeyboard(actions);
 });
 
@@ -167,7 +168,7 @@ describe("⌘E beside Desk", () => {
   });
 
   it("does nothing while no session was closed during this visit of the room", () => {
-    useUiStore.setState({ deskRoom: { session: null, panel: null, closed: null, answer: 0 } });
+    useUiStore.setState({ deskRoom: DESK_ROOM_CLOSED });
     emit("keydown", "KeyE", { metaKey: true });
     expect(room().session).toBeNull();
     expect(room().closed).toBeNull();

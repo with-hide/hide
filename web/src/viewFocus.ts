@@ -9,6 +9,7 @@ import { useShellStore } from "./store";
 import { areaFrame, noteAreaFrame, type DrawnViews } from "./areaFrames";
 import { deskOnScreen } from "./pairView";
 import { workspaceViewOf } from "./workspace";
+import { deskViewOf, DESK_SCREEN } from "./deskDesk";
 
 export type KeyboardOwner =
   | { kind: "view"; workspace: string; areaId: string }
@@ -141,13 +142,16 @@ export function installKeyboardOwner(): () => void {
     }
     if (event.kind !== "focus") return;
     const rest = useShellStore.getState().rest;
-    const view = workspaceViewOf(rest);
-    const checkout = frontCheckout(rest);
-    if (!view?.layout || !checkout || !deskOnScreen(view) || workspaceKey(view) !== event.workspace) return;
+    // A page of Desk's own desk takes the keyboard for Desk's room (PRD desk-own-desk B6).
+    const desk = deskViewOf(rest);
+    const onDesk = desk !== null && areaFrame("view") !== null && workspaceKey(desk) === event.workspace;
+    const view = onDesk ? desk : workspaceViewOf(rest);
+    const screen = onDesk ? DESK_SCREEN : frontCheckout(rest)?.id;
+    if (!view?.layout || !screen || (!onDesk && !deskOnScreen(workspaceViewOf(rest))) || workspaceKey(view) !== event.workspace) return;
     const located = locateDisplay(view.layout.root, event.id);
     if (!located) return;
     inputRevision++;
-    noteKeyboardOwner({ kind: "view", workspace: checkout.id, areaId: located.area.id });
+    noteKeyboardOwner({ kind: "view", workspace: screen, areaId: located.area.id });
     commandOwner = owner;
     handedBack = document.activeElement !== document.body ? document.activeElement : null;
   });

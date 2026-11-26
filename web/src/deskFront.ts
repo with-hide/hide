@@ -3,8 +3,10 @@
 // pull request's card ask this one question before they read, and one out of
 // front keeps what it last drew, so two areas never take the read in turns.
 
+import { createContext } from "react";
+import { deskViewOf } from "./deskDesk";
 import { deskOnScreen } from "./pairView";
-import { sameDetailItem, type DetailItem, type SnapshotRest } from "./snapshot";
+import { sameDetailItem, type DetailItem, type MissionNode, type SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { frontCard, workspaceViewOf } from "./workspace";
 
@@ -14,9 +16,20 @@ export function isDeskFront(rest: SnapshotRest | null, item: DetailItem): boolea
   return deskOnScreen(view) && sameDetailItem(frontCard(view), item);
 }
 
-export function useDeskFront(item: DetailItem): boolean {
-  return useShellStore((state) => isDeskFront(state.rest, item));
+/**
+ * Whether `item` is the card the core reads now, drawn where `place` says:
+ * on Desk's own desk, which is drawn only while it shows, its front card
+ * (PRD desk-own-desk B4); elsewhere the lane's.
+ */
+export function useDeskFront(item: DetailItem, place: CardPlace | null = null): boolean {
+  return useShellStore((state) => (place ? sameDetailItem(frontCard(deskViewOf(state.rest)), item) : isDeskFront(state.rest, item)));
 }
+
+/** A card drawn on Desk's own desk: what a press inside it opens there (PRD desk-own-desk B36). */
+export type CardPlace = { onMissionNode: (node: MissionNode) => void };
+
+/** Set by Desk's own desk around its cards; null on a Workspace's. */
+export const CardPlaceContext = createContext<CardPlace | null>(null);
 
 /**
  * What cards out of front last drew, by card, so one keeps its content rather

@@ -239,7 +239,7 @@ export function DocumentKeeper({ tabId, actions }: { tabId: string; actions: Act
  * and scroll it had in that document come back with it, and a preview
  * retargeted to another document starts that one at its own place.
  */
-export function DisplayEditor({ display, workspace, placeKey, actions, root, trailing }: { display: ViewDisplaySnapshot; workspace: ViewWorkspace; placeKey: string; actions: Actions; root?: string; trailing?: React.ReactNode }) {
+export function DisplayEditor({ display, workspace, placeKey, actions, root }: { display: ViewDisplaySnapshot; workspace: ViewWorkspace; placeKey: string; actions: Actions; root?: string }) {
   const tab = useShellStore((s) => editorTabFor(s.editor, display.tab_id));
   const document = useShellStore((s) => (display.tab_id ? (s.documents[display.tab_id] ?? null) : null));
   const scaleValue = useShellStore((s) => s.rest?.ui_state?.editor_text_scale);
@@ -248,7 +248,7 @@ export function DisplayEditor({ display, workspace, placeKey, actions, root, tra
   if (!tab) return <><PendingDocumentHeader display={display} actions={actions} /><Notice text={t("common.loading")} state="loading" /></>;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-editor={tab.id} data-editor-kind={display.kind} data-editor-display={display.id}>
-      <EditorHeader display={display} tab={tab} document={document} actions={actions} root={root} trailing={trailing} />
+      <EditorHeader display={display} tab={tab} document={document} actions={actions} root={root} />
       {display.kind === "diff" ? (
         <DiffBody display={display} workspace={workspace} wrap={tab.wrap} scale={scale} actions={actions} />
       ) : (
@@ -298,9 +298,10 @@ function filePathLine(display: ViewDisplaySnapshot, root: string | null, t: TFun
 }
 
 /** Provenance remains reachable while a document is loading or unavailable. */
-export function PendingDocumentHeader({ display, actions }: { display: ViewDisplaySnapshot; actions: Actions }) {
+export function PendingDocumentHeader({ display, actions, root: shownRoot }: { display: ViewDisplaySnapshot; actions: Actions; /** The checkout the path names the file from, when it is not the one in front (Desk's desk). */ root?: string }) {
   const { t } = useInterfaceTranslation();
-  const root = useShellStore((s) => frontCheckout(s.rest)?.path ?? null);
+  const front = useShellStore((s) => (shownRoot === undefined ? (frontCheckout(s.rest)?.path ?? null) : null));
+  const root = shownRoot ?? front;
   return <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-sm border-b border-border px-sm text-caption text-subtle-foreground" data-document-header="true">
     <Hint label={display.path} reveals>
       <span className="min-w-0 flex-1 truncate text-left [direction:rtl]" data-editor-path="true"><bdi dir="ltr">{filePathLine(display, root, t)}</bdi></span>
@@ -315,16 +316,13 @@ function EditorHeader({
   document,
   actions,
   root: shownRoot,
-  trailing,
 }: {
   display: ViewDisplaySnapshot;
   tab: EditorTabSnapshot;
   document: EditorDocumentSnapshot | null;
   actions: Actions;
-  /** The checkout the path line names the file from, when it is not the one in front (Desk's file view, PRD desk-2-ui B19). */
+  /** The checkout the path line names the file from, when it is not the one in front (Desk's desk, PRD desk-own-desk B2). */
   root?: string;
-  /** What the header ends with, a split side's `✕` in Desk's tab panel (B37). */
-  trailing?: React.ReactNode;
 }) {
   const file = display.kind === "file";
   const isMarkdown = file && document?.document_kind === "markdown";
@@ -373,7 +371,7 @@ function EditorHeader({
           </Button>
         </Hint>
       ) : null}
-      {/* A region comment is left on a View's display, which Desk's file view (`root`) is not. */}
+      {/* A region comment is left on a Workspace's View; a View of Desk's desk (`root`) takes none. */}
       {file && shownRoot === undefined && (document?.document_kind === "image" || document?.document_kind === "pdf") && !isVideoPath(display.path) ? (
         <RegionCommentButton displayId={display.id} kind={document.document_kind} />
       ) : null}
@@ -392,7 +390,6 @@ function EditorHeader({
         </Hint>
       ) : null}
       {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
-      {trailing}
     </div>
   );
 }

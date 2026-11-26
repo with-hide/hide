@@ -6,7 +6,7 @@ import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
-import { DESK_ROOM_CLOSED, activeTab } from "./deskRoom";
+import { DESK_ROOM_CLOSED } from "./deskRoom";
 import { clientI18n } from "./i18n/translator";
 import { Palette } from "./Palette";
 import type { DeskSection, SnapshotRest } from "./snapshot";
@@ -41,6 +41,8 @@ describe("⌘K on Desk", () => {
   let saved: ReturnType<typeof useShellStore.getState>;
   let savedUi: ReturnType<typeof useUiStore.getState>;
   let sent: Parameters<DispatchFn>[0][];
+  /** The cards Desk's desk was asked to open, in order. */
+  const cards = () => sent.filter((event) => event.kind === "desk_view_open").map((event) => (event.payload as { card: unknown }).card);
 
   beforeEach(async () => {
     saved = useShellStore.getState();
@@ -128,7 +130,7 @@ describe("⌘K on Desk", () => {
     }
   });
 
-  it("opens a PR and a mission in the tab panel, opens no session for them, and keeps ⌘↵ the same as ↵ on them", async () => {
+  it("opens a PR and a mission as cards on Desk's desk, opens no session for them, and keeps ⌘↵ the same as ↵ on them", async () => {
     system("MacIntel");
     await open("login mission");
     const mission = document.querySelector<HTMLElement>('[data-palette-row="mission:mission-a"]')!;
@@ -136,14 +138,14 @@ describe("⌘K on Desk", () => {
     await act(async () => mission.click());
     let room = useUiStore.getState().deskRoom;
     expect(room.session).toBeNull();
-    expect(activeTab(room.panel)).toEqual({ kind: "mission", mission: "mission-a", title: "Login mission" });
+    expect(cards().at(-1)).toEqual({ kind: "mission", mission: "mission-a" });
 
     useUiStore.setState({ overlay: "search", deskRoom: DESK_ROOM_CLOSED });
     await open("12345");
     await press({ metaKey: true });
     room = useUiStore.getState().deskRoom;
     expect(room.session).toBeNull();
-    expect(activeTab(room.panel)).toMatchObject({ kind: "output", output: { kind: "pr", label: `#${12345}` } });
+    expect(cards().at(-1)).toMatchObject({ kind: "pull_request", number: 12345 });
   });
 
   it("lists no mission on any other screen", async () => {

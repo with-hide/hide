@@ -501,7 +501,7 @@ function jobOf(jobs: Readonly<Record<string, DeskJob>>, id: string): DeskJob {
  * each job Desk started. `live` is the answer still arriving; `working`,
  * when given, is the working line at the foot until the turn ends.
  */
-export function DeskChat({ items, jobs, agents, queued = [], held = false, live = null, working = null, selectedJob = null, selectedOutput = null, ...actions }: {
+export function DeskChat({ items, jobs, agents, queued = [], held = false, live = null, working = null, selectedJob = null, ...actions }: {
   items: readonly DeskItem[];
   jobs: Readonly<Record<string, DeskJob>>;
   /** The agents, whose choices name a model line's model and effort. */
@@ -515,7 +515,6 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
   /** The turn under way, which the working line says (feedback 1 c3): what it does now and when it started; none once it ends or while it waits on the operator. */
   working?: { phase: WorkingPhase; since: number | null } | null;
   selectedJob?: string | null;
-  selectedOutput?: string | null;
 } & DeskChatActions) {
   const { t } = useInterfaceTranslation();
   // A model line holds the choice's id; its words are the choice's label, or the id an agent no longer offers.
@@ -531,7 +530,7 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(option, text) => actions.onApproval(item.id, option, text)} />
             : item.kind === "notice" ? <DeskNotice item={item} reason={failureReason(item.detail, replyBefore(items, index))} settled={(queued.length > 0 && item.notice === "turn_failed") || items.slice(index + 1).some((later) => later.kind === "user")} restartable={held && !items.slice(index + 1).some((later) => later.kind === "notice")} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
             : item.kind === "handed" ? <DeskHandedLine session={handedSession(item)} handed={item.letter_kind === "request"} line={item.line} read={item.read} onOpen={() => actions.onHanded(item.pane_id)} />
-            : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} />}
+            : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} {...actions} />}
         </li>
       ))}
       {live !== null ? <li className="flex min-w-0 flex-col"><DeskReply text={live} live /></li> : null}

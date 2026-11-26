@@ -5,7 +5,7 @@
 // draw from are in `viewFeedback.ts`; the core owns every comment.
 
 import { AlertCircleIcon, CheckIcon, ChevronDownIcon, CircleHelpIcon, FilesIcon, MessageSquarePlusIcon, PencilIcon, RotateCcwIcon, SendIcon, SquareIcon, Trash2Icon, UndoIcon, ArrowUpLeftIcon } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { Actions } from "./actions";
 import { agentProductName } from "./agentAdapters";
@@ -56,9 +56,20 @@ import { holdsFieldModifier } from "./shortcuts";
 import { keySystem } from "./host";
 import { composingKey } from "./keys";
 
-/** The front Workspace's feedback, or none. */
+/** Views drawn inside it take no comments: Desk's own desk, whose Views are the operator's, not an agent's (PRD desk-own-desk non-goal). */
+const CommentsOff = createContext(false);
+export const ViewCommentsOff = CommentsOff.Provider;
+
+/** Whether the Views drawn here take comments. */
+export function useCommentsTaken(): boolean {
+  return !useContext(CommentsOff);
+}
+
+/** The front Workspace's feedback, or none where Views take no comments. */
 export function useViewFeedback(): ViewFeedback | undefined {
-  return useShellStore((s) => workspaceViewOf(s.rest)?.feedback);
+  const off = useContext(CommentsOff);
+  const feedback = useShellStore((s) => workspaceViewOf(s.rest)?.feedback);
+  return off ? undefined : feedback;
 }
 
 // --- the opener's mark (B1-B7) ----------------------------------------------------

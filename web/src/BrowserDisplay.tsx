@@ -23,7 +23,8 @@ import { commandLabel } from "./shortcutLabels";
 import { useInterfaceTranslation } from "./i18n/client";
 import { MessageSquarePlusIcon } from "lucide-react";
 import { browserCommentKey, commentsOn, useFeedbackStore, noteBrowserComment } from "./viewFeedback";
-import { OpenerMark, PageNoteLayer, useViewFeedback } from "./ViewComments";
+import { OpenerMark, PageNoteLayer, useCommentsTaken, useViewFeedback } from "./ViewComments";
+import { deskViewOf, isDeskWorkspace } from "./deskDesk";
 import { externalBridge, pendingDeadline, settlePendingGrants, syncedGrants, useExternalStore } from "./externalFiles";
 import { windowDeviceId } from "./screenMachine";
 import { composingKey } from "./keys";
@@ -119,7 +120,9 @@ function HostedPage({ display, workspace, actions, external = false }: { display
   const command = (name: BrowserCommand) => browserBridge()?.command(workspace, display.id, name);
   const address = page?.url || display.url || "";
   const view = parseWorkspaceKey(workspace);
-  const areaId = useAreaOf(display.id);
+  const areaId = useAreaOf(view, display.id);
+  const commented = useCommentsTaken();
+  const coreDevice = useShellStore((s) => localDeviceId(s.rest));
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-browser-display={display.id}>
       <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-xs border-b border-border pl-xs pr-sm" data-browser-toolbar={display.id}>
@@ -161,8 +164,9 @@ function HostedPage({ display, workspace, actions, external = false }: { display
               trailing={size || !zoomed(page?.zoom ?? 1) ? null : <ZoomBadge zoom={page?.zoom ?? 1} command={command} />}
             />
             <DeviceButton device={device} drawn={drawn} onChoose={(next) => useUiStore.getState().setBrowserDevice(key, next)} />
-            <BrowserCommentButton display={display} workspace={workspace} areaId={areaId} address={address} actions={actions} />
-            <OpenDefaultBrowserButton address={address} pageDevice={view?.device_id ?? ""} actions={actions} />
+            {commented ? <BrowserCommentButton display={display} workspace={workspace} areaId={areaId} address={address} actions={actions} /> : null}
+            {/* Desk's pages are loaded where its core runs. */}
+            <OpenDefaultBrowserButton address={address} pageDevice={isDeskWorkspace(view) ? coreDevice : (view?.device_id ?? "")} actions={actions} />
             {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
           </>
         )}
@@ -178,7 +182,7 @@ function HostedPage({ display, workspace, actions, external = false }: { display
           ) : still ? (
             <img src={still} alt="" aria-hidden="true" draggable={false} className="absolute inset-0 size-full select-none object-fill" data-browser-still={display.id} />
           ) : null}
-          {view && areaId && !external ? (
+          {view && areaId && !external && commented ? (
             <PageNoteLayer
               commentKey={browserCommentKey(view, display.id)}
               displayId={display.id}
@@ -381,7 +385,11 @@ function AddressField({ address, onSubmit, autoFocus = false, trailing = null }:
  */
 export function BrowserHost({ actions }: { actions: Actions }) {
   const connection = useShellStore((s) => s.connection);
-  const view = useShellStore((s) => workspaceViewOf(s.rest));
+  // In Desk's room the pages in front are Desk's own desk's (PRD desk-own-desk B3).
+  const onDesk = useUiStore((s) => s.screen?.kind === "desk");
+  const workspaceView = useShellStore((s) => workspaceViewOf(s.rest));
+  const deskView = useShellStore((s) => deskViewOf(s.rest));
+  const view = onDesk ? deskView : workspaceView;
   const inventory = useShellStore((s) => s.rest?.browser_views);
   const scopes = useShellStore((s) => s.rest?.browser_scopes);
   const haveRest = useShellStore((s) => s.rest !== null && s.connection === "live");
@@ -449,7 +457,8 @@ export function BrowserHost({ actions }: { actions: Actions }) {
         const workspace = parseWorkspaceKey(event.workspace);
         if (workspace) latest.current.openBrowser(event.url, workspace, undefined, event.id);
       } else if (event.kind === "focus") {
-        const current = workspaceViewOf(useShellStore.getState().rest);
+        const rest = useShellStore.getState().rest;
+        const current = useUiStore.getState().screen?.kind === "desk" ? deskViewOf(rest) : workspaceViewOf(rest);
         if (!current?.layout || workspaceKey({ device_id: current.device_id, path: current.path }) !== event.workspace) return;
         const located = locateDisplay(current.layout.root, event.id);
         if (located && (current.layout.active_area !== located.area.id || located.area.active !== event.id)) latest.current.focusView(event.id);
@@ -465,10 +474,11 @@ export function BrowserHost({ actions }: { actions: Actions }) {
   return null;
 }
 
-/** The area that holds a display in the front Workspace's layout, or none. */
-function useAreaOf(displayId: string): string | null {
+/** The area that holds a display in its desk's layout, the front Workspace's or Desk's own, or none. */
+function useAreaOf(workspace: ViewWorkspace | null, displayId: string): string | null {
+  const desk = isDeskWorkspace(workspace);
   return useShellStore((s) => {
-    const layout = workspaceViewOf(s.rest)?.layout;
+    const layout = desk ? deskViewOf(s.rest)?.layout : workspaceViewOf(s.rest)?.layout;
     return layout ? (locateDisplay(layout.root, displayId)?.area.id ?? null) : null;
   });
 }

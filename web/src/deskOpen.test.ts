@@ -1,152 +1,113 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createActions } from "./actions";
-import { watchDeskFiles } from "./deskFiles";
-import { DESK_ROOM_CLOSED, activeTab, closeSide, closeTab, panelPlace, tabKey, type DeskTab } from "./deskRoom";
-import type { Checkout, SnapshotRest } from "./snapshot";
+import { deskOpenSend, type DeskOpen } from "./deskDesk";
+import { DESK_ROOM_CLOSED, deskShown, panelPlace } from "./deskRoom";
+import type { Checkout, DeskOutput, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import type { DispatchFn } from "./ws";
 
-// Expected answers are PRD desk-2-ui D-05, D-22-D-24, B16, B19, B20, B26,
-// B35-B39: what a press in Desk opens goes to the tab panel, beside the
-// session open beside Desk or at the window's right edge, and a file is its
-// checkout's document hided holds for this window from the room's whole file
-// set (`desk_files`), sent on each change and each connect, with no checkout
-// brought in front.
+// Expected answers are PRD desk-own-desk D-03, D-12, D-15, B10, B11, B14,
+// B16, B17, B34, B37-B39 and PRD desk-2-ui B7, B26: what a press in Desk
+// opens is one `desk_view_open`, which the core puts in front of Desk's own
+// desk, and the desk shows, beside the session open beside Desk or at the
+// window's right edge, with no checkout brought in front.
 
 const checkout = (id: string, path: string, pane: string): Checkout => ({
   id, workspace_id: `w-${id}`, path, label: id, branch: null, purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, agent_scope: undefined as never, next_tab_label: "Tab 2",
   tabs: [{ id: `t-${id}`, workspace_id: `w-${id}`, checkout_id: id, label: "Tab 1", empty: false, delegated: false, panes: [{ id: pane, device_id: "local", device_pane_id: pane, cwd: path, engine_label: null, terminal_title: null, identity_label: null, status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false }] }], active_tab_id: `t-${id}`, strip: [],
 });
-const workspace = (one: Checkout) => ({ id: one.workspace_id, label: one.label, device_id: "local", path: one.path, registered: true, temporary: false, pinned: false, inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: undefined as never, checkouts: [one] });
+const workspace = (one: Checkout, pulls: { number: number; url: string }[] = []) => ({ id: one.workspace_id, label: one.label, device_id: "local", path: one.path, registered: true, temporary: false, pinned: false, inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: undefined as never, checkouts: [one], pull_requests: pulls });
+const layout = { root: { area: { id: "a1", active: "d1", displays: [{ id: "d1" }] } }, active_area: "a1", display_count: 1, limits: { areas: 6, depth: 3, displays: 32 } };
 const rest = {
-  navigator: { focused_device_id: "local", focused_checkout_id: "front", focused_workspace_id: "w-front", devices: [{ id: "local", kind: "local" }], workspaces: [workspace(checkout("front", "/front", "p-front")), workspace(checkout("repo", "/repo", "p-session"))] },
+  navigator: { focused_device_id: "local", focused_checkout_id: "front", focused_workspace_id: "w-front", devices: [{ id: "local", kind: "local" }], workspaces: [workspace(checkout("front", "/front", "p-front")), workspace(checkout("repo", "/repo", "p-session"), [{ number: 2911, url: "https://github.com/o/r/pull/2911" }])] },
   ui_state: {},
+  desk_view: { device_id: "local", path: "hide:desk", layout, opened: 0 },
 } as unknown as SnapshotRest;
 const desk = { settings: { enabled: true } } as never;
-const mission: DeskTab = { kind: "mission", mission: "m-39", title: "1.3.0" };
-const pr: DeskTab = { kind: "output", output: { id: "pr:2911", kind: "pr", label: "#2911", thumb: null, seen: true, pr_state: "mergeable", device_id: null, checkout: null, path: null, url: "https://github.com/o/r/pull/2911" } };
+const mission: DeskOpen = { kind: "card", card: { kind: "mission", mission: "m-39" } };
+const output = (fields: Partial<DeskOutput>): DeskOutput => ({ id: "d4", kind: "doc", label: "plan.md", thumb: null, seen: false, pr_state: null, device_id: "local", checkout: "/repo", path: "/repo/plan.md", url: null, ...fields });
 
 let sent: Parameters<DispatchFn>[0][] = [];
 const actions = createActions((event) => {
   sent.push(event);
   return true;
 });
-const kinds = () => sent.map((event) => event.kind);
+const opens = () => sent.filter((event) => event.kind === "desk_view_open").map((event) => event.payload);
+const shown = () => deskShown(useUiStore.getState().deskRoom, 1);
 
-// The App's watcher of the room (App.tsx), on from a closed room.
-let unwatch = () => {};
 beforeEach(() => {
-  useShellStore.setState({ rest, desk, agents: [], connection: "live" });
+  useShellStore.setState({ rest, desk, agents: [], connection: "live", deskJobs: null });
   useUiStore.setState({ screen: { kind: "desk" }, deskRoom: DESK_ROOM_CLOSED, deskReturn: null });
-  unwatch = watchDeskFiles((files) => actions.deskFiles(files));
   sent = [];
 });
 afterEach(() => {
-  unwatch();
   useUiStore.setState({ deskRoom: DESK_ROOM_CLOSED });
 });
-const file = (path: string): DeskTab => ({ kind: "file", device_id: "local", root: "/repo", path });
-const held = (path: string) => ({ workspace_id: "w-repo", checkout_id: "repo", device_id: "local", path });
-const sets = () => sent.map((event) => (event.payload as { files: unknown[] }).files);
+const file = (path: string): DeskOpen => ({ kind: "file", device_id: "local", root: "/repo", path });
 
-describe("what Desk opens in its tab panel", () => {
-  it("opens a file beside the open session as one desk_files set, bringing no checkout in front", () => {
+describe("what Desk opens on its own desk", () => {
+  it("opens a file of a checkout beside the open session as one event naming that checkout, bringing no checkout in front (B10, B37, B38)", () => {
     actions.openDeskSession("p-session");
     sent = [];
     actions.deskOpen(file("/repo/web/token.ts"), { preview: true });
-    const room = useUiStore.getState().deskRoom;
-    expect(panelPlace(room)).toBe("beside_session");
-    expect(activeTab(room.panel)).toEqual(file("/repo/web/token.ts"));
-    expect(sent.map((event) => [event.kind, event.payload])).toEqual([["desk_files", { files: [held("/repo/web/token.ts")] }]]);
-    // Desk stays on screen.
-    expect(useUiStore.getState().screen).toEqual({ kind: "desk" });
+    actions.deskOpen(file("/repo/web/a.ts"), { beside: true });
+    expect(opens()).toEqual([
+      { kind: "file", workspace_id: "w-repo", checkout_id: "repo", device_id: "local", path: "/repo/web/token.ts", preview: true, beside: false },
+      { kind: "file", workspace_id: "w-repo", checkout_id: "repo", device_id: "local", path: "/repo/web/a.ts", preview: false, beside: true },
+    ]);
+    expect(sent.map((event) => event.kind)).toEqual(["desk_view_open", "desk_view_open"]);
+    expect([shown(), panelPlace(useUiStore.getState().deskRoom)]).toEqual([true, "beside_session"]);
   });
 
-  it("replaces the preview file in one set without the replaced file, and lets a closed tab's file go (B36)", () => {
-    actions.openDeskSession("p-session");
-    actions.deskOpen(file("/repo/a.ts"), { preview: true });
-    sent = [];
-    actions.deskOpen(file("/repo/b.ts"), { preview: true });
-    expect(sets()).toEqual([[held("/repo/b.ts")]]);
-    sent = [];
-    // Bringing an open tab to the front holds nothing new.
-    actions.deskOpen(file("/repo/b.ts"));
-    expect(sent).toEqual([]);
-    useUiStore.getState().setDeskRoom((now) => closeTab(now, tabKey(file("/repo/b.ts"))));
-    expect(sets()).toEqual([[]]);
-  });
-
-  it("opens a second file view beside the one in front with ⌘↵, the same file with no event, and a side's ✕ closes only that view (D-23, B37)", () => {
-    actions.openDeskSession("p-session");
-    actions.deskOpen(file("/repo/a.ts"));
-    sent = [];
-    actions.deskOpen(file("/repo/a.ts"), { beside: true });
-    let panel = useUiStore.getState().deskRoom.panel!;
-    expect([panel.active, panel.beside]).toEqual([tabKey(file("/repo/a.ts")), tabKey(file("/repo/a.ts"))]);
-    expect(sent).toEqual([]);
-    useUiStore.getState().setDeskRoom((now) => closeSide(now, "beside"));
-    expect(useUiStore.getState().deskRoom.panel?.beside).toBeNull();
-    actions.deskOpen(file("/repo/b.ts"), { beside: true });
-    panel = useUiStore.getState().deskRoom.panel!;
-    expect([panel.active, panel.beside]).toEqual([tabKey(file("/repo/a.ts")), tabKey(file("/repo/b.ts"))]);
-    expect(sets()).toEqual([[held("/repo/a.ts"), held("/repo/b.ts")]]);
-    sent = [];
-    useUiStore.getState().setDeskRoom((now) => closeSide(now, "front"));
-    panel = useUiStore.getState().deskRoom.panel!;
-    expect([panel.active, panel.beside, panel.tabs.length]).toEqual([tabKey(file("/repo/b.ts")), null, 2]);
-    expect(sent).toEqual([]);
-  });
-
-  it("opens a file, a PR or a mission at the window's right edge when no session is open, and opens no session for it", () => {
-    actions.deskOpen({ kind: "file", device_id: "local", root: "/front", path: "/front/a.ts" });
-    actions.deskOpen(pr);
+  it("opens a mission or a pull request as its card at the window's right edge when no session is open, and opens no session for it (B10, B39)", () => {
     actions.deskOpen(mission);
-    const room = useUiStore.getState().deskRoom;
-    expect(room.session).toBeNull();
-    expect(panelPlace(room)).toBe("window_edge");
-    expect(room.panel?.tabs).toHaveLength(3);
-    expect(activeTab(room.panel)).toEqual(mission);
-    expect(kinds()).toEqual(["desk_files"]);
+    actions.deskOpen({ kind: "output", output: output({ id: "pr:2911", kind: "pr", label: "#2911", pr_state: "mergeable", device_id: null, checkout: null, path: null, url: "https://github.com/o/r/pull/2911" }) });
+    expect(opens()).toEqual([{ kind: "card", card: { kind: "mission", mission: "m-39" } }, { kind: "card", card: { kind: "pull_request", workspace_id: "w-repo", number: 2911 } }]);
+    expect(useUiStore.getState().deskRoom.session).toBeNull();
+    expect([shown(), panelPlace(useUiStore.getState().deskRoom)]).toEqual([true, "window_edge"]);
   });
 
-  it("opens the Explorer of the session's checkout in the tool column with no event and closes it on a second press (B35)", () => {
+  it("opens a View a session listed through the core, which marks it seen, and a file an answer named by its checkout (D-12, B11, B25)", () => {
+    const listed = output({});
+    useShellStore.setState({ deskJobs: { jobs: [{ id: "j1", outputs: [listed] }], workers: [], named: [], records: [], moved: [] } as never });
+    actions.deskOpen({ kind: "output", output: listed });
+    actions.deskOpen({ kind: "output", output: output({ id: "answer:1", device_id: null, checkout: null, path: "/repo/docs/x.md" }) });
+    expect(opens()).toEqual([
+      { kind: "output", device_id: "local", checkout: "/repo", id: "d4" },
+      { kind: "file", workspace_id: "w-repo", checkout_id: "repo", device_id: "local", path: "/repo/docs/x.md", preview: false, beside: false },
+    ]);
+  });
+
+  it("opens nothing, and says so only in the log, for a file outside every checkout or while Desk is off", () => {
+    actions.deskOpen({ kind: "file", device_id: "local", root: "/elsewhere", path: "/elsewhere/x.md" });
+    expect(deskOpenSend(rest, { kind: "file", device_id: "local", root: "/elsewhere", path: "/elsewhere/x.md" }, () => false)).toEqual({ refused: "desk file: its checkout is not registered" });
+    useShellStore.setState({ desk: { settings: { enabled: false } } as never });
+    actions.deskOpen(file("/repo/a.ts"));
+    expect(opens()).toEqual([]);
+    expect(shown()).toBe(false);
+  });
+
+  it("opens the Explorer of the session's checkout in the desk's tool column with no event and closes it on a second press (B37)", () => {
     actions.openDeskSession("p-session");
     sent = [];
     actions.deskToggleExplorer();
-    expect(useUiStore.getState().deskRoom.panel?.explorer).toBe(true);
-    expect(sent).toEqual([]);
+    expect([useUiStore.getState().deskRoom.desk, useUiStore.getState().deskRoom.explorer]).toEqual([true, true]);
     actions.deskToggleExplorer();
-    expect(useUiStore.getState().deskRoom.panel).toBeNull();
-  });
-
-  it("lets every file of the room go in one set however the screen leaves Desk (B26)", () => {
-    actions.openDeskSession("p-session");
-    actions.deskOpen(file("/repo/a.ts"));
-    actions.deskOpen(file("/repo/b.ts"));
-    sent = [];
-    // Not through `setScreen`: a direct screen change leaves Desk too.
-    useUiStore.setState({ screen: { kind: "workspace" } });
-    expect(useUiStore.getState().deskRoom).toEqual(DESK_ROOM_CLOSED);
-    expect(sets()).toEqual([[]]);
-  });
-
-  it("sends the room's files again each time the connection comes live, once the catalog names their checkouts", () => {
-    actions.openDeskSession("p-session");
-    actions.deskOpen(file("/repo/a.ts"));
-    sent = [];
-    // A new connection holds nothing: a reload, a quit or a dropped socket let it go.
-    useShellStore.setState({ connection: "reconnecting", rest: null });
-    useShellStore.setState({ connection: "live" });
+    expect(useUiStore.getState().deskRoom.explorer).toBe(false);
     expect(sent).toEqual([]);
-    useShellStore.setState({ rest });
-    expect(sets()).toEqual([[held("/repo/a.ts")]]);
-    sent = [];
-    // A file whose checkout leaves the catalog is let go, and held again once it is back.
-    const listed = rest.navigator!.workspaces!;
-    useShellStore.setState({ rest: { ...rest, navigator: { ...rest.navigator!, workspaces: listed.slice(0, 1) } } as SnapshotRest });
-    useShellStore.setState({ rest });
-    expect(sets()).toEqual([[], [held("/repo/a.ts")]]);
+  });
+
+  it("shows the desk from `▤` only while it holds a tab, hides it on a second press, and keeps it through a session change (B13, B17, B19)", () => {
+    actions.deskToggleDesk();
+    expect(shown()).toBe(true);
+    actions.openDeskSession("p-session");
+    expect(shown()).toBe(true);
+    actions.deskToggleDesk();
+    expect(shown()).toBe(false);
+    useShellStore.setState({ rest: { ...rest, desk_view: { device_id: "local", path: "hide:desk", layout: { ...layout, display_count: 0 }, opened: 0 } } as unknown as SnapshotRest });
+    actions.deskToggleDesk();
+    expect(useUiStore.getState().deskRoom.desk).toBe(false);
   });
 
   it("starts the room closed the next time it is entered (B26), and ⌘J brings back the session it left for (B7)", () => {
