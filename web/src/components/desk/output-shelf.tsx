@@ -124,9 +124,9 @@ const CHIP = "h-(--size-control-lg) min-w-0 gap-xs px-sm text-body font-normal t
  * that output is shown. A thing alone of its kind shows itself in place of
  * its count, its name (an image with its picture, a pull request as its
  * mark), its details on hover, and a press opens it in the tab panel; a
- * larger group opens its list under the line, the images as large pictures
- * two to a row, the pull requests as rows with their state, up to six and
- * `+ n개 더`. The line never wraps: a thing alone of its kind gives up its
+ * larger group opens its list under the line, its files and pages as preview
+ * tiles three to a row (feedback 2, frame M 다), the pull requests as rows
+ * with their state, up to six and `+ n개 더`. The line never wraps: a thing alone of its kind gives up its
  * name's room first. A session with nothing made has no shelf.
  */
 export function OutputShelf({ outputs, pulls, selected = null, onOpen, onPull, row = null }: {
