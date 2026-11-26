@@ -136,12 +136,17 @@ describe("Desk's room", () => {
     expect(roomWidths(1100, 340, { view_width: 2000, session_width: null }, true)).toMatchObject({ view: 940 });
   });
 
-  it("finds the View a thread's file names, as a path, from its folder, or with a Windows device's backslashes", () => {
+  it("finds the View a thread's file names, as a path or under the session's folder, or with a Windows device's backslashes", () => {
     const posix = { ...output("notes"), path: "/repo/docs/notes.md" };
-    expect([namesView(posix, "/repo/docs/notes.md"), namesView(posix, "/repo/./docs/x/../notes.md"), namesView(posix, "docs/notes.md"), namesView(posix, "./notes.md")]).toEqual([true, true, true, true]);
-    expect([namesView(posix, "/other/docs/notes.md"), namesView(posix, "otes.md"), namesView(posix, "../notes.md"), namesView(posix, "docs\\notes.md")]).toEqual([false, false, false, false]);
+    expect([namesView(posix, "/repo/docs/notes.md", null), namesView(posix, "/repo/./docs/x/../notes.md", null), namesView(posix, "docs/notes.md", "/repo"), namesView(posix, "./notes.md", "/repo/docs"), namesView(posix, "../notes.md", "/repo/docs/x")]).toEqual([true, true, true, true, true]);
+    expect([namesView(posix, "/other/docs/notes.md", "/repo"), namesView(posix, "otes.md", "/repo/docs"), namesView(posix, "docs\\notes.md", "/repo")]).toEqual([false, false, false]);
     const windows = { ...output("notes"), path: "C:/repo/docs/notes.md" };
-    expect([namesView(windows, "C:\\repo\\docs\\notes.md"), namesView(windows, "c:/repo/docs/notes.md"), namesView(windows, "docs\\notes.md")]).toEqual([true, true, true]);
+    expect([namesView(windows, "C:\\repo\\docs\\notes.md", null), namesView(windows, "c:/repo/docs/notes.md", null), namesView(windows, "docs\\notes.md", "C:/repo")]).toEqual([true, true, true]);
+  });
+
+  it("never takes a file of the same name in another folder for a relative spelling, nor any file when the session's folder is unknown", () => {
+    const posix = { ...output("notes"), path: "/repo/docs/notes.md" };
+    expect([namesView(posix, "docs/notes.md", "/repo/web"), namesView(posix, "notes.md", "/repo"), namesView(posix, "docs/notes.md", null)]).toEqual([false, false, false]);
   });
 });
 
@@ -181,8 +186,10 @@ describe("the output a session's own line names (B27)", () => {
     expect(outputNamed(listed, typedPage("github.com/with-hide/hide/pull/2529/files"), place, "mac")).toBe(pull);
     expect(outputNamed(listed, typedPage("https://github.com/with-hide/hide/pull/2529/files"), place, "mac")).toBe(pull);
     expect(outputNamed(listed, typedPage("localhost:5173/gallery"), place, "mac")).toBe(dev);
-    expect(outputNamed(listed, typedPage("out\\report.html"), place, "mac")).toBe(windows);
-    // Another file or page is not one of them.
+    expect(outputNamed(listed, typedPage("out\\report.html"), { device: "winbox", checkout: "C:/src/repo", folder: "C:/src/repo" }, "mac")).toBe(windows);
+    // Another file or page is not one of them, nor a page of the same name in another folder than the session's.
+    expect(outputNamed(listed, typedPage("index.html"), { ...place, folder: "/work/repo/web" }, "mac").id).toBe("index.html");
+    expect(outputNamed(listed, typedPage("copy-pos/index.html"), { ...place, folder: "/work/repo/agents/other" }, "mac").id).toBe("copy-pos/index.html");
     const other = typedPage("agents/runs/other/index.html");
     expect(outputNamed(listed, other, place, "mac")).toBe(other);
     expect(outputNamed(listed, typedPage("github.com/with-hide/hide/pull/2530"), place, "mac").id).toBe("github.com/with-hide/hide/pull/2530");

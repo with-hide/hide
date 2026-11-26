@@ -8,7 +8,7 @@
 import { ENDED_JOB_STATES, livePane } from "./desk";
 import type { DeskItem, DeskJob, DeskMoved, DeskOutput } from "./snapshot";
 import { addressUrl, filePath } from "./browserViews";
-import { absolutePathRoot, underFolder } from "./terminalLinks";
+import { absolutePathRoot, normalize, underFolder } from "./terminalLinks";
 
 /**
  * A tab of the tab panel (B18, B19): an output the session opened (a page,
@@ -284,27 +284,21 @@ export function tabNames(tabs: readonly DeskTab[], projectOf: (tab: Extract<Desk
 
 /**
  * Whether `written`, a file as a session's call typed it, names the View
- * `made` opened (B16). A View's path is spelled as the wire spells it, `/`
- * between names on every system, so a Windows device's backslashes are read
- * as `/` and its drive letter in either case (docs/ARCHITECTURE.md, The
- * platform layer); a relative path names the View whose path ends with it.
+ * `made` opened (B16): the same file once a relative spelling is read under
+ * `folder`, the session's own folder, as the call read it; with no folder a
+ * relative spelling names nothing, since its end alone would take a file of
+ * the same name in another folder. A View's path is spelled as the wire
+ * spells it, `/` between names on every system, so a Windows device's
+ * backslashes are read as `/` and its drive letter in either case
+ * (docs/ARCHITECTURE.md, The platform layer).
  */
-export function namesView(made: DeskOutput, written: string): boolean {
+export function namesView(made: DeskOutput, written: string, folder: string | null): boolean {
   if (made.path === null) return false;
   const windows = /^[A-Za-z]:\//u.test(made.path) || made.path.startsWith("//");
   const wire = windows ? written.replaceAll("\\", "/") : written;
-  const root = absolutePathRoot(wire);
-  const parts: string[] = [];
-  for (const part of wire.slice(root?.length ?? 0).split("/")) {
-    if (part === "" || part === ".") continue;
-    if (part !== "..") parts.push(part);
-    else if (!root || parts.pop() === undefined) return false;
-  }
-  if (parts.length === 0) return false;
-  const same = (a: string, b: string) => (windows ? a.toLowerCase() === b.toLowerCase() : a === b);
-  if (root) return same(`${root}${parts.join("/")}`, made.path);
-  const tail = `/${parts.join("/")}`;
-  return made.path.length > tail.length && same(made.path.slice(-tail.length), tail);
+  const full = absolutePathRoot(wire) ? normalize(wire) : folder !== null && absolutePathRoot(folder) ? underFolder(folder, wire) : null;
+  if (full === null) return false;
+  return windows ? full.toLowerCase() === made.path.toLowerCase() : full === made.path;
 }
 
 /**
@@ -314,11 +308,11 @@ export function namesView(made: DeskOutput, written: string): boolean {
  * HTML file it names, absolute or relative to the session's folder, as
  * `namesView` reads a file (`hided/src/browser_cli.rs`, `address`).
  */
-function namesPage(made: DeskOutput, written: string): boolean {
+function namesPage(made: DeskOutput, written: string, folder: string | null): boolean {
   if (made.kind !== "page" || made.url === null) return false;
   if (made.url === addressUrl(written)) return true;
   const path = filePath(made.url);
-  return path !== null && namesView({ ...made, path }, written);
+  return path !== null && namesView({ ...made, path }, written, folder);
 }
 
 /**
@@ -330,7 +324,8 @@ function namesPage(made: DeskOutput, written: string): boolean {
  */
 export function outputNamed(listed: readonly DeskOutput[], output: DeskOutput, place: { device: string; checkout: string; folder: string } | null, node: string): DeskOutput {
   const typedPage = output.kind === "page" && output.device_id === null ? output.url : null;
-  const made = listed.find((one) => one.id === output.id || (output.url !== null && one.url === output.url) || (output.path !== null && namesView(one, output.path)) || (typedPage !== null && namesPage(one, typedPage)));
+  const folder = place?.folder ?? null;
+  const made = listed.find((one) => one.id === output.id || (output.url !== null && one.url === output.url) || (output.path !== null && namesView(one, output.path, folder)) || (typedPage !== null && namesPage(one, typedPage, folder)));
   if (made) return made;
   if (!place || output.path === null || output.device_id !== null) return output;
   const path = absolutePathRoot(place.folder) ? underFolder(place.folder, output.path) : output.path;
