@@ -246,21 +246,11 @@ export function paneChipWords(mission: Mission): { state: PaneChipState; key: Me
 
 function paneStateWords(mission: Mission): { state: PaneChipState; key: MessageKey; counts: string | null } {
   const { done, total } = missionCounts(mission);
-  return chipStateWords(mission.status, { done, total }, mission.nodes.length > 0);
-}
-
-/**
- * A mission chip's state, its word and its count, from what a chip holds: the
- * Conductor pane's chip reads it from the record's nodes, Desk's from the
- * counts its job carries, so both say the same for every status. A plan put
- * up and not started yet counts from none done (approved board 4); `planned`
- * says whether the plan has a node.
- */
-export function chipStateWords(status: Mission["status"], { done, total }: { done: number; total: number }, planned: boolean): { state: PaneChipState; key: MessageKey; counts: string | null } {
   const counts = `${done}/${total}`;
-  switch (status) {
+  switch (mission.status) {
     case "planning":
-      return planned ? { state: "running", key: "mission.chip", counts } : { state: "planning", key: "mission.pane.planning", counts: null };
+      // A plan put up and not started yet counts from none done (approved board 4).
+      return mission.nodes.length === 0 ? { state: "planning", key: "mission.pane.planning", counts: null } : { state: "running", key: "mission.chip", counts };
     case "running":
       return { state: "running", key: "mission.chip", counts };
     case "merge_wait":
@@ -270,6 +260,34 @@ export function chipStateWords(status: Mission["status"], { done, total }: { don
     case "cancelled":
       return { state: "cancelled", key: "mission.pane.cancelled", counts: null };
   }
+}
+
+/**
+ * The two-line mission chip's second line (Doop N2 가), the one rule Desk's
+ * answers and the session beside Desk read: a planning mission and a
+ * cancelled one say their word with no cells; a running one has its cells and
+ * `k/n`; a merge wait and a finished one keep both and add their word. The
+ * operator's turn, when it waits, says `! 내 차례` in place of the word.
+ */
+export function chipLine(status: Mission["status"], { done, total }: { done: number; total: number }, turn: boolean): { cells: boolean; counts: string | null; word: MessageKey | null } {
+  const word = turn ? "agents.mark.turn" : null;
+  switch (status) {
+    case "planning":
+      return { cells: false, counts: null, word: word ?? "mission.pane.planning" };
+    case "running":
+      return { cells: true, counts: `${done}/${total}`, word };
+    case "merge_wait":
+      return { cells: true, counts: `${done}/${total}`, word: word ?? "mission.pane.mergeWait" };
+    case "done":
+      return { cells: true, counts: `${done}/${total}`, word: "mission.pill.done" };
+    case "cancelled":
+      return { cells: false, counts: null, word: "mission.pane.cancelled" };
+  }
+}
+
+/** The cells of a mission known by its counts alone, as a Desk card carries it: the done ones, then those still ahead. */
+export function cellsFromCounts({ done, total }: { done: number; total: number }): CellTone[] {
+  return Array.from({ length: total }, (_, index) => (index < done ? "done" : "waiting"));
 }
 
 /**

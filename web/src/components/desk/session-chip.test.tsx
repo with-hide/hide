@@ -3,6 +3,8 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { DeskJob, DeskMention, DeskSessionRef, SessionFacts } from "../../desk";
+import type { SnapshotRest } from "../../snapshot";
+import { useShellStore } from "../../store";
 import { TooltipProvider } from "../ui/tooltip";
 import { DeskReply } from "./desk-chat";
 import { SessionCard, SessionChipProvider } from "./session-chip";
@@ -83,4 +85,23 @@ it("draws each mission the reply item carries in place of its token, a title wit
   expect(drawn.map((one) => [one.getAttribute("data-desk-mission-mention"), one.textContent])).toEqual([["mission-63", "결제 흐름 정리 (11-25)"]]);
   expect(host.textContent).not.toContain("@mission(mission-63");
   expect(host.textContent).toContain("@mission(mission-9 not read)");
+});
+
+it("puts the chips of the missions a paragraph names in one row right behind it, not in its words, and none for a mission the app does not hold", async () => {
+  const saved = useShellStore.getState();
+  const held = { id: "mission-63", title: "결제 흐름 정리", status: "running", nodes: [], conductor: { present: true }, decision: null, question: null, delay: null, closed_at_unix_ms: null };
+  useShellStore.setState({ rest: { missions: { items: [held] } } as unknown as SnapshotRest });
+  try {
+    const missions = [{ id: "mission-63", title: "결제 흐름 정리" }, { id: "mission-9", title: "모르는 미션" }];
+    const text = "@mission(mission-63 결제 흐름 정리) and @mission(mission-9 모르는 미션) run.\n\nSecond paragraph names no mission.";
+    const host = await render(<DeskReply text={text} missions={missions} onMission={() => {}} />);
+    const rows = [...host.querySelectorAll("[data-markdown-chip-row]")];
+    expect(rows.map((row) => [row.getAttribute("data-markdown-chip-row"), row.querySelectorAll("[data-mission-chip]").length])).toEqual([["0", 1]]);
+    // The paragraph's words keep both titles and hold no chip; the row follows its line and comes before the next paragraph.
+    const line = host.querySelector(".cm-line")!;
+    expect([line.textContent, line.querySelector("[data-mission-chip]")]).toEqual(["결제 흐름 정리 and 모르는 미션 run.", null]);
+    expect(rows[0]!.compareDocumentPosition(host.querySelectorAll(".cm-line")[2]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  } finally {
+    useShellStore.setState(saved, true);
+  }
 });

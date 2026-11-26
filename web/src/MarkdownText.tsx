@@ -38,8 +38,14 @@ const codeCopy = EditorView.theme({
   ".cm-md-code-copy": { position: "absolute", top: "var(--spacing-xxs)", right: "var(--spacing-xs)", fontFamily: "var(--font-sans)", lineHeight: "normal" },
 });
 
-/** A token of the text drawn as a part instead of its letters, such as a session a Desk reply names. */
-export type MarkdownChip = { token: string; node: ReactNode };
+/**
+ * A token of the text drawn as a part instead of its letters, such as a
+ * session a Desk reply names. `after` is a part that does not fit a line of
+ * words: the token's place keeps `node`, and `after` stands in a row of its
+ * own right behind the paragraph that holds the token, with the other parts
+ * that paragraph has.
+ */
+export type MarkdownChip = { token: string; node: ReactNode; after?: ReactNode };
 
 const roots = new WeakMap<HTMLElement, Root>();
 
@@ -66,16 +72,61 @@ class ChipWidget extends WidgetType {
   }
 }
 
-/** Every place a chip's token stands in the text, replaced by the chip. */
+/** A row of parts under a paragraph, in a root of its own, unmounted after the editor lets it go. */
+class ChipRowWidget extends WidgetType {
+  constructor(readonly indexes: string, readonly nodes: readonly ReactNode[]) {
+    super();
+  }
+  eq(other: ChipRowWidget) {
+    return other.indexes === this.indexes && other.nodes.every((node, at) => node === this.nodes[at]);
+  }
+  toDOM() {
+    const dom = document.createElement("div");
+    dom.className = "cm-md-chip-row";
+    dom.dataset.markdownChipRow = this.indexes;
+    const root = createRoot(dom);
+    root.render(this.nodes.map((node, at) => <span key={at} className="contents">{node}</span>));
+    roots.set(dom, root);
+    return dom;
+  }
+  destroy(dom: HTMLElement) {
+    const root = roots.get(dom);
+    roots.delete(dom);
+    if (root) queueMicrotask(() => root.unmount());
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
+// The row's room: the words' spacing and the parts side by side, wrapping to the next line when they run out.
+const chipRow = EditorView.theme({
+  ".cm-md-chip-row": { display: "flex", flexWrap: "wrap", gap: "var(--spacing-sm)", padding: "var(--spacing-xs) 0" },
+});
+
+/** Where the paragraph holding `at` ends: before its blank line, or the text's end. */
+function paragraphEnd(text: string, at: number): number {
+  const blank = text.indexOf("\n\n", at);
+  return blank < 0 ? text.length : blank;
+}
+
+/** Every place a chip's token stands in the text, replaced by the chip, and each paragraph's `after` parts in a row behind it. */
 function chipDecorations(text: string, chips: readonly MarkdownChip[]): Extension {
   const ranges: Range<Decoration>[] = [];
+  const rows = new Map<number, number[]>();
   chips.forEach((chip, index) => {
     if (!chip.token) return;
     for (let at = text.indexOf(chip.token); at >= 0; at = text.indexOf(chip.token, at + chip.token.length)) {
       ranges.push(Decoration.replace({ widget: new ChipWidget(index, chip.node) }).range(at, at + chip.token.length));
+      if (chip.after) {
+        const end = paragraphEnd(text, at);
+        const row = rows.get(end) ?? [];
+        if (!row.includes(index)) rows.set(end, [...row, index]);
+      }
     }
   });
-  return EditorView.decorations.of(Decoration.set(ranges, true));
+  for (const [end, indexes] of rows) ranges.push(Decoration.widget({ widget: new ChipRowWidget(indexes.join(" "), indexes.map((index) => chips[index]!.after)), block: true, side: 1 }).range(end));
+  return [chipRow, EditorView.decorations.of(Decoration.set(ranges, true))];
 }
 
 /** A code block's `복사`, in a root of its own, unmounted after the editor lets it go. */

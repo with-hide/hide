@@ -91,24 +91,22 @@ export function DeskQueuedBubble({ message, held = false, onRemove, onMention }:
 }
 
 /**
- * A mission a Desk answer names (`@mission(<id> <title>)`): its title and
- * the app's mission chip, its mark and done count, which opens its map. The
- * title is the mission's own while the app holds it; one the app does not
- * hold keeps the answer's title and has no chip.
+ * A mission a Desk answer names (`@mission(<id> <title>)`): its title where
+ * the answer names it, in the title the app holds while it holds the mission;
+ * its chip, two lines, stands in a row behind the paragraph (`DeskReply`).
  */
-function DeskMissionMention({ mention, onOpen }: { mention: DeskMissionMention; onOpen?: (missionId: string) => void }) {
+function DeskMissionMention({ mention }: { mention: DeskMissionMention }) {
   const title = useShellStore((s) => s.rest?.missions?.items.find((one) => one.id === mention.id)?.title) ?? mention.title;
   return (
-    <span className="inline-flex max-w-full min-w-0 items-center gap-xxs align-middle" data-desk-mission-mention={mention.id}>
+    <span className="inline-flex max-w-full min-w-0 items-center align-middle" data-desk-mission-mention={mention.id}>
       <span className="truncate font-semibold text-foreground">{title}</span>
-      {onOpen ? <MissionChipOf id={mention.id} onOpen={onOpen} /> : null}
     </span>
   );
 }
 
 /**
  * Desk's answer as plain Markdown (D-75), where a session it names is that
- * session's chip and a mission its title and mission chip, each pressed to
+ * session's chip and a mission its title, with its mission chip in a row behind the paragraph, each pressed to
  * open it; the core reads both from the finished answer, so a `live` one
  * streams its text alone; a stopped answer keeps what it said and says it
  * stopped (B7). Given `copy`, it offers `복사` of its original words, each
@@ -119,13 +117,15 @@ export function DeskReply({ text, stopped = false, live = false, mentions = [], 
   const { t } = useInterfaceTranslation();
   // Each chip is drawn in a root of its own inside the Markdown, so the screen's chip source is bridged to it.
   const bridge = useSessionChipBridge();
+  // A mission the app does not hold keeps the answer's title with no chip.
+  const held = useShellStore((s) => s.rest?.missions?.items);
   const chips = useMemo<MarkdownChip[]>(() => [
     ...mentions.map((mention) => ({
       token: markedMention(mention),
       node: bridge(<SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id }} onPress={onMention ? () => onMention(mention) : undefined} />),
     })),
-    ...missions.map((mission) => ({ token: markedMission(mission), node: bridge(<DeskMissionMention mention={mission} onOpen={onMission} />) })),
-  ], [mentions, missions, onMention, onMission, bridge]);
+    ...missions.map((mission) => ({ token: markedMission(mission), node: bridge(<DeskMissionMention mention={mission} />), after: onMission && held?.some((one) => one.id === mission.id) ? bridge(<MissionChipOf id={mission.id} onOpen={onMission} />) : undefined })),
+  ], [mentions, missions, held, onMention, onMission, bridge]);
   const words = <MarkdownText text={text} size="chat" chips={chips} copyCode={copy} />;
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-item="reply" data-desk-reply={live ? "live" : stopped ? "stopped" : "done"}>

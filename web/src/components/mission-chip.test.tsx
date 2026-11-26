@@ -9,8 +9,10 @@ import { useShellStore } from "../store";
 import { DeskMissionChip, MissionChipOf } from "./mission-chip";
 import { TooltipProvider } from "./ui/tooltip";
 
-// Desk's mission chip, in a job card and in an answer, says what the session
-// header's chip says (Doop frame C): the number, the state's word, `k/n`.
+// Desk's mission chip, in a job card, in an answer and in the head of the
+// session that conducts the mission, is two lines (Doop N2 가): the mark, the
+// number and the name; then the cells, `k/n` or the state's word, and the
+// operator's turn.
 
 initializeInterfaceI18n("en");
 
@@ -23,13 +25,13 @@ function mission(id: string, extra: Partial<Mission> = {}): Mission {
 }
 
 const NODES = [node("a", { status: "done" }), node("b", { status: "working" })];
-const STATES: { status: Mission["status"]; nodes: MissionNode[]; face: string }[] = [
-  { status: "planning", nodes: [], face: "M1·Planning" },
-  { status: "planning", nodes: NODES, face: "M1·1/2" },
-  { status: "running", nodes: NODES, face: "M1·1/2" },
-  { status: "merge_wait", nodes: NODES, face: "M1·Waiting to merge" },
-  { status: "done", nodes: NODES, face: "M1·1/2" },
-  { status: "cancelled", nodes: NODES, face: "M1·Cancelled" },
+const STATES: { status: Mission["status"]; nodes: MissionNode[]; text: string; cells: string | null }[] = [
+  { status: "planning", nodes: [], text: "M1DeskPlanning", cells: null },
+  { status: "planning", nodes: NODES, text: "M1DeskPlanning", cells: null },
+  { status: "running", nodes: NODES, text: "M1Desk1/2", cells: "done working" },
+  { status: "merge_wait", nodes: NODES, text: "M1Desk1/2Waiting to merge", cells: "done working" },
+  { status: "done", nodes: NODES, text: "M1Desk1/2Finished", cells: "done working" },
+  { status: "cancelled", nodes: NODES, text: "M1DeskCancelled", cells: null },
 ];
 
 let mounted: ReturnType<typeof createRoot>[] = [];
@@ -41,36 +43,51 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function face(node: React.ReactNode): Promise<string | undefined> {
+async function chip(node: React.ReactNode): Promise<HTMLElement | null> {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   mounted.push(root);
   await act(async () => root.render(<TooltipProvider>{node}</TooltipProvider>));
-  return host.querySelector("[data-mission-chip]")?.textContent ?? undefined;
+  return host.querySelector<HTMLElement>("[data-mission-chip]");
 }
 
-it("draws a carried mission's number, state word and count for every status, as the session header's chip does", async () => {
-  for (const { status, nodes, face: expected } of STATES) {
+
+const shape = (one: HTMLElement | null) => [one?.textContent, one?.querySelector("[data-progress-cells]")?.getAttribute("data-progress-cells") ?? null];
+
+it("draws a carried mission in two lines for every status, its cells from the counts it carries", async () => {
+  for (const { status, nodes, text, cells } of STATES) {
     const carried: DeskMission = { id: "mission-1", title: "Desk", status, done: nodes.length ? 1 : 0, total: nodes.length, turn: null, delay: null };
-    expect(await face(<DeskMissionChip mission={carried} onOpen={() => {}} />), `${status} with ${nodes.length} nodes`).toBe(expected);
+    const drawn = await chip(<DeskMissionChip mission={carried} onOpen={() => {}} />);
+    // A planning mission with no nodes and a cancelled one draw no cells; the others draw the counts' cells (`done waiting`).
+    expect(shape(drawn), `${status} with ${nodes.length} nodes`).toEqual([text, cells?.replace("working", "waiting") ?? null]);
+    expect(drawn?.querySelectorAll("[data-mission-chip-line]")).toHaveLength(1);
   }
 });
 
-it("draws a mission the store holds in an answer with the same face as the card's chip", async () => {
+it("draws a mission the store holds with the nodes' own cells, the same words, and in an answer's row the same chip", async () => {
   const saved = useShellStore.getState();
   try {
-    for (const { status, nodes, face: expected } of STATES) {
+    for (const { status, nodes, text, cells } of STATES) {
       const held = mission("mission-1", { title: "Desk", status, nodes });
       useShellStore.setState({ rest: { missions: { items: [held] } } as unknown as SnapshotRest });
-      expect(await face(<MissionChipOf id="mission-1" onOpen={() => {}} />), `${status} with ${nodes.length} nodes`).toBe(expected);
+      expect(shape(await chip(<MissionChipOf id="mission-1" onOpen={() => {}} />)), `${status} with ${nodes.length} nodes`).toEqual([text, cells]);
     }
+    const carried: DeskMission = { id: "mission-1", title: "Desk", status: "cancelled", done: 1, total: 2, turn: null, delay: null };
+    expect((await chip(<DeskMissionChip mission={carried} onOpen={() => {}} />))?.className).toContain("opacity-(--opacity-dimmed)");
   } finally {
     useShellStore.setState(saved, true);
   }
 });
 
-it("keeps the word of a mission whose id has no number", async () => {
-  const carried: DeskMission = { id: "m-x", title: "Desk", status: "running", done: 1, total: 2, turn: null, delay: null };
-  expect(await face(<DeskMissionChip mission={carried} onOpen={() => {}} />)).toBe("Mission1/2");
+it("edges a chip in the warning colour and says `! Needs you` while the operator's turn waits, keeping the progress", async () => {
+  const carried: DeskMission = { id: "mission-1", title: "Desk", status: "running", done: 1, total: 2, turn: "decision", delay: null };
+  const drawn = await chip(<DeskMissionChip mission={carried} onOpen={() => {}} />);
+  expect([drawn?.textContent, drawn?.className.includes("border-warning"), drawn?.dataset.missionChipTurn]).toEqual(["M1Desk1/2! Needs you", true, "decision"]);
+});
+
+it("keeps the name of a mission whose id has no number and cuts only the name short", async () => {
+  const carried: DeskMission = { id: "m-x", title: "A very long mission name that runs on and on", status: "running", done: 1, total: 2, turn: null, delay: null };
+  const drawn = await chip(<DeskMissionChip mission={carried} onOpen={() => {}} />);
+  expect([drawn?.textContent, drawn?.querySelector(".truncate")?.textContent]).toEqual(["A very long mission name that runs on and on1/2", "A very long mission name that runs on and on"]);
 });

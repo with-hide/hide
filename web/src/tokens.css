@@ -373,6 +373,8 @@
   --size-mission-edge: 1.5px;
   --size-chip-bar: 44px;
   --size-chip-edge-bar: 2px;
+  --size-mission-card-min: 168px;
+  --size-mission-card-max: 280px;
   --size-flow-title: 196px;
   --size-flow-bar: 8px;
   --size-pr-number: 38px;
