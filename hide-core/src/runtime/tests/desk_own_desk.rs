@@ -974,3 +974,49 @@ fn desks_desk_comes_back_with_its_document_on_a_runtime_started_from_its_saved_s
         "its document was read back"
     );
 }
+
+/// B42: a file of a project with no tab yet that cannot be read opens on
+/// Desk's desk as a tab saying why, in front, and Retry reads it once it can.
+#[cfg(unix)]
+#[test]
+fn a_file_desk_cannot_read_opens_as_a_tab_saying_why_and_retry_reads_it_once_it_can() {
+    use std::os::unix::fs::PermissionsExt;
+    let (mut runtime, other, other_checkout) = desk_runtime_with_other("own-desk-unreadable");
+    let file = other.join("locked.md");
+    std::fs::write(&file, "unlocked\n").expect("fixture");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).expect("lock");
+    // A mode bit locks a file only for an account that is not root.
+    if std::fs::read(&file).is_ok() {
+        return;
+    }
+
+    open_on_desk(&mut runtime, "workspace:other", &other_checkout, &file);
+
+    let views = desk_views(&mut runtime);
+    assert_eq!(views.len(), 1, "the open is a View of Desk's desk");
+    assert_eq!(views[0].path, file.to_string_lossy());
+    let reason = runtime
+        .snapshot
+        .editor
+        .tabs
+        .iter()
+        .find(|tab| tab.path == file.to_string_lossy())
+        .and_then(|tab| tab.unavailable_reason.clone());
+    assert!(reason.is_some(), "its tab says why it could not be read");
+
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).expect("unlock");
+    desk_layout(
+        &mut runtime,
+        serde_json::json!({"action": "retry", "display_id": views[0].id}),
+    );
+
+    let tab = runtime
+        .snapshot
+        .editor
+        .tabs
+        .iter()
+        .find(|tab| tab.path == file.to_string_lossy())
+        .expect("the tab stays");
+    assert_eq!(tab.unavailable_reason, None, "Retry read the file");
+    assert_eq!(desk_views(&mut runtime).len(), 1);
+}

@@ -1163,8 +1163,9 @@ impl Runtime {
             "display": oldest.display_id,
             "display_kind": oldest.kind,
         }));
+        // Every View, Desk's desk's among them, still showing the document
+        // keeps it.
         if let Some(document) = oldest.document
-            && !self.desk_holds_tab(&document)
             && !self
                 .every_view()
                 .any(|(_, display)| display.tab_id.as_ref() == Some(&document))
@@ -3169,13 +3170,15 @@ impl Runtime {
                             placement: None,
                         },
                     ),
-                    Err(message) => self.insert_unavailable_file_tab(
-                        &workspace_id,
-                        &checkout_id,
-                        &display.path,
-                        display.preview,
-                        message,
-                    ),
+                    Err(message) => {
+                        self.insert_unavailable_file_tab(
+                            &workspace_id,
+                            &checkout_id,
+                            &display.path,
+                            display.preview,
+                            message,
+                        );
+                    }
                 }
                 true
             }
@@ -3262,13 +3265,15 @@ impl Runtime {
                                 placement: None,
                             },
                         ),
-                        Err(message) => self.insert_unavailable_file_tab(
-                            &workspace_id,
-                            &checkout_id,
-                            path,
-                            false,
-                            message,
-                        ),
+                        Err(message) => {
+                            self.insert_unavailable_file_tab(
+                                &workspace_id,
+                                &checkout_id,
+                                path,
+                                false,
+                                message,
+                            );
+                        }
                     }
                 }
             }

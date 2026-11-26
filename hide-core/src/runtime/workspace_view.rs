@@ -1591,7 +1591,7 @@ impl Runtime {
         path: &str,
         preview: bool,
         reason: String,
-    ) {
+    ) -> String {
         let tab_id = self.new_file_tab_id(workspace_id, checkout_id, path);
         self.push_diagnostic(
             "workspace_views.tab_unavailable",
@@ -1607,10 +1607,10 @@ impl Runtime {
             if tab.unavailable_reason.is_some() {
                 tab.unavailable_reason = Some(reason);
             }
-            return;
+            return tab_id;
         }
         self.place_editor_tab(EditorTabSnapshot {
-            id: tab_id,
+            id: tab_id.clone(),
             device_id: Default::default(),
             workspace_id: workspace_id.to_owned(),
             checkout_id: checkout_id.to_owned(),
@@ -1624,6 +1624,7 @@ impl Runtime {
             preview,
             unavailable_reason: Some(reason),
         });
+        tab_id
     }
 
     /// Queues a write of the Workspace view file on its own worker, outside

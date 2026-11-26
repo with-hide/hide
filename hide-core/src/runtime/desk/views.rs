@@ -398,13 +398,15 @@ impl Runtime {
                         placement: None,
                     },
                 ),
-                Err(message) => self.insert_unavailable_file_tab(
-                    &workspace_id,
-                    &checkout_id,
-                    &path,
-                    false,
-                    message,
-                ),
+                Err(message) => {
+                    self.insert_unavailable_file_tab(
+                        &workspace_id,
+                        &checkout_id,
+                        &path,
+                        false,
+                        message,
+                    );
+                }
             }
         }
         began

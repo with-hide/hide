@@ -547,6 +547,31 @@ impl Runtime {
                 return true;
             }
             Err(failure) => {
+                // A file opened on Desk's desk that could not be read is a
+                // tab there saying why, with Retry, as one read back after a
+                // restart is (PRD desk-own-desk B42); Desk draws no notice.
+                let desk: Vec<ViewPlacement> = request
+                    .placements
+                    .iter()
+                    .filter(|placement| self.is_desk_key(&placement.key))
+                    .cloned()
+                    .collect();
+                if !request.reload && !desk.is_empty() {
+                    let tab_id = self.insert_unavailable_file_tab(
+                        &request.workspace_id,
+                        &request.checkout_id,
+                        &request.path,
+                        request.preview,
+                        failure.message(),
+                    );
+                    self.complete_file_in_views(
+                        PreparedFileTab::Open(tab_id),
+                        &request.workspace_id,
+                        &request.checkout_id,
+                        &request.path,
+                        desk,
+                    );
+                }
                 if let Some(key) = self.workspace_key(&request.workspace_id, &request.checkout_id) {
                     self.refuse_reopens_of_file(&key, &request.path);
                 }
