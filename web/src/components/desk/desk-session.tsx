@@ -6,8 +6,7 @@ import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { missionNumber, missionWorkedIn } from "../../missions";
 import { PaneHeadChildren } from "../../PaneHeaderBand";
-import { usePaneMission } from "../../PaneMissionChip";
-import { MissionChipOf } from "../mission-chip";
+import { PaneMissionCard, usePaneMission } from "../../PaneMissionChip";
 import { PanePlanChip } from "../../PanePlanChip";
 import { planOfPane } from "../../plans";
 import { useShellStore } from "../../store";
@@ -106,7 +105,7 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
           {disconnected ? <span className="shrink-0 text-warning" data-desk-session-disconnected="true">{t("desk.room.disconnected")}</span> : null}
           {conducts ? (
             <span className="flex min-w-0 items-center" data-desk-session-mission={conducts.id}>
-              <MissionChipOf id={conducts.id} onOpen={deskActions.openMission} />
+              <PaneMissionCard paneId={paneId} mission={conducts} actions={deskActions} />
             </span>
           ) : null}
           {works ? (

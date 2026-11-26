@@ -105,3 +105,22 @@ it("puts the chips of the missions a paragraph names in one row right behind it,
     useShellStore.setState(saved, true);
   }
 });
+
+it("redraws no answer when a mission changes unless the answer names that mission, so a selection in it stays", async () => {
+  const saved = useShellStore.getState();
+  const held = (title: string) => ({ id: "mission-63", title, status: "running", nodes: [], conductor: { present: true }, decision: null, question: null, delay: null, closed_at_unix_ms: null });
+  useShellStore.setState({ rest: { missions: { items: [held("결제 흐름 정리")] } } as unknown as SnapshotRest });
+  try {
+    const host = await render(<><DeskReply text="No mission here." /><DeskReply text="@mission(mission-63 결제 흐름 정리) runs." missions={[{ id: "mission-63", title: "결제 흐름 정리" }]} onMission={() => {}} /></>);
+    const editors = () => [...host.querySelectorAll(".cm-editor")];
+    const before = editors();
+    expect(before).toHaveLength(2);
+    // A mission changes (its title, a node): both answers keep their editors, so a text selection in either is not lost.
+    await act(async () => useShellStore.setState({ rest: { missions: { items: [held("결제 흐름 정리 (개정)")] } } as unknown as SnapshotRest }));
+    expect(editors().every((editor, at) => editor === before[at])).toBe(true);
+    // The chip itself follows the store, in its own root.
+    expect(host.querySelector("[data-mission-chip]")?.textContent).toContain("개정");
+  } finally {
+    useShellStore.setState(saved, true);
+  }
+});

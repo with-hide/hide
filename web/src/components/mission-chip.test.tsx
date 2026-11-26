@@ -91,3 +91,10 @@ it("keeps the name of a mission whose id has no number and cuts only the name sh
   const drawn = await chip(<DeskMissionChip mission={carried} onOpen={() => {}} />);
   expect([drawn?.textContent, drawn?.querySelector(".truncate")?.textContent]).toEqual(["A very long mission name that runs on and on1/2", "A very long mission name that runs on and on"]);
 });
+
+it("ends the second line with a grey pause and the time left while a mission delay holds the mission", async () => {
+  const carried: DeskMission = { id: "mission-1", title: "Desk", status: "running", done: 1, total: 2, turn: null, delay: "rate limit", delay_until_unix_ms: Date.now() + 12 * 60_000 };
+  const drawn = await chip(<DeskMissionChip mission={carried} onOpen={() => {}} />);
+  const held = drawn?.querySelector("[data-mission-chip-line] [data-mission-chip-delay]");
+  expect([held?.textContent, held?.querySelector("svg") !== null, drawn?.querySelector("[data-mission-chip-line]")?.lastElementChild === held]).toEqual(["12m", true, true]);
+});

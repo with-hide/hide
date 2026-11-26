@@ -5,7 +5,9 @@ import { heldBy, useDelayWords, type MissionDelay } from "./mission-hold";
 import type { DeskMission } from "../desk";
 import type { Mission, MissionTurn } from "../snapshot";
 import { cn } from "../lib/utils";
-import { CheckIcon, WaypointsIcon } from "lucide-react";
+import { CheckIcon, PauseIcon, WaypointsIcon } from "lucide-react";
+import type { ComponentProps } from "react";
+import { useRemaining } from "./elapsed";
 import { MissionChipFace, ProgressCells, TONE_TEXT } from "./mission-tone";
 import { InToolCell } from "./tool-mark";
 import { useShellStore } from "../store";
@@ -39,16 +41,16 @@ export function MissionChip({ agent, onOpen }: { agent: ConductorOwner; onOpen: 
  * Conductor row keeps its one-line chip. Only the name is cut short, its
  * whole in the hint.
  */
-function MissionChipCard({ id, title, status, done, total, cells, tone, turn, delay, onOpen }: { id: string; title: string; status: Mission["status"]; done: number; total: number; cells: readonly CellTone[]; tone: CellTone; turn: MissionTurn | null; delay: MissionDelay | null; onOpen: (missionId: string) => void }) {
+function MissionChipCard({ id, title, status, done, total, cells, tone, turn, delay, onOpen, anchor }: { anchor?: ComponentProps<typeof Button>; id: string; title: string; status: Mission["status"]; done: number; total: number; cells: readonly CellTone[]; tone: CellTone; turn: MissionTurn | null; delay: MissionDelay | null; onOpen: (missionId: string) => void }) {
   const { t } = useInterfaceTranslation();
   const held = useDelayWords(delay);
+  const left = useRemaining(delay?.until);
   const line = chipLine(status, { done, total }, turn !== null);
   const number = missionNumber(id);
   const word = line.word ? t(line.word) : null;
   const label = [t("mission.chip.open"), title, word, line.counts, turn ? t(TURN_WORDS[turn]) : null, held].filter(Boolean).join(" · ");
   const Mark = status === "done" ? CheckIcon : WaypointsIcon;
-  return (
-    <Hint label={label}>
+  const button = (
       <Button
         variant="text"
         size="inline"
@@ -67,6 +69,7 @@ function MissionChipCard({ id, title, status, done, total, cells, tone, turn, de
           event.stopPropagation();
           onOpen(id);
         }}
+        {...anchor}
       >
         <span className="flex min-w-0 items-center gap-xs text-caption">
           <Mark aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0", TONE_TEXT[tone])} />
@@ -77,16 +80,18 @@ function MissionChipCard({ id, title, status, done, total, cells, tone, turn, de
           {line.cells ? <ProgressCells tones={cells} size="head" className="min-w-(--size-chip-bar)" /> : null}
           {line.counts ? <span className={cn("shrink-0 font-mono font-semibold tabular-nums", status === "done" && "text-mission-done")}>{line.counts}</span> : null}
           {word ? <span className={cn("min-w-0 truncate", turn ? "font-semibold text-warning" : status === "merge_wait" ? "text-mission-review" : status === "done" ? "text-mission-done" : "text-muted-foreground")} data-mission-chip-word="true">{turn ? `! ${word}` : word}</span> : null}
+          {delay ? <span className="ml-auto flex shrink-0 items-center gap-xxs text-muted-foreground" data-mission-chip-delay="true"><PauseIcon aria-hidden="true" className="size-(--size-icon-sm)" />{left && left !== "past" ? left.text : null}</span> : null}
         </span>
       </Button>
-    </Hint>
   );
+  // Given the pane's hover card as its anchor, the card is the hover; else the hint says the chip.
+  return anchor ? button : <Hint label={label}>{button}</Hint>;
 }
 
-/** Desk's chip of a mission as the store holds it now: its cells are the nodes', its colour the one every chip wears. */
-function StoredMissionChip({ mission, onOpen }: { mission: Mission; onOpen: (missionId: string) => void }) {
+/** Desk's chip of a mission as the store holds it now: its cells are the nodes', its colour the one every chip wears; `anchor` makes it the anchor of a hover card (the Conductor pane's). */
+export function StoredMissionChip({ mission, onOpen, anchor }: { mission: Mission; onOpen: (missionId: string) => void; anchor?: ComponentProps<typeof Button> }) {
   const { done, total } = missionCounts(mission);
-  return <MissionChipCard id={mission.id} title={mission.title} status={mission.status} done={done} total={total} cells={missionCells(mission)} tone={missionTone(mission)} turn={missionTurn(mission)} delay={heldBy(mission)} onOpen={onOpen} />;
+  return <MissionChipCard id={mission.id} title={mission.title} status={mission.status} done={done} total={total} cells={missionCells(mission)} tone={missionTone(mission)} turn={missionTurn(mission)} delay={heldBy(mission)} onOpen={onOpen} anchor={anchor} />;
 }
 
 /** Desk's job card carries a mission's counts, not its nodes' states, so a mission the store does not hold draws its cells from the counts and a running one in the working colour. */

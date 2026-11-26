@@ -117,15 +117,16 @@ export function DeskReply({ text, stopped = false, live = false, mentions = [], 
   const { t } = useInterfaceTranslation();
   // Each chip is drawn in a root of its own inside the Markdown, so the screen's chip source is bridged to it.
   const bridge = useSessionChipBridge();
-  // A mission the app does not hold keeps the answer's title with no chip.
-  const held = useShellStore((s) => s.rest?.missions?.items);
+  // A mission the app does not hold keeps the answer's title with no chip. The selector returns the ids of this answer's held
+  // missions as one string, so a mission changing, or one this answer does not name, never redraws the answer (its text selection stays).
+  const heldIds = useShellStore((s) => missions.filter((mission) => s.rest?.missions?.items.some((one) => one.id === mission.id)).map((mission) => mission.id).join(" "));
   const chips = useMemo<MarkdownChip[]>(() => [
     ...mentions.map((mention) => ({
       token: markedMention(mention),
       node: bridge(<SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id }} onPress={onMention ? () => onMention(mention) : undefined} />),
     })),
-    ...missions.map((mission) => ({ token: markedMission(mission), node: bridge(<DeskMissionMention mention={mission} />), after: onMission && held?.some((one) => one.id === mission.id) ? bridge(<MissionChipOf id={mission.id} onOpen={onMission} />) : undefined })),
-  ], [mentions, missions, held, onMention, onMission, bridge]);
+    ...missions.map((mission) => ({ token: markedMission(mission), node: bridge(<DeskMissionMention mention={mission} />), after: onMission && heldIds.split(" ").includes(mission.id) ? bridge(<MissionChipOf id={mission.id} onOpen={onMission} />) : undefined })),
+  ], [mentions, missions, heldIds, onMention, onMission, bridge]);
   const words = <MarkdownText text={text} size="chat" chips={chips} copyCode={copy} />;
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-item="reply" data-desk-reply={live ? "live" : stopped ? "stopped" : "done"}>
@@ -300,8 +301,11 @@ function answeredWord(item: DeskApproval): MessageKey {
   }
 }
 
-/** A card's buttons: the refusal as words, the agent's allow-once option as the card's one primary, any other as secondary. */
-const BUTTON_VARIANT: Record<ApprovalWord | "other", "text" | "secondary" | "ask"> = { reject: "text", other: "secondary", allow_always: "secondary", allow_once: "ask" };
+/** A card's buttons by what pressing them does, not by the word they read (an agent with two options of a kind has no word on either): a refusal as words, an allow-once option the card's primary, any other secondary. */
+function buttonVariant(button: ApprovalButton): "text" | "secondary" | "ask" {
+  if (refuses(button)) return "text";
+  return button.option?.kind === "allow_once" ? "ask" : "secondary";
+}
 
 const BUTTON_WORD: Record<ApprovalWord, MessageKey> = {
   reject: "desk.approval.reject",
@@ -387,7 +391,7 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
             // The button keeps its own word as its name; the hint adds the agent's own name for the option when the word is Hide's.
             return (
               <Hint key={option?.id ?? "reject"} label={option?.name ?? label} active={word !== null && option !== null}>
-                <Button variant={BUTTON_VARIANT[word ?? "other"]} size="sm" aria-label={label} data-desk-approval-option={option?.id} data-desk-approval-kind={option?.kind ?? "reject"} onClick={() => (refuses(button) ? setRefusing(button) : onAnswer(option?.id ?? null))}>
+                <Button variant={buttonVariant(button)} size="sm" aria-label={label} data-desk-approval-option={option?.id} data-desk-approval-kind={option?.kind ?? "reject"} onClick={() => (refuses(button) ? setRefusing(button) : onAnswer(option?.id ?? null))}>
                   {label}
                 </Button>
               </Hint>

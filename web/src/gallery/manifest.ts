@@ -17,7 +17,7 @@ export const GALLERY = {
   "Badge": ["Default", "Secondary", "Destructive", "Outline", "Warning", "Success"],
   "Kbd": ["Default", "Group"],
   "Separator": ["Horizontal", "Vertical"],
-  "Dropdown Menu": ["Closed", "Open", "Highlighted", "Disabled Item", "Destructive Item"],
+  "Dropdown Menu": ["Closed", "Open", "Highlighted", "Disabled Item", "Destructive Item", "Radio Check"],
   "Context Menu": ["Open", "Highlighted", "Disabled Item"],
   "Dialog": ["Open", "With Close Button"],
   "Alert Dialog": ["Open", "Pending"],
