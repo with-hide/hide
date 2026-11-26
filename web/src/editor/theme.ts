@@ -170,8 +170,10 @@ export const liveTheme = EditorView.theme({
     padding: "var(--spacing-xxs) var(--spacing-xs)",
     borderRadius: "var(--radius-xs)",
     backgroundColor: "var(--secondary)",
+    // The hairline is drawn inside the padding, so it costs the line no width.
+    boxShadow: "inset 0 0 0 var(--size-hairline) var(--hairline)",
   },
-  ".cm-md-code": { fontFamily: "var(--font-mono)", fontSize: "0.9em", lineHeight: "1.6", backgroundColor: "var(--secondary)" },
+  ".cm-md-code": { fontFamily: "var(--font-mono)", fontSize: "0.9em", lineHeight: "1.6", backgroundColor: "var(--code-block)" },
   ".cm-md-link": { textDecoration: "underline" },
   ".cm-md-hidden-line": { display: "none" },
   ".cm-md-quote": {
@@ -185,7 +187,7 @@ export const liveTheme = EditorView.theme({
   // list and table styling, so each of those is put back to what HTML means.
   // The editor keeps a text's newlines (`pre-wrap`); HTML collapses them.
   ".cm-md-html": { fontFamily: "var(--font-sans)", lineHeight: "1.5", whiteSpace: "normal" },
-  ".cm-md-html pre": { whiteSpace: "pre-wrap" },
+  ".cm-md-html pre": { whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", backgroundColor: "var(--code-block)", boxShadow: "inset 0 0 0 var(--size-hairline) var(--hairline)" },
   ".cm-md-html-block": { display: "block" },
   ".cm-md-html img": { display: "inline-block", maxWidth: "100%", height: "auto", verticalAlign: "middle" },
   ".cm-md-html a[href]": { color: "var(--file-blue)", textDecoration: "underline" },
@@ -197,7 +199,9 @@ export const liveTheme = EditorView.theme({
   ".cm-md-html ul": { listStyle: "disc", paddingLeft: "1.5em" },
   ".cm-md-html ol": { listStyle: "decimal", paddingLeft: "1.5em" },
   ".cm-md-html blockquote": { borderLeft: "var(--size-editor-quote-rule) solid var(--border)", paddingLeft: "var(--spacing-sm)", color: "var(--subtle-foreground)" },
-  ".cm-md-html code, .cm-md-html kbd, .cm-md-html pre": { fontFamily: "var(--font-mono)", backgroundColor: "var(--secondary)" },
+  ".cm-md-html code, .cm-md-html kbd": { fontFamily: "var(--font-mono)", backgroundColor: "var(--secondary)" },
+  // Fills see through, so code inside a block would stack a second fill on the block's.
+  ".cm-md-html pre code": { backgroundColor: "transparent" },
   ".cm-md-html hr": { border: "0", borderTop: "var(--size-hairline) solid var(--border)", margin: "var(--spacing-sm) 0" },
   ".cm-md-html table": { borderCollapse: "collapse" },
   ".cm-md-html th, .cm-md-html td": { border: "var(--size-hairline) solid var(--border)", padding: "0 var(--spacing-sm)" },
@@ -225,6 +229,7 @@ export const liveTheme = EditorView.theme({
     fontFamily: "var(--font-mono)",
     fontSize: "0.9em",
     lineHeight: "1.6",
-    backgroundColor: "var(--secondary)",
+    backgroundColor: "var(--code-block)",
+    boxShadow: "inset 0 0 0 var(--size-hairline) var(--hairline)",
   },
 });

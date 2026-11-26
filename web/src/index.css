@@ -349,6 +349,14 @@ html[data-view-drag="row-resize"] * {
   & :is([data-variant="secondary"], [data-variant="outline"]):not(.border-dashed) { border-color: transparent; }
 }
 
+/* A filled control's hover: --secondary and --accent both see through, so the
+   hover fill is laid over the control's own fill rather than swapped in for it,
+   which would make the hovered control fainter than the resting one
+   (DESIGN_GUIDE.md, Tokens at a glance). */
+@utility fill-hovered {
+  background-image: linear-gradient(var(--accent), var(--accent));
+}
+
 /* The chosen item of a segmented control: lifted white in Light; in Dark a shadow reads as a stroke and the raised gray sits too close to the track, so it is a stronger foreground tint with no shadow. */
 @utility segment-on {
   &, &:hover {

@@ -224,7 +224,7 @@ function MarkdownTable({ table, source }: { table: SyntaxNode; source: Source })
 }
 
 function CodeBlock({ code }: { code: string }) {
-  return <pre className="m-none whitespace-pre-wrap wrap-anywhere rounded-md bg-secondary px-md py-sm font-mono">{code}</pre>;
+  return <pre className="m-none whitespace-pre-wrap wrap-anywhere rounded-md border border-hairline bg-code-block px-md py-sm font-mono">{code}</pre>;
 }
 
 /** A `mermaid` fence drawn as its diagram, drawn again when the colours change. */
@@ -309,7 +309,7 @@ function span(node: SyntaxNode, source: Source, key: number): ReactNode {
       // In a table cell `\|` is the cell's pipe, and GFM reads it as `|` inside code too.
       const code = inline(node, source);
       return (
-        <code key={key} className="rounded-xs bg-secondary px-xxs font-mono">
+        <code key={key} className="rounded-xs border border-hairline bg-secondary px-xxs font-mono">
           {source.cell ? code.map((part) => (typeof part === "string" ? part.replaceAll("\\|", "|") : part)) : code}
         </code>
       );
@@ -539,7 +539,7 @@ function element(tag: Tag, children: ReactNode[], key: number): ReactNode {
     case "em":
       return <em key={key}>{children}</em>;
     case "code":
-      return <code key={key} className="rounded-xs bg-secondary px-xxs font-mono">{children}</code>;
+      return <code key={key} className="rounded-xs border border-hairline bg-secondary px-xxs font-mono">{children}</code>;
     case "kbd":
       return <kbd key={key} className="rounded-xs border border-border bg-secondary px-xxs font-mono text-micro">{children}</kbd>;
     case "sub":

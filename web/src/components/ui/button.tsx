@@ -9,7 +9,8 @@ import { cn } from "../../lib/utils";
 // copy; with `size="inline"` they take the surrounding text's size and height. `row-action` is
 // an icon action inside a row that lights on hover itself, so it lights one
 // step further (secondary over the row's accent) and stays lit while its menu
-// is open. `practice` is the practice window's own start, in its amber, so the
+// is open. `secondary` is a see-through fill with a hairline edge; its hover lays
+// the accent over that fill (`fill-hovered`). `practice` is the practice window's own start, in its amber, so the
 // practice reads as one place apart from Hide's lime. `tint` is a primary
 // action in a small surface that is not a screen or a dialog, such as a
 // corner notice: the accent's light fill and the accent as its words, so it
@@ -22,7 +23,7 @@ const buttonVariants = cva(
         default: "bg-primary text-primary-foreground hover:bg-primary/90",
         destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         outline: "border border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground",
-        secondary: "border border-border bg-secondary text-secondary-foreground hover:bg-accent",
+        secondary: "border border-hairline bg-secondary text-secondary-foreground hover:fill-hovered",
         ghost: "text-subtle-foreground hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
         text: "font-normal text-subtle-foreground hover:text-foreground",
