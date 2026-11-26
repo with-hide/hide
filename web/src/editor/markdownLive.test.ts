@@ -56,6 +56,19 @@ describe("markdown live plan", () => {
     ]);
   });
 
+  it("leaves words in brackets as written unless they have an address or a definition", () => {
+    // omp's `/context` bars (letter-48464): no link, the brackets stay.
+    expect(shown(`${AWAY}System  [░░░░] 0%`)).toEqual([]);
+    expect(shown(`${AWAY}see [Docs] and [b][ref]\n\n[docs]: https://example.com\n[REF]: https://example.org`)).toEqual([
+      "hide:[",
+      "link:Docs",
+      "hide:]",
+      "hide:[",
+      "link:b",
+      "hide:]",
+    ]);
+  });
+
   it("collapses a fenced code block to its body and styles those lines", () => {
     expect(shown(`${AWAY}\`\`\`rust\nfn main() {}\n\`\`\`\n`)).toEqual([
       "hide:```",

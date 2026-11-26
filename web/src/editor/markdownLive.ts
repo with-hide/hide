@@ -70,6 +70,7 @@ export function markdownLivePlan(tree: Tree, doc: Text, selection: { from: numbe
     return overlaps(line.from, line.to);
   };
   const lineSpanTouched = (from: number, to: number) => embedsRevealed && overlaps(doc.lineAt(from).from, doc.lineAt(to).to);
+  const defined = referenceLabels(tree, doc);
 
   tree.iterate({
     enter: (ref) => {
@@ -226,6 +227,10 @@ export function markdownLivePlan(tree: Tree, doc: Text, selection: { from: numbe
       }
 
       if (name === "Link") {
+        // `[words]` with no address and no definition of that label is no
+        // link (CommonMark), as a terminal's bars in brackets are not: it
+        // stays as written.
+        if (!node.getChild("URL") && !defined.has(referenceLabel(node, doc))) return;
         if (!overlaps(node.from, node.to)) {
           for (let child = node.firstChild; child; child = child.nextSibling) {
             if (child.name === "LinkMark" || child.name === "URL" || child.name === "LinkTitle") {
@@ -284,6 +289,34 @@ function imageParts(node: SyntaxNode, doc: Text): { src: string; alt: string; ti
     alt: doc.sliceString(open.to, close.from),
     ...(quoted ? { title: quoted } : {}),
   };
+}
+
+/** A link label as CommonMark matches it: case folded, inner spaces collapsed, brackets off. */
+function normalLabel(label: string): string {
+  return label.replace(/^\[|\]$/g, "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** The labels the document defines (`[label]: address`). */
+function referenceLabels(tree: Tree, doc: Text): Set<string> {
+  const labels = new Set<string>();
+  tree.iterate({
+    enter: (ref) => {
+      if (ref.name !== "LinkReference") return;
+      const label = ref.node.getChild("LinkLabel");
+      if (label) labels.add(normalLabel(doc.sliceString(label.from, label.to)));
+      return false;
+    },
+  });
+  return labels;
+}
+
+/** The label a reference link looks up: its own `[label]`, or its text when it has none (`[text]`, `[text][]`). */
+function referenceLabel(node: SyntaxNode, doc: Text): string {
+  const label = node.getChild("LinkLabel");
+  const own = label ? normalLabel(doc.sliceString(label.from, label.to)) : "";
+  if (own) return own;
+  const text = linkText(node);
+  return text ? normalLabel(doc.sliceString(text.from, text.to)) : "";
 }
 
 /** The link's visible text: the range between `[` and `]`, the first two of
