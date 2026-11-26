@@ -1,15 +1,20 @@
 // One of a job's 결과물 in Desk's 보기 column (PRD session-docs-and-assistant
-// D-40, D-65, B30, B31): read-only, drawn with Hide's own viewers from the
-// file the session's View showed, read through hided under that View's
-// checkout, so nothing joins the checkout's Files list. A page shows the
-// picture its View last drew and its address (the live page stays in its
-// checkout until Desk has a place for one); a pull request is its mark and
-// its link. Every output can be opened where its session opened it.
+// D-40, D-65, B30, B31): a file is read-only, drawn with Hide's own viewers
+// from the file the session's View showed, read through hided under that
+// View's checkout, so nothing joins the checkout's Files list. A page is the
+// live page itself in the desktop app, the same native page its checkout
+// holds, moved here with the app's own toolbar while this tab is in front
+// (`PresentedPage`); in a plain browser tab, or once its checkout no longer
+// keeps it, it is the picture its View last drew and its address. A pull
+// request is its mark and its link. Every output can be opened where its
+// session opened it.
 
 import { ExternalLinkIcon, GlobeIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
+import { PresentedPage } from "./BrowserDisplay";
 import { addressShown, browserStillOf } from "./browserViews";
+import { browserBridge } from "./host";
 import { PrMark } from "./components/pr-mark";
 import { Button } from "./components/ui/button";
 import type { DeskOutput } from "./desk";
@@ -37,7 +42,7 @@ export function DeskOutputView({ output, viewKey, actions }: { output: DeskOutpu
   let body: ReactNode;
   if (output.kind === "pr") body = <PullOutput output={output} actions={actions} />;
   else if (output.path) body = <FileOutput path={output.path} output={output} viewKey={viewKey} />;
-  else if (output.url) body = <PageOutput output={output} url={output.url} />;
+  else if (output.url) body = <PageOutput output={output} url={output.url} actions={actions} />;
   else body = <ViewerNotice state="unreadable" reason={t("desk.outputs.unreadable")} />;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-output-view={output.kind}>
@@ -94,8 +99,19 @@ function DocumentText({ bytes }: { bytes: Uint8Array }) {
   );
 }
 
-/** A page: the picture its View last drew, else its globe, and its address. */
-function PageOutput({ output, url }: { output: DeskOutput; url: string }) {
+/**
+ * A page: the live page while its checkout keeps it and the desktop app draws
+ * pages; else the picture its View last drew, or its globe, and its address.
+ */
+function PageOutput({ output, url, actions }: { output: DeskOutput; url: string; actions: Actions }) {
+  const kept = useShellStore((s) => (s.rest?.browser_views ?? []).some((row) => row.device_id === output.device_id && row.path === output.checkout && row.view_id === output.id && Boolean(row.url)));
+  if (kept && output.device_id && output.checkout && browserBridge()) {
+    return <PresentedPage workspace={{ device_id: output.device_id, path: output.checkout }} id={output.id} url={url} label={output.label} actions={actions} />;
+  }
+  return <PageStill output={output} url={url} />;
+}
+
+function PageStill({ output, url }: { output: DeskOutput; url: string }) {
   const still = browserStillOf(output.id, url);
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center gap-sm overflow-auto p-md" data-desk-output-page="true">

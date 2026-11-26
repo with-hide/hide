@@ -1917,6 +1917,14 @@ impl Runtime {
         }
         let ViewLayoutPayload { workspace, action } = payload;
         let key = (workspace.device_id, workspace.path);
+        // A typed address names its page in its own checkout wherever that
+        // checkout is, as `browser_state` does: Desk's tab panel shows a
+        // checkout's page while another checkout is in front (PRD
+        // session-docs-and-assistant D-40). Every other action is drawn on
+        // the front frame and waits for it.
+        if let ViewLayoutAction::Navigate { display_id, url } = action {
+            return self.navigate_browser(&key, &display_id, url);
+        }
         if !self.area_workspace_is_current(&key, "view") {
             return true;
         }
@@ -2026,9 +2034,8 @@ impl Runtime {
             ViewLayoutAction::Retry { display_id } => {
                 return self.retry_view_display(&key, &display_id);
             }
-            ViewLayoutAction::Navigate { display_id, url } => {
-                return self.navigate_browser(&key, &display_id, url);
-            }
+            // Applied above, before the front check.
+            ViewLayoutAction::Navigate { .. } => return false,
         };
         match outcome {
             Ok(changed) => changed,

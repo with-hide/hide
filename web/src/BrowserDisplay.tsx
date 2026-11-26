@@ -2,7 +2,7 @@ import { ArrowLeftIcon, ArrowRightIcon, ExternalLinkIcon, MinusIcon, MonitorIcon
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AreaEmpty } from "./AreaEmpty";
-import { addressShown, addressUrl, clearBrowserAttachments, defaultBrowserAddress, focusBrowserDisplay, hostKey, mountBrowserAttachments, noteBrowserAttachment, notePageState, parseWorkspaceKey, registerBrowserSlot, syncBrowserFront, useBrowserStore } from "./browserViews";
+import { addressShown, addressUrl, clearBrowserAttachments, defaultBrowserAddress, focusBrowserDisplay, hostKey, mountBrowserAttachments, noteBrowserAttachment, notePageState, parseWorkspaceKey, presentBrowserPage, presentedBrowserPage, registerBrowserSlot, syncBrowserFront, useBrowserStore } from "./browserViews";
 import { NewTabBody } from "./components/new-tab-body";
 import { changedFiles } from "./newTab";
 import { useUiStore } from "./ui";
@@ -73,6 +73,22 @@ export function ExternalPage({ display, workspace, actions }: { display: ViewDis
   return <HostedPage display={display} workspace={workspaceKey(workspace)} actions={actions} external />;
 }
 
+/**
+ * A checkout's page drawn in Desk's tab panel (PRD session-docs-and-assistant
+ * D-40): the same native page its checkout shows, moved over this slot while
+ * it is mounted, with the app's own toolbar. Back, Forward, Reload, zoom,
+ * device size and Open in default browser act on the page itself, and a typed
+ * address goes to the page in its checkout; Comment and the opener's mark
+ * stay with the checkout's View, whose comments and opener the checkout in
+ * front alone carries.
+ */
+export function PresentedPage({ workspace, id, url, label, actions }: { workspace: ViewWorkspace; id: string; url: string; label: string; actions: Actions }) {
+  const key = workspaceKey(workspace);
+  useLayoutEffect(() => presentBrowserPage({ workspace: key, id }), [key, id]);
+  const display = { id, url, label };
+  return <HostedPage display={display} workspace={key} actions={actions} away={{ navigate: (next) => actions.navigateBrowser(id, next, workspace) }} />;
+}
+
 function NewTab({ display, actions }: { display: ViewDisplaySnapshot; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const root = useShellStore((s) => s.rest?.navigator?.changes_root_path ?? null);
@@ -91,7 +107,12 @@ function NewTab({ display, actions }: { display: ViewDisplaySnapshot; actions: A
   );
 }
 
-function HostedPage({ display, workspace, actions, external = false }: { display: ViewDisplaySnapshot; workspace: string; actions: Actions; external?: boolean }) {
+/**
+ * A page and its toolbar. `away` draws it outside its checkout's View areas
+ * (Desk's tab panel): its typed address goes through `away.navigate`, and it
+ * shows no Comment or opener mark, which are the checkout's View's.
+ */
+function HostedPage({ display, workspace, actions, external = false, away }: { display: Pick<ViewDisplaySnapshot, "id" | "url" | "label" | "opener">; workspace: string; actions: Actions; external?: boolean; away?: { navigate: (url: string) => void } }) {
   const { t } = useInterfaceTranslation();
   const key = hostKey(workspace, display.id);
   const page = useBrowserStore((s) => s.pages[key] ?? null);
@@ -157,13 +178,13 @@ function HostedPage({ display, workspace, actions, external = false }: { display
           <>
             <AddressField
               address={address}
-              onSubmit={(url) => actions.navigateBrowser(display.id, url)}
+              onSubmit={(url) => (away ? away.navigate(url) : actions.navigateBrowser(display.id, url))}
               trailing={size || !zoomed(page?.zoom ?? 1) ? null : <ZoomBadge zoom={page?.zoom ?? 1} command={command} />}
             />
             <DeviceButton device={device} drawn={drawn} onChoose={(next) => useUiStore.getState().setBrowserDevice(key, next)} />
-            <BrowserCommentButton display={display} workspace={workspace} areaId={areaId} address={address} actions={actions} />
+            {away ? null : <BrowserCommentButton display={display} workspace={workspace} areaId={areaId} address={address} actions={actions} />}
             <OpenDefaultBrowserButton address={address} pageDevice={view?.device_id ?? ""} actions={actions} />
-            {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
+            {display.opener && !away ? <OpenerMark opener={display.opener} actions={actions} /> : null}
           </>
         )}
       </div>
@@ -178,7 +199,7 @@ function HostedPage({ display, workspace, actions, external = false }: { display
           ) : still ? (
             <img src={still} alt="" aria-hidden="true" draggable={false} className="absolute inset-0 size-full select-none object-fill" data-browser-still={display.id} />
           ) : null}
-          {view && areaId && !external ? (
+          {view && areaId && !external && !away ? (
             <PageNoteLayer
               commentKey={browserCommentKey(view, display.id)}
               displayId={display.id}
@@ -449,6 +470,9 @@ export function BrowserHost({ actions }: { actions: Actions }) {
         const workspace = parseWorkspaceKey(event.workspace);
         if (workspace) latest.current.openBrowser(event.url, workspace, undefined, event.id);
       } else if (event.kind === "focus") {
+        // A page Desk presents takes the keyboard in Desk; its checkout's View areas stay as they are.
+        const presented = presentedBrowserPage();
+        if (presented?.workspace === event.workspace && presented.id === event.id) return;
         const current = workspaceViewOf(useShellStore.getState().rest);
         if (!current?.layout || workspaceKey({ device_id: current.device_id, path: current.path }) !== event.workspace) return;
         const located = locateDisplay(current.layout.root, event.id);
@@ -504,7 +528,7 @@ function isCommentStop(reason: string): reason is keyof typeof COMMENT_STOPS {
  * keyboard, so Esc there ends it as the hint says; so do Comment again and
  * leaving the View.
  */
-function BrowserCommentButton({ display, workspace, areaId, address, actions }: { display: ViewDisplaySnapshot; workspace: string; areaId: string | null; address: string; actions: Actions }) {
+function BrowserCommentButton({ display, workspace, areaId, address, actions }: { display: Pick<ViewDisplaySnapshot, "id">; workspace: string; areaId: string | null; address: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const view = parseWorkspaceKey(workspace);
   const key = view ? browserCommentKey(view, display.id) : null;

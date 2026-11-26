@@ -5,7 +5,10 @@
 // geometry.
 //
 // Everything that moves a page goes through one sync: the front Workspace's
-// browser displays, each with the rect its slot occupies now or null. A
+// browser displays, each with the rect its slot occupies now or null; while
+// Desk's tab panel shows a session's page, that page alone, named in its own
+// checkout, so the one native page moves between its checkout and Desk
+// without loading again (PRD session-docs-and-assistant D-40). A
 // shell overlay (the palette, a menu, a dialog, a popover, the Recent Panels
 // or Recent Projects list) that meets a page's rect cannot draw over a
 // native view, so the page is hidden in the
@@ -205,8 +208,30 @@ export function overlayRects(): { rects: BrowserRect[]; moving: boolean } {
 
 type Front = { workspace: string; rows: BrowserDisplayRow[] };
 
+/** A page drawn outside its checkout's View areas, by its checkout's host key (`workspaceKey`) and display id. */
+export type PresentedPage = { workspace: string; id: string };
+
+/**
+ * What the sync places: while Desk presents a page, that page alone if the
+ * core still keeps it, and nothing if it does not, since display ids repeat
+ * across checkouts and Desk's slot must never draw another checkout's page;
+ * else the core's front Workspace. An outside HTML file names no address in
+ * the inventory and is never presented.
+ */
+export function presentedFront(core: Front | null, presented: PresentedPage | null, retained: BrowserSync["retained"]): Front | null {
+  if (!presented) return core;
+  const row = retained.find((one) => one.workspace === presented.workspace && one.id === presented.id);
+  if (!row?.url) return { workspace: presented.workspace, rows: [] };
+  return { workspace: row.workspace, rows: [{ id: row.id, area_id: row.area_id, url: row.url, load: row.load ?? 0 }] };
+}
+
 class BrowserSyncLoop {
+  /** What the sync places now: the core's front Workspace, or the page Desk presents (`presentedFront`). */
   private front: Front | null = null;
+  /** The core's front Workspace, as the shell last gave it. */
+  private core: Front | null = null;
+  /** The page Desk's tab panel shows, if any. */
+  private presented: PresentedPage | null = null;
   private retained: BrowserSync["retained"] = [];
   private authorizedScopes: NonNullable<BrowserSync["authorized_scopes"]> = [];
   /** The outside-file grants tabs stand on; null until the shell has the core's tabs. */
@@ -320,12 +345,15 @@ class BrowserSyncLoop {
     return this.visible;
   }
 
-  setFront(front: Front | null, retained: BrowserSync["retained"], authorizedScopes: NonNullable<BrowserSync["authorized_scopes"]>, externalGrants: string[] | null, inventoried: boolean): void {
+  setFront(core: Front | null, retained: BrowserSync["retained"], authorizedScopes: NonNullable<BrowserSync["authorized_scopes"]>, externalGrants: string[] | null, inventoried: boolean): void {
     this.externalGrants = externalGrants;
     this.inventoried = inventoried;
-    const frontIds = new Set(front?.rows.map((row) => row.id));
+    this.core = core;
+    this.retained = retained;
+    this.authorizedScopes = authorizedScopes;
+    const frontIds = new Set(core?.rows.map((row) => row.id));
     this.retainedKeys = new Set(retained
-      .filter((row) => row.workspace !== front?.workspace || frontIds.has(row.id))
+      .filter((row) => row.workspace !== core?.workspace || frontIds.has(row.id))
       .map((row) => hostKey(row.workspace, row.id)));
     useBrowserStore.setState((current) => {
       const gone = Object.keys(current.attached).filter((key) => !this.retainedKeys.has(key));
@@ -334,6 +362,39 @@ class BrowserSyncLoop {
       for (const key of gone) delete attached[key];
       return { attached };
     });
+    // A closed display's page is closed by the host on this sync, so what it
+    // said goes with it; a page of the core's front Workspace that Desk does
+    // not present is still open.
+    if (core) {
+      const ids = new Set(core.rows.map((row) => row.id));
+      useBrowserStore.setState((current) => {
+        const pages = withoutClosed(current.pages, core.workspace, ids);
+        return pages === current.pages ? current : { pages };
+      });
+    }
+    this.place();
+  }
+
+  /** Desk's tab panel shows `page` in place of the front Workspace's pages until the returned release. */
+  present(page: PresentedPage): () => void {
+    this.presented = page;
+    this.place();
+    return () => {
+      if (this.presented !== page) return;
+      this.presented = null;
+      this.place();
+    };
+  }
+
+  /** The page Desk presents now, if the sync places it. */
+  presentedPage(): PresentedPage | null {
+    const presented = this.presented;
+    return presented && this.front?.workspace === presented.workspace && this.front.rows.some((row) => row.id === presented.id) ? presented : null;
+  }
+
+  /** Moves what the sync places to the core's front Workspace or the page Desk presents. */
+  private place(): void {
+    const front = presentedFront(this.core, this.presented, this.retained);
     if (front?.workspace !== this.front?.workspace) {
       this.epoch += 1;
       this.frozen.clear();
@@ -347,17 +408,14 @@ class BrowserSyncLoop {
       this.forget((id) => !ids.has(id));
       for (const id of this.frozen) if (!ids.has(id)) this.frozen.delete(id);
       useBrowserStore.setState((current) => {
-        const pages = withoutClosed(current.pages, front.workspace, ids);
         const gone = Object.keys(current.stills).filter((id) => !ids.has(id));
-        if (pages === current.pages && gone.length === 0) return current;
+        if (gone.length === 0) return current;
         const stills = { ...current.stills };
         for (const id of gone) delete stills[id];
-        return { pages, stills };
+        return { stills };
       });
     }
     this.front = front;
-    this.retained = retained;
-    this.authorizedScopes = authorizedScopes;
     this.schedule();
   }
 
@@ -612,6 +670,22 @@ export function visiblePageRects(): readonly BrowserRect[] {
 /** Places the pages again: a shell layer that mounts outside the body's children says it opened or closed. */
 export function noteShellLayer(): void {
   loop?.schedule();
+}
+
+/**
+ * Desk's tab panel shows a session's page (PRD session-docs-and-assistant
+ * D-40): until the returned release, the sync places that page alone, named
+ * in its own checkout, over the slot registered for its id, and every other
+ * page stays hidden and alive. Nothing is placed when the core keeps no such
+ * page.
+ */
+export function presentBrowserPage(page: PresentedPage): () => void {
+  return syncLoop()?.present(page) ?? (() => undefined);
+}
+
+/** The page Desk presents now, if the sync places it; its focus is Desk's, not its checkout's. */
+export function presentedBrowserPage(): PresentedPage | null {
+  return loop?.presentedPage() ?? null;
 }
 
 /** A display's page slot: the host places the page over this element, laid out at `device` when one is set. */

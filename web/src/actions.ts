@@ -4490,7 +4490,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** The address field: the display loads what was typed. */
-    navigateBrowser(displayId: string, url: string) {
+    /**
+     * A typed address for a page: by default the front Workspace's, or the
+     * page of `workspace`'s checkout wherever it is, which the core takes
+     * from any checkout (Desk's tab panel, PRD session-docs-and-assistant D-40).
+     */
+    navigateBrowser(displayId: string, url: string, workspace?: ViewWorkspace) {
+      if (workspace) {
+        dispatch({ schema_version: 2, kind: "view_layout", payload: viewLayoutPayload(workspace, { action: "navigate", display_id: displayId, url }) });
+        return;
+      }
       const frame = frameFor("navigate");
       if (frame) viewLayout(frame, { action: "navigate", display_id: displayId, url });
     },

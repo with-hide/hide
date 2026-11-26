@@ -971,6 +971,53 @@ fn an_action_for_a_workspace_no_longer_in_front_changes_nothing() {
     );
 }
 
+/// A typed address reaches a page of a checkout that is not in front (PRD
+/// session-docs-and-assistant D-40): Desk's tab panel shows the page while
+/// another checkout is in front, and its address field names the page's own
+/// checkout. The page loads the address there, and its checkout shows it when
+/// it comes back; a move for that checkout still waits for its frame.
+#[test]
+fn a_typed_address_reaches_a_page_of_a_checkout_not_in_front() {
+    let (mut runtime, checkout_id, directory) = strip_checkout("view-navigate-away");
+    let (_other, other_checkout) = second_checkout(&mut runtime, &directory);
+    let mut runtime = with_new_views(runtime, "view-navigate-away");
+    browser_open(&mut runtime, serde_json::json!({"url": "https://a.test/"}));
+    let [page] = browser_displays(&mut runtime).try_into().expect("one page");
+    let area = area_id(&mut runtime, 0);
+    let workspace = {
+        let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+        serde_json::json!({"device_id": view.device_id, "path": view.path})
+    };
+    runtime.dispatch_json(&explorer_event(
+        "focus_checkout",
+        serde_json::json!({"workspace_id": "workspace:other", "checkout_id": other_checkout}),
+    ));
+
+    assert!(act_on(
+        &mut runtime,
+        workspace.clone(),
+        serde_json::json!({"action": "navigate", "display_id": page.id, "url": "https://b.test/"}),
+    ));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    act_on(
+        &mut runtime,
+        workspace,
+        serde_json::json!({"action": "move", "display_id": page.id, "area_id": area, "index": 0}),
+    );
+    assert_eq!(
+        runtime.snapshot.status.diagnostics.last().map(|row| row.kind.as_str()),
+        Some("view_layout.stale_workspace")
+    );
+
+    runtime.dispatch_json(&explorer_event(
+        "focus_checkout",
+        serde_json::json!({"workspace_id": "workspace:order", "checkout_id": checkout_id}),
+    ));
+    let [typed] = browser_displays(&mut runtime).try_into().expect("one page");
+    assert_eq!((typed.id.as_str(), typed.url.as_deref()), (page.id.as_str(), Some("https://b.test/")));
+    assert!(typed.load > page.load);
+}
+
 /// B10: closing one of two displays of a document closes only that display;
 /// the document and its unsaved draft stay.
 #[test]
