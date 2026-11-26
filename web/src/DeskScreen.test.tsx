@@ -766,9 +766,9 @@ describe("Desk's room", () => {
         ["allow_all", "checked", "Allow allDefaultDoes it right away without asking."],
         ["agent", "unchecked", "As the agentAsks each time Claude Code asks, with its own answers."],
       ]);
-      // The chosen row is lit with a green ✓; the other has neither.
+      // Each row carries its level's mark, and only the chosen one the dot the composer's other menus mark theirs with.
       const rows = [...document.body.querySelectorAll<HTMLElement>("[data-desk-permission-choice]")];
-      expect(rows.map((row) => [row.className.includes("data-[state=checked]:bg-accent"), row.querySelector("svg")?.getAttribute("class")?.includes("text-success") ?? false])).toEqual([[true, true], [true, false]]);
+      expect(rows.map((row) => [row.querySelector("[data-desk-permission-icon]") !== null, row.querySelector(".lucide-circle") !== null])).toEqual([[true, true], [true, false]]);
       await press("[data-desk-permission-choice='agent']");
       expect(sent("desk_settings_set")).toEqual([{ permission: "agent" }]);
 

@@ -402,7 +402,7 @@ export function DeskPermissionMenu({ permission, agent, open, onPermission }: {
         {PERMISSIONS.map((one) => {
           const Icon = PERMISSION_ICON[one];
           return (
-          <DropdownMenuRadioItem key={one} value={one} mark="check" className="items-start gap-sm" data-desk-permission-choice={one}>
+          <DropdownMenuRadioItem key={one} value={one} className="items-start gap-sm" data-desk-permission-choice={one}>
             <Icon aria-hidden="true" className="mt-xxs size-(--size-icon) text-foreground" data-desk-permission-icon={one} />
             <span className="flex min-w-0 flex-col gap-xxs">
               <span className="flex items-center gap-xs text-foreground">

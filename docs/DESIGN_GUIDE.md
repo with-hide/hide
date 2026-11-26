@@ -37,7 +37,7 @@ A file may only go down: a new raw control fails, and a file with fewer than its
 | One of a long list | `Select` | |
 | A text field | `Input`; `Textarea` for several lines | `Textarea bare` inside a composer whose container is the frame. |
 | A range | `Slider` | |
-| A menu from a button | `DropdownMenu` | Hide's action menus are `EntryDropdown`, `EntryContextMenu` and `EntryPointMenu` in `components/entry-menu.tsx`. A short choice among a few (two or three rows that each carry a line of description) uses `DropdownMenuRadioItem mark="check"`: a green ✓ and a lit row for the chosen one, where the default `dot` marks a long list's choice quietly (the gallery's Dropdown Menu › Radio Check). |
+| A menu from a button | `DropdownMenu` | Hide's action menus are `EntryDropdown`, `EntryContextMenu` and `EntryPointMenu` in `components/entry-menu.tsx`. A choice among a few uses `DropdownMenuRadioItem`, whose dot marks the chosen row. |
 | A menu on right-click | `ContextMenu` | |
 | A floating panel with controls | `Popover` | |
 | A modal task | `Dialog` | `DialogHeader`, `DialogBody`, `DialogFooter`. |

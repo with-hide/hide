@@ -53,13 +53,13 @@ function DropdownMenuRadioGroup(props: ComponentProps<typeof DropdownMenuPrimiti
   return <DropdownMenuPrimitive.RadioGroup data-slot="dropdown-menu-radio-group" {...props} />;
 }
 
-/** A choice among a few: a dot marks the chosen row, or, with `mark="check"`, a green ✓ and a lit row for a short list read at a glance. */
-function DropdownMenuRadioItem({ className, children, mark = "dot", ...props }: ComponentProps<typeof DropdownMenuPrimitive.RadioItem> & { mark?: "dot" | "check" }) {
+/** A choice among a few: a dot marks the chosen row. */
+function DropdownMenuRadioItem({ className, children, ...props }: ComponentProps<typeof DropdownMenuPrimitive.RadioItem>) {
   return (
-    <DropdownMenuPrimitive.RadioItem data-slot="dropdown-menu-radio-item" className={cn(menuItem, "pl-xl", mark === "check" && "data-[state=checked]:bg-accent", className)} {...props}>
+    <DropdownMenuPrimitive.RadioItem data-slot="dropdown-menu-radio-item" className={cn(menuItem, "pl-xl", className)} {...props}>
       <span className="pointer-events-none absolute left-sm flex size-(--size-icon) items-center justify-center">
         <DropdownMenuPrimitive.ItemIndicator>
-          {mark === "check" ? <CheckIcon className="size-(--size-icon-sm) text-success" /> : <CircleIcon className="size-(--size-icon-sm) fill-current" />}
+          <CircleIcon className="size-(--size-icon-sm) fill-current" />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
       {children}
