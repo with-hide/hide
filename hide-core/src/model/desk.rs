@@ -364,11 +364,12 @@ impl DeskJobFailure {
 /// agent listed last, in its order, with what Desk leaves out already gone
 /// (`hide_desk::commands`). The list is the agent's last session's, kept
 /// while hided runs, so a new conversation's first `/` has it before its
-/// session opens; an agent that sent none has an empty list and no menu.
+/// session opens. `commands` is none until the agent's session has opened
+/// while hided runs, and empty from then until the agent sends its list.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct DeskCommandsSnapshot {
     pub agent: Option<AdapterId>,
-    pub commands: Vec<hide_desk::commands::Command>,
+    pub commands: Option<Vec<hide_desk::commands::Command>>,
 }
 
 /// A compaction the agent told outside its reply (OpenCode's), shown as the

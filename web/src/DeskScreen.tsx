@@ -42,7 +42,7 @@ import type { MentionInputHandle } from "./components/desk/mention-input";
 import { DeskPaneReturn } from "./components/desk/desk-entry";
 import { DeskChatColumn, DeskChatHead, DeskRoom, DeskTabPanel, type PanelTab } from "./components/desk/desk-room";
 import { DeskMentionMenu, type MentionProject, type MentionSession } from "./components/desk/desk-mention-menu";
-import { DeskCommandMenu } from "./components/desk/desk-command-menu";
+import { DeskCommandMenu, type DeskCommandPanel } from "./components/desk/desk-command-menu";
 import { DeskSettingsTab } from "./components/desk/desk-settings";
 import { FileMark } from "./components/file-mark";
 import { fileIcon } from "./fileIcons";
@@ -252,18 +252,26 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const tree = at && mentions ? mentionTree(mentions, at.query, menu.folds) : null;
   const enteredSessions = entered && mentions ? mentions.sessions.filter((session) => entered.sessions.includes(session.id)) : [];
   const values = entered ? [`new:${entered.id}`, ...enteredSessions.map((session) => `session:${session.id}`)] : tree ? [...tree.rows, ...tree.found].map((row) => `session:${row.session.id}`).concat(tree.projects.map((project) => `project:${project.id}`)) : [];
-  // The `/` menu: open while the draft starts with a `/` word the caret is in and the selected agent listed a command that matches it; with no list, or nothing matching, there is no menu and ↵ sends.
+  // The `/` menu: open while the draft starts with a `/` word the caret is in. It lists the selected agent's commands that match;
+  // with none matching it says so, and before the agent's session opened it says the list comes with the first message, or
+  // that it is on its way while the session opens. An agent whose session sent an empty list has no menu; ↵ sends when it lists nothing.
   const slash = commandAt(draft.text, caret);
-  const commandList = commandSection && commandSection.agent === desk?.selection.agent ? commandSection.commands : NO_COMMANDS;
-  const commandHits = slash ? commandRows(commandList, slash.query) : NO_COMMANDS;
-  const commandOpen = slash !== null && !commandMenu.dismissed && commandHits.length > 0;
+  const commandList = commandSection && commandSection.agent === desk?.selection.agent ? commandSection.commands : null;
+  const commandHits = slash && commandList ? commandRows(commandList, slash.query) : NO_COMMANDS;
+  const opening = desk?.host.state === "starting" || desk?.host.state === "thinking";
+  const commandPanel: DeskCommandPanel | null = !slash || !agent ? null
+    : commandList === null ? { kind: opening ? "waiting" : "first" }
+    : commandList.length === 0 ? null
+    : commandHits.length > 0 ? { kind: "rows", commands: commandHits }
+    : { kind: "none" };
+  const commandOpen = commandPanel !== null && !commandMenu.dismissed;
   const commandActive = commandHits.some((command) => command.name === commandMenu.active) ? commandMenu.active : (commandHits[0]?.name ?? "");
   const inSlash = slash !== null;
   useEffect(() => {
     if (!inSlash && commandMenu.dismissed) setCommandMenu({ active: "", dismissed: false });
   }, [inSlash, commandMenu.dismissed]);
   const menuOpen = commandOpen || (at !== null && menu.dismissed !== at.start && (values.length > 0 || tree !== null));
-  const menuEmpty = !commandOpen && menuOpen && values.length === 0;
+  const menuEmpty = commandOpen ? commandHits.length === 0 : menuOpen && values.length === 0;
   const active = values.includes(menu.active) ? menu.active : (values[0] ?? "");
   const pickCommandRow = (name: string) => {
     const command = commandHits.find((one) => one.name === name);
@@ -303,6 +311,8 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   // The `/` menu's keys: ↑ ↓ move, ↵ writes the command into the box, Esc closes it.
   const onCommandKey = (event: KeyboardEvent<HTMLElement>) => {
     const key = event.key;
+    // With no rows the panel's only key is Esc; ↵ sends the words.
+    if (commandHits.length === 0 && key !== "Escape") return;
     if (key === "ArrowDown" || key === "ArrowUp") {
       event.preventDefault();
       const names = commandHits.map((command) => command.name);
@@ -426,10 +436,11 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       focused={menuOpen}
       menuOpen={menuOpen}
       menuEmpty={menuEmpty}
-      menu={commandOpen ? (
+      menu={commandOpen && commandPanel ? (
         <DeskCommandMenu
           agent={agent?.label ?? ""}
-          commands={commandHits}
+          panel={commandPanel}
+          query={slash?.query ?? ""}
           active={commandActive}
           onActive={(name) => setCommandMenu({ ...commandMenu, active: name })}
           onPick={(command) => pickCommandRow(command.name)}

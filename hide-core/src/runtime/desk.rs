@@ -90,8 +90,10 @@ pub(super) struct Desk {
     sign_in_refused: BTreeSet<AdapterId>,
     /// Each agent's commands as its last session listed them, kept while
     /// hided runs, so a new conversation's first `/` has a list before its
-    /// session opens; replaced whole by each list the agent sends. Never
-    /// stored: the next session sends its own (letter-48308).
+    /// session opens; empty from a session's open until the agent sends one,
+    /// then replaced whole by each list it sends; none for an agent whose
+    /// session has not opened while hided runs. Never stored: the next
+    /// session sends its own (letter-48308).
     commands: BTreeMap<AdapterId, Vec<hide_desk::commands::Command>>,
     /// The running session that opened new on a command and has not been
     /// told Desk's guide yet, which goes with its first ordinary message
@@ -1360,6 +1362,9 @@ impl Runtime {
                     self.desk.stored.sessions.push((adapter, session_id));
                 }
                 self.learn_choices(adapter, &choices);
+                // An open session has its list, empty until the agent sends
+                // one: the `/` menu no longer waits for it.
+                self.desk.commands.entry(adapter).or_default();
                 self.forget_stopped();
                 self.desk.held = false;
                 self.desk.sign_in_refused.remove(&adapter);
@@ -1849,18 +1854,18 @@ impl Runtime {
             return;
         }
         let agent = self.desk.stored.selection.agent;
-        let commands = agent.map_or(&[][..], |agent| self.desk_commands_of(agent));
+        let commands = agent.and_then(|agent| self.desk.commands.get(&agent));
         if self
             .snapshot
             .desk_commands
             .as_deref()
-            .is_some_and(|shown| shown.agent == agent && shown.commands == commands)
+            .is_some_and(|shown| shown.agent == agent && shown.commands.as_ref() == commands)
         {
             return;
         }
         self.snapshot.desk_commands = Some(Arc::new(crate::model::DeskCommandsSnapshot {
             agent,
-            commands: commands.to_vec(),
+            commands: commands.cloned(),
         }));
     }
 
@@ -4008,6 +4013,7 @@ mod tests {
             section
                 .commands
                 .iter()
+                .flatten()
                 .map(|command| command.name.clone())
                 .collect(),
         )
@@ -4021,7 +4027,20 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, _received) = runtime(root.path());
         event(&mut runtime, "desk_select", json!({"agent": "claude"}));
-        assert_eq!(slash(&runtime), (Some(AdapterId::CLAUDE), Vec::new()));
+        // No list until the agent's session opens, then the one it sends,
+        // empty until it sends one.
+        let commands = |runtime: &Runtime| {
+            runtime
+                .snapshot
+                .desk_commands
+                .as_ref()
+                .unwrap()
+                .commands
+                .clone()
+        };
+        assert_eq!(commands(&runtime), None);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        assert_eq!(commands(&runtime), Some(Vec::new()));
         listed(
             &mut runtime,
             AdapterId::CLAUDE,

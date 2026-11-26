@@ -26,7 +26,7 @@ import type { Preview } from "../filePreview";
 import { MarkdownText } from "../MarkdownText";
 import { SidebarHeader } from "../components/sidebar-header";
 import { DeskMentionMenu } from "../components/desk/desk-mention-menu";
-import { DeskCommandMenu } from "../components/desk/desk-command-menu";
+import { DeskCommandMenu, type DeskCommandPanel } from "../components/desk/desk-command-menu";
 import { DeskOutputs } from "../components/desk/desk-outputs";
 import { DeskSettingsTab } from "../components/desk/desk-settings";
 import { SessionCard, SessionChip, SessionChipProvider } from "../components/desk/session-chip";
@@ -69,7 +69,11 @@ export const DESK_SCENES = [
   { state: "mention-project", label: "@ 프로젝트에서 ⇥ (B18)" },
   { state: "mention-empty", label: "@ 맞는 것이 없을 때" },
   { state: "command", label: "/ 메뉴: 에이전트 명령과 내 스킬, 입력 힌트" },
-  { state: "command-search", label: "/co: 앞이 맞는 것 먼저" },
+  { state: "command-search", label: "/co: 앞이 맞는 것 먼저, 친 글자는 진하게" },
+  { state: "command-codex", label: "/ 메뉴: Codex, 스킬은 $ 그대로" },
+  { state: "command-none", label: "/ 메뉴: 맞는 명령 없음 (↵ 는 그대로 보내요)" },
+  { state: "command-waiting", label: "/ 메뉴: 세션이 열리는 중, 목록을 받는 중" },
+  { state: "command-first", label: "/ 메뉴: 세션을 연 적 없음, 첫 메시지 뒤에 와요" },
   { state: "command-answers", label: "명령 답: OpenCode 압축 한 줄, Desk가 보내지 않는 명령" },
   { state: "composer-chips", label: "입력창 칩 · 보낸 말 칩 (B49)" },
   { state: "attachments", label: "첨부: 입력칸 타일, 20MB 넘는 파일, 올리는 중, 보낸 말 (desk-2-ui B41, B42)" },
@@ -160,6 +164,12 @@ const SCENE_COMMANDS: DeskCommand[] = [
   { name: "/explain", description: "AI가 한 일이나 찾은 것을 한 장짜리 그림 페이지로 설명해요. 아주 긴 설명은 한 줄로 잘려 보여요." },
 ];
 const CODEX: DeskSelection = { agent: "codex", model: "gpt", effort: "medium" };
+const CODEX_COMMANDS: DeskCommand[] = [
+  { name: "/review", description: "Review my current changes and find issues" },
+  { name: "$hide-mission", description: "Conduct a mission of agents in Hide." },
+  { name: "$explain", description: "AI가 한 일이나 찾은 것을 한 장짜리 그림 페이지로 설명해요." },
+  { name: "/status", description: "Show current session configuration and token usage" },
+];
 
 /** A tray that holds `files` as a scene sets them. */
 function sceneTray(files: readonly TrayFile[]): ComposerTray {
@@ -337,11 +347,18 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       break;
     }
     case "command":
-    case "command-search": {
-      const query = state === "command-search" ? "co" : "";
-      const rows = commandRows(SCENE_COMMANDS, query);
-      const menu = <DeskCommandMenu agent="Claude Code" commands={rows} active={rows[0]!.name} onActive={noop} onPick={noop} />;
-      body = <Room chat={chat(mentionItems(now), <ChatComposer selection={CLAUDE} value={`/${query}`} mention={menu} />)} />;
+    case "command-search":
+    case "command-codex":
+    case "command-none":
+    case "command-waiting":
+    case "command-first": {
+      // Feedback 1 frame P 가: the panel as wide as the box, eight pixels over it.
+      const codex = state === "command-codex";
+      const query = state === "command-search" ? "co" : state === "command-none" ? "xyz" : "";
+      const rows = commandRows(codex ? CODEX_COMMANDS : SCENE_COMMANDS, query);
+      const panel: DeskCommandPanel = state === "command-waiting" ? { kind: "waiting" } : state === "command-first" ? { kind: "first" } : rows.length ? { kind: "rows", commands: rows } : { kind: "none" };
+      const menu = <DeskCommandMenu agent={codex ? "Codex" : "Claude Code"} panel={panel} query={query} active={(codex ? rows[1] : rows[0])?.name ?? ""} onActive={noop} onPick={noop} />;
+      body = <Room chat={chat(mentionItems(now), <ChatComposer selection={codex ? CODEX : CLAUDE} value={`/${query}`} mention={menu} />)} />;
       break;
     }
     case "command-answers": {

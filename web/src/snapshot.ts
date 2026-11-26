@@ -3529,9 +3529,10 @@ export type DeskCommand = { name: string; description: string; hint?: string };
 /**
  * The `desk_commands` section, the `/` menu: the selected agent's commands as
  * its last session listed them, kept while hided runs, with what Desk keeps
- * from the agent already gone; empty for an agent that sent none.
+ * from the agent already gone; null until the agent's session has opened
+ * while hided runs, and empty from then until the agent sends its list.
  */
-export type DeskCommands = { agent: DeskAgentId | null; commands: DeskCommand[] };
+export type DeskCommands = { agent: DeskAgentId | null; commands: DeskCommand[] | null };
 
 /**
  * The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes.

@@ -362,12 +362,9 @@ describe("Desk's room", () => {
     expect(sent("desk_send")).toEqual([{ text: "/co", mentions: [] }]);
   });
 
-  it("opens no / menu for an agent that listed nothing, for another agent's list, past the first word or for a / inside the words", async () => {
+  it("opens no / menu for an agent whose session sent an empty list, past the first word or for a / inside the words", async () => {
     const cases: [string, DeskCommands | null][] = [
       ["/", { agent: "claude", commands: [] }],
-      ["/", { agent: "codex", commands: commands.commands }],
-      ["/", null],
-      ["/zzz", commands],
       ["/compact now", commands],
       ["see /compact", commands],
     ];
@@ -375,10 +372,39 @@ describe("Desk's room", () => {
       await withCommands(text, section);
       expect(document.body.querySelector("[data-desk-command-menu]"), text).toBeNull();
     }
+    // Another agent's list is never the chosen one's rows.
+    await withCommands("/", { agent: "codex", commands: commands.commands });
+    expect(commandRowsShown()).toEqual([]);
     // With no menu ↵ sends the words as they are.
     await withCommands("/", { agent: "claude", commands: [] });
     await key("Enter");
     expect(sent("desk_send")).toEqual([{ text: "/", mentions: [] }]);
+  });
+
+  it("says when no command matches, and ↵ then sends the words", async () => {
+    await withCommands("/zzz");
+    const line = document.body.querySelector<HTMLElement>("[data-desk-command-menu]");
+    expect(line?.dataset.deskCommandMenu).toBe("none");
+    expect(line?.textContent).toContain("No command matches");
+    expect(line?.textContent).toContain("Claude Code commands");
+    await key("Enter");
+    expect(sent("desk_send")).toEqual([{ text: "/zzz", mentions: [] }]);
+  });
+
+  it("says the list comes with the first message before the agent's session opened, and that it is on its way while the session opens", async () => {
+    await withCommands("/", null);
+    expect(document.body.querySelector<HTMLElement>("[data-desk-command-menu]")?.dataset.deskCommandMenu).toBe("first");
+    await act(async () => { useShellStore.setState({ desk: { ...desk([]), host: { state: "starting", detail: null } } }); });
+    const waiting = document.body.querySelector<HTMLElement>("[data-desk-command-menu]");
+    expect(waiting?.dataset.deskCommandMenu).toBe("waiting");
+    expect(waiting?.textContent).toContain("Getting the command list");
+  });
+
+  it("keeps the words typed after / bright in each name and mutes the rest", async () => {
+    await withCommands("/co");
+    expect(Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-command-match]")).map((name) => name.dataset.deskCommandMatch)).toEqual(["co", "co", "co"]);
+    await withCommands("/");
+    expect(document.body.querySelector("[data-desk-command-match]")).toBeNull();
   });
 
   it("shows a compaction the agent told outside its words as the answer's one line, and a left-out command's notice", async () => {
