@@ -53,10 +53,10 @@ test('a css token is a plain value, never a var() or a second declaration', t =>
   assert.throws(() => generate(root), /--scrim must be a plain CSS value/);
 });
 
-test('a see-through fill is written as its palette step mixed with transparent, the same in both color themes', t => {
+test('a see-through fill is written as its palette step\'s sRGB at its alpha, the same in both color themes', t => {
   const {css} = generate(withTokens(t, () => {}));
-  assert.match(css, /\.dark \{[^}]*--secondary: color-mix\(in srgb, var\(--gray-100\) 6%, transparent\);/s);
-  assert.match(css, /:root,\n\.light \{[^}]*--secondary: color-mix\(in srgb, var\(--gray-0\) 4\.5%, transparent\);/s);
+  assert.match(css, /\.dark \{[^}]*--secondary: rgba\(255, 255, 255, 0\.06\);/s);
+  assert.match(css, /:root,\n\.light \{[^}]*--secondary: rgba\(0, 0, 0, 0\.045\);/s);
   assert.match(css, /--color-secondary: var\(--secondary\);/);
   assert.doesNotMatch(css.slice(css.indexOf('.palette-hide')), /--secondary:/);
 });

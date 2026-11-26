@@ -19,7 +19,9 @@
 //
 // A `fill` token is a see-through fill: per mode, a palette step and how much
 // of it covers the surface under it (`{"step": "--gray-100", "alpha": 0.06}`),
-// written as `color-mix()` of that step with transparent. It draws the same in
+// written as `rgba()` of that step's sRGB value: the phone's iOS 15 WebView has
+// no `color-mix()`, and code that reads a token as a color (Mermaid, a canvas)
+// parses `rgba()` where it cannot parse a mix. It draws the same in
 // both color themes, because the surface under it carries the theme; so it
 // takes no `hide` value. `check-token-contrast.mjs` composites it over each
 // surface it sits on before it compares.
@@ -75,14 +77,15 @@ function slot(tokens, name, hex, step) {
   return `var(${step})`;
 }
 
-/** A see-through fill's value for one mode: its palette step mixed with transparent. */
+/** A see-through fill's value for one mode: its palette step's sRGB at its alpha. */
 export function fillMix(tokens, name, fill) {
   if (!fill || typeof fill !== 'object') throw new Error(`${name} has no fill for every mode`);
   const {step, alpha, ...rest} = fill;
   if (Object.keys(rest).length) throw new Error(`${name} has unknown fill fields: ${Object.keys(rest).join(', ')}`);
-  paletteHex(tokens, step);
+  const hex = paletteHex(tokens, step);
   if (typeof alpha !== 'number' || !(alpha > 0 && alpha < 1)) throw new Error(`${name} needs an alpha between 0 and 1, not ${alpha}`);
-  return `color-mix(in srgb, var(${step}) ${Number((alpha * 100).toFixed(2))}%, transparent)`;
+  const [r, g, b] = [1, 3, 5].map(at => Number.parseInt(hex.slice(at, at + 2), 16));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 function cssValue(name, value) {
