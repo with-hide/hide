@@ -192,6 +192,13 @@ export function App() {
       const cycle = useUiStore.getState().cycle;
       if (cycle) useUiStore.getState().setCycle(reconcileHeldCycle(cycle, state.rest));
     });
+    // A mission or an automation that leaves while the cycle is held leaves its frozen candidates too; the
+    // automations arrive beside the snapshot, so the subscriber above, keyed on `rest`, cannot see them go.
+    const unsubscribeHeldPlaces = useShellStore.subscribe((state, previous) => {
+      if (state.rest?.missions === previous.rest?.missions && state.automations === previous.automations) return;
+      const cycle = useUiStore.getState().cycle;
+      if (cycle?.kind === "places") useUiStore.getState().setCycle(reconcileHeldCycle(cycle, state.rest));
+    });
     return () => {
       window.removeEventListener("focusin", observeFocus);
       window.removeEventListener("pointerdown", endCommit, true);
@@ -202,6 +209,7 @@ export function App() {
       unwatchDeskOpens();
       unsubscribeNotices();
       unsubscribe();
+      unsubscribeHeldPlaces();
       keyboard();
       configurePlaceVisits(() => {});
       session.close();
