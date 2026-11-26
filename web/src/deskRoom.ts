@@ -252,14 +252,39 @@ export function namesView(made: DeskOutput, written: string): boolean {
 
 /**
  * The output a session's own line names, as its card lists it when it does: the View's id, or its address or file.
- * A line the card does not list names a file as the session typed it, read where the session runs (B27), so it
- * carries that session's device and checkout when they are another machine's; read without them it would go to
- * this machine's boundary, which refuses a path of another machine's checkout.
+ * A line the card does not list names a file as the session typed it, read where the session runs (B27): a relative
+ * spelling under the session's own folder (`folder`, its pane's folder), and with that session's device and checkout
+ * when they are another machine's; read without them it would go to this machine's boundary, which refuses a path of
+ * another machine's checkout.
  */
-export function outputNamed(listed: readonly DeskOutput[], output: DeskOutput, place: { device: string; checkout: string } | null, node: string): DeskOutput {
+export function outputNamed(listed: readonly DeskOutput[], output: DeskOutput, place: { device: string; checkout: string; folder: string } | null, node: string): DeskOutput {
   const made = listed.find((one) => one.id === output.id || (output.url !== null && one.url === output.url) || (output.path !== null && namesView(one, output.path)));
   if (made) return made;
-  return place && output.path !== null && output.device_id === null && place.device !== node ? { ...output, device_id: place.device, checkout: place.checkout } : output;
+  if (!place || output.path === null || output.device_id !== null) return output;
+  const path = underFolder(place.folder, output.path);
+  if (place.device !== node) return { ...output, path, device_id: place.device, checkout: place.checkout };
+  return path === output.path ? output : { ...output, path };
+}
+
+/**
+ * `written` as a path of the machine `folder` belongs to: as written when it
+ * is absolute, else read under `folder`, the session's own folder, the way
+ * the session's shell read it. Spelled as the wire spells a path, `/` between
+ * names, a Windows folder's backslashes read as `/`.
+ */
+function underFolder(folder: string, written: string): string {
+  const windows = /^[A-Za-z]:\//u.test(folder) || folder.startsWith("//");
+  const wire = windows ? written.replaceAll("\\", "/") : written;
+  if (absolutePathRoot(wire)) return wire;
+  const root = absolutePathRoot(folder);
+  if (!root) return written;
+  const parts = folder.slice(root.length).split("/").filter((part) => part !== "");
+  for (const part of wire.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return `${root}${parts.join("/")}`;
 }
 
 /**

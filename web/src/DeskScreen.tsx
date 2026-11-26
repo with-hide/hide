@@ -431,7 +431,7 @@ function everyCard(): DeskJob[] {
 }
 
 /** The output a session's own line names, as `outputNamed` resolves it, on this machine's node. */
-function outputOf(job: DeskJob | undefined, output: DeskOutput, place?: { device: string; checkout: string } | null): DeskOutput {
+function outputOf(job: DeskJob | undefined, output: DeskOutput, place?: { device: string; checkout: string; folder: string } | null): DeskOutput {
   return outputNamed(job?.outputs ?? [], output, place ?? null, localDeviceId(useShellStore.getState().rest));
 }
 
@@ -674,7 +674,7 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
         />
       ) : null}
       onTerminal={() => actions.deskTerminal()}
-      outputOf={(output) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath } : null)}
+      outputOf={(output) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath, folder: pane?.cwd || checkoutPath } : null)}
       onOutput={(output) => actions.deskOpen({ kind: "output", output })}
       onMission={room.mission}
       onSession={room.session}
