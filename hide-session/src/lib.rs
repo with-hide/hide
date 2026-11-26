@@ -2072,13 +2072,17 @@ fn is_interruption(text: &str) -> bool {
     text.starts_with("[Request interrupted") || text.starts_with("<turn_aborted>")
 }
 
-fn slash_command_text(text: &str) -> Option<String> {
+/// The command a record of one names, its name without the slash and its
+/// words, from the tags a command record carries (`<command-name>`,
+/// `<command-args>`, as Claude Code writes them).
+fn command_record(text: &str) -> Option<(&str, &str)> {
     let name = text
         .split_once("<command-name>")?
         .1
         .split_once("</command-name>")?
         .0
-        .trim();
+        .trim()
+        .trim_start_matches('/');
     if name.is_empty() {
         return None;
     }
@@ -2089,7 +2093,31 @@ fn slash_command_text(text: &str) -> Option<String> {
                 .map(|(args, _)| args.trim())
         })
         .unwrap_or("");
-    let name = name.trim_start_matches('/');
+    Some((name, args))
+}
+
+/// A command record as the operator typed it, `/name words`, for a reader
+/// that shows the conversation (letter-48507): a text that begins with a
+/// command record's tags is the command, whichever agent wrote it, and its
+/// tags are not words. `None` for any other text.
+pub(crate) fn command_line(text: &str) -> Option<String> {
+    let text = text.trim_start();
+    if !COMMAND_RECORD_TAGS.iter().any(|tag| text.starts_with(tag)) {
+        return None;
+    }
+    let (name, args) = command_record(text)?;
+    Some(if args.is_empty() {
+        format!("/{name}")
+    } else {
+        format!("/{name} {args}")
+    })
+}
+
+/// The tags a command record begins with.
+const COMMAND_RECORD_TAGS: &[&str] = &["<command-name>", "<command-message>"];
+
+fn slash_command_text(text: &str) -> Option<String> {
+    let (name, args) = command_record(text)?;
     Some(if args.is_empty() {
         // Claude Code's `<command-name>` already carries the slash.
         format!("/{name}")

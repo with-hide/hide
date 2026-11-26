@@ -249,6 +249,15 @@ impl Thread {
                     } else {
                         text
                     };
+                    // A command record is the command as typed, one line.
+                    let command;
+                    let text = match crate::command_line(text) {
+                        Some(line) => {
+                            command = line;
+                            command.as_str()
+                        }
+                        None => text,
+                    };
                     let origin = classify(origin, text);
                     // An interruption is one short line whatever the agent
                     // wrote about it, as Claude Code writes its own: Codex's
