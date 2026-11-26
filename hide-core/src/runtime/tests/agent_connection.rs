@@ -1331,7 +1331,11 @@ fn an_approval_leaves_needs_you_once_the_screen_shows_its_dialog_answered() {
     assert_eq!(row(&runtime), working());
     report(&mut runtime, &["Bash:fedcba9876543210"]);
     publish(&mut runtime, "working");
-    assert_eq!(row(&runtime), approval(), "the next call's dialog is not answered yet");
+    assert_eq!(
+        row(&runtime),
+        approval(),
+        "the next call's dialog is not answered yet"
+    );
 }
 
 /// Codex's permission request names no call, so the turn itself waits; its
