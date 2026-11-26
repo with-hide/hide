@@ -86,6 +86,24 @@ export function fileUrl(path: string): string {
 }
 
 /**
+ * The path a local `file:` URL names, spelled as the wire spells it (a
+ * Windows drive without the leading `/`): `fileUrl`'s inverse; null for any
+ * other address or one of another host.
+ */
+export function filePath(url: string): string | null {
+  if (!/^file:\/\//iu.test(url)) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.host !== "" && parsed.host !== "localhost") return null;
+  const path = decodeURIComponent(parsed.pathname);
+  return /^\/[A-Za-z]:\//u.test(path) ? path.slice(1) : path;
+}
+
+/**
  * What the address field's text asks to load, or null for nothing: a URL
  * with a scheme as written, an absolute path as a file, a loopback host over
  * http (a dev server), and any other host over https.

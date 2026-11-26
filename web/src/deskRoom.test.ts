@@ -164,6 +164,30 @@ describe("the output a session's own line names (B27)", () => {
     expect(outputNamed([], typed(".\\out\\run.log"), { device: "winbox", checkout: "C:/src/repo", folder: "C:/src/repo" }, "mac")).toMatchObject({ path: "C:/src/repo/out/run.log" });
   });
 
+  it("is the session's page View for a page its `hide browser open` typed: a relative or absolute HTML file, an address without its scheme", () => {
+    // As the core lists a session's pages (`desk/jobs.rs`): the View's id, device and checkout, its address, no path.
+    const page = (id: string, url: string): DeskOutput => ({ ...output(id, "page"), label: id, path: null, device_id: "mac", checkout: "/work/repo", url });
+    const html = page("view-html", "file:///work/repo/agents/runs/copy-pos/index.html");
+    const pull = page("view-pr", "https://github.com/with-hide/hide/pull/2529/files");
+    const dev = page("view-dev", "http://localhost:5173/gallery");
+    const windows = page("view-win", "file:///C:/src/repo/out/report.html");
+    const listed = [html, pull, dev, windows];
+    // As a thread's view line carries it (`threadView.ts`): the call's argument as typed.
+    const typedPage = (target: string): DeskOutput => ({ ...output(target, "page"), label: target, device_id: null, checkout: null, path: null, url: target });
+    const place = { device: "mac", checkout: "/work/repo", folder: "/work/repo" };
+    expect(outputNamed(listed, typedPage("agents/runs/copy-pos/index.html"), place, "mac")).toBe(html);
+    expect(outputNamed(listed, typedPage("./agents/runs/copy-pos/index.html"), place, "mac")).toBe(html);
+    expect(outputNamed(listed, typedPage("/work/repo/agents/runs/copy-pos/index.html"), place, "mac")).toBe(html);
+    expect(outputNamed(listed, typedPage("github.com/with-hide/hide/pull/2529/files"), place, "mac")).toBe(pull);
+    expect(outputNamed(listed, typedPage("https://github.com/with-hide/hide/pull/2529/files"), place, "mac")).toBe(pull);
+    expect(outputNamed(listed, typedPage("localhost:5173/gallery"), place, "mac")).toBe(dev);
+    expect(outputNamed(listed, typedPage("out\\report.html"), place, "mac")).toBe(windows);
+    // Another file or page is not one of them.
+    const other = typedPage("agents/runs/other/index.html");
+    expect(outputNamed(listed, other, place, "mac")).toBe(other);
+    expect(outputNamed(listed, typedPage("github.com/with-hide/hide/pull/2530"), place, "mac").id).toBe("github.com/with-hide/hide/pull/2530");
+  });
+
   it("leaves a file of this machine's own session as typed", () => {
     const own = typed("/work/repo/a.md");
     expect(outputNamed([], own, { device: "mac", checkout: "/work/repo", folder: "/work/repo" }, "mac")).toBe(own);

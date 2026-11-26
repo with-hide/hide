@@ -7,6 +7,7 @@
 
 import { ENDED_JOB_STATES, livePane } from "./desk";
 import type { DeskItem, DeskJob, DeskMoved, DeskOutput } from "./snapshot";
+import { addressUrl, filePath } from "./browserViews";
 import { absolutePathRoot, underFolder } from "./terminalLinks";
 
 /**
@@ -307,6 +308,20 @@ export function namesView(made: DeskOutput, written: string): boolean {
 }
 
 /**
+ * Whether `written`, a page as a session's `hide browser open` typed it,
+ * names the page View `made` opened: the address the CLI completes from it
+ * (`addressUrl`: a loopback host over http, any other over https), or the
+ * HTML file it names, absolute or relative to the session's folder, as
+ * `namesView` reads a file (`hided/src/browser_cli.rs`, `address`).
+ */
+function namesPage(made: DeskOutput, written: string): boolean {
+  if (made.kind !== "page" || made.url === null) return false;
+  if (made.url === addressUrl(written)) return true;
+  const path = filePath(made.url);
+  return path !== null && namesView({ ...made, path }, written);
+}
+
+/**
  * The output a session's own line names, as its card lists it when it does: the View's id, or its address or file.
  * A line the card does not list names a file as the session typed it, read where the session runs (B27): a relative
  * spelling under the session's own folder (`folder`, its pane's folder), and with that session's device and checkout
@@ -314,7 +329,8 @@ export function namesView(made: DeskOutput, written: string): boolean {
  * another machine's checkout.
  */
 export function outputNamed(listed: readonly DeskOutput[], output: DeskOutput, place: { device: string; checkout: string; folder: string } | null, node: string): DeskOutput {
-  const made = listed.find((one) => one.id === output.id || (output.url !== null && one.url === output.url) || (output.path !== null && namesView(one, output.path)));
+  const typedPage = output.kind === "page" && output.device_id === null ? output.url : null;
+  const made = listed.find((one) => one.id === output.id || (output.url !== null && one.url === output.url) || (output.path !== null && namesView(one, output.path)) || (typedPage !== null && namesPage(one, typedPage)));
   if (made) return made;
   if (!place || output.path === null || output.device_id !== null) return output;
   const path = absolutePathRoot(place.folder) ? underFolder(place.folder, output.path) : output.path;
