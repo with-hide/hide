@@ -52,3 +52,17 @@ test('a css token is a plain value, never a var() or a second declaration', t =>
   const root = withTokens(t, tokens => { tokens['--scrim'].value = 'var(--background)'; });
   assert.throws(() => generate(root), /--scrim must be a plain CSS value/);
 });
+
+test('a see-through fill is written as its palette step\'s sRGB at its alpha, the same in both color themes', t => {
+  const {css} = generate(withTokens(t, () => {}));
+  assert.match(css, /\.dark \{[^}]*--secondary: rgba\(255, 255, 255, 0\.06\);/s);
+  assert.match(css, /:root,\n\.light \{[^}]*--secondary: rgba\(0, 0, 0, 0\.045\);/s);
+  assert.match(css, /--color-secondary: var\(--secondary\);/);
+  assert.doesNotMatch(css.slice(css.indexOf('.palette-hide')), /--secondary:/);
+});
+
+test('a see-through fill with a Hide value, an unknown step or an alpha outside 0..1 is refused', t => {
+  assert.throws(() => generate(withTokens(t, tokens => { tokens['--secondary'].hide = {value: '#000000', light: '#FFFFFF'}; })), /--secondary is a see-through fill/);
+  assert.throws(() => generate(withTokens(t, tokens => { tokens['--secondary'].value.step = '--gray-missing'; })), /--gray-missing is not a palette step/);
+  assert.throws(() => generate(withTokens(t, tokens => { tokens['--secondary'].light.alpha = 1.2; })), /--secondary needs an alpha above 0 and at most 1/);
+});

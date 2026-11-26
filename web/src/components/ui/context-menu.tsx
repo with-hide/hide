@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ComponentP
 import { cn } from "../../lib/utils";
 import { useEscapeLayer, useReturnFocus } from "./layer";
 import { menuContent, menuItem, menuLabel, menuSeparator, menuShortcut } from "./menu-styles";
+import { useFloatingSurface } from "./floating-surface";
 
 // shadcn's Context Menu API over Radix's menu with a point anchor. Radix's own
 // context-menu root has no `open` prop, so it could not join the shell's
@@ -142,7 +143,7 @@ function ContextMenuContent({ className, onCloseAutoFocus, ...props }: Component
         align="start"
         side="bottom"
         sideOffset={0}
-        className={cn(menuContent, className)}
+        className={cn(menuContent, useFloatingSurface(), className)}
         onCloseAutoFocus={(event) => {
           onCloseAutoFocus?.(event);
           if (event.defaultPrevented) return;

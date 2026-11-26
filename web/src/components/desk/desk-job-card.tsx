@@ -194,7 +194,7 @@ export function OutputsChip({ outputs, selected = null, onOpen }: { outputs: rea
     <Button
       variant="text"
       size="inline"
-      className={cn("relative h-(--size-badge-height) max-w-full gap-xxs rounded-xs bg-secondary px-xs text-micro text-subtle-foreground hover:bg-accent hover:text-foreground", selected === shown.id && "ring-1 ring-ring")}
+      className={cn("relative h-(--size-badge-height) max-w-full gap-xxs rounded-xs bg-secondary px-xs text-micro text-subtle-foreground hover:fill-hovered hover:text-foreground", selected === shown.id && "ring-1 ring-ring")}
       aria-label={outputs.map((output) => output.label).join(", ")}
       data-desk-output-chip={shown.id}
       onClick={() => onOpen(shown)}
@@ -280,7 +280,7 @@ export function DeskJobCard({ job, selected = false, selectedOutput = null, ...a
   const ended = jobDimmed(job.state);
   return (
     <article
-      className={cn("relative min-w-0 rounded-lg border border-border", selected ? "bg-accent" : "hover:bg-accent/50")}
+      className={cn("relative min-w-0 rounded-lg border border-border", selected ? "bg-accent" : "hover:bg-accent")}
       aria-label={job.title}
       data-desk-job={job.state}
       data-desk-job-id={job.id}

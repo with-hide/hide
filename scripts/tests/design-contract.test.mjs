@@ -38,3 +38,58 @@ test('the public staged gate carries checker imports and logo registries without
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, /unstaged module must not run/);
 });
+
+test('the web token check refuses an opacity on a see-through fill and takes the fill itself', t => {
+  const repo = path.resolve(import.meta.dirname, '../..');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hide-web-tokens-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  fs.mkdirSync(path.join(root, 'design'));
+  fs.copyFileSync(path.join(repo, 'design/tokens.json'), path.join(root, 'design/tokens.json'));
+  fs.mkdirSync(path.join(root, 'web/src/generated'), {recursive: true});
+  fs.copyFileSync(path.join(repo, 'web/src/tokens.css'), path.join(root, 'web/src/tokens.css'));
+  fs.copyFileSync(path.join(repo, 'web/src/generated/accents.ts'), path.join(root, 'web/src/generated/accents.ts'));
+  const run = () => spawnSync(process.execPath, [path.join(repo, 'scripts/check-web-tokens.mjs'), root], {encoding: 'utf8'});
+  const check = source => {
+    fs.writeFileSync(path.join(root, 'web/src/row.tsx'), `export const row = "${source}";\n`);
+    return spawnSync(process.execPath, [path.join(repo, 'scripts/check-web-tokens.mjs'), root], {encoding: 'utf8'});
+  };
+  for (const faded of ['hover:bg-accent/50', 'bg-secondary/40', 'border-hairline/30']) {
+    const refused = check(`rounded-xs ${faded}`);
+    assert.notEqual(refused.status, 0, faded);
+    assert.match(refused.stderr, /opacity on a see-through fill/);
+  }
+  const taken = check('rounded-xs bg-secondary hover:bg-accent border-hairline bg-warning/15');
+  assert.equal(taken.status, 0, taken.stdout + taken.stderr);
+  // A stylesheet fades a fill with color-mix() or a relative rgb(), and is refused the same way.
+  const sheet = path.join(root, 'web/src/row.css');
+  for (const faded of ['.row:hover { background: color-mix(in srgb, var(--accent) 50%, transparent); }', '.row { background: rgb(from var(--secondary) r g b / 40%); }']) {
+    fs.writeFileSync(sheet, `${faded}\n`);
+    const refused = run();
+    assert.notEqual(refused.status, 0, faded);
+    assert.match(refused.stderr, /opacity on a see-through fill/, faded);
+  }
+  fs.writeFileSync(sheet, '.row { background: color-mix(in srgb, var(--warning) 10%, transparent); }\n');
+  const mixed = run();
+  assert.equal(mixed.status, 0, mixed.stdout + mixed.stderr);
+  fs.rmSync(sheet);
+});
+
+test('the web token check refuses a modal drawn on bg-dialog that does not mark itself for the menus opened in it', t => {
+  const repo = path.resolve(import.meta.dirname, '../..');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hide-web-modal-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  fs.mkdirSync(path.join(root, 'design'));
+  fs.copyFileSync(path.join(repo, 'design/tokens.json'), path.join(root, 'design/tokens.json'));
+  fs.mkdirSync(path.join(root, 'web/src/generated'), {recursive: true});
+  fs.copyFileSync(path.join(repo, 'web/src/tokens.css'), path.join(root, 'web/src/tokens.css'));
+  fs.copyFileSync(path.join(repo, 'web/src/generated/accents.ts'), path.join(root, 'web/src/generated/accents.ts'));
+  const check = source => {
+    fs.writeFileSync(path.join(root, 'web/src/panel.tsx'), source);
+    return spawnSync(process.execPath, [path.join(repo, 'scripts/check-web-tokens.mjs'), root], {encoding: 'utf8'});
+  };
+  const bare = check('export const Panel = () => <div role="dialog" className="bg-dialog shadow-modal" />;\n');
+  assert.notEqual(bare.status, 0);
+  assert.match(bare.stderr, /modal on bg-dialog outside ModalSurface/);
+  const marked = check('export const Panel = () => <ModalSurface><div role="dialog" data-modal-surface="true" className="bg-dialog shadow-modal" /></ModalSurface>;\n');
+  assert.equal(marked.status, 0, marked.stdout + marked.stderr);
+});

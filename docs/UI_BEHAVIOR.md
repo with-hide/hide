@@ -3742,7 +3742,7 @@ Every bot runs on the core's machine, so each line names that machine the way Se
 Each bot is drawn as its owl on its tile colour, the same as its rail tile; a 전체 bot's owl wears a small lime square with a person in its lower corner, and a bot in its own space none.
 Making a bot and the bots waiting for their AI are this machine's own window's alone: another machine's view of this one and the phone list the connected bots and make none.
 
-봇 만들기, in the secondary grey at the head of 연결된 봇, opens the make dialog: the name the AI will use in Hide (영문·숫자·`. _ -`, 64자까지) with the owl it gets drawn beside the field as it is typed, and the two modes with one line each, 봇 공간 · 봇이 띄운 일은 봇 칸에 따로 모이고, 질문도 봇이 받아요. 내 작업은 못 건드려요 and 전체 · 봇이 띄운 일도 내 목록에 들어오고, 질문은 나에게 와요. 내 작업도 다룰 수 있어요, with 봇 공간 chosen, the narrower.
+봇 만들기, a secondary button at the head of 연결된 봇, opens the make dialog: the name the AI will use in Hide (영문·숫자·`. _ -`, 64자까지) with the owl it gets drawn beside the field as it is typed, and the two modes with one line each, 봇 공간 · 봇이 띄운 일은 봇 칸에 따로 모이고, 질문도 봇이 받아요. 내 작업은 못 건드려요 and 전체 · 봇이 띄운 일도 내 목록에 들어오고, 질문은 나에게 와요. 내 작업도 다룰 수 있어요, with 봇 공간 chosen, the narrower.
 만들기 is off until the name is one the core takes; a name the core refuses says why under the field (같은 이름의 봇이 이미 있어요, the 16 bots full, four bots already waiting).
 The core answers with the bot and a one-time code, and the dialog gives way to the sentence for the AI that will use it, `Hide의 <name> 봇으로 일해 주세요. <machine>에서 \`hide access join <code>\` 명령을 실행하고, 연결되면 \`hide guide\`의 Bots 부분을 읽고 그대로 따라 주세요.`, where the machine is the core's by its own name, never This Mac, since the reader is on another machine's screen; 복사 copies it, and the note says 코드는 10분 안에 한 번만 쓸 수 있어요.
 The sentence closes on its own once its bot no longer waits: joined, taken back, or gone with a restart.
@@ -3752,7 +3752,7 @@ A bot whose code ran out keeps its row and its name, holds none of the 16 places
 The bot moves to 연결된 봇 when its AI runs `hide access join` with the code; the codes live in the daemon's memory only, so a restart drops the bots still waiting.
 
 승인 대기 (with its count) lists the requests a program put up itself with `hide access request --name <name>`, one row per request: the owl the bot will get and the name it asked under, then the machine, the program that asked (or 알 수 없는 프로그램 when the system did not say) and when it asked.
-Under them the same two modes, with 봇 공간 chosen; the approve button names the choice, 봇 공간으로 승인 or 전체로 승인, in the secondary grey beside 거절; the core's answer takes the request out of the group, and an approved one appears in the list below.
+Under them the same two modes, with 봇 공간 chosen; the approve button names the choice, 봇 공간으로 승인 or 전체로 승인, a secondary button beside 거절; the core's answer takes the request out of the group, and an approved one appears in the list below.
 
 연결된 봇 · n / 16 lists the approved bots in the order they were approved.
 Each row shows the owl, the bot's name with its mode as a pill (봇 공간 or 전체), and one line, its machine, its last use (moved at most once a minute) and `에이전트 N · 미션 N`, each piece kept whole when the line wraps; 모드 바꾸기, a menu of the two modes whose other one changes the mode from the bot's next command; and 끊기, which disconnects at once with no confirmation.
@@ -4228,6 +4228,7 @@ Every icon-only control has a tooltip and an accessible name carrying the same w
 A chorded tooltip reads the label followed by the shortcut chord; a chordless control shows only the label.
 The sidebar Settings tooltip and accessible name append the host's current shortcut in parentheses to the translated label.
 There is no native platform tooltip layered underneath the shared one; the shared tooltip is the only tooltip in the main shell.
+A shortcut keycap (`Kbd`), such as the sidebar's `⌘K` or a session head's `⌘E`, is an outline with no fill and muted letters, so the chord reads without a grey box above the words it sits beside.
 Tooltip hover has a short reveal delay, and an exact modifier hold reveals shortcut hints faster than a hover tooltip does.
 In the desktop app, holding ⌘ alone (Ctrl+Shift on Windows and Linux) floats each tab's number at its top left in the Agent area in use, holding ⌥ alone floats each Agents-list row's number at its top right, and holding ⌥⌘ alone (Alt+Shift on Windows and Linux) floats each device tile's number at its top left, the corner a tile's marks leave free: a keycap in the popover colors with a border, a small shadow and one mono digit, positioned over the row or tile rather than in it, so a title, a row's time, its fold slot and a tile's marks never move.
 The number is the screen order at that moment, first to ninth, top to bottom for the rows the Agents list draws (a folded parent's descendants are not rows) and for the rail's tiles, and an item past the ninth carries none.

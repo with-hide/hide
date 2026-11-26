@@ -21,7 +21,7 @@ export function PaneLetterButton({ paneId, letters, onDeliver }: { paneId: strin
     <Hint label={t("panes.letters.deliverLabel", { count: letters })}>
       <button
         type="button"
-        className="flex h-(--size-sidebar-line) shrink-0 items-center gap-xs rounded-xs border border-border bg-popover px-xs text-caption outline-none hover:border-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        className="flex h-(--size-sidebar-line) shrink-0 items-center gap-xs rounded-xs border border-hairline bg-secondary px-xs text-caption outline-none hover:border-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
         data-pane-letters={letters}
         onClick={() => onDeliver(paneId)}
       >

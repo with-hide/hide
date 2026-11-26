@@ -77,7 +77,7 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
               data-pane-mission-chip={mission.id}
               data-mission-chip-state={words.state}
               className={cn(
-                "relative flex h-(--size-sidebar-line-detail) shrink-0 items-center overflow-hidden gap-xs rounded-xs border border-border bg-background px-xs text-micro text-muted-foreground outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground",
+                "relative flex h-(--size-sidebar-line-detail) shrink-0 items-center overflow-hidden gap-xs rounded-xs border border-border bg-background px-xs text-micro text-muted-foreground outline-none hover:fill-hovered hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground",
                 CHIP_TONE[words.state],
               )}
             >
