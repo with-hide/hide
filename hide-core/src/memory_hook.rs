@@ -214,16 +214,33 @@ mod tests {
         false
     }
 
-    #[test]
-    fn short_continuations_use_only_the_prepared_confirmed_task() {
-        let temp = tempfile::tempdir().unwrap();
-        let project = hide_project::resolve(temp.path(), "local").unwrap();
-        let path = hide_memory::database_path(temp.path());
+    /// A Project with Memory on whose store holds `cards`, each a text, a
+    /// title and one alias, and no confirmed task.
+    fn seeded(temp: &std::path::Path, cards: &[(&str, &str, &str)]) -> Scope {
+        let project = hide_project::resolve(temp, "local").unwrap();
+        let path = hide_memory::database_path(temp);
         let mut store = hide_memory::MemoryStore::open(&path).unwrap();
         store
             .ensure_project(&project.id, &project.root, "local")
             .unwrap();
         store.set_enabled(&project.id, true, true).unwrap();
+        let candidates: Vec<_> = (1..)
+            .zip(cards)
+            .map(|(offset, (text, title, alias))| hide_memory::Candidate {
+                text: (*text).into(),
+                title: (*title).into(),
+                aliases: vec![(*alias).into()],
+                kind: hide_memory::CandidateKind::Rule,
+                confidence: 0.9,
+                salience: 0.9,
+                source_offsets: vec![offset],
+                human_offsets: vec![offset],
+                source_times: Default::default(),
+                source_words: Default::default(),
+                cited_paths: vec![],
+                relation: hide_memory::CandidateRelation::New,
+            })
+            .collect();
         store
             .apply_candidates(
                 &hide_memory::AnalysisBatch {
@@ -235,44 +252,41 @@ mod tests {
                     content_hash: "seed".into(),
                     created_at_unix_ms: 1,
                 },
-                &[
-                    hide_memory::Candidate {
-                        text: "Use nextest for test execution".into(),
-                        title: "Repository test runner".into(),
-                        aliases: vec!["테스트 실행기".into()],
-                        kind: hide_memory::CandidateKind::Rule,
-                        confidence: 0.9,
-                        salience: 0.9,
-                        source_offsets: vec![1],
-                        human_offsets: vec![1],
-                        source_times: Default::default(),
-                        source_words: Default::default(),
-                        cited_paths: vec![],
-                        relation: hide_memory::CandidateRelation::New,
-                    },
-                    hide_memory::Candidate {
-                        text: "Granite slabs are catalogued by quarry".into(),
-                        title: "Granite catalogue".into(),
-                        aliases: vec!["화강암".into()],
-                        kind: hide_memory::CandidateKind::Rule,
-                        confidence: 0.9,
-                        salience: 0.9,
-                        source_offsets: vec![2],
-                        human_offsets: vec![2],
-                        source_times: Default::default(),
-                        source_words: Default::default(),
-                        cited_paths: vec![],
-                        relation: hide_memory::CandidateRelation::New,
-                    },
-                ],
+                &candidates,
             )
             .unwrap();
-        drop(store);
-        let mut scope = Scope {
+        Scope {
             store: path,
             project,
             task_context: None,
-        };
+        }
+    }
+
+    /// The card every bell below and the ordinary prompt beside them match.
+    const GRANITE: [(&str, &str, &str); 1] = [(
+        "Granite reviews run nextest before the pull request opens",
+        "Granite review runner",
+        "화강암",
+    )];
+
+    #[test]
+    fn short_continuations_use_only_the_prepared_confirmed_task() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut scope = seeded(
+            temp.path(),
+            &[
+                (
+                    "Use nextest for test execution",
+                    "Repository test runner",
+                    "테스트 실행기",
+                ),
+                (
+                    "Granite slabs are catalogued by quarry",
+                    "Granite catalogue",
+                    "화강암",
+                ),
+            ],
+        );
         let ask = Ask::from_wire(&json!({"event":"UserPromptSubmit","runtime":"claude","session":"task-session","prompt":"계속해 주세요"})).unwrap();
         assert_eq!(
             answer_until(&scope, &ask, never).outcome,
@@ -329,50 +343,6 @@ mod tests {
         );
     }
 
-    /// A store holding one card that matches every bell below and the
-    /// ordinary prompt beside them.
-    fn store_with_a_card_for_every_word(temp: &std::path::Path) -> Scope {
-        let project = hide_project::resolve(temp, "local").unwrap();
-        let path = hide_memory::database_path(temp);
-        let mut store = hide_memory::MemoryStore::open(&path).unwrap();
-        store
-            .ensure_project(&project.id, &project.root, "local")
-            .unwrap();
-        store.set_enabled(&project.id, true, true).unwrap();
-        store
-            .apply_candidates(
-                &hide_memory::AnalysisBatch {
-                    id: "seed".into(),
-                    project_id: project.id.clone(),
-                    provider: "claude".into(),
-                    analysis_provider: "claude".into(),
-                    session_id: "source".into(),
-                    content_hash: "seed".into(),
-                    created_at_unix_ms: 1,
-                },
-                &[hide_memory::Candidate {
-                    text: "Granite reviews run nextest before the pull request opens".into(),
-                    title: "Granite review runner".into(),
-                    aliases: vec!["화강암".into()],
-                    kind: hide_memory::CandidateKind::Rule,
-                    confidence: 0.9,
-                    salience: 0.9,
-                    source_offsets: vec![1],
-                    human_offsets: vec![1],
-                    source_times: Default::default(),
-                    source_words: Default::default(),
-                    cited_paths: vec![],
-                    relation: hide_memory::CandidateRelation::New,
-                }],
-            )
-            .unwrap();
-        Scope {
-            store: path,
-            project,
-            task_context: Some("granite review".into()),
-        }
-    }
-
     fn prompt(runtime: &str, session: &str, prompt: &str) -> Ask {
         Ask::from_wire(&json!({
             "event": "UserPromptSubmit", "runtime": runtime, "session": session, "prompt": prompt,
@@ -385,7 +355,7 @@ mod tests {
         use crate::delivery::bell::{Ring, line};
         use crate::model::InterfaceLanguage;
         let temp = tempfile::tempdir().unwrap();
-        let scope = store_with_a_card_for_every_word(temp.path());
+        let scope = seeded(temp.path(), &GRANITE);
         let ring = |inbox| {
             line(&Ring {
                 sender: "granite-review",
@@ -435,7 +405,7 @@ mod tests {
     #[test]
     fn a_session_start_and_an_ordinary_prompt_still_read_the_store() {
         let temp = tempfile::tempdir().unwrap();
-        let scope = store_with_a_card_for_every_word(temp.path());
+        let scope = seeded(temp.path(), &GRANITE);
         let missing = Scope {
             store: temp.path().join("missing.sqlite3"),
             project: scope.project.clone(),
