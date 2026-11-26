@@ -277,12 +277,21 @@ mod tests {
         answer.push("지휘 세션 @ses");
         assert!(answer.sessions().is_empty());
         answer.push("sion(h1:p2 \"Hide 앱 Play");
-        assert!(answer.sessions().is_empty(), "a name not yet closed stays words");
+        assert!(
+            answer.sessions().is_empty(),
+            "a name not yet closed stays words"
+        );
         answer.push(" 스토어\")에 안 읽은 편");
         assert_eq!(pairs(answer.sessions()), [("h1:p2", "Hide 앱 Play 스토어")]);
-        assert_eq!(answer.text(), "지휘 세션 @session(h1:p2 Hide 앱 Play 스토어)에 안 읽은 편");
+        assert_eq!(
+            answer.text(),
+            "지휘 세션 @session(h1:p2 Hide 앱 Play 스토어)에 안 읽은 편"
+        );
         answer.push("지가 있고 @mission(mission-63 결제 (11-25");
-        assert!(answer.missions().is_empty(), "its own parentheses keep it open");
+        assert!(
+            answer.missions().is_empty(),
+            "its own parentheses keep it open"
+        );
         answer.push(")) 도 기다립니다.");
         assert_eq!(pairs(answer.missions()), [("mission-63", "결제 (11-25)")]);
     }

@@ -938,7 +938,11 @@ impl Runtime {
                     .as_ref()
                     .is_none_or(|refusal| refusal.text.is_none())
             {
-                let said = self.desk.turn.as_ref().map_or(0, |turn| turn.answer.written());
+                let said = self
+                    .desk
+                    .turn
+                    .as_ref()
+                    .map_or(0, |turn| turn.answer.written());
                 self.desk.refusal = Some(Refusal {
                     command: approval.command,
                     kind: approval.kind,
@@ -1525,10 +1529,9 @@ impl Runtime {
                 // went on said so itself.
                 let silent = matches!(outcome, TurnOutcome::Done | TurnOutcome::Cancelled)
                     && self.desk.turn.as_ref().is_some_and(|turn| {
-                        self.desk
-                            .refusal
-                            .as_ref()
-                            .is_some_and(|refusal| !turn.cut && turn.answer.written() == refusal.said)
+                        self.desk.refusal.as_ref().is_some_and(|refusal| {
+                            !turn.cut && turn.answer.written() == refusal.said
+                        })
                     });
                 self.desk_close_turn(outcome);
                 if self.desk.host.open {
@@ -1903,8 +1906,12 @@ impl Runtime {
             text: turn.map(|turn| turn.answer.text().to_owned()),
             started_at_ms: turn.map(|turn| turn.started_at_ms),
             step: turn.and_then(|turn| turn.now),
-            mentions: turn.map(|turn| session_chips(&turn.answer)).unwrap_or_default(),
-            missions: turn.map(|turn| mission_mentions(&turn.answer)).unwrap_or_default(),
+            mentions: turn
+                .map(|turn| session_chips(&turn.answer))
+                .unwrap_or_default(),
+            missions: turn
+                .map(|turn| mission_mentions(&turn.answer))
+                .unwrap_or_default(),
         }));
     }
 }
