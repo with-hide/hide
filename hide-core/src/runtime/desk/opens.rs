@@ -183,13 +183,20 @@ impl Runtime {
                 next_action: "Desk is switched off; the operator turns it on in Settings",
             });
         }
-        self.desk_open_file(
+        // A refusal is the agent's to read, and neither counts as an open nor
+        // stands for this request, so asking again once there is room opens.
+        if !self.desk_open_file(
             &target.workspace_id,
             &target.checkout_id,
             &material.path,
             false,
             false,
-        );
+        ) {
+            return Err(Refusal {
+                reason: "desk_open_refused",
+                next_action: "Desk's desk could not take the file (no room, or it could not be read); ask the operator to close a tab, then open it again",
+            });
+        }
         self.note_desk_agent_open();
         let id = self.desk.views_opened;
         let answered = &mut self.desk.opens.answered;

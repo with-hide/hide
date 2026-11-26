@@ -270,7 +270,9 @@ pub(crate) fn settle_desk_views(layout: &mut crate::view_layout::Layout) -> Vec<
         .filter(|display| match display.kind {
             DisplayKind::File => display.origin.is_none(),
             DisplayKind::Diff | DisplayKind::External => true,
-            DisplayKind::Browser => display.origin.is_some(),
+            // A page names the session's checkout it loads from, or none
+            // when Desk opened it itself.
+            DisplayKind::Browser => false,
             DisplayKind::Card => display.card.is_none() || display.is_run_summary(),
         })
         .map(|display| display.id.clone())
@@ -782,6 +784,66 @@ mod tests {
             vec!["/p/a.md".to_owned()],
             "a file with no checkout and a diff go"
         );
+    }
+
+    /// PRD desk-own-desk B28, D-10: a saved tree past the 32 Views closes the
+    /// ones looked at longest ago as it is read, and a page keeps the
+    /// session's checkout it loads from.
+    #[test]
+    fn a_saved_desk_past_thirty_two_views_reads_back_its_newest_and_a_page_keeps_its_checkout() {
+        use crate::view_layout::{DisplayKind, Layout, MAX_VIEW_DISPLAYS, ViewOrigin};
+        let origin = ViewOrigin {
+            device_id: "d".into(),
+            path: "/p".into(),
+        };
+        let mut views = Layout::default();
+        let area = views.active_area().id.clone();
+        for n in 0..MAX_VIEW_DISPLAYS {
+            let mut file =
+                views.new_display(&format!("/p/f{n:02}.md"), DisplayKind::File, None, false);
+            file.origin = Some(origin.clone());
+            file.last_focused_unix_ms = 10 + n as u64;
+            views.append(&area, file).unwrap();
+        }
+        let mut page = views.new_browser_display("http://localhost:5173/", 1);
+        page.origin = Some(origin.clone());
+        page.last_focused_unix_ms = 100;
+        // The 33rd View, which no tree this build keeps would hold, written
+        // into the saved file's one area.
+        let mut tree = serde_json::to_value(&views).unwrap();
+        fn displays(value: &mut serde_json::Value) -> Option<&mut Vec<serde_json::Value>> {
+            match value {
+                serde_json::Value::Object(map) => {
+                    if map.get("displays").is_some_and(serde_json::Value::is_array) {
+                        return map.get_mut("displays")?.as_array_mut();
+                    }
+                    map.values_mut().find_map(displays)
+                }
+                serde_json::Value::Array(items) => items.iter_mut().find_map(displays),
+                _ => None,
+            }
+        }
+        displays(&mut tree)
+            .expect("the area's Views")
+            .push(serde_json::to_value(&page).unwrap());
+        let mut value = serde_json::to_value(Stored::default()).unwrap();
+        value["views"] = tree;
+
+        let read = decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+
+        assert_eq!(read.views.display_count(), MAX_VIEW_DISPLAYS);
+        let paths: Vec<_> = read
+            .views
+            .displays()
+            .map(|display| display.path.clone())
+            .collect();
+        assert!(!paths.contains(&"/p/f00.md".to_owned()), "the oldest went");
+        let page = read
+            .views
+            .displays()
+            .find(|display| display.kind == DisplayKind::Browser)
+            .expect("the page stays");
+        assert_eq!(page.origin.as_ref(), Some(&origin));
     }
 
     fn user(id: u64, text: &str) -> DeskItem {

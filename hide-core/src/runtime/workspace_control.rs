@@ -155,46 +155,54 @@ impl Runtime {
         view_id: &str,
         load: u64,
     ) -> Option<BrowserRouteSource> {
-        // A page of Desk's own desk is the core's own, on no checkout's desk.
-        let desk =
-            super::desk::views::is_desk_key(&(device_id.to_owned(), checkout_path.to_owned()))
-                && device_id == self.node.as_str();
-        let connected = if device_id == self.node.as_str() {
+        // A page of Desk's own desk is keyed on the core's node and on no
+        // checkout; one a session opened names that session's machine and
+        // checkout (`origin`, PRD desk-own-desk D-10), whose loopback and
+        // files it loads from, as the session's own page does.
+        let key = (device_id.to_owned(), checkout_path.to_owned());
+        let desk = self.is_desk_key(&key);
+        let registered = |device: &str, path: &str| {
+            self.catalog_workspaces().into_iter().any(|workspace| {
+                workspace.device_id == device
+                    && workspace
+                        .checkouts
+                        .iter()
+                        .any(|checkout| checkout.path == path)
+            })
+        };
+        if !desk && !registered(device_id, checkout_path) {
+            return None;
+        }
+        let display = self.view_displays(&key).find(|display| {
+            display.id == view_id && display.kind == DisplayKind::Browser && display.load == load
+        })?;
+        let source = match (desk, &display.origin) {
+            (true, Some(origin)) if registered(&origin.device_id, &origin.path) => origin.key(),
+            (true, Some(_)) => return None,
+            _ => key.clone(),
+        };
+        let connected = if source.0 == self.node.as_str() {
             self.snapshot.status.engine.state == "connected"
         } else {
             self.snapshot
                 .status
                 .remote
                 .iter()
-                .any(|remote| remote.target_id == device_id && remote.state == "connected")
+                .any(|remote| remote.target_id == source.0 && remote.state == "connected")
         };
         if !connected {
             return None;
         }
-        let registered = self.catalog_workspaces().into_iter().any(|workspace| {
-            workspace.device_id == device_id
-                && workspace
-                    .checkouts
-                    .iter()
-                    .any(|checkout| checkout.path == checkout_path)
-        });
-        if !registered && !desk {
-            return None;
-        }
-        let key = (device_id.to_owned(), checkout_path.to_owned());
-        let display = self.view_displays(&key).find(|display| {
-            display.id == view_id && display.kind == DisplayKind::Browser && display.load == load
-        })?;
         let url = display.url.clone()?;
         // A local page's own files come from the checkout that holds it,
         // which an agent's open or a terminal link may have shown in another
         // checkout's Workspace.
         let root = hide_platform::path::from_file_url(&url).map_or_else(
-            || checkout_path.to_owned(),
-            |(path, _)| self.display_source_key(&key, &path).1,
+            || source.1.clone(),
+            |(path, _)| self.display_source_key(&source, &path).1,
         );
         Some(BrowserRouteSource {
-            device_id: device_id.to_owned(),
+            device_id: source.0,
             checkout_path: root,
             url,
             load,
@@ -282,7 +290,7 @@ impl Runtime {
         request_id: &str,
         action: &Action,
     ) -> Result<ActionPreparation, Refusal> {
-        // Desk has no View: its file open waits for its own tab panel.
+        // Desk has no checkout's View: its file open goes to Desk's desk.
         if Caller::parse(pane_id) == Caller::Desk {
             return self.desk_prepare_open(device_id, expected, request_id, action);
         }
@@ -1286,7 +1294,7 @@ const VIEW_NOT_IN_LANE: Refusal = Refusal {
 
 /// Desk has no pane and no checkout: it acts through delivery commands
 /// (`hide agent`, `hide request`, `hide inbox`, `hide watch`, `hide ps`) and
-/// shows a file in its own tab panel (`desk/opens.rs`), never through a
+/// shows a file on Desk's desk (`desk/opens.rs`), never through a
 /// Workspace or View command.
 pub(super) const DESK_REFUSAL: Refusal = Refusal {
     reason: "desk_has_no_checkout",

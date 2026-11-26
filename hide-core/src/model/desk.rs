@@ -26,9 +26,10 @@ pub struct DeskSnapshot {
 
 /// Desk's own desk (PRD desk-own-desk D-01, D-02): its View areas as a
 /// Workspace's desk carries them, under the key a `view_layout`,
-/// `browser_open` or `browser_state` names it by (`device_id` empty, `path`
-/// Desk's own name). Each file names its checkout (`origin`). Whether the
-/// desk is drawn is the window's.
+/// `browser_open` or `browser_state` names it by (`device_id` the core's own
+/// node, `path` Desk's own name). Each file names its checkout, and a page a
+/// session opened the checkout it loads from (`origin`). Whether the desk is
+/// drawn is the window's.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DeskViewSnapshot {
     pub device_id: String,
@@ -50,7 +51,7 @@ pub struct DeskViewSnapshot {
 pub struct DeskLane {
     /// Desk's desk's width: its left edge.
     pub view_width: Option<u32>,
-    /// The session panel's width: the edge between it and the tab panel.
+    /// The session panel's width: the edge between it and Desk's desk.
     pub session_width: Option<u32>,
 }
 

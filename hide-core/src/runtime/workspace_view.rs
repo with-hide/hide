@@ -467,7 +467,7 @@ impl Runtime {
     /// stays. The displays of a document that just closed leave first.
     pub(super) fn close_emptied_lane(&mut self, key: &WorkspaceKey) {
         self.reconcile_view_displays();
-        if super::desk::views::is_desk_key(key) {
+        if self.is_desk_key(key) {
             return;
         }
         self.keep_pair_front_shown();
@@ -875,7 +875,7 @@ impl Runtime {
     /// folder the Explorer.
     pub(super) fn apply_area_intent_to(&mut self, key: &WorkspaceKey, intent: AreaIntent) {
         // Desk's desk has no lane: the window shows it.
-        if super::desk::views::is_desk_key(key) {
+        if self.is_desk_key(key) {
             return;
         }
         match intent {

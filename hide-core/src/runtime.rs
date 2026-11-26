@@ -447,7 +447,7 @@ pub(crate) struct ExplorerTarget {
     pub(crate) checkout_id: String,
     pub(crate) device_id: String,
     pub(crate) root: String,
-    /// Desk's Explorer asked: a created file opens in Desk's tab panel, not
+    /// Desk's Explorer asked: a created file opens on Desk's desk, not
     /// in a Workspace's View.
     pub(crate) desk: bool,
 }

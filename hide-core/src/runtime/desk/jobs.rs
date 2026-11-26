@@ -1043,7 +1043,7 @@ impl Runtime {
             })
             .collect();
         let scope = self.session_scope_of_pane(&row.pane_id);
-        let mut opened: Vec<_> = index
+        let opened: Vec<_> = index
             .displays
             .iter()
             .filter(|(_, display)| {
@@ -1055,14 +1055,10 @@ impl Runtime {
                 })
             })
             .collect();
-        // Newest first, then cut: a session that opened more than the list
-        // holds shows its newest and says the rest are left out (PRD
-        // desk-own-desk D-18, engineering principle 15).
-        opened.sort_by_key(|(_, display)| std::cmp::Reverse(display.opened_stamp));
-        card.outputs_more = opened.len() > MAX_OUTPUTS;
+        let (opened, more) = newest_outputs(opened, |(_, display)| display.opened_stamp);
+        card.outputs_more = more;
         card.outputs = opened
             .into_iter()
-            .take(MAX_OUTPUTS)
             .map(|((device, checkout), display)| {
                 let page = display.kind == crate::view_layout::DisplayKind::Browser;
                 crate::model::DeskJobOutput {
@@ -1469,6 +1465,17 @@ impl Runtime {
 
 /// Outputs one card lists; a session that opened more shows its newest.
 const MAX_OUTPUTS: usize = 32;
+
+/// A session's opened Views as its card lists them: newest first, then cut,
+/// so a session that opened more than the list holds shows its newest and
+/// says the rest are left out (PRD desk-own-desk D-18, engineering principle
+/// 15).
+fn newest_outputs<T>(mut opened: Vec<T>, stamp: impl Fn(&T) -> u64) -> (Vec<T>, bool) {
+    opened.sort_by_key(|item| std::cmp::Reverse(stamp(item)));
+    let more = opened.len() > MAX_OUTPUTS;
+    opened.truncate(MAX_OUTPUTS);
+    (opened, more)
+}
 
 fn output_kind(display: &crate::view_layout::Display) -> crate::model::DeskOutputKind {
     use crate::model::DeskOutputKind;
@@ -2072,6 +2079,18 @@ mod tests {
             .into_iter()
             .find(|job| job.id == id)
             .unwrap_or_else(|| panic!("no card {id}"))
+    }
+
+    #[test]
+    fn a_card_lists_its_sessions_newest_thirty_two_views_and_says_older_ones_were_left_out() {
+        let stamps: Vec<u64> = (0..=MAX_OUTPUTS as u64).collect();
+        let (listed, more) = newest_outputs(stamps.clone(), |stamp| *stamp);
+        assert_eq!(listed.len(), MAX_OUTPUTS);
+        assert_eq!(listed.first(), Some(&(MAX_OUTPUTS as u64)), "newest first");
+        assert!(!listed.contains(&0), "the oldest is left out");
+        assert!(more);
+        let (listed, more) = newest_outputs(stamps[1..].to_vec(), |stamp| *stamp);
+        assert_eq!((listed.len(), more), (MAX_OUTPUTS, false));
     }
 
     #[test]
