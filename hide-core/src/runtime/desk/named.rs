@@ -49,7 +49,6 @@ pub(super) struct Records {
 /// One answer of the reader.
 type Answer = (SessionIdentity, Result<LedgerAnswer, String>);
 
-
 /// The chipped panes that are gone, each with the pane its session runs in
 /// now (`desk_moved`); at most the newest lines' chips.
 pub(super) type Moved = Vec<(String, String)>;
