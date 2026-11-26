@@ -32,7 +32,7 @@ type Palette = {
   dark: boolean;
   background: string;
   foreground: string;
-  secondary: string;
+  card: string;
   muted: string;
   border: string;
   font: string;
@@ -46,7 +46,8 @@ function palette(): Palette {
     dark: root.classList.contains("dark"),
     background: token("--background"),
     foreground: token("--foreground"),
-    secondary: token("--secondary"),
+    // Mermaid derives its shades from an opaque colour, so a node is filled with the card step rather than the see-through --secondary.
+    card: token("--card"),
     muted: token("--muted-foreground"),
     border: token("--border"),
     font: token("--font-sans"),
@@ -87,7 +88,7 @@ function configure(mermaid: Mermaid, colors: Palette, key: string): void {
       darkMode: colors.dark,
       background: colors.background,
       fontFamily: colors.font,
-      primaryColor: colors.secondary,
+      primaryColor: colors.card,
       primaryTextColor: colors.foreground,
       primaryBorderColor: colors.muted,
       secondaryColor: colors.background,

@@ -262,7 +262,7 @@ function BarMenu({ name, value, open, onOpenChange, highlight = false, wide = fa
     <DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
       <Hint label={name}>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className={cn("h-(--size-control-compact) gap-xxs px-xs text-caption font-normal", highlight ? "bg-secondary text-foreground" : "text-subtle-foreground")} aria-label={name} {...data}>
+          <Button variant="ghost" size="sm" className={cn("h-(--size-control-compact) gap-xxs border px-xs text-caption font-normal", highlight ? "border-hairline bg-secondary text-foreground" : "border-transparent text-subtle-foreground")} aria-label={name} {...data}>
             {value}
             <ChevronDownIcon className="size-(--size-icon-sm) text-muted-foreground" />
           </Button>

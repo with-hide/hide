@@ -50,6 +50,7 @@ A screenshot exemption names its concrete reason in the pull request for the rev
 Add a token with both Dark (`value`) and Light (`light`) colors when it is a color.
 Use `hide` only when the Hide palette differs, and use aliases instead of restating an existing value.
 A neutral or status color also names its palette step under `palette` (`{"value": "--gray-17", "light": "--gray-100"}`, plus `hide` when the token has one); add a step with `"type": "palette"` and its OKLCH only when no existing step fits.
+A see-through fill is a `"type": "fill"` token that names a step and an alpha per mode (`{"step": "--gray-100", "alpha": 0.06}`), with no `hide` value; the contrast check composites it over each surface it can sit on ([DESIGN_GUIDE.md](DESIGN_GUIDE.md#tokens-at-a-glance)).
 Regenerate the web outputs and use the token through Tailwind classes or CSS custom properties.
 Remove a token once no consumer needs it.
 For a reusable component, extend the existing part and its gallery states before introducing a sibling implementation.
@@ -61,7 +62,7 @@ Run `node scripts/check-design-contract.mjs` before delivery.
 The public `design-contract.yml` workflow runs this same entrypoint and the contrast regression suite.
 
 - `check-web-tokens.mjs` refuses literal colors, sizes, radii and unchosen Tailwind values in web source.
-- `check-token-contrast.mjs` checks terminal text and secondary text against their backgrounds in both palettes and modes.
+- `check-token-contrast.mjs` checks terminal text and secondary text against their backgrounds, and each see-through fill composited over every surface it can sit on, in both palettes and modes.
 - `check-agent-logos.mjs` checks bundled agent marks against their public registries and asset manifest.
 - `check-ui-parts.mjs` refuses a raw control or layer outside `web/src/components/ui` beyond each file's count in `scripts/ui-parts-baseline.json`, and asks for `--update` when a count went down ([DESIGN_GUIDE.md](DESIGN_GUIDE.md#three-rules)).
 

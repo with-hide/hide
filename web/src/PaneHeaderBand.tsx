@@ -514,7 +514,7 @@ function PaneTreeButton({ paneId, parent, children, agents, actions, connection 
     onTask={() => actions.revealTask(paneId)}
     returnFocus={() => document.querySelector<HTMLButtonElement>(`[data-pane-tree="${paneId}"]`)?.focus()}
     triggerLabel={label}
-    trigger={<button type="button" aria-label={label} data-pane-tree={paneId} data-pane-tree-subagents={subagents || undefined} className={cn("flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border bg-background px-xs text-micro text-subtle-foreground outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", raised > 0 ? "border-warning/60" : "border-border")}>
+    trigger={<button type="button" aria-label={label} data-pane-tree={paneId} data-pane-tree-subagents={subagents || undefined} className={cn("flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border bg-background px-xs text-micro text-subtle-foreground outline-none hover:fill-hovered focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", raised > 0 ? "border-warning/60" : "border-border")}>
       <TreeChipFace
         mark={marked.length > 0 ? marked.map((child) => <StatusMark key={child.pane_id} mark={child.mark} human={child.human_turn !== undefined} className={markTone(child)} data-pane-tree-mark={child.pane_id} />) : null}
         count={count}

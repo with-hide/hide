@@ -144,7 +144,7 @@ export function DeviceWays({ state, actions }: { state: WaysState; actions: Acti
 function WayCard({ title, now, lit, foot, children, ...data }: { title: string; now: boolean; lit: boolean; foot: ReactNode; children: ReactNode } & Record<`data-${string}`, string>) {
   const { t } = useInterfaceTranslation();
   return (
-    <section className={cn("flex min-w-0 flex-col gap-sm rounded-md border px-md py-sm", lit ? "border-muted-foreground bg-secondary/50" : "border-border")} data-device-way-now={String(now)} {...data}>
+    <section className={cn("flex min-w-0 flex-col gap-sm rounded-md border px-md py-sm", lit ? "border-muted-foreground bg-accent" : "border-border")} data-device-way-now={String(now)} {...data}>
       <div className="flex items-baseline gap-xs">
         <span className="text-body font-semibold text-foreground">{title}</span>
         {now ? <Badge>{t("devices.ways.now")}</Badge> : null}

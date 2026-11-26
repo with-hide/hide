@@ -61,7 +61,7 @@ function AncestorStep({ pane, step, actions, names }: { pane: PaneRow; step: Non
     <Hint label={failed ? progress.message : label}>
       <button
         type="button"
-        className={`flex min-w-0 shrink items-center gap-xxs rounded-xs px-xxs outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 ${failed ? "text-destructive" : ""}`}
+        className={`flex min-w-0 shrink items-center gap-xxs rounded-xs px-xxs outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 ${failed ? "text-destructive" : ""}`}
         aria-label={label}
         aria-busy={pending}
         data-pane-return={step.pane_id}

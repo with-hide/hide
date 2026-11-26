@@ -873,49 +873,52 @@ function ProjectName({ workspace, hidden = false, grow = true, label = false }: 
  * the keyboard could not reach them from outside the row and a closing
  * Project settings could not hand focus back to the gear that opened it.
  */
-function RowActions({ workspace, items, onSelect, fill, children }: { workspace: Workspace; items: () => MenuItem[]; onSelect: (id: MenuItem["id"]) => void; /** The `from-*` classes of the row's own fill, which the fade starts from; the row's own fill is what the buttons cover the name's end with. */ fill: string; children?: ReactNode }) {
+function RowActions({ workspace, items, onSelect, fill, children }: { workspace: Workspace; items: () => MenuItem[]; onSelect: (id: MenuItem["id"]) => void; /** The `from-*` classes of the row's own see-through fill, laid over the sidebar's fade; together they are what the buttons cover the name's end with. */ fill: string; children?: ReactNode }) {
   const { t } = useInterfaceTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const more = useRef<HTMLButtonElement>(null);
   return (
     <span className="pointer-events-none absolute inset-y-0 right-full flex items-center justify-end">
-      <span className={cn("pointer-events-none relative flex h-full items-center gap-xxs bg-linear-to-l from-70% to-transparent pl-md [&_button]:pointer-events-auto", fill, menuOpen ? "opacity-100" : ROW_REVEALED)} data-row-actions={workspace.id}>
-        <Hint label={t(workspace.pinned ? "workspace.menu.unpin" : "workspace.menu.pin")}>
-          <Button variant="row-action" size="icon-sm" aria-label={t(workspace.pinned ? "workspace.menu.unpin" : "workspace.menu.pin")} aria-pressed={workspace.pinned} data-row-pin={workspace.id} onClick={() => onSelect(workspace.pinned ? "unpin" : "pin")}>
-            <PinIcon aria-hidden="true" className={cn("size-(--size-icon-sm)", workspace.pinned && "fill-current text-foreground")} />
-          </Button>
-        </Hint>
-        <Hint label={t("sidebar.startAgentIn", { name: workspace.label })}>
-          <Button
-            variant="row-action"
-            size="icon-sm"
-            aria-label={t("sidebar.startAgentIn", { name: workspace.label })}
-            data-row-start={workspace.id}
-            onClick={() => useStartPanel.getState().open(false, { projectId: workspace.id })}
-          >
-            <PlusIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-          </Button>
-        </Hint>
-        <Hint label={t("projectSettings.open", { project: workspace.label })}>
-          <Button variant="row-action" size="icon-sm" aria-label={t("projectSettings.open", { project: workspace.label })} data-row-settings={workspace.id} onClick={() => useUiStore.getState().openProjectSettings(settingsTarget(workspace))}>
-            <SettingsIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-          </Button>
-        </Hint>
-        {children}
-        <EntryDropdown
-          label={t("common.entryActions", { name: workspace.label })}
-          items={items}
-          onSelect={(id) => id === "project_settings" || id === "rename_project" ? useUiStore.getState().openProjectSettings(settingsTarget(workspace), more.current, id === "rename_project" ? "name" : undefined) : onSelect(id)}
-          align="start"
-          hint={t("sidebar.moreActionsFor", { name: workspace.label })}
-          onOpenChange={setMenuOpen}
-          data-row-more-menu={workspace.id}
-          trigger={
-            <Button ref={more} variant="row-action" size="icon-sm" aria-label={t("sidebar.moreActionsFor", { name: workspace.label })} data-row-more={workspace.id}>
-              <EllipsisIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+      {/* The row's fill sees through, so its fade alone would leave the name showing under the buttons: the sidebar's own fade covers it and the row's fill is laid over that. */}
+      <span className={cn("pointer-events-none relative flex h-full bg-linear-to-l from-sidebar from-70% to-transparent", menuOpen ? "opacity-100" : ROW_REVEALED)} data-row-actions={workspace.id}>
+        <span className={cn("flex h-full items-center gap-xxs bg-linear-to-l from-70% to-transparent pl-md [&_button]:pointer-events-auto", fill)}>
+          <Hint label={t(workspace.pinned ? "workspace.menu.unpin" : "workspace.menu.pin")}>
+            <Button variant="row-action" size="icon-sm" aria-label={t(workspace.pinned ? "workspace.menu.unpin" : "workspace.menu.pin")} aria-pressed={workspace.pinned} data-row-pin={workspace.id} onClick={() => onSelect(workspace.pinned ? "unpin" : "pin")}>
+              <PinIcon aria-hidden="true" className={cn("size-(--size-icon-sm)", workspace.pinned && "fill-current text-foreground")} />
             </Button>
-          }
-        />
+          </Hint>
+          <Hint label={t("sidebar.startAgentIn", { name: workspace.label })}>
+            <Button
+              variant="row-action"
+              size="icon-sm"
+              aria-label={t("sidebar.startAgentIn", { name: workspace.label })}
+              data-row-start={workspace.id}
+              onClick={() => useStartPanel.getState().open(false, { projectId: workspace.id })}
+            >
+              <PlusIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+            </Button>
+          </Hint>
+          <Hint label={t("projectSettings.open", { project: workspace.label })}>
+            <Button variant="row-action" size="icon-sm" aria-label={t("projectSettings.open", { project: workspace.label })} data-row-settings={workspace.id} onClick={() => useUiStore.getState().openProjectSettings(settingsTarget(workspace))}>
+              <SettingsIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+            </Button>
+          </Hint>
+          {children}
+          <EntryDropdown
+            label={t("common.entryActions", { name: workspace.label })}
+            items={items}
+            onSelect={(id) => id === "project_settings" || id === "rename_project" ? useUiStore.getState().openProjectSettings(settingsTarget(workspace), more.current, id === "rename_project" ? "name" : undefined) : onSelect(id)}
+            align="start"
+            hint={t("sidebar.moreActionsFor", { name: workspace.label })}
+            onOpenChange={setMenuOpen}
+            data-row-more-menu={workspace.id}
+            trigger={
+              <Button ref={more} variant="row-action" size="icon-sm" aria-label={t("sidebar.moreActionsFor", { name: workspace.label })} data-row-more={workspace.id}>
+                <EllipsisIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+              </Button>
+            }
+          />
+        </span>
       </span>
     </span>
   );
@@ -1059,7 +1062,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
               workspace={workspace}
               items={() => projectMenu(workspace, menuHost(), t, issueSource)}
               onSelect={(item) => runProjectItem(actions, workspace, item)}
-              fill={projectCurrent ? "from-secondary" : "from-sidebar group-hover:from-accent group-has-focus-visible:from-accent"}
+              fill={projectCurrent ? "from-secondary" : "from-transparent group-hover:from-accent group-has-focus-visible:from-accent"}
             >
               <RepositoryMark workspace={workspace} actions={actions} />
             </RowActions>
@@ -1353,7 +1356,7 @@ const FolderRowView = memo(function FolderRowView({
                 workspace={workspace}
                 items={() => folderMenu(workspace, checkout, menuHost(), t, issueSource)}
                 onSelect={(item) => (FOLDER_CHECKOUT_ITEMS.has(item) ? runCheckoutItem(actions, workspace, checkout, item) : runProjectItem(actions, workspace, item))}
-                fill={focused ? "from-secondary" : "from-sidebar group-hover:from-accent group-has-focus-visible:from-accent"}
+                fill={focused ? "from-secondary" : "from-transparent group-hover:from-accent group-has-focus-visible:from-accent"}
               />
               {foldable ? (
                 <FoldToggle

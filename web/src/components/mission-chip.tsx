@@ -153,7 +153,7 @@ export function MissionChipView({ id, title, words, counts, tone, turn, delay, s
         data-mission-chip-tone={tone}
         data-mission-chip-turn={turn ?? undefined}
         data-mission-chip-delay={delay ? "true" : undefined}
-        className={cn("relative z-10 flex shrink-0 items-center gap-xxs rounded-xs bg-secondary px-xs text-micro outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", TONE_TEXT[tone])}
+        className={cn("relative z-10 flex shrink-0 items-center gap-xxs rounded-xs bg-secondary px-xs text-micro outline-none hover:fill-hovered focus-visible:ring-1 focus-visible:ring-ring", TONE_TEXT[tone])}
         onClick={(event) => {
           event.stopPropagation();
           onOpen(id);

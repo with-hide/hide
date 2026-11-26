@@ -484,7 +484,7 @@ export const PaneView = memo(function PaneView({
         </div>
         {/* The zoom shows only on the pane that holds the keyboard or is pointed at, so it leads the right side: the controls
             always drawn stay at its end, and the place it keeps while hidden reads as the title's own margin (B20). */}
-        {!zoomed && paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-popover ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
+        {!zoomed && paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-accent ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
         <PaneDeskReturn paneId={paneId} actions={actions} />
         {agentKind ? <PaneHeadChildren paneId={paneId} actions={actions} /> : null}
         <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
@@ -493,7 +493,7 @@ export const PaneView = memo(function PaneView({
             <Button
               variant="ghost"
               size="sm"
-              className="shrink-0 gap-xxs px-xs text-caption text-foreground hover:bg-popover"
+              className="shrink-0 gap-xxs px-xs text-caption text-foreground hover:bg-accent"
               aria-label={hidden > 0 ? t("panes.unzoomHidden", { count: hidden }) : t("panes.unzoom")}
               disabled={moving}
               data-pane-zoom={hidden}
@@ -516,7 +516,7 @@ export const PaneView = memo(function PaneView({
           <Button
             variant="ghost"
             size="icon-sm"
-            className="shrink-0 text-subtle-foreground hover:bg-popover hover:text-foreground"
+            className="shrink-0 text-subtle-foreground hover:bg-accent hover:text-foreground"
             aria-haspopup="menu"
             data-pane-menu={paneId}
             onClick={(event) => {
@@ -535,7 +535,7 @@ export const PaneView = memo(function PaneView({
         </Hint>
         } />
         <Hint label={t("panes.close", { name: title })}>
-          <Button variant="ghost" size="icon-sm" className="shrink-0 text-subtle-foreground hover:bg-popover hover:text-foreground" disabled={moving} onClick={() => actions.closePane(paneId)}>
+          <Button variant="ghost" size="icon-sm" className="shrink-0 text-subtle-foreground hover:bg-accent hover:text-foreground" disabled={moving} onClick={() => actions.closePane(paneId)}>
             <XIcon />
           </Button>
         </Hint>
@@ -612,7 +612,7 @@ function PaneSplit({ paneId, name, actions }: { paneId: string; name: string; ac
           <Button
             variant="ghost"
             size="icon-sm"
-            className={`shrink-0 ${pressed ? "bg-pair-view text-primary-foreground hover:bg-pair-view hover:text-primary-foreground" : "text-subtle-foreground hover:bg-popover"} pane-head-narrow:hidden`}
+            className={`shrink-0 ${pressed ? "bg-pair-view text-primary-foreground hover:bg-pair-view hover:text-primary-foreground" : "text-subtle-foreground hover:bg-accent"} pane-head-narrow:hidden`}
             aria-label={label}
             aria-pressed={pressed}
             data-pane-pair={offer}

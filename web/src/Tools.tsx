@@ -155,7 +155,7 @@ export function ToolRail({ actions }: { actions: Actions }) {
               {pressed ? <span aria-hidden="true" className="absolute -left-xxs inset-y-sm w-(--size-tab-indicator) rounded-full bg-primary" data-lane-tool-bar="true" /> : null}
               <Icon aria-hidden="true" className="size-(--size-icon-lg)" />
               {needs > 0 && countsShown ? (
-                <span aria-hidden="true" className="absolute right-0 top-0 flex h-(--size-icon) min-w-(--size-icon) items-center justify-center rounded-full bg-accent px-xxs text-micro tabular-nums text-foreground" data-lane-todo-count={needs}>
+                <span aria-hidden="true" className="absolute right-0 top-0 flex h-(--size-icon) min-w-(--size-icon) items-center justify-center rounded-full bg-raised px-xxs text-micro tabular-nums text-foreground shadow-raised" data-lane-todo-count={needs}>
                   {needs}
                 </span>
               ) : null}

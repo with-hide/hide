@@ -68,7 +68,7 @@ function ChangeRow({ entry, committed, selected, actions }: {
       <Hint label={title} reveals>
       <button
         type="button"
-        className={`flex h-[var(--size-pane-child-row)] w-full min-w-0 items-center gap-xs px-sm text-left text-caption hover:bg-accent ${selected ? "bg-secondary text-foreground" : "text-subtle-foreground"}`}
+        className={`flex h-[var(--size-pane-child-row)] w-full min-w-0 items-center gap-xs px-sm text-left text-caption ${selected ? "bg-secondary text-foreground hover:fill-hovered" : "text-subtle-foreground hover:bg-accent"}`}
         aria-label={title}
         aria-current={selected ? "true" : undefined}
         data-history-path={entry.relative_path}

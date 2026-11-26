@@ -104,7 +104,7 @@ function useMarkLabel(parts: PrMarkParts | null, stale: PrStaleness | undefined)
 }
 
 /** The class that makes a mark pressable: the fill under the pointer, the focus ring. */
-export const PR_MARK_PRESS = "flex shrink-0 items-center rounded-xs px-xxs outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary disabled:opacity-(--opacity-disabled)";
+export const PR_MARK_PRESS = "flex shrink-0 items-center rounded-xs px-xxs outline-none not-data-[state=open]:hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary data-[state=open]:hover:fill-hovered disabled:opacity-(--opacity-disabled)";
 
 /**
  * A row's pull requests as one mark (PRD sidebar-task-lens B14): the core's

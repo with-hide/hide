@@ -26,9 +26,9 @@ function CommandDialog({
   ...props
 }: ComponentProps<typeof Dialog> & { title?: string; description?: string; className?: string }) {
   const { t } = useInterfaceTranslation();
-  // The list draws on the dialog's own surface: the dialog lights a selected
-  // row in `--dialog-hover`, a step under `bg-popover`, and on a popover's own
-  // fill the selection would vanish.
+  // The list draws on the dialog's own surface rather than a popover's, so the
+  // palette reads as the one modal it is; a selected row's see-through
+  // `--accent` lights over it as over any surface.
   return (
     <Dialog {...props}>
       <DialogContent className={cn("top-(--size-settings-sheet-window-inset) w-(--size-search-sheet-w) translate-y-0 p-none [&_[data-slot=command]]:bg-transparent", className)}>

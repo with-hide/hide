@@ -57,7 +57,8 @@ const chrome = EditorView.theme(
     ".cm-panels": { backgroundColor: "var(--card)", color: "var(--foreground)" },
     ".cm-panels.cm-panels-top": { borderBottom: "var(--size-hairline) solid var(--border)" },
     ".cm-searchMatch": { backgroundColor: "var(--secondary)", outline: "var(--size-hairline) solid var(--border)" },
-    ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: "var(--popover)" },
+    // The current match lays the hover fill over the match's own, as `fill-hovered` does, and draws a stronger edge.
+    ".cm-searchMatch.cm-searchMatch-selected": { backgroundImage: "linear-gradient(var(--accent), var(--accent))", outlineColor: "var(--muted-foreground)" },
     ".cm-button": {
       backgroundImage: "none",
       backgroundColor: "var(--secondary)",
@@ -69,7 +70,7 @@ const chrome = EditorView.theme(
       color: "var(--foreground)",
       border: "var(--size-hairline) solid var(--border)",
     },
-    ".cm-tooltip": { backgroundColor: "var(--popover)", border: "var(--size-hairline) solid var(--border)" },
+    ".cm-tooltip": { backgroundColor: "var(--popover)", border: "none", boxShadow: "var(--elevation-overlay)" },
   },
 );
 
