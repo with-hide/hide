@@ -21,7 +21,7 @@ import { QuickAdd } from "./QuickAdd";
 import { Palette } from "./Palette";
 import { usePracticeChannel } from "./practice/channel";
 import { installProbe, probeEnabled } from "./probe";
-import { configurePaneVisits, expectPane, expectSurface, focusSignature } from "./recent";
+import { configurePlaceVisits, expectPlace, expectSurface, focusSignature } from "./recent";
 import { FirstRunWizard } from "./FirstRunWizard";
 import { WhatsNewHost } from "./components/whats-new";
 import { useAgentNotifications } from "./agentNotices";
@@ -105,7 +105,7 @@ export function App() {
     configureAutomationCalls(session.dispatch);
     configureAccessCalls(session.dispatch);
     configureGuestCloseCalls(session.dispatch);
-    configurePaneVisits(actions.paneVisit);
+    configurePlaceVisits(actions.placeVisit);
     const keyboard = installKeyboard(actions);
     if (probeEnabled()) {
       installProbe(
@@ -133,7 +133,7 @@ export function App() {
       if (event.defaultPrevented) return;
       if (event instanceof KeyboardEvent && ["Control", "Alt", "Shift", "Meta"].includes(event.key)) return;
       expectSurface(null);
-      expectPane(null);
+      expectPlace(null);
     };
     window.addEventListener("focusin", observeFocus);
     window.addEventListener("pointerdown", endCommit, true);
@@ -142,10 +142,17 @@ export function App() {
     window.addEventListener("pointerdown", noteOperatorPointer, true);
     window.addEventListener("keydown", endCommit, true);
     // All projects and an Overview are visits of their own, and leaving one
-    // for the Workspace makes the surface there the one in use; neither
-    // changes core state, so the page's screen is watched here.
+    // for the Workspace makes the surface there the one in use; a mission's
+    // or an automation's detail is a place of its own, and an automation the
+    // core has just made becomes one when it arrives. None of it changes core
+    // state, so the page's screen and where it stands are watched here.
     const unsubscribeScreen = useUiStore.subscribe((state, previous) => {
-      if (state.screen !== previous.screen) observeRecent(useShellStore.getState().rest, true);
+      const moved = state.screen !== previous.screen
+        || state.missions.selected !== previous.missions.selected
+        || state.automations.selected !== previous.automations.selected
+        || state.automations.form !== previous.automations.form
+        || state.automations.arriving !== previous.automations.arriving;
+      if (moved) observeRecent(useShellStore.getState().rest, true);
     });
     // Desk's file tabs reach hided as the room's whole file set, on each change and each connect (`deskFiles.ts`).
     const unwatchDeskRoom = watchDeskFiles((files) => actions.deskFiles(files));
@@ -178,12 +185,19 @@ export function App() {
       // A refused commit brings nothing forward, so the next surface in use is a visit again.
       if (fresh) {
         expectSurface(null);
-        expectPane(null);
+        expectPlace(null);
       }
       if (state.rest?.navigator === previous.rest?.navigator && state.rest?.workspace_view === previous.rest?.workspace_view && state.rest?.focused === previous.rest?.focused) return;
       observeRecent(state.rest, focusSignature(state.rest) !== focusSignature(previous.rest));
       const cycle = useUiStore.getState().cycle;
       if (cycle) useUiStore.getState().setCycle(reconcileHeldCycle(cycle, state.rest));
+    });
+    // A mission or an automation that leaves while the cycle is held leaves its frozen candidates too; the
+    // automations arrive beside the snapshot, so the subscriber above, keyed on `rest`, cannot see them go.
+    const unsubscribeHeldPlaces = useShellStore.subscribe((state, previous) => {
+      if (state.rest?.missions === previous.rest?.missions && state.automations === previous.automations) return;
+      const cycle = useUiStore.getState().cycle;
+      if (cycle?.kind === "places") useUiStore.getState().setCycle(reconcileHeldCycle(cycle, state.rest));
     });
     return () => {
       window.removeEventListener("focusin", observeFocus);
@@ -195,8 +209,9 @@ export function App() {
       unwatchDeskOpens();
       unsubscribeNotices();
       unsubscribe();
+      unsubscribeHeldPlaces();
       keyboard();
-      configurePaneVisits(() => {});
+      configurePlaceVisits(() => {});
       session.close();
     };
   }, [actions]);

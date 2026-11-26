@@ -561,7 +561,7 @@ pub(super) struct WatchAsk {
 const MAX_WATCH_REFUSALS: u8 = 3;
 
 /// The newest conversation lines whose session chips follow the rows.
-const FOLLOWED_CHIPS: usize = 64;
+pub(super) const FOLLOWED_CHIPS: usize = 64;
 /// The lineage roots the `@` menu lists, and the rows it lists with their
 /// descendants (D-84).
 const MENTION_PARENTS: usize = 50;
@@ -1571,6 +1571,7 @@ impl Runtime {
                 .any(|spawn| spawn.intent == job.intent && spawn.completed)
         });
         marked |= self.desk.stored.queue.len() != before;
+        marked |= self.desk_keep_named();
         // The cards and the workers' cards share one index a publish; a
         // queue that waits counts its places from cards of their own first.
         let started = self.desk_waiting() > 0 && {
@@ -1585,7 +1586,8 @@ impl Runtime {
         cards.truncate(MAX_CARDS);
         let workers = self.desk_workers(&cards, &index);
         let named = self.desk_named(&cards.iter().chain(&workers).collect::<Vec<_>>(), &index);
-        self.publish_desk_jobs(cards, workers, named);
+        let records = self.desk_records();
+        self.publish_desk_jobs(cards, workers, named, records);
         self.compose_desk_mentions();
         if letters_read || self.desk_chips_moved() {
             self.compose_desk();
@@ -1602,7 +1604,8 @@ impl Runtime {
         jobs.truncate(MAX_CARDS);
         let workers = self.desk_workers(&jobs, &index);
         let named = self.desk_named(&jobs.iter().chain(&workers).collect::<Vec<_>>(), &index);
-        self.publish_desk_jobs(jobs, workers, named);
+        let records = self.desk_records();
+        self.publish_desk_jobs(jobs, workers, named, records);
     }
 
     /// The cards of the workers `jobs` conduct: each worker pane's spawn,
@@ -1652,9 +1655,13 @@ impl Runtime {
         jobs: Vec<crate::model::DeskJobSnapshot>,
         workers: Vec<crate::model::DeskJobSnapshot>,
         named: Vec<crate::model::DeskJobSnapshot>,
+        records: Vec<crate::model::DeskRecordSnapshot>,
     ) {
         if self.snapshot.desk_jobs.as_ref().is_some_and(|section| {
-            section.jobs == jobs && section.workers == workers && section.named == named
+            section.jobs == jobs
+                && section.workers == workers
+                && section.named == named
+                && section.records == records
         }) {
             return;
         }
@@ -1662,6 +1669,7 @@ impl Runtime {
             jobs,
             workers,
             named,
+            records,
         }));
     }
 

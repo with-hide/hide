@@ -3,7 +3,8 @@
 // state, threads as ACP updates and outputs. Names, counts and paths are
 // made up; nothing here is read from a machine.
 import type { AcpSessionUpdate, DeskAgent, DeskItem, DeskJob, DeskMention, DeskMission, DeskOption, DeskOutput, DeskSessionRef, DeskSteps, SessionFacts, SessionViewKind, ThreadHidePart } from "../desk";
-import type { ConductorCandidate, DeskSessionChip, RowMark } from "../snapshot";
+import { recordCard } from "../desk";
+import type { ConductorCandidate, DeskRecord, DeskSessionChip, RowMark } from "../snapshot";
 import type { MentionProject, MentionSession } from "../components/desk/desk-mention-menu";
 import { planFixture } from "./PlanScene";
 
@@ -500,7 +501,7 @@ export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
   const facts = new Map<string, SessionFacts>();
   for (const named of every) {
     if (named.mark === null) {
-      facts.set(pane(named.name), { listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null });
+      facts.set(pane(named.name), { listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null, record: null });
       continue;
     }
     const card = job(named.name, named.name, {
@@ -510,7 +511,7 @@ export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
       ...named.extra,
     });
     const parent = every.find((one) => one.name === named.parent);
-    facts.set(pane(named.name), { listed: true, name: named.name, mark: named.mark, agent_kind: named.kind, card: { ...card, mark: named.mark }, since: at(now, named.minutes ?? 1), parent: parent ? ref(parent) : null });
+    facts.set(pane(named.name), { listed: true, name: named.name, mark: named.mark, agent_kind: named.kind, card: { ...card, mark: named.mark }, since: at(now, named.minutes ?? 1), parent: parent ? ref(parent) : null, record: null });
   }
   const token = (named: Named) => `@session(${pane(named.name)} ${named.name})`;
   const text = [
@@ -522,4 +523,29 @@ export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
     { kind: "reply", missions: [], agent: "claude", id: 2, text, at_ms: at(now, 1), state: "done", thought_ms: 6_000, steps: { ...NO_STEPS, sessions: every.length }, mentions: every.map((named) => ({ pane_id: pane(named.name), name: named.name, agent_kind: named.mark === null ? null : named.kind, mark: named.mark })) },
   ];
   return { items, facts, open: pane("agent-journey") };
+}
+
+/**
+ * The ended scene (frame K): an answer naming a session whose pane is gone
+ * but whose record Hide keeps, open beside Desk read-only, and one with no
+ * record left, dimmed and unpressable.
+ */
+export function endedScene(now: number): { items: DeskItem[]; facts: ReadonlyMap<string, SessionFacts>; record: DeskRecord } {
+  const record: DeskRecord = {
+    pane_id: "w1:release-notes", session: { device_id: "local", agent: "claude", session_id: "s-release-notes" }, agent_kind: "claude",
+    title: "1.2.12 릴리스 노트 정리", started_at_unix_ms: at(now, 26 * 60), ended_at_unix_ms: at(now, 22 * 60), line: "릴리스 노트 초안 올리고 끝냄",
+    pull_requests: [{ number: 2914, state: "merged" }], cwd: "/Users/me/projects/herdr-ide", path: null, project: "herdr-ide", thread: true,
+  };
+  const facts = new Map<string, SessionFacts>([
+    [record.pane_id, { listed: false, name: record.title, mark: null, agent_kind: record.agent_kind, card: recordCard(record), since: record.ended_at_unix_ms, parent: null, record }],
+    ["w1:old-probe", { listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null, record: null }],
+  ]);
+  const items: DeskItem[] = [
+    { kind: "user", id: 1, text: "어제 릴리스 노트 세션 어떻게 끝났어?", at_ms: at(now, 2), mentions: [] },
+    { kind: "reply", missions: [], agent: "claude", id: 2, text: `@session(${record.pane_id} ${record.title})은 초안을 올리고 끝났어요. 그 PR은 머지됐어요. 그 전에 돌던 @session(w1:old-probe old-probe)는 기록이 남아 있지 않아요.`, at_ms: at(now, 2), state: "done", thought_ms: 4_000, steps: NO_STEPS, mentions: [
+      { pane_id: record.pane_id, name: record.title, agent_kind: null, mark: null },
+      { pane_id: "w1:old-probe", name: "old-probe", agent_kind: null, mark: null },
+    ] },
+  ];
+  return { items, facts, record };
 }

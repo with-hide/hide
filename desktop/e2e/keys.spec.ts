@@ -165,7 +165,7 @@ test("cycles: ⌃Tab and ⌥Tab commit once, on releasing the held modifier", as
   await page.keyboard.down("Control");
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
-  await expect(cycleRow("agents")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[2]!)!);
+  await expect(cycleRow("places")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[2]!)!);
   expect(sent.get("focus_pane") ?? 0).toBe(focused);
   await page.keyboard.up("Control");
   await expect(page.locator("[data-cycle]")).toHaveCount(0);
@@ -179,7 +179,7 @@ test("cycles: ⌃Tab and ⌥Tab commit once, on releasing the held modifier", as
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await page.keyboard.press("Shift+Tab");
-  await expect(cycleRow("agents")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[0]!)!);
+  await expect(cycleRow("places")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[0]!)!);
   await page.keyboard.up("Control");
   await expect(canvas).toHaveAttribute("data-canvas", tabs[0]!);
   await exactlyOnce(sent, "focus_pane", focused + 1, page);
@@ -192,9 +192,9 @@ test("cycles: ⌃Tab and ⌥Tab commit once, on releasing the held modifier", as
   focused = sent.get("focus_pane") ?? 0;
   await page.keyboard.down("Control");
   await page.keyboard.press("Tab");
-  await expect(cycleRow("agents")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[0]!)!);
+  await expect(cycleRow("places")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[0]!)!);
   await page.keyboard.press("Tab");
-  await expect(cycleRow("agents")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[2]!)!);
+  await expect(cycleRow("places")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[2]!)!);
   await screenshot(page, "desktop-recent-agents-from-sidebar");
   const captureDir = process.env.HIDE_E2E_SCREENSHOT_DIR;
   if (captureDir) {

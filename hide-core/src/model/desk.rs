@@ -73,6 +73,37 @@ pub struct DeskJobsSnapshot {
     /// their sidebar rows, so a chip's hover card and its thread show what
     /// the row shows (D-86); none is drawn in the chat or listed in Threads.
     pub named: Vec<DeskJobSnapshot>,
+    /// The sessions the newest lines name whose pane is gone, as Hide's
+    /// record keeps them (feedback 2, frame K): a chip draws its record's
+    /// title and opens the record beside Desk. A session with no record has
+    /// none, and its chip stays dimmed.
+    pub records: Vec<DeskRecordSnapshot>,
+}
+
+/// A session whose pane is gone, as its record keeps it (frame K): what its
+/// chip, its hover card and its read-only thread draw, and where `이어서
+/// 하기` resumes it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DeskRecordSnapshot {
+    /// The pane the conversation's chips name it by.
+    pub pane_id: String,
+    pub session: crate::links::ledger::SessionIdentity,
+    /// Its Hide agent kind, the one its row had.
+    pub agent_kind: String,
+    pub title: String,
+    pub started_at_unix_ms: Option<u64>,
+    pub ended_at_unix_ms: Option<u64>,
+    /// Its last turn's line: what it last answered.
+    pub line: Option<String>,
+    pub pull_requests: Vec<DeskPullRequest>,
+    /// The folder it worked in, where a resume starts it again.
+    pub cwd: Option<String>,
+    /// Its session file, which a resume names.
+    pub path: Option<String>,
+    pub project: Option<String>,
+    /// Whether Hide kept where its conversation is read, so the record opens
+    /// as a thread.
+    pub thread: bool,
 }
 
 /// One session Desk started, or one waiting to start.

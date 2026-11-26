@@ -167,8 +167,8 @@ mod pull_requests;
 mod read_on_look;
 #[path = "tests/recent_checkouts.rs"]
 mod recent_checkouts;
-#[path = "tests/recent_panes.rs"]
-mod recent_panes;
+#[path = "tests/recent_places.rs"]
+mod recent_places;
 #[path = "tests/remote_spawn.rs"]
 mod remote_spawn;
 #[path = "tests/repository_clone.rs"]

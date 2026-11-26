@@ -6,7 +6,7 @@ import tokensText from "../../design/tokens.json?raw";
 import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createActions } from "./actions";
-import { agentCycle } from "./areaCycle";
+import { placeCycle } from "./areaCycle";
 import { noteAreaFrame } from "./areaFrames";
 import { commitCycle } from "./keyboard";
 import { resetRecent } from "./recent";
@@ -314,12 +314,12 @@ it("numbers with ⌥n the list a tool's cell shows: its sessions' roots in 프�
  * pane first in the order the keyboard visited panes, as the core keeps it.
  */
 function inFront(rest: SnapshotRest, checkoutId: string, paneId: string): SnapshotRest {
-  const recent = rest.ui_state?.recent_pane_ids ?? [];
+  const recent = rest.ui_state?.recent_places ?? [];
   return {
     ...rest,
     navigator: { ...rest.navigator!, focused_checkout_id: checkoutId, focused_workspace_id: "alpha" },
     focused: { pane_id: paneId },
-    ui_state: { ...rest.ui_state!, recent_pane_ids: [paneId, ...recent.filter((id) => id !== paneId)] },
+    ui_state: { ...rest.ui_state!, recent_places: [{ kind: "pane", pane_id: paneId }, ...recent.filter((place) => !(place.kind === "pane" && place.pane_id === paneId))] },
   } as SnapshotRest;
 }
 
@@ -332,7 +332,7 @@ function drawArea(checkoutId: string, paneId: string) {
 /** ⌃Tab once from the pane the keyboard is in, released at once, as the keyboard's cycle does it. */
 async function cycleOnce(checkoutId: string, paneId: string) {
   drawArea(checkoutId, paneId);
-  const cycle = agentCycle(useShellStore.getState().rest, { kind: "pane", workspace: checkoutId, paneId })!;
+  const cycle = placeCycle(useShellStore.getState().rest, { kind: "pane", workspace: checkoutId, paneId })!;
   await act(async () => { commitCycle({ ...cycle, index: (cycle.index + 1) % cycle.items.length }, drawnActions!); });
 }
 

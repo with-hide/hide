@@ -174,13 +174,23 @@ describe("⌘E beside Desk", () => {
   });
 });
 
-// Feedback 1 D2: ⌃⇥ in Desk's room and a press on the sidebar's Desk row while
-// Desk is in front leave Desk as its head's `나가기 ✕` does; with no panel
-// used before Desk, All projects takes its place.
+// Feedback 1 D2: a press on the sidebar's Desk row while Desk is in front
+// leaves Desk as its head's `나가기 ✕` does, for the place used before it, or
+// All projects when there is none. ⌃⇥ in Desk's room walks the recent places,
+// Desk among them (issue 301), so its first chord lands on that same place.
 describe("leaving Desk", () => {
-  it("leaves on the recent-tab chord pressed in Desk's room", () => {
+  it("lands the recent-tab chord pressed in Desk's room on the place used before Desk, and does nothing with none", () => {
     emit("keydown", "Tab", { ctrlKey: true });
-    expect(useUiStore.getState().screen).toEqual({ kind: "main" });
+    emit("keyup", "Control");
+    expect(useUiStore.getState().screen).toEqual({ kind: "desk" });
+
+    const mission = { id: "m1", title: "payments refactor", device_id: "local", workspace_id: "w", project: "/w", checkout_path: "/w", status: "running", nodes: [] };
+    useShellStore.setState({ rest: { navigator: { focused_device_id: "local", devices: [{ id: "local", label: "This Mac", kind: "local", state: "local" }], workspaces: [] }, missions: { items: [mission] }, ui_state: { recent_places: [{ kind: "desk" }, { kind: "mission", mission_id: "m1" }] } } as unknown as SnapshotRest });
+    emit("keydown", "Tab", { ctrlKey: true });
+    expect(useUiStore.getState().cycle?.items.map((item) => item.key)).toEqual(["desk", "mission\u0000m1"]);
+    emit("keyup", "Control");
+    expect(useUiStore.getState().screen).toEqual({ kind: "missions" });
+    expect(useUiStore.getState().missions.selected).toBe("m1");
   });
 
   it("leaves on the Desk row's press while Desk is in front, and opens Desk on it otherwise", () => {
