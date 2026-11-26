@@ -188,50 +188,50 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   Once the worker's plan exists it is the truth and your `steps` stay its starting point; a later plan that leaves `steps` out keeps them, and `"steps": []` clears them.
 - Declare the `issues` and `paths` a node touches: the plan's answer lists `overlaps`, the other missions of this project on the same issue or files.
 - Show the plan in the conversation as one Markdown table, written as a table and never inside a code block, one row per node in the order the work runs, so the operator reads in one place what is made, in what order, by whom and who checks it.
-  Its columns are `순서` (the node's number and what it waits for, such as `2 (1 다음)` or `3 (1, 2 머지 뒤)`), `노드` (its title, with its kind when it is not code: 일반 with its preset, 기다림), `작업자` (the worker's agent, model and effort), `리뷰 · 검증` (each checker by its line and agent, with where a verification runs, such as `검증 Codex (격리한 앱)`, and `👤 나` on a node with a gate; `없음` when it has none), `결과` (its pull request or delivery, or a general node's `결과 한 줄`) and `따로 나눈 이유` (which of the four lines above, in a few words).
-  The `리뷰 · 검증` cell names who checks, never what: what each checker runs is the node's verification table (below), which goes into the checkers' briefs and is shown only when the operator asks how a node is checked.
-  Under the table, one line names the merge order, the check command and any overlap (`겹치는 미션: 없음` when there is none).
+  Write it in the operator's language, with these columns: the order (the node's number and what it waits for), the node (its title, with its kind when it is not code: general with its preset, or waiting), the worker (its agent, model and effort), review and verify (each checker by its line and agent, where a verification runs, and 👤 on a node with a gate; none when it has no checker), the result (its pull request or delivery, or a general node's one-line result) and why it is its own node (which of the four lines above, in a few words).
+  The review and verify cell names who checks, never what: what each checker runs is the node's verification table (below), which goes into the checkers' briefs and is shown only when the operator asks how a node is checked.
+  Under the table, one line names the merge order, the check command and any overlap, saying so when there is none.
 
   ```markdown
-  | 순서 | 노드 | 작업자 | 리뷰 · 검증 | 결과 | 따로 나눈 이유 |
+  | # | Node | Worker | Review · verify | Result | Why its own node |
   | --- | --- | --- | --- | --- | --- |
-  | 1 | core-store · 렌즈 저장 형식 | Claude opus · high | 리뷰 Codex | PR | screen이 이 형식을 읽어요 |
-  | 2 (1 다음) | screen · 렌즈 복원 화면 | Claude sonnet · high | 검증 Codex (격리한 앱) · 👤 나 | PR | 다른 에이전트가 직접 돌려 볼 만해요 |
-  | 3 (1, 2 머지 뒤) | 함께 검증 · 일반 (검증) | Claude sonnet · high | 없음 | 결과 한 줄 | 둘을 합쳐야만 돌아가요 |
+  | 1 | core-store · lens save format | Claude opus · high | review Codex | PR | screen reads this format |
+  | 2 (after 1) | screen · lens restore screen | Claude sonnet · high | verify Codex (isolated app) · 👤 you | PR | another agent should run it |
+  | 3 (after 1 and 2 merge) | check together · general (verify) | Claude sonnet · high | none | one-line result | they only work together |
 
-  머지 순서: 1 → 2 · check: `cargo test && pnpm test` · 겹치는 미션: 없음
+  Merge order: 1 → 2 · check: `cargo test && pnpm test` · overlapping missions: none
   ```
-- Name the gates in one line that asks the operator to check there and tell you, such as `내가 확인할 곳: fix-1487 (재시작 후 태스크 렌즈), deploy (시작 전: 배포해도 될지). 여기서 확인하고 알려 주세요`; they approve it, or name more or fewer places.
-  Name what nothing here can check in one line under it, such as `확인 못 하는 곳: Windows 실기 (여기서 못 돌려요, 사람 필요)`, and leave the line out when there is nothing.
-  Ask about the cut in the same message, in one line in the operator's language that names the count and what you joined: `노드 3개로 나눴어요 (화면은 core와 한 노드로 합침). 더 합치거나 나눌까요?`; the operator's answer reshapes the plan before it starts.
+- Under the table, in the operator's language, name the gates in one line that asks the operator to check there and tell you, such as `Where to check: fix-1487 (the task lens after a restart), deploy (before it starts: whether to deploy). Check there and tell me`; they approve it, or name more or fewer places.
+  Name what nothing here can check in one line under it, such as `Not checked here: a real Windows machine (it cannot run here, a person has to)`, and leave the line out when there is nothing.
+  Ask about the cut in the same message, in one line that names the count and what you joined: `I cut it into 3 nodes (the screen joined the core node). Join or split more?`; the operator's answer reshapes the plan before it starts.
   The operator's changes in conversation change this mission only; the settings stay as they are.
 - Write each node's verification table as you plan it: one line for each finish line of the node (its `criteria`), so its checkers run what the plan meant and a gap in the checking shows before anything starts.
   It is yours and its checkers', not the operator's: it goes into the checkers' briefs (Cutting the mission and briefing a worker), and the plan in the conversation shows only its gates and the lines nothing here can check.
-  The columns are `확인할 것` (the behaviour or cell by its name), `증거` (the check that proves it, named as `docs/VERIFICATION.md`, Pick the check by the claim, names it: a unit test, a web or desktop e2e, a real CLI journey, an isolated candidate app, the screen) and `누가` (a checker's agent kind, the worker, or `사람`); group the rows under their node's key and leave out the `check` and `ci` lines, which Hide adds and judges itself.
+  The columns are what to check (the behaviour or cell by its name), the evidence (the check that proves it, named as `docs/VERIFICATION.md`, Pick the check by the claim, names it: a unit test, a web or desktop e2e, a real CLI journey, an isolated candidate app, the screen) and who (a checker's agent kind, the worker, or a person); group the rows under their node's key and leave out the `check` and `ci` lines, which Hide adds and judges itself.
   Name the cheapest check that can observe the claim: a flow a user performs is never proved by a unit test alone, and a node that changes what a user runs has a row on the isolated candidate app (above).
   The table is the criteria and checks shown, never a second list to keep in step with them, so a node has at most the three rows its criteria allow.
   Many behaviours to check do not make more nodes or more rows: group them by theme into those rows and name each cell inside its row's words; cut a node only on the usual four lines, never because its table is long.
-  A row whose `누가` is `사람` is the node's `gate` (one line, at most 80 characters) and not one of its criteria: the operator looks while the agents go on, and it holds the node only as a start gate does; the plan's table marks it `👤 나`.
-  A row nothing here can run (no candidate app, no device) is written as `못 함` with its reason and put to the operator in the plan's `확인 못 하는 곳` line, as a `gate` or a decision, never left out, so a gap in the checking is seen at the plan and not after a bug; no checker is given such a row, so it never turns a verification into a failure.
+  A row whose who is a person is the node's `gate` (one line, at most 80 characters) and not one of its criteria: the operator looks while the agents go on, and it holds the node only as a start gate does; the plan's table marks it 👤.
+  A row nothing here can run (no candidate app, no device) is written as not runnable with its reason and put to the operator in the plan's line of what is not checked here, as a `gate` or a decision, never left out, so a gap in the checking is seen at the plan and not after a bug; no checker is given such a row, so it never turns a verification into a failure.
 
   ```text
   fix-1487
-   재시작 뒤 태스크 렌즈가 남아요 · 격리한 앱 · 검증 에이전트 (opus)
-   저장 형식이 옛 값을 읽어요 · 단위 테스트 · 작업자
-   고른 줄이 화면에서 보여요 · 화면 · 사람
+   the task lens stays after a restart · isolated app · verify agent (opus)
+   the save format reads old values · unit test · worker
+   the chosen row shows on screen · screen · person
   ```
 - With the plan, show the options this mission runs with, one line each and in this order, in the operator's language:
-  머지 (the scope and who merges, and any node the operator merges), 워크트리 (whether a merged worktree is cleaned up, and that one with changes or in use stays), 확인 (the verification strength), 동시에 (the cap), 내 폴더 (that your checkout is brought up to the destination when the mission closes, or `없음` when no node's result goes into the destination).
-  A value as Settings › Mission has it ends with `(설정)`; a value this mission changed says why in a few words.
-  The cleanup is Settings' for every mission, so its line is always `(설정)`.
+  merge (the scope and who merges, and any node the operator merges), worktrees (whether a merged worktree is cleaned up, and that one with changes or in use stays), checking (the verification strength), at once (the cap), your folder (that your checkout is brought up to the destination when the mission closes, or none when no node's result goes into the destination).
+  A value as Settings › Mission has it ends with `(settings)` in the operator's language; a value this mission changed says why in a few words.
+  The cleanup is Settings' for every mission, so its line always ends with `(settings)`.
   The account the mission works as (section 1) takes the last line.
 
   ```text
-  머지 · 머지까지, 지휘자가 머지 (설정)
-  워크트리 · 머지되면 정리, 변경이 남은 곳은 남김 (설정)
-  확인 · 꼼꼼하게 · 결제 DB 저장 형식이 바뀜
-  동시에 · 4 (설정)
-  내 폴더 · 닫힐 때 feat/login 최신으로 당겨옴
+  Merge · through the merge, the Conductor merges (settings)
+  Worktrees · cleaned up once merged, one with changes stays (settings)
+  Checking · thorough · the payment DB's save format changes
+  At once · 4 (settings)
+  Your folder · brought up to feat/login when the mission closes
   GitHub: <account> (gh)
   ```
 - The plan shows on your pane's mission chip; nothing opens in the operator's lane, so tell them the plan is up in the conversation.
