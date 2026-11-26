@@ -27,6 +27,7 @@ import { allProjectsCount } from "./navigation";
 import { cardTitle } from "./cardTitle";
 import { translate } from "./i18n/client";
 import { remoteContext, remoteView } from "./remote";
+import { missionProjectLabel } from "./missionList";
 import { machineName, windowDeviceId } from "./screenMachine";
 import { listedWorkspaces, type AgentRow, type Checkout, type Mission, type MissionStatus, type PaneRow, type RecentPlace, type SnapshotRest, type Tab, type ViewDisplaySnapshot, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
@@ -487,12 +488,6 @@ function automationOf(automationId: string) {
   return useShellStore.getState().automations?.items.find((row) => row.id === automationId) ?? null;
 }
 
-/** A mission's project as the mission screen names it: the catalog's name, else its folder's. */
-function missionProject(rest: SnapshotRest | null, mission: Mission): string {
-  const row = allCheckouts(rest).find((candidate) => candidate.workspace.id === mission.workspace_id);
-  return row?.workspace.label ?? mission.project.split(/[\\/]/).filter(Boolean).at(-1) ?? mission.project;
-}
-
 /**
  * A place cycle row, for a place the shell holds: an agent pane as the Agent
  * pane row (`paneItem`), a mission by its title with its project and state
@@ -508,7 +503,7 @@ export function placeItem(rest: SnapshotRest | null, place: RecentPlace): CycleI
     case "mission": {
       const mission = missionOf(rest, place.mission_id);
       if (!mission) return null;
-      return { key, title: mission.title, detail: { kind: "mission", project: missionProject(rest, mission), status: mission.status }, kind: "mission", chip: deviceChip(rest, mission.device_id), agent: null, target: { kind: "mission", missionId: mission.id } };
+      return { key, title: mission.title, detail: { kind: "mission", project: missionProjectLabel(mission, allCheckouts(rest).map((row) => row.workspace)), status: mission.status }, kind: "mission", chip: deviceChip(rest, mission.device_id), agent: null, target: { kind: "mission", missionId: mission.id } };
     }
     case "automation": {
       const automation = automationOf(place.automation_id);

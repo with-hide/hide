@@ -2,7 +2,9 @@
 // (issue 301, docs/UI_BEHAVIOR.md, Recent navigation): the page reports the
 // automation's detail as a place, the core keeps it in the one order beside
 // the panes and saves it in `core-state.json`, and the held chord walks both
-// and commits either.
+// and commits either. The unit tests hold each side alone; only a real hided
+// shows the page's report taken by the core's decoder, kept and sent back in
+// the snapshot the next cycle reads.
 
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
