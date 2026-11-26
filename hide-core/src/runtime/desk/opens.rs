@@ -190,6 +190,7 @@ impl Runtime {
             false,
             false,
         );
+        self.desk_note_agent_view();
         self.note_desk_agent_open();
         let id = self.desk.views_opened;
         let answered = &mut self.desk.opens.answered;

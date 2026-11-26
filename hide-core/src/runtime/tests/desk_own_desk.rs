@@ -17,7 +17,7 @@ fn desk_runtime(name: &str) -> (Runtime, String, PathBuf) {
 }
 
 /// `desk_runtime` with a second checkout, not in front.
-fn desk_runtime_with_other(name: &str) -> (Runtime, PathBuf, String) {
+pub(super) fn desk_runtime_with_other(name: &str) -> (Runtime, PathBuf, String) {
     let (mut runtime, _, directory) = strip_checkout(name);
     let (other, other_checkout) = second_checkout(&mut runtime, &directory);
     let mut runtime = with_new_views(runtime, name);
@@ -95,7 +95,7 @@ fn displays(node: &ViewNodeSnapshot) -> Vec<ViewDisplaySnapshot> {
 }
 
 /// Every View of Desk's desk as the snapshot carries it.
-fn desk_views(runtime: &mut Runtime) -> Vec<ViewDisplaySnapshot> {
+pub(super) fn desk_views(runtime: &mut Runtime) -> Vec<ViewDisplaySnapshot> {
     runtime.sync_workspace_view();
     runtime
         .snapshot
@@ -439,7 +439,11 @@ fn desk_action(runtime: &mut Runtime, id: &str, action: Action) -> Result<Action
     )
 }
 
-fn agent_open(runtime: &mut Runtime, id: &str, path: &Path) -> Result<ActionResult, Refusal> {
+pub(super) fn agent_open(
+    runtime: &mut Runtime,
+    id: &str,
+    path: &Path,
+) -> Result<ActionResult, Refusal> {
     desk_action(
         runtime,
         id,

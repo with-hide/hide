@@ -9,11 +9,11 @@ use crate::view_layout::DisplayKind;
 use crate::workspace_control::Action;
 use serde_json::json;
 
-const CHECKOUT: &str = "/checkouts/fixture";
+pub(super) const CHECKOUT: &str = "/checkouts/fixture";
 /// The fixture's one Agent tab, which holds both panes.
 const TAB: &str = "tab";
 
-fn key() -> (String, String) {
+pub(super) fn key() -> (String, String) {
     (crate::node::TEST_NODE.into(), CHECKOUT.into())
 }
 
@@ -37,7 +37,7 @@ fn agent(pane: &str, session: &str) -> crate::model::SidebarAgentSnapshot {
 /// a working Codex agent in its own terminal, in the one front checkout,
 /// with the Files lane open, a window holding the keyboard and the operator
 /// in neither pane. With `child`, `recipient` is `sender`'s delegated child.
-fn fixture(child: bool) -> (tempfile::TempDir, Arc<Mutex<Runtime>>) {
+pub(super) fn fixture(child: bool) -> (tempfile::TempDir, Arc<Mutex<Runtime>>) {
     let root = tempfile::tempdir().unwrap();
     let (runtime, _, _, _) = crate::runtime::delivery::tests::fixture(root.path());
     {
@@ -71,7 +71,7 @@ fn fixture(child: bool) -> (tempfile::TempDir, Arc<Mutex<Runtime>>) {
 
 /// The operator's keyboard on `pane`, or on no pane, as the strip settles
 /// it before the next frame.
-fn keyboard(runtime: &mut Runtime, pane: Option<&str>) {
+pub(super) fn keyboard(runtime: &mut Runtime, pane: Option<&str>) {
     runtime.snapshot.terminal.pane_id = pane.map(str::to_owned);
     runtime.set_operator_focus(pane.map(str::to_owned));
     runtime.refresh_pane_read_state();
@@ -83,7 +83,7 @@ fn keyboard(runtime: &mut Runtime, pane: Option<&str>) {
 /// operator watches the caller, else on no desk (PRD lane-desk-pair-view
 /// B1), a View that already shows the file taken where it is (D-20), and
 /// marked by its caller.
-fn open(runtime: &mut Runtime, caller: &str, path: &str) -> String {
+pub(super) fn open(runtime: &mut Runtime, caller: &str, path: &str) -> String {
     let key = key();
     let place = runtime.control_place(&key, caller);
     let watched = place != crate::workspace_views::Place::Shelf;

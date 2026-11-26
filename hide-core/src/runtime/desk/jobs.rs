@@ -639,7 +639,7 @@ fn places_in(cards: &[crate::model::DeskJobSnapshot]) -> usize {
 
 /// What every card reads, gathered once per build of the cards rather than
 /// once per card.
-struct CardIndex<'a> {
+pub(super) struct CardIndex<'a> {
     /// Registration ids the session archive holds.
     archived: HashSet<&'a str>,
     rows: HashMap<&'a str, &'a SidebarAgentSnapshot>,
@@ -649,7 +649,7 @@ struct CardIndex<'a> {
     /// The missions each pane conducts.
     missions: HashMap<&'a str, Vec<&'a crate::runtime::missions::MissionView>>,
     /// Every open View that is a 결과물 (B30), with the checkout whose list holds it.
-    displays: Vec<(
+    pub(super) displays: Vec<(
         super::super::workspace_view::WorkspaceKey,
         &'a crate::view_layout::Display,
     )>,
@@ -1063,21 +1063,7 @@ impl Runtime {
         card.outputs = opened
             .into_iter()
             .take(MAX_OUTPUTS)
-            .map(|((device, checkout), display)| {
-                let page = display.kind == crate::view_layout::DisplayKind::Browser;
-                crate::model::DeskJobOutput {
-                    id: display.id.clone(),
-                    kind: output_kind(display),
-                    label: super::super::view_areas::display_label(display),
-                    thumb: None,
-                    seen: display.unseen.is_none(),
-                    pr_state: None,
-                    device_id: Some(device.clone()),
-                    checkout: Some(checkout.clone()),
-                    path: (!page && !display.path.is_empty()).then(|| display.path.clone()),
-                    url: display.url.clone().filter(|_| page),
-                }
-            })
+            .map(|(key, display)| view_output(key, display))
             .chain(pulls.iter().map(|pull| crate::model::DeskJobOutput {
                 id: pull.url.clone(),
                 kind: crate::model::DeskOutputKind::Pr,
@@ -1094,8 +1080,8 @@ impl Runtime {
     }
 
     /// The sessions the followed conversation names (a reply's chips, a
-    /// letter's line, the operator's `@` chips) and the one whose thread the
-    /// lane holds, that no card of `shown` is, each a card of its own read
+    /// letter's line, the operator's `@` chips), the one whose thread the
+    /// lane holds and 한눈에's, that no card of `shown` is, each a card of its own read
     /// from its sidebar row (D-86, D-87), so a chip's hover card and the
     /// thread any press opens read the same facts as Desk's own. A session
     /// the sidebar no longer lists has none: its chip is dimmed. The
@@ -1163,6 +1149,17 @@ impl Runtime {
             && let Some(row) = index.rows.get(pane)
         {
             named.push(self.desk_row_card(row, index));
+        }
+        // 한눈에's sessions that no card above is, so each of its rows reads
+        // the session's card as a chip does.
+        for kept in self.desk.stored.glance.iter().rev() {
+            let pane = kept.pane_id.as_str();
+            if carded.contains(pane) || !seen.insert(pane) {
+                continue;
+            }
+            if let Some(row) = index.rows.get(pane) {
+                named.push(self.desk_row_card(row, index));
+            }
         }
         named
     }
@@ -1470,6 +1467,27 @@ impl Runtime {
 /// Outputs one card lists; a session that opened more shows its newest.
 const MAX_OUTPUTS: usize = 32;
 
+/// A View as a card's 결과물 and 한눈에's file row: what it shows, whether it
+/// was looked at, and the device and checkout whose list holds it.
+pub(super) fn view_output(
+    (device, checkout): &super::super::workspace_view::WorkspaceKey,
+    display: &crate::view_layout::Display,
+) -> crate::model::DeskJobOutput {
+    let page = display.kind == crate::view_layout::DisplayKind::Browser;
+    crate::model::DeskJobOutput {
+        id: display.id.clone(),
+        kind: output_kind(display),
+        label: super::super::view_areas::display_label(display),
+        thumb: None,
+        seen: display.unseen.is_none(),
+        pr_state: None,
+        device_id: Some(device.clone()),
+        checkout: Some(checkout.clone()),
+        path: (!page && !display.path.is_empty()).then(|| display.path.clone()),
+        url: display.url.clone().filter(|_| page),
+    }
+}
+
 fn output_kind(display: &crate::view_layout::Display) -> crate::model::DeskOutputKind {
     use crate::model::DeskOutputKind;
     use crate::view_layout::DisplayKind;
@@ -1527,6 +1545,11 @@ impl Runtime {
             else {
                 continue;
             };
+            // Every session Desk started is one of 한눈에's.
+            marked |= self
+                .desk
+                .stored
+                .keep_glance(&pane, spawn.reserved_at_unix_ms);
             let mark = self.desk_mark(&spawn.intent).cloned().unwrap_or_default();
             let mut next = mark.clone();
             next.intent.clone_from(&spawn.intent);
@@ -1607,8 +1630,16 @@ impl Runtime {
             &index,
             &moved,
         );
+        let glance = self.desk_glance(&[&cards, &workers, &named], &index);
         let records = self.desk_records(&moved);
-        self.publish_desk_jobs(cards, workers, named, records, moved_snapshot(&moved));
+        self.publish_desk_jobs(
+            cards,
+            workers,
+            named,
+            records,
+            moved_snapshot(&moved),
+            glance,
+        );
         self.compose_desk_mentions();
         if letters_read || self.desk_chips_moved(&moved) {
             self.compose_desk_moved(Some(&moved));
@@ -1630,8 +1661,16 @@ impl Runtime {
             &index,
             &moved,
         );
+        let glance = self.desk_glance(&[&jobs, &workers, &named], &index);
         let records = self.desk_records(&moved);
-        self.publish_desk_jobs(jobs, workers, named, records, moved_snapshot(&moved));
+        self.publish_desk_jobs(
+            jobs,
+            workers,
+            named,
+            records,
+            moved_snapshot(&moved),
+            glance,
+        );
     }
 
     /// The cards of the workers `jobs` conduct: each worker pane's spawn,
@@ -1683,6 +1722,7 @@ impl Runtime {
         named: Vec<crate::model::DeskJobSnapshot>,
         records: Vec<crate::model::DeskRecordSnapshot>,
         moved: Vec<crate::model::DeskMovedSnapshot>,
+        glance: crate::model::DeskGlanceSnapshot,
     ) {
         if self.snapshot.desk_jobs.as_ref().is_some_and(|section| {
             section.jobs == jobs
@@ -1690,6 +1730,7 @@ impl Runtime {
                 && section.named == named
                 && section.records == records
                 && section.moved == moved
+                && section.glance == glance
         }) {
             return;
         }
@@ -1699,6 +1740,7 @@ impl Runtime {
             named,
             records,
             moved,
+            glance,
         }));
     }
 
@@ -2592,8 +2634,28 @@ mod tests {
         assert!(section.jobs.is_empty() && section.workers.is_empty());
     }
 
+    /// 한눈에 lists every session Desk started, newest first, kept in Desk's
+    /// store once, so a refresh that finds them again saves nothing.
     #[test]
-    fn a_session_no_job_is_has_a_card_while_its_thread_is_open_and_none_after() {
+    fn every_session_desk_started_is_one_of_glances_newest_first() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 4, &["one", "two"]);
+        runtime.start_test_desk();
+        runtime.snapshot.navigator.agents = vec![row("p0", "working"), row("p1", "done")];
+        runtime.refresh_desk_jobs();
+        let kept = runtime.desk.stored.glance.clone();
+        let mut panes: Vec<&str> = kept.iter().map(|kept| kept.pane_id.as_str()).collect();
+        let section = runtime.snapshot.desk_jobs.as_ref().unwrap();
+        panes.reverse();
+        assert_eq!(section.glance.sessions, panes, "newest first");
+        panes.sort_unstable();
+        assert_eq!(panes, ["p0", "p1"]);
+        runtime.refresh_desk_jobs();
+        assert_eq!(runtime.desk.stored.glance, kept);
+    }
+
+    #[test]
+    fn a_session_no_job_is_has_a_card_while_its_thread_is_open_or_glance_lists_it() {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = desk(root.path(), 2, &[]);
         runtime.start_test_desk();
@@ -2621,7 +2683,11 @@ mod tests {
         let section = runtime.snapshot.desk_jobs.as_ref().unwrap();
         assert!(section.jobs.is_empty() && section.workers.is_empty());
 
+        // Closed, it stays one of 한눈에's, whose row reads its card.
         assert!(runtime.close_session_thread());
+        assert_eq!(named(&runtime), ["p9"]);
+        runtime.desk.stored.glance.clear();
+        runtime.compose_desk_jobs();
         assert!(named(&runtime).is_empty());
     }
 

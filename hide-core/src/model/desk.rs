@@ -51,7 +51,12 @@ pub struct DeskLane {
     /// Desk's desk's width: its left edge.
     pub view_width: Option<u32>,
     /// The session panel's width: the edge between it and the tab panel.
+    /// 한눈에 takes the same width, standing where the session panel does.
     pub session_width: Option<u32>,
+    /// 한눈에 is folded (`⟩`), so Desk's chat takes the room's width while
+    /// no session is open beside it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub glance_folded: bool,
 }
 
 /// The widest a stored panel width may be; a wider one is refused
@@ -69,7 +74,8 @@ pub struct DeskJobsSnapshot {
     /// is drawn in the chat.
     pub workers: Vec<DeskJobSnapshot>,
     /// The other sessions the newest lines of the conversation name (a
-    /// reply's chips, a letter's line), as cards of their own read from
+    /// reply's chips, a letter's line), the one open beside Desk and
+    /// 한눈에's, as cards of their own read from
     /// their sidebar rows, so a chip's hover card and its thread show what
     /// the row shows (D-86); none is drawn in the chat or listed in Threads.
     pub named: Vec<DeskJobSnapshot>,
@@ -83,6 +89,34 @@ pub struct DeskJobsSnapshot {
     /// `이어서 하기` resumed): a chip naming the gone pane is the live
     /// session's, drawn from its row and opening it, and has no record.
     pub moved: Vec<DeskMovedSnapshot>,
+    /// 한눈에 at Desk's right.
+    pub glance: DeskGlanceSnapshot,
+}
+
+/// 한눈에: the sessions Desk started and the ones the operator opened beside
+/// Desk, and the Views they and Desk's own agent opened.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DeskGlanceSnapshot {
+    /// The sessions by pane, the newest first, at most 32 (Desk's store
+    /// keeps them, `Stored::glance`); each has its card in `jobs`, `workers`
+    /// or `named`, and one with none (its pane gone, no job of Desk's) is
+    /// left out.
+    pub sessions: Vec<String>,
+    /// The Views those sessions and Desk's agent opened, read from each
+    /// View's own record (its openers and whether it was looked at): those
+    /// not looked at first, then the newest first, at most 32.
+    pub files: Vec<DeskGlanceFile>,
+    /// How many more such Views there are than `files` holds.
+    pub files_more: usize,
+}
+
+/// One View 한눈에 lists, with the session that opened it last.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DeskGlanceFile {
+    #[serde(flatten)]
+    pub output: DeskJobOutput,
+    /// The pane of the session that opened it; none for Desk's own agent.
+    pub pane_id: Option<String>,
 }
 
 /// A chip's gone pane and the pane its session runs in now.
