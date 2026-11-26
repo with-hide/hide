@@ -91,7 +91,7 @@ export function SessionChip({ session, onPress, card: carded = true, className }
   const name = (known ? facts.name : null) ?? session.name;
   const lead = agent === null ? null : <><StatusMark mark={mark} /><AgentMark kind={agent} /></>;
   // The chip of the session open beside Desk wears the selection ring an output in front of the tab panel wears (B16).
-  const shown = !dimmed && session.pane_id != null && source?.open === session.pane_id;
+  const shown = !dimmed && source?.open != null && source.open === (facts ? facts.pane_id : session.pane_id);
   const look = cn("inline-flex max-w-full min-w-0 items-center gap-xxs rounded-xs px-xxs align-middle", MENTION_TONE.session, dimmed && "opacity-(--opacity-dimmed)", ended && "opacity-(--opacity-secondary)", shown && "ring-1 ring-ring", className);
   const marks = { "data-desk-session-chip": name, "data-desk-session-gone": dimmed ? "true" : undefined, "data-desk-session-ended": ended ? "true" : undefined, "data-desk-session-open": shown ? "true" : undefined };
   // A session no longer listed and not recorded has nothing left to open.

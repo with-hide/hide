@@ -523,7 +523,7 @@ it("lists the decision's Views, opening one from its agent's 볼 것, and with n
     expect(asks()).toEqual([expect.objectContaining({ mission: "m-turn", key: 4 })]);
     // A refusal is told in the material's own words and the press stays.
     await serve({ type: "mission_result", request_id: asks()[0]!.request_id as string, mission: "m-turn", ok: false, reason: "gone" });
-    expect(container.querySelector("[data-phone-answer-error]")!.textContent).toBe("This question is no longer open.");
+    expect(container.querySelector("[data-phone-answer-error]")!.textContent).toBe("This is no longer open to check.");
     expect(container.querySelector('[data-phone-material="ask"]')).not.toBeNull();
 
     await serve({ type: "missions", items: [deciding({ question: { ...deciding().question!, material_asked: true } })], failed: false });
@@ -578,7 +578,7 @@ it("opens a closed View on the Mac first, then its agent's 볼 것 lists it; a r
     await refused.click('[data-phone-decision-view="d3"]');
     expect(asked()).toHaveLength(2);
     await refused.serve({ type: "missions", items: [deciding({ question: { ...deciding().question!, key: 5 } })], failed: false });
-    expect(refused.container.querySelector("[data-phone-answer-error]")!.textContent).toBe("This question is no longer open.");
+    expect(refused.container.querySelector("[data-phone-answer-error]")!.textContent).toBe("This is no longer open to check.");
     // A press the core never answers for ends once the phone's wait is over.
     await refused.serve({ type: "missions", items: [deciding({ decision_views: [{ ...row, closed: true }] })], failed: false });
     vi.useFakeTimers();

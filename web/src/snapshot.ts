@@ -3684,7 +3684,11 @@ export type DeskJobsSection = {
   named: DeskJob[];
   /** The sessions the newest lines name whose pane is gone, as Hide's record keeps them (feedback 2, frame K): a chip draws its record and opens it beside Desk; a session with no record has none. */
   records: DeskRecord[];
+  /** The sessions the newest lines name whose pane is gone and that run now in another pane, the same session on the same machine (one `이어서 하기` resumed): a chip naming the gone pane is the live session's, drawn from its row and opening it, with no record. */
+  moved: DeskMoved[];
 };
+/** A chip's gone pane and the pane its session runs in now (`desk_jobs.moved`). */
+export type DeskMoved = { pane_id: string; live_pane_id: string };
 /**
  * A session whose pane is gone, as its record keeps it: what its chip, its
  * hover card and its read-only thread draw, and where `이어서 하기` resumes it.

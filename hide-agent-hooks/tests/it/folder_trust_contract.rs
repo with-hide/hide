@@ -49,7 +49,7 @@ fn every_agent_whose_screen_asks_for_folder_trust_records_it_or_names_its_suppor
     // Every agent whose definition's rules were taken from a real screen of
     // that question says so; a rule that stopped saying it would leave its
     // agent out of this test unseen.
-    for id in ["codex", "antigravity", "devin", "qwen", "muse"] {
+    for id in ["codex", "antigravity", "devin", "qwen", "muse", "pi"] {
         assert!(
             asking.iter().any(|definition| definition.id == id),
             "{id}'s screen rules no longer say which rule is its folder trust question"

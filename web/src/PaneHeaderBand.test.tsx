@@ -660,7 +660,7 @@ it("opens the turn card from the request on a press, not on hover, until Esc", a
     expect(card()?.querySelector("[data-turn-card-summary]")?.textContent).toBe("Proceed as proposed + check unclear states");
     expect(card()?.querySelector("[data-turn-card-original]")?.textContent).toContain("ok do that.");
     expect(card()?.querySelector("[data-turn-card-later]")?.textContent).toBe("Next request from lead");
-    expect(card()?.querySelector("[data-turn-card-response]")?.textContent).toBe("QuestionBundle questions 1-3 into one PR?");
+    expect(card()?.querySelector("[data-turn-card-response]")?.textContent).toBe("To checkBundle questions 1-3 into one PR?");
     expect(card()?.querySelector("[data-turn-card-sender]")?.textContent).toBe("Me");
     // The rail reads in time order, so the older of the two turns before comes first.
     expect([...card()!.querySelectorAll("[data-turn-card-earlier-item]")].map((item) => [...item.querySelectorAll("p")].map((line) => line.textContent))).toEqual([
@@ -727,7 +727,7 @@ it("says what a waiting turn waits for on the card, in the sidebar's words", asy
 });
 
 // docs/UI_BEHAVIOR.md, Pane turn row mode: the questions still waiting end
-// the pane's second row's turn as words, `· 질문 N` (`Questions N`), whose press
+// the pane's second row's turn as words, `· 확인할 것 N` (`To check N`), whose press
 // opens the turn card that lists them; with nothing else on the row the oldest
 // question's words follow them; the head draws them only while the row is off,
 // and a pane with none draws nothing in either place.
@@ -752,17 +752,17 @@ it("counts a pane's waiting questions as the tail of its second row, on the head
     // With the row off the head holds them and no row is drawn.
     useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "off" } } as unknown as SnapshotRest });
     await draw();
-    expect(container.querySelector("[data-head] [data-pane-open-asks=solo]")?.textContent).toBe("Questions 2");
+    expect(container.querySelector("[data-head] [data-pane-open-asks=solo]")?.textContent).toBe("To check 2");
     expect(container.querySelector("[data-pane-header-band]")).toBeNull();
     useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "one_line" } } as unknown as SnapshotRest });
     await draw();
     expect(container.querySelector("[data-head]")?.childElementCount).toBe(0);
     const mark = container.querySelector<HTMLButtonElement>('[data-pane-header-band="open_asks"] [data-pane-open-asks=solo]')!;
-    expect(mark.textContent).toBe("Questions 2");
-    expect(container.querySelector('[data-pane-header-band="open_asks"]')?.textContent).toBe("Questions 2Decide the closed tab defect");
+    expect(mark.textContent).toBe("To check 2");
+    expect(container.querySelector('[data-pane-header-band="open_asks"]')?.textContent).toBe("To check 2Decide the closed tab defect");
     // Beside a request and its progress they follow the progress, and the question's own words stay in the card.
     await act(async () => root.render(<TooltipProvider><PaneHeaderBand paneId="solo" header={{ ...header, request: { text: "Proceed as proposed", images: 0 }, progress: "Reading the tab code" } as PaneHeader} actions={actions} /></TooltipProvider>));
-    expect(container.querySelector('[data-pane-header-band="progress"]')?.textContent).toBe("Proceed as proposed→Reading the tab code· Questions 2");
+    expect(container.querySelector('[data-pane-header-band="progress"]')?.textContent).toBe("Proceed as proposed→Reading the tab code· To check 2");
     // Beside the pane's own question the tail counts the others, right after the ask's words.
     const question: PaneBand = { kind: "answer", reason: "Merge now or wait for CI", since_unix_ms: null, read: false, action: null, more: 0 };
     await act(async () => root.render(<TooltipProvider><PaneHeaderBand paneId="solo" header={{ ...header, working: false, band: question } as PaneHeader} actions={actions} /></TooltipProvider>));
@@ -770,7 +770,7 @@ it("counts a pane's waiting questions as the tail of its second row, on the head
     // With the row off the question's own mark counts them all, and the count beside it is gone.
     useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "off" } } as unknown as SnapshotRest });
     await act(async () => root.render(<TooltipProvider><PaneAskMark paneId="solo" header={{ ...header, band: question } as PaneHeader} actions={actions} /><PaneOpenAsksMark paneId="solo" header={{ ...header, band: question } as PaneHeader} actions={actions} /></TooltipProvider>));
-    expect([container.querySelector("[data-pane-ask-mark]")?.textContent, container.querySelector("[data-pane-open-asks]")]).toEqual(["Questions 2", null]);
+    expect([container.querySelector("[data-pane-ask-mark]")?.textContent, container.querySelector("[data-pane-open-asks]")]).toEqual(["To check 2", null]);
     useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "one_line" } } as unknown as SnapshotRest });
     await draw();
     expect(container.querySelector("[data-quiet-head]")?.childElementCount).toBe(0);
@@ -828,7 +828,7 @@ it("draws the answer, the questions still waiting and the letters since the requ
     expect(order).toEqual(["answer", "asks", "letters"]);
     const asks = () => [...card().querySelectorAll<HTMLElement>("[data-turn-card-asks] [data-record-ask]")];
     expect(asks().map((ask) => ask.textContent?.includes("Decide the closed tab defect") || ask.textContent?.includes("Merge now or wait for CI"))).toEqual([true, true]);
-    expect(card().querySelector("[data-turn-card-asks] h3")?.textContent).toBe("Waiting on you · Questions 2");
+    expect(card().querySelector("[data-turn-card-asks] h3")?.textContent).toBe("Waiting on you · To check 2");
     // 무시하기 puts the question away in the session's record, and the line stays to undo while the card is open.
     await act(async () => card().querySelector<HTMLButtonElement>("[data-record-ask-dismiss=m1]")!.click());
     expect(events.filter((event) => event.kind === "session_missed_status").map((event) => event.payload)).toEqual([{ session, id: "m1", status: "dismissed" }]);
