@@ -21,7 +21,7 @@ import type { SyntaxNode, Tree } from "@lezer/common";
 import type { Text } from "@codemirror/state";
 import { isMermaidInfo } from "../markdownMermaid";
 
-export type LiveKind = "hide" | "bullet" | "checkbox" | "heading" | "codeBlock" | "fenceLine" | "quote" | "link" | "codeInline" | "html" | "image" | "mermaid" | "table";
+export type LiveKind = "hide" | "bullet" | "checkbox" | "heading" | "codeHead" | "codeBlock" | "fenceLine" | "quote" | "link" | "codeInline" | "html" | "image" | "mermaid" | "table";
 
 export type LiveRange = {
   from: number;
@@ -38,8 +38,12 @@ export type LiveRange = {
   src?: string;
   alt?: string;
   title?: string;
-  /** `mermaid`: the diagram's source, the text between the fences; `table`: the table's source. */
+  /** `mermaid`: the diagram's source, the text between the fences; `table`: the table's source; `codeHead`: the block's code as it is copied. */
   source?: string;
+  /** `codeHead`: the language the fence names, null when it names none. */
+  language?: string | null;
+  /** `codeBlock`: the line is the block's first code line, its last, or its only one, so the block is drawn as one box under its head. */
+  edge?: "first" | "last" | "only";
 };
 
 /** The Live view's whole-document byte bound: above
@@ -145,10 +149,17 @@ export function markdownLivePlan(tree: Tree, doc: Text, selection: { from: numbe
           return;
         }
         // A fence is revealed by a selection anywhere in its block, which is
-        // the unit a fenced code block is edited in.
+        // the unit a fenced code block is edited in. The opening fence of a
+        // block with code draws as the block's head row; the closing one hides.
         const block = enclosing(node, "FencedCode");
         if (block && !overlaps(block.from, block.to)) {
           const line = doc.lineAt(node.from);
+          const fenced = node.parent;
+          if (fenced?.firstChild?.from === node.from && fenced.getChild("CodeText")) {
+            const { code, language } = fencedCode(doc, fenced);
+            ranges.push({ from: node.from, to: line.to, kind: "codeHead", language, source: code });
+            return;
+          }
           ranges.push({ from: node.from, to: node.to, kind: "hide" });
           ranges.push({ from: line.from, to: line.to, kind: "fenceLine" });
         }
@@ -156,8 +167,9 @@ export function markdownLivePlan(tree: Tree, doc: Text, selection: { from: numbe
       }
 
       if (name === "CodeInfo") {
+        // The head row says the language in place of the opening fence's words.
         const block = enclosing(node, "FencedCode");
-        if (block && !overlaps(block.from, block.to)) {
+        if (block && !overlaps(block.from, block.to) && !node.parent?.getChild("CodeText")) {
           ranges.push({ from: node.from, to: node.to, kind: "hide" });
         }
         return;
@@ -166,10 +178,12 @@ export function markdownLivePlan(tree: Tree, doc: Text, selection: { from: numbe
       if (name === "CodeText") {
         const block = enclosing(node, "FencedCode");
         if (block && !overlaps(block.from, block.to)) {
-          for (let pos = node.from; pos < node.to; ) {
-            const line = doc.lineAt(pos);
-            ranges.push({ from: line.from, to: line.to, kind: "codeBlock" });
-            pos = line.to + 1;
+          const first = doc.lineAt(node.from).number;
+          const last = doc.lineAt(node.to).number;
+          for (let number = first; number <= last; number += 1) {
+            const line = doc.line(number);
+            const edge = first === last ? "only" : number === first ? "first" : number === last ? "last" : undefined;
+            ranges.push({ from: line.from, to: line.to, kind: "codeBlock", ...(edge ? { edge } : {}) });
           }
         }
         return;
@@ -254,6 +268,34 @@ function enclosing(node: SyntaxNode, name: string): { from: number; to: number }
 }
 
 /** A fenced block's diagram when its language is `mermaid` and it holds text, else null. */
+/**
+ * A fenced block's code as it is copied, and the language its fence names.
+ * The lines are those between the fences (to the text's end when the block
+ * is never closed), each without the container prefix the opening fence's
+ * column holds (a quote's `>`, a list item's indent), so a block in a quote
+ * or a list copies as its code alone.
+ */
+export function fencedCode(doc: Text, node: SyntaxNode): { code: string; language: string | null } {
+  const open = doc.lineAt(node.from);
+  const column = node.from - open.from;
+  const marks = node.getChildren("CodeMark");
+  const close = marks.length > 1 ? doc.lineAt(marks[marks.length - 1]!.from) : null;
+  const last = close && close.number > open.number ? close.number - 1 : doc.lineAt(node.to).number;
+  const lines: string[] = [];
+  for (let number = open.number + 1; number <= last; number += 1) {
+    const text = doc.line(number).text;
+    const prefix = /^[ \t>]*/.exec(text)?.[0].length ?? 0;
+    lines.push(text.slice(Math.min(column, prefix)));
+  }
+  const info = node.getChild("CodeInfo");
+  return { code: lines.join("\n"), language: info ? fenceLanguage(doc.sliceString(info.from, info.to)) : null };
+}
+
+/** The language a fence's info words name, its first word, or null when they name none. */
+export function fenceLanguage(info: string): string | null {
+  return info.trim().split(/\s+/)[0] || null;
+}
+
 function mermaidSource(node: SyntaxNode, doc: Text): string | null {
   const info = node.getChild("CodeInfo");
   const lines = node.getChildren("CodeText");

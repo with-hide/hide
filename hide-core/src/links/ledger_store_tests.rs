@@ -1160,6 +1160,7 @@ fn turn_replay_and_status_undo_survive_restart() {
             same_as: None,
             operator_only: None,
             to_parent: false,
+            quote: None,
         }],
         ..Default::default()
     };
@@ -1287,6 +1288,7 @@ fn an_off_or_failed_turn_remains_raw_after_restart_and_a_late_answer() {
                 same_as: None,
                 operator_only: None,
                 to_parent: false,
+                quote: None,
             }],
             ..Default::default()
         },
@@ -1315,6 +1317,7 @@ fn the_durable_issue_intent_keeps_the_original_attempt_and_closes_without_an_out
                 same_as: None,
                 operator_only: None,
                 to_parent: false,
+                quote: None,
             }],
             ..Default::default()
         },
@@ -1411,6 +1414,7 @@ fn issue_creation_uses_both_window_edges_and_late_facts_attach_only_the_resolvin
                 same_as: None,
                 operator_only: None,
                 to_parent: false,
+                quote: None,
             }],
             ..Default::default()
         },
@@ -1618,6 +1622,7 @@ fn a_mixed_device_tree_groups_descendant_prs_under_the_direct_child() {
                         same_as: None,
                         operator_only: None,
                         to_parent: false,
+                        quote: None,
                     }],
                     ..Default::default()
                 },
@@ -1735,6 +1740,7 @@ fn late_parent_retracts_judgments_and_refuses_in_flight_operator_work() {
                 same_as: None,
                 operator_only: None,
                 to_parent: false,
+                quote: None,
             }],
             ..Default::default()
         },
@@ -1773,6 +1779,7 @@ fn late_parent_retracts_judgments_and_refuses_in_flight_operator_work() {
                 same_as: None,
                 operator_only: None,
                 to_parent: false,
+                quote: None,
             }],
             ..Default::default()
         },
@@ -1938,6 +1945,7 @@ fn a_memo_from_missed_work_marks_its_line_and_undo_opens_it_again() {
                 same_as: None,
                 operator_only: None,
                 to_parent: false,
+                quote: None,
             }],
             ..Default::default()
         },
@@ -2607,6 +2615,7 @@ fn an_ask_waits_in_the_record_and_the_row_and_never_reaches_the_backlogs_missed_
                     same_as: None,
                     operator_only: None,
                     to_parent: false,
+                    quote: None,
                 },
                 NewMissedWork {
                     kind: MissedKind::Problem,
@@ -2614,6 +2623,7 @@ fn an_ask_waits_in_the_record_and_the_row_and_never_reaches_the_backlogs_missed_
                     same_as: None,
                     operator_only: None,
                     to_parent: false,
+                    quote: None,
                 },
             ],
             ..Default::default()
@@ -2689,6 +2699,7 @@ fn a_project_past_the_session_limit_is_summarized_by_its_newest_sessions() {
                 same_as: None,
                 operator_only: None,
                 to_parent: false,
+                quote: None,
             }],
             ..Default::default()
         },
@@ -2790,6 +2801,7 @@ fn the_operators_reply_closes_earlier_asks_and_a_repeated_ask_is_one_line() {
         same_as: None,
         operator_only: None,
         to_parent: false,
+        quote: None,
     };
     let asks = |store: &LinkStore| {
         store
@@ -2869,6 +2881,7 @@ fn a_put_away_ask_listed_again_by_a_letter_turn_stays_away() {
             same_as: None,
             operator_only: None,
             to_parent: false,
+            quote: None,
         }],
         ..Default::default()
     };
@@ -2910,6 +2923,7 @@ fn three_asks() -> TurnJudgment {
         same_as: None,
         operator_only,
         to_parent: false,
+        quote: None,
     };
     TurnJudgment {
         missed: vec![
@@ -3296,6 +3310,7 @@ fn a_question_for_the_parent_waits_folded_and_one_press_opens_it() {
         same_as: None,
         operator_only: Some(operator_only),
         to_parent: true,
+        quote: None,
     };
     let judgment = || TurnJudgment {
         missed: vec![
@@ -3366,6 +3381,7 @@ fn asks(lines: &[(&str, Option<&str>)]) -> TurnJudgment {
                 same_as: same_as.map(str::to_owned),
                 operator_only: None,
                 to_parent: false,
+                quote: None,
             })
             .collect(),
         ..Default::default()
@@ -3398,6 +3414,83 @@ fn an_open_ask_a_letter_turn_rewords_stays_one_line() {
     assert_eq!(
         lines,
         ["main 커밋을 push할지 결정", "Hide 문제를 이슈로 올릴지"]
+    );
+}
+
+/// A question keeps the sentence its answer asks it in, and takes the new
+/// one when a later answer asks it again; one asked again without a
+/// sentence keeps the one it had.
+#[test]
+fn a_question_keeps_the_sentence_it_was_asked_in_and_takes_the_newer_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "미션 시작해 줘");
+    chapter(&mut store);
+    let quoted = |text: &str, same_as: Option<&str>, quote: Option<&str>| TurnJudgment {
+        missed: vec![NewMissedWork {
+            kind: MissedKind::Ask,
+            text: text.into(),
+            same_as: same_as.map(str::to_owned),
+            operator_only: None,
+            to_parent: false,
+            quote: quote.map(str::to_owned),
+        }],
+        ..Default::default()
+    };
+    let quote = |store: &LinkStore| {
+        store.ledger_record(&session()).unwrap().asks[0]
+            .quote
+            .clone()
+    };
+    end(
+        &mut store,
+        1,
+        quoted("push할지 결정", None, Some("main에 push할까요?")),
+    );
+    assert_eq!(quote(&store).as_deref(), Some("main에 push할까요?"));
+    let id = store.ledger_record(&session()).unwrap().asks[0].id.clone();
+    store
+        .apply_ledger_update(&turn_end(
+            2,
+            None,
+            quoted("push 결정", Some(&id), Some("61개 커밋을 push할까요?")),
+        ))
+        .unwrap();
+    assert_eq!(quote(&store).as_deref(), Some("61개 커밋을 push할까요?"));
+    store
+        .apply_ledger_update(&turn_end(3, None, quoted("push 결정", Some(&id), None)))
+        .unwrap();
+    assert_eq!(quote(&store).as_deref(), Some("61개 커밋을 push할까요?"));
+    assert_eq!(store.ledger_record(&session()).unwrap().asks.len(), 1);
+}
+
+/// A version 18 store gains the sentence column, and every question it
+/// recorded reads as having none.
+#[test]
+fn a_version_18_store_reads_its_questions_without_a_sentence() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("links.sqlite3");
+    {
+        let (mut store, _) = LinkStore::open(&path).unwrap();
+        request(&mut store, 1, "모바일 출시 맡아줘");
+        chapter(&mut store);
+        store
+            .apply_ledger_update(&turn_end(1, None, three_asks()))
+            .unwrap();
+        store
+            .connection
+            .execute_batch("ALTER TABLE ledger_missed DROP COLUMN quote; PRAGMA user_version=18;")
+            .unwrap();
+    }
+    let (store, _) = LinkStore::open(&path).unwrap();
+    let record = store.ledger_record(&session()).unwrap();
+    assert_eq!(record.asks.len() + record.folded_asks.len(), 3);
+    assert!(
+        record
+            .asks
+            .iter()
+            .chain(&record.folded_asks)
+            .all(|ask| ask.quote.is_none())
     );
 }
 
@@ -3481,6 +3574,7 @@ fn a_label_cannot_resolve_an_ask_in_a_turn_no_answer_came_in() {
                 same_as: None,
                 operator_only: None,
                 to_parent: false,
+                quote: None,
             }],
             ..Default::default()
         },
@@ -3617,6 +3711,7 @@ fn stopped(store: &mut LinkStore, offset: u64, end: LabelEnd, line: &str, asks: 
                         same_as: None,
                         operator_only: None,
                         to_parent: false,
+                        quote: None,
                     })
                     .collect(),
                 ..Default::default()

@@ -20,7 +20,10 @@ import { hasVisibleHtml, imageTarget, liveLinkAddress, resolveInCheckout, saniti
 import { LiveImages, readImageFile } from "./liveImages";
 import { markdownLivePlan, MARKDOWN_LIVE_BYTE_LIMIT } from "./markdownLive";
 import { drawMermaid, showMermaidSvg, watchPalette } from "../markdownMermaid";
-import { renderMarkdown } from "../mobile/markdown";
+import { renderMarkdown, type InlinePart } from "../mobile/markdown";
+import { CodeBlockHead, INLINE_CODE } from "../components/code-block";
+import { CopyWords } from "../components/copy-words";
+import type { CopyText } from "../components/human-turn-copy";
 
 /**
  * What a Live text can reach outside itself: where its relative paths start
@@ -41,11 +44,13 @@ const OUTSIDE: LiveFiles = {
   openPath: () => {},
 };
 
+const NO_PARTS: readonly InlinePart[] = [];
+
 /** How long an image may stay pending before it falls back to its alt text. */
 const IMAGE_TIMEOUT_MS = 8_000;
 
-/** What a widget draws with: the view's image cache and the files it may name. */
-type Drawing = { images: LiveImages; files: LiveFiles };
+/** What a widget draws with: the view's image cache, the files it may name, the parts its words carry and the clipboard a code block's `복사` writes to. */
+type Drawing = { images: LiveImages; files: LiveFiles; parts: readonly InlinePart[]; copy: CopyText | undefined };
 
 class BulletWidget extends WidgetType {
   toDOM(): HTMLElement {
@@ -296,7 +301,7 @@ class MermaidWidget extends WidgetType {
   }
 }
 
-/** Each drawn table's React root, unmounted after the editor lets it go, since that can happen while React commits. */
+/** Each drawn table's and code head's React root, unmounted after the editor lets it go, since that can happen while React commits. */
 const tableRoots = new WeakMap<HTMLElement, Root>();
 
 /** Runs `drawn` once React has put the table in the page, so the editor measures the height it takes. */
@@ -316,11 +321,12 @@ class TableWidget extends WidgetType {
   constructor(
     readonly source: string,
     private readonly files: LiveFiles,
+    private readonly parts: readonly InlinePart[],
   ) {
     super();
   }
   eq(other: TableWidget): boolean {
-    return other.source === this.source;
+    return other.source === this.source && other.parts === this.parts;
   }
   toDOM(view: EditorView): HTMLElement {
     const root = document.createElement("div");
@@ -349,7 +355,6 @@ class TableWidget extends WidgetType {
     }
     return root;
   }
-  /** A table that grew (an answer streaming its rows) is drawn into the node and root it has, so it never stands empty. */
   updateDOM(dom: HTMLElement, view: EditorView): boolean {
     const react = tableRoots.get(dom);
     if (!react) return false;
@@ -357,7 +362,7 @@ class TableWidget extends WidgetType {
     return true;
   }
   private drawing(view: EditorView): ReactElement {
-    return createElement(Drawn, { drawn: () => view.requestMeasure(), children: renderMarkdown(this.source, { html: true, link: liveLinkAddress }) });
+    return createElement(Drawn, { drawn: () => view.requestMeasure(), children: renderMarkdown(this.source, { html: true, link: liveLinkAddress, parts: this.parts }) });
   }
   destroy(dom: HTMLElement): void {
     const react = tableRoots.get(dom);
@@ -366,6 +371,57 @@ class TableWidget extends WidgetType {
   }
   ignoreEvent(event: Event): boolean {
     return event.type === "mousedown";
+  }
+}
+
+/**
+ * A fenced code block's head row on its opening fence's line (Doop N 1 나):
+ * the language and `복사`, drawn by the part Desk's answers use. `복사` copies
+ * the block's code; any other press puts the caret on the fence, which shows
+ * the block's source.
+ */
+class CodeHeadWidget extends WidgetType {
+  constructor(
+    readonly language: string | null,
+    readonly code: string,
+    private readonly copy: CopyText | undefined,
+  ) {
+    super();
+  }
+  eq(other: CodeHeadWidget): boolean {
+    return other.language === this.language && other.code === this.code && other.copy === this.copy;
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const root = document.createElement("span");
+    root.className = "cm-md-code-head-row";
+    const react = createRoot(root);
+    react.render(this.head());
+    tableRoots.set(root, react);
+    root.addEventListener("mousedown", (event) => {
+      if (event.button !== 0 || (event.target instanceof Element && event.target.closest("[data-copy-words]"))) return;
+      event.preventDefault();
+      view.dispatch({ selection: { anchor: view.posAtDOM(root) }, userEvent: "select.pointer" });
+      view.focus();
+    });
+    return root;
+  }
+  destroy(dom: HTMLElement): void {
+    const react = tableRoots.get(dom);
+    tableRoots.delete(dom);
+    if (react) queueMicrotask(() => react.unmount());
+  }
+  updateDOM(dom: HTMLElement): boolean {
+    const react = tableRoots.get(dom);
+    if (!react) return false;
+    react.render(this.head());
+    return true;
+  }
+  private head(): ReactElement {
+    const action = this.copy ? createElement(CopyWords, { text: this.code, what: "code block", copy: this.copy, quiet: true }) : undefined;
+    return createElement(CodeBlockHead, { language: this.language, action });
+  }
+  ignoreEvent(): boolean {
+    return true;
   }
 }
 
@@ -412,8 +468,12 @@ function build(state: EditorState, reveal: boolean, drawing: Drawing): Decoratio
       case "heading":
         ranges.push(Decoration.line({ class: `cm-md-heading-${range.level ?? 1}` }).range(range.from));
         break;
+      case "codeHead":
+        ranges.push(Decoration.line({ class: "cm-md-code-head" }).range(state.doc.lineAt(range.from).from));
+        ranges.push(Decoration.replace({ widget: new CodeHeadWidget(range.language ?? null, range.source ?? "", drawing.copy) }).range(range.from, range.to));
+        break;
       case "codeBlock":
-        ranges.push(Decoration.line({ class: "cm-md-code" }).range(range.from));
+        ranges.push(Decoration.line({ class: range.edge ? `cm-md-code cm-md-code-${range.edge}` : "cm-md-code" }).range(range.from));
         break;
       case "fenceLine":
         ranges.push(Decoration.line({ class: "cm-md-hidden-line" }).range(range.from));
@@ -425,7 +485,7 @@ function build(state: EditorState, reveal: boolean, drawing: Drawing): Decoratio
         ranges.push(Decoration.mark({ class: "cm-md-link" }).range(range.from, range.to));
         break;
       case "codeInline":
-        ranges.push(Decoration.mark({ class: "cm-md-code-inline" }).range(range.from, range.to));
+        ranges.push(Decoration.mark({ class: `cm-md-code-inline ${INLINE_CODE}` }).range(range.from, range.to));
         break;
       case "html":
         if (!hasVisibleHtml(range.html ?? "")) break;
@@ -440,7 +500,7 @@ function build(state: EditorState, reveal: boolean, drawing: Drawing): Decoratio
         ranges.push(Decoration.replace({ widget: new MermaidWidget(range.source ?? ""), block: true }).range(range.from, range.to));
         break;
       case "table":
-        ranges.push(Decoration.replace({ widget: new TableWidget(range.source ?? "", drawing.files), block: true }).range(range.from, range.to));
+        ranges.push(Decoration.replace({ widget: new TableWidget(range.source ?? "", drawing.files, drawing.parts), block: true }).range(range.from, range.to));
         break;
       case "image":
         ranges.push(
@@ -456,15 +516,19 @@ function build(state: EditorState, reveal: boolean, drawing: Drawing): Decoratio
  * `reveal` shows the marks of the lines the selection touches, as an editor
  * does; a read-only text (an issue's body) has no caret to edit at, so it
  * never reveals them. `files` says where a document's relative images and
- * links start; a text with none loads web images only.
+ * links start; a text with none loads web images only. `parts` are tokens
+ * of the text drawn as parts (a read-only text's chips), which a table's
+ * cells, drawn apart from the text's lines, draw too. `copy` is the
+ * clipboard a fenced block's head row writes to; without it the head holds
+ * no `복사`.
  *
  * The field rebuilds when the document, the selection or the parse changed, so
  * a lazily loaded Markdown language lights the view up as soon as its first
  * tree exists. A widget whose source and base are unchanged keeps its DOM, so
  * an edit outside an HTML block neither redraws it nor reads its images again.
  */
-export function markdownLive({ reveal = true, files = OUTSIDE }: { reveal?: boolean; files?: LiveFiles } = {}): Extension {
-  const drawing: Drawing = { images: new LiveImages(readImageFile, (message) => useShellStore.getState().noteDiagnostic(message)), files };
+export function markdownLive({ reveal = true, files = OUTSIDE, parts = NO_PARTS, copy }: { reveal?: boolean; files?: LiveFiles; parts?: readonly InlinePart[]; copy?: CopyText } = {}): Extension {
+  const drawing: Drawing = { images: new LiveImages(readImageFile, (message) => useShellStore.getState().noteDiagnostic(message)), files, parts, copy };
   const field = StateField.define<DecorationSet>({
     create: (state) => build(state, reveal, drawing),
     update(value, tr) {

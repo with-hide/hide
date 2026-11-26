@@ -2,8 +2,9 @@
 // with the grammar the editor's Markdown view uses (@lezer/markdown with GFM)
 // and drawn as plain elements, never an editor, so a page of messages costs a
 // few milliseconds. Nothing on the page navigates: a link is its text and an
-// image its description, as the terminal rows keep OSC 8 links as text. Code
-// wraps at the phone's width like everything else, without highlighting.
+// image its description, as the terminal rows keep OSC 8 links as text. A
+// code block is the desktop's (`CodeBlock`, Doop N 1 나): its head row names
+// the fence's language, its long lines scroll inside it, without highlighting.
 //
 // A pull request's body is drawn the same way with `html` on (PRD
 // record-card-readability D-11, B19, B20): the HTML GitHub draws in a body
@@ -25,7 +26,9 @@
 
 import type { SyntaxNode } from "@lezer/common";
 import { GFM, parser } from "@lezer/markdown";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { CodeBlock, INLINE_CODE } from "../components/code-block";
+import { fenceLanguage } from "../editor/markdownLive";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { drawMermaid, isMermaidInfo, showMermaidSvg, watchPalette, type MermaidDrawing } from "../markdownMermaid";
 import { appHost } from "./appHost";
@@ -39,20 +42,46 @@ const TARGETS = new Set(["URL", "LinkTitle", "LinkLabel"]);
 
 const HEADINGS = /^(ATXHeading[1-6]|SetextHeading[12])$/;
 
+
 /** One parse: the source and whether its HTML is drawn. */
 /** Which address a link may carry, or null when it stays its text. */
 export type LinkRule = (raw: string) => string | null;
 
-/** One parse: the source, whether its HTML is drawn, the link rule, and whether the run is a table cell's. */
-type Source = { text: string; html: boolean; link: LinkRule; cell?: boolean };
+/** A token of the text drawn as a part instead of its letters, such as a session Desk names (`MarkdownText`'s chips). */
+export type InlinePart = { token: string; node: ReactNode };
+
+const NO_PARTS: readonly InlinePart[] = [];
+
+/** One parse: the source, whether its HTML is drawn, the link rule, the parts its words carry, and whether the run is a table cell's. */
+type Source = { text: string; html: boolean; link: LinkRule; parts: readonly InlinePart[]; cell?: boolean };
 
 /**
  * `link` says which addresses a drawn link keeps: the web's by default (the
  * phone and the pull request card); the document view's Live mode gives its
  * own rule, which keeps a relative file for its modifier-click to open.
  */
-export function renderMarkdown(text: string, options: { html?: boolean; link?: LinkRule } = {}): ReactNode {
-  return blocks(markdown.parse(text).topNode, { text, html: options.html === true, link: options.link ?? webAddress });
+export function renderMarkdown(text: string, options: { html?: boolean; link?: LinkRule; parts?: readonly InlinePart[] } = {}): ReactNode {
+  return blocks(markdown.parse(text).topNode, { text, html: options.html === true, link: options.link ?? webAddress, parts: options.parts ?? NO_PARTS });
+}
+
+/** A run of plain words, each part's token in it drawn as the part; `at` is where the run starts in the text, which keys each part. */
+function withParts(run: string, at: number, parts: readonly InlinePart[]): ReactNode[] {
+  const out: ReactNode[] = [];
+  let rest = 0;
+  for (;;) {
+    let next: { index: number; part: InlinePart } | null = null;
+    for (const part of parts) {
+      if (!part.token) continue;
+      const index = run.indexOf(part.token, rest);
+      if (index >= 0 && (next === null || index < next.index)) next = { index, part };
+    }
+    if (next === null) break;
+    if (next.index > rest) out.push(run.slice(rest, next.index));
+    out.push(<Fragment key={`part-${at + next.index}`}>{next.part.node}</Fragment>);
+    rest = next.index + next.part.token.length;
+  }
+  if (rest < run.length) out.push(run.slice(rest));
+  return out;
 }
 
 function childrenOf(node: SyntaxNode): SyntaxNode[] {
@@ -117,7 +146,7 @@ function block(node: SyntaxNode, source: Source, key: number): ReactNode {
       const code = codeOf(node, text);
       const info = node.getChild("CodeInfo");
       if (info && isMermaidInfo(text.slice(info.from, info.to)) && code.trim() !== "") return <MermaidBlock key={key} source={code} />;
-      return <CodeBlock key={key} code={code} />;
+      return <CodeBlock key={key} code={code} language={info ? fenceLanguage(text.slice(info.from, info.to)) : null} />;
     }
     case "HorizontalRule":
       return <hr key={key} className="border-border" />;
@@ -223,10 +252,6 @@ function MarkdownTable({ table, source }: { table: SyntaxNode; source: Source })
   );
 }
 
-function CodeBlock({ code }: { code: string }) {
-  return <pre className="m-none whitespace-pre-wrap wrap-anywhere rounded-md bg-secondary px-md py-sm font-mono">{code}</pre>;
-}
-
 /** A `mermaid` fence drawn as its diagram, drawn again when the colours change. */
 function MermaidBlock({ source }: { source: string }) {
   const { t } = useInterfaceTranslation();
@@ -256,11 +281,11 @@ function MermaidBlock({ source }: { source: string }) {
     return (
       <div className="space-y-xxs">
         <p className="text-caption text-muted-foreground">{t("documents.mermaidUnavailable", { reason: drawing.reason })}</p>
-        <CodeBlock code={source} />
+        <CodeBlock code={source} language="mermaid" />
       </div>
     );
   }
-  return <CodeBlock code={source} />;
+  return <CodeBlock code={source} language="mermaid" />;
 }
 
 /** The code between a fence's marks, or an indented block's lines. */
@@ -279,14 +304,19 @@ function inline(node: SyntaxNode, source: Source, skip: ReadonlySet<string> = MA
   const tree = source.html ? new HtmlTree(source.link) : null;
   const out: ReactNode[] = [];
   const add = (part: ReactNode) => (tree ? tree.add(part) : out.push(part));
+  // Code keeps its letters; every other run of words draws its parts.
+  const parts = node.name === "InlineCode" ? NO_PARTS : source.parts;
+  const words = (from: number, to: number) => {
+    for (const part of parts.length ? withParts(text.slice(from, to), from, parts) : [text.slice(from, to)]) add(part);
+  };
   let at = node.from;
   for (const child of childrenOf(node)) {
-    if (child.from > at) add(text.slice(at, child.from));
+    if (child.from > at) words(at, child.from);
     if (tree && (child.name === "HTMLTag" || child.name === "Comment")) tree.html(text.slice(child.from, child.to), false);
     else if (!skip.has(child.name) && !MARKS.has(child.name)) add(span(child, source, tree ? tree.key() : out.length));
     at = child.to;
   }
-  if (node.to > at) add(text.slice(at, node.to));
+  if (node.to > at) words(at, node.to);
   return tree ? tree.done() : out;
 }
 
@@ -309,7 +339,7 @@ function span(node: SyntaxNode, source: Source, key: number): ReactNode {
       // In a table cell `\|` is the cell's pipe, and GFM reads it as `|` inside code too.
       const code = inline(node, source);
       return (
-        <code key={key} className="rounded-xs bg-secondary px-xxs font-mono">
+        <code key={key} className={INLINE_CODE}>
           {source.cell ? code.map((part) => (typeof part === "string" ? part.replaceAll("\\|", "|") : part)) : code}
         </code>
       );
@@ -539,7 +569,7 @@ function element(tag: Tag, children: ReactNode[], key: number): ReactNode {
     case "em":
       return <em key={key}>{children}</em>;
     case "code":
-      return <code key={key} className="rounded-xs bg-secondary px-xxs font-mono">{children}</code>;
+      return <code key={key} className={INLINE_CODE}>{children}</code>;
     case "kbd":
       return <kbd key={key} className="rounded-xs border border-border bg-secondary px-xxs font-mono text-micro">{children}</kbd>;
     case "sub":

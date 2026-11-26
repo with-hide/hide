@@ -7,14 +7,18 @@
 // that changed, so the parts already drawn keep their nodes.
 
 import { syntaxTree } from "@codemirror/language";
-import { Compartment, EditorState, Prec, StateField, type Extension, type Range } from "@codemirror/state";
-import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
+import { Compartment, EditorState, Prec, StateField, type Extension, type Range, type Text } from "@codemirror/state";
+import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { CodeBlock } from "./components/code-block";
 import { CopyWords } from "./components/copy-words";
 import type { CopyText } from "./components/human-turn-copy";
 import { languageLoader } from "./editor/languages";
 import { markdownLive } from "./editor/markdownLivePlugin";
+import { fencedCode } from "./editor/markdownLive";
+import type { InlinePart } from "./mobile/markdown";
 import { baseTheme, liveTheme } from "./editor/theme";
 
 // The chrome sets the editor's monospace on `.cm-content` and the card's
@@ -34,21 +38,16 @@ const chat = EditorView.theme({
   "&.cm-editor .cm-content": { fontSize: "var(--text-subhead)", lineHeight: "1.625" },
 });
 
-// A code block's `복사` stands at the top right of its first line, inside the block's own ground.
-const codeCopy = EditorView.theme({
-  ".cm-md-code-head": { position: "relative" },
-  ".cm-md-code-copy": { position: "absolute", top: "var(--spacing-xxs)", right: "var(--spacing-xs)", fontFamily: "var(--font-sans)", lineHeight: "normal" },
-});
-
 /**
  * A token of the text drawn as a part instead of its letters, such as a
  * session a Desk reply names: everywhere it stands, or only at the offsets
- * `at` names (a file path, which a code block keeps as code). `after` is a
- * part that does not fit a line of words: the token's place keeps `node`, and
- * `after` stands in a row of its own right behind the paragraph that holds the
- * token, with the other parts that paragraph has.
+ * `at` names (a file path, which a code block keeps as code). A table's cells
+ * draw the ones without `at`. `after` is a part that does not fit a line of
+ * words: the token's place keeps `node`, and `after` stands in a row of its
+ * own right behind the paragraph that holds the token, with the other parts
+ * that paragraph has.
  */
-export type MarkdownChip = { token: string; node: ReactNode; at?: readonly number[]; after?: ReactNode };
+export type MarkdownChip = InlinePart & { at?: readonly number[]; after?: ReactNode };
 
 const roots = new WeakMap<HTMLElement, Root>();
 
@@ -68,7 +67,6 @@ class ChipWidget extends WidgetType {
     roots.set(dom, root);
     return dom;
   }
-  /** Another chip in this one's place is drawn into its node and root, so the place never stands empty. */
   updateDOM(dom: HTMLElement) {
     const root = roots.get(dom);
     if (!root) return false;
@@ -96,7 +94,7 @@ class ChipRowWidget extends WidgetType {
     dom.className = "cm-md-chip-row";
     dom.dataset.markdownChipRow = this.indexes;
     const root = createRoot(dom);
-    root.render(this.parts());
+    root.render(this.nodes.map((node, at) => <span key={at} className="contents">{node}</span>));
     roots.set(dom, root);
     return dom;
   }
@@ -104,11 +102,8 @@ class ChipRowWidget extends WidgetType {
     const root = roots.get(dom);
     if (!root) return false;
     dom.dataset.markdownChipRow = this.indexes;
-    root.render(this.parts());
+    root.render(this.nodes.map((node, at) => <span key={at} className="contents">{node}</span>));
     return true;
-  }
-  private parts() {
-    return this.nodes.map((node, at) => <span key={at} className="contents">{node}</span>);
   }
   destroy(dom: HTMLElement) {
     const root = roots.get(dom);
@@ -166,7 +161,7 @@ function chipSet(text: string, chips: readonly MarkdownChip[]): DecorationSet {
   return Decoration.set(ranges, true);
 }
 
-/** The chips, found again in the words each time they change. */
+/** The chips, found again in the words each time they change; none at all when there are no chips. */
 function chipDecorations(chips: readonly MarkdownChip[]): Extension {
   if (!chips.length) return [];
   const field = StateField.define<DecorationSet>({
@@ -177,32 +172,30 @@ function chipDecorations(chips: readonly MarkdownChip[]): Extension {
   return [chipRow, field];
 }
 
-/** A code block's `복사`, in a root of its own, unmounted after the editor lets it go. */
-class CodeCopyWidget extends WidgetType {
-  constructor(readonly code: string, readonly copy: CopyText) {
+/** A code block drawn whole by `CodeBlock`, with `복사` in its gutter, in a root of its own unmounted after the editor lets it go. */
+class CodeBlockWidget extends WidgetType {
+  constructor(readonly code: string, readonly language: string | null, readonly copy: CopyText | undefined) {
     super();
   }
-  eq(other: CodeCopyWidget) {
-    return other.code === this.code && other.copy === this.copy;
+  eq(other: CodeBlockWidget) {
+    return other.code === this.code && other.language === this.language && other.copy === this.copy;
   }
   toDOM() {
-    const dom = document.createElement("span");
-    dom.className = "cm-md-code-copy";
-    dom.dataset.markdownCodeCopy = "true";
+    const dom = document.createElement("div");
+    dom.dataset.markdownCodeBlock = "true";
     const root = createRoot(dom);
-    root.render(this.words());
+    root.render(this.block());
     roots.set(dom, root);
     return dom;
   }
-  /** A block whose code grew (an answer streaming it) keeps its `복사`, which copies the code it has now. */
   updateDOM(dom: HTMLElement) {
     const root = roots.get(dom);
     if (!root) return false;
-    root.render(this.words());
+    root.render(this.block());
     return true;
   }
-  private words() {
-    return <CopyWords text={this.code} what="code block" copy={this.copy} />;
+  private block() {
+    return <CodeBlock code={this.code} language={this.language} action={this.copy && this.code ? <CopyWords quiet text={this.code} what="code block" copy={this.copy} /> : undefined} />;
   }
   destroy(dom: HTMLElement) {
     const root = roots.get(dom);
@@ -214,43 +207,68 @@ class CodeCopyWidget extends WidgetType {
   }
 }
 
-/** Each fenced code block's code with `복사` on its first line, read from the parse; a diagram drawn in its place has none. */
-function codeCopyDecorations(view: EditorView, copy: CopyText): DecorationSet {
+/**
+ * A code block that stands on lines of its own, read from the parse: a
+ * fence's code (`fencedCode`) with its language, an indented block's lines
+ * with their four spaces. `null` for one opened after a list mark or a
+ * quote's `>`, which the Live view draws as a box of lines with the same
+ * head row and `복사`.
+ */
+function codeBlockAt(doc: Text, node: SyntaxNode): { from: number; to: number; code: string; language: string | null } | null {
+  const open = doc.lineAt(node.from);
+  const end = doc.lineAt(node.to);
+  if (doc.sliceString(open.from, node.from).trim() !== "") return null;
+  if (node.name === "CodeBlock") return { from: open.from, to: end.to, code: doc.sliceString(open.from, end.to).replace(/^ {1,4}/gm, ""), language: null };
+  return { from: open.from, to: end.to, ...fencedCode(doc, node) };
+}
+
+/** Every code block of the text drawn as a `CodeBlock`; a diagram drawn in its place keeps its drawing. */
+function codeBlockDecorations(state: EditorState, copy: CopyText | undefined): DecorationSet {
   const ranges: Range<Decoration>[] = [];
-  const doc = view.state.doc;
-  syntaxTree(view.state).iterate({
+  syntaxTree(state).iterate({
     enter: (node) => {
-      if (node.name !== "FencedCode") return;
+      if (node.name !== "FencedCode" && node.name !== "CodeBlock") return;
       const info = node.node.getChild("CodeInfo");
-      if (info && doc.sliceString(info.from, info.to).trim().toLowerCase() === "mermaid") return false;
-      const text = node.node.getChild("CodeText");
-      if (!text || text.from === text.to) return false;
-      const line = doc.lineAt(text.from);
-      ranges.push(Decoration.line({ class: "cm-md-code-head" }).range(line.from));
-      ranges.push(Decoration.widget({ widget: new CodeCopyWidget(doc.sliceString(text.from, text.to), copy), side: -1 }).range(line.from));
+      if (info && state.doc.sliceString(info.from, info.to).trim().toLowerCase() === "mermaid") return false;
+      const block = codeBlockAt(state.doc, node.node);
+      if (block) ranges.push(Decoration.replace({ widget: new CodeBlockWidget(block.code, block.language, copy), block: true }).range(block.from, block.to));
       return false;
     },
   });
   return Decoration.set(ranges, true);
 }
 
-/** `복사` on every code block, found again whenever the lazily loaded language parses the text. */
-function codeCopyButtons(copy: CopyText): Extension {
-  return [
-    codeCopy,
-    ViewPlugin.define(
-      (view) => ({
-        decorations: codeCopyDecorations(view, copy),
-        update(this: { decorations: DecorationSet }, update: ViewUpdate) {
-          if (update.docChanged || syntaxTree(update.state) !== syntaxTree(update.startState)) this.decorations = codeCopyDecorations(update.view, copy);
-        },
-      }),
-      { decorations: (plugin) => plugin.decorations },
-    ),
-  ];
+/**
+ * The code blocks (Doop N 1 나), found again whenever the lazily loaded
+ * language parses the text. A block replaces whole lines, which only a
+ * state field may give; it outranks the Live plan's own code lines.
+ */
+function codeBlocks(copy: CopyText | undefined): Extension {
+  const field = StateField.define<DecorationSet>({
+    create: (state) => codeBlockDecorations(state, copy),
+    update: (blocks, transaction) => (transaction.docChanged || syntaxTree(transaction.state) !== syntaxTree(transaction.startState) ? codeBlockDecorations(transaction.state, copy) : blocks),
+    provide: (own) => EditorView.decorations.from(own),
+  });
+  return Prec.highest(field);
 }
 
 const NO_CHIPS: readonly MarkdownChip[] = [];
+
+/** A stretch of the text lit for a moment: the sentence a question line pressed (Doop N3 가). */
+export type MarkdownMark = { from: number; to: number };
+
+const LIT = Decoration.mark({ class: "rounded-xs bg-open-ask/20", attributes: { "data-markdown-lit": "true" } });
+
+/** The lit stretch, moved with the words an edit adds before it. */
+function markDecorations(mark: MarkdownMark | null, length: number): Extension {
+  if (!mark || mark.from >= mark.to || mark.to > length) return [];
+  const field = StateField.define<DecorationSet>({
+    create: () => Decoration.set([LIT.range(mark.from, mark.to)]),
+    update: (lit, transaction) => lit.map(transaction.changes),
+    provide: (own) => EditorView.decorations.from(own),
+  });
+  return field;
+}
 
 /** The one edit that turns `from` into `to`: the stretch between their common start and their common end. */
 function changeBetween(from: string, to: string): { from: number; to: number; insert: string } {
@@ -262,26 +280,28 @@ function changeBetween(from: string, to: string): { from: number; to: number; in
   return { from: start, to: from.length - end, insert: to.slice(start, to.length - end) };
 }
 
-/** The parts drawn from the caller's chips and `복사`, swapped as one when either changes. */
+/** What the caller's chips and `복사` draw: the Live plan (a table's cells take the chips), the chips and the code blocks, swapped as one when either changes. */
 function partsOf(chips: readonly MarkdownChip[], copyCode: CopyText | undefined): Extension {
-  return [chipDecorations(chips), copyCode ? codeCopyButtons(copyCode) : []];
+  return [markdownLive({ reveal: false, parts: chips.filter((chip) => !chip.at), copy: copyCode }), chipDecorations(chips), codeBlocks(copyCode)];
 }
 
-type Drawn = { view: EditorView; parts: Compartment; text: string; chips: readonly MarkdownChip[]; copyCode: CopyText | undefined };
+type Drawn = { view: EditorView; parts: Compartment; marked: Compartment; text: string; chips: readonly MarkdownChip[]; copyCode: CopyText | undefined; mark: MarkdownMark | null };
 
 /**
  * `size="chat"` sets the text at Desk's conversation size; `chips` draws
  * tokens of the text as parts (keep the array stable between renders, or every
- * part is drawn again); `copyCode` puts `복사` on every code block (Doop E2),
- * always in view. The text can be selected and copied as a page's text is. A
- * new `text` is written into the editor already drawn as one edit, so a
- * streamed answer adds its words without drawing again what it said before.
+ * part is looked up again); `copyCode` puts `복사` in every code block's head
+ * row (Doop E2, N 1 나), a block in a quote or a list included, always in
+ * view; `mark` lights a stretch of the text, by offsets into it. The text can
+ * be selected and copied as a page's text is. A new `text` is written into the
+ * editor already drawn as one edit, so a streamed answer adds its words
+ * without drawing again what it said before.
  */
-export function MarkdownText({ text, size = "body", chips = NO_CHIPS, copyCode }: { text: string; size?: "body" | "chat"; chips?: readonly MarkdownChip[]; copyCode?: CopyText }) {
+export function MarkdownText({ text, size = "body", chips = NO_CHIPS, copyCode, mark = null }: { text: string; size?: "body" | "chat"; chips?: readonly MarkdownChip[]; copyCode?: CopyText; mark?: MarkdownMark | null }) {
   const host = useRef<HTMLDivElement>(null);
   const drawn = useRef<Drawn | null>(null);
-  const latest = useRef({ text, chips, copyCode });
-  latest.current = { text, chips, copyCode };
+  const latest = useRef({ text, chips, copyCode, mark });
+  latest.current = { text, chips, copyCode, mark };
   // The editor lives as long as the text's size; the language pack lights it up once.
   useLayoutEffect(() => {
     const parent = host.current;
@@ -289,14 +309,15 @@ export function MarkdownText({ text, size = "body", chips = NO_CHIPS, copyCode }
     const now = latest.current;
     const language = new Compartment();
     const parts = new Compartment();
+    const marked = new Compartment();
     const view = new EditorView({
       parent,
       state: EditorState.create({
         doc: now.text,
-        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false }), parts.of(partsOf(now.chips, now.copyCode)), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
+        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), parts.of(partsOf(now.chips, now.copyCode)), marked.of(markDecorations(now.mark, now.text.length)), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
       }),
     });
-    drawn.current = { view, parts, ...now };
+    drawn.current = { view, parts, marked, ...now };
     let live = true;
     void languageLoader("markdown", "issue.md")?.().then((extension) => {
       if (live) view.dispatch({ effects: language.reconfigure(extension) });
@@ -307,17 +328,17 @@ export function MarkdownText({ text, size = "body", chips = NO_CHIPS, copyCode }
       view.destroy();
     };
   }, [size]);
-  // A changed text is one edit of the stretch that changed; changed parts are swapped in the same transaction.
+  // A changed text is one edit of the stretch that changed; changed parts or a changed lit stretch go in the same transaction.
   useLayoutEffect(() => {
     const now = drawn.current;
     if (!now) return;
-    const swap = now.chips !== chips || now.copyCode !== copyCode;
-    if (now.text === text && !swap) return;
-    now.view.dispatch({
-      changes: now.text === text ? undefined : changeBetween(now.text, text),
-      effects: swap ? now.parts.reconfigure(partsOf(chips, copyCode)) : undefined,
-    });
-    drawn.current = { ...now, text, chips, copyCode };
-  }, [text, chips, copyCode]);
+    const changes = now.text === text ? undefined : changeBetween(now.text, text);
+    const effects = [];
+    if (now.chips !== chips || now.copyCode !== copyCode) effects.push(now.parts.reconfigure(partsOf(chips, copyCode)));
+    if (now.mark !== mark) effects.push(now.marked.reconfigure(markDecorations(mark, text.length)));
+    if (!changes && !effects.length) return;
+    now.view.dispatch({ changes, effects });
+    drawn.current = { ...now, text, chips, copyCode, mark };
+  }, [text, chips, copyCode, mark]);
   return <div ref={host} className="min-w-0" data-markdown-text="true" />;
 }

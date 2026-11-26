@@ -7,7 +7,7 @@
 import { DropdownMenu as MenuPrimitive } from "radix-ui";
 import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "../lib/utils";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "./ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger, useOpeningPressGuard } from "./ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -303,13 +303,14 @@ export function EntryPointMenu<Id extends string>({
 } & Record<`data-${string}`, string>) {
   useEscapeLayer(at !== null, onClose);
   const returnFocus = useReturnFocus(at !== null);
+  const guard = useOpeningPressGuard(at);
   return (
     <MenuPrimitive.Root open={at !== null} onOpenChange={(open) => (open ? undefined : onClose())}>
       <MenuPrimitive.Trigger asChild>
         <span aria-hidden="true" className="pointer-events-none fixed size-(--spacing-none)" style={{ left: at?.x ?? 0, top: at?.y ?? 0 }} />
       </MenuPrimitive.Trigger>
       <MenuPrimitive.Portal>
-        <MenuPrimitive.Content aria-label={label} align="start" sideOffset={0} className={cn(menuContent, useFloatingSurface(), entryBounds)} onCloseAutoFocus={returnFocus} {...data}>
+        <MenuPrimitive.Content aria-label={label} align="start" sideOffset={0} className={cn(menuContent, useFloatingSurface(), entryBounds)} onCloseAutoFocus={returnFocus} {...guard} {...data}>
           <MenuTitle title={title} />
           <EntryItems items={items} onSelect={onSelect} parts={{ Item: DropdownMenuItem, Separator: DropdownMenuSeparator }} />
         </MenuPrimitive.Content>

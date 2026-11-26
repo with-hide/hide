@@ -946,14 +946,17 @@ test("Markdown opens in Live and toggles to source", async ({ page }) => {
     await page.keyboard.press("ControlOrMeta+End");
 
     // Live draws the heading and hides its hashes, draws the list bullets and
-    // the task checkbox, styles the link text and the fenced code (B6).
+    // the task checkbox, styles the link text and the fenced code (B6): the
+    // opening fence is the block's head row with its language and 복사, the
+    // closing fence a hidden line (Doop N 1 나).
     await expect(page.locator(".cm-md-heading-1")).toHaveCount(1, { timeout: 20_000 });
     await expect(page.locator(".cm-md-heading-1")).toHaveText("Title");
     await expect(page.locator(".cm-md-bullet")).toHaveCount(3);
     await expect(page.locator(".cm-md-checkbox")).toHaveCount(1);
     await expect(page.locator(".cm-md-link")).toHaveText("text");
     await expect(page.locator(".cm-md-code")).toHaveCount(1);
-    await expect(page.locator(".cm-md-hidden-line")).toHaveCount(2);
+    await expect(page.locator(".cm-md-code-head [data-code-block-head]")).toHaveCount(1);
+    await expect(page.locator(".cm-md-hidden-line")).toHaveCount(1);
     await screenshot(page, "s3-markdown-live");
 
     // Live hides markup from the DOM, not from the document: Source mode
