@@ -409,11 +409,12 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   ask?: ReactNode;
   /** The questions Hide found that still wait on the operator, oldest first (`open_asks`, the list 내 차례 reads). */
   asks?: readonly AskLine[];
-  /** 무시하기 and 되돌리기 on one of `asks`, as 내 차례 does it for the session. */
-  onAsk: (id: string, status: "open" | "dismissed") => void;
+  /** 무시하기 and 되돌리기 on one of `asks`, as 내 차례 does it for the session; a view without it (an ended session's record) draws no question line. */
+  onAsk?: (id: string, status: "open" | "dismissed") => void;
   /** Drawn in the input box's place, as a sleeping session's wake line is (B43). */
   foot?: ReactNode;
-  onTerminal: () => void;
+  /** The session's terminal, which a record it cannot read points to; none for a session whose pane is gone. */
+  onTerminal?: () => void;
   /** The conversation was scrolled to its top: the page before it can be read. */
   onReachTop?: () => void;
 } & ThreadPartActions) {
@@ -454,7 +455,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
           <p role="alert" className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" data-desk-thread-failure={failure}>
             <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-warning" />
             <span className="min-w-0 text-subtle-foreground">{t(failure === "no_record" ? "desk.thread.readFailed.no_record" : "desk.thread.readFailed.refused")}</span>
-            <Button variant="text-link" size="inline" onClick={onTerminal}>{t("desk.thread.toTerminal")}</Button>
+            {onTerminal ? <Button variant="text-link" size="inline" onClick={onTerminal}>{t("desk.thread.toTerminal")}</Button> : null}
           </p>
         ) : reading ? (
           <p role="status" className="animate-pulse text-caption text-muted-foreground" data-desk-thread-reading="true">{t("desk.thread.reading")}</p>
@@ -469,7 +470,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
         {running && !reading && !failure ? <WorkingLine phase={threadPhase(turns.at(-1))} since={workingSince} /> : null}
         {ask}
       </div>
-      <ThreadAsks asks={asks} onGo={goTo} onSet={onAsk} body={askedWords} />
+      {onAsk ? <ThreadAsks asks={asks} onGo={goTo} onSet={onAsk} body={askedWords} /> : null}
       {foot ?? (
         <div className="shrink-0 px-sm pb-sm">
           <DeskComposer

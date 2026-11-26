@@ -148,7 +148,7 @@ export function MissionHover({ paneId, mission, actions, children }: { paneId: s
 export function PaneMissionCard({ paneId, mission, actions }: { paneId: string; mission: Mission; actions: Actions }) {
   return (
     <MissionHover paneId={paneId} mission={mission} actions={actions}>
-      {(anchor) => <StoredMissionChip mission={mission} onOpen={actions.openMission} anchor={anchor} />}
+      {({ ref, ...anchor }) => <StoredMissionChip ref={ref} mission={mission} onOpen={actions.openMission} anchor={anchor} />}
     </MissionHover>
   );
 }

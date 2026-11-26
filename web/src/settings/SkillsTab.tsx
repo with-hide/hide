@@ -48,6 +48,7 @@ import {
   versionText,
   type ShownColumn,
 } from "./skillsMcp";
+import { HideSkillsGroup } from "./HideSkillsGroup";
 import { useAgentsDemand } from "./useAgentsDemand";
 import { useStoreRequest } from "./useStoreRequest";
 
@@ -95,18 +96,21 @@ export function SkillsTab({ actions }: { actions: Actions }) {
   const machine = machines.find((row) => row.device.id === (askDevice ?? selected ?? own)) ?? machines[0];
   if (!machine) return <Note>{t("store.reading")}</Note>;
   return (
-    <MachineStore
-      key={machine.device.id}
-      machine={machine}
-      machines={machines}
-      own={own}
-      onMachine={(id) => {
-        setSelected(id);
-        useUiStore.getState().clearStoreAsk();
-      }}
-      devices={devices}
-      actions={actions}
-    />
+    <>
+      <HideSkillsGroup />
+      <MachineStore
+        key={machine.device.id}
+        machine={machine}
+        machines={machines}
+        own={own}
+        onMachine={(id) => {
+          setSelected(id);
+          useUiStore.getState().clearStoreAsk();
+        }}
+        devices={devices}
+        actions={actions}
+      />
+    </>
   );
 }
 

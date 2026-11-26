@@ -16,6 +16,7 @@
 
 mod files;
 pub(super) mod jobs;
+mod named;
 mod opens;
 mod worker;
 
@@ -75,6 +76,9 @@ pub(super) struct Desk {
     /// What Desk's agent opened with `hide file open`, waiting for a window
     /// showing Desk to open it in the tab panel (`opens.rs`); never stored.
     opens: opens::DeskOpens,
+    /// The records of the sessions the conversation names whose pane is
+    /// gone, as the link record answered (`named.rs`); never stored.
+    records: named::Records,
     /// The agent refused the last start (its sign-in, a process that did
     /// not open): the queued messages wait for the
     /// operator's next send, `다시 시작` or a session that opens, rather

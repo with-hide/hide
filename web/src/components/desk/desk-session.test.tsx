@@ -134,7 +134,9 @@ describe("the session panel's head (Doop H 다, operator decision 2026-11-25)", 
       expect([chip.dataset.missionChipCard, chip.textContent]).toEqual(["true", "M101Desk 2차0/0"]);
       expect(document.body.querySelector("[data-pane-mission]")).toBeNull();
       await act(async () => chip.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, relatedTarget: null })));
-      expect(document.body.querySelector("[data-pane-mission='mission-101']")).not.toBeNull();
+      const card = document.body.querySelector<HTMLElement>("[data-pane-mission='mission-101']")!;
+      // Radix keeps a card with no anchor above the screen (`translate(0, -200%)`).
+      await vi.waitFor(() => expect(card.parentElement!.style.transform).toMatch(/^translate\([^%]*\)$/));
     } finally {
       useShellStore.setState(saved, true);
     }

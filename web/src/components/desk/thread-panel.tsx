@@ -40,10 +40,11 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   head?: ReactNode;
   ask?: ReactNode;
   asks?: readonly AskLine[];
-  /** 무시하기 and 되돌리기 on one of `asks`, for the session they wait in. */
-  onAsk: (id: string, status: "open" | "dismissed") => void;
+  /** 무시하기 and 되돌리기 on one of `asks`, for the session they wait in; without it no question line is drawn. */
+  onAsk?: (id: string, status: "open" | "dismissed") => void;
   foot?: ReactNode;
-  onTerminal: () => void;
+  /** The session's terminal; none for a session whose pane is gone. */
+  onTerminal?: () => void;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
   useSessionThread(actions, paneId);

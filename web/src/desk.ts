@@ -8,9 +8,10 @@
 // The fields no section carries (marked `wire gap` below) are a thread's
 // own, which the threads node reads from the session record.
 
-import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskItem, DeskOption, DeskOptionKind, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskMissionMention, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
+import { candidateAgent } from "./conductorSettings";
+import type { AgentRow, ConductorCandidate, DeskAgent, DeskAgentState, DeskAskKind, DeskItem, DeskOption, DeskOptionKind, DeskJob, DeskJobsSection, DeskRecord, DeskMention as WireMention, DeskMission, DeskMissionMention, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
 
-export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalState, DeskChoice, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskMissionMention, DeskOption, DeskOptionKind, DeskOutput, DeskOutputKind, DeskPermission, DeskQueuedMessage, DeskSteps } from "./snapshot";
+export type { DeskAgent, DeskAgentId, DeskRecord, DeskAgentState, DeskApprovalState, DeskChoice, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskMissionMention, DeskOption, DeskOptionKind, DeskOutput, DeskOutputKind, DeskPermission, DeskQueuedMessage, DeskSteps } from "./snapshot";
 
 export type DeskSelection = DeskSection["selection"];
 
@@ -70,6 +71,8 @@ export type SessionFacts = {
   /** When its row's time counts from (`last_prompt_at_unix_ms`). */
   since: number | null;
   parent: DeskSessionRef | null;
+  /** What Hide's record keeps of a session the sidebar no longer lists (frame K): its chip draws it, a press opens it beside Desk read-only; null for a listed session or one with no record. */
+  record: DeskRecord | null;
 };
 
 /** A row as a chip names it. */
@@ -83,9 +86,13 @@ function rowSession(row: AgentRow): DeskSessionRef {
  * chip is dimmed; one named only by a name no row carries is not known, and
  * its chip keeps the values it came with.
  */
-export function sessionFacts(rows: ReadonlyMap<string, AgentRow>, cards: readonly DeskJob[], session: DeskSessionRef): SessionFacts | null {
+export function sessionFacts(rows: ReadonlyMap<string, AgentRow>, cards: readonly DeskJob[], session: DeskSessionRef, records: readonly DeskRecord[] = []): SessionFacts | null {
   const row = session.pane_id ? rows.get(session.pane_id) : [...rows.values()].find((one) => one.identity_label === session.name);
-  if (!row) return session.pane_id ? { listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null } : null;
+  if (!row) {
+    if (!session.pane_id) return null;
+    const record = records.find((one) => one.pane_id === session.pane_id) ?? null;
+    return { listed: false, name: record?.title ?? null, mark: null, agent_kind: record?.agent_kind ?? null, card: record ? recordCard(record) : null, since: record?.ended_at_unix_ms ?? null, parent: null, record };
+  }
   const parent = row.lineage_parent_pane_id ? rows.get(row.lineage_parent_pane_id) : undefined;
   return {
     listed: true,
@@ -95,6 +102,52 @@ export function sessionFacts(rows: ReadonlyMap<string, AgentRow>, cards: readonl
     card: cardOfSession(cards, { ...session, pane_id: row.pane_id }),
     since: row.last_prompt_at_unix_ms ?? null,
     parent: parent ? rowSession(parent) : null,
+    record: null,
+  };
+}
+
+/** A wire path's last name (`/` between names on every system), as a card's ⌂ names a folder. */
+function lastName(path: string): string {
+  return path.replace(/\/+$/u, "").split("/").pop() || path;
+}
+
+/**
+ * A record as the app's `SessionCard` draws a session (frame K, 나): ended
+ * (`끝남` with the time since it ended), ⌂ its project and the folder it
+ * worked in, its last result line, and its pull requests. Every fact is the
+ * record's; one it does not keep is left out.
+ */
+export function recordCard(record: DeskRecord): DeskJob {
+  const project = record.project ?? record.cwd;
+  const folder = record.cwd ? lastName(record.cwd) : "";
+  return {
+    id: `record:${record.session.device_id}:${record.session.agent}:${record.session.session_id}`,
+    agent_id: null,
+    pane_id: record.pane_id,
+    title: record.title,
+    agent_kind: record.agent_kind,
+    project: { workspace_id: null, label: project ? lastName(project) : "" },
+    location: { kind: "checkout", label: folder },
+    state: "done",
+    queue_position: null,
+    now: record.line,
+    plan: null,
+    question: null,
+    summary: record.line,
+    pull_requests: record.pull_requests,
+    outputs: [],
+    joined: false,
+    reason: null,
+    failure: null,
+    ask: null,
+    mark: null,
+    mark_read: false,
+    machine: null,
+    disconnected: false,
+    changed_at_unix_ms: record.ended_at_unix_ms ?? 0,
+    read: true,
+    mission: null,
+    workers: [],
   };
 }
 
@@ -479,6 +532,40 @@ export function namedText(text: string, mentions: readonly DeskMention[]): strin
 /** An agent Desk cannot be given (B4, D-79): one Settings › Agents switched off. One not ready or not signed in can be picked and says so (B6). */
 export function agentPickable(agent: DeskAgent): boolean {
   return agent.state !== "off";
+}
+
+/** A favorite model (Settings › Agents) as the agent menu offers it: one pick that sets the agent, its model and its effort together. */
+export type DeskFavorite = { key: string; agent: DeskAgent; model: string | null; effort: string | null; modelLabel: string; purpose: string };
+
+/**
+ * The favorite models Desk's agent menu lists first. A favorite is listed
+ * when Desk can start what it names: its agent is one the bar offers, it
+ * names no profile (Desk runs an agent's built-in setup), and its model and
+ * effort are ones the agent's last session offered. Before that session the
+ * agent has offered none, and a pick that switches to the agent is applied
+ * as it opens, so such a favorite is listed only while another agent is
+ * chosen.
+ */
+export function deskFavorites(candidates: readonly ConductorCandidate[], agents: readonly DeskAgent[], selection: DeskSection["selection"]): DeskFavorite[] {
+  const favorites: DeskFavorite[] = [];
+  candidates.forEach((candidate, index) => {
+    if (candidate.profile) return;
+    const kind = candidateAgent(candidate.agent);
+    const agent = agents.find((one) => one.id === kind);
+    if (!agent || !agentPickable(agent)) return;
+    const model = candidate.model ?? null;
+    const effort = candidate.effort ?? null;
+    const offered = (choices: readonly { id: string }[], id: string | null) => id === null || (choices.length === 0 ? selection.agent !== agent.id : choices.some((one) => one.id === id));
+    if (!offered(agent.models, model) || !offered(agent.efforts, effort)) return;
+    const modelLabel = model === null ? "" : (agent.models.find((one) => one.id === model)?.label ?? model);
+    favorites.push({ key: `${index}`, agent, model, effort, modelLabel, purpose: candidate.purpose });
+  });
+  return favorites;
+}
+
+/** Whether a favorite is what Desk's next message goes to now. */
+export function favoriteChosen(favorite: DeskFavorite, selection: DeskSection["selection"]): boolean {
+  return selection.agent === favorite.agent.id && (favorite.model === null || selection.model === favorite.model) && (favorite.effort === null || selection.effort === favorite.effort);
 }
 
 /** What the agent bar says beside an agent (D-81, B44): a ready agent's sign-in as Settings › Agents reads it, nothing while that is unread; otherwise its state. */
