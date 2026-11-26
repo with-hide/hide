@@ -168,7 +168,10 @@ mod tests {
         // the outer one's release opens the inner one, which keeps going.
         let mut escapes = Escapes::default();
         let said = escapes.strip(&format!("a\x1b]{}\x1b]{long}z rest", "x".repeat(10)));
-        assert_eq!(said + &escapes.finish(), format!("a{}{long}z rest", "x".repeat(10)));
+        assert_eq!(
+            said + &escapes.finish(),
+            format!("a{}{long}z rest", "x".repeat(10))
+        );
         // One that ends within the cap is still taken out whole.
         assert_eq!(strip(&["a\x1b]", &long[1..], "\x07b"]), "ab");
     }
