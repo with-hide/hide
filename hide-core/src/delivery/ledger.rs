@@ -302,6 +302,16 @@ impl Ledger {
 }
 
 impl Letter {
+    /// The letter as an answer to `reader` shows it, its sender's and
+    /// recipient's panes as that reader uses them (`Actor::read_by`).
+    pub(crate) fn read_by(&self, reader: crate::address::Reader<'_>) -> Letter {
+        Letter {
+            sender: self.sender.read_by(reader),
+            recipient: self.recipient.read_by(reader),
+            ..self.clone()
+        }
+    }
+
     /// Whether a bell is rung for this letter while its recipient is awake,
     /// at rest or at work: every kind but `progress`, which is news and
     /// never the reason a turn starts, `--now` or not. A progress letter

@@ -75,7 +75,14 @@ impl Runtime {
                 runtime: std::sync::Weak::new(),
             });
         }
-        self.pane_command_as(device, caller_pane, &context, own.as_ref(), command)
+        self.pane_command_as(
+            device,
+            crate::address::Reader::On(device),
+            caller_pane,
+            &context,
+            own.as_ref(),
+            command,
+        )
     }
 
     /// What `command` does for a caller already admitted: `caller_pane` is
@@ -85,6 +92,7 @@ impl Runtime {
     pub(super) fn pane_command_as(
         &self,
         device: &str,
+        reader: crate::address::Reader<'_>,
         caller_pane: &str,
         context: &Context,
         own: Option<&super::access::OwnWork>,
@@ -103,10 +111,11 @@ impl Runtime {
         }
         let node = self.node.as_str();
         // A pane named in full stays on the machine it names; a bare one is
-        // the caller's.
-        let target = |pane: &str| -> (String, String) {
+        // the caller's. The answer names it as the caller uses it.
+        let target = |pane: &str| -> (String, String, String) {
             let (machine, raw) = crate::address::split_pane(device, pane);
-            (machine.to_owned(), raw.to_owned())
+            let named = crate::address::pane_for_caller(reader, machine, raw);
+            (machine.to_owned(), raw.to_owned(), named)
         };
         let engine_of = |machine: &str| self.delivery_engine(machine).ok_or("engine_unavailable");
         // The observed pane a send types into: input routed to it, like a key
@@ -116,11 +125,11 @@ impl Runtime {
         let mut sent = None;
         let (machine, step) = match command {
             PaneCommand::ReadScreen { pane } => {
-                let (machine, raw) = target(&pane);
+                let (machine, raw, pane) = target(&pane);
                 (machine, Step::ReadScreen { pane, raw })
             }
             PaneCommand::Read { pane, lines } => {
-                let (machine, raw) = target(&pane);
+                let (machine, raw, pane) = target(&pane);
                 (machine, Step::Read { pane, raw, lines })
             }
             PaneCommand::Send {
@@ -130,8 +139,12 @@ impl Runtime {
                 enter,
                 paste,
             } => {
-                let (machine, raw) = target(&pane);
-                let observed = crate::address::pane_id_on(node, &machine, &raw);
+                let (machine, raw, pane) = target(&pane);
+                let observed = crate::address::pane_for_caller(
+                    crate::address::Reader::On(node),
+                    &machine,
+                    &raw,
+                );
                 if paste && !self.takes_one_paste(&observed, &machine) {
                     return Err("paste_unsupported".into());
                 }
@@ -153,14 +166,13 @@ impl Runtime {
                 (
                     observation.actor.device_id.clone(),
                     // The answer names the agent's pane as `hide pane send`
-                    // takes it from this caller: bare on the caller's own
-                    // machine, in full on another.
+                    // takes it from this caller.
                     Step::Read {
-                        pane: if observation.actor.device_id == device {
-                            observation.raw_pane_id.clone()
-                        } else {
-                            observation.actor.pane_id.clone()
-                        },
+                        pane: crate::address::pane_for_caller(
+                            reader,
+                            &observation.actor.device_id,
+                            &observation.raw_pane_id,
+                        ),
                         raw: observation.raw_pane_id.clone(),
                         lines,
                     },

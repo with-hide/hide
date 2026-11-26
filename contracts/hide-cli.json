@@ -296,6 +296,7 @@
                     ]
                 },
                 "pane": {
+                    "description": "The agent's pane as the caller uses it: bare on the caller's own machine, `remote:<device>:pane:<id>` for one this core runs on another machine, `core:<device>:pane:<id>` for one another machine's own core keeps. Pass it as written. `hide agent end` answers `pane` with what became of the pane instead (`closed`, `kept`, `gone`, `other_agent`, `left`), so it names no address.",
                     "type": "string"
                 },
                 "parent": {
@@ -659,6 +660,7 @@
                     ]
                 },
                 "pane": {
+                    "description": "The agent's pane as the caller uses it: bare on the caller's own machine, `remote:<device>:pane:<id>` for one this core runs on another machine, `core:<device>:pane:<id>` for one another machine's own core keeps. Pass it as written. `hide agent end` answers `pane` with what became of the pane instead (`closed`, `kept`, `gone`, `other_agent`, `left`), so it names no address.",
                     "type": "string"
                 },
                 "parent": {
@@ -803,6 +805,7 @@
                             ]
                         },
                         "pane": {
+                            "description": "The agent's pane as the caller uses it: bare on the caller's own machine, `remote:<device>:pane:<id>` for one this core runs on another machine, `core:<device>:pane:<id>` for one another machine's own core keeps. Pass it as written. `hide agent end` answers `pane` with what became of the pane instead (`closed`, `kept`, `gone`, `other_agent`, `left`), so it names no address.",
                             "type": "string"
                         },
                         "parent": {
@@ -1550,6 +1553,7 @@
                     ]
                 },
                 "pane": {
+                    "description": "The agent's pane as the caller uses it: bare on the caller's own machine, `remote:<device>:pane:<id>` for one this core runs on another machine, `core:<device>:pane:<id>` for one another machine's own core keeps. Pass it as written. `hide agent end` answers `pane` with what became of the pane instead (`closed`, `kept`, `gone`, `other_agent`, `left`), so it names no address.",
                     "type": "string"
                 },
                 "parent": {
@@ -3164,7 +3168,7 @@
             "description": "`hide pane read` and `hide agent read`: text in the requested form.",
             "properties": {
                 "pane": {
-                    "description": "The pane read: a pane of the caller's own machine bare, as `hide ps` lists it there (`w1:p2`), another machine's as `remote:<device>:pane:<id>`.",
+                    "description": "The pane read, as the caller uses it: a pane of the caller's own machine bare, as `hide ps` lists it there (`w1:p2`), one this core runs on another machine as `remote:<device>:pane:<id>`, and one another machine's own core keeps as `core:<device>:pane:<id>`.",
                     "type": "string"
                 },
                 "text": {
@@ -3362,6 +3366,7 @@
                             ]
                         },
                         "pane": {
+                            "description": "The agent's pane as the caller uses it, written as a pane row's `pane` is.",
                             "type": "string"
                         },
                         "parent": {
@@ -3372,7 +3377,7 @@
                             ]
                         },
                         "parent_machine": {
-                            "description": "The live agent this one was delegated by, as the screen nests it.",
+                            "description": "The live agent this one was delegated by, as the screen nests it: its machine and its pane, the parent row's `machine` and `pane`.",
                             "type": [
                                 "string",
                                 "null"
@@ -3473,7 +3478,7 @@
                             ]
                         },
                         "pane": {
-                            "description": "The pane's id on `machine`.",
+                            "description": "The pane's address as the caller uses it: bare on the caller's own machine, `remote:<device>:pane:<id>` on another. With `machine` it is the key a child's `parent_machine` and `parent_pane` name.",
                             "type": "string"
                         },
                         "project": {
@@ -3842,7 +3847,7 @@
                             "type": "string"
                         },
                         "pane": {
-                            "description": "The pane as `hide pane send` takes it; absent until the spawn made one.",
+                            "description": "The pane as the caller passes it to `hide pane send`, written as an agent's `pane` is; absent until the spawn made one.",
                             "type": [
                                 "string",
                                 "null"
@@ -9801,7 +9806,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:872f2ff767db734e7c82cd1d77e97e520a1664fb79efbff759ad021db6c45640",
+    "digest": "sha256:b91d796896fde54d487e23389683aaeec71991874f4a71876ca58cda8037095f",
     "envelopes": {
         "access": {
             "answer": "value",

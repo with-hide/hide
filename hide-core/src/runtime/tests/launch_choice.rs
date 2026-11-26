@@ -858,7 +858,13 @@ fn a_profile_agent_keeps_its_title_and_its_row_names_the_profile_beside_it() {
     let ledger = crate::delivery::ledger::Ledger::default();
     let facts = runtime.registration_facts(std::slice::from_ref(&record));
     assert_eq!(
-        crate::coordination::agent_view(&record, &ledger, &facts).profile,
+        crate::coordination::agent_view(
+            &record,
+            &ledger,
+            &facts,
+            crate::address::Reader::On(crate::node::TEST_NODE)
+        )
+        .profile,
         Some("Claude · a".to_owned())
     );
 }

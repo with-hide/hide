@@ -11,7 +11,7 @@ use crate::delivery::worker::Worker;
 use crate::delivery::{Actor, Command};
 use crate::handle::ChangeNotifier;
 use crate::runtime::access::AccessEvent;
-use crate::runtime::delivery::tests::{authority, fixture, set_live};
+use crate::runtime::delivery::tests::{authority, set_live};
 use crate::workspace_control::{DESK_CALLER, access_caller_id};
 use serde_json::{Value, json};
 
@@ -19,6 +19,8 @@ const PANES: [&str; 2] = ["worker", "other"];
 const KEY: &str = "5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5";
 
 pub(super) struct Fixture {
+    /// The core's own node, which its agents run on.
+    node: &'static str,
     pub(super) runtime: Arc<Mutex<Runtime>>,
     pub(super) ids: std::collections::HashMap<&'static str, String>,
     _worker: Worker,
@@ -28,6 +30,12 @@ pub(super) struct Fixture {
 impl Fixture {
     pub(super) fn start() -> Self {
         Self::start_over(tempfile::tempdir().unwrap(), &PANES, &PANES)
+    }
+
+    /// [`Fixture::start`] for a core whose own node is `node`: a second
+    /// machine's core, whose node id is the device id it says in its hello.
+    pub(super) fn start_on(node: &'static str) -> Self {
+        Self::start_on_over(tempfile::tempdir().unwrap(), &PANES, &PANES, node)
     }
 
     /// The fixture over `root`, whose `state` folder may hold what an
@@ -45,8 +53,19 @@ impl Fixture {
 
     /// [`Fixture::start_with`] over `root`.
     fn start_over(root: tempfile::TempDir, panes: &[&'static str], roots: &[&'static str]) -> Self {
+        Self::start_on_over(root, panes, roots, crate::node::TEST_NODE)
+    }
+
+    /// [`Fixture::start_over`] on the core's own node `node`.
+    fn start_on_over(
+        root: tempfile::TempDir,
+        panes: &[&'static str],
+        roots: &[&'static str],
+        node: &'static str,
+    ) -> Self {
         let panes = panes.to_vec();
-        let (runtime, _, _, path) = fixture(root.path());
+        let (runtime, _, _, path) =
+            crate::runtime::delivery::tests::fixture_on(root.path(), "codex", node);
         let native = |pane: &str| {
             json!({"pane_id":pane,"workspace_id":"workspace","tab_id":"tab",
                 "terminal_id":format!("terminal-{pane}"),"revision":1,"focused":false,
@@ -80,7 +99,7 @@ impl Fixture {
                 })
                 .collect();
             let payload = serde_json::from_value(json!({ "agents": agents })).unwrap();
-            guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
+            guard.observe_delivery_laid(node, &payload, None, None);
             let tab = &mut guard.snapshot.navigator.workspaces[0].checkouts[0].tabs[0];
             let template = tab.panes[0].clone();
             tab.panes = panes
@@ -94,6 +113,7 @@ impl Fixture {
                 .collect();
         }
         let mut started = Self {
+            node,
             runtime,
             ids: Default::default(),
             _worker: worker,
@@ -141,21 +161,20 @@ impl Fixture {
 
     /// A command of the agent in `pane`.
     pub(super) fn agent(&self, pane: &str, command: Command) -> Result<Value, String> {
-        let context = authority(&Actor {
+        let mut context = authority(&Actor {
             pane_id: pane.into(),
             name: pane.into(),
             kind: "codex".into(),
-            device_id: crate::node::TEST_NODE.into(),
+            device_id: self.node.into(),
             session: None,
         })
         .context;
-        let prepared = self.runtime.lock().unwrap().prepare_delivery(
-            crate::node::TEST_NODE,
-            pane,
-            &context,
-            None,
-            command,
-        )?;
+        context.device_id = self.node.into();
+        let prepared = self
+            .runtime
+            .lock()
+            .unwrap()
+            .prepare_delivery(self.node, pane, &context, None, command)?;
         prepared.run(Duration::from_secs(5))
     }
 
@@ -1110,7 +1129,13 @@ fn an_own_mode_bot_reaches_its_own_work_by_exact_identity_and_nothing_else() {
         "terminal-mini",
         false,
     );
-    let device_pane = |pane: &str| crate::address::pane_id_on(crate::node::TEST_NODE, "mini", pane);
+    let device_pane = |pane: &str| {
+        crate::address::pane_for_caller(
+            crate::address::Reader::On(crate::node::TEST_NODE),
+            "mini",
+            pane,
+        )
+    };
     {
         let mut guard = fixture.runtime.lock().unwrap();
         let tab = &mut guard.snapshot.navigator.workspaces[0].checkouts[0].tabs[0];

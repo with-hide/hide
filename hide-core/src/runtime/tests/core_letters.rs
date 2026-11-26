@@ -71,7 +71,7 @@ struct Pair {
 impl Pair {
     /// The MacBook opens the Mac mini, and the two are connected.
     fn start() -> Self {
-        Self::of(Fixture::start(), Fixture::start())
+        Self::of(Fixture::start(), Fixture::start_on(MINI))
     }
 
     /// [`Pair::start`], of two cores that already run.
@@ -833,6 +833,18 @@ fn an_agent_reads_another_cores_agents_and_the_opened_machine_reads_none() {
     let mut there: Vec<&str> = pair.mini.ids.values().map(String::as_str).collect();
     there.sort();
     assert_eq!(ids, there, "the Mac mini's own agents");
+    // The Mac mini answers an agent of another core with its own panes as
+    // its own core's, `core:<its node>:pane:<id>`, its node being the device
+    // id it says in its hello, which the Mac knows it by; the Mac passes the
+    // answer on as it came.
+    let worker_row = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == pair.mini.ids["worker"].as_str())
+        .unwrap();
+    let handed = "core:mac-mini:pane:worker";
+    assert_eq!(worker_row["pane"], handed);
     let shown = pair
         .mac
         .agent(
@@ -845,6 +857,47 @@ fn an_agent_reads_another_cores_agents_and_the_opened_machine_reads_none() {
         )
         .unwrap();
     assert_eq!(shown["id"], pair.mini.ids["other"]);
+    assert_eq!(shown["pane"], "core:mac-mini:pane:other");
+    // The address the Mac's agent was handed, passed back to the Mac as
+    // written, names the same agent there and comes back the same.
+    let again = pair
+        .mac
+        .agent(
+            "worker",
+            Command::Agents {
+                command: Agents::Show { id: handed.into() },
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        (again["id"].as_str(), again["pane"].as_str()),
+        (Some(pair.mini.ids["worker"].as_str()), Some(handed))
+    );
+    // A read of it the Mac passes on reads that pane on the Mac mini, whose
+    // answer hands the same address back.
+    let asker = worker(&pair.mac);
+    let read = pair.mini.runtime.lock().unwrap().prepare_core_call(
+        &mac_key(),
+        &asker,
+        Asked::Pane(PaneCommand::Read {
+            pane: crate::address::CoreAddress::parse(handed)
+                .unwrap()
+                .unwrap()
+                .id
+                .to_owned(),
+            lines: 10,
+        }),
+    );
+    match read {
+        Ok(crate::core_calls::Call::Pane(prepared)) => match prepared.step {
+            crate::pane_command::Step::Read { pane, raw, .. } => {
+                assert_eq!((pane.as_str(), raw.as_str()), (handed, "worker"))
+            }
+            _ => panic!("a read"),
+        },
+        Ok(_) => panic!("a pane read"),
+        Err(reason) => panic!("the read was refused: {reason}"),
+    }
 
     assert_eq!(
         pair.mini.agent("worker", list(MAC)).unwrap_err(),
@@ -1127,7 +1180,7 @@ fn what_a_ledger_keeps_of_another_machine_over_a_released_state_folder_is_the_sa
         let root = tempfile::tempdir().unwrap();
         // Where the fixture's core keeps its state.
         started_at(&folder, &root.path().join("state"));
-        let pair = Pair::of(Fixture::start_in(root), Fixture::start());
+        let pair = Pair::of(Fixture::start_in(root), Fixture::start_on(MINI));
         let released = letters(&pair.mac).len();
         let mac_id = pair.mac.ids["worker"].clone();
         let mini_id = pair.mini.ids["worker"].clone();
