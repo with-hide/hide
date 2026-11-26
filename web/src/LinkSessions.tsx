@@ -14,12 +14,12 @@ import { StatusMark } from "./components/status-mark";
 import { summariesEnabled } from "./hideAi";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import { deviceLabel, failureKey, foldTimeline, resumeProvider, resumeBlock, resumeCheckout, sessionLines, spanText, timeText, viewBlock, type Blocked, type SessionLine } from "./linkPanel";
+import { deviceLabel, failureKey, foldTimeline, resumeBlock, resumeCheckout, sessionLines, spanText, timeText, viewBlock, type Blocked, type SessionLine } from "./linkPanel";
 import { allAgents } from "./navigation";
 import { checkSummary, timeline, type Milestone, type TimelineEntry } from "./prCardModel";
 import { recordTitle } from "./sessionWork";
 import { catalogOf, catalogWorkspaces, localDeviceId, type HostDeclaration, type LinkPanel, type PullRequest, type Workspace } from "./snapshot";
-import { useSessionResume } from "./useSessionResume";
+import { resumeFailureText, resumeRequest, useSessionResume } from "./useSessionResume";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -204,9 +204,8 @@ function SessionLineView({ entry, project, checkoutBranch, opener, item, actions
   const asked = live?.kind === "question" ? rowLine(live.agent)?.text : null;
   const view = () => actions.openSessionConversation({ device_id: line.device_id, agent: line.agent, session_id: line.id });
   const resumeLine = () => {
-    const provider = resumeProvider(line.agent);
-    if (!checkout || !provider) return;
-    start((requestId, confirmOnly) => actions.startAgent({ target: { checkoutPath: checkout.path }, deviceId: line.device_id === node ? undefined : line.device_id, provider, resumeSessionId: line.id, resumeSessionPath: line.path ?? undefined, requestId, confirmOnly }));
+    const send = resumeRequest(actions.startAgent, { device_id: line.device_id, agent: line.agent, session_id: line.id, path: line.path }, checkout, node);
+    if (send) start(send);
   };
   const agent = agentProductName(line.agent);
   // The tooltip carries what the row leaves out (B9): the agent the logo stands for, the request, who delegated it, how many sessions it joins, which device.
@@ -260,7 +259,7 @@ function SessionLineView({ entry, project, checkoutBranch, opener, item, actions
       {resume.uncertain ? <span role="status" className="text-caption text-muted-foreground">{t("links.resumeUnknown")}</span> : null}
       {resume.failure !== null ? (
         <span role="alert" className="flex items-center gap-xs text-caption text-warning" data-link-resume-failed={line.id}>
-          <span className="min-w-0 break-words">{resume.uncertain ? resume.failure : resume.failure ? t("links.resumeFailed", { reason: resume.failure }) : t("links.resumeFailedPlain")}</span>
+          <span className="min-w-0 break-words">{resumeFailureText(resume, t)}</span>
           {!resume.uncertain ? <Button variant="ghost" size="sm" onClick={resumeLine} data-link-resume-retry={line.id}>
             {t("common.retry")}
           </Button> : null}
@@ -270,8 +269,8 @@ function SessionLineView({ entry, project, checkoutBranch, opener, item, actions
   );
 }
 
-/** A button under an ended line; off, it stays reachable so its tooltip says why (B10). */
-function LineButton({ icon, label, blocked, busy = false, onClick, data, id }: { icon: ReactNode; label: string; blocked: Blocked; busy?: boolean; onClick: () => void; data: string; id: string }) {
+/** A button under an ended line; off, it stays reachable so its tooltip says why (B10). Desk's session opened from its record takes its `이어서 하기` (feedback 2, frame K). */
+export function LineButton({ icon, label, blocked, busy = false, onClick, data, id }: { icon: ReactNode; label: string; blocked: Blocked; busy?: boolean; onClick: () => void; data: string; id: string }) {
   const { t } = useInterfaceTranslation();
   const off = blocked !== null || busy;
   const button = (

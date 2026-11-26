@@ -1,4 +1,4 @@
-import { PlusIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { Actions } from "../actions";
 import { AgentMark } from "../AgentMark";
@@ -7,6 +7,7 @@ import { catalogFor, modelLabel, providerLabel, takesModel, type ProfileItem, ty
 import { itemName, missingItemName, type AgentItem } from "../agentProfiles";
 import { Note } from "../components/settings-rows";
 import { Button } from "../components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { Input } from "../components/ui/input";
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
@@ -202,10 +203,13 @@ function CandidateRow({ candidate, device, list, layout, onChange }: { candidate
     <EffortChoice efforts={efforts} value={candidate.effort ?? null} onChange={(next) => onChange({ ...candidate, effort: next })} data-candidate-effort={candidate.effort ?? "auto"} />
   );
   const purposeInput = (
-    <Input value={purpose} placeholder={t("conductor.purposePlaceholder")} aria-label={t("conductor.column.purpose")} className="min-w-0" onChange={(event) => setPurpose(event.target.value)}
-      onBlur={() => purpose !== candidate.purpose && onChange({ ...candidate, purpose })}
-      onKeyDown={(event) => { if (event.key === "Enter" && !composingKey(event)) event.currentTarget.blur(); }}
-      data-candidate-purpose="true" />
+    <div className="flex min-w-0 items-center gap-xxs">
+      <Input value={purpose} placeholder={t("conductor.purposePlaceholder")} aria-label={t("conductor.column.purpose")} className="min-w-0 flex-1" onChange={(event) => setPurpose(event.target.value)}
+        onBlur={() => purpose !== candidate.purpose && onChange({ ...candidate, purpose })}
+        onKeyDown={(event) => { if (event.key === "Enter" && !composingKey(event)) event.currentTarget.blur(); }}
+        data-candidate-purpose="true" />
+      <PurposePresets onPick={(text) => { setPurpose(text); if (text !== candidate.purpose) onChange({ ...candidate, purpose: text }); }} />
+    </div>
   );
   const data = { "data-conductor-candidate": candidate.agent, "data-candidate-installed": installed === false ? "false" : undefined, "data-candidate-gone": gone ? "true" : undefined };
   if (layout === "stack") {
@@ -227,6 +231,28 @@ function CandidateRow({ candidate, device, list, layout, onChange }: { candidate
       {unusable ? missing : <>{model}{effort}{purposeInput}</>}
       {remove}
     </div>
+  );
+}
+
+/** The wording Hide suggests for what a model is for; a pick fills the purpose, which stays free text the operator can write over. */
+const PURPOSE_PRESETS = ["general", "hard", "easy", "review"] as const;
+
+/** The menu of suggested purposes beside a purpose field. */
+function PurposePresets({ onPick }: { onPick: (text: string) => void }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label={t("conductor.purposePresets")} data-candidate-purpose-presets="true"><ChevronDownIcon /></Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {PURPOSE_PRESETS.map((preset) => (
+          <DropdownMenuItem key={preset} onSelect={() => onPick(t(`conductor.purposePreset.${preset}`))} data-candidate-purpose-preset={preset}>
+            {t(`conductor.purposePreset.${preset}`)}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

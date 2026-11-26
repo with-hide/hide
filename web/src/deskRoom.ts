@@ -5,7 +5,7 @@
 // time the room is entered (B26); the core keeps only the two panels' widths
 // (`desk.lane`, B23).
 
-import type { DeskOutput } from "./snapshot";
+import type { DeskItem, DeskJob, DeskOutput } from "./snapshot";
 import { absolutePathRoot } from "./terminalLinks";
 
 /**
@@ -72,6 +72,51 @@ export function openSession(room: DeskRoomWindow, pane: string, options: { answe
   const answer = options.answer ? room.answer + 1 : room.answer;
   if (room.session === pane) return { ...room, answer };
   return { ...room, session: pane, panel: null, answer };
+}
+
+/**
+ * Where the room follows the sessions Desk's turns start (feedback 2, frame
+ * J): the conversation it follows, the newest line it held when the room was
+ * entered (nothing before it opens by itself, B26), and the turn whose first
+ * new session was already settled, opened or left as a chip.
+ */
+export type NewSessionFollow = { generation: number; after: number; settled: number | null };
+
+/** The follow a room starts with: every line already there is old. */
+export function followFrom(generation: number, items: readonly DeskItem[]): NewSessionFollow {
+  return { generation, after: items.at(-1)?.id ?? -1, settled: null };
+}
+
+/** Job states with no pane to open now: the turn's first session is the next job, unless this one starts again. */
+const NO_PANE_COMING: ReadonlySet<DeskJob["state"]> = new Set<DeskJob["state"]>(["failed", "cancelled", "closed", "moved_out", "archived"]);
+
+/**
+ * The open-beside rule of a session a Desk turn starts (frame J, 가-2, 나-1,
+ * 다). A session Desk started is its turn's `job` line, the core's record of
+ * the start, never a name read from the answer; a letter handed to a session
+ * that already runs is a `handed` line and opens nothing. The turn's first
+ * new session, once its pane exists, opens beside Desk when the right side
+ * is empty, no session and no tab panel shown; when something shows it stays
+ * and the session is only its chip. Either way the turn is settled, so its
+ * other sessions, and the first one again after a close, stay chips.
+ */
+export function newSessionBeside(follow: NewSessionFollow, generation: number, items: readonly DeskItem[], cards: Readonly<Record<string, DeskJob>>, room: DeskRoomWindow): { follow: NewSessionFollow; open: string | null } {
+  // A new conversation starts empty: every line in it is new.
+  const now = follow.generation === generation ? follow : { generation, after: -1, settled: null };
+  const turn = items.reduce((last, item) => (item.kind === "user" ? item.id : last), -1);
+  if (now.settled === turn) return { follow: now, open: null };
+  for (const item of items) {
+    if (item.kind !== "job" || item.id <= now.after || item.id <= turn) continue;
+    const card = cards[item.job_id];
+    // A job the core has not listed yet, or one still waiting for its pane, holds the turn's first place.
+    if (!card) return { follow: now, open: null };
+    // A start that failed is no session: the next one is the turn's first, and a start retried under the same job is looked at again.
+    if (NO_PANE_COMING.has(card.state)) continue;
+    if (!card.pane_id) return { follow: now, open: null };
+    const empty = room.session === null && room.panel === null;
+    return { follow: { ...now, settled: turn }, open: empty ? card.pane_id : null };
+  }
+  return { follow: now, open: null };
 }
 
 /** The session panel's `✕`, Escape or ⌘E (B6): Desk widens again and the tab panel, which was that session's, goes with it; the session is kept for ⌘E to open again. */

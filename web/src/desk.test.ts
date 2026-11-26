@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, approvalButtons, askedIn, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
-import type { AgentRow } from "./snapshot";
+import { agentPickable, approvalButtons, deskFavorites, favoriteChosen, askedIn, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
+import type { AgentRow, DeskRecord } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
   id, agent_id: null, pane_id: `pane-${id}`, title: id, agent_kind: "claude", project: { workspace_id: "w", label: "w" }, location: { kind: "checkout", label: "w" },
@@ -222,11 +222,25 @@ describe("a chip's session (D-86, B50)", () => {
 
   it("reads a listed session's name, mark, card, time and parent from its row", () => {
     const facts = sessionFacts(rows, cards, { name: "agent-47656", mark: null, agent_kind: null, pane_id: "w1:p1" });
-    expect(facts).toEqual({ listed: true, name: "agent-journey", mark: "going", agent_kind: "codex", card: cards[0], since: 1_000, parent: { name: "agent-14586", mark: "turn", agent_kind: "claude", pane_id: "w1:p0" } });
+    expect(facts).toEqual({ listed: true, name: "agent-journey", mark: "going", agent_kind: "codex", card: cards[0], since: 1_000, parent: { name: "agent-14586", mark: "turn", agent_kind: "claude", pane_id: "w1:p0" }, record: null });
   });
 
   it("reads a session the sidebar no longer lists as gone, with no mark and no card", () => {
-    expect(sessionFacts(rows, cards, { name: "m349", mark: "done", agent_kind: "claude", pane_id: "w1:gone" })).toEqual({ listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null });
+    expect(sessionFacts(rows, cards, { name: "m349", mark: "done", agent_kind: "claude", pane_id: "w1:gone" })).toEqual({ listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null, record: null });
+  });
+
+  // Frame K: a session whose pane is gone reads as Hide's record of it, its card the app's SessionCard of that record.
+  it("reads a session the sidebar no longer lists from its record when Hide keeps one: its title, agent, end and card", () => {
+    const record: DeskRecord = {
+      pane_id: "w1:gone", session: { device_id: "mini", agent: "claude", session_id: "s1" }, agent_kind: "claude", title: "1.3.0 후보 빌드 만들기",
+      started_at_unix_ms: 100, ended_at_unix_ms: 900, line: "서명까지 확인했어요", pull_requests: [{ number: 2930, state: "merged" }],
+      cwd: "/repo/.worktrees/release-1.3.0-rc9", path: null, project: "/repo/herdr-ide", thread: true,
+    };
+    const facts = sessionFacts(rows, cards, { name: "m349", mark: "done", agent_kind: "claude", pane_id: "w1:gone" }, [record]);
+    expect([facts?.listed, facts?.name, facts?.mark, facts?.agent_kind, facts?.since, facts?.record]).toEqual([false, "1.3.0 후보 빌드 만들기", null, "claude", 900, record]);
+    expect(facts?.card).toMatchObject({ title: "1.3.0 후보 빌드 만들기", state: "done", now: "서명까지 확인했어요", pull_requests: [{ number: 2930, state: "merged" }], project: { label: "herdr-ide" }, location: { label: "release-1.3.0-rc9" } });
+    // Another pane's record is not this one's.
+    expect(sessionFacts(rows, cards, { name: "m350", mark: null, agent_kind: null, pane_id: "w1:other" }, [record])?.record).toBeNull();
   });
 
   it("finds a session named only by its name, and leaves one no row carries to its own values", () => {
@@ -259,5 +273,34 @@ describe("holdsFoot", () => {
 
   it("stays held when content shrinking under the foot pulls the view up", () => {
     expect(holdsFoot(true, 3386, 3350, 0, 48)).toBe(true);
+  });
+});
+
+describe("the favorite models the agent menu lists first", () => {
+  const agent = (id: DeskAgent["id"], models: string[] = [], efforts: string[] = [], state: DeskAgent["state"] = "ready"): DeskAgent => ({ id, label: id, state, detail: null, signed_in: true, login_command: "", models: models.map((model) => ({ id: model, label: model.toUpperCase() })), efforts: efforts.map((effort) => ({ id: effort, label: effort })) });
+  const selection = (agentId: DeskAgent["id"] | null) => ({ agent: agentId, model: null, effort: null });
+
+  it("lists a favorite whose agent the bar offers and whose model and effort that agent's last session offered", () => {
+    const agents = [agent("claude", ["opus", "sonnet"], ["high"]), agent("codex")];
+    const list = deskFavorites([{ agent: "claude", model: "opus", effort: "high", purpose: "General" }, { agent: "claude", model: "haiku", purpose: "" }], agents, selection("claude"));
+    expect(list.map((favorite) => [favorite.agent.id, favorite.model, favorite.effort, favorite.modelLabel, favorite.purpose])).toEqual([["claude", "opus", "high", "OPUS", "General"]]);
+  });
+
+  it("leaves out a favorite that names a profile or an agent that is off, which Desk cannot start", () => {
+    const agents = [agent("claude", ["opus"]), agent("codex", [], [], "off")];
+    expect(deskFavorites([{ agent: "claude", profile: "p-work", model: "opus", purpose: "" }, { agent: "codex", purpose: "" }], agents, selection("claude"))).toEqual([]);
+  });
+
+  it("lists a favorite of an agent that has offered no models yet only while another agent is chosen, since a switch applies it as the session opens", () => {
+    const agents = [agent("claude"), agent("codex")];
+    const candidates = [{ agent: "claude", model: "opus", purpose: "" }];
+    expect(deskFavorites(candidates, agents, selection("codex"))).toHaveLength(1);
+    expect(deskFavorites(candidates, agents, selection("claude"))).toEqual([]);
+  });
+
+  it("reads a favorite as chosen when the agent, model and effort it fixes are the ones Desk goes to", () => {
+    const favorite = deskFavorites([{ agent: "claude", model: "opus", purpose: "" }], [agent("claude", ["opus"])], selection("claude"))[0]!;
+    expect(favoriteChosen(favorite, { agent: "claude", model: "opus", effort: "high" })).toBe(true);
+    expect(favoriteChosen(favorite, { agent: "claude", model: "sonnet", effort: null })).toBe(false);
   });
 });
