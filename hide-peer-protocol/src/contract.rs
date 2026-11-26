@@ -652,6 +652,7 @@ pub fn shape() -> Value {
             "to_node": {
                 "hello": hex_byte(tap::kind::HELLO),
                 "input": hex_byte(tap::kind::INPUT),
+                "paste": hex_byte(tap::kind::PASTE),
                 "resize": hex_byte(tap::kind::RESIZE),
                 "terminate": hex_byte(tap::kind::TERMINATE),
                 "redraw": hex_byte(tap::kind::REDRAW),

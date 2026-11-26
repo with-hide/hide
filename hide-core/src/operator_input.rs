@@ -150,9 +150,10 @@ impl Attach {
         } else {
             paths.to_vec()
         };
-        let quoted = crate::terminal_attachments::paste_bytes(&destinations, false, self.on_device)
+        let quoted = crate::terminal_attachments::quoted_paths(&destinations, self.on_device)
             .map_err(|_| "attachment_failed")?;
-        let mut words = String::from_utf8(quoted).map_err(|_| "attachment_failed")?;
+        let mut words = quoted.join(" ");
+        words.push(' ');
         words.push_str(text);
         Ok(words)
     }
@@ -879,7 +880,7 @@ mod tests {
         fn control(&self, _: TerminalControl) {
             panic!("an operator write must not attach or focus");
         }
-        fn key(&self, _: KeyTarget, _: Vec<u8>, _: u64) {
+        fn type_into(&self, _: KeyTarget, _: hide_node_link::terminal::ScreenInput, _: u64) {
             panic!("an operator write goes to the engine, not the key path");
         }
         fn view(&self, _: &str, _: GridSize, _: bool) {

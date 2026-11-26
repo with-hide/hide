@@ -687,12 +687,12 @@ A registration ends when its host's published session stops listing its pane: ea
 
 ## Explicit terminal attachments
 
-The browser cannot name a dropped file's or a pasted image's path, so hided's own staging (`hided/src/attachments.rs`, see hided and the WebSocket boundary) is the only source of a `terminal_attachment` intent: it writes the uploaded bytes to disk and sends the event carrying the original pane ID, bracketed-paste mode, a generated request UUID and the staged paths.
+The browser cannot name a dropped file's or a pasted image's path, so hided's own staging (`hided/src/attachments.rs`, see hided and the WebSocket boundary) is the only source of a `terminal_attachment` intent: it writes the uploaded bytes to disk and sends the event carrying the original pane ID, a generated request UUID and the staged paths.
 hided reports `terminal_attachment_ready` itself once a clipboard image's bytes are staged at the exact path the core reads it from.
 No clipboard image bytes enter the JSON event or the render mutex.
 
 `runtime/attachments.rs` owns admission, captured terminal and remote connection generations, one active worker, retry, cancellation and an ordered 64 KiB input reservation.
-Subsequent input to the originating pane is held by the pane's node until file preparation and transfer succeed, then the complete quoted path payload and held bytes enter the node's terminal writer together (`TerminalControl::AttachmentHold`, `AttachmentDeliver`).
+Subsequent input to the originating pane is held by the pane's node until file preparation and transfer succeed, then the node pastes each quoted path to the pane's holder, a space after each, and writes the held input behind them on the same writer (`TerminalControl::AttachmentHold`, `AttachmentDeliver`); the holder wraps each path in bracketed paste only when the program turned that mode on, which the screen cannot see (with-hide/hide issue 2952).
 No Enter is synthesized, and an upload failure never forwards held input, because it may contain an Enter that would submit an incomplete prompt.
 Retry keeps immutable prepared bytes; cancel discards held input explicitly.
 Missing, closed, released or reconnected targets retire the intent and cannot forward its data to a replacement session or fall back to the local host.
@@ -2400,7 +2400,7 @@ While the program holds its output (synchronized output, mode 2026) the writer w
 A full screen larger than one fragment is split between rows into several, the first full and the rest deltas of its epoch; a row is bounded well below a fragment (64 bytes of text and a 2 KiB link per cell, 1024 columns), so a screen is never refused: closing a connection for its size would recur on every reattach to the same screen.
 
 Input bytes go to the program as they came, already encoded by the node.
-A paste, a pointer event and a wheel are sent as what they mean and encoded at the moment they reach the holder, for the modes the program has on then: a paste in bracketed paste mode or with its line breaks made carriage returns, a pointer event in the program's mouse protocol or dropped when it tracks none, and a wheel as the program's mouse report, as arrow keys on the alternate screen with mode 1007, or as a scroll of the holder's own view; the holder never guesses a paste from bytes.
+A paste, a pointer event and a wheel are sent as what they mean and encoded at the moment they reach the holder, for the modes the program has on then: a paste in bracketed paste mode or with its line breaks made carriage returns, a pointer event in the program's mouse protocol or dropped when it tracks none, and a wheel as the program's mouse report, as arrow keys on the alternate screen with mode 1007, or as a scroll of the holder's own view; the holder never guesses a paste from bytes, and a screen's paste reaches it as a paste too ([The terminal path](#the-terminal-path)).
 Input moves a scrolled view back to the bottom.
 Input and the answers to the program's questions reach the PTY through one writer, in the order they came.
 
@@ -3732,7 +3732,7 @@ A relayed screen (a node's screen the core draws through its link) is a window w
 ### A guest's panes on the host
 
 A guest's work runs on this machine in the guest's own node (`hided node serve --guest`), and this machine's daemon reaches its panes only through the tap that node serves (`hided/src/guests/tap.rs`), whether or not the guest is connected.
-The tap is one local connection per guest: the node says which panes exist, each one's grid and its output, and the daemon writes back a screen's keys, sizes, redraws and a close.
+The tap is one local connection per guest: the node says which panes exist, each one's grid and its output, and the daemon writes back a screen's keys, pastes, sizes, redraws and a close; a paste goes as the `paste` frame only to a node that welcomed tap 2 (`hide_peer_protocol::tap::PASTE_TAP`), and to an older node, which skips a kind it does not know, as the keys it was.
 A window ends one pane with the daemon-only client event `guest_pane_close`, taken from a window of this machine or the screen another machine shows of it (the `Window` class, `hided/src/server/event_class.rs`), since either already types into that pane and only a machine holding an open grant to this one draws such a screen: the daemon finds the guest by the address's device id, refuses an address that is no listed pane (`pane_unavailable`), writes the close to that guest's tap (`Guests::close_pane`), whose node ends the pane and tells the guest's engine it ended, so the guest's own tab of it closes as when its program exits, and a guest not linked then closes it from the pane's record (`HolderRecovery::closed`) when it links again or its core starts anew, never with a new shell; refuses it `node_unavailable` when that guest's node is not connected or the write fails, since the pane then still runs, and answers that window alone with `guest_pane_close_result` under the call's `request_id`, so the window moves only once the close reached the node (`web/src/guestCloseCall.ts`); a page loaded before this machine updated sends `{pane_id}` alone, and hided still closes it and answers that page as it was built to, nothing on a close and an error frame on a refusal; a guest's panes also end together with its removal ([A guest taken off the host](#a-guest-taken-off-the-host)).
 The node also says the folder each pane was started in, read once from the pane's holder record, in a `folder` frame after the pane's own (`hide_peer_protocol::tap`, kind `0x93`, at most 4096 bytes); a host that predates the frame skips its kind, and the daemon keeps the folder with the pane, spelled through its links as a caller's own folder is, so the two are compared as the same path.
 The daemon keeps each guest's pane list in the guest's `h/panes.json`, written whole on every change and held to 128 panes, hands output to the screens' hub under the pane's `guest:` address, and installs the tap in the terminal router (`Router::install_guest`) so a screen's keys and sizes for that address go to it.
@@ -4017,6 +4017,8 @@ On Windows the window asks Windows once for the firewall rules when the operator
 
 Terminal bytes never pass the core (PRD core-host-node-terminal D-02, D-11).
 A key goes from the screen to the node that holds its pane, and the pane's output goes from that node to the screen, while the core decides which panes attach and hears only facts about them.
+A paste goes the same way as the `key` event marked `paste` (`TerminalNode::type_into` with `hide_node_link::terminal::ScreenInput::Paste`), its line breaks carriage returns, and reaches the pane's holder as a paste, which the holder wraps in bracketed paste only when the program turned that mode on: the screen draws from fragments that never carry the mode, so xterm's own paste sent every line break as Enter (with-hide/hide issue 2952).
+It is held, capped and refused as a key is, and travels down a device's link as a `key` line marked `paste` (node link protocol 106), up a node's terminals relay to its core the same way, and over a guest's tap as a `paste` frame (tap 2) to a node that welcomed that version, or as the keys it was to an older one.
 Three parts carry the bytes, all outside `Mutex<Runtime>`.
 
 - **The node's terminal service** (`hide-node/src/terminal/`) holds one session per attached pane over the pane's holder ([The node's holder panes](#the-nodes-holder-panes)) and keeps the attach rules the core ran before this layer (D-12): an attach waits for its view's size, a frame at a grid the view is not drawn at is held until a full frame at the view's grid, and a failed attach is retried after 5, 10, 20 and 30 seconds while its pane is shown (this machine's panes; a device's wait for the operator's Reconnect, as they always have).
@@ -4088,7 +4090,7 @@ Past 16,384 waiting reports a report takes the place of the waiting one about th
 
 | Goes to the core (control) | Goes between the screen and a node without the core (data) |
 | --- | --- |
-| Which panes attach and are released (`ATTACHED_TAB_LIMIT`, `released`), shown, asleep or closing; Reconnect | Keys (`key`), from the web socket to the router to the pane's writer |
+| Which panes attach and are released (`ATTACHED_TAB_LIMIT`, `released`), shown, asleep or closing; Reconnect | Keys and pastes (`key`, a paste marked `paste`), from the web socket to the router to the pane's writer |
 | PTY size (`terminal_resize`), from the screen that last sent the pane input (`pane_sizes.rs`), the moment that screen's view fits its drawn rectangle | Pane output, from the session's reader to the hub to the client (`terminal` frames) |
 | Wheel (`terminal_scroll`) and a pointer event (`terminal_mouse`) | A view's grid and whether it has nothing drawn (`terminal_viewport`), which the node's attach rules read |
 | Creation requests keys are sent against: opened, resolved to a pane, discarded | Held keys and a paste's text with the keys behind it, written by the node's writer |

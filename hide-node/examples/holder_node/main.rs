@@ -41,7 +41,7 @@ use hide_kit::layout;
 use hide_kit::panes::{StartRequest, Started};
 use hide_node::terminal::holder::{HolderFolders, Holders, LocalTerminals};
 use hide_node::terminal::{OutputSink, ReportSink};
-use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalNode};
+use hide_node_link::terminal::{GridSize, KeyTarget, ScreenInput, TerminalControl, TerminalNode};
 use serde_json::{Value, json};
 
 use crate::screens::{Reports, Screens};
@@ -222,7 +222,9 @@ fn answer(node: &Node, request: &Value) -> Result<Option<Value>, String> {
         "key" => {
             let pane = text(request, "pane")?;
             let bytes = unhex(&text(request, "hex")?)?;
-            node.terminals.service.key(KeyTarget::Pane(pane), bytes, 0);
+            node.terminals
+                .service
+                .type_into(KeyTarget::Pane(pane), ScreenInput::Keys(bytes), 0);
             json!({})
         }
         "release" => {
