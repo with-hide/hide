@@ -125,8 +125,9 @@ impl Runtime {
     /// pane (one `이어서 하기` resumed, or a wake opened anew), each with the
     /// row it runs in: the same session, on the same machine, by its id, the
     /// first such row in the sidebar's order. Only the newest lines' chips
-    /// are followed, so the pairs are at most the chips they name. Such a chip is that row's, and its record is not drawn; a record is
-    /// drawn only for a session no row runs.
+    /// are followed, so the pairs are at most the chips they name. Such a
+    /// chip is that row's, and its record is not drawn; a record is drawn
+    /// only for a session no row runs.
     pub(super) fn desk_moved(&self) -> Vec<(&str, &crate::model::SidebarAgentSnapshot)> {
         let rows: HashSet<&str> = self.agent_rows().map(|row| row.pane_id.as_str()).collect();
         let gone: Vec<(&str, &SessionIdentity)> = self
@@ -173,8 +174,9 @@ impl Runtime {
     }
 
     /// The records of the sessions the newest lines' chips name whose pane
-    /// no row holds now and that no other pane runs, in the chips' order; a session not read yet is
-    /// handed to the reader and joins once it answers.
+    /// no row holds now and that no other pane runs, in the chips' order; a
+    /// session not read yet is handed to the reader and joins once it
+    /// answers.
     pub(super) fn desk_records(&mut self) -> Vec<DeskRecordSnapshot> {
         let rows: HashSet<&str> = self.desk_chip_rows().into_keys().collect();
         let mut records = Vec::new();
