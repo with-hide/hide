@@ -5,7 +5,7 @@ import type { Catalog, Catalogs } from "../../schema";
 // Korean, English for the rest), as both screens would show them.
 const en = {
   "practice.connect.title": "Many computers, one team",
-  "practice.connect.summary": "Connect a Mac, Windows or Linux computer, and its agents' work and questions reach you here",
+  "practice.connect.summary": "Connect a Mac, Windows or Linux computer, and its agents' work and what they leave to check reach you here",
   "practice.connect.words": "arrow art arrive artefact",
   "practice.connect.miniTask": "Nightly build fails on arm64",
   "practice.connect.miniQuestion": "Pin the old toolchain for now?",
@@ -51,7 +51,7 @@ const en = {
   "practice.connect.asks.title": "The Mac mini keeps working",
   "practice.connect.asks.text": "Wait a moment: an agent on the Mac mini is about to ask something.",
   "practice.connect.work.kick": "Your turn",
-  "practice.connect.work.title": "Its question comes here",
+  "practice.connect.work.title": "What it leaves to check comes here",
   "practice.connect.work.text": "Work on the Mac mini that waits for you shows in your list with its name, and the count on its tile.",
   "practice.connect.end.kick": "End of chapter 9",
   "practice.connect.end.title": "Computers connect with one link",
@@ -60,7 +60,7 @@ const en = {
 
 const ko = {
   "practice.connect.title": "여러 컴퓨터, 한 팀",
-  "practice.connect.summary": "Mac, Windows, Linux 컴퓨터를 이어서, 그곳 에이전트의 일과 질문을 여기서 받아요",
+  "practice.connect.summary": "Mac, Windows, Linux 컴퓨터를 이어서, 그곳 에이전트의 일과 확인할 것을 여기서 받아요",
   "practice.connect.words": "계곡 목표 경험 계란",
   "practice.connect.miniTask": "arm64 야간 빌드 실패",
   "practice.connect.miniQuestion": "당분간 예전 툴체인으로 고정할까요?",
@@ -106,7 +106,7 @@ const ko = {
   "practice.connect.asks.title": "Mac mini도 계속 일해요",
   "practice.connect.asks.text": "잠깐 기다려요. Mac mini의 에이전트가 곧 무언가를 물어요.",
   "practice.connect.work.kick": "내 차례",
-  "practice.connect.work.title": "그 질문이 여기로 와요",
+  "practice.connect.work.title": "그 확인할 것이 여기로 와요",
   "practice.connect.work.text": "Mac mini에서 나를 기다리는 일은 그 컴퓨터 이름과 함께 내 목록에 뜨고, 그 칸에도 수가 붙어요.",
   "practice.connect.end.kick": "9장 끝",
   "practice.connect.end.title": "컴퓨터는 링크 하나로 연결돼요",
@@ -115,7 +115,7 @@ const ko = {
 
 const zhCN = {
   "practice.connect.title": "多台电脑，一个团队",
-  "practice.connect.summary": "连接一台 Mac、Windows 或 Linux 电脑，它的智能体的工作和提问都会来到这里",
+  "practice.connect.summary": "连接一台 Mac、Windows 或 Linux 电脑，它的智能体的工作和待确认都会来到这里",
   "practice.connect.words": "arrow art arrive artefact",
   "practice.connect.miniTask": "arm64 夜间构建失败",
   "practice.connect.miniQuestion": "暂时固定旧的工具链吗？",
@@ -161,7 +161,7 @@ const zhCN = {
   "practice.connect.asks.title": "Mac mini 也在继续工作",
   "practice.connect.asks.text": "稍等片刻：Mac mini 上的智能体马上要问一个问题。",
   "practice.connect.work.kick": "轮到你",
-  "practice.connect.work.title": "它的问题会来到这里",
+  "practice.connect.work.title": "它的待确认会来到这里",
   "practice.connect.work.text": "Mac mini 上等你处理的工作会带着那台电脑的名字出现在你的列表里，它的格子上也有计数。",
   "practice.connect.end.kick": "第 9 章 结束",
   "practice.connect.end.title": "电脑用一个链接连接",
@@ -170,7 +170,7 @@ const zhCN = {
 
 const ja = {
   "practice.connect.title": "複数のコンピュータ、ひとつのチーム",
-  "practice.connect.summary": "Mac・Windows・Linux のコンピュータをつなぎ、そのエージェントの仕事と質問をここで受け取ります",
+  "practice.connect.summary": "Mac・Windows・Linux のコンピュータをつなぎ、そのエージェントの仕事と確認することをここで受け取ります",
   "practice.connect.words": "arrow art arrive artefact",
   "practice.connect.miniTask": "arm64 のナイトリービルドが失敗",
   "practice.connect.miniQuestion": "当面は古いツールチェーンに固定しますか？",
@@ -216,7 +216,7 @@ const ja = {
   "practice.connect.asks.title": "Mac mini も働き続けます",
   "practice.connect.asks.text": "少し待つと、Mac mini のエージェントが何かを尋ねます。",
   "practice.connect.work.kick": "自分の番",
-  "practice.connect.work.title": "その質問がここに来ます",
+  "practice.connect.work.title": "その確認することがここに来ます",
   "practice.connect.work.text": "Mac mini であなたを待つ仕事は、そのコンピュータの名前と一緒に一覧に出て、その枠にも数が付きます。",
   "practice.connect.end.kick": "第 9 章 おわり",
   "practice.connect.end.title": "コンピュータはリンク一つでつながります",
