@@ -12,6 +12,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "./actions";
 import { answerPlace, type AnswerPlace, type FoundAnswerPath } from "./answerPaths";
 import { hostBridge } from "./host";
+import { keepScroll, keptScroll, placeAt, scrollPlace, stillAt } from "./conversationScroll";
 import { deskOn, deskPhase, holdsFoot, laneCards, livePane, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
 import { activeTab, closePanel, closeSide, closeTab, fileName, followFrom, followMoved, keepTab, newSessionBeside, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab, type NewSessionFollow } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
@@ -217,16 +218,27 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   // The conversation keeps its foot in view while the operator reads there (`stick`), and stays where they
   // scrolled otherwise. It follows sizes, not events: a reply's text fills its editor after this pass, a card
   // grows, the box under it grows a line, and Desk opened again would otherwise show the conversation's top.
+  // Left above its foot for another screen, it comes back to the item the operator was reading (`keptScroll`),
+  // held there while the items around it are drawn again, until the operator scrolls.
   const empty = shown.length === 0 && !answering && queued.length === 0;
   const drawn = desk !== null;
+  const scrollKey = `desk:${desk?.conversation.generation ?? 0}`;
   useLayoutEffect(() => {
     const box = scroller.current;
     if (!box) return;
+    let anchor = keptScroll(scrollKey);
+    stick.current = anchor === null;
     const pin = () => {
       if (stick.current) box.scrollTop = box.scrollHeight;
+      else if (anchor) placeAt(box, anchor);
     };
     let last = box.scrollTop;
     const follow = () => {
+      if (anchor && stillAt(box, anchor)) {
+        last = box.scrollTop;
+        return;
+      }
+      anchor = null;
       stick.current = holdsFoot(stick.current, last, box.scrollTop, box.scrollHeight - box.scrollTop - box.clientHeight, STICK_PX);
       last = box.scrollTop;
     };
@@ -236,10 +248,11 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     resized.observe(box);
     for (const child of box.children) resized.observe(child);
     return () => {
+      keepScroll(scrollKey, stick.current ? null : (anchor ?? scrollPlace(box)));
       box.removeEventListener("scroll", follow);
       resized.disconnect();
     };
-  }, [empty, drawn]);
+  }, [empty, drawn, scrollKey]);
 
   useReadShownCards(scroller, jobs, actions.deskJobRead);
   useNewSessionBeside(actions, desk?.conversation.generation, items, byId);

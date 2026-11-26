@@ -138,6 +138,8 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
     <FileDropZone ref={root} tray={foot ? null : tray} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""}>
       {head}
       <ThreadView
+        key={paneId ?? ""}
+        scrollKey={paneId ? `thread:${paneId}` : null}
         job={job}
         workingSince={rows.find((row) => row.pane_id === paneId)?.last_prompt_at_unix_ms ?? null}
         lines={screen.lines}
