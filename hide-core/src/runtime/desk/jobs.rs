@@ -9,7 +9,6 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{Value, json};
 
 use super::super::Runtime;
-use crate::agent_state::RowMark;
 use crate::coordination::{Command as AgentCommand, SPAWN_BUSY};
 use crate::delivery::{Actor, Command, HIDE_DESK_ROLE};
 use crate::desk::{MAX_QUEUE, QueuedJob, QueuedState};
@@ -1102,6 +1101,12 @@ impl Runtime {
             .iter()
             .filter_map(|card| card.pane_id.as_deref())
             .collect();
+        // A gone pane whose session runs in another pane is that pane's card.
+        let moved: HashMap<&str, &str> = self
+            .desk_moved()
+            .into_iter()
+            .map(|(pane, row)| (pane, row.pane_id.as_str()))
+            .collect();
         let mut seen: HashSet<&str> = HashSet::new();
         let mut named = Vec::new();
         for item in self
@@ -1126,6 +1131,7 @@ impl Runtime {
                 _ => continue,
             };
             for pane in panes {
+                let pane = moved.get(pane).copied().unwrap_or(pane);
                 if carded.contains(pane) || !seen.insert(pane) {
                     continue;
                 }
@@ -1587,7 +1593,8 @@ impl Runtime {
         let workers = self.desk_workers(&cards, &index);
         let named = self.desk_named(&cards.iter().chain(&workers).collect::<Vec<_>>(), &index);
         let records = self.desk_records();
-        self.publish_desk_jobs(cards, workers, named, records);
+        let moved = self.desk_moved_panes();
+        self.publish_desk_jobs(cards, workers, named, records, moved);
         self.compose_desk_mentions();
         if letters_read || self.desk_chips_moved() {
             self.compose_desk();
@@ -1605,7 +1612,8 @@ impl Runtime {
         let workers = self.desk_workers(&jobs, &index);
         let named = self.desk_named(&jobs.iter().chain(&workers).collect::<Vec<_>>(), &index);
         let records = self.desk_records();
-        self.publish_desk_jobs(jobs, workers, named, records);
+        let moved = self.desk_moved_panes();
+        self.publish_desk_jobs(jobs, workers, named, records, moved);
     }
 
     /// The cards of the workers `jobs` conduct: each worker pane's spawn,
@@ -1656,12 +1664,14 @@ impl Runtime {
         workers: Vec<crate::model::DeskJobSnapshot>,
         named: Vec<crate::model::DeskJobSnapshot>,
         records: Vec<crate::model::DeskRecordSnapshot>,
+        moved: Vec<crate::model::DeskMovedSnapshot>,
     ) {
         if self.snapshot.desk_jobs.as_ref().is_some_and(|section| {
             section.jobs == jobs
                 && section.workers == workers
                 && section.named == named
                 && section.records == records
+                && section.moved == moved
         }) {
             return;
         }
@@ -1670,7 +1680,19 @@ impl Runtime {
             workers,
             named,
             records,
+            moved,
         }));
+    }
+
+    /// [`Self::desk_moved`] as the `desk_jobs` section sends it.
+    fn desk_moved_panes(&self) -> Vec<crate::model::DeskMovedSnapshot> {
+        self.desk_moved()
+            .into_iter()
+            .map(|(pane, row)| crate::model::DeskMovedSnapshot {
+                pane_id: pane.to_owned(),
+                live_pane_id: row.pane_id.clone(),
+            })
+            .collect()
     }
 
     /// The `desk_mentions` section, sent again when the `@` menu moved.
@@ -1694,10 +1716,7 @@ impl Runtime {
         if !followed().any(has_chips) {
             return;
         }
-        let rows: HashMap<&str, &SidebarAgentSnapshot> = self
-            .agent_rows()
-            .map(|row| (row.pane_id.as_str(), row))
-            .collect();
+        let rows = self.desk_chip_rows();
         for item in items.iter_mut().rev().take(FOLLOWED_CHIPS) {
             match item {
                 DeskItem::Handed { pane_id, mark, .. } => {
@@ -1725,11 +1744,8 @@ impl Runtime {
         if !followed().any(has_chips) {
             return false;
         }
-        let rows: HashMap<&str, RowMark> = self
-            .agent_rows()
-            .map(|row| (row.pane_id.as_str(), row.mark))
-            .collect();
-        let now = |pane: &str| rows.get(pane).copied();
+        let rows = self.desk_chip_rows();
+        let now = |pane: &str| rows.get(pane).map(|row| row.mark);
         followed().any(|item| match item {
             DeskItem::Handed { pane_id, mark, .. } => now(pane_id) != *mark,
             DeskItem::Reply { mentions, .. } => {
