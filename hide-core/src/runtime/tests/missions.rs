@@ -19913,7 +19913,15 @@ fn a_checkers_record_ends_its_parents_watch_and_sleeps_it_until_the_next_round()
     );
 
     // The reviewer records every finding: the record is its report.
-    let findings = "S1 serious: the parser drops v1 files at parse.rs:40\nM1 minor: a stale comment at parse.rs:12";
+    // Past the 600 bytes a record's evidence was held to before.
+    let findings = format!(
+        "S1 serious: the parser drops v1 files at parse.rs:40\n{}",
+        (1..=12)
+            .map(|n| format!("M{n} minor: a stale comment about the v1 reader at parse.rs:{n}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    assert!(findings.len() > 600);
     command(
         &mut runtime,
         "reviewer",
@@ -19939,7 +19947,11 @@ fn a_checkers_record_ends_its_parents_watch_and_sleeps_it_until_the_next_round()
         .checkers[0]
         .evidence
         .clone();
-    assert_eq!(review.as_deref(), Some(findings), "the findings stay whole");
+    assert_eq!(
+        review.as_deref(),
+        Some(findings.as_str()),
+        "the findings stay whole"
+    );
     drop(runtime);
     flush();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -19963,6 +19975,35 @@ fn a_checkers_record_ends_its_parents_watch_and_sleeps_it_until_the_next_round()
     )
     .unwrap();
     runtime.publish_delivery(Arc::new(ledger), true);
+    assert_eq!(marks(&runtime), [("agent-3".to_owned(), "record")]);
+
+    // A letter that would wake it drops the mark, as it drops a report's,
+    // and the same answer recorded again marks it again.
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    crate::delivery::mailbox::send(
+        &mut ledger,
+        &actor(&runtime, "recipient"),
+        &actor(&runtime, "reviewer"),
+        "fix-plan-s1",
+        "Plan for S1: keep v1 files in the reader",
+        "request",
+        None,
+        unix_milliseconds(),
+    )
+    .unwrap();
+    runtime.publish_delivery(Arc::new(ledger), true);
+    assert!(marks(&runtime).is_empty());
+    let (_, changed) = command(
+        &mut runtime,
+        "reviewer",
+        record_of(
+            "fix",
+            "review",
+            json!({"commit": HEAD, "pass": false, "evidence": findings}),
+        ),
+    )
+    .unwrap();
+    assert!(!changed, "the same answer changes no line");
     assert_eq!(marks(&runtime), [("agent-3".to_owned(), "record")]);
 
     // The worker's next check asks the reviewer again, by a cell that
@@ -20024,6 +20065,62 @@ fn a_records_evidence_past_a_letters_cap_is_refused() {
             .1
     );
     assert_eq!(line_state(&runtime, "review"), CriterionState::Fail);
+}
+
+/// A checker's findings read whole in the answer `hide mission show`
+/// draws (`mission_view_for`), while the snapshot's missions section,
+/// compared on every read and sent whole on any mission's change, carries
+/// at most the 600 bytes a record's evidence was held to before, cut on a
+/// character boundary and ending in "…".
+#[test]
+fn a_long_evidence_reads_whole_in_show_and_cut_in_the_snapshot() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    let findings = format!("S1: {}", "가".repeat(700));
+    let (answer, _) = command(
+        &mut runtime,
+        "reviewer",
+        record_of(
+            "fix",
+            "review",
+            json!({"commit": HEAD, "pass": false, "evidence": findings}),
+        ),
+    )
+    .unwrap();
+    let shown = answer["mission"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["key"] == "fix")
+        .unwrap()["criteria"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|line| line["key"] == "review")
+        .unwrap()["checkers"][0]["evidence"]
+        .clone();
+    assert_eq!(shown, json!(findings), "show reads it whole");
+    runtime.refresh_missions();
+    let carried = runtime.snapshot.missions.items[0]
+        .nodes
+        .iter()
+        .find(|node| node.key == "fix")
+        .unwrap()
+        .criteria
+        .iter()
+        .find(|line| line.key == "review")
+        .unwrap()
+        .checkers[0]
+        .evidence
+        .clone()
+        .unwrap();
+    assert!(
+        carried.len() <= 600 && carried.len() > 590 && carried.ends_with('…'),
+        "{} bytes",
+        carried.len()
+    );
+    assert!(findings.starts_with(carried.trim_end_matches('…')));
 }
 
 /// PRD mission-speed-2 B5: a check while the node's reviewer ended asks

@@ -62,7 +62,10 @@ const DEPENDENCY_LIMIT: usize = 16;
 /// Issue numbers and paths a node may declare it touches (B6).
 const TOUCH_LIMIT: usize = 32;
 const TITLE_LIMIT: usize = 200;
-const LINE_LIMIT: usize = 600;
+/// A line of words a command carries; a record's evidence was held to it
+/// before a checker's record carried every finding, and the missions
+/// section of the snapshot still is (`runtime::missions::for_snapshot`).
+pub(crate) const LINE_LIMIT: usize = 600;
 /// Steps a node's plan entry names: as many as a worker's own `hide task`
 /// plan takes, which starts from them.
 pub const STEP_LIMIT: usize = 8;

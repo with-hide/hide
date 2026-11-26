@@ -2073,6 +2073,38 @@ pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<
     Some(intent)
 }
 
+/// `view` as the snapshot's missions section carries it: each line's and
+/// each checker's evidence past `missions::LINE_LIMIT` bytes cut on a
+/// character boundary and ended with "…", so the reader sees it was cut.
+/// The section has no generation: it is compared on every read and cloned
+/// whole under the lock when any mission moves, so it keeps the bound a
+/// record's evidence had before a checker's record held every finding (up
+/// to `delivery::BODY_LIMIT`). The whole text is `hide mission show`'s,
+/// whose view (`Runtime::mission_view_for`) never passes here.
+fn for_snapshot(mut view: MissionView) -> MissionView {
+    let cut = |evidence: &mut Option<String>| {
+        let Some(text) = evidence
+            .as_mut()
+            .filter(|text| text.len() > crate::missions::LINE_LIMIT)
+        else {
+            return;
+        };
+        let mut end = crate::missions::LINE_LIMIT - '…'.len_utf8();
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push('…');
+    };
+    for line in view.nodes.iter_mut().flat_map(|node| &mut node.criteria) {
+        cut(&mut line.evidence);
+        for checker in &mut line.checkers {
+            cut(&mut checker.evidence);
+        }
+    }
+    view
+}
+
 /// Takes the Conductor's standing CI and review cells of node `node` out
 /// of `mission`'s record, as a merge or a CI that passed resolves them; a
 /// pass does so with no news of its own (`Runtime::note_mission_pulls`).
@@ -5871,10 +5903,10 @@ impl Runtime {
                     .flatten();
                 match kept {
                     Some(view) => view.clone(),
-                    None => MissionView {
+                    None => for_snapshot(MissionView {
                         destination: self.judged_destination(mission),
                         ..self.view_mission(mission, &agents, &sleeping, ledger.as_deref())
-                    },
+                    }),
                 }
             })
             .collect();
