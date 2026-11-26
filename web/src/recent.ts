@@ -232,6 +232,13 @@ function unechoedVisit(rest: SnapshotRest | null): RecentPlace | null {
   if (reportedOver !== null && orderOf(rest) !== reportedOver) reportedOver = null;
   return reportedOver === null ? null : reported;
 }
+/**
+ * The mission whose detail the mission screen shows, held back until the
+ * operator moves on from it: ↑ and ↓ in the screen's list show every mission
+ * they pass, and only the one the operator stops on is a visit (operator
+ * decision 2026-11-26). Until then it reads as the first place.
+ */
+let staying: RecentPlace | null = null;
 /** The entry a Recent Panels or Recent Projects commit asked for, until the page shows it (see `expectSurface`). */
 let expected: string | null = null;
 /** The place a place cycle commit asked for, by its key, until the operator is on it (see `expectPlace`). */
@@ -278,6 +285,7 @@ export function configurePlaceVisits(report: (place: RecentPlace) => void) {
   reportVisit = report;
   reported = null;
   reportedOver = null;
+  staying = null;
 }
 
 /**
@@ -300,21 +308,36 @@ function placeHeld(rest: SnapshotRest | null, place: RecentPlace): boolean {
 /**
  * Reports the place the operator is on as a visit. A place joins the order
  * only once the operator has been on it, and only a place the shell holds is
- * reported. A commit's own frames (the checkout arriving before its pane is
- * focused) are not visits, as for `observeEntries`.
+ * reported; a mission only once the operator moves on from it to another
+ * place, or a commit takes them to another mission (`staying`). A commit's
+ * own frames (the checkout arriving before its pane is focused) are not
+ * visits, as for `observeEntries`.
  */
 export function observePlace(rest: SnapshotRest | null, current: RecentPlace | null) {
   unechoedVisit(rest);
   const key = current ? placeKey(current) : null;
   if (expectedPlace && key !== expectedPlace) return;
+  // A commit chose where to go; another mission shown on the mission screen is a skim past this one.
+  const committed = expectedPlace !== null;
   expectedPlace = null;
+  if (staying && placeKey(staying) !== key && (current?.kind !== "mission" || committed)) {
+    const left = staying;
+    staying = null;
+    if (placeHeld(rest, left)) report(rest, left);
+  }
   if (!current || !placeHeld(rest, current)) return;
+  if (current.kind === "mission") staying = current;
+  else report(rest, current);
+}
+
+function report(rest: SnapshotRest | null, place: RecentPlace) {
+  const key = placeKey(place);
   // Another window's visit moves the core's head, so the same place is reported again once it is not first.
   const head = recentPlaces(rest)[0];
   if (reported && placeKey(reported) === key && head && placeKey(head) === key) return;
-  reported = current;
+  reported = place;
   reportedOver = orderOf(rest);
-  reportVisit(current);
+  reportVisit(place);
 }
 
 /** Marks the place a commit is bringing forward, by its key: visits are not recorded until the operator is on it or acts. */
@@ -325,10 +348,13 @@ export function expectPlace(key: string | null) {
 /** The places, the one the operator was on last first; a remote pane id is scoped to its device, so one id names one pane. */
 export function recentPlaces(rest: SnapshotRest | null): readonly RecentPlace[] {
   const held = rest?.ui_state?.recent_places ?? [];
-  const pending = unechoedVisit(rest);
-  if (pending === null) return held;
-  const key = placeKey(pending);
-  return [pending, ...held.filter((place) => placeKey(place) !== key)];
+  const ahead: RecentPlace[] = [];
+  for (const place of [staying, unechoedVisit(rest)]) {
+    if (place && !ahead.some((row) => placeKey(row) === placeKey(place))) ahead.push(place);
+  }
+  if (ahead.length === 0) return held;
+  const first = new Set(ahead.map(placeKey));
+  return [...ahead, ...held.filter((place) => !first.has(placeKey(place)))];
 }
 
 /** Pane ids of the place order, the one the keyboard was in last first. */
@@ -370,6 +396,7 @@ export function resetRecent() {
   reportVisit = () => {};
   reported = null;
   reportedOver = null;
+  staying = null;
   expected = null;
   expectedPlace = null;
 }

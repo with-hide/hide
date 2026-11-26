@@ -5,7 +5,7 @@ import { noteAreaFrame } from "./areaFrames";
 import { areaGeometry } from "./areaLayout";
 import { createActions } from "./actions";
 import { commitCycle, deskReturn, reconcileHeldCycle } from "./keyboard";
-import { configurePlaceVisits, expectPlace, observeEntries, observePlace, paneKey, resetRecent, tabSurface } from "./recent";
+import { configurePlaceVisits, expectPlace, observeEntries, observePlace, paneKey, recentPlaces, resetRecent, tabSurface } from "./recent";
 import type { RecentPlace, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore } from "./ui";
@@ -402,7 +402,7 @@ describe("recent place cycle: missions, automations and Desk", () => {
 
   it("commits a mission, an automation or Desk on the page's own screen, closing the Overview over it, with no event to the core", () => {
     const rest = places(); draw(rest);
-    for (const place of [desk, automation("auto-1"), mission("m-mini"), mission("m-tool"), pane("t1-pane")]) observePlace(rest, place);
+    for (const place of [desk, mission("m-mini"), automation("auto-1"), mission("m-tool"), pane("t1-pane")]) observePlace(rest, place);
     const sent: { kind: string; payload: Record<string, unknown> }[] = [];
     const actions = createActions((event) => { sent.push(event as never); });
     const row = (key: string) => {
@@ -439,6 +439,26 @@ describe("recent place cycle: missions, automations and Desk", () => {
     observePlace(rest, automation("auto-1"));
     observePlace(rest, desk);
     expect(reported).toEqual([automation("auto-1"), desk]);
+  });
+
+  it("records only the mission the operator stops on, once they move on from it, and reads it first until then", () => {
+    const rest = places(); draw(rest);
+    const reported: RecentPlace[] = [];
+    configurePlaceVisits((place) => { reported.push(place); });
+    observePlace(rest, pane("t2-pane"));
+    // ↑ and ↓ in the mission screen's list pass two missions; neither is a visit yet.
+    observePlace(rest, mission("m-here"));
+    observePlace(rest, mission("m-mini"));
+    expect(reported).toEqual([pane("t2-pane")]);
+    expect(recentPlaces(rest).slice(0, 2)).toEqual([mission("m-mini"), pane("t2-pane")]);
+    // Moving on to an automation records the mission stopped on, then the automation.
+    observePlace(rest, automation("auto-1"));
+    expect(reported).toEqual([pane("t2-pane"), mission("m-mini"), automation("auto-1")]);
+    // A commit from one mission to another is a choice, not a skim: the one left is recorded.
+    observePlace(rest, mission("m-here"));
+    expectPlace("mission\u0000m-mini");
+    observePlace(rest, mission("m-mini"));
+    expect(reported).toEqual([pane("t2-pane"), mission("m-mini"), automation("auto-1"), mission("m-here")]);
   });
 
   it("leaves Desk for a mission used just before it, where the first chord from Desk lands, and otherwise for the tab used before it", () => {
