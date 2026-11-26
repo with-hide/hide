@@ -29,7 +29,7 @@ import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
 import { Separator } from "../components/ui/separator";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { askingCount, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskPermission, type DeskSelection, type DeskSessionRef, type ThreadReadFailure, type WorkingPhase } from "../desk";
+import { askingCount, deskFavorites, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskPermission, type DeskSelection, type DeskSessionRef, type ThreadReadFailure, type WorkingPhase } from "../desk";
 import { commandRows, keepSent, mentionTree, type ComposerTray, type TrayFile } from "../deskComposer";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -40,7 +40,7 @@ import { useShellStore } from "../store";
 import type { DeskCommand, SessionPull, SnapshotRest } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
-  AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_CARD, PLAN_EXIT_OPTIONS, WAITING_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
+  AGENTS, AGENTS_PREPARING, FAVORITE_MODELS, cardSceneItems, LONG_CARD, PLAN_EXIT_OPTIONS, WAITING_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
   mentionItems, missionItems, OUTPUTS, PICTURES, RECORD_THREAD, SESSION_VIEWS, SESSIONS, stateItems, statusItems, storyJobs, switchedItems, WORKER_THREAD,
 } from "./deskSceneData";
 
@@ -130,7 +130,7 @@ function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "",
     <DeskComposer value={text} draft={{ text, mentions }} label={t("desk.composer.label")} placeholder={t("desk.composer.placeholder")} tray={sceneTray(files)} answering={answering} focused={mention !== null} menu={mention} menuOpen={mention !== null} onChange={setText} onSend={noop} onStop={noop}>
       <DeskPermissionMenu permission={permission} agent={agents.find((agent) => agent.id === selection.agent)?.label ?? null} open={menuOpen === "permissions" ? true : undefined} onPermission={noop} />
       <Separator orientation="vertical" className="mx-xxs data-[orientation=vertical]:h-(--size-icon)" />
-      <DeskAgentBar agents={agents} selection={selection} open={menuOpen === "agent" ? "agent" : null} onAgent={noop} onModel={noop} onEffort={noop} onAgentSettings={noop} />
+      <DeskAgentBar agents={agents} selection={selection} favorites={deskFavorites(FAVORITE_MODELS, agents, selection)} open={menuOpen === "agent" ? "agent" : null} onAgent={noop} onFavorite={noop} onModel={noop} onEffort={noop} onAgentSettings={noop} />
     </DeskComposer>
   );
 }
