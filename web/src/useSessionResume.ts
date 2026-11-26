@@ -18,12 +18,15 @@ type Send = (request: string, confirmOnly: boolean) => void;
 
 /**
  * Follows one resume to its answer (B12, B14): a tab that opened moves the
- * screen to its pane, a refusal or a failure stays on the line with Retry.
+ * screen to its pane, or goes where `opened` takes it (Desk opens it beside
+ * itself, frame K), and a refusal or a failure stays on the line with Retry.
  */
-export function useSessionResume(): { resume: Resume; start: (send: Send) => void } {
+export function useSessionResume(opened?: (paneId: string) => void): { resume: Resume; start: (send: Send) => void } {
   const { t } = useInterfaceTranslation();
   const [resume, setResume] = useState<Resume>({ request: null, failure: null, uncertain: false });
   const sending = useRef(false);
+  const goTo = useRef(opened);
+  goTo.current = opened;
   const confirming = useRef(false);
   // A retry keeps the original identity and destination, including after a timeout.
   const intent = useRef<{ id: string; send: Send } | null>(null);
@@ -50,7 +53,10 @@ export function useSessionResume(): { resume: Resume; start: (send: Send) => voi
       if (answer.agentPhase !== "failed") {
         intent.current = null;
         if (answer.agentPhase) ui.setWatchedTask(answer.taskId);
-        if (answer.paneId) ui.setFocusWhenListed(answer.paneId);
+        if (answer.paneId) {
+          if (goTo.current) goTo.current(answer.paneId);
+          else ui.setFocusWhenListed(answer.paneId);
+        }
       }
       const failure = agentFailure(answer.agentReason, null);
       const reason = "key" in failure ? t(failure.key) : failure.message;

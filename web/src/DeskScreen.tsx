@@ -623,7 +623,8 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
   // whether its file is still there, so the resume's own answer does.
   const checkout = resumeCheckout({ device_id: device, cwd: record.cwd }, catalogOf(workspaces, remote), null, node);
   const blocked = resumeBlock({ agent: record.session.agent, file: "unknown", device_id: device }, checkout, devices, node);
-  const { resume, start } = useSessionResume();
+  // The resumed session opens beside Desk, as any session Desk opens does, not in its own tab.
+  const { resume, start } = useSessionResume((pane) => actions.openDeskSession(pane));
   const resumeNow = () => {
     const provider = resumeProvider(record.session.agent);
     if (!checkout || !provider) return;
