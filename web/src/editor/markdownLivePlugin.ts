@@ -20,7 +20,7 @@ import { hasVisibleHtml, imageTarget, liveLinkAddress, resolveInCheckout, saniti
 import { LiveImages, readImageFile } from "./liveImages";
 import { markdownLivePlan, MARKDOWN_LIVE_BYTE_LIMIT } from "./markdownLive";
 import { drawMermaid, showMermaidSvg, watchPalette } from "../markdownMermaid";
-import { renderMarkdown } from "../mobile/markdown";
+import { renderMarkdown, type InlinePart } from "../mobile/markdown";
 
 /**
  * What a Live text can reach outside itself: where its relative paths start
@@ -41,11 +41,13 @@ const OUTSIDE: LiveFiles = {
   openPath: () => {},
 };
 
+const NO_PARTS: readonly InlinePart[] = [];
+
 /** How long an image may stay pending before it falls back to its alt text. */
 const IMAGE_TIMEOUT_MS = 8_000;
 
-/** What a widget draws with: the view's image cache and the files it may name. */
-type Drawing = { images: LiveImages; files: LiveFiles };
+/** What a widget draws with: the view's image cache, the files it may name and the parts its words carry. */
+type Drawing = { images: LiveImages; files: LiveFiles; parts: readonly InlinePart[] };
 
 class BulletWidget extends WidgetType {
   toDOM(): HTMLElement {
@@ -316,17 +318,18 @@ class TableWidget extends WidgetType {
   constructor(
     readonly source: string,
     private readonly files: LiveFiles,
+    private readonly parts: readonly InlinePart[],
   ) {
     super();
   }
   eq(other: TableWidget): boolean {
-    return other.source === this.source;
+    return other.source === this.source && other.parts === this.parts;
   }
   toDOM(view: EditorView): HTMLElement {
     const root = document.createElement("div");
     root.className = "cm-md-table";
     const react = createRoot(root);
-    react.render(createElement(Drawn, { drawn: () => view.requestMeasure(), children: renderMarkdown(this.source, { html: true, link: liveLinkAddress }) }));
+    react.render(createElement(Drawn, { drawn: () => view.requestMeasure(), children: renderMarkdown(this.source, { html: true, link: liveLinkAddress, parts: this.parts }) }));
     tableRoots.set(root, react);
     // A picture in a cell changes the table's height when it arrives or gives up.
     for (const type of ["load", "error"]) root.addEventListener(type, () => view.requestMeasure(), true);
@@ -430,7 +433,7 @@ function build(state: EditorState, reveal: boolean, drawing: Drawing): Decoratio
         ranges.push(Decoration.replace({ widget: new MermaidWidget(range.source ?? ""), block: true }).range(range.from, range.to));
         break;
       case "table":
-        ranges.push(Decoration.replace({ widget: new TableWidget(range.source ?? "", drawing.files), block: true }).range(range.from, range.to));
+        ranges.push(Decoration.replace({ widget: new TableWidget(range.source ?? "", drawing.files, drawing.parts), block: true }).range(range.from, range.to));
         break;
       case "image":
         ranges.push(
@@ -446,15 +449,17 @@ function build(state: EditorState, reveal: boolean, drawing: Drawing): Decoratio
  * `reveal` shows the marks of the lines the selection touches, as an editor
  * does; a read-only text (an issue's body) has no caret to edit at, so it
  * never reveals them. `files` says where a document's relative images and
- * links start; a text with none loads web images only.
+ * links start; a text with none loads web images only. `parts` are tokens
+ * of the text drawn as parts (a read-only text's chips), which a table's
+ * cells, drawn apart from the text's lines, draw too.
  *
  * The field rebuilds when the document, the selection or the parse changed, so
  * a lazily loaded Markdown language lights the view up as soon as its first
  * tree exists. A widget whose source and base are unchanged keeps its DOM, so
  * an edit outside an HTML block neither redraws it nor reads its images again.
  */
-export function markdownLive({ reveal = true, files = OUTSIDE }: { reveal?: boolean; files?: LiveFiles } = {}): Extension {
-  const drawing: Drawing = { images: new LiveImages(readImageFile, (message) => useShellStore.getState().noteDiagnostic(message)), files };
+export function markdownLive({ reveal = true, files = OUTSIDE, parts = NO_PARTS }: { reveal?: boolean; files?: LiveFiles; parts?: readonly InlinePart[] } = {}): Extension {
+  const drawing: Drawing = { images: new LiveImages(readImageFile, (message) => useShellStore.getState().noteDiagnostic(message)), files, parts };
   const field = StateField.define<DecorationSet>({
     create: (state) => build(state, reveal, drawing),
     update(value, tr) {

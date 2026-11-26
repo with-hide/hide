@@ -16,6 +16,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import type { CopyText } from "./components/human-turn-copy";
 import { languageLoader } from "./editor/languages";
 import { markdownLive } from "./editor/markdownLivePlugin";
+import type { InlinePart } from "./mobile/markdown";
 import { baseTheme, liveTheme } from "./editor/theme";
 
 // The chrome sets the editor's monospace on `.cm-content` and the card's
@@ -35,8 +36,8 @@ const chat = EditorView.theme({
   "&.cm-editor .cm-content": { fontSize: "var(--text-subhead)", lineHeight: "1.625" },
 });
 
-/** A token of the text drawn as a part instead of its letters, such as a session a Desk reply names. */
-export type MarkdownChip = { token: string; node: ReactNode };
+/** A token of the text drawn as a part instead of its letters, such as a session a Desk reply names; a table's cells draw it too. */
+export type MarkdownChip = InlinePart;
 
 const roots = new WeakMap<HTMLElement, Root>();
 
@@ -178,7 +179,7 @@ export function MarkdownText({ text, size = "body", chips = NO_CHIPS, copyCode }
       parent,
       state: EditorState.create({
         doc: text,
-        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false }), chipDecorations(text, chips), codeBlocks(copyCode), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
+        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false, parts: chips }), chipDecorations(text, chips), codeBlocks(copyCode), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
       }),
     });
     let live = true;

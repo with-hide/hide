@@ -26,7 +26,7 @@
 
 import type { SyntaxNode } from "@lezer/common";
 import { GFM, parser } from "@lezer/markdown";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { CodeBlock } from "../components/code-block";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { drawMermaid, isMermaidInfo, showMermaidSvg, watchPalette, type MermaidDrawing } from "../markdownMermaid";
@@ -48,16 +48,41 @@ const INLINE_CODE = "rounded-xs border border-border bg-secondary px-xs py-xxs f
 /** Which address a link may carry, or null when it stays its text. */
 export type LinkRule = (raw: string) => string | null;
 
-/** One parse: the source, whether its HTML is drawn, the link rule, and whether the run is a table cell's. */
-type Source = { text: string; html: boolean; link: LinkRule; cell?: boolean };
+/** A token of the text drawn as a part instead of its letters, such as a session Desk names (`MarkdownText`'s chips). */
+export type InlinePart = { token: string; node: ReactNode };
+
+const NO_PARTS: readonly InlinePart[] = [];
+
+/** One parse: the source, whether its HTML is drawn, the link rule, the parts its words carry, and whether the run is a table cell's. */
+type Source = { text: string; html: boolean; link: LinkRule; parts: readonly InlinePart[]; cell?: boolean };
 
 /**
  * `link` says which addresses a drawn link keeps: the web's by default (the
  * phone and the pull request card); the document view's Live mode gives its
  * own rule, which keeps a relative file for its modifier-click to open.
  */
-export function renderMarkdown(text: string, options: { html?: boolean; link?: LinkRule } = {}): ReactNode {
-  return blocks(markdown.parse(text).topNode, { text, html: options.html === true, link: options.link ?? webAddress });
+export function renderMarkdown(text: string, options: { html?: boolean; link?: LinkRule; parts?: readonly InlinePart[] } = {}): ReactNode {
+  return blocks(markdown.parse(text).topNode, { text, html: options.html === true, link: options.link ?? webAddress, parts: options.parts ?? NO_PARTS });
+}
+
+/** A run of plain words, each part's token in it drawn as the part; `at` is where the run starts in the text, which keys each part. */
+function withParts(run: string, at: number, parts: readonly InlinePart[]): ReactNode[] {
+  const out: ReactNode[] = [];
+  let rest = 0;
+  for (;;) {
+    let next: { index: number; part: InlinePart } | null = null;
+    for (const part of parts) {
+      if (!part.token) continue;
+      const index = run.indexOf(part.token, rest);
+      if (index >= 0 && (next === null || index < next.index)) next = { index, part };
+    }
+    if (next === null) break;
+    if (next.index > rest) out.push(run.slice(rest, next.index));
+    out.push(<Fragment key={`part-${at + next.index}`}>{next.part.node}</Fragment>);
+    rest = next.index + next.part.token.length;
+  }
+  if (rest < run.length) out.push(run.slice(rest));
+  return out;
 }
 
 function childrenOf(node: SyntaxNode): SyntaxNode[] {
@@ -280,14 +305,19 @@ function inline(node: SyntaxNode, source: Source, skip: ReadonlySet<string> = MA
   const tree = source.html ? new HtmlTree(source.link) : null;
   const out: ReactNode[] = [];
   const add = (part: ReactNode) => (tree ? tree.add(part) : out.push(part));
+  // Code keeps its letters; every other run of words draws its parts.
+  const parts = node.name === "InlineCode" ? NO_PARTS : source.parts;
+  const words = (from: number, to: number) => {
+    for (const part of parts.length ? withParts(text.slice(from, to), from, parts) : [text.slice(from, to)]) add(part);
+  };
   let at = node.from;
   for (const child of childrenOf(node)) {
-    if (child.from > at) add(text.slice(at, child.from));
+    if (child.from > at) words(at, child.from);
     if (tree && (child.name === "HTMLTag" || child.name === "Comment")) tree.html(text.slice(child.from, child.to), false);
     else if (!skip.has(child.name) && !MARKS.has(child.name)) add(span(child, source, tree ? tree.key() : out.length));
     at = child.to;
   }
-  if (node.to > at) add(text.slice(at, node.to));
+  if (node.to > at) words(at, node.to);
   return tree ? tree.done() : out;
 }
 

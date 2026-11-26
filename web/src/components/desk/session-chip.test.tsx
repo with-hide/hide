@@ -84,3 +84,16 @@ it("draws each mission the reply item carries in place of its token, a title wit
   expect(host.textContent).not.toContain("@mission(mission-63");
   expect(host.textContent).toContain("@mission(mission-9 not read)");
 });
+
+it("draws a session named inside a table cell, a list item and a quote as a chip, never as its token", async () => {
+  const mentions: DeskMention[] = ["w1:p1", "w1:p2", "w1:p3"].map((id, index) => ({ kind: "session", id, name: `job-${index + 1}`, mark: "going", agent_kind: "claude" }));
+  const [cell, item, quote] = mentions.map((mention) => `@session(${mention.id} ${mention.name})`);
+  const text = `| 역할 | 세션 |\n| --- | --- |\n| 지휘자 | ${cell} |\n\n- 맡은 쪽: ${item}\n\n> 기다림: ${quote}`;
+  const facts = (): SessionFacts => ({ listed: true, name: null, mark: "going", agent_kind: "claude", card: null, since: null, parent: null });
+  const host = await render(<SessionChipProvider source={{ facts, onOpen: () => undefined }}><DeskReply text={text} mentions={mentions} /></SessionChipProvider>);
+  // The table is drawn once the lazily loaded Markdown language parsed the reply.
+  await act(() => vi.waitFor(() => expect(host.querySelector(".cm-md-table [data-desk-session-chip]")).not.toBeNull()));
+  expect(host.querySelector(".cm-md-table [data-desk-session-chip]")?.textContent).toBe("job-1");
+  expect([...host.querySelectorAll("[data-desk-session-chip]")].map((chip) => chip.textContent).sort()).toEqual(["job-1", "job-2", "job-3"]);
+  expect(host.textContent).not.toContain("@session(");
+});
