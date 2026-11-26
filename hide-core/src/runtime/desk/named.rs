@@ -386,6 +386,7 @@ mod tests {
                 })
                 .collect(),
             missions: Vec::new(),
+            compaction: None,
         });
     }
 
