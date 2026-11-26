@@ -981,8 +981,6 @@ impl Runtime {
         }
     }
 
-    /// Ends the Desk process from the room: the reply under way stops, and
-    /// each waiting card closes as a refusal.
     /// An ordinary message's turn that ended done told the untold session
     /// its guide, so the session is stored to load again.
     fn desk_session_told(&mut self) {
@@ -1008,6 +1006,8 @@ impl Runtime {
         }
     }
 
+    /// Ends the Desk process from the room: the reply under way stops, and
+    /// each waiting card closes as a refusal.
     fn end_desk_process(&mut self) {
         self.order(Order::End);
         self.desk.untold = None;
