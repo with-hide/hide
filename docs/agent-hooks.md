@@ -321,9 +321,11 @@ A turn the agent wrote anything for is not unanswered, so after output only the 
 The read is the status's, not the labels': the agent-summary switch stops analysis and takes the AI fields off the row, and the label worker still reads each session on the agent's engine state change and lays what it finds (`labels::tests::an_interruption_is_read_from_the_session_file_with_summaries_off`, `runtime::tests::labels::a_hook_turn_ends_on_the_session_files_interruption_with_summaries_off`).
 The read runs on the label worker's read thread, once per engine state change and never per hook report or tick; under `Mutex<Runtime>` the core only compares the read's engine state with the turn's.
 Where a cell says not reported, the core reads the engine's state for that part until the agent gives an event for it: an OpenCode 2, Pi or omp permission prompt, and a Grok or Antigravity interrupt, show as the engine reads the screen.
-A Claude Code or Codex approval sends no event of its own, so the turn reads waiting while the approved call runs: in Claude Code until that call ends, and in Codex until the session's next tool call; a plain denial in Claude Code interrupts the turn, which the session file then says, and a denial with feedback lets the turn go on, which the session file's result for the call says (above).
-An answered MCP `elicitation_dialog` names no call, so it reads waiting until the session's next call starts or ends, since the tool that asked is still running.
-Codex's tool hooks keep to its shell, question and file tools, so an approval of an MCP tool in Codex reads waiting until the next of those or the turn's end.
+A Claude Code or Codex approval sends no event of its own, so the hook alone reads the turn waiting while the approved call runs: in Claude Code until that call ends, and in Codex until the session's next tool call.
+The core ends the wait at the answer instead, once the engine has read the dialog `blocked` and then the agent going on (above); only a wait whose dialog the engine never read on the screen lasts until the hook's event.
+A plain denial in Claude Code interrupts the turn, which the session file then says, and a denial with feedback lets the turn go on, which the session file's result for the call says (above).
+An answered MCP `elicitation_dialog` names no call, so the hook reads it waiting until the session's next call starts or ends, since the tool that asked is still running; the screen's answer ends it sooner in the same way.
+Codex's tool hooks keep to its shell, question and file tools, so the hook reads an approval of an MCP tool in Codex waiting until the next of those or the turn's end; the screen's answer ends it sooner in the same way.
 
 #### Which subagents run
 
