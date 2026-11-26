@@ -70,7 +70,20 @@ export function markdownLivePlan(tree: Tree, doc: Text, selection: { from: numbe
     return overlaps(line.from, line.to);
   };
   const lineSpanTouched = (from: number, to: number) => embedsRevealed && overlaps(doc.lineAt(from).from, doc.lineAt(to).to);
-  const defined = referenceLabels(tree, doc);
+  // A link with no address is one only when the document defines its label,
+  // which may come after it: such links wait for the walk's end.
+  const defined = new Set<string>();
+  const unaddressed: SyntaxNode[] = [];
+  const drawLink = (node: SyntaxNode) => {
+    if (overlaps(node.from, node.to)) return;
+    for (let child = node.firstChild; child; child = child.nextSibling) {
+      if (child.name === "LinkMark" || child.name === "URL" || child.name === "LinkTitle") {
+        ranges.push({ from: child.from, to: child.to, kind: "hide" });
+      }
+    }
+    const text = linkText(node);
+    if (text) ranges.push({ from: text.from, to: text.to, kind: "link" });
+  };
 
   tree.iterate({
     enter: (ref) => {
@@ -226,27 +239,27 @@ export function markdownLivePlan(tree: Tree, doc: Text, selection: { from: numbe
         return false;
       }
 
+      if (name === "LinkReference") {
+        const label = node.getChild("LinkLabel");
+        if (label) defined.add(normalLabel(doc.sliceString(label.from, label.to)));
+        return false;
+      }
+
       if (name === "Link") {
-        // `[words]` with no address and no definition of that label is no
-        // link (CommonMark), as a terminal's bars in brackets are not: it
-        // stays as written, in its line's colour.
-        if (!node.getChild("URL") && !defined.has(referenceLabel(node, doc))) {
-          ranges.push({ from: node.from, to: node.to, kind: "plain" });
-          return;
-        }
-        if (!overlaps(node.from, node.to)) {
-          for (let child = node.firstChild; child; child = child.nextSibling) {
-            if (child.name === "LinkMark" || child.name === "URL" || child.name === "LinkTitle") {
-              ranges.push({ from: child.from, to: child.to, kind: "hide" });
-            }
-          }
-          const text = linkText(node);
-          if (text) ranges.push({ from: text.from, to: text.to, kind: "link" });
-        }
+        if (node.getChild("URL")) drawLink(node);
+        else unaddressed.push(node);
         return;
       }
     },
   });
+
+  // `[words]` with no address and no definition of that label is no link
+  // (CommonMark), as a terminal's bars in brackets are not: it stays as
+  // written, in its line's colour.
+  for (const node of unaddressed) {
+    if (defined.has(referenceLabel(node, doc))) drawLink(node);
+    else ranges.push({ from: node.from, to: node.to, kind: "plain" });
+  }
 
   ranges.sort((left, right) => left.from - right.from || left.to - right.to);
   return ranges;
@@ -297,20 +310,6 @@ function imageParts(node: SyntaxNode, doc: Text): { src: string; alt: string; ti
 /** A link label as CommonMark matches it: case folded, inner spaces collapsed, brackets off. */
 function normalLabel(label: string): string {
   return label.replace(/^\[|\]$/g, "").trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-/** The labels the document defines (`[label]: address`). */
-function referenceLabels(tree: Tree, doc: Text): Set<string> {
-  const labels = new Set<string>();
-  tree.iterate({
-    enter: (ref) => {
-      if (ref.name !== "LinkReference") return;
-      const label = ref.node.getChild("LinkLabel");
-      if (label) labels.add(normalLabel(doc.sliceString(label.from, label.to)));
-      return false;
-    },
-  });
-  return labels;
 }
 
 /** The label a reference link looks up: its own `[label]`, or its text when it has none (`[text]`, `[text][]`). */
