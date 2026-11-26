@@ -4,7 +4,8 @@ import { CommandList } from "../ui/command";
 
 /**
  * The look every menu of Desk's composer shares (feedback 1 frame P 가): a
- * floating surface with a wide radius and the modal's fine rim and shadow,
+ * floating surface with a wide radius over the menus' own hairline ring and
+ * shadow (`menu-styles.ts`, one step up inside a modal by `useFloatingSurface`),
  * group names small and bold in the muted color, rows with room around
  * them, and the highlighted row a rounded fill as wide as the panel.
  *
@@ -13,10 +14,10 @@ import { CommandList } from "../ui/command";
  * permission, agent, model and effort menus), whose rows are the dropdown's
  * own and take the same height and fill.
  */
-export const DESK_MENU_PANEL = "w-(--radix-popover-trigger-width) rounded-xl border-none p-none shadow-modal";
+export const DESK_MENU_PANEL = "w-(--radix-popover-trigger-width) rounded-xl p-none";
 
 export const DESK_MENU_DROPDOWN =
-  "rounded-xl border-none p-xs shadow-modal [&_[role^=menuitem]]:rounded-md [&_[role^=menuitem]]:py-sm [&_[role^=menuitem][data-highlighted]]:bg-secondary! [&_[role^=menuitem][data-highlighted]]:text-foreground! [&_[role=menuitemradio][data-state=checked]]:bg-secondary [&_[role=menuitemradio]>span:first-child_.lucide-circle]:size-(--size-status-mark) [&_[role=menuitemradio]>span:first-child_.lucide-circle]:text-foreground";
+  "rounded-xl p-xs [&_[role^=menuitem]]:rounded-md [&_[role^=menuitem]]:py-sm [&_[role^=menuitem][data-highlighted]]:bg-secondary! [&_[role^=menuitem][data-highlighted]]:text-foreground! [&_[role=menuitemradio][data-state=checked]]:bg-secondary [&_[role=menuitemradio]>span:first-child_.lucide-circle]:size-(--size-status-mark) [&_[role=menuitemradio]>span:first-child_.lucide-circle]:text-foreground";
 
 /** A dropdown's group name in the panel's look: small, bold and muted. */
 export const DESK_MENU_HEADING = "text-micro font-semibold text-muted-foreground";
