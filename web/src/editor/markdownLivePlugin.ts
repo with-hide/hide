@@ -67,6 +67,22 @@ class BulletWidget extends WidgetType {
   }
 }
 
+/** A list item's mark in a read-only text, one width for every item, so the line can hang its wrapped words under its first. */
+class ListMarkWidget extends WidgetType {
+  constructor(readonly mark: string) {
+    super();
+  }
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = this.mark === "•" ? "cm-md-list-mark cm-md-bullet" : "cm-md-list-mark";
+    span.textContent = this.mark;
+    return span;
+  }
+  eq(other: ListMarkWidget): boolean {
+    return other.mark === this.mark;
+  }
+}
+
 class CheckboxWidget extends WidgetType {
   constructor(
     readonly checked: boolean,
@@ -437,7 +453,16 @@ function build(state: EditorState, reveal: boolean, drawing: Drawing): Decoratio
         ranges.push(Decoration.replace({}).range(range.from, range.to));
         break;
       case "bullet":
-        ranges.push(Decoration.replace({ widget: new BulletWidget() }).range(range.from, range.to));
+        // A read-only text draws the bullet as its item's lead (`listItem`).
+        if (reveal) ranges.push(Decoration.replace({ widget: new BulletWidget() }).range(range.from, range.to));
+        break;
+      case "listItem":
+        // A read-only text hangs the item's wrapped lines under its words: its lead becomes a mark of one width and the line
+        // indents by its depth and that width. The editor keeps the lead as text the caret goes into.
+        if (!reveal) {
+          ranges.push(Decoration.line({ class: "cm-md-list", attributes: { style: `--md-list-depth: ${range.depth ?? 0}` } }).range(range.from));
+          ranges.push(Decoration.replace({ widget: new ListMarkWidget(range.source ?? "•") }).range(range.from, range.to));
+        }
         break;
       case "checkbox":
         ranges.push(

@@ -143,6 +143,8 @@ it("draws a mission a table's cell or a list's item names as the one-line chip i
     // The list item reads on: its words, then the chip where the name was; the operator's turn is the chip's `!`, its words in the hint.
     const item = chips[1]!.closest(".cm-line")!;
     expect(item.textContent).toContain("머지 대기: ");
+    // The item's line hangs its wrapped words under its first: its lead is a mark of one width, never the `- ` it was written with.
+    expect([item.classList.contains("cm-md-list"), item.querySelector(".cm-md-list-mark")?.textContent, item.textContent?.startsWith("- ")]).toEqual([true, "•", false]);
     expect([chips[1]!.getAttribute("data-mission-chip-turn"), chips[1]!.textContent?.endsWith("!"), chips[1]!.textContent?.includes("내 차례")]).toEqual(["decision", true, false]);
   } finally {
     useShellStore.setState(saved, true);
