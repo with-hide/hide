@@ -119,8 +119,8 @@ const NO_REPLY_MISSIONS: readonly DeskMissionMention[] = [];
  * open it; the core reads both from the finished answer, so a `live` one
  * streams its text alone; a stopped answer keeps what it said and says it
  * stopped (B7). Given `copy`, it offers `복사` of its original words, each
- * session and mission said by its name, on hover and on every code block
- * (Doop E2).
+ * session and mission said by its name, always under it and on every code
+ * block (Doop E2).
  */
 export function DeskReply({ text, stopped = false, live = false, mentions = NO_REPLY_MENTIONS, missions = NO_REPLY_MISSIONS, onMention, onMission, onFile, copy }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; missions?: readonly DeskMissionMention[]; onMention?: (mention: DeskMention) => void; onMission?: (missionId: string) => void; /** A file path the answer names, pressed (feedback 2 frame M [2]); without it paths stay words. */ onFile?: (file: FoundAnswerPath) => void; copy?: CopyText }) {
   const { t } = useInterfaceTranslation();

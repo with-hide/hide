@@ -232,7 +232,7 @@ function WorkLine({ line, words, actions }: { line: ThreadLine; words: Words; ac
 /**
  * The agent's words as Desk's answers read (Doop E2): Markdown in the
  * answer's type, an `@name` as its session's chip, `복사` of the original
- * words on hover and on every code block. `lit` is the sentence of it a
+ * words always under it and on every code block. `lit` is the sentence of it a
  * question Hide found asks, lit for a moment after the question line brought
  * it into view (Doop N3 가).
  */
