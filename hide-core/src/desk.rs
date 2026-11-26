@@ -826,7 +826,8 @@ mod tests {
         displays(&mut tree)
             .expect("the area's Views")
             .push(serde_json::to_value(&page).unwrap());
-        let mut value = serde_json::to_value(Stored::default()).unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&encode(&Stored::default()).unwrap()).unwrap();
         value["views"] = tree;
 
         let read = decode(&serde_json::to_vec(&value).unwrap()).unwrap();
