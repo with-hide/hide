@@ -1,9 +1,10 @@
 // What a device row of Settings › Devices opens on (operator decision
-// 2026-11-24, Doop canvas 1N77v1reLZ): the two ways a device is connected,
-// which one it uses now, what the other costs, and the condition its
-// machine is in, beside the one button that switches it. Everything it
-// draws is hided's answer or the core's row (`switchWays.ts`); it decides
-// nothing about a switch itself.
+// 2026-11-24, Doop canvas 1N77v1reLZ; drawn side by side 2026-11-26): the two
+// ways a device is connected as two cards, which one it uses now, what each
+// keeps doing while this computer sleeps, and the condition its machine is
+// in, beside the one button that switches it. Everything it draws is hided's
+// answer or the core's row (`switchWays.ts`); it decides nothing about a
+// switch itself.
 
 import { CheckIcon, LoaderCircleIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -15,11 +16,13 @@ import { Button } from "../components/ui/button";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { Separator } from "../components/ui/separator";
 import { useInterfaceTranslation } from "../i18n/client";
+import { useOnScreen } from "../lib/useOnScreen";
 import { cn } from "../lib/utils";
 import type { SwitchCondition } from "../pairing";
 import type { DeviceSwitchStep } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
+import "./deviceWays.css";
 import { FixCommand } from "./FixCommand";
 import { stepState, SWITCH_STEPS, switchButton, switchFailureKey, type SwitchLook, type SwitchOutcome } from "./switchWays";
 
@@ -35,14 +38,16 @@ export function WayBadge({ way, deviceId }: { way: "ssh" | "wsl" | "server"; dev
 
 /**
  * How one device stands for its opened row: `way` is the connection it
- * uses now, `connected` whether its machine can be read, `step` the switch
- * the core says is running and `pressed` one this window just asked for.
+ * uses now, `direct` the login it is (or was, before a switch) reached
+ * over, `connected` whether its machine can be read, `step` the switch the
+ * core says is running and `pressed` one this window just asked for.
  */
 export type WaysState = {
   deviceId: string;
   name: string;
   way: "ssh" | "wsl" | "server";
-  /** The machine runs Windows, which is not switched: one line stands in the box's place. */
+  direct: "ssh" | "wsl";
+  /** The machine runs Windows, which is not switched: one line stands in the cards' place. */
   windows: boolean;
   connected: boolean;
   look: SwitchLook | null;
@@ -58,47 +63,218 @@ export function DeviceWays({ state, actions }: { state: WaysState; actions: Acti
   const { deviceId, name, way } = state;
   const server = way === "server";
   const outcome = useUiStore((s) => s.switchOutcomes[deviceId] ?? null);
+  const [ref, playing] = useOnScreen<HTMLDivElement>();
   const condition = state.look?.state === "read" ? state.look.condition : null;
   if (!server && (state.windows || condition?.kind === "windows")) {
     return <Note data-device-ways={`${deviceId}:windows`}>{t("devices.ways.windows")}</Note>;
   }
+  // A switch under way draws its steps in the server card, which takes the
+  // outline from the card in use until the switch ends.
+  const switching = !server && (state.step !== null || state.pressed);
+  // A distribution runs on this PC and sleeps with it, so the picture of
+  // what keeps running while this computer sleeps is not drawn for it.
+  const sleeps = state.direct === "ssh";
   return (
     <div className="space-y-sm" data-device-ways={`${deviceId}:${way}`}>
       <SwitchedNotice deviceId={deviceId} name={name} />
-      <div className="rounded-md border border-border">
-        <div className="grid grid-cols-[auto_minmax(0,1fr)] divide-y divide-border">
-          <Way name={t(way === "wsl" ? "devices.ways.wsl" : "devices.ways.ssh")} line={t("devices.ways.sshLine")} now={!server} data-device-way-row="direct" />
-          <Way name={t("devices.ways.server")} line={t("devices.ways.serverLine")} now={server} data-device-way-row="server" />
+      <div ref={ref} className="dw-ways @container/ways" data-playing={playing ? "true" : "false"}>
+        <div className="grid gap-sm @lg/ways:grid-cols-2">
+          <WayCard
+            title={t(state.direct === "wsl" ? "devices.ways.wsl" : "devices.ways.ssh")}
+            now={!server}
+            lit={!server && !switching}
+            data-device-way-row="direct"
+            foot={
+              server ? (
+                <Note data-device-ways-back={deviceId}>{t("devices.ways.back")}</Note>
+              ) : (
+                <Note>{t(switching ? "devices.ways.switchingEnds" : "devices.ways.directTool")}</Note>
+              )
+            }
+          >
+            {sleeps ? <Headline lead={t("devices.ways.directHead")} turn={t("devices.ways.directHeadStop")} tone="warn" /> : <Note>{t("devices.ways.sshLine")}</Note>}
+            {sleeps && !switching ? (
+              <>
+                <Picture way="direct" name={name} />
+                <Keeps way="direct" name={name} />
+                <p className="break-keep text-caption text-muted-foreground">{t("devices.ways.directFit")}</p>
+              </>
+            ) : null}
+          </WayCard>
+          <WayCard
+            title={t("devices.ways.server")}
+            now={server}
+            lit={server || switching}
+            data-device-way-row="server"
+            foot={
+              switching ? null : (
+                <div className="w-full min-w-0" data-device-condition={deviceId}>
+                  {server ? <ServerCondition state={state} /> : <SwitchPlace state={state} outcome={outcome} actions={actions} />}
+                </div>
+              )
+            }
+          >
+            {sleeps ? <Headline lead={t("devices.ways.serverHead")} turn={t("devices.ways.serverHeadGo", { device: name })} tone="ok" /> : <Note>{t("devices.ways.serverLine")}</Note>}
+            {switching ? (
+              <SwitchSteps name={name} current={state.step ?? "checking"} />
+            ) : (
+              <>
+                {sleeps ? (
+                  <>
+                    <Picture way="server" name={name} />
+                    <Keeps way="server" name={name} />
+                    <p className="break-keep text-caption text-muted-foreground">{t("devices.ways.serverFit")}</p>
+                  </>
+                ) : null}
+                <p className="break-keep text-caption text-muted-foreground">{t("devices.ways.insteadLine")}</p>
+              </>
+            )}
+          </WayCard>
         </div>
-        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-md gap-y-xs border-t border-border px-md py-sm text-body">
-          <dt className="text-muted-foreground">{t("devices.ways.instead")}</dt>
-          <dd className="break-keep text-subtle-foreground">{t("devices.ways.insteadLine")}</dd>
-          <dt className="text-muted-foreground">{t("devices.ways.condition")}</dt>
-          <dd className="min-w-0" data-device-condition={deviceId}>
-            {server ? <ServerCondition state={state} /> : <SwitchPlace state={state} outcome={outcome} actions={actions} />}
-          </dd>
-        </dl>
-        {server ? (
-          <div className="border-t border-border px-md py-xs">
-            <Note data-device-ways-back={deviceId}>{t("devices.ways.back")}</Note>
-          </div>
-        ) : null}
       </div>
     </div>
   );
 }
 
-/** One way of the two: its name, the mark on the one in use, and when to choose it. */
-function Way({ name, line, now, ...data }: { name: string; line: string; now: boolean } & Record<`data-${string}`, string>) {
+/**
+ * One way of the two as a card: its name with `지금` on the one in use, what
+ * it is, and at its foot what to do about it. `lit` outlines the card the
+ * device is on, or is moving to while a switch runs.
+ */
+function WayCard({ title, now, lit, foot, children, ...data }: { title: string; now: boolean; lit: boolean; foot: ReactNode; children: ReactNode } & Record<`data-${string}`, string>) {
   const { t } = useInterfaceTranslation();
   return (
-    <div className={cn("col-span-2 grid grid-cols-subgrid gap-x-md px-md py-sm", now && "bg-secondary/50")} data-device-way-now={String(now)} {...data}>
+    <section className={cn("flex min-w-0 flex-col gap-sm rounded-md border px-md py-sm", lit ? "border-muted-foreground bg-secondary/50" : "border-border")} data-device-way-now={String(now)} {...data}>
       <div className="flex items-baseline gap-xs">
-        <span className="text-body font-semibold text-foreground">{name}</span>
+        <span className="text-body font-semibold text-foreground">{title}</span>
         {now ? <Badge>{t("devices.ways.now")}</Badge> : null}
       </div>
-      <p className="break-keep text-body text-subtle-foreground">{line}</p>
-    </div>
+      {children}
+      {foot ? <div className="mt-auto flex min-h-(--size-control) items-center border-t border-border pt-sm text-body">{foot}</div> : null}
+    </section>
+  );
+}
+
+/** The card's first words, the reason to choose it: what this computer's sleep does, and its outcome in the way's tone. */
+function Headline({ lead, turn, tone }: { lead: string; turn: string; tone: "warn" | "ok" }) {
+  return (
+    <p className="break-keep text-subhead font-semibold text-foreground" data-device-way-headline={tone}>
+      <span className="block">{lead}</span>
+      <span className={cn("block", tone === "warn" ? "text-warning" : "text-success")}>{turn}</span>
+    </p>
+  );
+}
+
+/** The most a name takes in the picture, counting a wide (CJK) character as two. */
+const PICTURE_NAME_UNITS = 16;
+
+/** `name` cut to what fits under the drawn machine, ending in `…` when cut. */
+function pictureName(name: string): string {
+  let units = 0;
+  let kept = "";
+  for (const character of name) {
+    units += (character.codePointAt(0) ?? 0) >= 0x2e80 ? 2 : 1;
+    if (units > PICTURE_NAME_UNITS) return `${kept.trimEnd()}…`;
+    kept += character;
+  }
+  return kept;
+}
+
+/** The labels' size in the drawing's units. */
+const LABEL = 10;
+
+/**
+ * Where Hide runs in this way, and what is left of it while this computer
+ * sleeps: an SVG in its own coordinates, so it scales down with the card and
+ * stays at its drawn size in a wide one; the motion and colours are
+ * `deviceWays.css`. For a reader it is one image
+ * with one sentence of what it shows.
+ */
+function Picture({ way, name }: { way: "direct" | "server"; name: string }) {
+  const { t } = useInterfaceTranslation();
+  const server = way === "server";
+  return (
+    <svg viewBox="0 0 280 92" role="img" aria-label={t(server ? "devices.ways.pic.serverAria" : "devices.ways.pic.directAria")} className="mx-auto w-full max-w-(--size-device-way-picture)" data-device-way-picture={way}>
+      <text className="dw-phase dw-awake" x="56" y="10" textAnchor="middle" fontSize={LABEL}>{t("devices.ways.pic.awake")}</text>
+      <text className="dw-phase dw-asleep" x="56" y="10" textAnchor="middle" fontSize={LABEL}>{t("devices.ways.pic.asleep")}</text>
+      <g className="dw-lid">
+        <rect className="dw-frame" x="18" y="16" width="76" height="46" rx="4" strokeWidth="1.3" />
+        <rect className="dw-hide" x="34" y="30" width="44" height="18" rx="9" />
+        <text className="dw-hide-text" x="56" y="43" textAnchor="middle" fontSize={LABEL}>Hide</text>
+      </g>
+      <rect className="dw-base" x="10" y="62" width="92" height="5" rx="2" />
+      <text className="dw-zz dw-asleep" x="98" y="54" fontSize={11}>z</text>
+      <text className="dw-label" x="56" y="84" textAnchor="middle" fontSize={LABEL}>{t("devices.ways.pic.this")}</text>
+      <line className="dw-wire" x1="108" y1="40" x2="176" y2="40" strokeWidth="1.2" />
+      {server ? (
+        <>
+          <line className="dw-flow" x1="176" y1="37" x2="108" y2="37" strokeWidth="2.4" />
+          <line className="dw-flow" x1="108" y1="43" x2="176" y2="43" strokeWidth="2.4" />
+        </>
+      ) : (
+        <line className="dw-flow" x1="176" y1="40" x2="108" y2="40" strokeWidth="2.4" />
+      )}
+      <rect className="dw-frame" x="182" y="22" width="88" height="40" rx="9" strokeWidth="1.3" />
+      {server ? (
+        <>
+          <rect className="dw-ring" x="204" y="32" width="44" height="18" rx="9" strokeWidth="1.2" />
+          <rect className="dw-hide" x="204" y="32" width="44" height="18" rx="9" />
+          <text className="dw-hide-text" x="226" y="45" textAnchor="middle" fontSize={LABEL}>Hide</text>
+        </>
+      ) : (
+        <>
+          <rect className="dw-tool" x="198" y="32" width="56" height="18" rx="9" strokeWidth="1" />
+          <text className="dw-tool-text" x="226" y="44.5" textAnchor="middle" fontSize={9.5}>{t("devices.ways.pic.tool")}</text>
+        </>
+      )}
+      <text className="dw-label" x="226" y="84" textAnchor="middle" fontSize={LABEL}>{pictureName(name)}</text>
+    </svg>
+  );
+}
+
+type Moment = { word: string; on: boolean };
+
+/**
+ * What keeps going in this way, row by row: each row's word while this
+ * computer is awake and while it sleeps, sharing the picture's beat; the
+ * last row says what the device itself offers and does not move. A reader
+ * hears only the asleep word, the one the headline is about.
+ */
+function Keeps({ way, name }: { way: "direct" | "server"; name: string }) {
+  const { t } = useInterfaceTranslation();
+  const server = way === "server";
+  const running: Moment = { word: t("devices.ways.state.running"), on: true };
+  const rows: { key: string; label: string; asleep: Moment }[] = [
+    { key: "agents", label: t("devices.ways.row.agents"), asleep: { word: t(server ? "devices.ways.state.keepsRunning" : "devices.ways.state.goesOn"), on: true } },
+    { key: "missions", label: t("devices.ways.row.missions"), asleep: { word: t(server ? "devices.ways.state.keepsRunning" : "devices.ways.state.stops"), on: server } },
+    { key: "automations", label: t("devices.ways.row.automations"), asleep: { word: t(server ? "devices.ways.state.keepsRunning" : "devices.ways.state.stops"), on: server } },
+  ];
+  return (
+    <dl className="grid grid-cols-[fit-content(45%)_minmax(0,1fr)] gap-x-md gap-y-xxs text-caption" data-device-way-keeps={way}>
+      {rows.map((row) => (
+        <div key={row.key} className="contents" data-device-keep={row.key}>
+          <dt className="truncate text-muted-foreground">{row.label}</dt>
+          <dd className="grid min-w-0">
+            <Word moment={running} className="dw-moment dw-awake" hidden />
+            <Word moment={row.asleep} className="dw-moment dw-asleep" data-keep-asleep="true" />
+          </dd>
+        </div>
+      ))}
+      <div className="contents" data-device-keep="there">
+        <dt className="truncate text-muted-foreground">{t("devices.ways.row.there", { device: name })}</dt>
+        <dd className={cn("min-w-0 break-keep", server ? "text-foreground" : "text-muted-foreground")}>{t(server ? "devices.ways.state.app" : "devices.ways.state.noScreen")}</dd>
+      </div>
+    </dl>
+  );
+}
+
+/** One row's word at one moment: running in the success tone with a dot, stopped in the warning tone with a pause mark. */
+function Word({ moment, className, hidden = false, ...data }: { moment: Moment; className: string; hidden?: boolean } & Record<`data-${string}`, string>) {
+  return (
+    <span className={cn("flex min-w-0 items-baseline gap-xs", moment.on ? "text-success" : "text-warning", className)} aria-hidden={hidden || undefined} {...data}>
+      <span aria-hidden="true" className="font-mono">{moment.on ? "●" : "‖"}</span>
+      <span className="min-w-0 break-keep">{moment.word}</span>
+    </span>
   );
 }
 
@@ -156,14 +332,14 @@ function ServerCondition({ state }: { state: WaysState }) {
 }
 
 /**
- * The condition of a device that can be switched, with the button: the
- * steps while a switch runs, else how the last press ended, else what the
- * machine said and whether it can be pressed.
+ * The condition of a device that can be switched, with the button, at the
+ * server card's foot: how the last press ended, else what the machine said
+ * and whether it can be pressed. A switch under way draws its steps in the
+ * card instead.
  */
 function SwitchPlace({ state, outcome, actions }: { state: WaysState; outcome: SwitchOutcome | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const { deviceId, name, look } = state;
-  if (state.step !== null || state.pressed) return <SwitchSteps name={name} current={state.step ?? "checking"} />;
   const button = (label: "devices.ways.server" | "common.retry", disabled = false) => (
     <Button variant="secondary" size="sm" disabled={disabled} onClick={state.onSwitch} data-device-switch={deviceId}>
       {t(label)}
@@ -181,24 +357,14 @@ function SwitchPlace({ state, outcome, actions }: { state: WaysState; outcome: S
         : outcome.terminals === null
           ? t("devices.ways.heldUnread", { by: outcome.by, device: name })
           : t("devices.ways.held", { by: outcome.by, device: name, count: outcome.terminals });
-    return (
-      <Lines data-device-switch-outcome={`${deviceId}:${outcome.kind}`}>
-        <Note tone="warn">{line}</Note>
-        {button("common.retry")}
-      </Lines>
-    );
+    return <Beside lines={<Note tone="warn">{line}</Note>} press={button("common.retry")} data-device-switch-outcome={`${deviceId}:${outcome.kind}`} />;
   }
   if (!state.connected) return <Note>{t("devices.ways.whenConnected")}</Note>;
   if (look === null || look.state === "reading") return <Status tone="pending">{t("devices.ways.reading")}</Status>;
   if (look.state === "unread") {
     // A login that asks for an answer is never switched; any other read that failed can be tried again.
     if (look.reason === "ssh_not_reached") return <Note tone="warn" data-device-condition-kind="password">{t("devices.ways.password")}</Note>;
-    return (
-      <Lines data-device-condition-kind="unread">
-        <Note tone="warn">{t("devices.ways.unread")}</Note>
-        {recheck}
-      </Lines>
-    );
+    return <Beside lines={<Note tone="warn">{t("devices.ways.unread")}</Note>} press={recheck} data-device-condition-kind="unread" />;
   }
   const condition = look.condition;
   const pressable = switchButton(condition);
@@ -206,27 +372,35 @@ function SwitchPlace({ state, outcome, actions }: { state: WaysState; outcome: S
   // Mac again, so automatic login turned on meanwhile takes the warning away.
   return (
     <Popover onOpenChange={(open) => { if (!open) state.onRead(); }}>
-      <Lines data-device-condition-kind={condition.kind}>
-        <ConditionLine condition={condition} name={name} wsl={state.way === "wsl"} actions={actions} deviceId={deviceId} />
-        {pressable === "none" ? null : (
-          <PopoverAnchor asChild>
-            <div className="flex flex-wrap items-center gap-sm">
-              {button("devices.ways.server", pressable === "off")}
-              {condition.kind === "linger_admin" ? recheck : null}
-            </div>
-          </PopoverAnchor>
-        )}
-      </Lines>
+      <Beside
+        lines={<ConditionLine condition={condition} name={name} wsl={state.direct === "wsl"} actions={actions} deviceId={deviceId} />}
+        press={
+          pressable === "none" ? null : (
+            <PopoverAnchor asChild>
+              <div className="flex flex-wrap items-center gap-sm">
+                {condition.kind === "linger_admin" ? recheck : null}
+                {button("devices.ways.server", pressable === "off")}
+              </div>
+            </PopoverAnchor>
+          )
+        }
+        data-device-condition-kind={condition.kind}
+      />
       {condition.kind === "auto_login_off" && condition.how ? <AutoLoginSteps name={name} user={look.user} /> : null}
     </Popover>
   );
 }
 
-/** The lines of the condition place, top to bottom. */
-function Lines({ children, ...data }: { children: ReactNode } & Record<`data-${string}`, string>) {
+/**
+ * The condition place at a card's foot: what was read on the left and what
+ * to press on the right; words longer than one line take the whole width
+ * and the button goes under them.
+ */
+function Beside({ lines, press, ...data }: { lines: ReactNode; press: ReactNode } & Record<`data-${string}`, string>) {
   return (
-    <div className="flex flex-col items-start gap-xs" {...data}>
-      {children}
+    <div className="flex w-full flex-wrap items-center justify-between gap-x-md gap-y-xs" {...data}>
+      <div className="flex min-w-0 flex-auto flex-col items-start gap-xs">{lines}</div>
+      {press ? <div className="flex shrink-0 flex-wrap items-center gap-sm">{press}</div> : null}
     </div>
   );
 }
