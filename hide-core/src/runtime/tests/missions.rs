@@ -19803,17 +19803,79 @@ fn a_check_wakes_the_nodes_reviewer_and_its_failure_goes_to_the_worker() {
 fn a_checkers_record_ends_its_parents_watch_and_sleeps_it_until_the_next_round() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
-    reviewed_fix(&mut runtime);
+    // Each pane's lineage is its session's digest and each registration
+    // holds that session, so the delivery store keeps the ledger this test
+    // hands it (`resumed_agent`), as `with_worker_and_reviewer`'s is not.
+    let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+        resumed_agent("sender", "codex", "sender-session"),
+        resumed_agent("recipient", "codex", "recipient-session"),
+        resumed_agent("reviewer", "codex", "reviewer-session"),
+    ]}))
+    .unwrap();
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
+    let panes = &mut runtime.snapshot.navigator.workspaces[0].checkouts[0].tabs[0].panes;
+    let mut reviewer = panes[1].clone();
+    reviewer.id = "reviewer".into();
+    panes.push(reviewer);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
     let actor = |runtime: &Runtime, pane: &str| runtime.delivery_observations[pane].actor.clone();
     let conductor = actor(&runtime, "sender");
-    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
-    // Past the three registrations, so the store keeps what it is handed.
+    let mut ledger = crate::delivery::ledger::Ledger::default();
+    for (id, pane) in [
+        ("agent-1", "sender"),
+        ("agent-2", "recipient"),
+        ("agent-3", "reviewer"),
+    ] {
+        ledger.agents.push(crate::coordination::AgentRecord {
+            id: id.into(),
+            name: Some(pane.into()),
+            machine: crate::node::TEST_NODE.into(),
+            host_scope: "scope".into(),
+            native_machine: "fixture-machine".into(),
+            session: format!("{pane}-session"),
+            instance: pane.into(),
+            pane: pane.into(),
+            parent: (id != "agent-1").then(|| "agent-1".into()),
+            origin: None,
+            project: None,
+            actor: actor(&runtime, pane),
+            ended: false,
+            terminal_id: None,
+            forked: false,
+            successor: None,
+        });
+    }
     ledger.next_id = 4;
+    // The Conductor watches its worker and its reviewer.
     for pane in ["recipient", "reviewer"] {
         crate::delivery::watch::start(&mut ledger, &conductor, &actor(&runtime, pane), 1).unwrap();
     }
     ledger.validate().unwrap();
     runtime.delivery_ledger = Ok(Arc::new(ledger));
+    checkout_at(&mut runtime, HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-2", "pr": 7, "reviewer": "agent-3"}}),
+    )
+    .unwrap();
+    let client = runtime.delivery_client.clone().unwrap();
+    // Whatever the commands so far asked of the store has landed.
+    let flush = || {
+        client
+            .submit(
+                crate::delivery::worker::Effect::HumanClaim,
+                Duration::from_secs(10),
+            )
+            .unwrap();
+    };
     let marks = |runtime: &Runtime| {
         runtime
             .missions
@@ -19879,15 +19941,12 @@ fn a_checkers_record_ends_its_parents_watch_and_sleeps_it_until_the_next_round()
         .clone();
     assert_eq!(review.as_deref(), Some(findings), "the findings stay whole");
     drop(runtime);
-    wait_for("the Conductor's watch on the reviewer to end", || {
-        let runtime = fixture.runtime.lock().unwrap();
-        !watched(&runtime).iter().any(|pane| pane == "reviewer")
-    });
+    flush();
     let mut runtime = fixture.runtime.lock().unwrap();
     assert_eq!(
         watched(&runtime),
         ["recipient"],
-        "the worker's watch stands"
+        "the reviewer's watch ended, the worker's stands"
     );
 
     // A report letter the reviewer still sends out of habit changes nothing.
