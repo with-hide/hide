@@ -117,8 +117,9 @@ pub enum Kind {
 }
 
 /// What `message` is to `adapter`, whose last list is `commands`: it runs a
-/// command when its first word is a listed command as typed, and it is left out when it starts with the words of one of
-/// the definition's left-out commands after a `/`, listed or not.
+/// command when its first word is a listed command as typed, and it is left
+/// out when it starts with the words of one of the definition's left-out
+/// commands after a `/`, listed or not.
 pub fn kind(adapter: AdapterId, commands: &[Command], message: &str) -> Kind {
     let message = message.trim_start();
     if let Some(typed) = message.strip_prefix('/') {
