@@ -348,6 +348,8 @@ it("shows the questions Hide found above the box and goes to the answer each was
   expect(line.querySelector('[data-desk-thread-ask="missed-2-0"]')?.textContent).toContain("본인 확인을 직접 해 줄 수 있는지 물었어요");
   expect(line.querySelector("[data-desk-thread-asks-more]")?.getAttribute("data-desk-thread-asks-more")).toBe("1");
   expect(line.compareDocumentPosition(container.querySelector("textarea")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  // It wears the amber the sidebar's 내 차례 question rows wear (`text-warning`), not the pane's working blue (Doop B4, question 나).
+  expect([line.className.includes("border-warning"), line.className.includes("open-ask")]).toEqual([true, false]);
 
   vi.useFakeTimers();
   try {

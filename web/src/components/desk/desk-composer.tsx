@@ -392,13 +392,13 @@ export function DeskPermissionMenu({ permission, agent, open, onPermission }: {
       <DropdownMenuLabel className="font-normal text-muted-foreground">{t("desk.permission.heading")}</DropdownMenuLabel>
       <DropdownMenuRadioGroup value={permission} onValueChange={(value) => value !== permission && onPermission(value as DeskPermission)}>
         {PERMISSIONS.map((one) => (
-          <DropdownMenuRadioItem key={one} value={one} className="items-start" data-desk-permission-choice={one}>
+          <DropdownMenuRadioItem key={one} value={one} mark="check" className="items-start" data-desk-permission-choice={one}>
             <span className="flex min-w-0 flex-col gap-xxs">
               <span className="flex items-center gap-xs text-foreground">
                 {t(PERMISSION_NAME[one])}
                 {one === "allow_all" ? <Badge variant="secondary">{t("desk.permission.default")}</Badge> : null}
               </span>
-              <span className="whitespace-normal break-keep text-caption text-muted-foreground">
+              <span className="whitespace-normal break-keep text-caption text-subtle-foreground">
                 {one === "allow_all" ? t("desk.permission.allow_allDetail") : t("desk.permission.agentDetail", { agent: agent ?? t("desk.bar.agent") })}
               </span>
             </span>

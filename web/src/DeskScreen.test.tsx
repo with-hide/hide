@@ -602,9 +602,28 @@ describe("Desk's room", () => {
       expect(card).toContain("npm run build");
       expect(card).toContain("~/repo/web");
       expect(buttons()).toEqual([["reject", "Reject…"], ["allow-with-updates", "Always allow"], ["allow-once", "Allow once"]]);
+      // Frame A2 가: the card stands on the ask surface with its kind first, the refusal is words, and only allow-once is the primary.
+      const surface = document.body.querySelector("[data-desk-item='approval']")!;
+      expect(surface.className).toContain("border-warning");
+      expect(surface.querySelector("p")!.textContent).toBe("Shell commandDesk wants to do this");
+      const fill = (id: string) => document.body.querySelector<HTMLElement>(`[data-desk-approval-option='${id}']`)!.className;
+      expect([fill("reject").includes("border"), fill("allow-with-updates").includes("bg-secondary"), fill("allow-once").includes("bg-warning")]).toEqual([false, true, true]);
       await press("[data-desk-approval-option='allow-with-updates']");
       await press("[data-desk-approval-option='allow-once']");
       expect(sent("desk_approval")).toEqual([{ id: 7, option: "allow-with-updates" }, { id: 7, option: "allow-once" }]);
+    });
+
+    it("draws the refusal as words and every allow-once option as the primary by the option's kind, though two options of a kind read no word", async () => {
+      const twice: DeskOption[] = [
+        { id: "no-1", kind: "reject_once", name: "No" },
+        { id: "no-2", kind: "reject_always", name: "No, and don't ask again" },
+        { id: "yes-1", kind: "allow_once", name: "Yes, once" },
+        { id: "yes-2", kind: "allow_once", name: "Yes, this time only" },
+        { id: "always", kind: "allow_always", name: "Always" },
+      ];
+      await render(desk([{ ...build, options: twice }]));
+      const look = (id: string) => { const names = document.body.querySelector<HTMLElement>(`[data-desk-approval-option='${id}']`)!.className; return names.includes("bg-warning") ? "primary" : names.includes("bg-secondary") ? "secondary" : "words"; };
+      expect(["no-1", "no-2", "yes-1", "yes-2", "always"].map(look)).toEqual(["words", "words", "primary", "primary", "secondary"]);
     });
 
     it("names answers of one kind by the agent's own names, so Claude's ways out of plan mode read apart", async () => {
@@ -639,6 +658,9 @@ describe("Desk's room", () => {
         ["allow_all", "checked", "Allow allDefaultDoes it right away without asking."],
         ["agent", "unchecked", "As the agentAsks each time Claude Code asks, with its own answers."],
       ]);
+      // The chosen row is lit with a green ✓; the other has neither.
+      const rows = [...document.body.querySelectorAll<HTMLElement>("[data-desk-permission-choice]")];
+      expect(rows.map((row) => [row.className.includes("data-[state=checked]:bg-accent"), row.querySelector("svg")?.getAttribute("class")?.includes("text-success") ?? false])).toEqual([[true, true], [true, false]]);
       await press("[data-desk-permission-choice='agent']");
       expect(sent("desk_settings_set")).toEqual([{ permission: "agent" }]);
 

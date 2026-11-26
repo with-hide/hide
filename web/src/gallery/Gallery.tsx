@@ -18,7 +18,7 @@ import { Checkbox } from "../components/ui/checkbox";
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "../components/ui/command";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../components/ui/context-menu";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { Input } from "../components/ui/input";
 import { RowButton, RowOverlayButton } from "../components/ui/row-button";
 import { Textarea } from "../components/ui/textarea";
@@ -120,6 +120,8 @@ const renderers: Renderers = {
     "Practice Hover": () => <Button variant="practice" data-gallery-state="hover">Start</Button>,
     "Tint": () => <Button variant="tint" size="sm">Update now</Button>,
     "Tint Hover": () => <Button variant="tint" size="sm" data-gallery-state="hover">Update now</Button>,
+    "Ask": () => <Button variant="ask" size="sm">Allow once</Button>,
+    "Ask Hover": () => <Button variant="ask" size="sm" data-gallery-state="hover">Allow once</Button>,
     "Small": () => <Button size="sm">Retry</Button>,
     "Large": () => <Button size="lg">Register project</Button>,
     "Icon": () => (
@@ -269,6 +271,7 @@ const renderers: Renderers = {
     "Highlighted": () => <GalleryDropdown highlight={0} />,
     "Disabled Item": () => <GalleryDropdown disabledItem />,
     "Destructive Item": () => <GalleryDropdown destructiveItem />,
+    "Radio Check": () => <GalleryDropdown radioCheck />,
   },
   "Context Menu": {
     "Open": () => <GalleryContextMenu />,
@@ -469,14 +472,22 @@ function GalleryTabs({ disabled, state }: { disabled?: boolean; state?: "hover" 
   );
 }
 
-function GalleryDropdown({ highlight, disabledItem, destructiveItem }: { highlight?: number; disabledItem?: boolean; destructiveItem?: boolean }) {
+function GalleryDropdown({ highlight, disabledItem, destructiveItem, radioCheck }: { highlight?: number; disabledItem?: boolean; destructiveItem?: boolean; radioCheck?: boolean }) {
   return (
     <DropdownMenu open modal={false}>
       <DropdownMenuTrigger asChild>
         <Button variant="secondary">Project ⋯</Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
-        {MENU}
+        {radioCheck ? (
+          <>
+            <DropdownMenuLabel>How Desk asks</DropdownMenuLabel>
+            <DropdownMenuRadioGroup value="all">
+              <DropdownMenuRadioItem value="all" mark="check">Allow all</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="agent" mark="check">As the agent</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </>
+        ) : MENU}
         {disabledItem ? (
           <DropdownMenuItem disabled className="flex-col items-start gap-none">
             <span>New worktree</span>
