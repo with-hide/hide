@@ -56,18 +56,27 @@ export function FilePathChip({ file, onOpen }: { file: FoundAnswerPath; onOpen: 
 
 /**
  * The chips for the file paths `text` writes, once each is found: a path
- * that names nothing stays words. Nothing is looked up while the words are
- * still `live` (an answer being written), nor for a session no checkout
- * holds (`place` null).
+ * that names nothing stays words. While the words are still `live` (an
+ * answer being written) only its finished lines are read, so a path still
+ * being written is never looked up and the paths are read again once per
+ * line, not per chunk; nothing is looked up for a session no checkout holds
+ * (`place` null).
  */
-/** No file chips, one array, so an answer still streaming (it has none yet) keeps its chips array while its words change. */
+/** No file chips, one array, so an answer that names no file keeps its chips array while its words change. */
 const NO_FILE_CHIPS: MarkdownChip[] = [];
+
+/** The part of `text` its paths are read from: all of it once written, else up to its last finished line, which streaming never changes again. */
+export function settledWords(text: string, live: boolean): string {
+  return live ? text.slice(0, text.lastIndexOf("\n") + 1) : text;
+}
 
 export function useFilePathChips(text: string, place: AnswerPlace | null, live: boolean, onOpen: (file: FoundAnswerPath) => void): MarkdownChip[] {
   const bridge = useSessionChipBridge();
   const latest = useRef(onOpen);
   latest.current = onOpen;
-  const written = useMemo(() => (live || !place ? [] : writtenPaths(text)), [text, live, place]);
+  // A string is compared by its value, so a chunk that finishes no line reads no paths again.
+  const settled = settledWords(text, live);
+  const written = useMemo(() => (!place ? [] : writtenPaths(settled)), [settled, place]);
   const [found, setFound] = useState<Map<string, FoundAnswerPath>>(() => new Map());
   const device = place?.device ?? null;
   const cwd = place?.cwd ?? null;

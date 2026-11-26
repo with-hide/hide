@@ -180,6 +180,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const turn = live?.started_at_ms ?? null;
   const answering = turn !== null;
   const liveText = live?.text ? live.text : null;
+  const liveAnswer = useMemo(() => (liveText === null ? null : { text: liveText, mentions: live?.mentions ?? [], missions: live?.missions ?? [] }), [liveText, live?.mentions, live?.missions]);
   // The working line stands from the send to the turn's end, and goes while an approval card waits on the operator (feedback 1 c3).
   const turnLine = useMemo(() => (answering && desk?.approvals_waiting === 0 ? { phase: deskPhase(live?.step, liveText), since: turn } : null), [answering, desk?.approvals_waiting, live?.step, liveText, turn]);
   const agent = desk?.selection.agent ? desk.agents.find((one) => one.id === desk.selection.agent) : undefined;
@@ -501,7 +502,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
-                <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} held={queuedHeld} live={liveText} working={turnLine} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
+                <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} held={queuedHeld} live={liveAnswer} working={turnLine} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
               )}
             </DeskChatColumn>
           )}

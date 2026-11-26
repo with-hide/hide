@@ -575,6 +575,29 @@ describe("Desk's room", () => {
     expect(line()).toBeNull();
   });
 
+  it("turns a session, a mission and a file a streaming answer names into chips as each is written, before the answer ends", async () => {
+    const asked: string[] = [];
+    configureFileBytes((event) => {
+      const read = event.payload as Record<string, unknown>;
+      asked.push(read.path as string);
+      queueMicrotask(() => answerBytes(read, [35], 40));
+    });
+    const held = { id: "mission-63", title: "결제 흐름 정리", status: "running", nodes: [], conductor: { present: true }, decision: null, question: null, delay: null, closed_at_unix_ms: null };
+    await render(desk([]));
+    await act(async () => useShellStore.setState({ rest: { ...rest, missions: { items: [held] } } as unknown as SnapshotRest }));
+    // The core reads each token once its parenthesis closes and sends it with the words so far; the last line is still being written.
+    const text = "@session(w1:p2 fix login)이 /work/repo-home/docs/report.md 를 고쳤고\n@mission(mission-63 결제 흐름 정리)도 /work/repo-home/docs/pla";
+    await act(async () => useShellStore.setState({ deskLive: { text, started_at_ms: 1, step: null, mentions: [{ pane_id: "w1:p2", name: "fix login", agent_kind: null, mark: null }], missions: [{ id: "mission-63", title: "결제 흐름 정리" }] } }));
+    const reply = () => document.body.querySelector("[data-desk-reply='live']")!;
+    await vi.waitFor(() => expect(reply().querySelector("[data-mission-chip-lines='1']")).not.toBeNull());
+    expect(reply().querySelector("[data-desk-session-chip]")?.textContent).toBe("fix login");
+    expect(reply().textContent).not.toContain("@session(");
+    expect(reply().textContent).not.toContain("@mission(");
+    // A path on a finished line is looked up and becomes its chip; one still being written is never asked for.
+    await vi.waitFor(() => expect(reply().querySelector("[data-desk-file-chip='project']")?.textContent).toBe("report.md"));
+    expect(asked).toEqual(["/work/repo-home/docs/report.md"]);
+  });
+
   it("draws a file an answer names inside a project as a chip that opens it in the tab panel, and leaves a missing path and code as words (feedback 2 frame M [2])", async () => {
     const asked: Record<string, unknown>[] = [];
     configureFileBytes((event) => {
