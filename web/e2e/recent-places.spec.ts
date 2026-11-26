@@ -12,7 +12,7 @@ import path from "node:path";
 import { held } from "./chords";
 import { startCaller, type CallerFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, sendEvent } from "./wire";
+import { enterWorkspace, screenshot, sendEvent } from "./wire";
 
 test.describe.configure({ timeout: 180_000 }); // wait-ok: a fixture with an agent pane and a daemon, started and stopped whole
 
@@ -60,6 +60,7 @@ test("the held chord walks an automation's detail and an agent pane in one order
     await expect(places.locator("[role=option]").first()).toHaveAttribute("data-cycle-kind", "automation");
     await expect(places.locator("[role=option]").first()).toContainText("morning issues");
     await expect(highlighted).toHaveAttribute("data-cycle-row", fixture.pane);
+    await screenshot(page, "recent-places-from-automation");
     await release();
     await expect(places).toHaveCount(0);
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
@@ -70,6 +71,7 @@ test("the held chord walks an automation's detail and an agent pane in one order
     release = await hold(page, 1);
     await expect(highlighted).toHaveAttribute("data-cycle-kind", "automation");
     await expect(highlighted).toHaveAttribute("data-cycle-row", automation);
+    await screenshot(page, "recent-places-from-pane");
     await release();
     await expect(page.locator(`[data-automation-detail="${automation}"]`)).toBeVisible();
     await expect.poll(stored).toEqual([{ kind: "automation", automation_id: automation }, { kind: "pane", pane_id: fixture.pane }]);
