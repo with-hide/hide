@@ -24,7 +24,7 @@ import { boardProjects } from "./navigation";
 import { cardLine, cardOfPane, cardQuestion, everyAgent } from "./overviewTasks";
 import { destinationOf } from "./overviewBacklog";
 import { folderName, resumeBlock } from "./linkPanel";
-import { resumeFailureText, resumeRequest, useSessionResume } from "./useSessionResume";
+import { resumeFailureText, resumeReason, resumeRequest, useSessionResume } from "./useSessionResume";
 import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
@@ -218,7 +218,7 @@ function RestoreSession({ record, checkout: original, actions }: { record: Recor
   const { resume, start } = useSessionResume();
   const busy = resume.request !== null && !resume.uncertain;
   const off = blocked !== null || !connected;
-  const reason = blocked ? "device" in blocked ? t(blocked.key, { device: blocked.device }) : t(blocked.key) : !connected ? t("devices.rail.notConnected") : null;
+  const reason = resumeReason(blocked, connected, t);
   const restore = () => {
     const send = off || busy ? null : resumeRequest(actions.startAgent, { ...record.session, path: record.path }, checkout, node);
     if (send) start(send);

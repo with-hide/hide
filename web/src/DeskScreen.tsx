@@ -23,7 +23,7 @@ import { SessionChipProvider, type SessionChipSource } from "./components/desk/s
 import { SessionAskCard, SessionHead, SessionRecordFoot, SessionSleepingFoot } from "./components/desk/desk-session";
 import { LineButton } from "./LinkSessions";
 import { resumeBlock, resumeCheckout } from "./linkPanel";
-import { resumeFailureText, resumeRequest, useSessionResume } from "./useSessionResume";
+import { resumeFailureText, resumeReason, resumeRequest, useSessionResume } from "./useSessionResume";
 import { OutputShelf } from "./components/desk/output-shelf";
 import { rowPulls } from "./prMark";
 import { useElapsed } from "./components/elapsed";
@@ -625,7 +625,7 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
   const checkout = resumeCheckout({ device_id: device, cwd: record.cwd }, catalogOf(workspaces, remote), null, node);
   const live = useShellStore((s) => s.connection === "live");
   const blocked = resumeBlock({ agent: record.session.agent, file: record.path ? "present" : "missing", device_id: device }, checkout, devices, node);
-  const reason = blocked ? t(blocked.key, "device" in blocked ? { device: blocked.device } : {}) : !live ? t("devices.rail.notConnected") : null;
+  const reason = resumeReason(blocked, live, t);
   // The resumed session opens beside Desk, as any session Desk opens does, not in its own tab.
   const { resume, start } = useSessionResume((pane) => actions.openDeskSession(pane));
   const resumeNow = () => {

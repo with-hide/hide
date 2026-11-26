@@ -19,22 +19,31 @@ use crate::model::{DeskItem, DeskPullRequest, DeskRecordSnapshot, PrState};
 
 /// The pull requests a record's chip and card count at most.
 const RECORD_PULLS: usize = 8;
-/// How long a read that failed (a timeout, a busy record) waits before the
-/// sessions still unread are asked again, on a later compose.
+/// How long a session whose read failed (a timeout, a busy record) waits
+/// before it is asked again, on a later compose; each failure in a row
+/// doubles it, up to [`RECORD_RETRY_MAX_MS`].
 const RECORD_RETRY_MS: u64 = 30_000;
+const RECORD_RETRY_MAX_MS: u64 = 15 * 60_000;
+
+/// A session whose last read failed: when it may be asked again, how many
+/// failed in a row, and the code last logged, so one cause is logged once.
+struct Failed {
+    retry_at_ms: u64,
+    failures: u32,
+    code: String,
+}
 
 /// What the link record answered for each named session, and whether a read
 /// is out; the runtime's, never stored, and only for sessions still named.
 #[derive(Default)]
 pub(super) struct Records {
     /// `None` for a session the record does not hold: its chip stays
-    /// dimmed, and it is not asked again while Hide runs. A read that failed
-    /// leaves its sessions out, so they are asked again after
-    /// [`RECORD_RETRY_MS`].
+    /// dimmed, and it is not asked again while Hide runs.
     read: BTreeMap<SessionIdentity, Option<DeskRecordSnapshot>>,
+    /// Sessions whose read failed, each waiting on its own; the others are
+    /// read meanwhile.
+    failed: BTreeMap<SessionIdentity, Failed>,
     reading: bool,
-    /// No read starts before this (`crate::links::now_ms`), after one failed.
-    retry_at_ms: u64,
 }
 
 /// One answer of the reader.
@@ -134,7 +143,8 @@ impl Runtime {
                     ..record.clone()
                 }),
                 Some(None) => {}
-                None => unread.push(named.session.clone()),
+                None if self.desk_record_due(&named.session) => unread.push(named.session.clone()),
+                None => {}
             }
         }
         self.desk_read_records(unread);
@@ -144,10 +154,7 @@ impl Runtime {
     /// Reads `sessions`' records on a worker, one read out at a time; the
     /// lock is not held while the link record answers.
     fn desk_read_records(&mut self, sessions: Vec<SessionIdentity>) {
-        if self.desk.records.reading
-            || sessions.is_empty()
-            || crate::links::now_ms() < self.desk.records.retry_at_ms
-        {
+        if self.desk.records.reading || sessions.is_empty() {
             return;
         }
         let Some(client) = self.links_work.client.clone() else {
@@ -211,14 +218,11 @@ impl Runtime {
                 // A session the record never held is the dimmed chip, not a failure.
                 (Err(code), _) if code == "ledger_session_missing" => None,
                 (Err(code), _) => {
-                    crate::diagnostic!(serde_json::json!({
-                        "component": "desk", "kind": "desk.record_read_failed",
-                        "session_id": session.session_id, "code": code,
-                    }));
-                    self.desk.records.retry_at_ms = crate::links::now_ms() + RECORD_RETRY_MS;
+                    self.desk_record_failed(session, code);
                     continue;
                 }
             };
+            self.desk.records.failed.remove(&session);
             self.desk.records.read.insert(session, record);
         }
         let named: HashSet<&SessionIdentity> = self
@@ -232,8 +236,49 @@ impl Runtime {
             .records
             .read
             .retain(|session, _| named.contains(session));
+        self.desk
+            .records
+            .failed
+            .retain(|session, _| named.contains(session));
         self.compose_desk_jobs();
         true
+    }
+
+    /// Whether a session not read yet may be asked now: one whose last read
+    /// failed waits out its own wait, and no other session waits with it.
+    fn desk_record_due(&self, session: &SessionIdentity) -> bool {
+        self.desk
+            .records
+            .failed
+            .get(session)
+            .is_none_or(|failed| crate::links::now_ms() >= failed.retry_at_ms)
+    }
+
+    /// A session whose read failed waits longer after each failure in a row,
+    /// and its cause is logged once until it changes.
+    fn desk_record_failed(&mut self, session: SessionIdentity, code: String) {
+        let failed = self
+            .desk
+            .records
+            .failed
+            .entry(session.clone())
+            .or_insert(Failed {
+                retry_at_ms: 0,
+                failures: 0,
+                code: String::new(),
+            });
+        if failed.code != code {
+            crate::diagnostic!(serde_json::json!({
+                "component": "desk", "kind": "desk.record_read_failed",
+                "session_id": session.session_id, "code": code,
+            }));
+            failed.code = code;
+        }
+        failed.failures = failed.failures.saturating_add(1);
+        let wait = RECORD_RETRY_MS
+            .saturating_mul(1u64 << (failed.failures - 1).min(10))
+            .min(RECORD_RETRY_MAX_MS);
+        failed.retry_at_ms = crate::links::now_ms() + wait;
     }
 
     /// Where the thread of a session a chip names is read once its pane is
@@ -425,31 +470,67 @@ mod tests {
     }
 
     /// A read that failed (a timeout, a busy record) is not taken for "no
-    /// record": the session is asked again later and draws once it answers.
+    /// record": that session alone waits, longer after each failure in a row
+    /// up to a cap, while another chip's session is read, and it draws once
+    /// it answers.
     #[test]
-    fn a_record_read_that_failed_is_asked_again_and_draws_once_it_answers() {
+    fn a_record_read_that_failed_waits_alone_longer_each_time_and_draws_once_it_answers() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, _orders) = super::super::tests::runtime(root.path());
-        runtime.snapshot.navigator.agents = vec![row("p1", SESSION)];
-        reply_naming(&mut runtime, &["p1"]);
+        runtime.snapshot.navigator.agents = vec![row("p1", SESSION), row("p2", "other")];
+        reply_naming(&mut runtime, &["p1", "p2"]);
         runtime.refresh_desk_jobs();
         runtime.snapshot.navigator.agents.clear();
         runtime.refresh_desk_jobs();
-        let built = runtime.desk.stored.named[0].session.clone();
+        let session = |runtime: &Runtime, id: &str| {
+            runtime
+                .desk
+                .stored
+                .named
+                .iter()
+                .find(|named| named.session.session_id == id)
+                .unwrap()
+                .session
+                .clone()
+        };
+        let (built, other) = (session(&runtime, SESSION), session(&runtime, "other"));
+        let wait = |runtime: &Runtime| {
+            runtime.desk.records.failed[&built]
+                .retry_at_ms
+                .saturating_sub(crate::links::now_ms())
+        };
         runtime.desk_records_read(vec![(built.clone(), Err("ledger_rpc_capacity".into()))]);
         assert!(records(&runtime).is_empty());
         assert!(
             !runtime.desk.records.read.contains_key(&built),
             "a failure is not remembered as no record"
         );
-        assert!(runtime.desk.records.retry_at_ms > crate::links::now_ms());
+        assert!(
+            !runtime.desk_record_due(&built) && runtime.desk_record_due(&other),
+            "one session's failure holds no other"
+        );
+        let first = wait(&runtime);
+        assert!((RECORD_RETRY_MS - 1_000..=RECORD_RETRY_MS).contains(&first));
+        runtime.desk_records_read(vec![(built.clone(), Err("ledger_rpc_capacity".into()))]);
+        assert!((2 * RECORD_RETRY_MS - 1_000..=2 * RECORD_RETRY_MS).contains(&wait(&runtime)));
+        for _ in 0..20 {
+            runtime.desk_records_read(vec![(built.clone(), Err("ledger_rpc_capacity".into()))]);
+        }
+        assert!(
+            wait(&runtime) <= RECORD_RETRY_MAX_MS,
+            "the wait stops growing at its cap"
+        );
         let record = SessionRecord {
             session: built.clone(),
             title: "후보 빌드".into(),
             ..SessionRecord::default()
         };
-        runtime.desk_records_read(vec![(built, Ok(LedgerAnswer::Record(Box::new(record))))]);
+        runtime.desk_records_read(vec![(
+            built.clone(),
+            Ok(LedgerAnswer::Record(Box::new(record))),
+        )]);
         assert_eq!(records(&runtime).len(), 1);
+        assert!(!runtime.desk.records.failed.contains_key(&built));
     }
 
     /// desk.json is outside the node migration (PR Decide): a session kept
