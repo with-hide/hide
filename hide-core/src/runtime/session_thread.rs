@@ -1236,6 +1236,9 @@ mod tests {
         fn key(&self, _: hide_node_link::terminal::KeyTarget, _: Vec<u8>, _: u64) {
             unreachable!("a thread's input never types keys");
         }
+        fn paste(&self, _: hide_node_link::terminal::KeyTarget, _: Vec<u8>, _: u64) {
+            unreachable!("a thread's input never pastes through a screen's path");
+        }
         fn view(&self, _: &str, _: hide_node_link::terminal::GridSize, _: bool) {
             unreachable!("a thread never attaches its pane");
         }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agent, counted, deskSnapshot, oneTabDesk, typed, withLineage, type DeskModel, type PracticePane } from "./kit";
+import { agent, counted, deskSnapshot, oneTabDesk, typed, typedText, withLineage, type DeskModel, type PracticePane } from "./kit";
 
 const PLACE = { project: "shop-app", label: "shop-app", branch: "main" };
 const NOW = Date.UTC(2026, 9, 23, 12);
@@ -36,6 +36,18 @@ describe("an agent's prompt in a practice world", () => {
     const after = typed({ draft: "" }, "ab\x7fc\x1b[D\rgone\x15left", submit);
     expect(sent).toEqual(["ac"]);
     expect(after.draft).toBe("left");
+  });
+
+  // with-hide/hide#2952: a paste submits nothing, as a real agent's prompt
+  // takes one in bracketed paste; its lines join the one-line practice draft.
+  it("takes a paste's lines into the draft without submitting them", () => {
+    const sent: string[] = [];
+    const submit = (model: { draft: string }) => (sent.push(model.draft), { draft: "" });
+    const base64 = btoa("one\rtwo");
+    expect(typed({ draft: "" }, typedText({ bytes_base64: base64, paste: true }), submit)).toEqual({ draft: "one two" });
+    expect(sent).toEqual([]);
+    typed({ draft: "" }, typedText({ bytes_base64: base64 }), submit);
+    expect(sent).toEqual(["one"]);
   });
 });
 

@@ -117,7 +117,17 @@ export function shellScreen(place: PracticePlace): string {
 // --- An agent's prompt --------------------------------------------------------
 
 /** The text a terminal's `key` event carries (`bytes_base64`). */
-export const keyText = (base64: string) => new TextDecoder().decode(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)));
+const keyText = (base64: string) => new TextDecoder().decode(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)));
+
+/**
+ * What a terminal's `key` event types into an agent's prompt: its keys, or,
+ * for one marked `paste`, its text with each line break as a space, since a
+ * paste submits nothing and the practice prompt is one line.
+ */
+export function typedText(payload: { bytes_base64: string; paste?: unknown }): string {
+  const text = keyText(payload.bytes_base64);
+  return payload.paste === true ? text.replace(/\r/g, " ") : text;
+}
 
 /**
  * The prompt after the keys `text`, as an agent's input line takes them: ⌃U

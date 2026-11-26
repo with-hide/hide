@@ -464,7 +464,12 @@ use crate::error::HostError;
 /// card of an agent whose session records a call only once it is allowed
 /// (Codex); a core on 104 refuses a report with a field it does not know, so a
 /// helper upgrades with its core.
-pub const PROTOCOL_VERSION: u32 = 105;
+/// 106: a screen's paste goes down as a `key` line marked `paste`, which the
+/// device's node hands its pane's holder as a paste, wrapped for the
+/// program's paste mode (with-hide/hide#2952); a node on 105 would type it as
+/// keys, every line break an Enter, so it is refused at Hello and upgraded
+/// with its core.
+pub const PROTOCOL_VERSION: u32 = 106;
 
 /// The longest text a prompt file holds ([`Call::PromptFile`]): a start's
 /// first input, `hide-core`'s 64 KiB with room to spare.

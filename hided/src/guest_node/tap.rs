@@ -350,6 +350,9 @@ impl TapHub {
                 ToNode::Input { pane, bytes } => {
                     node.key(KeyTarget::Pane(pane), bytes, now_unix_ms());
                 }
+                ToNode::Paste { pane, text } => {
+                    node.paste(KeyTarget::Pane(pane), text, now_unix_ms());
+                }
                 ToNode::Resize { pane, rows, cols } => {
                     node.size_from_tap(&pane, GridSize { rows, cols });
                 }

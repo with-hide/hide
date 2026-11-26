@@ -39,6 +39,7 @@ impl TerminalNode for NoTerminals {
         }));
     }
     fn key(&self, _target: hide_node_link::terminal::KeyTarget, _bytes: Vec<u8>, _at: u64) {}
+    fn paste(&self, _target: hide_node_link::terminal::KeyTarget, _text: Vec<u8>, _at: u64) {}
     fn view(&self, _pane: &str, _size: GridSize, _new_view: bool) {}
     fn redraw(&self, _pane: &str) {}
 }

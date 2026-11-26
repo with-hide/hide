@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use hide_node_link::address::{PaneAddress, scoped_pane_id};
 use hide_node_link::terminal::{
-    GridSize, KeyTarget, PaneTerminalState, ReportSink, TerminalControl, TerminalNode,
+    GridSize, KeyTarget, PaneTerminalState, ReportSink, ScreenInput, TerminalControl, TerminalNode,
     TerminalReport, TerminalRoutes,
 };
 use serde_json::json;
@@ -266,6 +266,55 @@ impl Router {
 
     fn route(&self, pane: &str) -> Route {
         Self::route_in(&lock(&self.routes), pane)
+    }
+
+    /// A screen's key or paste, to the node that holds its pane: a request
+    /// to this machine's node, which opened it.
+    fn type_into(&self, target: KeyTarget, input: ScreenInput, typed_at_unix_ms: u64) {
+        let KeyTarget::Pane(scoped) = target else {
+            input.send_to(self.local.as_ref(), target, typed_at_unix_ms);
+            return;
+        };
+        let route = {
+            let mut routes = lock(&self.routes);
+            let now = Instant::now();
+            match &mut routes.keyed {
+                Some((keyed, at)) if *keyed == scoped => *at = now,
+                keyed => *keyed = Some((scoped.clone(), now)),
+            }
+            let route = Self::route_in(&routes, &scoped);
+            // A key for a device with no link is refused, never kept for a
+            // later link (D-19, B17), and a flood of them is reported once
+            // a window and counted after that, like a node's own refusals.
+            let counted = matches!(route, Route::Unrouted)
+                && routes
+                    .refusals
+                    .refuse(&scoped, "terminal.device_disconnected", now)
+                    != Refusal::Report;
+            let due = routes.due();
+            drop(routes);
+            log_due(due);
+            if counted {
+                return;
+            }
+            route
+        };
+        match route {
+            Route::Local => input.send_to(
+                self.local.as_ref(),
+                KeyTarget::Pane(scoped),
+                typed_at_unix_ms,
+            ),
+            Route::Device { node, pane, .. } | Route::Guest { node, pane } => {
+                input.send_to(node.as_ref(), KeyTarget::Pane(pane), typed_at_unix_ms)
+            }
+            Route::Unrouted => self.reports.report(TerminalReport::Error {
+                pane: scoped,
+                kind: "terminal.device_disconnected".to_owned(),
+                message: "This device's terminals are not connected, so the key was not sent"
+                    .to_owned(),
+            }),
+        }
     }
 
     fn route_in(routes: &Routes, pane: &str) -> Route {
@@ -559,48 +608,11 @@ impl TerminalNode for Router {
     }
 
     fn key(&self, target: KeyTarget, bytes: Vec<u8>, typed_at_unix_ms: u64) {
-        let KeyTarget::Pane(scoped) = target else {
-            self.local.key(target, bytes, typed_at_unix_ms);
-            return;
-        };
-        let route = {
-            let mut routes = lock(&self.routes);
-            let now = Instant::now();
-            match &mut routes.keyed {
-                Some((keyed, at)) if *keyed == scoped => *at = now,
-                keyed => *keyed = Some((scoped.clone(), now)),
-            }
-            let route = Self::route_in(&routes, &scoped);
-            // A key for a device with no link is refused, never kept for a
-            // later link (D-19, B17), and a flood of them is reported once
-            // a window and counted after that, like a node's own refusals.
-            let counted = matches!(route, Route::Unrouted)
-                && routes
-                    .refusals
-                    .refuse(&scoped, "terminal.device_disconnected", now)
-                    != Refusal::Report;
-            let due = routes.due();
-            drop(routes);
-            log_due(due);
-            if counted {
-                return;
-            }
-            route
-        };
-        match route {
-            Route::Local => self
-                .local
-                .key(KeyTarget::Pane(scoped), bytes, typed_at_unix_ms),
-            Route::Device { node, pane, .. } | Route::Guest { node, pane } => {
-                node.key(KeyTarget::Pane(pane), bytes, typed_at_unix_ms)
-            }
-            Route::Unrouted => self.reports.report(TerminalReport::Error {
-                pane: scoped,
-                kind: "terminal.device_disconnected".to_owned(),
-                message: "This device's terminals are not connected, so the key was not sent"
-                    .to_owned(),
-            }),
-        }
+        self.type_into(target, ScreenInput::Keys(bytes), typed_at_unix_ms);
+    }
+
+    fn paste(&self, target: KeyTarget, text: Vec<u8>, typed_at_unix_ms: u64) {
+        self.type_into(target, ScreenInput::Paste(text), typed_at_unix_ms);
     }
 
     fn view(&self, pane: &str, size: GridSize, new_view: bool) {
@@ -777,6 +789,7 @@ mod tests {
         permits: Mutex<Vec<(String, usize)>>,
         controls: Mutex<Vec<TerminalControl>>,
         keys: Mutex<Vec<(KeyTarget, Vec<u8>)>>,
+        pastes: Mutex<Vec<(KeyTarget, Vec<u8>)>>,
     }
 
     impl TerminalNode for Recorder {
@@ -794,6 +807,9 @@ mod tests {
         }
         fn key(&self, target: KeyTarget, bytes: Vec<u8>, _typed_at_unix_ms: u64) {
             self.keys.lock().unwrap().push((target, bytes));
+        }
+        fn paste(&self, target: KeyTarget, text: Vec<u8>, _typed_at_unix_ms: u64) {
+            self.pastes.lock().unwrap().push((target, text));
         }
         fn view(&self, _pane: &str, _size: GridSize, _new_view: bool) {}
         fn redraw(&self, _pane: &str) {}
@@ -906,6 +922,57 @@ mod tests {
                 generation: 2
             }]
         );
+    }
+
+    /// with-hide/hide#2952: a screen's paste reaches the node that holds its
+    /// pane as a paste, never as keys, so that node's holder can wrap it for
+    /// the program; a pane no link reaches refuses it as it refuses a key.
+    #[test]
+    fn a_paste_reaches_the_node_that_holds_its_pane_as_a_paste() {
+        let (router, local, _hub, reports) = router();
+        let mini = Arc::new(Recorder::default());
+        let tap = Arc::new(Recorder::default());
+        router.install_device("mini", Arc::clone(&mini) as Arc<dyn TerminalNode>);
+        router.install_guest("macbook", Arc::clone(&tap) as Arc<dyn TerminalNode>);
+        for pane in [
+            "w1:p1",
+            "remote:mini:pane:w2:p3",
+            "guest:macbook:pane:w1:p1",
+        ] {
+            router.paste(KeyTarget::Pane(pane.into()), b"a\rb".to_vec(), 1);
+        }
+        router.paste(KeyTarget::Request("new-pane".into()), b"c".to_vec(), 1);
+        let pasted = |node: &Recorder| node.pastes.lock().unwrap().clone();
+        assert_eq!(
+            pasted(&local),
+            [
+                (KeyTarget::Pane("w1:p1".into()), b"a\rb".to_vec()),
+                (KeyTarget::Request("new-pane".into()), b"c".to_vec()),
+            ]
+        );
+        assert_eq!(
+            pasted(&mini),
+            [(KeyTarget::Pane("w2:p3".into()), b"a\rb".to_vec())]
+        );
+        assert_eq!(
+            pasted(&tap),
+            [(KeyTarget::Pane("w1:p1".into()), b"a\rb".to_vec())]
+        );
+        for node in [&local, &mini, &tap] {
+            assert!(node.keys.lock().unwrap().is_empty());
+        }
+
+        router.remove_device("mini");
+        router.paste(
+            KeyTarget::Pane("remote:mini:pane:w2:p3".into()),
+            b"d".to_vec(),
+            2,
+        );
+        assert_eq!(pasted(&mini).len(), 1);
+        assert!(matches!(
+            reports.0.lock().unwrap().as_slice(),
+            [TerminalReport::Error { kind, .. }] if kind == "terminal.device_disconnected"
+        ));
     }
 
     /// PRD device-connect-iroh D-77 (5): a guest's pane on this machine is

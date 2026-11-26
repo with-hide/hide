@@ -761,7 +761,12 @@ fn take_down(text: &str, terminals: &dyn TerminalNode, own_node: &str) -> Result
     let line: TerminalLine<TerminalDown> =
         serde_json::from_str(text).map_err(|error| format!("{:?}", error.classify()))?;
     match line.terminal {
-        TerminalDown::Key { target, data, .. } => {
+        TerminalDown::Key {
+            target,
+            data,
+            paste,
+            ..
+        } => {
             if let hide_node_link::terminal::KeyTarget::Pane(pane) = &target
                 && is_pane_of(pane, own_node)
             {
@@ -770,7 +775,12 @@ fn take_down(text: &str, terminals: &dyn TerminalNode, own_node: &str) -> Result
             let bytes = decode_base64(&data)?;
             // Stamped here, on the core's clock, as a key from a screen of
             // this machine is.
-            terminals.key(target, bytes, crate::server::unix_ms_now());
+            let now = crate::server::unix_ms_now();
+            if paste {
+                terminals.paste(target, bytes, now);
+            } else {
+                terminals.key(target, bytes, now);
+            }
         }
         // A node's screens send their views with their other events, so the
         // core decides the grid each is drawn at (`pane_sizes`).
@@ -801,6 +811,9 @@ mod tests {
         fn key(&self, _: hide_node_link::terminal::KeyTarget, bytes: Vec<u8>, _: u64) {
             lock(&self.0).push(bytes);
         }
+        fn paste(&self, _: hide_node_link::terminal::KeyTarget, _: Vec<u8>, _: u64) {
+            unreachable!("these tests relay keys only");
+        }
         fn view(&self, _: &str, _: hide_node_link::terminal::GridSize, _: bool) {}
         fn redraw(&self, _: &str) {}
     }
@@ -818,6 +831,65 @@ mod tests {
         .unwrap();
         assert_eq!(take_down(&line, &keys, "device"), Err("control".into()));
         assert!(lock(&keys.0).is_empty());
+    }
+
+    /// What a relay typed into this machine's panes: each paste, and each
+    /// run of keys.
+    #[derive(Default)]
+    struct Typed {
+        pastes: Mutex<Vec<(String, Vec<u8>)>>,
+        keys: Mutex<Vec<Vec<u8>>>,
+    }
+
+    impl TerminalNode for Typed {
+        fn control(&self, _: hide_node_link::terminal::TerminalControl) {}
+        fn key(&self, _: hide_node_link::terminal::KeyTarget, bytes: Vec<u8>, _: u64) {
+            lock(&self.keys).push(bytes);
+        }
+        fn paste(&self, target: hide_node_link::terminal::KeyTarget, text: Vec<u8>, _: u64) {
+            let hide_node_link::terminal::KeyTarget::Pane(pane) = target else {
+                unreachable!("these tests paste into panes")
+            };
+            lock(&self.pastes).push((pane, text));
+        }
+        fn view(&self, _: &str, _: hide_node_link::terminal::GridSize, _: bool) {}
+        fn redraw(&self, _: &str) {}
+    }
+
+    /// with-hide/hide#2952: a node's screen pastes into this machine's pane
+    /// as a paste, for that pane's holder to wrap; its own pane is still not
+    /// the relay's.
+    #[test]
+    fn a_node_screens_paste_reaches_this_machines_pane_as_a_paste() {
+        let typed = Typed::default();
+        let line = |pane: &str, paste: bool| {
+            serde_json::to_string(&TerminalLine {
+                terminal: TerminalDown::Key {
+                    target: hide_node_link::terminal::KeyTarget::Pane(pane.to_owned()),
+                    data: encode_base64(b"a\rb"),
+                    typed_at_unix_ms: 1,
+                    paste,
+                },
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            take_down(&line("core-pane", true), &typed, "device"),
+            Ok(())
+        );
+        assert_eq!(
+            take_down(&line("core-pane", false), &typed, "device"),
+            Ok(())
+        );
+        assert_eq!(
+            take_down(&line("remote:device:pane:w1:p1", true), &typed, "device"),
+            Err("own_pane".into())
+        );
+        assert_eq!(
+            lock(&typed.pastes).as_slice(),
+            [("core-pane".to_owned(), b"a\rb".to_vec())]
+        );
+        assert_eq!(lock(&typed.keys).as_slice(), [b"a\rb".to_vec()]);
     }
 
     /// A send the node does not take (a large message over a slow forward)
@@ -870,6 +942,7 @@ mod tests {
                 target: hide_node_link::terminal::KeyTarget::Pane("core-pane".to_owned()),
                 data: encode_base64(b"k"),
                 typed_at_unix_ms: 1,
+                paste: false,
             },
         })
         .unwrap();

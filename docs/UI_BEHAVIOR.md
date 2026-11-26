@@ -1462,7 +1462,7 @@ Folders and files from another device show the forbidden drop cursor and insert 
 Image acceptance and display remain the receiving program's responsibility, as for other terminal attachments.
 
 Dropping local file URLs into a visible terminal focuses that receiving pane and starts one attachment intent through the existing ordered writer.
-Paste captures PNG or TIFF clipboard images at the same ingress; ordinary text and keys keep their existing terminal behavior.
+Paste captures PNG or TIFF clipboard images at the same ingress; pasted text goes to the pane as one paste, which reaches the program in bracketed paste exactly when the program turned that mode on, so a multi-line paste into an agent's prompt is never sent a line at a time, and keys keep their existing terminal behavior.
 The core reserves the original pane and connection generation before asynchronous image preparation, file validation, or transfer, so later focus changes cannot redirect the attachment.
 Clipboard images are normalized into private PNG files off the input thread, while the core owns transfer state, held input, retry, and cancellation.
 Local files keep their original paths after validation; a device's attachments are staged through that device's link and insert only the resulting device paths.

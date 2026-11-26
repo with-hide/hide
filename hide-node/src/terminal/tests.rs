@@ -6,9 +6,9 @@ use super::*;
 pub(super) const WAIT: Duration = Duration::from_secs(5);
 
 /// What a stand-in session writes, one JSON value per call, in the form the
-/// tests read: its input, its resizes and redraws, its wheels and its
-/// release. Paste and named keys are refused, as by a transport that does
-/// not read them.
+/// tests read: its input, its pastes, its resizes and redraws, its wheels
+/// and its release. Named keys are refused, as by a transport that does not
+/// read them.
 pub(super) struct FakeWriter(pub(super) Box<dyn Write + Send>);
 
 impl FakeWriter {
@@ -25,8 +25,8 @@ impl SessionWriter for FakeWriter {
         self.line(json!({"type": "terminal.input", "bytes": protocol::encode_base64(bytes)}))
     }
 
-    fn paste(&mut self, _text: &[u8]) -> std::io::Result<()> {
-        Err(std::io::Error::other("this stand-in takes no paste"))
+    fn paste(&mut self, text: &[u8]) -> std::io::Result<()> {
+        self.line(json!({"type": "terminal.paste", "text": protocol::encode_base64(text)}))
     }
 
     fn keys(&mut self, _keys: &[hide_holder_protocol::Key]) -> std::io::Result<()> {
@@ -164,6 +164,22 @@ impl Opened {
             if line["type"] == "terminal.input" {
                 return protocol::decode_base64(line["bytes"].as_str().unwrap()).unwrap();
             }
+        }
+    }
+
+    /// The next input or paste written, as which it was and its bytes.
+    pub(super) fn next_write(&self) -> (&'static str, Vec<u8>) {
+        loop {
+            let line = self.next_line();
+            let (kind, field) = match line["type"].as_str() {
+                Some("terminal.input") => ("input", "bytes"),
+                Some("terminal.paste") => ("paste", "text"),
+                _ => continue,
+            };
+            return (
+                kind,
+                protocol::decode_base64(line[field].as_str().unwrap()).unwrap(),
+            );
         }
     }
 
@@ -485,6 +501,11 @@ impl Harness {
     fn key(&self, pane: &str, bytes: &[u8]) {
         self.service
             .key(KeyTarget::Pane(pane.into()), bytes.to_vec(), unix_ms());
+    }
+
+    fn paste(&self, pane: &str, text: &[u8]) {
+        self.service
+            .paste(KeyTarget::Pane(pane.into()), text.to_vec(), unix_ms());
     }
 }
 
@@ -1418,6 +1439,60 @@ fn a_paste_is_written_before_the_keys_typed_behind_it() {
         paste: protocol::encode_base64(b"'/tmp/a.png' "),
     });
     assert_eq!(opened.next_input(), b"'/tmp/a.png' \r");
+    harness.report_where(|report| {
+        matches!(
+            report,
+            TerminalReport::AttachmentDelivered { written: true, .. }
+        )
+    });
+}
+
+/// with-hide/hide#2952: a screen's paste reaches the pane's writer as a
+/// paste, for its holder to wrap in the program's paste mode, never as keys
+/// in which each line break would be an Enter; it is the operator's input
+/// and submits nothing.
+#[test]
+fn a_screen_paste_reaches_the_writer_as_a_paste_and_submits_nothing() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    harness.paste("w1:p1", b"one\rtwo\r");
+    assert_eq!(opened.next_write(), ("paste", b"one\rtwo\r".to_vec()));
+    let pasted = harness.report_where(|report| matches!(report, TerminalReport::Input { .. }));
+    assert!(matches!(
+        pasted,
+        TerminalReport::Input {
+            submitted: false,
+            focus: true,
+            ..
+        }
+    ));
+}
+
+/// A paste typed while an attachment is prepared waits behind it with the
+/// keys around it, and all of them follow the attachment in the order typed.
+#[test]
+fn a_paste_typed_behind_an_attachment_follows_it_in_order() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    let generation = harness.service.shared.lock().panes["w1:p1"]
+        .current_generation
+        .unwrap();
+    harness.service.control(TerminalControl::AttachmentHold {
+        pane: "w1:p1".into(),
+        intent: "i1".into(),
+    });
+    harness.key("w1:p1", b"a");
+    harness.paste("w1:p1", b"p\rq");
+    harness.key("w1:p1", b"b");
+    opened.assert_no_input();
+    harness.service.control(TerminalControl::AttachmentDeliver {
+        intent: "i1".into(),
+        generation,
+        paste: protocol::encode_base64(b"'/tmp/a.png' "),
+    });
+    assert_eq!(opened.next_write(), ("input", b"'/tmp/a.png' a".to_vec()));
+    assert_eq!(opened.next_write(), ("paste", b"p\rq".to_vec()));
+    assert_eq!(opened.next_write(), ("input", b"b".to_vec()));
     harness.report_where(|report| {
         matches!(
             report,

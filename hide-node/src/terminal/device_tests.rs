@@ -23,6 +23,7 @@ fn key_line(pane: &str, bytes: &[u8]) -> Vec<u8> {
         target: KeyTarget::Pane(pane.to_owned()),
         data: encode_base64(bytes),
         typed_at_unix_ms: 1,
+        paste: false,
     })
     .unwrap()
 }
@@ -661,6 +662,7 @@ fn key_lines(lines: &[TerminalDown]) -> Vec<(String, Vec<u8>, u64)> {
                 target: KeyTarget::Pane(pane),
                 data,
                 typed_at_unix_ms,
+                paste: false,
             } => Some((
                 pane.clone(),
                 decode_base64(data).unwrap(),
@@ -787,6 +789,71 @@ fn a_waiting_run_of_keys_stops_at_a_pane_a_control_an_enter_and_an_escape() {
         .position(|line| matches!(line, TerminalDown::Key { data, .. } if decode_base64(data).unwrap() == b"d"))
         .unwrap();
     assert_eq!(control, d + 1);
+}
+
+/// with-hide/hide#2952: a screen's paste for a device's pane goes down as a
+/// key line of its own marked `paste`, so the device's node hands its holder
+/// a paste; keys typed around it never join it, and an older line with no
+/// mark reads as keys.
+#[test]
+fn a_paste_goes_down_as_a_line_of_its_own_marked_paste() {
+    let (proxy, link, _heard) = proxy();
+    stall(&proxy);
+    let pane = || KeyTarget::Pane("w1:p1".into());
+    proxy.key(pane(), b"a".to_vec(), 1);
+    proxy.key(pane(), b"b".to_vec(), 2);
+    proxy.paste(pane(), b"x\ry".to_vec(), 3);
+    proxy.key(pane(), b"c".to_vec(), 4);
+    proxy.key(pane(), b"d".to_vec(), 5);
+    link.release();
+    let all = link.wait_for_lines(|lines| ends_with_key(lines, "w1:p1", b"cd"));
+    let sent: Vec<(Vec<u8>, bool)> = all
+        .iter()
+        .filter_map(|line| match line {
+            TerminalDown::Key { data, paste, .. } => Some((decode_base64(data).unwrap(), *paste)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            (b"ab".to_vec(), false),
+            (b"x\ry".to_vec(), true),
+            (b"cd".to_vec(), false),
+        ]
+    );
+    let older: TerminalLine<TerminalDown> = serde_json::from_str(
+        r#"{"terminal":{"kind":"key","target":{"pane":"w1:p1"},"data":"YQ==","typed_at_unix_ms":1}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        older.terminal,
+        TerminalDown::Key { paste: false, .. }
+    ));
+    let keys = String::from_utf8(key_line("w1:p1", b"a")).unwrap();
+    assert!(
+        !keys.contains("paste"),
+        "a key line carries no mark: {keys}"
+    );
+}
+
+/// The device's node hands a key line marked `paste` to its pane's holder
+/// as a paste, and one with no mark as keys.
+#[test]
+fn a_device_node_hands_a_marked_line_to_its_holder_as_a_paste() {
+    let (node, opened) = node();
+    let pane = attach(&node, &opened, "w1:p1");
+    let pasted = line_of(TerminalDown::Key {
+        target: KeyTarget::Pane("w1:p1".into()),
+        data: encode_base64(b"one\rtwo"),
+        typed_at_unix_ms: 1,
+        paste: true,
+    })
+    .unwrap();
+    node.line(pasted.trim_ascii_end());
+    node.line(key_line("w1:p1", b"k").trim_ascii_end());
+    assert_eq!(pane.next_write(), ("paste", b"one\rtwo".to_vec()));
+    assert_eq!(pane.next_write(), ("input", b"k".to_vec()));
 }
 
 /// The controls, views and redraws waiting for a device's link are capped

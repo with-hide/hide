@@ -988,6 +988,17 @@ mod tests {
         );
     }
 
+    /// A screen sends a paste's line breaks as carriage returns, as a
+    /// terminal does (with-hide/hide#2952): inside bracketed paste they stay
+    /// carriage returns, so the program reads the lines as one paste.
+    #[test]
+    fn a_pasted_carriage_return_stays_one_inside_bracketed_paste() {
+        let mut pane = pane();
+        assert_eq!(pane.paste(b"a\rb").unwrap(), b"a\rb");
+        answers(&mut pane, &[b"\x1b[?2004h"]);
+        assert_eq!(pane.paste(b"a\rb").unwrap(), b"\x1b[200~a\rb\x1b[201~");
+    }
+
     fn press(col: u16, row: u16) -> Mouse {
         Mouse {
             action: MouseAction::Press,

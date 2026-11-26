@@ -29,7 +29,7 @@ use crate::terminal_hub::Resume;
 use crate::watch::WatchService;
 use base64::Engine as _;
 use hide_node::opener::OpenHandler;
-use hide_node_link::terminal::{GridSize, KeyTarget, MAX_PANE_ID_BYTES, TerminalNode};
+use hide_node_link::terminal::{GridSize, KeyTarget, MAX_PANE_ID_BYTES, ScreenInput, TerminalNode};
 
 const FALLBACK_INDEX: &str = include_str!("../fallback-ui/index.html");
 
@@ -2973,11 +2973,11 @@ fn handle_client_text(
         // only what the node reports of them (PRD core-host-node-terminal
         // D-05).
         Some("key") => {
-            let (target, bytes) = terminal_key(&event)?;
+            let (target, input) = terminal_key(&event)?;
             if let KeyTarget::Pane(pane) = &target {
                 screen_input(state, connection, pane);
             }
-            state.core.terminals.key(target, bytes, unix_ms_now());
+            input.send_to(state.core.terminals.as_ref(), target, unix_ms_now());
             return Ok(ClientAction::Replies(Vec::new()));
         }
         Some("terminal_mouse") => {
@@ -5364,7 +5364,11 @@ pub(crate) fn device_root_known(
 
 /// A `key` event's target, a pane or a creation request (exactly one), and
 /// its bytes.
-pub(crate) fn terminal_key(event: &Value) -> Result<(KeyTarget, Vec<u8>), String> {
+/// A `key` event: the pane or creation it is typed into, and what was typed.
+/// `paste: true` marks text the screen pasted, its line breaks carriage
+/// returns, which the pane's holder wraps for the program's paste mode
+/// (with-hide/hide#2952); a daemon before it reads the same event as keys.
+pub(crate) fn terminal_key(event: &Value) -> Result<(KeyTarget, ScreenInput), String> {
     let field = |name: &str| {
         event
             .pointer(&format!("/payload/{name}"))
@@ -5387,7 +5391,20 @@ pub(crate) fn terminal_key(event: &Value) -> Result<(KeyTarget, Vec<u8>), String
                 .decode(data)
                 .map_err(|error| format!("key.bytes_base64: {error}"))
         })?;
-    Ok((target, bytes))
+    let paste = match event.pointer("/payload/paste") {
+        None => false,
+        Some(paste) => paste
+            .as_bool()
+            .ok_or_else(|| "key.paste must be a boolean".to_owned())?,
+    };
+    Ok((
+        target,
+        if paste {
+            ScreenInput::Paste(bytes)
+        } else {
+            ScreenInput::Keys(bytes)
+        },
+    ))
 }
 
 /// A `terminal_viewport` event: the pane, the grid its view draws at, and
@@ -6654,6 +6671,35 @@ mod tests {
         assert!(key(&too_long, "pane_id").is_err());
         assert!(key(&too_long, "pending_request").is_err());
         assert!(view(&too_long).is_err());
+    }
+
+    /// with-hide/hide#2952: a screen marks the text it pasted, which goes on
+    /// as a paste for the pane's holder to wrap; an unmarked key, or one a
+    /// page built before the mark sends, is keys, and a mark that is no
+    /// boolean is refused rather than guessed.
+    #[test]
+    fn a_key_marked_paste_is_a_paste_and_an_unmarked_one_is_keys() {
+        let read = |payload: Value| terminal_key(&json!({"type": "key", "payload": payload}));
+        assert_eq!(
+            read(json!({"pane_id": "w1:p1", "bytes_base64": "YQ1i", "paste": true})),
+            Ok((
+                KeyTarget::Pane("w1:p1".into()),
+                ScreenInput::Paste(b"a\rb".to_vec())
+            ))
+        );
+        for payload in [
+            json!({"pane_id": "w1:p1", "bytes_base64": "YQ1i"}),
+            json!({"pane_id": "w1:p1", "bytes_base64": "YQ1i", "paste": false}),
+        ] {
+            assert_eq!(
+                read(payload),
+                Ok((
+                    KeyTarget::Pane("w1:p1".into()),
+                    ScreenInput::Keys(b"a\rb".to_vec())
+                ))
+            );
+        }
+        assert!(read(json!({"pane_id": "w1:p1", "bytes_base64": "YQ1i", "paste": "yes"})).is_err());
     }
 
     /// A spawn or a pane send that stopped partway answers its code and its

@@ -14,7 +14,7 @@ import type { ProjectTasksScope } from "../../agentScope";
 import type { AgentRow, ChangesSnapshot, LayoutNode, PaneHeader, RecentClosed } from "../../snapshot";
 import type { DirectoryList } from "../../store";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
-import { agent, applyDesk, deskSnapshot, focusedPane, keyText, panesOf, rowRequest, rowState, shellScreen, typed, viewedFileFrames, withViewedFile, type DeskModel, type PracticePane, type PracticePlace, type PracticeTab, type ViewedFile } from "./kit";
+import { agent, applyDesk, deskSnapshot, focusedPane, panesOf, rowRequest, rowState, shellScreen, typed, typedText, viewedFileFrames, withViewedFile, type DeskModel, type PracticePane, type PracticePlace, type PracticeTab, type ViewedFile } from "./kit";
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 const ROOT = `/work/${PLACE.project}`;
@@ -242,7 +242,7 @@ function apply(model: AgentsModel, event: CoreEvent): AgentsModel | null {
       const role = pane && roleOf(pane);
       if (typeof p.bytes_base64 !== "string" || (role !== "lead" && role !== "rev")) return null;
       const base = model.draftIn === id ? model : { ...model, draft: "", draftIn: id };
-      return typed(base, keyText(p.bytes_base64), (one) => submit(one, id));
+      return typed(base, typedText({ bytes_base64: p.bytes_base64, paste: p.paste }), (one) => submit(one, id));
     }
     case "focus_pane": {
       const id = String(p.pane_id);

@@ -1042,9 +1042,44 @@ export async function terminalLinkAt(paneId: string, point: { clientX: number; c
   return { ...link, inCheckout: !!owner, sourceInHide: !!owner || (owner === null && outsideFilesShown(useShellStore.getState().rest)) };
 }
 
-/** Pastes text as typed input, wrapped in bracketed paste when the program asked for it. */
+/**
+ * Pastes text into the pane as a paste: the `key` event marked `paste`, its
+ * line breaks carriage returns as a terminal sends them. The pane's holder
+ * wraps it in bracketed paste when the program turned that mode on, which
+ * this terminal cannot know: it draws from fragments that never carry the
+ * mode, so xterm's own paste sent every line as Enter (with-hide/hide#2952).
+ */
 export function pasteText(paneId: string, text: string) {
-  instances.get(paneId)?.term.paste(text);
+  const instance = instances.get(paneId);
+  if (!instance || !text) return;
+  const bytes = new TextEncoder().encode(text.replace(/\r?\n/g, "\r"));
+  afterComposition(instance, () => instance.dispatch({ schema_version: 2, kind: "key", payload: { ...keyPayload(instance.paneId, bytesBase64(bytes)), paste: true } }));
+}
+
+/**
+ * Runs `send` behind a composition xterm is about to send. xterm sends a
+ * pending composition early for a key that reaches its own handler, and a
+ * key or paste taken by the shell never does. macOS Chromium delivers the
+ * Return that ends a Hangul syllable as a second keydown after
+ * `compositionend`, so ⇧↩ right after "안녕" would reach the program as
+ * "안", the newline, then "녕". The input waits one task instead, queued
+ * behind xterm's send, so the syllable goes first; input sent while one
+ * waits queues behind it rather than overtaking it.
+ */
+function afterComposition(instance: Instance, send: () => void) {
+  if (!instance.commitPending && instance.keysWaiting === 0) return send();
+  instance.keysWaiting += 1;
+  setTimeout(() => {
+    instance.keysWaiting -= 1;
+    if (instances.get(instance.paneId) === instance) send();
+  }, 0);
+}
+
+/** Types `text` into the pane as keys, as if each were pressed: a carriage return is Enter. */
+export function typeText(paneId: string, text: string) {
+  const instance = instances.get(paneId);
+  if (!instance || !text) return;
+  instance.dispatch({ schema_version: 2, kind: "key", payload: keyPayload(instance.paneId, bytesBase64(new TextEncoder().encode(text))) });
 }
 
 /** Types an agent reference (`agentReference.ts`) as input, with a space to keep typing after it and never Enter. */
@@ -1216,20 +1251,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
         });
       }
     };
-    // xterm sends a pending composition early for a key that reaches its own
-    // handler, and a key taken here never does. macOS Chromium delivers the
-    // Return that ends a Hangul syllable as a second keydown after
-    // `compositionend`, so ⇧↩ right after "안녕" would reach the program as
-    // "안", the newline, then "녕". The key waits one task instead, queued
-    // behind xterm's send, so the syllable goes first; a key pressed while
-    // one waits queues behind it rather than overtaking it.
-    if (instance.commitPending || instance.keysWaiting > 0) {
-      instance.keysWaiting += 1;
-      setTimeout(() => {
-        instance.keysWaiting -= 1;
-        if (instances.get(instance.paneId) === instance) run();
-      }, 0);
-    } else run();
+    afterComposition(instance, run);
     return false;
   });
   // A selection xterm draws itself (a double or triple click, select-all)

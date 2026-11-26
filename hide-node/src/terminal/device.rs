@@ -45,8 +45,8 @@ use std::time::{Duration, Instant};
 
 use hide_node_link::terminal::{
     GridSize, KeyTarget, MAX_TERMINAL_LINE_BYTES, MAX_UNSENT_KEY_BYTES, MAX_UNSENT_OUTPUT_BYTES,
-    PaneTerminalState, ReportSink, TerminalClipboard, TerminalControl, TerminalDown, TerminalLine,
-    TerminalNode, TerminalOutput, TerminalReport, TerminalUp,
+    PaneTerminalState, ReportSink, ScreenInput, TerminalClipboard, TerminalControl, TerminalDown,
+    TerminalLine, TerminalNode, TerminalOutput, TerminalReport, TerminalUp,
 };
 use serde_json::json;
 
@@ -850,9 +850,15 @@ impl hide_host::serve::Terminals for NodeTerminals {
                 target,
                 data,
                 typed_at_unix_ms,
+                paste,
             } => match decode_base64(&data) {
                 Ok(bytes) => {
-                    self.with_service(|service| service.key(target, bytes, typed_at_unix_ms))
+                    let input = if paste {
+                        ScreenInput::Paste(bytes)
+                    } else {
+                        ScreenInput::Keys(bytes)
+                    };
+                    self.with_service(|service| input.send_to(service, target, typed_at_unix_ms))
                 }
                 Err(message) => crate::diagnostic!(json!({
                     "component": "node_terminal",
@@ -922,6 +928,10 @@ impl TerminalNode for NodeTerminals {
         self.with_service(|service| service.key(target, bytes, typed_at_unix_ms));
     }
 
+    fn paste(&self, target: KeyTarget, text: Vec<u8>, typed_at_unix_ms: u64) {
+        self.with_service(|service| service.paste(target, text, typed_at_unix_ms));
+    }
+
     fn view(&self, pane: &str, size: GridSize, new_view: bool) {
         self.with_service(|service| service.view(pane, size, new_view));
     }
@@ -989,12 +999,13 @@ enum Waiting {
     Line(Vec<u8>),
     /// A run of one pane's keys, typed back to back while the link was
     /// behind, and when the last of them was typed. Only a plain run takes
-    /// more keys.
+    /// more keys; a paste is a run of its own and takes none.
     Keys {
         pane: String,
         bytes: Vec<u8>,
         typed_at_unix_ms: u64,
         plain: bool,
+        paste: bool,
     },
 }
 
@@ -1081,20 +1092,22 @@ impl ProxyState {
             )
     }
 
-    /// Which of a pane's caps `bytes` more of its keys would pass, if any.
-    fn pane_cap_passed(&self, pane: &str, bytes: &[u8]) -> Option<&'static str> {
+    /// Which of a pane's caps `input`, more of its keys or a paste, would
+    /// pass, if any.
+    fn pane_cap_passed(&self, pane: &str, input: &ScreenInput) -> Option<&'static str> {
         let Some(waiting) = self.keys.get(pane) else {
             return if self.keys.len() >= MAX_KEY_PANES {
                 Some("panes")
-            } else if bytes.len() > MAX_UNSENT_KEY_BYTES {
+            } else if input.len() > MAX_UNSENT_KEY_BYTES {
                 Some("bytes")
             } else {
                 None
             };
         };
-        if waiting.bytes + bytes.len() > MAX_UNSENT_KEY_BYTES {
+        let joins = matches!(input, ScreenInput::Keys(bytes) if self.joins_run(pane, bytes));
+        if waiting.bytes + input.len() > MAX_UNSENT_KEY_BYTES {
             Some("bytes")
-        } else if waiting.lines >= MAX_PANE_KEY_LINES && !self.joins_run(pane, bytes) {
+        } else if waiting.lines >= MAX_PANE_KEY_LINES && !joins {
             Some("lines")
         } else {
             None
@@ -1117,10 +1130,14 @@ impl ProxyState {
         stalled
     }
 
-    /// Queues `bytes` for `pane`, onto the plain run of its keys waiting
-    /// last in line when both are plain.
-    fn queue_keys(&mut self, pane: String, bytes: Vec<u8>, typed_at_unix_ms: u64) {
-        let joins = self.joins_run(&pane, &bytes);
+    /// Queues `input` for `pane`: keys onto the plain run of its keys
+    /// waiting last in line when both are plain, a paste as a run of its own.
+    fn queue_keys(&mut self, pane: String, input: ScreenInput, typed_at_unix_ms: u64) {
+        let (bytes, paste) = match input {
+            ScreenInput::Keys(bytes) => (bytes, false),
+            ScreenInput::Paste(text) => (text, true),
+        };
+        let joins = !paste && self.joins_run(&pane, &bytes);
         let waiting = self.keys.entry(pane.clone()).or_default();
         waiting.bytes += bytes.len();
         if joins
@@ -1137,9 +1154,10 @@ impl ProxyState {
         waiting.lines += 1;
         self.lines.push_back(Waiting::Keys {
             pane,
-            plain: plain_keys(&bytes),
+            plain: !paste && plain_keys(&bytes),
             bytes,
             typed_at_unix_ms,
+            paste,
         });
     }
 
@@ -1390,6 +1408,32 @@ impl TerminalNode for DeviceTerminals {
     }
 
     fn key(&self, target: KeyTarget, bytes: Vec<u8>, typed_at_unix_ms: u64) {
+        self.type_into(target, ScreenInput::Keys(bytes), typed_at_unix_ms);
+    }
+
+    fn paste(&self, target: KeyTarget, text: Vec<u8>, typed_at_unix_ms: u64) {
+        self.type_into(target, ScreenInput::Paste(text), typed_at_unix_ms);
+    }
+
+    fn view(&self, pane: &str, size: GridSize, new_view: bool) {
+        self.send(TerminalDown::View {
+            pane: pane.to_owned(),
+            size,
+            new_view,
+        });
+    }
+
+    fn redraw(&self, pane: &str) {
+        self.send(TerminalDown::Redraw {
+            pane: pane.to_owned(),
+        });
+    }
+}
+
+impl DeviceTerminals {
+    /// A screen's key or paste for one of the device's panes, queued for
+    /// the link in the order typed and bounded as keys are.
+    fn type_into(&self, target: KeyTarget, input: ScreenInput, typed_at_unix_ms: u64) {
         let KeyTarget::Pane(pane) = target else {
             // The core opens creation requests for this machine's panes
             // only; a device pane's keys always name it.
@@ -1413,7 +1457,7 @@ impl TerminalNode for DeviceTerminals {
             } else if state.stopping {
                 return;
             } else {
-                if let Some(cap) = state.pane_cap_passed(&pane, &bytes) {
+                if let Some(cap) = state.pane_cap_passed(&pane, &input) {
                     if !first_told(&mut state.overflowed, &pane) {
                         // A pane past what the set remembers: refused, and
                         // reported once with the others past it.
@@ -1432,7 +1476,7 @@ impl TerminalNode for DeviceTerminals {
                         cap,
                     ))
                 } else {
-                    state.queue_keys(pane.clone(), bytes, typed_at_unix_ms);
+                    state.queue_keys(pane.clone(), input, typed_at_unix_ms);
                     None
                 }
             }
@@ -1469,20 +1513,6 @@ impl TerminalNode for DeviceTerminals {
             return;
         }
         self.shared.ready.notify_one();
-    }
-
-    fn view(&self, pane: &str, size: GridSize, new_view: bool) {
-        self.send(TerminalDown::View {
-            pane: pane.to_owned(),
-            size,
-            new_view,
-        });
-    }
-
-    fn redraw(&self, pane: &str) {
-        self.send(TerminalDown::Redraw {
-            pane: pane.to_owned(),
-        });
     }
 }
 
@@ -1741,12 +1771,14 @@ fn write_lines(shared: &ProxyShared, link: &dyn LineLink) {
                 pane,
                 bytes,
                 typed_at_unix_ms,
+                paste,
                 ..
             } => {
                 encoded = line_of(TerminalDown::Key {
                     target: KeyTarget::Pane(pane.clone()),
                     data: encode_base64(bytes),
                     typed_at_unix_ms: *typed_at_unix_ms,
+                    paste: *paste,
                 })
                 .unwrap_or_default();
                 &encoded

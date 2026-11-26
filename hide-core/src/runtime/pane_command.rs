@@ -539,6 +539,9 @@ mod tests {
                 self.typed.lock().unwrap().push((pane, bytes));
             }
         }
+        fn paste(&self, _: hide_node_link::terminal::KeyTarget, _: Vec<u8>, _: u64) {
+            unreachable!("a pane command types into a guest's pane and never pastes there");
+        }
         fn view(&self, _pane: &str, _size: hide_node_link::terminal::GridSize, _new: bool) {}
         fn redraw(&self, _pane: &str) {}
     }

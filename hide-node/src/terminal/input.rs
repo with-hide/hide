@@ -1151,13 +1151,55 @@ impl InputFacts {
     }
 }
 
-/// Keys typed while a paste is prepared, written behind it (`runtime/
-/// attachments.rs` in the core owns the paste).
+/// Keys and text pasted while an attachment's paste is prepared, written
+/// behind it in the order typed (`runtime/attachments.rs` in the core owns
+/// the attachment).
 #[derive(Debug)]
 pub(super) struct AttachmentHold {
     pub(super) intent: String,
-    pub(super) queued: Vec<u8>,
+    /// Keys and pastes, never two runs of keys side by side.
+    queued: Vec<Typed>,
     pub(super) cancelling: bool,
+}
+
+impl AttachmentHold {
+    pub(super) fn new(intent: String) -> Self {
+        Self {
+            intent,
+            queued: Vec::new(),
+            cancelling: false,
+        }
+    }
+
+    /// The bytes held, which [`MAX_ATTACHMENT_INPUT_BYTES`] bounds.
+    ///
+    /// [`MAX_ATTACHMENT_INPUT_BYTES`]: hide_node_link::terminal::MAX_ATTACHMENT_INPUT_BYTES
+    pub(super) fn held(&self) -> usize {
+        self.queued.iter().map(Typed::len).sum()
+    }
+
+    /// Holds a key or a paste behind what it holds.
+    pub(super) fn hold(&mut self, input: Typed) {
+        match (self.queued.last_mut(), input) {
+            (Some(Typed::Bytes(run)), Typed::Bytes(bytes)) => run.extend(bytes),
+            (_, input) => self.queued.push(input),
+        }
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.queued.clear();
+    }
+
+    /// What follows the attachment's paste: the keys typed up to the first
+    /// paste, which go in the attachment's own write as they always did, and
+    /// everything from that paste on, written after it in order. Read
+    /// without taking, so a write that fails keeps them for the retry.
+    pub(super) fn behind(&self) -> (Vec<u8>, &[Typed]) {
+        match self.queued.split_first() {
+            Some((Typed::Bytes(keys), rest)) => (keys.clone(), rest),
+            _ => (Vec::new(), &self.queued),
+        }
+    }
 }
 
 #[cfg(test)]

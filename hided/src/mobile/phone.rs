@@ -2886,6 +2886,9 @@ mod tests {
         fn key(&self, _: KeyTarget, _: Vec<u8>, _: u64) {
             panic!("no raw phone keys");
         }
+        fn paste(&self, _: KeyTarget, _: Vec<u8>, _: u64) {
+            panic!("no raw phone pastes");
+        }
         fn view(&self, _: &str, _: GridSize, _: bool) {
             panic!("no phone attach");
         }
