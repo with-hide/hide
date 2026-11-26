@@ -483,6 +483,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
     setLit((now) => ({ id, press: (now?.press ?? 0) + 1 }));
   };
   // 본문 보기: the block of the answer a question was asked in that holds the sentence asking it, as the conversation draws it; the whole answer for a question kept without its sentence, or one the answer read here does not hold.
+  // `askedIn` gives the last answer line written by then, while the core checked the sentence against the turn's assistant messages together, so a sentence in an earlier message of that turn is not found here and the whole of the last one shows.
   const askedWords = (ask: AskLine) => {
     const answer = askedIn(turns, ask.at_unix_ms);
     if (!answer) return null;

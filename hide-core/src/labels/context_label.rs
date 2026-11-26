@@ -572,6 +572,8 @@ impl JudgedWork {
 /// `text` as a quote is compared in: Markdown emphasis and quotation marks
 /// left out and every run of white space one space, so a sentence the
 /// judgment copied without the answer's `**` or line break still matches.
+/// The web's 본문 보기 finds a kept sentence in the answer by the same
+/// reading (`quoteForm` in web/src/markdownPlain.ts); change the two together.
 fn quote_form(text: &str) -> String {
     /// Markdown emphasis and code marks and the quotation marks a model
     /// may add or leave out around a copied sentence.

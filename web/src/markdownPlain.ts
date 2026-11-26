@@ -31,8 +31,10 @@ export function markdownPlainText(text: string): string {
 }
 
 // The marks Hide AI's quote check drops before it looks for a question's
-// sentence in the answer (hide-core `quote_form`): emphasis, code and
-// quotation marks a model may add or leave out around a copied sentence.
+// sentence in the answer: emphasis, code and quotation marks a model may add
+// or leave out around a copied sentence. The same reading as `quote_form` in
+// hide-core/src/labels/context_label.rs; change the two together, or a
+// sentence the core kept is not found here and the whole answer shows.
 const QUOTE_MARKS = new Set(["*", "_", "`", '"', "'", "\u201C", "\u201D", "\u2018", "\u2019"]);
 
 /** `text` as the quote check reads it, with where each of its characters stands in `text`. */
