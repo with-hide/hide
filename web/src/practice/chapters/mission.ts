@@ -54,7 +54,7 @@ export default chapter<MissionModel>({
     { id: "send", target: SEND, side: "left", gesture: { click: true }, done: (model) => model.stage >= 6 },
     // What the answer changed runs to the end by itself: the workers finish and the Conductor reports.
     { id: "finishing", target: "[data-mission]", side: "left", wait: true, done: (model) => model.stage >= 9 },
-    // The card's ⚙ opens Settings › Mission: the default scope and the link to Settings › Agents' favorite models. Pointed at and read, never opened here.
+    // The card's ⚙ opens Settings › Mission: the default scope and the link to Settings › Models by purpose's agent list. Pointed at and read, never opened here.
     { id: "settings", target: "[data-detail-conductor-settings]", side: "left" },
     // The card has shown what the mission did; its ✕ puts it away, the pane as it was.
     { id: "leave", quest: true, target: CLOSE, side: "left", gesture: { click: true }, done: missionLeft },

@@ -13,7 +13,7 @@
 use super::beside_spawn::{LOCAL_CHECKOUT, Spawner, local_spawner};
 use super::*;
 use crate::delivery::Command;
-use crate::missions::{Candidate, MissionCommand};
+use crate::missions::MissionCommand;
 use crate::runtime::delivery::tests::authority;
 use serde_json::{Value, json};
 
@@ -84,20 +84,9 @@ fn project_picks(runtime: &mut Runtime, profile: &str) {
         .insert(crate::project_settings::key(&node, LOCAL_CHECKOUT), record);
 }
 
-/// A Codex worker candidate of the built-in default (`None`) or a profile.
-fn codex(profile: Option<&str>) -> Candidate {
-    Candidate {
-        agent: "codex".into(),
-        profile: profile.map(|id| hide_agent_adapter::ProfileId(id.into())),
-        model: None,
-        effort: None,
-        purpose: String::new(),
-    }
-}
-
-/// The caller `sender` conducts a started mission whose worker candidates
-/// are `candidates`, with `work` listed on this machine.
-fn conducting(candidates: Vec<Candidate>) -> Spawner {
+/// The caller `sender` conducts a started mission, with `work` listed on
+/// this machine.
+fn conducting() -> Spawner {
     let spawner = local_spawner();
     {
         let mut runtime = spawner.runtime.lock().unwrap();
@@ -111,7 +100,6 @@ fn conducting(candidates: Vec<Candidate>) -> Spawner {
                 root_path: LOCAL_CHECKOUT.into(),
                 ..Default::default()
             });
-        runtime.snapshot.ui_state.conductor_settings.candidates = candidates;
         let context = authority(&spawner.actor).context;
         for op in [
             json!({"op": "create", "title": "Review the fix"}),
@@ -198,29 +186,16 @@ impl Spawner {
     }
 }
 
-/// A worker admitted on Codex's built-in default starts on it, though the
-/// project chose `work` for Codex between the admission and the start: the
-/// start runs the item the admission judged and does not pick again.
-#[test]
-fn a_worker_starts_with_the_item_its_admission_judged() {
-    let spawner = conducting(vec![codex(None)]);
-    spawner
-        .spawn_mission(reviewer(None), |runtime| project_picks(runtime, "p-work"))
-        .expect("the admitted default starts");
-    assert_eq!(spawner.started_profile(), None);
-    assert_eq!(spawner.count("start_agent"), 1);
-}
-
 /// The same spawn asked again after its worker started answers that worker,
 /// though the profile it named was renamed since: what finished is not
 /// judged again, so the name it gave no longer has to resolve. The same
 /// intent asked with another profile is still a conflict.
 #[test]
 fn a_finished_spawn_asked_again_after_its_profile_was_renamed_answers_its_worker() {
-    let spawner = conducting(vec![codex(Some("p-work"))]);
+    let spawner = conducting();
     let worker = spawner
         .spawn_mission(reviewer(Some("work")), |_| {})
-        .expect("the work candidate starts");
+        .expect("the work item starts");
     assert_eq!(spawner.started_profile().as_deref(), Some("work"));
     {
         let mut runtime = spawner.runtime.lock().unwrap();
@@ -241,14 +216,14 @@ fn a_finished_spawn_asked_again_after_its_profile_was_renamed_answers_its_worker
 }
 
 /// The same spawn asked again after its worker started on the project's
-/// choice answers that worker, though the project has since chosen an item
-/// outside the candidates: the item was judged when the worker started.
+/// choice answers that worker, though the project has since chosen another
+/// item: a finished spawn picks nothing again.
 #[test]
 fn a_finished_spawn_asked_again_after_the_projects_choice_moved_answers_its_worker() {
-    let spawner = conducting(vec![codex(None)]);
+    let spawner = conducting();
     let worker = spawner
         .spawn_mission(reviewer(None), |_| {})
-        .expect("the default candidate starts");
+        .expect("the default item starts");
     assert_eq!(spawner.started_profile(), None);
     {
         let mut runtime = spawner.runtime.lock().unwrap();
@@ -286,23 +261,22 @@ fn kept_worker(spawner: &Spawner) -> Value {
     json!(runtime.missions.book.missions[0].nodes[0].worker)
 }
 
-/// The model a plan names for Codex when its candidate keeps the CLI's
-/// default: the one `hide agent catalog` offers as `cli_default_model`.
+/// The model a plan names for Codex when it keeps the CLI's default: the one
+/// `hide agent catalog` offers as `cli_default_model`.
 const CODEX_DEFAULT_MODEL: &str = "gpt-5.6-luna";
 
 /// A plan names its worker's profile by the name `--profile` takes, and the
 /// book keeps that profile's id. A name the machine does not list is refused
-/// with the node and the item, and so is an item none of the candidates
-/// admits (PRD agent-profiles-phase2 D-08).
+/// with the node and the item (PRD agent-profiles-phase2 D-08).
 #[test]
-fn a_plan_names_its_workers_profile_and_is_held_to_the_candidates() {
-    let spawner = conducting(vec![codex(Some("p-work"))]);
+fn a_plan_names_its_workers_profile_by_its_name() {
+    let spawner = conducting();
     let model = CODEX_DEFAULT_MODEL;
     plan_worker(
         &spawner,
         json!({"agent": "codex", "profile": "work", "model": model}),
     )
-    .expect("the work candidate is planned");
+    .expect("the work item is planned");
     assert_eq!(
         kept_worker(&spawner),
         json!({"agent": "codex", "profile": "p-work", "model": model, "effort": null, "effort_auto": false})
@@ -314,19 +288,6 @@ fn a_plan_names_its_workers_profile_and_is_held_to_the_candidates() {
         ),
         Err("mission_profile_unknown\u{1f}fix: Codex · nope".to_owned())
     );
-    assert_eq!(
-        plan_worker(&spawner, json!({"agent": "codex", "model": model})),
-        Err(format!(
-            "mission_candidate_refused\u{1f}fix: Codex ({model})"
-        ))
-    );
-    assert_eq!(
-        plan_worker(
-            &spawner,
-            json!({"agent": "codex", "profile": "work", "model": "gpt-other"}),
-        ),
-        Err("mission_candidate_refused\u{1f}fix: Codex · work (gpt-other)".to_owned())
-    );
 }
 
 /// A plan of the built-in default keeps no profile, so its book is the
@@ -334,12 +295,12 @@ fn a_plan_names_its_workers_profile_and_is_held_to_the_candidates() {
 #[test]
 fn a_plan_of_the_built_in_default_keeps_the_bytes_it_kept_before_profiles() {
     let model = CODEX_DEFAULT_MODEL;
-    let spawner = conducting(vec![codex(None)]);
+    let spawner = conducting();
     plan_worker(
         &spawner,
         json!({"agent": "codex", "profile": "default", "model": model}),
     )
-    .expect("the default candidate is planned");
+    .expect("the default item is planned");
     assert_eq!(
         serde_json::to_string(&kept_worker(&spawner)).unwrap(),
         format!(r#"{{"agent":"codex","model":"{model}","effort":null,"effort_auto":false}}"#),
@@ -380,7 +341,7 @@ fn node_started_profile(spawner: &Spawner, mission: &str) -> Option<String> {
 /// whatever the project chose (PRD agent-profiles-phase2 D-02).
 #[test]
 fn a_nodes_worker_named_by_no_profile_starts_as_its_plan_names_it() {
-    let spawner = conducting(vec![codex(Some("p-work"))]);
+    let spawner = conducting();
     let mission = mission_id(&spawner);
     plan_worker(
         &spawner,
@@ -400,11 +361,10 @@ fn a_nodes_worker_named_by_no_profile_starts_as_its_plan_names_it() {
     );
 }
 
-/// A `--profile` that differs from the plan is the spawn's own choice, held
-/// to the candidates as any spawn's is.
+/// A `--profile` that differs from the plan is the spawn's own choice.
 #[test]
-fn a_nodes_worker_named_by_another_profile_starts_with_it_when_a_candidate_admits_it() {
-    let spawner = conducting(vec![codex(Some("p-work")), codex(None)]);
+fn a_nodes_worker_named_by_another_profile_starts_with_it() {
+    let spawner = conducting();
     let mission = mission_id(&spawner);
     plan_worker(
         &spawner,
@@ -422,7 +382,7 @@ fn a_nodes_worker_named_by_another_profile_starts_with_it_when_a_candidate_admit
 /// account a node runs before it starts.
 #[test]
 fn mission_show_names_a_planned_workers_item() {
-    let spawner = conducting(vec![codex(Some("p-work"))]);
+    let spawner = conducting();
     plan_worker(
         &spawner,
         json!({"agent": "codex", "profile": "work", "model": CODEX_DEFAULT_MODEL}),
@@ -459,7 +419,7 @@ fn mission_show_names_a_planned_workers_item() {
 /// does (PRD agent-profiles-phase2 D-02).
 #[test]
 fn a_nodes_worker_planned_on_the_default_does_not_take_its_conductors_profile() {
-    let spawner = conducting(vec![codex(Some("p-work")), codex(None)]);
+    let spawner = conducting();
     let mission = mission_id(&spawner);
     plan_worker(
         &spawner,
@@ -520,7 +480,7 @@ fn work_becomes(spawner: &Spawner, name: Option<&str>) {
 /// `p-work` for both.
 #[test]
 fn a_started_nodes_replan_keeps_its_profiles_after_one_is_renamed_or_removed() {
-    let spawner = conducting(vec![codex(Some("p-work"))]);
+    let spawner = conducting();
     let worked = json!({"agent": "codex", "profile": "work", "model": CODEX_DEFAULT_MODEL});
     let replan = |spawner: &Spawner| {
         let mut runtime = spawner.runtime.lock().unwrap();
@@ -573,7 +533,7 @@ fn a_started_nodes_replan_keeps_its_profiles_after_one_is_renamed_or_removed() {
 /// intent is still a conflict.
 #[test]
 fn a_nodes_worker_asked_again_answers_its_worker_after_its_profile_or_plan_moved() {
-    let spawner = conducting(vec![codex(Some("p-work")), codex(None)]);
+    let spawner = conducting();
     let mission = mission_id(&spawner);
     plan_worker(
         &spawner,
@@ -720,7 +680,7 @@ fn a_node_worker_starts_at_its_local_only_destination_in_any_spelling_of_the_pro
             _ => refused("internal_error", "the test stops the start here"),
         })
     };
-    let spawner = conducting(vec![codex(None)]);
+    let spawner = conducting();
     {
         let mut runtime = spawner.runtime.lock().unwrap();
         let node: Arc<dyn crate::node_access::NodeLink> =

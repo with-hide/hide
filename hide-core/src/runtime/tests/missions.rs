@@ -114,23 +114,6 @@ fn spawn(machine: Option<&str>, intent: &str, brief: Option<&str>) -> crate::del
     }
 }
 
-/// A spawn of `kind` in the project with `launch`, on `machine`, naming no
-/// profile.
-fn worker<'a>(
-    machine: Option<&'a str>,
-    kind: &'a str,
-    launch: &'a hide_agent_adapter::LaunchChoice,
-) -> crate::runtime::missions::SpawnWorker<'a> {
-    crate::runtime::missions::SpawnWorker {
-        machine,
-        kind,
-        profile: None,
-        repo: PROJECT,
-        launch,
-        finished: false,
-    }
-}
-
 /// The node `cause`'s worker, started on its brief.
 fn prepare_spawn(
     runtime: &mut Runtime,
@@ -258,13 +241,7 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
     // A pane that conducts nothing spawns as it always did.
     assert!(
         runtime
-            .mission_spawn_admission(
-                &conductor,
-                &worker(None, "codex", &Default::default()),
-                &mut None,
-                "plain",
-                false,
-            )
+            .mission_spawn_admission(&conductor, None, "plain", false)
             .unwrap()
             .is_none()
     );
@@ -290,13 +267,7 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
         "a research node's worker runs only on the machine the project is on"
     );
     let admission = runtime
-        .mission_spawn_admission(
-            &conductor,
-            &worker(None, "codex", &Default::default()),
-            &mut None,
-            "plain",
-            false,
-        )
+        .mission_spawn_admission(&conductor, None, "plain", false)
         .unwrap()
         .expect("a running mission's spawn is one of its workers");
     assert_eq!(
@@ -315,13 +286,7 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
     .unwrap();
     assert!(
         runtime
-            .mission_spawn_admission(
-                &conductor,
-                &worker(None, "codex", &Default::default()),
-                &mut None,
-                "plain",
-                false,
-            )
+            .mission_spawn_admission(&conductor, None, "plain", false)
             .unwrap()
             .is_none()
     );
@@ -3657,107 +3622,20 @@ fn a_merge_wait_mission_waits_only_on_the_pull_requests_left_in_its_stack() {
     assert_eq!(closed["mission"]["status"], "done");
 }
 
-/// With worker candidates set, a Conductor's worker outside them is refused
-/// by name (B8, D-34): another agent, another model than the one a candidate
-/// fixes or a model where it keeps the CLI's default, another effort than a
-/// fixed one. An automatic effort is the Conductor's to choose.
+/// The operator's agent list is what a Conductor chooses from, not a limit:
+/// a worker that is none of its rows is planned and started.
 #[test]
-fn a_conductors_worker_outside_the_candidates_is_refused() {
+fn a_conductors_worker_outside_the_agent_list_is_planned_and_started() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     let conductor = fixture.conductor.clone();
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "create", "title": "Fix the bug"}),
-    )
-    .unwrap();
-    command(&mut runtime, "sender", plan()).unwrap();
-    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
-    let launch = |model: Option<&str>, effort: Option<&str>| hide_agent_adapter::LaunchChoice {
-        model: model.map(str::to_owned),
-        effort: effort.map(str::to_owned),
-    };
-    let admit = |runtime: &Runtime, kind: &str, choice: hide_agent_adapter::LaunchChoice| {
-        runtime
-            .mission_spawn_admission(
-                &conductor,
-                &worker(None, kind, &choice),
-                &mut None,
-                "plain",
-                false,
-            )
-            .map(|admission| admission.is_some())
-            .map_err(|refusal| crate::coordination::split_refusal(&refusal).0.to_owned())
-    };
-    // No candidates: any agent the machine has.
-    assert_eq!(admit(&runtime, "codex", launch(None, None)), Ok(true));
-
-    let candidates = vec![
-        crate::missions::Candidate {
-            agent: "claude".into(),
-            profile: None,
-            model: None,
-            effort: None,
-            purpose: "changes".into(),
-        },
-        crate::missions::Candidate {
-            agent: "codex".into(),
-            profile: None,
-            model: Some("gpt-x".into()),
-            effort: Some("high".into()),
-            purpose: "review".into(),
-        },
-    ];
-    // A mission created with none keeps admitting any agent, in a plan and
-    // a spawn alike: candidates added in Settings since do not narrow it.
-    runtime.snapshot.ui_state.conductor_settings.candidates = candidates.clone();
-    assert_eq!(admit(&runtime, "opencode", launch(None, None)), Ok(true));
-    command(&mut runtime, "sender", plan_fix_by("codex")).expect("any agent is planned");
-    // A mission created with candidates is held to them.
-    runtime.missions.book.missions.clear();
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "create", "title": "Fix the bug"}),
-    )
-    .unwrap();
-    command(&mut runtime, "sender", plan()).unwrap();
-    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
-    assert_eq!(runtime.missions.book.missions[0].candidates, candidates);
-    let refused = Err("mission_candidate_refused".to_owned());
-    assert_eq!(admit(&runtime, "claude", launch(None, None)), Ok(true));
-    assert_eq!(
-        admit(&runtime, "claude", launch(None, Some("max"))),
-        Ok(true),
-        "an automatic effort is free"
-    );
-    assert_eq!(
-        admit(&runtime, "claude", launch(Some("other"), None)),
-        refused
-    );
-    assert_eq!(
-        admit(&runtime, "codex", launch(Some("gpt-x"), Some("high"))),
-        Ok(true)
-    );
-    assert_eq!(
-        admit(&runtime, "codex", launch(Some("gpt-x"), None)),
-        refused
-    );
-    assert_eq!(
-        admit(&runtime, "codex", launch(None, Some("high"))),
-        refused
-    );
-    assert_eq!(admit(&runtime, "opencode", launch(None, None)), refused);
-    // The spawn command itself is refused, before the ledger reserves it.
-    runtime.missions.book.missions[0].candidates.truncate(1);
-    assert_eq!(
-        prepare_spawn(&mut runtime, &conductor, None).unwrap_err(),
-        crate::coordination::refusal("mission_candidate_refused", "Codex")
-    );
+    runtime.snapshot.ui_state.conductor_settings.candidates = vec![candidate_of("claude")];
+    running(&mut runtime);
+    command(&mut runtime, "sender", plan_fix_by("codex")).expect("planned");
+    prepare_spawn(&mut runtime, &conductor, None).expect("started");
 }
 
-/// A worker candidate of `agent` that fixes no profile, model or effort.
+/// A list row of `agent` that fixes no profile, model or effort.
 fn candidate_of(agent: &str) -> crate::missions::Candidate {
     crate::missions::Candidate {
         agent: agent.into(),
@@ -3777,103 +3655,6 @@ fn plan_fix_by(agent: &str) -> Value {
         {"key": "fix", "title": "Fix it", "kind": "change", "criteria": ["it works"], "delivery": "pr",
          "depends_on": ["cause"], "worker": {"agent": agent, "model": model}},
     ]}})
-}
-
-/// A candidate the operator adds in Settings › Mission while a mission runs
-/// applies to it at once (B48): the plan naming it for a node not started
-/// and the worker spawned under a node's intent are admitted, where the
-/// same agent in neither the mission's own candidates nor Settings' was
-/// refused, with the next action saying where the candidates come from.
-#[test]
-fn a_candidate_added_in_settings_applies_to_a_running_mission() {
-    let fixture = conducting();
-    let mut runtime = fixture.runtime.lock().unwrap();
-    let conductor = fixture.conductor.clone();
-    let model = crate::missions::cli_default_model("codex").unwrap();
-    runtime.snapshot.ui_state.conductor_settings.candidates = vec![candidate_of("claude")];
-    running(&mut runtime);
-    runtime.snapshot.ui_state.conductor_settings.candidates =
-        vec![candidate_of("claude"), candidate_of("opencode")];
-
-    let refused = command(&mut runtime, "sender", plan_fix_by("codex")).unwrap_err();
-    assert_eq!(
-        refused,
-        crate::coordination::refusal(
-            "mission_candidate_refused",
-            &format!("fix: Codex ({model})")
-        )
-    );
-    assert_eq!(
-        prepare_spawn(&mut runtime, &conductor, None).unwrap_err(),
-        crate::coordination::refusal("mission_candidate_refused", "Codex")
-    );
-    runtime
-        .snapshot
-        .ui_state
-        .conductor_settings
-        .candidates
-        .push(candidate_of("codex"));
-    command(&mut runtime, "sender", plan_fix_by("codex")).expect("the added candidate is planned");
-    prepare_spawn(&mut runtime, &conductor, None).expect("the added candidate starts");
-    // The refusal above told the Conductor where its candidates come from.
-    let next = crate::missions::next_action("mission_candidate_refused");
-    assert!(
-        next.contains("when it was created") && next.contains("add it in Settings > Mission"),
-        "{next}"
-    );
-}
-
-/// A candidate removed from Settings › Mission still admits work in a
-/// mission created with it, so a node planned on it is not stranded; the
-/// next mission is created without it and refuses it (B48).
-#[test]
-fn a_candidate_removed_in_settings_applies_from_the_next_mission() {
-    let fixture = conducting();
-    let mut runtime = fixture.runtime.lock().unwrap();
-    let conductor = fixture.conductor.clone();
-    let model = crate::missions::cli_default_model("codex").unwrap();
-    runtime.snapshot.ui_state.conductor_settings.candidates = vec![candidate_of("codex")];
-    running(&mut runtime);
-    runtime.snapshot.ui_state.conductor_settings.candidates = vec![candidate_of("claude")];
-
-    command(&mut runtime, "sender", plan_fix_by("codex"))
-        .expect("the removed candidate is planned");
-    prepare_spawn(&mut runtime, &conductor, None).expect("the removed candidate starts");
-
-    without_gate(&mut runtime);
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "close", "end": "done"}),
-    )
-    .unwrap();
-    let (created, _) = command(
-        &mut runtime,
-        "sender",
-        json!({"op": "create", "title": "Fix the next bug"}),
-    )
-    .unwrap();
-    let next = created["mission"]["id"].as_str().unwrap().to_owned();
-    assert_eq!(
-        command(&mut runtime, "sender", plan_fix_by("codex")).unwrap_err(),
-        crate::coordination::refusal(
-            "mission_candidate_refused",
-            &format!("fix: Codex ({model})")
-        )
-    );
-    command(&mut runtime, "sender", plan()).unwrap();
-    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
-    assert_eq!(
-        prepare_spawn_of(
-            &mut runtime,
-            &conductor,
-            None,
-            &format!("{next}:cause"),
-            Some("Find the cause.")
-        )
-        .unwrap_err(),
-        crate::coordination::refusal("mission_candidate_refused", "Codex")
-    );
 }
 
 /// The fixture's own machine lists Codex's profile `team` (`p-team`), and
@@ -3926,83 +3707,6 @@ fn conductor_runs_team(runtime: &mut Runtime) {
     );
 }
 
-/// A candidate holds the profile a worker actually starts with (PRD
-/// agent-profiles-phase2 D-08, B12, B13, B15): a Conductor running
-/// `Codex · team` that spawns a Codex worker without `--profile` hands it
-/// its own profile, which a candidate of Codex's built-in default does not
-/// admit, and the refusal names what would have started; the same spawn
-/// naming the built-in default is the candidate. A candidate of
-/// `Codex · team` admits a worker that inherits it or names it, and not one
-/// on the built-in default. A candidate of a profile the machine no longer
-/// lists admits no worker at all, since no start can take that profile.
-#[test]
-fn a_candidate_admits_the_profile_a_worker_starts_with() {
-    let fixture = conducting();
-    let mut runtime = fixture.runtime.lock().unwrap();
-    let conductor = fixture.conductor.clone();
-    conductor_runs_team(&mut runtime);
-    let candidate = |profile: Option<&str>| crate::missions::Candidate {
-        agent: "codex".into(),
-        profile: profile.map(|id| hide_agent_adapter::ProfileId(id.into())),
-        model: None,
-        effort: None,
-        purpose: String::new(),
-    };
-    runtime.snapshot.ui_state.conductor_settings.candidates = vec![candidate(None)];
-    running(&mut runtime);
-    // Settings' candidates admit too (B48): emptied, so the mission's own,
-    // set below, judge alone.
-    runtime
-        .snapshot
-        .ui_state
-        .conductor_settings
-        .candidates
-        .clear();
-    let defaults = hide_agent_adapter::LaunchChoice::default();
-    let admit = |runtime: &Runtime, profile: Option<&str>| {
-        runtime
-            .mission_spawn_admission(
-                &conductor,
-                &crate::runtime::missions::SpawnWorker {
-                    profile,
-                    ..worker(None, "codex", &defaults)
-                },
-                &mut None,
-                "plain",
-                false,
-            )
-            .map(|admission| admission.is_some())
-    };
-    let refused = |item: &str| {
-        Err(crate::coordination::refusal(
-            "mission_candidate_refused",
-            item,
-        ))
-    };
-
-    assert_eq!(admit(&runtime, None), refused("Codex · team"));
-    assert_eq!(admit(&runtime, Some("default")), Ok(true));
-    // The spawn command itself is refused, before the ledger reserves it.
-    assert_eq!(
-        prepare_spawn(&mut runtime, &conductor, None).unwrap_err(),
-        crate::coordination::refusal("mission_candidate_refused", "Codex · team")
-    );
-
-    runtime.missions.book.missions[0].candidates = vec![candidate(Some("p-team"))];
-    assert_eq!(admit(&runtime, None), Ok(true));
-    assert_eq!(admit(&runtime, Some("team")), Ok(true));
-    assert_eq!(admit(&runtime, Some("default")), refused("Codex"));
-
-    runtime.missions.book.missions[0].candidates = vec![candidate(Some("p-gone"))];
-    assert_eq!(admit(&runtime, None), refused("Codex · team"));
-    assert_eq!(admit(&runtime, Some("default")), refused("Codex"));
-    assert!(
-        admit(&runtime, Some("gone"))
-            .unwrap_err()
-            .starts_with(crate::launch::PROFILE_GONE)
-    );
-}
-
 /// `hide mission settings` names each candidate as the agent item it
 /// starts and the `--profile` value that starts it (PRD
 /// agent-profiles-phase2 B11, B14, B15): a row kept with its agent alone is
@@ -4042,6 +3746,11 @@ fn mission_settings_name_each_candidates_item() {
         (rows[0]["purpose"].clone(), rows[1]["model"].clone()),
         (json!("changes"), json!("gpt-x"))
     );
+    // Any agent that chooses whom to start reads the same rows in the
+    // catalog, with no mission of its own.
+    let node = runtime.node.to_string();
+    let catalog = runtime.agent_catalog(&node, None, true).unwrap();
+    assert_eq!(catalog["candidates"], answer["settings"]["candidates"]);
 }
 
 /// A created, planned and started mission conducted by `sender`.
@@ -9971,13 +9680,7 @@ fn a_worker_on_another_machine_starts_only_for_a_pull_request_change_of_the_same
     runtime.github = repository_read(PROJECT, Some("R_1"));
     let admit = |runtime: &Runtime, machine: Option<&str>, intent: &str| {
         runtime
-            .mission_spawn_admission(
-                &conductor,
-                &worker(machine, "codex", &Default::default()),
-                &mut None,
-                intent,
-                true,
-            )
+            .mission_spawn_admission(&conductor, machine, intent, true)
             .map(|admission| admission.map(|admission| admission.mission))
     };
     let refused =
@@ -17540,8 +17243,8 @@ fn an_outside_nodes_view_says_where_its_work_goes() {
 
 /// B5: a worker of the mission starts its worktree from the destination,
 /// which its admission carries off the lock with the mission's project, the
-/// repository the spawn judges its own against there (with-hide/hide#2634),
-/// whatever the spawn's folder is named; a mission that records none names
+/// repository the spawn judges its own against there (with-hide/hide#2634);
+/// a mission that records none names
 /// neither, so its worktree starts as it always did.
 #[test]
 fn a_missions_worker_is_admitted_with_the_destination_its_worktree_starts_from() {
@@ -17559,40 +17262,19 @@ fn a_missions_worker_is_admitted_with_the_destination_its_worktree_starts_from()
         .unwrap();
         command(&mut runtime, "sender", plan()).unwrap();
         command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
-        let admitted = |runtime: &Runtime, repo: &str, intent: &str| {
+        let admitted = |runtime: &Runtime, intent: &str| {
             runtime
-                .mission_spawn_admission(
-                    &fixture.conductor,
-                    &crate::runtime::missions::SpawnWorker {
-                        repo,
-                        ..worker(None, "codex", &Default::default())
-                    },
-                    &mut None,
-                    intent,
-                    true,
-                )
+                .mission_spawn_admission(&fixture.conductor, None, intent, true)
                 .unwrap()
                 .unwrap()
         };
         let project = expected.map(|_| PROJECT.to_owned());
-        // The text of the path decides nothing: the project spelled with a
-        // trailing `/`, another repository, and one the catalog lists under
-        // another project are all judged by the spawn.
-        runtime
-            .worktree_catalog
-            .projects
-            .push(crate::model::ProjectWorktreesSnapshot {
-                root_path: "/checkouts/other".into(),
-                ..Default::default()
-            });
-        for repo in [PROJECT, "/checkouts/fixture/", "/checkouts/other"] {
-            let admission = admitted(&runtime, repo, "plain");
-            assert_eq!(admission.destination.as_deref(), expected, "{repo}");
-            assert_eq!(admission.project, project, "{repo}");
-            assert!(!admission.node_worker, "{repo}");
-        }
+        let admission = admitted(&runtime, "plain");
+        assert_eq!(admission.destination.as_deref(), expected);
+        assert_eq!(admission.project, project);
+        assert!(!admission.node_worker);
         // A node's worker is marked so, since it works in the project only.
-        assert!(admitted(&runtime, PROJECT, "mission-1:cause").node_worker);
+        assert!(admitted(&runtime, "mission-1:cause").node_worker);
     }
 }
 
