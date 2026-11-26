@@ -157,7 +157,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   A gate you change or take away while it asks takes its question off the map with it, and the next gate asks.
   A done node keeps the gate it has (`mission_gate_node_done`), a waiting node has none, and a mission Hide exempts from finish lines takes none (`mission_gate_exempt`).
 - `"operator_merge": "<why in one line>"` gives the operator a node's merge in a mission whose scope is `merge`: when the operator wants to merge one pull request themselves ("DB는 내가 머지할게"), put it on that `change` node delivered by `pr`, with why in at most 80 characters (`mission_operator_merge_invalid` on any other node, a longer or multi-line reason, or with scope `pr`, where every pull request is the operator's already).
-  Hide marks that node `done` once its pull request is green and approved, as in scope `pr`, and its merge is left to the operator; a later plan that leaves `operator_merge` out keeps it, and `"operator_merge": null` gives the merge back to you.
+  Hide marks that node `done` once its pull request is ready with nothing a person owes (above all an approval the branch rule asks for; with no rule, none is owed), as in scope `pr`, and its merge is left to the operator; a later plan that leaves `operator_merge` out keeps it, and `"operator_merge": null` gives the merge back to you.
   Say it in the plan's scope line, `머지까지 · <node>만 👤 내가 머지` in the operator's language, which `hide mission show` prints under its head too.
 - Name a node `<what> · <how>` in the operator's language, such as `결제 DB · 환불 상태 열`: the map's card shows the title alone, with no description under it, so the title says what the node makes and by what means. A longer description goes in its `steps` and its brief.
 - One change node is one pull request unless the operator asked to review several together.
@@ -326,8 +326,10 @@ Every worker's brief, code or general, says in its first line what the node is, 
   The CI letter comes once nothing on the commit still runs, and names the commit and whether the CI was cancelled with no run replacing it or failed, with the jobs that failed.
   Each result is told once per commit for good, the one a pull request already has when Hide first reads it included, so a rerun that fails again sends none, even after a pass between.
   A CI that passes sends no letter of its own: it takes the failure's letter away, and the node's readiness is what you hear.
-  A node is ready when every one of its lines is met (its `ci` line on the newest commit and its checkers' lines included) while GitHub reads each of its open pull requests mergeable (checks passed, the review approved or not asked for, and no conflict with its base); the letter comes once per newest commit, so a new commit that passes again brings it again.
-  With scope `merge` it says to merge the node, naming the pull request below it first when it is stacked; with scope `pr`, or on a node with `operator_merge`, it says the merge is the operator's: merge nothing, start what waits on it, and report once every node is ready.
+  A node is ready when every one of its lines is met (its `ci` line on the newest commit and its checkers' lines included) and nothing is left for its worker on any of its open pull requests: its CI passed on the newest commit or it has none, no conflict with its base and no changes asked for.
+  The letter names what a person still owes before the merge, an approval the branch rule asks for or a pull request still a draft, and says how to get it: ask the operator for the approval (below), take it out of draft.
+  It comes once per newest commit and what is owed, so a new commit that passes again brings it again, and so does the approval coming.
+  With scope `merge` it says to merge the node, naming the pull request below it first when it is stacked; on a node with `operator_merge` it says the merge is the operator's: merge nothing and start what waits on it; with scope `pr` it also says to report once every node is ready.
   A node whose gate waits on the operator is not ready until they pass it.
   A new commit alone sends no letter: wait for its CI letter or the node's ready letter rather than watching the checks in a shell.
   When a lower pull request of a stack changes, bring the change into the one above it with a merge, never a rebase.
@@ -401,7 +403,7 @@ Anything else is yours to settle, with your reason recorded where the command ta
 
 Hide looks at the mission whenever a fact it rests on arrives (a read of the project's host, a worker falling asleep or ending, a `record`, a node finishing, you leaving) and does what is certain by itself; each shows on the node as Hide's own line in `hide mission show <node>` and in the map's history.
 
-- A node at work whose pull requests are all merged (scope `merge`), or all merged or green and approved (scope `pr`, or a node with `operator_merge`), and whose lines all pass, is set `done`; a general or `direct` node with no pull request is set `done` when its lines all pass.
+- A node at work whose pull requests are all merged (scope `merge`), or all merged or ready with nothing a person owes on them: CI passed or none, no conflict, no changes asked for, out of draft, and approved where the branch rule asks for an approval (scope `pr`, or a node with `operator_merge`), and whose lines all pass, is set `done`; a general or `direct` node with no pull request is set `done` when its lines all pass.
 - A new pull request opened from the node's own branch (not a fork) is added to the node; a done node it joins works again.
 - A sleeping worker whose pull request fails CI or gets a review asking for changes is woken with a cell naming it, once per pull request, reason and commit.
   A conflict with the base is told to the worker asleep or at work, since its pull request's CI does not run until it is gone: once while the conflict lasts, whatever it pushes meanwhile, within the five minutes its host is read in, and again only after the host read it gone.

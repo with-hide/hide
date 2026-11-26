@@ -18,12 +18,12 @@ use super::Runtime;
 use crate::mission_criteria::GATE_KEY;
 use crate::mission_events::{EventKind, MissionEvent};
 use crate::mission_health::{
-    Act, Facts, NodeFacts, WarnAct, WorkerLife, WorkerStopped, evaluate, warn_acts,
+    Act, Facts, NodeFacts, ReadyHead, WarnAct, WorkerLife, WorkerStopped, evaluate, warn_acts,
 };
 use crate::missions::{
     Attention, AttentionReason, FixReason, HideAction, HideMark, Mission, MissionEnd, MissionNode,
-    MissionStatus, NodePatch, NodeStatus, NodeWarning, OperatorAction, PendingWake, RoundWake,
-    WOKEN_LIMIT, WakeEvent, Woken,
+    MissionStatus, NodePatch, NodeStatus, NodeWarning, OperatorAction, Owed, PendingWake,
+    RoundWake, WOKEN_LIMIT, WakeEvent, Woken,
 };
 
 /// Raises one mission holds at once; a new one past it is refused and
@@ -196,6 +196,7 @@ pub(super) fn raise_for(
                 notified: false,
                 opened_seq: None,
                 round: None,
+                owed: Vec::new(),
             },
         );
     }
@@ -296,6 +297,7 @@ pub(super) fn ensure_raise_cells(mission: &mut Mission) -> bool {
                 notified: false,
                 opened_seq: None,
                 round: None,
+                owed: Vec::new(),
             },
         );
     }
@@ -415,6 +417,7 @@ fn tell_warnings(mission: &mut Mission, now: u64) -> bool {
                 notified: false,
                 opened_seq: None,
                 round: None,
+                owed: Vec::new(),
             };
             // A full queue refuses the rest too; it is logged once a pass.
             if super::missions::push_wake(mission, wake).is_none() {
@@ -1553,6 +1556,7 @@ impl Runtime {
                 notified: false,
                 opened_seq: None,
                 round: None,
+                owed: Vec::new(),
             },
         );
         if pushed.is_none() {
@@ -1591,21 +1595,36 @@ impl Runtime {
         true
     }
 
-    /// Tells node `at`'s Conductor the node is ready for its merge
-    /// (`RoundWake::Ready`), keyed by the node and the head of its newest
-    /// open pull request, and notes it told on each of `heads`. A wake the
-    /// full queue refused is not told, so a later evaluation with room
-    /// records it (engineering #15). Whether it was recorded.
-    fn hide_ready(&mut self, id: &str, at: usize, heads: &[(u32, String)]) -> bool {
+    /// Tells node `at`'s Conductor the node is ready for its merge but for
+    /// what a person owes (`RoundWake::Ready`), keyed by the node, the head
+    /// of its newest open pull request and what is owed, and notes on each
+    /// of `heads` what it told. A wake the full queue refused is not told,
+    /// so a later evaluation with room records it (engineering #15).
+    /// Whether it was recorded.
+    fn hide_ready(&mut self, id: &str, at: usize, heads: &[ReadyHead]) -> bool {
         let Some(mission) = self.missions.book.get_mut(id) else {
             return false;
         };
-        let Some((pr, head)) = heads.last().cloned() else {
+        let Some((pr, head, _)) = heads.last().cloned() else {
             return false;
         };
+        let mut owed: Vec<Owed> = Vec::new();
+        for owe in heads.iter().flat_map(|(_, _, owed)| owed) {
+            if !owed.contains(owe) {
+                owed.push(*owe);
+            }
+        }
         let node = &mission.nodes[at];
         let key = node.key.clone();
-        let act = act_key(node, &format!("ready:{pr}:{}", short(Some(head.as_str()))));
+        let owing: Vec<&str> = owed.iter().map(|owe| owe.as_str()).collect();
+        let act = act_key(
+            node,
+            &format!(
+                "ready:{pr}:{}:{}",
+                short(Some(head.as_str())),
+                owing.join("+")
+            ),
+        );
         let mut wake = super::missions::wake_about(
             key.clone(),
             Some(pr),
@@ -1614,19 +1633,20 @@ impl Runtime {
             Some(act),
         );
         wake.round = Some(RoundWake::Ready);
+        wake.owed = owed;
         if super::missions::record(mission, wake).is_none() {
             return false;
         }
         for seen in &mut mission.nodes[at].pr_seen {
-            if heads.iter().any(|(number, head)| {
+            if let Some((_, _, owed)) = heads.iter().find(|(number, head, _)| {
                 seen.number == *number && seen.head.as_deref() == Some(head.as_str())
             }) {
-                seen.ready_told = true;
+                seen.ready_owed = Some(owed.clone());
             }
         }
         crate::diagnostic!(json!({
             "component": "missions", "kind": "mission.node_ready",
-            "mission": id, "node": key, "pr": pr,
+            "mission": id, "node": key, "pr": pr, "owed": owing,
         }));
         true
     }
@@ -1720,6 +1740,7 @@ impl Runtime {
                         notified: false,
                         opened_seq: None,
                         round: None,
+                        owed: Vec::new(),
                     },
                 );
                 vec![MissionEvent::new(now, EventKind::HideClosed)]
@@ -2077,6 +2098,7 @@ impl Runtime {
                     notified: false,
                     opened_seq: None,
                     round: None,
+                    owed: Vec::new(),
                 },
             );
         }

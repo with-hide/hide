@@ -23,8 +23,8 @@ use crate::mission_store::{Restored, Visiting};
 use crate::missions::{
     AnswerFailure, AttentionTo, Blocked, CI_FAILED_NAMED, Checks, CiNews, CiResult, Conductor,
     ConductorSettings, Delivery, Mission, MissionBook, MissionCommand, MissionEnd, MissionNode,
-    MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT, PendingWake, PrSeen,
-    Question, RoundWake, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
+    MissionScope, MissionStatus, NodeKind, NodeStatus, Owed, PENDING_WAKE_LIMIT, PendingWake,
+    PrSeen, Question, RoundWake, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
 };
 use crate::model::{PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
@@ -1072,7 +1072,7 @@ fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
         changes_requested: pull.review == Some(ReviewDecision::ChangesRequested),
         closed: pull.badge == PullRequestBadge::Closed,
         ci_told: Vec::new(),
-        ready_told: false,
+        ready_owed: None,
     }
 }
 
@@ -1096,7 +1096,9 @@ fn keep_told(seen: &mut PrSeen, before: &PrSeen) {
     if seen.head != before.head {
         return;
     }
-    seen.ready_told |= before.ready_told;
+    if seen.ready_owed.is_none() {
+        seen.ready_owed.clone_from(&before.ready_owed);
+    }
     for result in &before.ci_told {
         if !seen.ci_told.contains(result) {
             seen.ci_told.push(*result);
@@ -1780,10 +1782,25 @@ fn round_body(
                 )
             };
             let commit = wake.head.as_deref().map_or_else(|| "-".to_owned(), short);
-            let what = format!(
-                "{} is ready on commit {commit}: every line is met and its checks passed",
+            // What a person still owes, and how the Conductor gets it.
+            let (owes, gets): (Vec<&str>, Vec<&str>) = wake
+                .owed
+                .iter()
+                .map(|owe| match owe {
+                    Owed::Draft => ("it is still a draft", "take it out of draft"),
+                    Owed::Approval => (
+                        "its branch rule still asks for an approval",
+                        "ask the operator for the approval",
+                    ),
+                })
+                .unzip();
+            let mut what = format!(
+                "{} is ready on commit {commit}: every line is met and nothing fails on it",
                 name(wake.pr)
             );
+            if !owes.is_empty() {
+                what = format!("{what}, but {}", owes.join(" and "));
+            }
             // A stacked pull request merges after the one below it.
             let below = mission.stacks_on(node).filter(|below| {
                 below
@@ -1791,14 +1808,28 @@ fn round_body(
                     .and_then(|number| below.seen(number))
                     .is_none_or(|seen| !seen.merged)
             });
-            let act = match below {
-                _ if mission.operator_merges(node) => "it is the operator's to merge, so merge nothing: start what waits on it, and report once every node is ready".to_owned(),
+            let merge = match below {
+                _ if mission.operator_merges(node) => {
+                    let report = if mission.scope == MissionScope::Pr {
+                        ", and report once every node is ready"
+                    } else {
+                        ""
+                    };
+                    format!(
+                        "it is the operator's to merge, so merge nothing: start what waits on it{report}"
+                    )
+                }
                 Some(below) => format!(
                     "{} of node {} below it merges first, then merge this one",
                     name(below.current_pr()),
                     below.key
                 ),
                 None => "merge it".to_owned(),
+            };
+            let act = if gets.is_empty() {
+                merge
+            } else {
+                format!("{}; then {merge}", gets.join(" and "))
             };
             news(what, &act)
         }
@@ -1918,6 +1949,7 @@ pub(super) fn wake_about(
         notified: false,
         opened_seq: None,
         round: None,
+        owed: Vec::new(),
     }
 }
 

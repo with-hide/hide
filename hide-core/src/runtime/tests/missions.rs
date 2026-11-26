@@ -2003,6 +2003,7 @@ fn a_ci_result_refused_by_a_full_queue_is_told_once_there_is_room() {
             notified: false,
             opened_seq: None,
             round: None,
+            owed: Vec::new(),
         })
         .collect();
     let failed = checked(7, "b2", PullRequestChecks::Failed, &["verify"]);
@@ -7501,7 +7502,7 @@ fn see(node: &mut crate::missions::MissionNode, merged: bool, closed: bool) {
         closed,
         changes_requested: false,
         ci_told: Vec::new(),
-        ready_told: false,
+        ready_owed: None,
     });
 }
 
@@ -8022,6 +8023,18 @@ fn hide_finishes_a_merged_node_and_closes_the_mission_after_its_last_node() {
     let mut runtime = fixture.runtime.lock().unwrap();
     running_criteria_mission(&mut runtime);
     met_fix(&mut runtime);
+    // Its approval still asked for, so the scope `pr` node waits.
+    let open = github(
+        vec![pull(
+            7,
+            HEAD,
+            PullRequestBadge::Open,
+            Some(ReviewDecision::ReviewRequired),
+        )],
+        false,
+    );
+    runtime.github = open.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &open);
     let now = crate::runtime::unix_milliseconds();
     runtime.drive_mission_health(now);
     assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
@@ -9082,11 +9095,17 @@ fn a_node_taken_back_to_work_is_finished_again_only_on_its_next_pull_request() {
         json!({"op": "node", "node": "fix", "patch": {"status": "working", "pr": 8}}),
     )
     .unwrap();
+    // Its approval still asked for, so the scope `pr` node waits on it.
     merged(
         &mut runtime,
         vec![
             pull(7, HEAD, PullRequestBadge::Merged, None),
-            pull(8, HEAD, PullRequestBadge::Open, None),
+            pull(
+                8,
+                HEAD,
+                PullRequestBadge::Open,
+                Some(ReviewDecision::ReviewRequired),
+            ),
         ],
     );
     assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
@@ -9369,6 +9388,7 @@ fn a_full_wake_queue_keeps_what_waits() {
         notified: false,
         opened_seq: None,
         round: None,
+        owed: Vec::new(),
     };
     assert!(crate::runtime::missions::push_wake(mission, worker).is_some());
 }
@@ -10589,6 +10609,7 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
             notified: false,
             opened_seq: None,
             round: None,
+            owed: Vec::new(),
         })
         .collect();
     runtime.warn_missions(worked + 90 * minute);
@@ -17952,8 +17973,13 @@ fn a_node_the_operator_merges_is_done_when_ready_and_its_merge_waits_for_them() 
     merge_owner_mission(&mut runtime, "merge", Some(why));
     let mine = || Some((MergeBy::Operator, Some(why.to_owned()), MergeStep::Ahead));
 
-    // Green but not approved: planned for the operator, nothing asked yet.
-    github_answers(&mut runtime, PullRequestBadge::Open, None);
+    // Green but its approval still asked for: planned for the operator,
+    // nothing asked yet.
+    github_answers(
+        &mut runtime,
+        PullRequestBadge::Open,
+        Some(ReviewDecision::ReviewRequired),
+    );
     assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
     assert_eq!(fix_merge(&runtime), mine());
     assert!(
@@ -18066,7 +18092,11 @@ fn a_ready_pull_request_of_a_scope_pr_mission_asks_the_operator_nothing() {
     let mut runtime = fixture.runtime.lock().unwrap();
     merge_owner_mission(&mut runtime, "pr", None);
     let theirs = |state| Some((MergeBy::Operator, None, state));
-    github_answers(&mut runtime, PullRequestBadge::Open, None);
+    github_answers(
+        &mut runtime,
+        PullRequestBadge::Open,
+        Some(ReviewDecision::ReviewRequired),
+    );
     assert_eq!(fix_merge(&runtime), theirs(MergeStep::Ahead));
 
     github_answers(
@@ -18261,7 +18291,7 @@ fn an_operator_merge_report_names_all_open_held_pull_requests() {
                 closed: number == 37 && closed,
                 changes_requested: false,
                 ci_told: vec![],
-                ready_told: false,
+                ready_owed: None,
             });
         }
         let projected =
@@ -18321,6 +18351,7 @@ fn a_stall_letter_asks_for_a_move_and_a_failed_review_promises_no_stall() {
                 notified: false,
                 opened_seq: None,
                 round: None,
+                owed: Vec::new(),
             },
         )
     };
@@ -18978,6 +19009,7 @@ fn warn_stopped(runtime: &mut Runtime, node: &str, since: u64, cell_since: Optio
         notified: false,
         opened_seq: None,
         round: None,
+        owed: Vec::new(),
     };
     crate::runtime::missions::push_wake(mission, wake).unwrap();
     runtime.save_missions();
@@ -20995,7 +21027,7 @@ fn a_ready_node_with_no_review_decision_tells_its_conductor_to_merge_it_once_per
     assert_eq!(ready.len(), 1, "{ready:?}");
     assert!(
         ready[0].starts_with(
-            "PR #7 is ready on commit a1b2c3d: every line is met and its checks passed (mission mission-1"
+            "PR #7 is ready on commit a1b2c3d: every line is met and nothing fails on it (mission mission-1"
         ) && ready[0].ends_with("act on it: merge it."),
         "{ready:?}"
     );
@@ -21091,7 +21123,8 @@ fn a_ci_pass_after_a_failure_clears_the_failed_cell_and_rings_nothing() {
 /// A node with checkers whose review passes after its CI is told ready on
 /// the review's record, and in a mission that goes up to ready pull
 /// requests the merge is the operator's: the Conductor starts what waits
-/// on it.
+/// on it. No review decision, where no rule asks for one, counts as
+/// approved, so Hide sets the node done on the same pass.
 #[test]
 fn a_review_passing_after_ci_tells_the_node_ready_for_the_operators_merge() {
     let fixture = conducting();
@@ -21132,8 +21165,8 @@ fn a_review_passing_after_ci_tells_the_node_ready_for_the_operators_merge() {
     );
     assert_eq!(
         node_view(&runtime, "fix").status,
-        NodeStatus::Working,
-        "with no approval Hide does not set it done (pr_ready)"
+        NodeStatus::Done,
+        "an empty review decision counts as approved (readiness)"
     );
 }
 
@@ -21228,6 +21261,134 @@ fn a_conflicting_pull_request_is_not_ready_until_its_merge_commit_passes() {
     let ready = ready_lines(&mut runtime);
     assert!(
         ready.len() == 1 && ready[0].starts_with("PR #7 is ready on commit f0e1d2c"),
+        "{ready:?}"
+    );
+}
+
+/// GitHub's read of pull request 7 at `HEAD` as `shape` makes it, noted
+/// and judged.
+fn read_seven(runtime: &mut Runtime, now: u64, shape: impl FnOnce(&mut PullRequestSnapshot)) {
+    let mut seven = pull(7, HEAD, PullRequestBadge::Open, None);
+    shape(&mut seven);
+    let read = github(vec![seven], false);
+    runtime.github = read.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
+    runtime.drive_mission_health(now);
+}
+
+/// A pull request whose branch rule still asks for an approval is ready
+/// but for it: the Conductor of a merging mission is told to ask the
+/// operator for it, and once the approval comes on the same head it is
+/// told again, to merge it.
+#[test]
+fn a_ready_node_waiting_on_a_required_approval_tells_its_conductor_to_ask_for_it() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    merge_owner_mission(&mut runtime, "merge", None);
+    let now = crate::runtime::unix_milliseconds();
+    read_seven(&mut runtime, now, |pull| {
+        pull.review = Some(ReviewDecision::ReviewRequired);
+    });
+    let ready = ready_lines(&mut runtime);
+    assert!(
+        ready.len() == 1
+            && ready[0].starts_with(
+                "PR #7 is ready on commit a1b2c3d: every line is met and nothing fails on it, but its branch rule still asks for an approval (mission mission-1"
+            )
+            && ready[0].ends_with("act on it: ask the operator for the approval; then merge it."),
+        "{ready:?}"
+    );
+    read_seven(&mut runtime, now + 1, |pull| {
+        pull.review = Some(ReviewDecision::ReviewRequired);
+    });
+    assert!(ready_lines(&mut runtime).is_empty(), "told once");
+
+    read_seven(&mut runtime, now + 2, |pull| {
+        pull.review = Some(ReviewDecision::Approved);
+    });
+    let approved = ready_lines(&mut runtime);
+    assert!(
+        approved.len() == 1
+            && approved[0].contains("every line is met and nothing fails on it (mission")
+            && approved[0].ends_with("act on it: merge it."),
+        "{approved:?}"
+    );
+}
+
+/// A draft is ready but for leaving draft: the Conductor is told to take
+/// it out of draft, then merge it.
+#[test]
+fn a_ready_node_whose_pull_request_is_a_draft_tells_its_conductor_to_take_it_out() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    merge_owner_mission(&mut runtime, "merge", None);
+    read_seven(&mut runtime, crate::runtime::unix_milliseconds(), |pull| {
+        pull.is_draft = true;
+    });
+    let ready = ready_lines(&mut runtime);
+    assert!(
+        ready.len() == 1
+            && ready[0].contains("nothing fails on it, but it is still a draft (mission")
+            && ready[0].ends_with("act on it: take it out of draft; then merge it."),
+        "{ready:?}"
+    );
+}
+
+/// A project with no CI is ready on its lines alone: no checks on the
+/// head is nothing failing on it.
+#[test]
+fn a_ready_node_of_a_project_with_no_ci_is_ready_on_its_lines() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    merge_owner_mission(&mut runtime, "merge", None);
+    read_seven(&mut runtime, crate::runtime::unix_milliseconds(), |pull| {
+        pull.checks = PullRequestChecks::None;
+    });
+    let ready = ready_lines(&mut runtime);
+    assert!(
+        ready.len() == 1 && ready[0].ends_with("act on it: merge it."),
+        "{ready:?}"
+    );
+}
+
+/// A node the operator merges in a mission that merges the rest is the
+/// operator's to merge, and the Conductor goes on with the others: no
+/// report owed, which is scope `pr`'s.
+#[test]
+fn a_ready_node_the_operator_merges_in_a_merging_mission_asks_for_no_report() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    merge_owner_mission(&mut runtime, "merge", Some("DB 변경"));
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    let ready = ready_lines(&mut runtime);
+    assert!(
+        ready.len() == 1
+            && ready[0].ends_with(
+                "act on it: it is the operator's to merge, so merge nothing: start what waits on it."
+            ),
+        "{ready:?}"
+    );
+}
+
+/// In a mission that goes up to ready pull requests, a node whose branch
+/// rule still asks for an approval is not done, and its Conductor is told
+/// it is ready but for the approval, to ask the operator for it.
+#[test]
+fn a_scope_pr_node_waiting_on_a_required_approval_is_not_done_but_told_ready() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    merge_owner_mission(&mut runtime, "pr", None);
+    read_seven(&mut runtime, crate::runtime::unix_milliseconds(), |pull| {
+        pull.review = Some(ReviewDecision::ReviewRequired);
+    });
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+    let ready = ready_lines(&mut runtime);
+    assert!(
+        ready.len() == 1
+            && ready[0].contains("but its branch rule still asks for an approval (mission")
+            && ready[0].ends_with(
+                "act on it: ask the operator for the approval; then it is the operator's to merge, so merge nothing: start what waits on it, and report once every node is ready."
+            ),
         "{ready:?}"
     );
 }

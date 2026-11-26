@@ -15,11 +15,10 @@
 
 use crate::missions::{
     AttentionReason, CiResult, Delivery, FixReason, LinesNow, Mission, MissionNode, MissionStatus,
-    NodeKind, NodeStatus, StopCause, WarningKind, cause_key,
+    NodeKind, NodeStatus, Owed, StopCause, WarningKind, cause_key,
 };
 use crate::model::{
-    CiEnd, GithubProjectSnapshot, MergeState, PrState, PullRequestBadge, PullRequestSnapshot,
-    ReviewDecision,
+    CiEnd, GithubProjectSnapshot, MergeState, PullRequestBadge, PullRequestSnapshot, ReviewDecision,
 };
 
 /// A node's worker as its registration stands (`coordination::life`).
@@ -130,12 +129,10 @@ pub(crate) enum Act {
     },
     /// The conflict the node's worker was told of is gone.
     Unconflicted { node: usize, pr: u32 },
-    /// The node is ready for its merge (`ready_heads`): its Conductor is
-    /// told, once per head of each open pull request in `heads`.
-    Ready {
-        node: usize,
-        heads: Vec<(u32, String)>,
-    },
+    /// The node is ready for its merge but for what a person owes
+    /// (`ready_heads`): its Conductor is told, once per head of each open
+    /// pull request in `heads` and what is owed on it.
+    Ready { node: usize, heads: Vec<ReadyHead> },
     /// Every node finished: the mission closes (B18).
     Close,
 }
@@ -329,9 +326,9 @@ fn node_acts(
             });
         }
     }
-    // Every line met while GitHub reads each open pull request mergeable:
-    // the Conductor is told the node is ready for its merge, once per head,
-    // in place of each CI pass.
+    // Every line met and each open pull request ready for its merge but
+    // for what a person owes: the Conductor is told, once per head and what
+    // is owed, in place of each CI pass.
     if fact.unmet.is_empty()
         && !resumed(node)
         && let Some(heads) = ready_heads(node, &live)
@@ -341,10 +338,11 @@ fn node_acts(
     let merged = live
         .iter()
         .all(|pull| pull.badge == PullRequestBadge::Merged);
-    // A node the operator merges is finished with its pull request ready;
-    // the merge is theirs (PRD mission-destination D-10, D-35).
+    // A node the operator merges is finished with its pull request ready
+    // with nothing owed; the merge is theirs (PRD mission-destination D-10,
+    // D-35).
     let ready = if mission.operator_merges(node) {
-        live.iter().all(|pull| pr_ready(pull))
+        live.iter().all(|pull| readiness(pull) == Readiness::Ready)
     } else {
         merged
     };
@@ -641,10 +639,15 @@ fn live_pulls<'a>(
 }
 
 /// Whether `node`'s pull requests are ready for the operator's merge (PRD
-/// mission-destination D-11): every one not closed is `pr_ready`, at least
-/// one is, and the list holds them all.
+/// mission-destination D-11): every one not closed is ready with nothing
+/// owed (`readiness`), at least one is, and the list holds them all.
 pub(crate) fn merge_ready(node: &MissionNode, pulls: &GithubProjectSnapshot) -> bool {
-    live_pulls(node, pulls).is_some_and(|live| !live.is_empty() && live.into_iter().all(pr_ready))
+    live_pulls(node, pulls).is_some_and(|live| {
+        !live.is_empty()
+            && live
+                .into_iter()
+                .all(|pull| readiness(pull) == Readiness::Ready)
+    })
 }
 
 /// What an open pull request needs from its worker (D-13): a CI failure
@@ -667,48 +670,82 @@ fn needs(pull: &PullRequestSnapshot) -> Vec<FixReason> {
     out
 }
 
+/// How far a pull request stands from its merge: the one rule a node's
+/// ready letter (`Act::Ready`), the finish of a node the operator merges
+/// and the operator's merge turn (`merge_ready`) read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Readiness {
+    /// Its worker, its CI or the host still has something to do: a CI that
+    /// failed, still runs or cannot be read, a conflict, changes asked for,
+    /// or it was closed unmerged.
+    NotReady,
+    /// Ready but for what a person still owes on it.
+    Owes(Vec<Owed>),
+    /// Merged, or open with nothing left before its merge.
+    Ready,
+}
+
+/// Where `pull` stands from its merge (`Readiness`): open, its CI passed
+/// on its head or it has none, nothing its worker owes (`needs`), and what
+/// a person still owes named.
+pub(crate) fn readiness(pull: &PullRequestSnapshot) -> Readiness {
+    match pull.badge {
+        PullRequestBadge::Merged => return Readiness::Ready,
+        PullRequestBadge::Closed => return Readiness::NotReady,
+        PullRequestBadge::Open | PullRequestBadge::Review => {}
+    }
+    let ci_done = matches!(
+        pull.ci_end(),
+        CiEnd::Ended(CiResult::Passed) | CiEnd::NoChecks
+    );
+    if !ci_done || !needs(pull).is_empty() {
+        return Readiness::NotReady;
+    }
+    let mut owed = Vec::new();
+    if pull.is_draft {
+        owed.push(Owed::Draft);
+    }
+    // No review decision, where no rule asks for one, counts as approved
+    // (the operator's call, 2026-11-26).
+    if pull.review == Some(ReviewDecision::ReviewRequired) {
+        owed.push(Owed::Approval);
+    }
+    if owed.is_empty() {
+        Readiness::Ready
+    } else {
+        Readiness::Owes(owed)
+    }
+}
+
+/// An open pull request a node is ready on (`Act::Ready`): its number, its
+/// head and what a person still owes on it.
+pub(crate) type ReadyHead = (u32, String, Vec<Owed>);
+
 /// The open pull requests of a node's `live` ones with the heads it is
-/// ready for its merge on: each reads `PrState::Mergeable` (checks passed,
-/// the review approved or not asked for) with nothing its worker owes (no
-/// conflict, `needs`), and the rest merged. None with
-/// none open, once its Conductor was told on these heads
-/// (`PrSeen::ready_told`), or while Hide's record of one is of another head
-/// than GitHub's answer, which the next read brings level.
-fn ready_heads(node: &MissionNode, live: &[&PullRequestSnapshot]) -> Option<Vec<(u32, String)>> {
+/// ready for its merge on, but for what a person owes (`readiness`), the
+/// rest merged. None with none open, while Hide's record of one is of
+/// another head than the host's answer, which the next read brings level,
+/// or once its Conductor was told on these heads what is still owed
+/// (`PrSeen::ready_owed`).
+fn ready_heads(node: &MissionNode, live: &[&PullRequestSnapshot]) -> Option<Vec<ReadyHead>> {
     let mut heads = Vec::new();
     let mut told = true;
     for pull in live {
-        if pull.badge == PullRequestBadge::Merged {
-            continue;
-        }
-        // A conflict keeps it from its merge whatever its checks say; it
-        // is the worker's to fix (`needs`).
-        if pull.state() != PrState::Mergeable || !needs(pull).is_empty() {
-            return None;
-        }
+        let owed = match readiness(pull) {
+            Readiness::NotReady => return None,
+            _ if pull.badge == PullRequestBadge::Merged => continue,
+            Readiness::Owes(owed) => owed,
+            Readiness::Ready => Vec::new(),
+        };
         let head = pull.head_oid.clone()?;
         let seen = node.seen(pull.number)?;
         if seen.head.as_deref() != Some(head.as_str()) {
             return None;
         }
-        told &= seen.ready_told;
-        heads.push((pull.number, head));
+        told &= seen.ready_owed.as_ref() == Some(&owed);
+        heads.push((pull.number, head, owed));
     }
     (!heads.is_empty() && !told).then_some(heads)
-}
-
-/// A pull request a node the operator merges is finished with (D-11;
-/// `Mission::operator_merges`): merged, or open, out of draft, its checks
-/// green or none, and approved.
-fn pr_ready(pull: &PullRequestSnapshot) -> bool {
-    pull.badge == PullRequestBadge::Merged
-        || (!pull.badge.is_settled()
-            && !pull.is_draft
-            && matches!(
-                pull.ci_end(),
-                CiEnd::Ended(CiResult::Passed) | CiEnd::NoChecks
-            )
-            && pull.review == Some(ReviewDecision::Approved))
 }
 
 /// Whether a mission worker's open pull request waits on CI, a review or
@@ -1750,21 +1787,32 @@ mod tests {
     }
 
     /// D-11: a PR-scope node is finished with an open pull request that is
-    /// green and approved, and not before.
+    /// green and approved, or has no review decision where no rule asks for
+    /// one, and not while its branch rule asks for an approval.
     #[test]
     fn a_pr_scope_node_finishes_on_an_approved_green_pull_request() {
         let mut m = running(&["a"]);
         m.scope = crate::missions::MissionScope::Pr;
         m.nodes[0].prs = vec![7];
         let mut open = pull(7, "feat/a", PullRequestBadge::Open);
+        open.review = Some(ReviewDecision::ReviewRequired);
         let pulls = listed(vec![open.clone()]);
-        assert!(evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Running)])).is_empty());
-        open.review = Some(ReviewDecision::Approved);
-        let pulls = listed(vec![open]);
-        assert_eq!(
-            evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Running)])),
-            [Act::Done { node: 0 }]
-        );
+        let done = |acts: Vec<Act>| acts.contains(&Act::Done { node: 0 });
+        assert!(!done(evaluate(
+            &m,
+            &facts(Some(&pulls), vec![worker(WorkerLife::Running)])
+        )));
+        for review in [Some(ReviewDecision::Approved), None] {
+            open.review = review;
+            let pulls = listed(vec![open.clone()]);
+            assert!(
+                done(evaluate(
+                    &m,
+                    &facts(Some(&pulls), vec![worker(WorkerLife::Running)])
+                )),
+                "{review:?}"
+            );
+        }
     }
 
     /// D-06: only a pull request with nothing for its worker to do waits on
