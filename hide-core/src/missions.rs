@@ -762,6 +762,33 @@ pub struct PrSeen {
     /// news again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ci_told: Vec<CiResult>,
+    /// What a person still owed on it (`Owed`) when the Conductor was told
+    /// on `head` that the node is ready for its merge (`RoundWake::Ready`);
+    /// none before. Told again only when that changes; a new head clears
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready_owed: Option<Vec<Owed>>,
+}
+
+/// What a person still owes on a pull request that is otherwise ready for
+/// its merge (`mission_health::readiness`): nothing its worker or its CI
+/// can do.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Owed {
+    /// Still a draft.
+    Draft,
+    /// An approval its branch rule asks for (`ReviewDecision::ReviewRequired`).
+    Approval,
+}
+
+impl Owed {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Approval => "approval",
+        }
+    }
 }
 
 /// What a pull request's CI ended as on one head commit: its checks as the
@@ -867,6 +894,9 @@ pub struct PendingWake {
     /// round or its place in the plan (`RoundWake`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub round: Option<RoundWake>,
+    /// What a person still owes on the node a `ready` round is about.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owed: Vec<Owed>,
 }
 
 impl PendingWake {
@@ -983,6 +1013,12 @@ pub enum RoundWake {
     /// The plan makes a change node wait for the whole of another change
     /// node: the Conductor may start it sooner on one of its lines (D-07).
     WholeNodeWait,
+    /// Every line of the node is met and each of its open pull requests is
+    /// ready for its merge but for what a person owes (`owed`,
+    /// `mission_health::readiness`): its Conductor merges it, or in scope
+    /// `pr` and with `operator_merge` starts what waits on it, told once per
+    /// head and what is owed (`PrSeen::ready_owed`).
+    Ready,
     /// A kind a later build wrote.
     #[serde(other)]
     Unknown,
@@ -995,6 +1031,7 @@ impl RoundWake {
             Self::CheckerNeeded => "checker_needed",
             Self::Checked => "checked",
             Self::WholeNodeWait => "whole_node_wait",
+            Self::Ready => "ready",
             Self::Unknown => "unknown",
         }
     }

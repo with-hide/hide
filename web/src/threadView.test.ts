@@ -69,7 +69,7 @@ describe("a thread's screen", () => {
       d: { kind: "view", view: "diff", target: "notes.md" },
       m: { kind: "mission", mission: "mission-3" },
       gone: { kind: "mission", mission: "mission-9" },
-      f: { kind: "view", view: "file", target: "shots/dark.png" },
+      f: { kind: "view", view: "file", target: "shots/dark.png", view_id: "v3" },
     },
     sessions: { "agent-7": { pane_id: "w1:p2", machine: "mac" }, lead: { pane_id: "w1:p1", machine: "mac" } },
   };
@@ -88,7 +88,8 @@ describe("a thread's screen", () => {
       d: "tool",
       m: { kind: "mission", mission: { id: "mission-3", title: "Desk 1차", status: "running", done: 1, total: 2, turn: null, delay: null } },
       gone: "tool",
-      f: { kind: "view", output: { id: "shots/dark.png", kind: "image", label: "dark.png", thumb: null, seen: true, pr_state: null } },
+      // The View its answer named travels with the line, which is how the session's View is found (`outputNamed`).
+      f: { kind: "view", output: { id: "shots/dark.png", kind: "image", label: "dark.png", thumb: null, seen: true, pr_state: null }, view_id: "v3" },
     });
   });
 

@@ -301,9 +301,9 @@ const GALLERY_FIRST_TURN: AcpSessionUpdate[] = [
 ];
 
 const GALLERY_FIRST_PARTS: Record<string, ThreadHidePart> = {
-  "g-view-1": { kind: "view", output: OUTPUTS.light1 },
-  "g-view-2": { kind: "view", output: OUTPUTS.light2 },
-  "g-view-3": { kind: "view", output: OUTPUTS.light3 },
+  "g-view-1": { kind: "view", output: OUTPUTS.light1, view_id: null },
+  "g-view-2": { kind: "view", output: OUTPUTS.light2, view_id: null },
+  "g-view-3": { kind: "view", output: OUTPUTS.light3, view_id: null },
 };
 
 /** Scene 4: the gallery thread at work on its second turn, its `hide` calls read into Hide's parts. */
@@ -366,7 +366,7 @@ export function conductorThread(jobs: Record<string, DeskJob>): { updates: AcpSe
       "h-plan": { kind: "plan", plan },
       "h-spawn": { kind: "spawn", session: { name: jobs["1b"]!.title, mark: "going", agent_kind: jobs["1b"]!.agent_kind } },
       "h-letter": { kind: "letter", direction: "sent", peer: SESSIONS.room, body: "리뷰 지적 2개 반영해서 다시 올려줘" },
-      "h-view": { kind: "view", output: OUTPUTS.galleryPage },
+      "h-view": { kind: "view", output: OUTPUTS.galleryPage, view_id: null },
       "h-mission": { kind: "mission", mission: MISSION },
       "h-pr": { kind: "pr", number: 1905, state: "pending" },
     },
