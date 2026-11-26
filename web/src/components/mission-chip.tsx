@@ -35,6 +35,9 @@ export function MissionChip({ agent, onOpen }: { agent: ConductorOwner; onOpen: 
 /** What a hover card puts on the chip that anchors it: its handlers and states, and the ref it is placed by. */
 type ChipAnchor = { anchor?: ComponentProps<"button">; ref?: Ref<HTMLButtonElement> };
 
+/** How many lines Desk's mission chip takes: two after a paragraph, one where a table's cell or a list's item names the mission (Doop Q 가). */
+export type ChipLines = 1 | 2;
+
 /**
  * Desk's mission chip, in two lines (Doop N2 가): the mission's mark, number
  * and name, then its cells, `k/n` or its state's word, and `! 내 차례` while
@@ -42,9 +45,12 @@ type ChipAnchor = { anchor?: ComponentProps<"button">; ref?: Ref<HTMLButtonEleme
  * (`chipLine`, `web/src/missions.ts`) for a job card's mission, a mission an
  * answer names and the session beside Desk that conducts one; the sidebar's
  * Conductor row keeps its one-line chip. Only the name is cut short, its
- * whole in the hint.
+ * whole in the hint. `lines={1}` draws the same chip on one line, in the
+ * place of the mission's name in a table's cell or a list's item (Doop Q 가):
+ * its cells on a fixed track so a table's rows line them up, and the
+ * operator's turn as the warning edge and `!` alone, its words in the hint.
  */
-function MissionChipCard({ id, title, status, done, total, cells, tone, turn, delay, onOpen, anchor, ref }: ChipAnchor & { id: string; title: string; status: Mission["status"]; done: number; total: number; cells: readonly CellTone[]; tone: CellTone; turn: MissionTurn | null; delay: MissionDelay | null; onOpen: (missionId: string) => void }) {
+function MissionChipCard({ id, title, status, done, total, cells, tone, turn, delay, lines = 2, onOpen, anchor, ref }: ChipAnchor & { id: string; title: string; status: Mission["status"]; done: number; total: number; cells: readonly CellTone[]; tone: CellTone; turn: MissionTurn | null; delay: MissionDelay | null; lines?: ChipLines; onOpen: (missionId: string) => void }) {
   const { t } = useInterfaceTranslation();
   const held = useDelayWords(delay);
   const left = useRemaining(delay?.until);
@@ -53,38 +59,65 @@ function MissionChipCard({ id, title, status, done, total, cells, tone, turn, de
   const word = line.word ? t(line.word) : null;
   const label = [t("mission.chip.open"), title, word, line.counts, turn ? t(TURN_WORDS[turn]) : null, held].filter(Boolean).join(" · ");
   const Mark = status === "done" ? CheckIcon : WaypointsIcon;
-  const button = (
+  const mark = <Mark aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0", TONE_TEXT[tone])} />;
+  const numbered = number ? <span className="shrink-0 font-mono text-micro text-muted-foreground">{number}</span> : null;
+  const name = <span className={cn("min-w-0 truncate font-medium", status === "done" ? "text-mission-done" : "text-foreground")}>{title}</span>;
+  const counts = line.counts ? <span className={cn("shrink-0 font-mono font-semibold tabular-nums", status === "done" && "text-mission-done")}>{line.counts}</span> : null;
+  const wordTone = status === "merge_wait" ? "text-mission-review" : status === "done" ? "text-mission-done" : "text-muted-foreground";
+  const paused = delay ? <span className="flex shrink-0 items-center gap-xxs text-muted-foreground" data-mission-chip-delay="true"><PauseIcon aria-hidden="true" className="size-(--size-icon-sm)" />{left && left !== "past" ? left.text : null}</span> : null;
+  const press = (event: { stopPropagation: () => void }) => {
+    event.stopPropagation();
+    onOpen(id);
+  };
+  const marks = { "aria-label": label, "data-mission-chip": id, "data-mission-chip-status": status, "data-mission-chip-tone": tone, "data-mission-chip-turn": turn ?? undefined } as const;
+  const button = lines === 1 ? (
       <Button
         variant="text"
         size="inline"
         ref={ref}
-        aria-label={label}
-        data-mission-chip={id}
+        {...marks}
+        data-mission-chip-lines="1"
+        className={cn(
+          "relative z-10 inline-flex h-auto max-w-full min-w-0 items-center gap-xs rounded-sm border bg-code-block px-xs py-px align-middle text-caption font-normal text-foreground hover:fill-hovered hover:text-foreground",
+          turn ? "border-warning" : "border-hairline",
+          status === "cancelled" && "opacity-(--opacity-dimmed)",
+        )}
+        onClick={press}
+        {...anchor}
+      >
+        {mark}
+        {numbered}
+        {name}
+        {line.cells ? <ProgressCells tones={cells} size="track" /> : null}
+        {counts}
+        {turn ? <span aria-hidden="true" className="shrink-0 font-semibold text-warning" data-mission-chip-word="true">!</span> : word ? <span className={cn("shrink-0 text-micro", wordTone)} data-mission-chip-word="true">{word}</span> : null}
+        {paused}
+      </Button>
+  ) : (
+      <Button
+        variant="text"
+        size="inline"
+        ref={ref}
+        {...marks}
         data-mission-chip-card="true"
-        data-mission-chip-status={status}
-        data-mission-chip-tone={tone}
-        data-mission-chip-turn={turn ?? undefined}
         className={cn(
           "relative z-10 flex h-auto min-w-(--size-mission-card-min) max-w-(--size-mission-card-max) flex-col items-stretch justify-start gap-xxs rounded-sm border bg-card px-xs py-xxs text-left font-normal text-foreground hover:bg-accent hover:text-foreground",
           turn ? "border-warning" : "border-border",
           status === "cancelled" && "opacity-(--opacity-dimmed)",
         )}
-        onClick={(event) => {
-          event.stopPropagation();
-          onOpen(id);
-        }}
+        onClick={press}
         {...anchor}
       >
         <span className="flex min-w-0 items-center gap-xs text-caption">
-          <Mark aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0", TONE_TEXT[tone])} />
-          {number ? <span className="shrink-0 font-mono text-micro text-muted-foreground">{number}</span> : null}
-          <span className={cn("min-w-0 truncate font-medium", status === "done" ? "text-mission-done" : "text-foreground")}>{title}</span>
+          {mark}
+          {numbered}
+          {name}
         </span>
         <span className="flex min-w-0 items-center gap-xs text-micro" data-mission-chip-line="true">
           {line.cells ? <ProgressCells tones={cells} size="head" className="min-w-(--size-chip-bar)" /> : null}
-          {line.counts ? <span className={cn("shrink-0 font-mono font-semibold tabular-nums", status === "done" && "text-mission-done")}>{line.counts}</span> : null}
-          {word ? <span className={cn("min-w-0 truncate", turn ? "font-semibold text-warning" : status === "merge_wait" ? "text-mission-review" : status === "done" ? "text-mission-done" : "text-muted-foreground")} data-mission-chip-word="true">{turn ? `! ${word}` : word}</span> : null}
-          {delay ? <span className="ml-auto flex shrink-0 items-center gap-xxs text-muted-foreground" data-mission-chip-delay="true"><PauseIcon aria-hidden="true" className="size-(--size-icon-sm)" />{left && left !== "past" ? left.text : null}</span> : null}
+          {counts}
+          {word ? <span className={cn("min-w-0 truncate", turn ? "font-semibold text-warning" : wordTone)} data-mission-chip-word="true">{turn ? `! ${word}` : word}</span> : null}
+          {paused ? <span className="ml-auto flex shrink-0">{paused}</span> : null}
         </span>
       </Button>
   );
@@ -93,9 +126,9 @@ function MissionChipCard({ id, title, status, done, total, cells, tone, turn, de
 }
 
 /** Desk's chip of a mission as the store holds it now: its cells are the nodes', its colour the one every chip wears; `anchor` and `ref` make it the anchor of a hover card (the Conductor pane's). */
-export function StoredMissionChip({ mission, onOpen, anchor, ref }: ChipAnchor & { mission: Mission; onOpen: (missionId: string) => void }) {
+export function StoredMissionChip({ mission, lines, onOpen, anchor, ref }: ChipAnchor & { mission: Mission; lines?: ChipLines; onOpen: (missionId: string) => void }) {
   const { done, total } = missionCounts(mission);
-  return <MissionChipCard id={mission.id} title={mission.title} status={mission.status} done={done} total={total} cells={missionCells(mission)} tone={missionTone(mission)} turn={missionTurn(mission)} delay={heldBy(mission)} onOpen={onOpen} anchor={anchor} ref={ref} />;
+  return <MissionChipCard id={mission.id} title={mission.title} status={mission.status} done={done} total={total} cells={missionCells(mission)} tone={missionTone(mission)} turn={missionTurn(mission)} delay={heldBy(mission)} lines={lines} onOpen={onOpen} anchor={anchor} ref={ref} />;
 }
 
 /** Desk's job card carries a mission's counts, not its nodes' states, so a mission the store does not hold draws its cells from the counts and a running one in the working colour. */
@@ -110,10 +143,10 @@ export function DeskMissionChip({ mission, onOpen }: { mission: DeskMission; onO
   return <MissionChipCard id={mission.id} title={mission.title} status={mission.status} {...counts} cells={cellsFromCounts(counts)} tone={missionToneOf(mission.status, mission.turn !== null, DESK_NOT_STALLED)} turn={mission.turn} delay={delay} onOpen={onOpen} />;
 }
 
-/** The chip of the mission `id` as the store holds it now (a Desk answer's `@mission`, the session beside Desk's head), nothing for a mission it does not hold. */
-export function MissionChipOf({ id, onOpen }: { id: string; onOpen: (missionId: string) => void }) {
+/** The chip of the mission `id` as the store holds it now (a Desk answer's `@mission`, on one line in a table's cell or a list's item; the session beside Desk's head), nothing for a mission it does not hold. */
+export function MissionChipOf({ id, lines, onOpen }: { id: string; lines?: ChipLines; onOpen: (missionId: string) => void }) {
   const mission = useShellStore((s) => s.rest?.missions?.items.find((one) => one.id === id) ?? null);
-  return mission ? <StoredMissionChip mission={mission} onOpen={onOpen} /> : null;
+  return mission ? <StoredMissionChip mission={mission} lines={lines} onOpen={onOpen} /> : null;
 }
 
 function HeldMissionChip({ mission, onOpen }: { mission: Mission; onOpen: (missionId: string) => void }) {
