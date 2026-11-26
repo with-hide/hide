@@ -880,6 +880,7 @@ impl Runtime {
             summary: None,
             pull_requests: Vec::new(),
             outputs: Vec::new(),
+            outputs_more: false,
             joined: mark.is_some_and(|mark| mark.joined),
             reason: None,
             failure: None,
@@ -1042,7 +1043,7 @@ impl Runtime {
             })
             .collect();
         let scope = self.session_scope_of_pane(&row.pane_id);
-        card.outputs = index
+        let mut opened: Vec<_> = index
             .displays
             .iter()
             .filter(|(_, display)| {
@@ -1053,6 +1054,14 @@ impl Runtime {
                         .any(|opener| opener.of_session(scope))
                 })
             })
+            .collect();
+        // Newest first, then cut: a session that opened more than the list
+        // holds shows its newest and says the rest are left out (PRD
+        // desk-own-desk D-18, engineering principle 15).
+        opened.sort_by_key(|(_, display)| std::cmp::Reverse(display.opened_stamp));
+        card.outputs_more = opened.len() > MAX_OUTPUTS;
+        card.outputs = opened
+            .into_iter()
             .take(MAX_OUTPUTS)
             .map(|((device, checkout), display)| {
                 let page = display.kind == crate::view_layout::DisplayKind::Browser;

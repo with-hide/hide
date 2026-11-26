@@ -9,8 +9,7 @@
 //! connection only owns its own demand.
 
 use hide_core::links::ledger::BacklogOriginIdentity;
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 #[derive(Default)]
@@ -135,84 +134,6 @@ impl OriginHolds {
     }
 }
 
-/// The files one window's Desk room may hold at once; its tab panel drops
-/// its oldest file tab past this (`web/src/deskRoom.ts`).
-pub const DESK_FILES_PER_CONNECTION: usize = 32;
-
-/// A file a window's Desk room shows: its checkout's ids, the device the
-/// checkout is on, and its path as this daemon checked it.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DeskFileKey {
-    pub workspace_id: String,
-    pub checkout_id: String,
-    pub device_id: String,
-    pub path: String,
-}
-
-/// Which connections' Desk rooms hold each file (PRD desk-2-ui B19, B36).
-/// The core keeps a held file's document out of every View, so the hold
-/// belongs to the window that shows it: one window letting a file go must
-/// not close another's, and a window that leaves without saying so (a quit,
-/// a reload, a dropped socket) lets its files go with its connection.
-#[derive(Default)]
-pub struct DeskFileHolds {
-    holders: Mutex<BTreeMap<DeskFileKey, HashSet<u64>>>,
-}
-
-impl DeskFileHolds {
-    /// Makes `files` the whole set `connection` holds. When files no
-    /// connection held become held, or the last connection holding a file
-    /// lets it go, `change` receives both lists in one call, made while the
-    /// holds are still locked so two windows' changes reach the core in the
-    /// order they happened. Refused past `DESK_FILES_PER_CONNECTION` files.
-    pub fn set(
-        &self,
-        connection: u64,
-        files: Vec<DeskFileKey>,
-        change: impl FnOnce(&[DeskFileKey], &[DeskFileKey]),
-    ) -> Result<(), String> {
-        let mut wanted = Vec::with_capacity(files.len());
-        for file in files {
-            if !wanted.contains(&file) {
-                wanted.push(file);
-            }
-        }
-        if wanted.len() > DESK_FILES_PER_CONNECTION {
-            return Err(format!(
-                "desk_files: one window holds at most {DESK_FILES_PER_CONNECTION} files"
-            ));
-        }
-        let mut holders = self.holders.lock().expect("desk file holds");
-        let mut close = Vec::new();
-        holders.retain(|key, connections| {
-            if !wanted.contains(key) && connections.remove(&connection) && connections.is_empty() {
-                close.push(key.clone());
-                return false;
-            }
-            !connections.is_empty()
-        });
-        let mut open = Vec::new();
-        for file in wanted {
-            let connections = holders.entry(file.clone()).or_default();
-            if connections.is_empty() {
-                open.push(file);
-            }
-            connections.insert(connection);
-        }
-        if !open.is_empty() || !close.is_empty() {
-            change(&open, &close);
-        }
-        Ok(())
-    }
-
-    /// Lets go of every file a closed connection held, in one `change` for
-    /// the files no connection holds any more.
-    pub fn release(&self, connection: u64, change: impl FnOnce(&[DeskFileKey], &[DeskFileKey])) {
-        // An empty set is never refused.
-        let _ = self.set(connection, Vec::new(), change);
-    }
-}
 
 /// Which windows show the core's one session thread, and how many panels of
 /// each (`session_thread_open`, `session_thread_close`). One window closing
@@ -524,74 +445,6 @@ mod tests {
         assert_eq!(
             demand.set(3, false, |_| panic!("nothing to announce")),
             None
-        );
-    }
-
-    fn file(path: &str) -> DeskFileKey {
-        DeskFileKey {
-            workspace_id: "workspace:a".into(),
-            checkout_id: "checkout:a".into(),
-            device_id: "device-a".into(),
-            path: path.into(),
-        }
-    }
-
-    type Changes = std::cell::RefCell<Vec<(Vec<String>, Vec<String>)>>;
-
-    fn record(changes: &Changes) -> impl FnOnce(&[DeskFileKey], &[DeskFileKey]) + '_ {
-        |open, close| {
-            let paths =
-                |files: &[DeskFileKey]| files.iter().map(|file| file.path.clone()).collect();
-            changes.borrow_mut().push((paths(open), paths(close)));
-        }
-    }
-
-    #[test]
-    fn a_desk_file_closes_only_when_the_last_window_holding_it_lets_it_go_or_leaves() {
-        let holds = DeskFileHolds::default();
-        let changes = Changes::default();
-        holds
-            .set(1, vec![file("/a"), file("/b")], record(&changes))
-            .unwrap();
-        holds.set(2, vec![file("/a")], record(&changes)).unwrap();
-        // A preview replace in window 1: one change opens /c and lets /b go.
-        holds
-            .set(1, vec![file("/a"), file("/c")], record(&changes))
-            .unwrap();
-        // The same set again changes nothing.
-        holds
-            .set(1, vec![file("/a"), file("/c")], record(&changes))
-            .unwrap();
-        holds.set(1, Vec::new(), record(&changes)).unwrap();
-        holds.release(2, record(&changes));
-        assert_eq!(
-            changes.into_inner(),
-            vec![
-                (vec!["/a".into(), "/b".into()], vec![]),
-                (vec!["/c".into()], vec!["/b".into()]),
-                (vec![], vec!["/c".into()]),
-                (vec![], vec!["/a".into()]),
-            ],
-            "window 2 kept /a open after window 1 let it go, until it left"
-        );
-    }
-
-    #[test]
-    fn a_window_past_its_desk_file_cap_is_refused_and_keeps_what_it_held() {
-        let holds = DeskFileHolds::default();
-        let changes = Changes::default();
-        holds.set(1, vec![file("/kept")], record(&changes)).unwrap();
-        let many = (0..=DESK_FILES_PER_CONNECTION)
-            .map(|n| file(&format!("/{n}")))
-            .collect();
-        assert!(holds.set(1, many, record(&changes)).is_err());
-        holds.release(1, record(&changes));
-        assert_eq!(
-            changes.into_inner(),
-            vec![
-                (vec!["/kept".into()], vec![]),
-                (vec![], vec!["/kept".into()])
-            ]
         );
     }
 }

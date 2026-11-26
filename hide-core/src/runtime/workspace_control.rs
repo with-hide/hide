@@ -486,7 +486,7 @@ impl Runtime {
                         && (self.tray_in_view(&key, tab)
                             || self.pair_left_of(&key, tab).as_deref() == Some(pane_id))
                 }
-                Place::Shelf => false,
+                Place::Shelf | Place::Desk => false,
             };
             let kept = (!in_view || !lane_call(&action)).then(|| self.keep_front(&key));
             // A run's desk is drawn by the automation screen, which no lane
@@ -820,7 +820,7 @@ impl Runtime {
                     _ => false,
                 };
                 let selected = match &target {
-                    Place::Shelf => false,
+                    Place::Shelf | Place::Desk => false,
                     Place::Tray(_) => self
                         .change_view_layout(key, &target, |layout, stamp| {
                             layout
@@ -833,7 +833,7 @@ impl Runtime {
                 // on a desk whose lane is closed), an agent's select is To
                 // look at (B2).
                 let unseen = match place {
-                    Place::Shelf => true,
+                    Place::Shelf | Place::Desk => true,
                     Place::Tray(tab) => !self.tray_in_view(key, tab),
                 };
                 if unseen
@@ -973,7 +973,7 @@ impl Runtime {
     fn placed_view(&self, key: &(String, String), view_id: &str) -> Result<Place, Refusal> {
         match self.view_place(key, view_id) {
             Some(Place::Tray(tab)) => Ok(Place::Tray(tab)),
-            Some(Place::Shelf) => Err(VIEW_NOT_IN_LANE),
+            Some(Place::Shelf | Place::Desk) => Err(VIEW_NOT_IN_LANE),
             None => Err(layout_refusal(
                 crate::view_layout::LayoutError::UnknownDisplay(view_id.to_owned()),
             )),

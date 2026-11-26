@@ -176,7 +176,7 @@ pub(crate) struct KnownChoices {
 }
 
 /// Everything Desk keeps across a restart.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Stored {
     pub selection: DeskSelection,
     pub settings: DeskSettings,
@@ -213,6 +213,88 @@ pub(crate) struct Stored {
         deserialize_with = "named_leniently"
     )]
     pub named: Vec<NamedSession>,
+    /// Desk's own desk (PRD desk-own-desk D-02, D-10): its View areas, their
+    /// tabs and each area's tab in front, the same tree a Workspace's desk
+    /// keeps, each file naming its checkout (`Display::origin`). Read on its
+    /// own (`views_leniently`): a tree this build cannot read leaves Desk an
+    /// empty desk and the rest of the store as it was, and an older Hide
+    /// reads past the key.
+    #[serde(
+        default,
+        skip_serializing_if = "desk_views_empty",
+        deserialize_with = "views_leniently"
+    )]
+    pub views: crate::view_layout::Layout,
+}
+
+fn desk_views_empty(layout: &crate::view_layout::Layout) -> bool {
+    layout.display_count() == 0
+}
+
+/// Reads Desk's desk on its own and settles it as a Workspace's stored desk
+/// is settled (`Layout::repair`): a View this build would never write (an
+/// outside file, a diff, a run's summary, a file with no checkout, a card
+/// with no card) goes, and past `MAX_VIEW_DISPLAYS` the Views looked at
+/// longest ago go. A tree that does not read at all is an empty desk, said
+/// in the log (B29).
+fn views_leniently<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<crate::view_layout::Layout, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let mut layout: crate::view_layout::Layout = match serde_json::from_value(value) {
+        Ok(layout) => layout,
+        Err(error) => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "desk", "kind": "desk_store.views_unreadable",
+                "error": error.to_string(),
+            }));
+            return Ok(crate::view_layout::Layout::default());
+        }
+    };
+    let notes = settle_desk_views(&mut layout);
+    if !notes.is_empty() {
+        crate::diagnostic!(serde_json::json!({
+            "component": "desk", "kind": "desk_store.views_repaired",
+            "notes": notes,
+        }));
+    }
+    Ok(layout)
+}
+
+/// What [`views_leniently`] does to a read tree, with a note per repair.
+pub(crate) fn settle_desk_views(layout: &mut crate::view_layout::Layout) -> Vec<String> {
+    use crate::view_layout::{DisplayKind, MAX_VIEW_DISPLAYS};
+    let mut notes = Vec::new();
+    let stray: Vec<String> = layout
+        .displays()
+        .filter(|display| match display.kind {
+            DisplayKind::File => display.origin.is_none(),
+            DisplayKind::Diff | DisplayKind::External => true,
+            DisplayKind::Browser => display.origin.is_some(),
+            DisplayKind::Card => display.card.is_none() || display.is_run_summary(),
+        })
+        .map(|display| display.id.clone())
+        .collect();
+    for id in &stray {
+        layout.remove(id);
+    }
+    if !stray.is_empty() {
+        notes.push(format!("{} views Desk's desk never holds", stray.len()));
+    }
+    notes.extend(layout.repair());
+    let excess = layout.display_count().saturating_sub(MAX_VIEW_DISPLAYS);
+    if excess > 0 {
+        let mut oldest: Vec<(u64, String)> = layout
+            .displays()
+            .map(|display| (display.last_focused_unix_ms, display.id.clone()))
+            .collect();
+        oldest.sort();
+        for (_, id) in oldest.into_iter().take(excess) {
+            layout.remove(&id);
+        }
+        notes.push(format!("{excess} views past {MAX_VIEW_DISPLAYS} were closed"));
+    }
+    notes
 }
 
 /// The sessions [`Stored::named`] keeps; past it the one named least
@@ -479,6 +561,16 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
     Ok(stored)
 }
 
+#[cfg(test)]
+pub(crate) fn encode_for_test(stored: &Stored) -> Vec<u8> {
+    encode(stored).expect("encodes")
+}
+
+#[cfg(test)]
+pub(crate) fn decode_for_test(bytes: &[u8]) -> Result<Stored, String> {
+    decode(bytes)
+}
+
 /// Desk's file (`hide_kit::layout::desk_store`), written off the lock.
 pub(crate) struct DeskStore {
     path: PathBuf,
@@ -520,6 +612,43 @@ impl DeskStore {
 mod tests {
     use super::*;
     use crate::model::{DeskMention, DeskReplyState};
+
+    /// PRD desk-own-desk B29, B30: Desk's desk is read on its own. A tree this
+    /// build cannot read is an empty desk and the conversation stays; a
+    /// store from before Desk's desk reads as an empty one; a View this
+    /// build never writes there goes.
+    #[test]
+    fn desks_desk_is_read_on_its_own_and_an_unreadable_one_leaves_the_rest() {
+        let mut stored = Stored::default();
+        stored.conversation.push(user(1, "kept"));
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+        value["views"] = serde_json::json!({"root": "not a tree"});
+        let read = decode(&serde_json::to_vec(&value).unwrap()).expect("the store reads");
+        assert_eq!(read.views.display_count(), 0);
+        assert_eq!(read.conversation.items.len(), 1, "the conversation stays");
+
+        value.as_object_mut().unwrap().remove("views");
+        let read = decode(&serde_json::to_vec(&value).unwrap()).expect("an older store reads");
+        assert_eq!(read.views.display_count(), 0);
+
+        let mut views = crate::view_layout::Layout::default();
+        let area = views.active_area().id.clone();
+        let mut kept = views.new_display("/p/a.md", crate::view_layout::DisplayKind::File, None, false);
+        kept.origin = Some(crate::view_layout::ViewOrigin {
+            device_id: "d".into(),
+            path: "/p".into(),
+        });
+        let stray = views.new_display("/p/b.md", crate::view_layout::DisplayKind::File, None, false);
+        let diff = views.new_display("/p/c.md", crate::view_layout::DisplayKind::Diff, Some(false), false);
+        for display in [kept, stray, diff] {
+            views.append(&area, display).unwrap();
+        }
+        value["views"] = serde_json::to_value(&views).unwrap();
+        let read = decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let paths: Vec<_> = read.views.displays().map(|display| display.path.clone()).collect();
+        assert_eq!(paths, vec!["/p/a.md".to_owned()], "a file with no checkout and a diff go");
+    }
 
     fn user(id: u64, text: &str) -> DeskItem {
         DeskItem::User {

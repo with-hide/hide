@@ -223,10 +223,14 @@ pub fn clamp_pair_ratio(value: u16) -> u16 {
 
 /// Where one of a checkout's Views sits: on one Agent tab's desk, or on the
 /// shelf of Views on no desk (D-19, D-20). A View is in exactly one place.
+/// `Desk` is Desk's own desk (PRD desk-own-desk D-01, D-04), which no
+/// checkout holds: Desk's store keeps it, and the runtime reaches it under
+/// its own key (`runtime::desk::views::DESK_KEY`), never under a checkout's.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Place {
     Tray(String),
     Shelf,
+    Desk,
 }
 
 impl Tray {
@@ -574,6 +578,7 @@ impl WorkspaceView {
         match place {
             Place::Tray(tab) => self.tray(tab).map(|tray| &tray.layout),
             Place::Shelf => Some(&self.shelf),
+            Place::Desk => None,
         }
     }
 
@@ -581,6 +586,7 @@ impl WorkspaceView {
         match place {
             Place::Tray(tab) => self.tray_mut(tab).map(|tray| &mut tray.layout),
             Place::Shelf => Some(&mut self.shelf),
+            Place::Desk => None,
         }
     }
 
@@ -648,6 +654,10 @@ impl WorkspaceView {
         let from = self.place_of(id)?;
         if &from == to {
             return Some(from);
+        }
+        // Desk's desk is no checkout's: a checkout's View never moves there.
+        if *to == Place::Desk {
+            return None;
         }
         if let Place::Tray(tab) = to {
             self.tray_entry(tab);

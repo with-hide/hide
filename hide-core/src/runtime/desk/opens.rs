@@ -1,72 +1,39 @@
-//! What Desk's agent opened for the operator with `hide file open`, waiting
-//! for a window to show it in Desk's tab panel. `hide diff open` is refused
-//! Desk for now: the tab panel has no diff tab, and the core reads a diff
-//! only for the checkout in front (`changes_request`).
-//!
-//! The tab panel's tabs are the window's (`web/src/deskRoom.ts`), so the
-//! core never adds a tab: it keeps a short list of opens the snapshot
-//! carries in the `desk` section, and a window showing Desk opens each one
-//! as a click would, then sends `desk_open_taken` with its id, which takes
-//! it off the list. With no window showing Desk an open waits; past
-//! [`MAX_DESK_OPENS`] the oldest is dropped (engineering principle 15).
+//! What Desk's agent opens for the operator with `hide file open`: the file
+//! goes in front of Desk's own desk (PRD desk-own-desk D-13, B35), as a
+//! press in Desk's room opens it. Whether the desk is drawn is the window's:
+//! a window showing Desk shows it for the open (`desk_view.opened`), and one
+//! on another screen moves nothing. `hide diff open` is refused Desk: Desk's
+//! desk has no diff tab, and the core reads a diff only for the checkout in
+//! front (`changes_request`).
 //!
 //! The path is checked as an agent's `file_open` is: it must sit inside a
 //! checkout Hide shows on a connected machine, by whole path segments, and
-//! that checkout's own host reads it there (`ActionSource::read`) before the
-//! open is kept, so a link out of the checkout or a missing file is refused
-//! before anything waits.
+//! that checkout's own host reads it there (`ActionSource::read`) before it
+//! opens, so a link out of the checkout or a missing file is refused before
+//! anything moves.
 
 use std::collections::VecDeque;
 
-use serde::Deserialize;
-
-use crate::model::DeskOpenSnapshot;
 use crate::runtime::Runtime;
 use crate::runtime::workspace_control::{DESK_REFUSAL, path_within};
 use crate::workspace_control::{
     Action, ActionMaterial, ActionPreparation, ActionResult, ActionSource, Context, Refusal,
 };
 
-/// The most opens that wait for a window; a newer one drops the oldest.
-pub(crate) const MAX_DESK_OPENS: usize = 16;
+/// The requests whose answers are kept; an older one asked again opens
+/// the file again, which brings its tab in front as before.
+const OPENS_ANSWERED: usize = 16;
 
-/// One open waiting for a window, with the request id that made it, so the
-/// same command run again answers the same open.
-#[derive(Clone, Debug)]
-pub(super) struct DeskOpen {
-    request_id: String,
-    open: DeskOpenSnapshot,
-}
-
+/// The answers to the recent opens, each by the request id that made it.
 #[derive(Default)]
 pub(super) struct DeskOpens {
-    waiting: VecDeque<DeskOpen>,
-    next_id: u64,
+    answered: VecDeque<(String, u64)>,
 }
 
-impl DeskOpens {
-    pub(super) fn snapshot(&self) -> Vec<DeskOpenSnapshot> {
-        self.waiting.iter().map(|open| open.open.clone()).collect()
-    }
-
-    pub(super) fn clear(&mut self) -> bool {
-        let had = !self.waiting.is_empty();
-        self.waiting.clear();
-        had
-    }
-}
-
-/// `desk_open_taken`, from a window that opened the entry in its room.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(in crate::runtime) struct TakenPayload {
-    id: u64,
-}
-
-/// `hide diff open` from Desk: its tab panel has no diff tab yet.
+/// `hide diff open` from Desk: Desk's desk has no diff tab.
 const DIFF_UNSUPPORTED: Refusal = Refusal {
     reason: "desk_diff_unsupported",
-    next_action: "Desk's tab panel shows files, not diffs, for now: open the changed file with hide file open <path>",
+    next_action: "Desk's desk shows files, not diffs: open the changed file with hide file open <path>",
 };
 
 const OUTSIDE_PROJECTS: Refusal = Refusal {
@@ -192,9 +159,8 @@ impl Runtime {
         )))
     }
 
-    /// Keeps Desk's open once its host has read it, for a window to take.
-    /// The same request id, or the same file still waiting, answers the open
-    /// already kept.
+    /// Opens Desk's file in front of Desk's desk once its host has read it.
+    /// The same request id asked again answers the open already made.
     pub(in crate::runtime) fn desk_commit_open(
         &mut self,
         device_id: &str,
@@ -211,58 +177,33 @@ impl Runtime {
         let material = material?.ok_or(CHECKOUT_UNAVAILABLE)?;
         // The catalog may have moved while the host read the file.
         let target = self.desk_open_target(path)?;
-        let open = DeskOpenSnapshot {
-            id: 0,
-            device_id: target.device_id,
-            root: target.root,
-            path: material.path,
-        };
-        let opens = &mut self.desk.opens;
-        let id = match opens.waiting.iter_mut().find(|waiting| {
-            waiting.open.device_id == open.device_id
-                && waiting.open.root == open.root
-                && waiting.open.path == open.path
-        }) {
-            Some(waiting) => {
-                waiting.request_id = request_id.to_owned();
-                waiting.open.id
-            }
-            None => {
-                opens.next_id += 1;
-                let id = opens.next_id;
-                if opens.waiting.len() >= MAX_DESK_OPENS {
-                    opens.waiting.pop_front();
-                    crate::diagnostic!(serde_json::json!({
-                        "component": "desk",
-                        "kind": "desk.open_dropped",
-                        "cap": MAX_DESK_OPENS,
-                    }));
-                }
-                opens.waiting.push_back(DeskOpen {
-                    request_id: request_id.to_owned(),
-                    open: DeskOpenSnapshot { id, ..open },
-                });
-                id
-            }
-        };
+        if !self.desk_views_on() {
+            return Err(Refusal {
+                reason: "desk_off",
+                next_action: "Desk is switched off; the operator turns it on in Settings",
+            });
+        }
+        self.desk_open_file(
+            &target.workspace_id,
+            &target.checkout_id,
+            &material.path,
+            false,
+            false,
+        );
+        self.note_desk_agent_open();
+        let id = self.desk.views_opened;
+        let answered = &mut self.desk.opens.answered;
+        if answered.len() >= OPENS_ANSWERED {
+            answered.pop_front();
+        }
+        answered.push_back((request_id.to_owned(), id));
         crate::diagnostic!(serde_json::json!({
             "component": "desk",
             "kind": "desk.open",
             "open": id,
-            "waiting": self.desk.opens.waiting.len(),
+            "device": target.device_id,
         }));
-        self.compose_desk();
         Ok(self.desk_open_result(request_id, id))
-    }
-
-    /// `desk_open_taken`: a window opened the entry in its room.
-    pub(in crate::runtime) fn desk_open_taken(&mut self, payload: TakenPayload) -> bool {
-        let before = self.desk.opens.waiting.len();
-        self.desk
-            .opens
-            .waiting
-            .retain(|waiting| waiting.open.id != payload.id);
-        before != self.desk.opens.waiting.len()
     }
 
     fn desk_open_caller(&self, device_id: &str, expected: &Context) -> Result<(), Refusal> {
@@ -279,9 +220,9 @@ impl Runtime {
     fn desk_open_by_request(&self, request_id: &str) -> Option<u64> {
         self.desk
             .opens
-            .waiting
+            .answered
             .iter()
-            .find(|waiting| waiting.request_id == request_id)
-            .map(|waiting| waiting.open.id)
+            .find(|(asked, _)| asked == request_id)
+            .map(|(_, id)| *id)
     }
 }
