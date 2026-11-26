@@ -1005,7 +1005,12 @@ fn a_typed_address_reaches_a_page_of_a_checkout_not_in_front() {
         serde_json::json!({"action": "move", "display_id": page.id, "area_id": area, "index": 0}),
     );
     assert_eq!(
-        runtime.snapshot.status.diagnostics.last().map(|row| row.kind.as_str()),
+        runtime
+            .snapshot
+            .status
+            .diagnostics
+            .last()
+            .map(|row| row.kind.as_str()),
         Some("view_layout.stale_workspace")
     );
 
@@ -1014,7 +1019,10 @@ fn a_typed_address_reaches_a_page_of_a_checkout_not_in_front() {
         serde_json::json!({"workspace_id": "workspace:order", "checkout_id": checkout_id}),
     ));
     let [typed] = browser_displays(&mut runtime).try_into().expect("one page");
-    assert_eq!((typed.id.as_str(), typed.url.as_deref()), (page.id.as_str(), Some("https://b.test/")));
+    assert_eq!(
+        (typed.id.as_str(), typed.url.as_deref()),
+        (page.id.as_str(), Some("https://b.test/"))
+    );
     assert!(typed.load > page.load);
 }
 
