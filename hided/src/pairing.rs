@@ -1124,8 +1124,10 @@ impl Pairing {
             return Ok(json!({ "alias": alias, "looked": looked }));
         }
         if let Ask::LookSwitch { device } = &ask {
-            let (device, via) = self.read_through(device).await?;
-            let moves = self.may_move(&via, pairing_ssh::Asked::Look).await?;
+            let (device, via, node) = self.read_through(device).await?;
+            let moves = self
+                .may_move(&via, node.as_deref(), pairing_ssh::Asked::Look)
+                .await?;
             return Ok(json!({
                 "device_id": device,
                 "condition": moves.condition.payload(),
@@ -1566,7 +1568,11 @@ impl Pairing {
         let device = source.device_id.as_str();
         self.switch_step(device, "checking", json!({})).await;
         let moves = self
-            .may_move(&source.via, pairing_ssh::Asked::Switch)
+            .may_move(
+                &source.via,
+                source.node_program.as_deref(),
+                pairing_ssh::Asked::Switch,
+            )
             .await?;
         let condition = moves.condition.payload();
         if !moves.condition.may() {
@@ -1628,7 +1634,8 @@ impl Pairing {
             hide_core::SwitchVia::Wsl { distro } => wsl_request_key(distro),
         };
         let request = self.ssh_request(&requested)?;
-        let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
+        let reach = self.ssh.running(source.node_program.as_deref());
+        let (me, key) = (self.me.clone(), peers.key());
         let helper_root = source.helper_root.clone();
         let projects = source.projects.clone();
         let runtime = tokio::runtime::Handle::current();
@@ -1819,13 +1826,15 @@ impl Pairing {
 
     /// Where the machine reached through `via` stands on the rule every
     /// switch passes (`pairing_ssh::may_move`), read over a login of its
-    /// own that asks nobody.
+    /// own that asks nobody, with the `hide` beside its device's node,
+    /// `node`, when one runs there ([`pairing_ssh::Reach::running`]).
     async fn may_move(
         &self,
         via: &hide_core::SwitchVia,
+        node: Option<&str>,
         asked: pairing_ssh::Asked,
     ) -> Result<pairing_ssh::Move, &'static str> {
-        let reach = self.ssh.clone();
+        let reach = self.ssh.running(node);
         match via {
             hide_core::SwitchVia::Ssh { alias, .. } => {
                 let target = alias.clone();
@@ -1844,20 +1853,21 @@ impl Pairing {
         }
     }
 
-    /// The login `device` is read through, and its id: a helper device's
-    /// own, as the core knows it, or, for a machine a helper device was
-    /// switched to, the login it was switched through, which its record
-    /// keeps. A machine paired any other way has none.
+    /// The login `device` is read through, its id, and the program its
+    /// node runs there: a helper device's own, as the core knows them, or,
+    /// for a machine a helper device was switched to, the login it was
+    /// switched through, which its record keeps, with no node of this
+    /// computer's there. A machine paired any other way has none.
     async fn read_through(
         &self,
         device: &str,
-    ) -> Result<(String, hide_core::SwitchVia), &'static str> {
+    ) -> Result<(String, hide_core::SwitchVia, Option<String>), &'static str> {
         let (core, named) = (Arc::clone(&self.core), device.to_owned());
         let source = tokio::task::spawn_blocking(move || core.device_switch_source(&named))
             .await
             .map_err(|_| "hide_unavailable")?;
         match source {
-            Ok(source) => Ok((source.device_id, source.via)),
+            Ok(source) => Ok((source.device_id, source.via, source.node_program)),
             Err(refusal) => {
                 // Read from the records, so a machine is read whether or
                 // not the endpoint is open.
@@ -1871,7 +1881,7 @@ impl Pairing {
                     Login::Ssh(alias) => hide_core::SwitchVia::Ssh { alias },
                     Login::Wsl(distro) => hide_core::SwitchVia::Wsl { distro },
                 };
-                Ok((device.to_owned(), via))
+                Ok((device.to_owned(), via, None))
             }
         }
     }

@@ -2365,6 +2365,38 @@ fn a_devices_windows_drives_are_what_its_helper_reports() {
     }
 }
 
+/// What a switch starts from names the program its device's node was
+/// started from on the device's connection, whose `hide` every step of the
+/// switch runs (with-hide/hide#3007), and none before the device connected.
+#[test]
+fn a_switch_starts_from_the_program_its_devices_connection_put_there() {
+    let probe = device_runtime(None, None);
+    let shared = device_runtime(Some(granted(&probe)), None);
+    let mut runtime = shared.lock().unwrap();
+    for registration in &mut runtime.snapshot.ui_state.device_registrations {
+        if let crate::model::LinkOrigin::Dialed { naming, .. } = &mut registration.origin {
+            *naming = crate::model::DeviceNaming::Named;
+        }
+    }
+    let program = |runtime: &Runtime| {
+        runtime
+            .device_switch_source(DEVICE)
+            .expect("a device to switch")
+            .node_program
+    };
+    assert_eq!(program(&runtime), None);
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
+    let generation = runtime.device_host_generation(DEVICE);
+    let connected = established_with_terminals();
+    let started = connected.helper_path.clone();
+    runtime.ingest_host_established(
+        DEVICE,
+        generation,
+        Ok(hosts::HostReady::Dialed(Box::new(connected))),
+    );
+    assert_eq!(program(&runtime), Some(started));
+}
+
 /// A device's connection whose node runs a terminal service.
 fn established_with_terminals() -> hide_node_link::device::Established {
     established(
