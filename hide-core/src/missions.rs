@@ -4270,6 +4270,29 @@ pub(crate) fn summary_line(summary: Option<String>) -> Result<Option<String>, St
     Ok(Some(summary))
 }
 
+/// A record's `--evidence`, trimmed: what its result rests on, which for a
+/// checker is every finding, graded, since its record is its answer.
+/// Refused empty (`mission_evidence_missing`) or past a letter body's cap
+/// (`delivery::BODY_LIMIT`, `mission_evidence_too_long`), so the book,
+/// which keeps every line's and every checker's last answer, stays bounded.
+pub(crate) fn evidence_text(evidence: &str) -> Result<String, String> {
+    let evidence = evidence.trim();
+    if evidence.is_empty() {
+        return Err("mission_evidence_missing".into());
+    }
+    if evidence.len() > crate::delivery::BODY_LIMIT {
+        return Err(crate::coordination::refusal(
+            "mission_evidence_too_long",
+            &format!(
+                "{} bytes, at most {}",
+                evidence.len(),
+                crate::delivery::BODY_LIMIT
+            ),
+        ));
+    }
+    Ok(evidence.to_owned())
+}
+
 /// A commit as Git names one: 7 to 64 hexadecimal digits.
 pub fn valid_commit(value: &str) -> bool {
     (7..=64).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -4587,7 +4610,10 @@ pub fn next_action(code: &str) -> &'static str {
             "Give --summary as one line of at most 160 characters in the operator's language: what the result means for them, the details staying in --evidence"
         }
         "mission_evidence_missing" => {
-            "Give --evidence with the one line the result rests on: the command and what it printed, or what the review read"
+            "Give --evidence with what the result rests on: the command and what it printed, or, for a review or verification, every finding, graded"
+        }
+        "mission_evidence_too_long" => {
+            "Keep --evidence within 16 KiB: each finding in a line or two with its file:line, the long output left in the worktree"
         }
         "mission_checkout_unknown" => {
             "Record the check command from a pane in the checkout it ran in: Hide holds the line against that checkout's later commits"

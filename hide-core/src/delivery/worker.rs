@@ -499,6 +499,13 @@ pub(crate) enum Effect {
         recipient: String,
         seen: BTreeMap<String, u64>,
     },
+    /// Registration `agent` reported to its parent without a letter: a
+    /// mission checker recorded its line (`Runtime::checker_reported`), so
+    /// its parent's watch on it ends, as a confirmed report's does
+    /// (`Ledger::end_parent_watch`).
+    Reported {
+        agent: String,
+    },
     /// A Reopen is about to bring these closed agents back: the letters
     /// that wait for them now end, before anything starts (B2, B7; see
     /// `Runtime::delivery_closed`). The store answers once they are saved.
@@ -1084,6 +1091,10 @@ fn apply(
                     .any(|record| record.id == *id && !record.ended)
             });
             return Ok((Value::Null, true));
+        }
+        Effect::Reported { agent } => {
+            let ended = ledger.end_parent_watch(agent);
+            return Ok((json!({ "ended": ended }), ended));
         }
         Effect::EndClosed(closed) => {
             let mut ended = false;

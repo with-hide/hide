@@ -85,6 +85,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_gate_too_many"
             | "mission_gate_invalid"
             | "mission_gate_too_long"
+            | "mission_evidence_too_long"
             | "mission_gate_exempt"
             | "mission_gate_node_done"
             | "mission_gate_node_started"

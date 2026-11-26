@@ -1696,12 +1696,15 @@ fn round_body(
                 .max_by_key(|checker| checker.at_unix_ms)
                 .map(|checker| checker.commit.as_deref());
             let confirm = "When the worker asks you to confirm its plan for a serious finding, answer only OK or what to change.";
+            // The record is the checker's report: its parent's watch ends
+            // and it sleeps until the next round (`checker_reported`).
+            let answer = "Record every finding, graded, in `--evidence`; your record is your answer, send your Conductor no letter about it.";
             match last {
                 None => format!(
-                    "{place} is ready for your {lines}: {signal}.\nRead it with {show}, check it and record your result with `hide mission record`.\nGive every finding in this one round, each graded serious, ordinary or minor (docs/CODE_REVIEW.md). {confirm}"
+                    "{place} is ready for your {lines}: {signal}.\nRead it with {show}, check it and record your result with `hide mission record`.\nGive every finding in this one round, each graded serious, ordinary or minor (docs/CODE_REVIEW.md). {answer} {confirm}"
                 ),
                 Some(last) => format!(
-                    "{place} is ready for your {lines} again: {}, and {signal}.\nRead only your earlier findings and what changed since then; raise a new finding only when it is serious. {confirm}",
+                    "{place} is ready for your {lines} again: {}, and {signal}.\nRead only your earlier findings and what changed since then; raise a new finding only when it is serious. {answer} {confirm}",
                     last.map_or_else(
                         || "after your last answer".to_owned(),
                         |commit| format!("you last checked commit {}", short(commit))

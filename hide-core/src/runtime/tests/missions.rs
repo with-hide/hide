@@ -19791,6 +19791,179 @@ fn a_check_wakes_the_nodes_reviewer_and_its_failure_goes_to_the_worker() {
     );
 }
 
+/// A checker's `hide mission record` of its line is its report: Hide ends
+/// its parent's watch on it and marks it to sleep at its next rest, as a
+/// confirmed `report` letter from it does, so a checker that never writes
+/// its Conductor (mission-104's two reviewers, whose watches warned every
+/// 20 minutes between rounds) is not watched past its answer. Its findings
+/// stay whole in the record the worker reads, the next round's ask is a
+/// cell that wakes it asleep, a worker's own record does neither, and a
+/// report letter the checker still sends changes nothing more.
+#[test]
+fn a_checkers_record_ends_its_parents_watch_and_sleeps_it_until_the_next_round() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    let actor = |runtime: &Runtime, pane: &str| runtime.delivery_observations[pane].actor.clone();
+    let conductor = actor(&runtime, "sender");
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    for pane in ["recipient", "reviewer"] {
+        crate::delivery::watch::start(&mut ledger, &conductor, &actor(&runtime, pane), 1).unwrap();
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let marks = |runtime: &Runtime| {
+        runtime
+            .missions
+            .sleep_marks
+            .iter()
+            .map(|mark| (mark.agent_id.clone(), mark.origin.trigger()))
+            .collect::<Vec<_>>()
+    };
+    let watched = |runtime: &Runtime| {
+        runtime
+            .delivery_state()
+            .unwrap()
+            .watches
+            .iter()
+            .map(|watch| watch.target.pane_id.clone())
+            .collect::<Vec<_>>()
+    };
+
+    // The worker's own records mark nothing.
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert!(marks(&runtime).is_empty());
+    let asked = read_cells(&mut runtime, "agent-3");
+    assert!(
+        asked.len() == 1
+            && asked[0].contains(
+                "Record every finding, graded, in `--evidence`; your record is your answer, send your Conductor no letter about it."
+            ),
+        "{asked:?}"
+    );
+
+    // The reviewer records every finding: the record is its report.
+    let findings = "S1 serious: the parser drops v1 files at parse.rs:40\nM1 minor: a stale comment at parse.rs:12";
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of(
+            "fix",
+            "review",
+            json!({"commit": HEAD, "pass": false, "evidence": findings}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(marks(&runtime), [("agent-3".to_owned(), "record")]);
+    let review = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .node("fix")
+        .unwrap()
+        .criteria
+        .iter()
+        .find(|line| line.key == "review")
+        .unwrap()
+        .checkers[0]
+        .evidence
+        .clone();
+    assert_eq!(review.as_deref(), Some(findings), "the findings stay whole");
+    drop(runtime);
+    wait_for("the Conductor's watch on the reviewer to end", || {
+        let runtime = fixture.runtime.lock().unwrap();
+        !watched(&runtime).iter().any(|pane| pane == "reviewer")
+    });
+    let mut runtime = fixture.runtime.lock().unwrap();
+    assert_eq!(
+        watched(&runtime),
+        ["recipient"],
+        "the worker's watch stands"
+    );
+
+    // A report letter the reviewer still sends out of habit changes nothing.
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    crate::delivery::mailbox::send(
+        &mut ledger,
+        &actor(&runtime, "reviewer"),
+        &conductor,
+        "fix-review-report",
+        "Review FAIL: S1",
+        "report",
+        None,
+        unix_milliseconds(),
+    )
+    .unwrap();
+    runtime.publish_delivery(Arc::new(ledger), true);
+    assert_eq!(marks(&runtime), [("agent-3".to_owned(), "record")]);
+
+    // The worker's next check asks the reviewer again, by a cell that
+    // wakes it asleep.
+    checkout_at(&mut runtime, HEAD_2);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD_2})),
+    )
+    .unwrap();
+    assert!(
+        runtime
+            .worker_cells_unseen()
+            .iter()
+            .any(|(agent, ..)| agent == "agent-3"),
+        "the next round's ask is a cell that wakes the reviewer"
+    );
+    let again = read_cells(&mut runtime, "agent-3");
+    assert!(
+        again.len() == 1
+            && again[0].contains("again: you last checked commit a1b2c3d")
+            && again[0].contains("send your Conductor no letter about it"),
+        "{again:?}"
+    );
+}
+
+/// A record's evidence, a checker's findings included, is bounded by a
+/// letter body's cap: at the cap it is taken, one byte past it is refused
+/// with the reason and the size, and nothing is recorded.
+#[test]
+fn a_records_evidence_past_a_letters_cap_is_refused() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    let record = |evidence: String| {
+        record_of(
+            "fix",
+            "review",
+            json!({"commit": HEAD, "pass": false, "evidence": evidence}),
+        )
+    };
+    let limit = crate::delivery::BODY_LIMIT;
+    let refused = command(&mut runtime, "reviewer", record("x".repeat(limit + 1))).unwrap_err();
+    let (code, detail) = crate::coordination::split_refusal(&refused);
+    assert_eq!(code, "mission_evidence_too_long");
+    assert_eq!(
+        detail,
+        Some(format!("{} bytes, at most {limit}", limit + 1).as_str())
+    );
+    assert!(
+        runtime.missions.sleep_marks.is_empty(),
+        "a refused record reports nothing"
+    );
+    assert_eq!(line_state(&runtime, "review"), CriterionState::Open);
+    assert!(
+        command(&mut runtime, "reviewer", record("x".repeat(limit)))
+            .unwrap()
+            .1
+    );
+    assert_eq!(line_state(&runtime, "review"), CriterionState::Fail);
+}
+
 /// PRD mission-speed-2 B5: a check while the node's reviewer ended asks
 /// the Conductor for a fresh one, naming the node and the line.
 #[test]

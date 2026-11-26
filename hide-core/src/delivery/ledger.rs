@@ -815,6 +815,31 @@ impl Ledger {
         });
     }
 
+    /// Ends the watch the parent of registration `agent` keeps on it, as a
+    /// confirmed report from it would (`end_report_watch`): a mission
+    /// checker's record of its line is its report
+    /// (`Runtime::checker_reported`). Returns whether a watch ended.
+    pub(crate) fn end_parent_watch(&mut self, agent: &str) -> bool {
+        let Some(child) = self
+            .agents
+            .iter()
+            .find(|record| record.id == agent && !record.ended)
+        else {
+            return false;
+        };
+        let Some(parent) = child
+            .parent
+            .as_ref()
+            .and_then(|parent| self.agents.iter().find(|record| &record.id == parent))
+        else {
+            return false;
+        };
+        let (sender, recipient) = (child.actor.clone(), parent.actor.clone());
+        let before = self.watches.len();
+        self.end_report_watch(&sender, &recipient);
+        self.watches.len() != before
+    }
+
     /// The core on connection `key` took letter `id`, which this core's
     /// agent wrote to an agent of that core (PRD device-connect-iroh D-72):
     /// the letter is delivered, and its recipient takes `name`, what that

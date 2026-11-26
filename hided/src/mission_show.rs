@@ -542,6 +542,12 @@ fn recorded_words(by: &Value, at: &Value, now: u64) -> String {
     format!("{name} {}", age(now, at))
 }
 
+/// A record's evidence whole, as a checker's findings are: each later line
+/// indented under the line it belongs to, so it never reads as the next line.
+fn evidence_words(evidence: &str) -> String {
+    evidence.lines().collect::<Vec<_>>().join("\n      ")
+}
+
 fn draw_line(out: &mut String, line: &Value, now: u64) {
     let mut words = format!("  {} {}", text(line, "key"), line_word(&line["state"]));
     // A start gate asks before the node's worker is bound (PRD node-presets
@@ -565,7 +571,7 @@ fn draw_line(out: &mut String, line: &Value, now: u64) {
         let _ = write!(words, " · {summary}");
     }
     if let Some(evidence) = line["evidence"].as_str() {
-        let _ = write!(words, " · 근거 {evidence}");
+        let _ = write!(words, " · 근거 {}", evidence_words(evidence));
     }
     if line["by"].is_object() {
         let _ = write!(
@@ -593,7 +599,7 @@ fn draw_line(out: &mut String, line: &Value, now: u64) {
             let _ = write!(words, " · {summary}");
         }
         if let Some(evidence) = checker["evidence"].as_str() {
-            let _ = write!(words, " · 근거 {evidence}");
+            let _ = write!(words, " · 근거 {}", evidence_words(evidence));
         }
         let _ = writeln!(out, "{words}");
     }
@@ -1119,6 +1125,30 @@ mod tests {
                 .unwrap()
                 .ends_with("최근 편지 · 읽지 못함\n")
         );
+    }
+
+    /// A checker's record holds every finding, one per line: `show` prints
+    /// them whole, each later line indented under the checker's.
+    #[test]
+    fn a_checkers_findings_read_whole_under_its_line() {
+        let mut node = mission()["mission"]["nodes"][0].clone();
+        let findings = format!(
+            "S1 serious: input lost at a.rs:7\nO1 ordinary: {}",
+            "x".repeat(600)
+        );
+        node["criteria"][1]["checkers"] = json!([
+            {"worker": {"agent": "codex"}, "agent_id": "agent-3", "state": "fail",
+             "evidence": findings, "at_unix_ms": NOW - 20 * MINUTE}]);
+        let text = draw(
+            &json!({"mission_id": "mission-33", "node": node, "letters": []}),
+            NOW,
+        )
+        .unwrap();
+        let expected = format!(
+            "\x20   codex 실패 · agent-3 · 20분 전 · 근거 S1 serious: input lost at a.rs:7\n\x20     O1 ordinary: {}\n",
+            "x".repeat(600)
+        );
+        assert!(text.contains(&expected), "{text}");
     }
 
     /// A worker launched with a profile names it beside its agent, and one
