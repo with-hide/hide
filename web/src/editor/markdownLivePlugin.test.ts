@@ -112,3 +112,26 @@ describe("markdown live tables", () => {
     expect(view.dom.querySelector(".cm-md-table")).toBe(before);
   });
 });
+
+describe("markdown live code blocks", () => {
+  const doc = "intro\n\n```bash\npnpm install\npnpm build\n```\n\nend";
+  const head = async (view: EditorView) => {
+    await vi.waitFor(() => expect(view.dom.querySelector(".cm-md-code-head [data-code-block-head]")).not.toBeNull());
+    return view.dom.querySelector<HTMLElement>(".cm-md-code-head [data-code-block-head]")!;
+  };
+
+  it("draws the opening fence as the block's head row, boxes the code lines under it, and copies the code through the given clipboard", async () => {
+    const copied: string[] = [];
+    const view = open(doc, { copy: async (text) => (copied.push(text), true) });
+    const row = await head(view);
+    expect(row.querySelector("[data-code-block-language]")?.textContent).toBe("bash");
+    expect(Array.from(view.dom.querySelectorAll(".cm-md-code")).map((line) => [line.textContent, line.className.match(/cm-md-code-(first|last)/)?.[1] ?? null])).toEqual([["pnpm install", "first"], ["pnpm build", "last"]]);
+    row.querySelector<HTMLElement>('[data-copy-words="code block"]')!.click();
+    await vi.waitFor(() => expect(copied).toEqual(["pnpm install\npnpm build"]));
+  });
+
+  it("draws no 복사 without a clipboard", async () => {
+    const row = await head(open(doc));
+    expect(row.querySelector("[data-copy-words]")).toBeNull();
+  });
+});

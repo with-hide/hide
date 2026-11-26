@@ -20,7 +20,7 @@ import { planFixture } from "./PlanScene";
 
 export const DESK_THREAD_SCENES = [
   { state: "live", label: "Thread from the store: Hide's parts, a letter each way, a running command (B25, B26, D-75)" },
-  { state: "asking", label: "Thread from the store: the questions Hide found, in one line above the box (Doop B4)" },
+  { state: "asking", label: "Thread from the store: code blocks, and the questions Hide found above the box (Doop B4, N)" },
   { state: "failed", label: "Thread from the store: a record it cannot read (B27)" },
   { state: "held", label: "Thread from the store: its pane runs another session (B29)" },
 ] as const;
@@ -31,9 +31,12 @@ const noop = () => undefined;
 
 /** The questions Hide found in the asking scene's conversation, oldest first, as `open_asks` lists them. */
 const ASKS = [
-  { id: "ask-1", text: "라이트 캡처 6장을 모두 비교할까요?", at_unix_ms: Date.now() - 9 * 60_000 },
-  { id: "ask-2", text: "다크 모드도 찍을까요?", at_unix_ms: Date.now() - 2 * 60_000 },
+  { id: "ask-1", text: "라이트 캡처 6장을 모두 비교할지", at_unix_ms: Date.now() - 9 * 60_000, quote: "라이트 캡처 6장을 모두 비교할까요?" },
+  { id: "ask-2", text: "다크 모드도 찍을지", at_unix_ms: Date.now() - 2 * 60_000, quote: "다크 모드도 찍을까요?" },
 ];
+
+/** The answer the questions were asked in: code in a line, a one-line block and a block of several lines, one too long for the column (Doop N 1 가). */
+const ASKED_IN = "라이트 캡처를 찍었어요. 세션은 `hide agent ps`로 볼 수 있어요.\n\n```\nopen https://play.google.com/console\n```\n\n```bash\npnpm --dir web install\npnpm --dir web build\nhide agent list --json | jq -r '.value.items[] | select(.runtime == \"running\") | .name + \" \" + .project'\n```\n\n다크 모드도 찍을까요?";
 
 const row = (pane_id: string, identity_label: string, mark: AgentRow["mark"], agent_kind: string) => ({ pane_id, identity_label, mark, agent_kind }) as AgentRow;
 const said = (text: string) => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
@@ -96,7 +99,7 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
     const rows = [row("w1:1a", "1a Desk 방", "done", "codex"), row("w1:1b", "1b 스레드 화면", "going", "codex"), row(job.pane_id!, job.title, job.mark ?? "going", job.agent_kind)];
     const page: Record<SceneState, SessionThreadSection> = {
       live: thread(job.pane_id!, conductorPage(now, missions.mission.id)),
-      asking: thread(job.pane_id!, { updates: [asked("gallery 캡처를 라이트·다크로 찍어서 나란히 비교해줘"), shell("c1", "node scripts/capture-gallery.mjs --theme light", "completed"), said("라이트 캡처를 찍었어요.\n다크 모드도 찍을까요?")], parts: {}, sessions: {} }),
+      asking: thread(job.pane_id!, { updates: [asked("gallery 캡처를 라이트·다크로 찍어서 나란히 비교해줘"), shell("c1", "node scripts/capture-gallery.mjs --theme light", "completed"), { ...said(ASKED_IN), _meta: { hide: { at_ms: Date.now() - 10 * 60_000 } } }], parts: {}, sessions: {} }),
       failed: thread(job.pane_id!, null, { state: "failed", failure: "no_record" }),
       held: thread(job.pane_id!, conductorPage(now, missions.mission.id), { pane: "changed" }),
     };
@@ -114,7 +117,7 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
     <TooltipProvider>
       <div className="flex h-screen min-w-0 justify-end bg-background text-foreground" data-desk-thread-scene={state}>
         <div className="flex min-h-0 w-full max-w-(--size-lane-ideal) min-w-0 flex-col border-l border-border">
-          <ThreadPanel job={job} paneId={job.pane_id} actions={actions} mentions={mentions} startedByDesk={state === "asking"} asks={state === "asking" ? ASKS : undefined} head={<SessionHead paneId={job.pane_id!} title={job.title} job={job} row={null} pane={null} machine={state === "live" ? "Mac mini" : null} disconnected={false} sleeping={false} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={() => Promise.resolve(true)} />
+          <ThreadPanel job={job} paneId={job.pane_id} actions={actions} mentions={mentions} startedByDesk={state === "asking"} asks={state === "asking" ? ASKS : undefined} onAsk={noop} head={<SessionHead paneId={job.pane_id!} title={job.title} job={job} row={null} pane={null} machine={state === "live" ? "Mac mini" : null} disconnected={false} sleeping={false} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={() => Promise.resolve(true)} />
         </div>
       </div>
     </TooltipProvider>

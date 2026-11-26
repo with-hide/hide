@@ -261,11 +261,11 @@ export type UserTurnFact = {
 
 export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed", "human_turn", "open_ask"] as const;
 /** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, the decision a Conductor's mission waits on, a mission node waiting on the operator to look (its title and why), a brief or letter Hide typed that the agent never took, or a step only a person can take that the agent declared (`hide agent ask-human`, PRD ask-human): its declaration, kind, place and the device's name, absent for this machine. */
-export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string; views?: number } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason; unmet?: number } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean } | { cause: "human_turn"; id: string; kind: HumanKind; place: string; device?: string } | { cause: "open_ask"; id: string; line: string };
+export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string; views?: number } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason; unmet?: number } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean } | { cause: "human_turn"; id: string; kind: HumanKind; place: string; device?: string } | { cause: "open_ask"; id: string; line: string; quote?: string };
 /** The questions a row's session put to the operator that still wait (`OpenAsksSnapshot`). */
 export type OpenAsks = { session: WorkSession; items: OpenAsk[] };
-/** One question that still waits on the operator; `id` is the record's, which 무시하기 names. */
-export type OpenAsk = { id: string; text: string; at_unix_ms: number };
+/** One question that still waits on the operator; `id` is the record's, which 무시하기 names; `quote` is the sentence of the agent's answer that asks it, absent on one recorded before Hide kept it. */
+export type OpenAsk = { id: string; text: string; at_unix_ms: number; quote?: string };
 
 export const HUMAN_KINDS = ["auth", "permission", "install"] as const;
 /** What a person's turn asks for (`contracts/snapshot-wire-enums.json`: `human_kind`): a sign-in or unlock, a permission, or the confirm of an install an agent asked for with `hide skill` / `hide mcp`, which the core lays itself. */

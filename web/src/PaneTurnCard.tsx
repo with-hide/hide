@@ -12,7 +12,7 @@ import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { renderMarkdown } from "./mobile/markdown";
 import { agentsByPane, allAgents } from "./paneAgents";
-import { sessionOfAgent } from "./sessionWork";
+import { askingSession, sessionOfAgent } from "./sessionWork";
 import { type AgentRow, type LabelEnd, type LetterLine, type LetterMark, type PaneHeader, type PeerLine, type PaneTurnRequest, type RequestSender, type TurnAnswer, type TurnAnswerRead, type WorkSession } from "./snapshot";
 import { useShellStore } from "./store";
 import { lettersBefore, peerCount } from "./turnCard";
@@ -390,8 +390,7 @@ export function TurnCard({ agent, header, onRecord, onReadWhole, onAsk, answerOp
   const [lettersOpen, setLettersOpen] = useState(lettersOpened ?? false);
   const letters = view?.letters;
   const open = agent.open_asks ?? null;
-  // A line put away here is undone in the agent's session, also once the core lists none.
-  const asking = open?.session ?? sessionOfAgent(agent);
+  const asking = askingSession(agent);
   // A question of the list laid on the row is the list's to say, not a second line's.
   const askIsListed = header?.band?.subject?.cause === "open_ask";
   const before = lettersBefore(letters);
