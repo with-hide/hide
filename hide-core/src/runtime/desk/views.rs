@@ -164,7 +164,12 @@ impl Runtime {
 
     /// The checkout of editor tab `tab_id`, as a View of Desk's desk names it.
     pub(in crate::runtime) fn tab_origin(&self, tab_id: &str) -> Option<ViewOrigin> {
-        let tab = self.snapshot.editor.tabs.iter().find(|tab| tab.id == tab_id)?;
+        let tab = self
+            .snapshot
+            .editor
+            .tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)?;
         self.workspace_key(&tab.workspace_id, &tab.checkout_id)
             .map(|(device_id, path)| ViewOrigin { device_id, path })
     }
@@ -210,7 +215,14 @@ impl Runtime {
             );
             return true;
         }
-        self.open_file_in_view(&self.desk_key(), workspace_id, checkout_id, path, preview, beside);
+        self.open_file_in_view(
+            &self.desk_key(),
+            workspace_id,
+            checkout_id,
+            path,
+            preview,
+            beside,
+        );
         crate::diagnostic!(serde_json::json!({
             "component": "desk",
             "kind": "desk_views.file_open",

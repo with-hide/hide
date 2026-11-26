@@ -26,6 +26,7 @@
 
 use serde::Deserialize;
 
+use super::desk::views::is_desk_key;
 use super::documents::OpenRequestFields;
 use super::workspace_view::{AreaIntent, WorkspaceKey, file_label};
 use super::*;
@@ -35,11 +36,9 @@ use crate::model::{
 };
 use crate::view_layout::{
     Display, DisplayKind, Edge, ExternalFile, ExternalKind, Layout, LayoutError, MAX_SPLIT_DEPTH,
-    ViewOrigin,
-    MAX_VIEW_AREAS, MAX_VIEW_DISPLAYS, Node, browser_address, browser_title,
+    MAX_VIEW_AREAS, MAX_VIEW_DISPLAYS, Node, ViewOrigin, browser_address, browser_title,
 };
 use crate::workspace_views::Place;
-use super::desk::views::is_desk_key;
 
 /// Split request ids remembered per Workspace, so a split sent twice splits
 /// once (engineering principle 11). Runtime only.
@@ -647,10 +646,7 @@ impl Runtime {
     /// Where the View `id` of the Workspace `key` sits.
     pub(super) fn view_place(&self, key: &WorkspaceKey, id: &str) -> Option<Place> {
         if is_desk_key(key) {
-            return self
-                .desk_views()?
-                .display(id)
-                .map(|_| Place::Desk);
+            return self.desk_views()?.display(id).map(|_| Place::Desk);
         }
         self.workspace_views
             .as_ref()?
@@ -1768,7 +1764,15 @@ impl Runtime {
             placed?;
             return Ok(true);
         }
-        if self.focus_view_document(key, place, origin.as_ref(), &path, kind, committed, !preview)? {
+        if self.focus_view_document(
+            key,
+            place,
+            origin.as_ref(),
+            &path,
+            kind,
+            committed,
+            !preview,
+        )? {
             return Ok(true);
         }
         // The preview display the open takes, with the document it showed.
@@ -2869,9 +2873,11 @@ impl Runtime {
                                 )
                             })
                     })
-                    .chain(self.desk_browser_inventory().into_iter().map(|row| {
-                        (row.device_id, row.path, row.view_id)
-                    }))
+                    .chain(
+                        self.desk_browser_inventory()
+                            .into_iter()
+                            .map(|row| (row.device_id, row.path, row.view_id)),
+                    )
                     .collect();
                 self.browser_pages.retain(|key, _| active.contains(key));
                 if self.browser_pages.len() >= BROWSER_PAGE_REPORTS_KEPT {
@@ -3682,8 +3688,7 @@ impl Runtime {
     pub(super) fn shown_card(&self) -> Option<&crate::model::DetailItem> {
         // While Desk's room is the place in front, the card in front of
         // Desk's desk is the one read (PRD desk-own-desk B4).
-        if self.snapshot.ui_state.recent_places.first()
-            == Some(&crate::model::RecentPlace::Desk)
+        if self.snapshot.ui_state.recent_places.first() == Some(&crate::model::RecentPlace::Desk)
             && let Some(card) = self.desk_front_card()
         {
             return Some(card);

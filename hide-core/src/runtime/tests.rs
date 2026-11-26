@@ -51,8 +51,8 @@ mod closed_registrations;
 #[path = "tests/control_order.rs"]
 mod control_order;
 mod core_letters;
-mod desk_own_desk;
 mod desk_group;
+mod desk_own_desk;
 mod desk_views;
 #[path = "tests/detail.rs"]
 mod detail;

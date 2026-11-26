@@ -38,6 +38,8 @@ async function openList(selector: string) {
   await act(async () => document.querySelector<HTMLElement>(selector)!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
 }
 
+/** A pull request as the shelf names it, its number after `#`. */
+const pr = (number: number) => `#${number}`;
 const rows = () => Array.from(document.querySelectorAll<HTMLElement>("[data-desk-view-row]")).map((row) => row.dataset.deskViewRow);
 
 it("is one 뷰 N chip with the 볼 것 eye while any View is not looked at, and the PR mark beside it (B21)", async () => {
@@ -87,12 +89,12 @@ it("opens one pull request with a press, on its host with ⌘, and several from 
   const one = await render([], [pull(2532)], opened);
   await act(async () => one.querySelector<HTMLElement>('[data-desk-pulls="1"]')!.click());
   await act(async () => one.querySelector<HTMLElement>('[data-desk-pulls="1"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, metaKey: true })));
-  expect(opened).toEqual(["#2532", "github #2532"]);
+  expect(opened).toEqual([pr(2532), `github ${pr(2532)}`]);
   const many = await render([], [pull(2537), pull(2536)], opened);
   expect(many.querySelector('[data-desk-pulls="2"]')?.textContent).toBe("PR 2");
   await openList('[data-desk-pulls="2"]');
   await act(async () => document.querySelector<HTMLElement>('[data-desk-pull-row="pr:https://github.com/o/r/pull/2536"]')!.click());
-  expect(opened.at(-1)).toBe("#2536");
+  expect(opened.at(-1)).toBe(pr(2536));
 });
 
 it("has no 뷰 chip for a session that opened no View, and draws nothing for one that made nothing (B21)", async () => {

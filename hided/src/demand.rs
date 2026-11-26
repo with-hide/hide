@@ -134,7 +134,6 @@ impl OriginHolds {
     }
 }
 
-
 /// Which windows show the core's one session thread, and how many panels of
 /// each (`session_thread_open`, `session_thread_close`). One window closing
 /// its panel must not empty another's, and a window that reloads, crashes or

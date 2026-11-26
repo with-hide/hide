@@ -28,7 +28,13 @@ fn desk_runtime_with_other(name: &str) -> (Runtime, PathBuf, String) {
 }
 
 fn open_on_desk(runtime: &mut Runtime, workspace_id: &str, checkout_id: &str, path: &Path) {
-    open_on_desk_as(runtime, workspace_id, checkout_id, path, serde_json::json!({}));
+    open_on_desk_as(
+        runtime,
+        workspace_id,
+        checkout_id,
+        path,
+        serde_json::json!({}),
+    );
 }
 
 fn open_on_desk_as(
@@ -52,7 +58,8 @@ fn open_on_desk_as(
 
 fn desk_layout(runtime: &mut Runtime, action: serde_json::Value) {
     let mut payload = action;
-    payload["workspace"] = serde_json::json!({"device_id": runtime.node.as_str(), "path": "hide:desk"});
+    payload["workspace"] =
+        serde_json::json!({"device_id": runtime.node.as_str(), "path": "hide:desk"});
     runtime.dispatch_json(&explorer_event("view_layout", payload));
 }
 
@@ -175,11 +182,17 @@ fn a_workspaces_open_never_lands_on_desks_desk_nor_desks_on_the_workspaces() {
         "file_open",
         serde_json::json!({"path": notes.to_string_lossy(), "workspace_id": "workspace:order", "checkout_id": checkout_id, "preview": false}),
     ));
-    assert!(desk_views(&mut runtime).is_empty(), "B15: terminal mode's open");
+    assert!(
+        desk_views(&mut runtime).is_empty(),
+        "B15: terminal mode's open"
+    );
     let next = directory.join("next.md");
     std::fs::write(&next, "next\n").expect("fixture");
     open_on_desk(&mut runtime, "workspace:order", &checkout_id, &next);
-    assert_eq!(shown(&mut runtime), vec![notes.to_string_lossy().into_owned()]);
+    assert_eq!(
+        shown(&mut runtime),
+        vec![notes.to_string_lossy().into_owned()]
+    );
     assert_eq!(desk_views(&mut runtime).len(), 1);
 }
 
@@ -194,14 +207,21 @@ fn a_workspace_closing_its_last_view_leaves_a_file_desks_desk_shows_and_desks_cl
     open_on_desk(&mut runtime, "workspace:order", &checkout_id, &file);
     let tab = open_tab(&runtime, &file).expect("one shared document");
     runtime.sync_workspace_view();
-    let view = runtime.snapshot.workspace_view.clone().expect("a front Workspace");
+    let view = runtime
+        .snapshot
+        .workspace_view
+        .clone()
+        .expect("a front Workspace");
     let display = displays(&view.layout.root)[0].id.clone();
     runtime.dispatch_json(&explorer_event(
         "view_layout",
         serde_json::json!({"action": "close", "display_id": display, "workspace": {"device_id": view.device_id, "path": view.path}}),
     ));
     assert_eq!(open_tab(&runtime, &file).as_deref(), Some(tab.as_str()));
-    assert!(shown(&mut runtime).is_empty(), "the View does not take it back");
+    assert!(
+        shown(&mut runtime).is_empty(),
+        "the View does not take it back"
+    );
 
     let desk = desk_views(&mut runtime)[0].id.clone();
     desk_layout(
@@ -209,7 +229,11 @@ fn a_workspace_closing_its_last_view_leaves_a_file_desks_desk_shows_and_desks_cl
         serde_json::json!({"action": "close", "display_id": desk}),
     );
     assert_eq!(runtime.snapshot.status.last_error, None);
-    assert_eq!(open_tab(&runtime, &file), None, "B32: nothing else shows it");
+    assert_eq!(
+        open_tab(&runtime, &file),
+        None,
+        "B32: nothing else shows it"
+    );
     assert!(desk_views(&mut runtime).is_empty());
 }
 
@@ -250,7 +274,12 @@ fn desks_desk_splits_and_resizes_as_a_workspaces_desk_does() {
     let (mut runtime, checkout_id, directory) = desk_runtime("own-desk-split");
     let next = directory.join("next.md");
     std::fs::write(&next, "next\n").expect("fixture");
-    open_on_desk(&mut runtime, "workspace:order", &checkout_id, &directory.join("notes.md"));
+    open_on_desk(
+        &mut runtime,
+        "workspace:order",
+        &checkout_id,
+        &directory.join("notes.md"),
+    );
     open_on_desk(&mut runtime, "workspace:order", &checkout_id, &next);
     runtime.sync_workspace_view();
     let view = runtime.snapshot.desk_view.clone().expect("Desk's desk");
@@ -329,7 +358,11 @@ fn desk_switched_off_lets_its_documents_go_keeps_its_tabs_and_reads_them_back_on
         "the unsaved one goes to its checkout's View"
     );
     assert!(runtime.snapshot.desk_view.is_none(), "no desk while off");
-    assert_eq!(runtime.desk_stored_for_test().views.display_count(), 2, "the tabs stay");
+    assert_eq!(
+        runtime.desk_stored_for_test().views.display_count(),
+        2,
+        "the tabs stay"
+    );
 
     runtime.dispatch_json(&explorer_event(
         "desk_settings_set",
@@ -356,7 +389,12 @@ fn desks_desk_is_refused_while_desk_is_off() {
 #[test]
 fn desks_desk_survives_a_restart_through_desks_store() {
     let (mut runtime, checkout_id, directory) = desk_runtime("own-desk-store");
-    open_on_desk(&mut runtime, "workspace:order", &checkout_id, &directory.join("notes.md"));
+    open_on_desk(
+        &mut runtime,
+        "workspace:order",
+        &checkout_id,
+        &directory.join("notes.md"),
+    );
     let stored = runtime.desk_stored_for_test().clone();
     let bytes = crate::desk::encode_for_test(&stored);
     let read = crate::desk::decode_for_test(&bytes).expect("reads");
@@ -425,7 +463,10 @@ fn a_file_desks_agent_opens_goes_in_front_of_desks_desk() {
     let views = desk_views(&mut runtime);
     assert_eq!(views.len(), 1);
     assert_eq!(views[0].path, file.to_string_lossy());
-    assert_eq!(runtime.snapshot.desk_view.as_ref().map(|view| view.opened), Some(1));
+    assert_eq!(
+        runtime.snapshot.desk_view.as_ref().map(|view| view.opened),
+        Some(1)
+    );
     assert!(!shown(&mut runtime).contains(&file.to_string_lossy().into_owned()));
 
     // The same command again answers the same open.
@@ -489,7 +530,9 @@ fn desk_opens_nothing_while_its_process_is_not_running() {
     std::fs::write(&file, "a\n").expect("fixture");
     runtime.close_test_desk();
     assert_eq!(
-        agent_open(&mut runtime, "stopped", &file).unwrap_err().reason,
+        agent_open(&mut runtime, "stopped", &file)
+            .unwrap_err()
+            .reason,
         "desk_not_running"
     );
 }
@@ -535,11 +578,27 @@ fn a_page_of_desks_desk_is_the_core_machines_and_resolves_to_load_there() {
         .into_iter()
         .find(|display| display.kind == crate::view_layout::DisplayKind::Browser)
         .expect("the page is on Desk's desk");
-    assert_eq!(runtime.snapshot.desk_view.as_ref().map(|view| view.device_id.clone()), Some(node.clone()));
-    let load = runtime.view_display(&runtime.desk_key(), &page.id).map(|display| display.load).expect("the page's display");
+    assert_eq!(
+        runtime
+            .snapshot
+            .desk_view
+            .as_ref()
+            .map(|view| view.device_id.clone()),
+        Some(node.clone())
+    );
+    let load = runtime
+        .view_display(&runtime.desk_key(), &page.id)
+        .map(|display| display.load)
+        .expect("the page's display");
     let source = runtime
         .browser_route_source(&node, "hide:desk", &page.id, load)
         .expect("a page of Desk's desk resolves");
-    assert_eq!((source.device_id, source.url), (node, "https://example.com/".to_owned()));
-    assert!(shown(&mut runtime).is_empty(), "the page is on no Workspace's desk");
+    assert_eq!(
+        (source.device_id, source.url),
+        (node, "https://example.com/".to_owned())
+    );
+    assert!(
+        shown(&mut runtime).is_empty(),
+        "the page is on no Workspace's desk"
+    );
 }

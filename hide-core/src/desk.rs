@@ -292,7 +292,9 @@ pub(crate) fn settle_desk_views(layout: &mut crate::view_layout::Layout) -> Vec<
         for (_, id) in oldest.into_iter().take(excess) {
             layout.remove(&id);
         }
-        notes.push(format!("{excess} views past {MAX_VIEW_DISPLAYS} were closed"));
+        notes.push(format!(
+            "{excess} views past {MAX_VIEW_DISPLAYS} were closed"
+        ));
     }
     notes
 }
@@ -634,20 +636,43 @@ mod tests {
 
         let mut views = crate::view_layout::Layout::default();
         let area = views.active_area().id.clone();
-        let mut kept = views.new_display("/p/a.md", crate::view_layout::DisplayKind::File, None, false);
+        let mut kept = views.new_display(
+            "/p/a.md",
+            crate::view_layout::DisplayKind::File,
+            None,
+            false,
+        );
         kept.origin = Some(crate::view_layout::ViewOrigin {
             device_id: "d".into(),
             path: "/p".into(),
         });
-        let stray = views.new_display("/p/b.md", crate::view_layout::DisplayKind::File, None, false);
-        let diff = views.new_display("/p/c.md", crate::view_layout::DisplayKind::Diff, Some(false), false);
+        let stray = views.new_display(
+            "/p/b.md",
+            crate::view_layout::DisplayKind::File,
+            None,
+            false,
+        );
+        let diff = views.new_display(
+            "/p/c.md",
+            crate::view_layout::DisplayKind::Diff,
+            Some(false),
+            false,
+        );
         for display in [kept, stray, diff] {
             views.append(&area, display).unwrap();
         }
         value["views"] = serde_json::to_value(&views).unwrap();
         let read = decode(&serde_json::to_vec(&value).unwrap()).unwrap();
-        let paths: Vec<_> = read.views.displays().map(|display| display.path.clone()).collect();
-        assert_eq!(paths, vec!["/p/a.md".to_owned()], "a file with no checkout and a diff go");
+        let paths: Vec<_> = read
+            .views
+            .displays()
+            .map(|display| display.path.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            vec!["/p/a.md".to_owned()],
+            "a file with no checkout and a diff go"
+        );
     }
 
     fn user(id: u64, text: &str) -> DeskItem {

@@ -156,8 +156,9 @@ impl Runtime {
         load: u64,
     ) -> Option<BrowserRouteSource> {
         // A page of Desk's own desk is the core's own, on no checkout's desk.
-        let desk = super::desk::views::is_desk_key(&(device_id.to_owned(), checkout_path.to_owned()))
-            && device_id == self.node.as_str();
+        let desk =
+            super::desk::views::is_desk_key(&(device_id.to_owned(), checkout_path.to_owned()))
+                && device_id == self.node.as_str();
         let connected = if device_id == self.node.as_str() {
             self.snapshot.status.engine.state == "connected"
         } else {
