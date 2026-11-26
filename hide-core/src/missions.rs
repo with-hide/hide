@@ -762,6 +762,10 @@ pub struct PrSeen {
     /// news again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ci_told: Vec<CiResult>,
+    /// The Conductor was told on `head` that the node is ready for its
+    /// merge (`RoundWake::Ready`), once for good; a new head clears it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ready_told: bool,
 }
 
 /// What a pull request's CI ended as on one head commit: its checks as the
@@ -983,6 +987,11 @@ pub enum RoundWake {
     /// The plan makes a change node wait for the whole of another change
     /// node: the Conductor may start it sooner on one of its lines (D-07).
     WholeNodeWait,
+    /// Every line of the node is met while GitHub reads each of its open
+    /// pull requests mergeable (`PrState::Mergeable`): its Conductor merges
+    /// it, or in scope `pr` and with `operator_merge` starts what waits on
+    /// it, told once per head (`PrSeen::ready_told`).
+    Ready,
     /// A kind a later build wrote.
     #[serde(other)]
     Unknown,
@@ -995,6 +1004,7 @@ impl RoundWake {
             Self::CheckerNeeded => "checker_needed",
             Self::Checked => "checked",
             Self::WholeNodeWait => "whole_node_wait",
+            Self::Ready => "ready",
             Self::Unknown => "unknown",
         }
     }

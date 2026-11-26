@@ -1651,17 +1651,17 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
 
     // The first answer about the pull request is where its merge and
     // review wakes start; the CI result it already has is told.
-    let open = github(vec![pull(7, "a1", PullRequestBadge::Open, None)], false);
+    let open = checked(7, "a1", PullRequestChecks::Failed, &[]);
     assert_eq!(
         runtime.note_mission_pulls(node, &open),
-        vec!["mission:mission-1:ci:fix:7:a1:passed:sender"]
+        vec!["mission:mission-1:ci:fix:7:a1:failed:sender"]
     );
     assert!(
         runtime.note_mission_pulls(node, &open).is_empty(),
         "the same answer wakes nothing"
     );
 
-    let pushed = github(vec![pull(7, "b2", PullRequestBadge::Open, None)], false);
+    let pushed = checked(7, "b2", PullRequestChecks::Failed, &[]);
     assert!(
         runtime
             .note_mission_pulls(
@@ -1673,7 +1673,7 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     );
     assert_eq!(
         runtime.note_mission_pulls(node, &pushed),
-        vec!["mission:mission-1:ci:fix:7:b2:passed:sender"],
+        vec!["mission:mission-1:ci:fix:7:b2:failed:sender"],
         "its CI's result on the new commit"
     );
     assert!(runtime.note_mission_pulls(node, &pushed).is_empty());
@@ -1692,7 +1692,8 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
         vec!["mission:mission-1:changes_requested:fix:7:b2:1:sender"]
     );
 
-    // A CI result on a done mission's pull request opens it again.
+    // A CI that fails on a done mission's pull request opens it again; a
+    // pass does not.
     without_gate(&mut runtime);
     command(
         &mut runtime,
@@ -1701,17 +1702,12 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     )
     .unwrap();
     let status = |runtime: &Runtime, id: &str| runtime.missions.book.get(id).unwrap().status;
+    // A pass is no news, so it opens nothing.
     let pushed_again = github(vec![pull(7, "c3", PullRequestBadge::Open, None)], false);
-    assert_eq!(runtime.note_mission_pulls(node, &pushed_again).len(), 1);
-    assert_eq!(status(&runtime, "mission-1"), MissionStatus::Running);
+    assert!(runtime.note_mission_pulls(node, &pushed_again).is_empty());
+    assert_eq!(status(&runtime, "mission-1"), MissionStatus::Done);
 
-    // So does a run ending again on that commit with another result.
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "close", "end": "done"}),
-    )
-    .unwrap();
+    // A run ending again on that commit with a failure opens it.
     assert_eq!(
         runtime.note_mission_pulls(node, &checked(7, "c3", PullRequestChecks::Failed, &[])),
         vec!["mission:mission-1:ci:fix:7:c3:failed:sender"]
@@ -1797,14 +1793,14 @@ fn a_missions_pull_request_tells_its_conductor_each_ci_result_once_per_commit() 
         read(failed).is_empty(),
         "a rerun failing again on the same commit"
     );
-    assert_eq!(
-        read(checked(7, "b2", PullRequestChecks::Passing, &[])),
-        vec!["mission:mission-1:ci:fix:7:b2:passed:sender"]
+    assert!(
+        read(checked(7, "b2", PullRequestChecks::Passing, &[])).is_empty(),
+        "a pass is no letter: the node's readiness is"
     );
     // A commit whose CI ended between two reads is still told.
     assert_eq!(
-        read(checked(7, "c3", PullRequestChecks::Passing, &[])),
-        vec!["mission:mission-1:ci:fix:7:c3:passed:sender"]
+        read(checked(7, "c3", PullRequestChecks::Failed, &[])),
+        vec!["mission:mission-1:ci:fix:7:c3:failed:sender"]
     );
     // A review asking for changes still tells, with no CI result of its own.
     let mut asked = pull(
@@ -1867,6 +1863,7 @@ fn a_ci_letter_names_the_commit_the_result_and_the_failed_checks() {
     }];
     runtime.note_mission_pulls(node, &github(vec![cancelled], false));
     read(&mut runtime, &mut told);
+    // A pass is no letter of its own.
     runtime.note_mission_pulls(node, &checked(7, "fedcba", PullRequestChecks::Passing, &[]));
     read(&mut runtime, &mut told);
 
@@ -1878,7 +1875,6 @@ fn a_ci_letter_names_the_commit_the_result_and_the_failed_checks() {
                 "PR #7: CI failed on commit 1234567: job 0, job 1, job 2, job 3, job 4, job 5, job 6, job 7 and 2 more {at}"
             ),
             format!("PR #7: CI was cancelled on commit abcdef1 and no run replaced it {at}"),
-            format!("PR #7: CI passed on commit fedcba {at}"),
         ]
     );
 }
@@ -2081,15 +2077,13 @@ fn a_result_told_on_a_commit_is_never_told_again() {
     let first = pushed(&runtime);
     assert!(first.is_some(), "the first head read starts the push clock");
     assert_eq!(runtime.note_mission_pulls(node, &failed).len(), 1);
-    assert_eq!(runtime.note_mission_pulls(node, &passed).len(), 1);
-    // The pass resolved the failure's cell; the Conductor reads the pass
-    // once, and the news goes with its reading.
-    let cells = runtime.take_conductor_cells("mission-1");
-    assert_eq!(cells.len(), 1, "{cells:?}");
     assert!(
-        cells[0].news && cells[0].line.contains("CI passed"),
-        "{cells:?}"
+        runtime.note_mission_pulls(node, &passed).is_empty(),
+        "a pass is no letter"
     );
+    // The pass resolved the failure's cell and is no news of its own.
+    let cells = runtime.take_conductor_cells("mission-1");
+    assert!(cells.is_empty(), "{cells:?}");
     let stored: crate::missions::MissionBook =
         serde_json::from_value(serde_json::to_value(&runtime.missions.book).unwrap()).unwrap();
     runtime.missions.book = stored;
@@ -2239,10 +2233,10 @@ fn a_done_mission_does_not_open_beside_its_conductors_open_one() {
     )
     .unwrap();
 
-    let pushed = github(vec![pull(7, "b2", PullRequestBadge::Open, None)], false);
+    let pushed = checked(7, "b2", PullRequestChecks::Failed, &[]);
     assert_eq!(
         runtime.note_mission_pulls(node, &pushed),
-        vec!["mission:mission-1:ci:fix:7:b2:passed:sender"],
+        vec!["mission:mission-1:ci:fix:7:b2:failed:sender"],
         "the Conductor is still told"
     );
     let status = |runtime: &Runtime, id: &str| runtime.missions.book.get(id).unwrap().status;
@@ -7507,6 +7501,7 @@ fn see(node: &mut crate::missions::MissionNode, merged: bool, closed: bool) {
         closed,
         changes_requested: false,
         ci_told: Vec::new(),
+        ready_told: false,
     });
 }
 
@@ -18266,6 +18261,7 @@ fn an_operator_merge_report_names_all_open_held_pull_requests() {
                 closed: number == 37 && closed,
                 changes_requested: false,
                 ci_told: vec![],
+                ready_told: false,
             });
         }
         let projected =
@@ -18770,7 +18766,8 @@ fn hide_letters(runtime: &Runtime) -> usize {
 /// A pull request's news is the Conductor's one cell about the node, never
 /// a letter, and a new fact about the node updates that cell (B8, B9, B10):
 /// a failure stands, a failure on the next commit replaces it, and a pass
-/// resolves it into news the Conductor reads once (B11).
+/// resolves it with no news of its own (B11): the node's readiness is the
+/// news.
 #[test]
 fn a_nodes_ci_is_one_cell_that_a_new_fact_updates_and_a_pass_resolves() {
     let fixture = conducting();
@@ -18812,15 +18809,8 @@ fn a_nodes_ci_is_one_cell_that_a_new_fact_updates_and_a_pass_resolves() {
 
     runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]));
     let passed = runtime.take_conductor_cells("mission-1");
-    assert_eq!(passed.len(), 1, "{passed:?}");
-    assert!(
-        passed[0].news && passed[0].line.contains("CI passed"),
-        "{passed:?}"
-    );
-    assert!(
-        wakes(&runtime).is_empty(),
-        "the failure went with the pass, the news with its reading"
-    );
+    assert!(passed.is_empty(), "a pass is no news: {passed:?}");
+    assert!(wakes(&runtime).is_empty(), "the failure went with the pass");
     assert!(runtime.take_conductor_cells("mission-1").is_empty());
     assert_eq!(hide_letters(&runtime), 0, "Hide wrote no letter");
 }
@@ -20975,4 +20965,269 @@ fn a_missions_change_requests_carry_their_hosts_reference() {
             "{stored}"
         );
     }
+}
+
+/// The Conductor's cells, taken as read, that tell a node is ready for its
+/// merge (`crate::missions::RoundWake::Ready`).
+fn ready_lines(runtime: &mut Runtime) -> Vec<String> {
+    runtime
+        .take_conductor_cells("mission-1")
+        .into_iter()
+        .map(|cell| cell.line)
+        .filter(|line| line.contains(" is ready on commit "))
+        .collect()
+}
+
+/// A node whose every line is met while GitHub reads its pull request
+/// mergeable with no review decision, as this repository's pull requests
+/// have, tells its Conductor once per head to merge it: the same head read
+/// again, after a restart too, tells nothing, and a new head whose lines
+/// pass again is told again.
+#[test]
+fn a_ready_node_with_no_review_decision_tells_its_conductor_to_merge_it_once_per_head() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    merge_owner_mission(&mut runtime, "merge", None);
+    let node = crate::node::TEST_NODE;
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    let ready = ready_lines(&mut runtime);
+    assert_eq!(ready.len(), 1, "{ready:?}");
+    assert!(
+        ready[0].starts_with(
+            "PR #7 is ready on commit a1b2c3d: every line is met and its checks passed (mission mission-1"
+        ) && ready[0].ends_with("act on it: merge it."),
+        "{ready:?}"
+    );
+    let wake = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .wakes
+        .clone();
+    assert!(
+        wake.iter()
+            .all(|wake| wake.round != Some(crate::missions::RoundWake::Ready)),
+        "the news went with its reading: {wake:?}"
+    );
+
+    let stored: crate::missions::MissionBook =
+        serde_json::from_value(serde_json::to_value(&runtime.missions.book).unwrap()).unwrap();
+    runtime.missions.book = stored;
+    let read = github(vec![pull(7, HEAD, PullRequestBadge::Open, None)], false);
+    runtime.note_mission_pulls(node, &read);
+    runtime.drive_mission_health(now + 1);
+    assert!(ready_lines(&mut runtime).is_empty(), "told once per head");
+
+    checkout_at(&mut runtime, HEAD_2);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD_2})),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of("fix", "review", json!({"commit": HEAD_2})),
+    )
+    .unwrap();
+    let read = github(vec![pull(7, HEAD_2, PullRequestBadge::Open, None)], false);
+    runtime.github = read.clone();
+    runtime.note_mission_pulls(node, &read);
+    runtime.drive_mission_health(now + 2);
+    let again = ready_lines(&mut runtime);
+    assert!(
+        again.len() == 1 && again[0].starts_with("PR #7 is ready on commit f0e1d2c"),
+        "{again:?}"
+    );
+}
+
+/// A CI that passes after a failure is recorded for its effects, no news
+/// of its own: the failure's standing cell goes, the pass counts as told on
+/// its head, and the Conductor is rung for nothing (no letter, no cell).
+#[test]
+fn a_ci_pass_after_a_failure_clears_the_failed_cell_and_rings_nothing() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    let node = crate::node::TEST_NODE;
+    runtime.note_mission_pulls(node, &checked(7, "a1", PullRequestChecks::Pending, &[]));
+    let failed = checked(7, "a1", PullRequestChecks::Failed, &["verify"]);
+    assert_eq!(runtime.note_mission_pulls(node, &failed).len(), 1);
+    let standing = runtime.take_conductor_cells("mission-1");
+    assert!(
+        standing.len() == 1 && !standing[0].news,
+        "a failed CI stands: {standing:?}"
+    );
+
+    let passed = checked(7, "a1", PullRequestChecks::Passing, &[]);
+    assert!(
+        runtime.note_mission_pulls(node, &passed).is_empty(),
+        "a pass writes no letter"
+    );
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(
+        mission.wakes.is_empty(),
+        "the failure went with the pass: {:?}",
+        mission.wakes
+    );
+    let fix = mission.node("fix").unwrap();
+    assert_eq!(
+        fix.seen(7).unwrap().ci_told,
+        [
+            crate::missions::CiResult::Failed,
+            crate::missions::CiResult::Passed
+        ],
+        "the pass counts as told"
+    );
+    assert!(runtime.take_conductor_cells("mission-1").is_empty());
+    assert!(runtime.note_mission_pulls(node, &failed).is_empty());
+    assert!(runtime.note_mission_pulls(node, &passed).is_empty());
+    assert_eq!(hide_letters(&runtime), 0, "Hide wrote no letter");
+}
+
+/// A node with checkers whose review passes after its CI is told ready on
+/// the review's record, and in a mission that goes up to ready pull
+/// requests the merge is the operator's: the Conductor starts what waits
+/// on it.
+#[test]
+fn a_review_passing_after_ci_tells_the_node_ready_for_the_operators_merge() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    let read = github(vec![pull(7, HEAD, PullRequestBadge::Open, None)], false);
+    runtime.github = read.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    assert!(
+        ready_lines(&mut runtime).is_empty(),
+        "CI passed with the review open: not ready"
+    );
+
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of("fix", "review", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now + 1);
+    let ready = ready_lines(&mut runtime);
+    assert!(
+        ready.len() == 1
+            && ready[0].starts_with("PR #7 is ready on commit a1b2c3d")
+            && ready[0].ends_with(
+                "act on it: it is the operator's to merge, so merge nothing: start what waits on it, and report once every node is ready."
+            ),
+        "{ready:?}"
+    );
+    assert_eq!(
+        node_view(&runtime, "fix").status,
+        NodeStatus::Working,
+        "with no approval Hide does not set it done (pr_ready)"
+    );
+}
+
+/// A node whose human gate waits on the operator is not ready, however
+/// green its pull request; it is once the operator passes the gate.
+#[test]
+fn a_node_whose_gate_waits_is_not_ready_until_the_gate_passes() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reached_gate(&mut runtime);
+    assert!(ready_lines(&mut runtime).is_empty(), "the gate is open");
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "gate", "node": "fix", "pass": true, "said": "OK"}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds() + 1);
+    assert_eq!(ready_lines(&mut runtime).len(), 1);
+}
+
+/// A book holding a `ready` round loads, carried as the event `new_head`
+/// every build reads; a build that does not know the kind reads it as
+/// `unknown` and words it as news to read the mission by.
+#[test]
+fn a_book_holding_a_ready_round_loads_and_an_unknown_kind_reads_as_news() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    merge_owner_mission(&mut runtime, "merge", None);
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    let stored = serde_json::to_value(&runtime.missions.book).unwrap();
+    let book: crate::missions::MissionBook = serde_json::from_value(stored).unwrap();
+    let mission = book.get("mission-1").unwrap();
+    let wake = mission
+        .wakes
+        .iter()
+        .find(|wake| wake.round == Some(crate::missions::RoundWake::Ready))
+        .expect("the ready wake is in the book")
+        .clone();
+    let value = serde_json::to_value(&wake).unwrap();
+    assert_eq!(
+        (&value["event"], &value["round"]),
+        (&json!("new_head"), &json!("ready"))
+    );
+    let mut later = value;
+    later["round"] = json!("a_kind_this_build_does_not_know");
+    let later: crate::missions::PendingWake = serde_json::from_value(later).unwrap();
+    assert_eq!(later.round, Some(crate::missions::RoundWake::Unknown));
+    let body = crate::runtime::missions::wake_body(mission, &later);
+    assert!(body.starts_with("Node fix moved"), "{body}");
+}
+
+/// A pull request that conflicts with its base is not ready, however green
+/// its checks on the head it still shows: the conflict is its worker's.
+/// Once the merge that resolves it has a new head whose lines and CI pass,
+/// the node is ready on that head.
+#[test]
+fn a_conflicting_pull_request_is_not_ready_until_its_merge_commit_passes() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    merge_owner_mission(&mut runtime, "merge", None);
+    let node = crate::node::TEST_NODE;
+    let mut dirty = pull(7, HEAD, PullRequestBadge::Open, None);
+    dirty.work.merge_state = crate::model::MergeState::Dirty;
+    let read = github(vec![dirty], false);
+    runtime.github = read.clone();
+    runtime.note_mission_pulls(node, &read);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    assert!(
+        ready_lines(&mut runtime).is_empty(),
+        "lines met and checks passing, but it conflicts"
+    );
+
+    checkout_at(&mut runtime, HEAD_2);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD_2})),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of("fix", "review", json!({"commit": HEAD_2})),
+    )
+    .unwrap();
+    let read = github(vec![pull(7, HEAD_2, PullRequestBadge::Open, None)], false);
+    runtime.github = read.clone();
+    runtime.note_mission_pulls(node, &read);
+    runtime.drive_mission_health(now + 1);
+    let ready = ready_lines(&mut runtime);
+    assert!(
+        ready.len() == 1 && ready[0].starts_with("PR #7 is ready on commit f0e1d2c"),
+        "{ready:?}"
+    );
 }

@@ -139,8 +139,8 @@ fn letter(runtime: &Runtime, event: WakeEvent) -> String {
     crate::runtime::missions::wake_words(mission, wake, runtime.mission_unit(mission))
 }
 
-/// The CI and merge letters of a gitlab.com project's mission name `MR !7`;
-/// the same answers on a GitHub project still read `PR #7`.
+/// The CI failure and merge letters of a gitlab.com project's mission name
+/// `MR !7`; the same answers on a GitHub project still read `PR #7`.
 #[test]
 fn a_gitlab_projects_mission_letters_name_its_merge_request() {
     for (unit, name, other) in [(gitlab(), "MR !7", "PR #7"), (None, "PR #7", "MR !7")] {
@@ -149,17 +149,17 @@ fn a_gitlab_projects_mission_letters_name_its_merge_request() {
         delivering(&mut runtime);
         let node = crate::node::TEST_NODE;
 
-        let open = read_by(unit, vec![pull(7, "a1", PullRequestBadge::Open)]);
+        let mut failing = pull(7, "a1", PullRequestBadge::Open);
+        failing.checks = PullRequestChecks::Failed;
+        let open = read_by(unit, vec![failing]);
         runtime.github = open.clone();
         assert_eq!(
             runtime.note_mission_pulls(node, &open),
-            vec!["mission:mission-1:ci:fix:7:a1:passed:sender"]
+            vec!["mission:mission-1:ci:fix:7:a1:failed:sender"]
         );
         let ci = letter(&runtime, WakeEvent::Ci);
         assert!(
-            ci.starts_with(&format!(
-                "{name}: CI passed on commit a1 (mission mission-1"
-            )),
+            ci.starts_with(&format!("{name}: CI failed on commit a1")),
             "{ci}"
         );
         assert!(!ci.contains(other), "{ci}");

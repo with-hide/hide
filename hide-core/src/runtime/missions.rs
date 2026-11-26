@@ -1072,6 +1072,7 @@ fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
         changes_requested: pull.review == Some(ReviewDecision::ChangesRequested),
         closed: pull.badge == PullRequestBadge::Closed,
         ci_told: Vec::new(),
+        ready_told: false,
     }
 }
 
@@ -1089,12 +1090,13 @@ fn ci_of(pull: &crate::model::PullRequestSnapshot) -> Option<CiResult> {
     }
 }
 
-/// Keeps the CI results `before` told beside those `seen` holds while
-/// `seen` is of the same head.
+/// Keeps what `before` told (its CI results and the node's readiness)
+/// beside what `seen` holds while `seen` is of the same head.
 fn keep_told(seen: &mut PrSeen, before: &PrSeen) {
     if seen.head != before.head {
         return;
     }
+    seen.ready_told |= before.ready_told;
     for result in &before.ci_told {
         if !seen.ci_told.contains(result) {
             seen.ci_told.push(*result);
@@ -1200,7 +1202,7 @@ pub(super) fn wake_words(
     // A wake about a node's review round or the plan rides `new_head`,
     // which a build before it words as news (`RoundWake`).
     if let Some(round) = wake.round {
-        return round_body(mission, wake, node, round, &news);
+        return round_body(mission, wake, node, round, unit, &news);
     }
     let body = match wake.event {
         WakeEvent::Merged => news(format!("{pr} was merged"), PR_ACT),
@@ -1656,6 +1658,7 @@ fn round_body(
     wake: &PendingWake,
     node: Option<&MissionNode>,
     round: RoundWake,
+    unit: &dyn crate::code_host::CodeHost,
     news: &dyn Fn(String, &str) -> String,
 ) -> String {
     let short = |commit: &str| commit.get(..7).unwrap_or(commit).to_owned();
@@ -1768,6 +1771,36 @@ fn round_body(
                     suggest.join(", ")
                 ),
             )
+        }
+        (RoundWake::Ready, Some(node)) => {
+            let name = |number: Option<u32>| {
+                number.map_or_else(
+                    || "The PR".to_owned(),
+                    |number| unit.change_request_name(number),
+                )
+            };
+            let commit = wake.head.as_deref().map_or_else(|| "-".to_owned(), short);
+            let what = format!(
+                "{} is ready on commit {commit}: every line is met and its checks passed",
+                name(wake.pr)
+            );
+            // A stacked pull request merges after the one below it.
+            let below = mission.stacks_on(node).filter(|below| {
+                below
+                    .current_pr()
+                    .and_then(|number| below.seen(number))
+                    .is_none_or(|seen| !seen.merged)
+            });
+            let act = match below {
+                _ if mission.operator_merges(node) => "it is the operator's to merge, so merge nothing: start what waits on it, and report once every node is ready".to_owned(),
+                Some(below) => format!(
+                    "{} of node {} below it merges first, then merge this one",
+                    name(below.current_pr()),
+                    below.key
+                ),
+                None => "merge it".to_owned(),
+            };
+            news(what, &act)
         }
         _ => news(
             format!("Node {} moved", wake.node),
@@ -1992,20 +2025,29 @@ pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<
         .map(|kept| kept.opened_seq.unwrap_or(kept.seq))
         .min()
         .or(Some(wake.seq));
+    if resolves {
+        resolve_ci(mission, &wake.node);
+    }
     mission.wakes.retain(|kept| {
         if !kept.same_cell(&wake) {
             return true;
         }
-        if kept.standing() {
-            let resolved =
-                resolves && matches!(kept.event, WakeEvent::Ci | WakeEvent::ChangesRequested);
-            !(standing || resolved)
-        } else {
-            standing
-        }
+        if kept.standing() { !standing } else { standing }
     });
     mission.wakes.push(wake);
     Some(intent)
+}
+
+/// Takes the Conductor's standing CI and review cells of node `node` out
+/// of `mission`'s record, as a merge or a CI that passed resolves them; a
+/// pass does so with no news of its own (`Runtime::note_mission_pulls`).
+fn resolve_ci(mission: &mut Mission, node: &str) {
+    mission.wakes.retain(|kept| {
+        kept.node != node
+            || kept.to.is_some()
+            || !kept.standing()
+            || !matches!(kept.event, WakeEvent::Ci | WakeEvent::ChangesRequested)
+    });
 }
 
 /// Takes every standing cell of node `node` that only its work answers (a
@@ -4995,10 +5037,14 @@ impl Runtime {
             }
             // A Conductor conducts one open mission at a time, so a change
             // to a done one while it conducts another wakes it with the
-            // news and leaves the mission done.
-            let reopen = done
-                && !events.is_empty()
-                && self
+            // news and leaves the mission done. A CI pass is no news and
+            // opens nothing.
+            let reopen =
+                done && events.iter().any(|wake| {
+                    wake.ci
+                        .as_ref()
+                        .is_none_or(|ci| ci.result != CiResult::Passed)
+                }) && self
                     .missions
                     .book
                     .conducted_open(&mission.conductor.actor)
@@ -5038,6 +5084,15 @@ impl Runtime {
                     .ci
                     .as_ref()
                     .map(|ci| (wake.node.clone(), wake.pr, ci.result));
+                // A CI that passed is no news of its own: it resolves the
+                // node's standing CI and review cells and counts as told,
+                // and the node's readiness is what the Conductor hears
+                // (`RoundWake::Ready`).
+                if let Some((node, Some(number), CiResult::Passed)) = &told {
+                    resolve_ci(mission, node);
+                    tell_ci(mission, node, *number, CiResult::Passed);
+                    continue;
+                }
                 // A letter the full queue refused is not told, so the next
                 // answer with room records it (engineering #15).
                 let Some(intent) = record(mission, wake) else {

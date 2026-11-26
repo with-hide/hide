@@ -22,8 +22,8 @@ use crate::mission_health::{
 };
 use crate::missions::{
     Attention, AttentionReason, FixReason, HideAction, HideMark, Mission, MissionEnd, MissionNode,
-    MissionStatus, NodePatch, NodeStatus, NodeWarning, OperatorAction, PendingWake, WOKEN_LIMIT,
-    WakeEvent, Woken,
+    MissionStatus, NodePatch, NodeStatus, NodeWarning, OperatorAction, PendingWake, RoundWake,
+    WOKEN_LIMIT, WakeEvent, Woken,
 };
 
 /// Raises one mission holds at once; a new one past it is refused and
@@ -1341,6 +1341,9 @@ impl Runtime {
                 Act::Unconflicted { node, pr } => {
                     changed |= self.conflict_gone(id, node, pr);
                 }
+                Act::Ready { node, heads } => {
+                    changed |= self.hide_ready(id, node, &heads);
+                }
                 Act::Close => close = true,
             }
         }
@@ -1584,6 +1587,46 @@ impl Runtime {
         crate::diagnostic!(json!({
             "component": "missions", "kind": "mission.worker_woken",
             "mission": id, "node": key, "pr": pr, "why": why.as_str(),
+        }));
+        true
+    }
+
+    /// Tells node `at`'s Conductor the node is ready for its merge
+    /// (`RoundWake::Ready`), keyed by the node and the head of its newest
+    /// open pull request, and notes it told on each of `heads`. A wake the
+    /// full queue refused is not told, so a later evaluation with room
+    /// records it (engineering #15). Whether it was recorded.
+    fn hide_ready(&mut self, id: &str, at: usize, heads: &[(u32, String)]) -> bool {
+        let Some(mission) = self.missions.book.get_mut(id) else {
+            return false;
+        };
+        let Some((pr, head)) = heads.last().cloned() else {
+            return false;
+        };
+        let node = &mission.nodes[at];
+        let key = node.key.clone();
+        let act = act_key(node, &format!("ready:{pr}:{}", short(Some(head.as_str()))));
+        let mut wake = super::missions::wake_about(
+            key.clone(),
+            Some(pr),
+            WakeEvent::NewHead,
+            Some(head),
+            Some(act),
+        );
+        wake.round = Some(RoundWake::Ready);
+        if super::missions::record(mission, wake).is_none() {
+            return false;
+        }
+        for seen in &mut mission.nodes[at].pr_seen {
+            if heads.iter().any(|(number, head)| {
+                seen.number == *number && seen.head.as_deref() == Some(head.as_str())
+            }) {
+                seen.ready_told = true;
+            }
+        }
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.node_ready",
+            "mission": id, "node": key, "pr": pr,
         }));
         true
     }

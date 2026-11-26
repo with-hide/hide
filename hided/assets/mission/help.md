@@ -322,13 +322,17 @@ Every worker's brief, code or general, says in its first line what the node is, 
   A label or address of another host, or an address of another repository, than the mission's project is refused (`change_request_other_host`, `change_request_other_repository`), and while the project's repository is not read yet only a bare number is taken (`change_request_project_unknown`).
   When a `direct` change reaches the destination, record its commit with `--commit <sha>`; when a general node ends with a judgment (a `verify` node always, any other that checked something), record `--verdict pass|fail` and `--checks <passed>/<total>`.
   Hide refuses a commit on any other node and a verdict on a code or waiting node (`mission_field_kind_invalid`), and the map shows them as the node's result.
-- Hide wakes you with a letter when one of the mission's pull requests merges, gets a review asking for changes, or ends its CI on its newest commit, when a waiting node is met, and when a finish line another node waits on passes or opens again (above).
-  The CI letter comes once nothing on the commit still runs, and names the commit and whether the CI passed, was cancelled with no run replacing it, or failed, with the jobs that failed.
+- Hide wakes you with a letter when one of the mission's pull requests merges, gets a review asking for changes, or ends its CI on its newest commit without passing, when a node is ready, when a waiting node is met, and when a finish line another node waits on passes or opens again (above).
+  The CI letter comes once nothing on the commit still runs, and names the commit and whether the CI was cancelled with no run replacing it or failed, with the jobs that failed.
   Each result is told once per commit for good, the one a pull request already has when Hide first reads it included, so a rerun that fails again sends none, even after a pass between.
-  A new commit alone sends no letter: wait for its CI letter rather than watching the checks in a shell.
+  A CI that passes sends no letter of its own: it takes the failure's letter away, and the node's readiness is what you hear.
+  A node is ready when every one of its lines is met (its `ci` line on the newest commit and its checkers' lines included) while GitHub reads each of its open pull requests mergeable (checks passed, the review approved or not asked for, and no conflict with its base); the letter comes once per newest commit, so a new commit that passes again brings it again.
+  With scope `merge` it says to merge the node, naming the pull request below it first when it is stacked; with scope `pr`, or on a node with `operator_merge`, it says the merge is the operator's: merge nothing, start what waits on it, and report once every node is ready.
+  A node whose gate waits on the operator is not ready until they pass it.
+  A new commit alone sends no letter: wait for its CI letter or the node's ready letter rather than watching the checks in a shell.
   When a lower pull request of a stack changes, bring the change into the one above it with a merge, never a rebase.
 - While a node waits on CI, start the next work that does not depend on it, as the cap allows.
-  A node's reviewer and verifier are such work: start and bind them the moment its pull request opens and read the head they record with `--commit`, so the review and CI run together; never hold a checker until the CI letter comes.
+  A node's reviewer and verifier are such work: start and bind them the moment its pull request opens and read the head they record with `--commit`, so the review and CI run together; never hold a checker until the CI passes.
   The worker's check starts each round, not you and not a push: when the worker records its `check` line (on a node without a check command, every line of its own passed), Hide asks each live checker bound to the node to check that commit, the same checker every round until the node ends; a checker's result goes to the worker straight, so you are not told each result and read them in `hide mission show <node>`.
   When the check comes while a checker line has no live checker (none bound, or the one bound ended), Hide asks you instead, naming the node and, when only one of its lines lacks one, that line: bind a fresh checker, which takes the ended one's place.
   The one exception is a node whose gate is a screen the operator has not said is right yet: its checkers start after their OK (below).
@@ -505,7 +509,7 @@ The operator's words are the controls; there are no buttons.
 - With a `direct` delivery and scope `merge`, merge the branches that passed into the destination in order, running the check command on the destination before each merge.
   With scope `pr`, merge nothing: report the branches with the merge order from the bottom, which the operator's turn shows, and merge them from the bottom up only when the operator tells you to.
 - With scope `pr`, merge nothing.
-  A ready pull request of a scope `pr` mission calls no one: the operator chose to merge them all after your report.
+  A ready pull request of a scope `pr` mission raises nothing to the operator: Hide tells you its node is ready (above), and the operator chose to merge them all after your report.
 
 ## 7. The report
 
@@ -529,7 +533,7 @@ End the report with three lines that measure the mission, from `hide mission sho
 A `pr`-scope mission that leaves a stack waiting for the operator's merge, or a mission whose `operator_merge` node the operator has not merged yet, closes `--as merge_wait` after the report and stays open quietly; when the operator merges the lower pull request, move the one above and check it; once every pull request of the stack is merged, and every `direct` change's `--branch` is in the destination, Hide closes the mission as done itself, with or without you there.
 Hide reads a branch in the destination from git, as this repository or its last fetch has it, with no GitHub needed. A mission from before destinations records none and is read against main, which in a repository with no remote is the branch its main worktree has out. A `direct` change that names no branch keeps the mission waiting and shows unread, so name each one's branch before the close.
 A waiting mission closes itself only as your close would be allowed: a node a defect sent back to work keeps it waiting, and so does a branch you changed, one with new commits past the destination, or one Hide could not read this time (shown unread), until Hide reads it in the destination again; a reopened mission reads its branches again. A `direct` change's branch is read from the moment its node is done, so the map shows it in the destination while the mission still runs, and a close `--as merge_wait` with every branch already in the destination is done at once.
-A further instruction to a done mission opens it again (`hide mission reopen`), and so does a review asking for changes or a CI letter about one of its open pull requests; its merge does not.
+A further instruction to a done mission opens it again (`hide mission reopen`), and so does a review asking for changes or a CI failure or cancellation on one of its open pull requests; its merge and a CI pass do not.
 You conduct one open mission at a time: while another is open, a done one stays done, `reopen` is refused `mission_already_conducting`, and a letter about it is news to take up after the open one.
 
 ## 8. Taking over

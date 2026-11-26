@@ -18,7 +18,8 @@ use crate::missions::{
     NodeKind, NodeStatus, StopCause, WarningKind, cause_key,
 };
 use crate::model::{
-    CiEnd, GithubProjectSnapshot, MergeState, PullRequestBadge, PullRequestSnapshot, ReviewDecision,
+    CiEnd, GithubProjectSnapshot, MergeState, PrState, PullRequestBadge, PullRequestSnapshot,
+    ReviewDecision,
 };
 
 /// A node's worker as its registration stands (`coordination::life`).
@@ -129,6 +130,12 @@ pub(crate) enum Act {
     },
     /// The conflict the node's worker was told of is gone.
     Unconflicted { node: usize, pr: u32 },
+    /// The node is ready for its merge (`ready_heads`): its Conductor is
+    /// told, once per head of each open pull request in `heads`.
+    Ready {
+        node: usize,
+        heads: Vec<(u32, String)>,
+    },
     /// Every node finished: the mission closes (B18).
     Close,
 }
@@ -321,6 +328,15 @@ fn node_acts(
                 pr: pull.number,
             });
         }
+    }
+    // Every line met while GitHub reads each open pull request mergeable:
+    // the Conductor is told the node is ready for its merge, once per head,
+    // in place of each CI pass.
+    if fact.unmet.is_empty()
+        && !resumed(node)
+        && let Some(heads) = ready_heads(node, &live)
+    {
+        acts.push(Act::Ready { node: at, heads });
     }
     let merged = live
         .iter()
@@ -649,6 +665,36 @@ fn needs(pull: &PullRequestSnapshot) -> Vec<FixReason> {
         out.push(FixReason::ChangesRequested);
     }
     out
+}
+
+/// The open pull requests of a node's `live` ones with the heads it is
+/// ready for its merge on: each reads `PrState::Mergeable` (checks passed,
+/// the review approved or not asked for) with nothing its worker owes (no
+/// conflict, `needs`), and the rest merged. None with
+/// none open, once its Conductor was told on these heads
+/// (`PrSeen::ready_told`), or while Hide's record of one is of another head
+/// than GitHub's answer, which the next read brings level.
+fn ready_heads(node: &MissionNode, live: &[&PullRequestSnapshot]) -> Option<Vec<(u32, String)>> {
+    let mut heads = Vec::new();
+    let mut told = true;
+    for pull in live {
+        if pull.badge == PullRequestBadge::Merged {
+            continue;
+        }
+        // A conflict keeps it from its merge whatever its checks say; it
+        // is the worker's to fix (`needs`).
+        if pull.state() != PrState::Mergeable || !needs(pull).is_empty() {
+            return None;
+        }
+        let head = pull.head_oid.clone()?;
+        let seen = node.seen(pull.number)?;
+        if seen.head.as_deref() != Some(head.as_str()) {
+            return None;
+        }
+        told &= seen.ready_told;
+        heads.push((pull.number, head));
+    }
+    (!heads.is_empty() && !told).then_some(heads)
 }
 
 /// A pull request a node the operator merges is finished with (D-11;
