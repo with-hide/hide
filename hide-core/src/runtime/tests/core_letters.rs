@@ -833,6 +833,16 @@ fn an_agent_reads_another_cores_agents_and_the_opened_machine_reads_none() {
     let mut there: Vec<&str> = pair.mini.ids.values().map(String::as_str).collect();
     there.sort();
     assert_eq!(ids, there, "the Mac mini's own agents");
+    // The Mac mini names its own panes bare, as to its own agents; the agent
+    // that asked here is handed each as another core's pane, which `hide
+    // pane read` takes as written.
+    let worker_row = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == pair.mini.ids["worker"].as_str())
+        .unwrap();
+    assert_eq!(worker_row["pane"], "core:mac-mini:pane:worker");
     let shown = pair
         .mac
         .agent(
@@ -845,6 +855,7 @@ fn an_agent_reads_another_cores_agents_and_the_opened_machine_reads_none() {
         )
         .unwrap();
     assert_eq!(shown["id"], pair.mini.ids["other"]);
+    assert_eq!(shown["pane"], "core:mac-mini:pane:other");
 
     assert_eq!(
         pair.mini.agent("worker", list(MAC)).unwrap_err(),

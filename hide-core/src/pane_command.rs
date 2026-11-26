@@ -229,7 +229,7 @@ pub fn next_action(code: &str) -> Option<&'static str> {
         "purpose_invalid" => "Write the purpose as one line of text",
         "purpose_too_long" => "Write the purpose in 40 characters or fewer",
         "pane_unavailable" => {
-            "Run hide ps for the panes there are and their ids; a bare id such as w1:p2 names a pane of your own machine, a pane of another machine is remote:<device id>:pane:<id>, and another machine's work running on this one is guest:<device id>:pane:<id> (hide device list shows the device ids and the guest panes)"
+            "Run hide ps for the panes there are and their ids; a bare id such as w1:p2 names a pane of your own machine, a pane this machine runs on another is remote:<device id>:pane:<id>, one another machine's own Hide keeps is core:<device id>:pane:<id>, and another machine's work running on this one is guest:<device id>:pane:<id> (hide device list shows the device ids and the guest panes)"
         }
         crate::access::MACHINE_NOT_PERMITTED => crate::access::MACHINE_NOT_PERMITTED_NEXT,
         "guest_pane_read" => {
@@ -239,7 +239,7 @@ pub fn next_action(code: &str) -> Option<&'static str> {
             "This pane is another machine's work running here: it takes text and --enter from this machine; a named key is encoded by the pane's own machine, so press it there or in the Hide window"
         }
         "agent_unavailable" => {
-            "Run hide ps for the agents there are, their names and panes; an agent of another machine is named by its registration id from hide agent list, a pane that is no registered agent by remote:<device id>:pane:<id>"
+            "Run hide ps for the agents there are, their names and panes; an agent of another machine is named by its registration id from hide agent list, a pane that is no registered agent by the address hide ps prints, remote:<device id>:pane:<id> or core:<device id>:pane:<id>"
         }
         "target_ambiguous" => {
             "Name the agent by its registration id or its pane, both shown by hide ps"
@@ -268,9 +268,10 @@ pub fn next_action(code: &str) -> Option<&'static str> {
 /// `hide pane read` and `hide agent read`: text in the requested form.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PaneRead {
-    /// The pane read: a pane of the caller's own machine bare, as `hide ps`
-    /// lists it there (`w1:p2`), another machine's as
-    /// `remote:<device>:pane:<id>`.
+    /// The pane read, as the caller uses it: a pane of the caller's own
+    /// machine bare, as `hide ps` lists it there (`w1:p2`), one this core
+    /// runs on another machine as `remote:<device>:pane:<id>`, and one
+    /// another machine's own core keeps as `core:<device>:pane:<id>`.
     pub pane: String,
     pub text: String,
     /// Whether the engine cut the answer short.
@@ -929,13 +930,13 @@ mod tests {
     #[test]
     fn a_pane_refusal_names_the_address_of_a_pane_on_another_machine() {
         // A bare id names a pane of the caller's machine; the refusal is the
-        // only place an agent that pasted one from another machine learns why.
+        // only place an agent that pasted one from another machine learns why,
+        // and a pane another machine's own core keeps is no `remote:` pane.
         for code in ["pane_unavailable", "agent_unavailable"] {
             let next = next_action(code).expect(code);
-            assert!(
-                next.contains("remote:<device id>:pane:<id>"),
-                "{code}: {next}"
-            );
+            for form in ["remote:<device id>:pane:<id>", "core:<device id>:pane:<id>"] {
+                assert!(next.contains(form), "{code}: {form}: {next}");
+            }
         }
     }
 

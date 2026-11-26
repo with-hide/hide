@@ -241,6 +241,9 @@ pub(crate) struct Forward {
     pub(crate) link: std::sync::Arc<dyn CoreLink>,
     /// The other machine's connection id.
     pub(crate) key: String,
+    /// The other machine's device id, which names its core's panes to this
+    /// core's callers (`answer_from_core`).
+    pub(crate) device: String,
     pub(crate) from: Party,
     pub(crate) asked: Asked,
 }
@@ -252,7 +255,40 @@ impl Forward {
         self
     }
 
+    /// Asks it of the other core: its answer, each pane in it named as
+    /// this core's caller uses it (`answer_from_core`), or the refusal's
+    /// code.
     pub(crate) fn run(&self, within: Duration) -> Result<Value, String> {
-        self.link.call(&self.key, &self.from, &self.asked, within)
+        self.link
+            .call(&self.key, &self.from, &self.asked, within)
+            .map(|answer| answer_from_core(answer, &self.device))
     }
+}
+
+/// An answer the core on `device` gave, as this core's caller uses it. That
+/// core names its panes relative to itself, as it names them to its own
+/// callers, so each `pane` becomes `core:<device>:pane:<id>`
+/// (`address::core_pane_id`), which this core passes back to it as it
+/// stands; a core of an older build answers its panes bare too, so a mixed
+/// pair comes out the same. The answer is an agent (`AgentView`, flattened
+/// into `AgentShow`), a spawn (`SpawnShow`), a list (`AgentList`) or a
+/// pane's text (`PaneRead`).
+fn answer_from_core(mut answer: Value, device: &str) -> Value {
+    let scope = |object: &mut Value| {
+        if let Some(pane) = object.get_mut("pane")
+            && let Some(id) = pane.as_str()
+        {
+            *pane = Value::String(crate::address::core_pane_id(device, id));
+        }
+    };
+    scope(&mut answer);
+    if let Some(spawn) = answer.get_mut("spawn") {
+        scope(spawn);
+    }
+    if let Some(items) = answer.get_mut("items").and_then(Value::as_array_mut) {
+        for item in items {
+            scope(item);
+        }
+    }
+    answer
 }

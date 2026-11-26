@@ -703,6 +703,7 @@ impl Runtime {
         Ok(Forward {
             link,
             key: machine.key.clone(),
+            device: machine.device_id.clone(),
             from,
             asked,
         })

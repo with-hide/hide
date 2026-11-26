@@ -1693,8 +1693,14 @@ pub(crate) fn life(record: &AgentRecord, sleeping: &RegistrationFacts) -> Runtim
     }
 }
 
-pub(crate) fn view(record: &AgentRecord, ledger: &Ledger, sleeping: &RegistrationFacts) -> Value {
-    json!(agent_view(record, ledger, sleeping))
+/// `record` as an answer to a caller on machine `device` shows it.
+pub(crate) fn view(
+    record: &AgentRecord,
+    ledger: &Ledger,
+    sleeping: &RegistrationFacts,
+    device: &str,
+) -> Value {
+    json!(agent_view(record, ledger, sleeping, device))
 }
 
 /// The name of the bot whose connection started `record`, read
@@ -1710,10 +1716,13 @@ pub(crate) fn origin_tool(record: &AgentRecord, ledger: &Ledger) -> Option<Strin
         .map(str::to_owned)
 }
 
+/// `record` as an answer to a caller on machine `device` shows it, its pane
+/// spelled as that caller uses it (`address::pane_for_caller`).
 pub(crate) fn agent_view(
     record: &AgentRecord,
     ledger: &Ledger,
     sleeping: &RegistrationFacts,
+    device: &str,
 ) -> AgentView {
     let runtime = life(record, sleeping);
     AgentView {
@@ -1728,7 +1737,7 @@ pub(crate) fn agent_view(
         host_scope: record.host_scope.clone(),
         session: record.session.clone(),
         instance: record.instance.clone(),
-        pane: record.pane.clone(),
+        pane: crate::address::pane_for_caller(device, &record.machine, &record.pane),
         parent: record.parent.clone(),
         origin: record.origin.clone().or_else(|| record.parent.clone()),
         origin_tool: origin_tool(record, ledger),
@@ -2003,6 +2012,7 @@ pub(crate) fn apply_with(
                     .ok_or("agent_unavailable")?,
                 ledger,
                 &RegistrationFacts::NONE,
+                &caller.device_id,
             ))
         }
         Mutation::Reserve { parent, command } => {
@@ -2854,8 +2864,14 @@ fn insert_record(
         {
             return Err("registration_conflict".into());
         }
-        // The caller is that registration's own running agent.
-        return Ok(view(existing, ledger, &RegistrationFacts::NONE));
+        // The caller is that registration's own running agent, on its
+        // machine.
+        return Ok(view(
+            existing,
+            ledger,
+            &RegistrationFacts::NONE,
+            &existing.machine,
+        ));
     }
     if ledger.agents.iter().any(|existing| {
         !existing.ended
@@ -2877,7 +2893,12 @@ fn insert_record(
     let mut record = record.clone();
     record.id = allocate(ledger, "agent")?;
     ledger.agents.push(record.clone());
-    Ok(view(&record, ledger, &RegistrationFacts::NONE))
+    Ok(view(
+        &record,
+        ledger,
+        &RegistrationFacts::NONE,
+        &record.machine,
+    ))
 }
 
 /// Registers the agent of `record`, a party of a letter about to be kept,
@@ -3875,7 +3896,7 @@ mod tests {
         assert_eq!(ledger, before);
         let id = register(&mut ledger, fork(), &source.actor);
         let fork = ledger.agents.iter().find(|record| record.id == id).unwrap();
-        let shown = view(fork, &ledger, &RegistrationFacts::NONE);
+        let shown = view(fork, &ledger, &RegistrationFacts::NONE, "local");
         assert!(shown["parent"].is_null());
         assert_eq!(shown["origin"], source_id);
         // Without the fork's provenance, the source is not the new pane.
@@ -6162,11 +6183,20 @@ mod tests {
                     .unwrap(),
                 &ledger,
                 &RegistrationFacts::NONE,
+                "local",
             );
             assert!(child_view["parent"].is_null());
             assert_eq!(child_view["origin"], origin);
             assert!(child_view["watch"].is_null());
-            assert!(view(&ledger.agents[0], &ledger, &RegistrationFacts::NONE)["origin"].is_null());
+            assert!(
+                view(
+                    &ledger.agents[0],
+                    &ledger,
+                    &RegistrationFacts::NONE,
+                    "local"
+                )["origin"]
+                    .is_null()
+            );
             let before = ledger.clone();
             assert_eq!(
                 apply(
@@ -6329,7 +6359,12 @@ mod tests {
         assert_eq!(restored, ledger);
         assert_eq!(restored.spawns[0].mode, SpawnMode::Delegation);
         assert_eq!(
-            view(&restored.agents[1], &restored, &RegistrationFacts::NONE)["origin"],
+            view(
+                &restored.agents[1],
+                &restored,
+                &RegistrationFacts::NONE,
+                "local"
+            )["origin"],
             parent
         );
         let before = restored.clone();

@@ -230,7 +230,7 @@ impl Shown {
                     state.waiting = Some(crate::delivery::answer::Waiting::human(turn));
                 }
                 json!(crate::delivery::answer::AgentShow {
-                    agent: super::agent_view(&record, &self.ledger, &self.sleeping),
+                    agent: super::agent_view(&record, &self.ledger, &self.sleeping, device),
                     state,
                 })
             }
@@ -303,8 +303,8 @@ pub(crate) fn spawn_ref(
             .pane
             .as_ref()
             .map(|pane| match spawn.machine.as_deref() {
-                Some(machine) if machine != device => crate::address::scoped_pane_id(machine, pane),
-                _ => pane.clone(),
+                Some(machine) => crate::address::pane_for_caller(device, machine, pane),
+                None => pane.clone(),
             }),
         child: spawn.child.clone(),
     }
@@ -798,7 +798,9 @@ pub(crate) fn run(
                     .iter()
                     .filter(|record| !record.actor.code_owned())
                     .filter(|record| !live || !record.ended)
-                    .map(|record| super::agent_view(record, &ledger, &sleeping))
+                    .map(|record| {
+                        super::agent_view(record, &ledger, &sleeping, &actor.device_id)
+                    })
                     .collect(),
             }))
         }
@@ -1558,6 +1560,7 @@ fn spawn(
                 .ok_or("child_unavailable")?,
             &ledger,
             &sleeping,
+            &actor.device_id,
         ));
     }
     // Everything the child needs happens on its own device; only the parent's
@@ -2318,6 +2321,7 @@ fn spawn(
                 .ok_or("child_unavailable")?,
             &ledger,
             &sleeping,
+            &actor.device_id,
         ))
     })();
     // Nothing after this creates anything, so a device that has gone quiet

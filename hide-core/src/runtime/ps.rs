@@ -34,6 +34,8 @@ pub(crate) struct PsRows {
     /// For an own-mode bot, the registrations of its own work, the only
     /// ones it lists (mission-87); `None` lists every one.
     only: Option<HashSet<String>>,
+    /// The caller's machine, which the answer names each pane relative to.
+    device: String,
 }
 
 /// A pane id as the navigator spells it, as its machine and its own id.
@@ -205,6 +207,7 @@ impl Runtime {
             ledger,
             sleeping,
             only,
+            device: device.to_owned(),
         })
     }
 }
@@ -223,6 +226,7 @@ impl PsRows {
             ledger,
             sleeping,
             only,
+            device,
         } = self;
         let mut used = HashSet::new();
         let mut join = |agent: &mut PsAgent| {
@@ -300,6 +304,25 @@ impl PsRows {
                     project: record.project.clone(),
                 }),
         );
+        // Rows are joined by machine and engine id above; the answer names
+        // each pane as the caller uses it, a parent's pane the same way, so
+        // `(machine, pane)` still links a child to its parent.
+        let address = |machine: &str, pane: &mut String| {
+            *pane = crate::address::pane_for_caller(&device, machine, pane);
+        };
+        let address_agent = |agent: &mut PsAgent| {
+            address(&agent.machine, &mut agent.pane);
+            if let (Some(machine), Some(pane)) = (&agent.parent_machine, &mut agent.parent_pane) {
+                address(machine, pane);
+            }
+        };
+        for pane in &mut panes {
+            address(&pane.machine, &mut pane.pane);
+            if let Some(agent) = &mut pane.agent {
+                address_agent(agent);
+            }
+        }
+        agents.iter_mut().for_each(address_agent);
         Ps {
             panes,
             agents,
