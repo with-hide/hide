@@ -54,15 +54,19 @@ impl Escapes {
     /// its head is gone, its words are not lost.
     pub fn finish(&mut self) -> String {
         let mut plain = String::new();
-        if matches!(self.state, State::String | State::StringEscape) {
+        // What it held may open another string that is not closed either;
+        // each pass reads less, since a head is gone each time.
+        while matches!(self.state, State::String | State::StringEscape) {
             self.release(&mut plain);
         }
-        self.state = State::Text;
         plain
     }
 
+    /// Reads one character. The state moves in one place, at the end, but
+    /// for a string that never ends: its release reads what it held again
+    /// and leaves the state where that reading stopped.
     fn step(&mut self, ch: char, plain: &mut String) {
-        self.state = match (self.state, ch) {
+        let next = match (self.state, ch) {
             (State::String, '\x07') => self.drop_held(),
             (State::String, '\x1b') => State::StringEscape,
             (State::StringEscape, '\\') => self.drop_held(),
@@ -77,10 +81,9 @@ impl Escapes {
                 self.hold(ch);
                 if self.held_chars > MAX_STRING_CHARS {
                     self.release(plain);
-                    State::Text
-                } else {
-                    State::String
+                    return;
                 }
+                State::String
             }
             (_, '\x1b') => State::Escape,
             (State::Text, ch) => {
@@ -94,6 +97,7 @@ impl Escapes {
             (State::Csi, '\x40'..='\x7e') => State::Text,
             (State::Csi, _) => State::Csi,
         };
+        self.state = next;
     }
 
     fn hold(&mut self, ch: char) {
@@ -160,6 +164,11 @@ mod tests {
         let mut escapes = Escapes::default();
         let said = escapes.strip("see \x1b]8;;the answer");
         assert_eq!(said + &escapes.finish(), "see 8;;the answer");
+        // Two that never end, one inside the other, give back every word:
+        // the outer one's release opens the inner one, which keeps going.
+        let mut escapes = Escapes::default();
+        let said = escapes.strip(&format!("a\x1b]{}\x1b]{long}z rest", "x".repeat(10)));
+        assert_eq!(said + &escapes.finish(), format!("a{}{long}z rest", "x".repeat(10)));
         // One that ends within the cap is still taken out whole.
         assert_eq!(strip(&["a\x1b]", &long[1..], "\x07b"]), "ab");
     }
