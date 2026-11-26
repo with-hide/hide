@@ -100,7 +100,7 @@ function hidePart(part: ThreadPart, found: { session: (name: string) => DeskSess
       return { kind: "letter", direction: "sent", peer: found.session(part.to), body: (part.body ?? "").trim().split("\n", 1)[0] ?? "" };
     case "view": {
       const output = viewOutput(part.view, part.target);
-      return output ? { kind: "view", output } : null;
+      return output ? { kind: "view", output, view_id: part.view_id ?? null } : null;
     }
     case "mission": {
       const mission = part.mission ? (found.missions?.items.find((one) => one.id === part.mission) ?? null) : null;

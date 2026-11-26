@@ -3,7 +3,6 @@ import { useEffect, useState, type ReactNode } from "react";
 import { browserStillOf, useBrowserStore } from "../../browserViews";
 import type { DeskOutput } from "../../desk";
 import { deviceConnected } from "../../devices";
-import { fileIcon } from "../../fileIcons";
 import { forgetPreview, watchPreview, type Preview } from "../../filePreview";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { formatBytes } from "../../i18n/format";
@@ -13,10 +12,10 @@ import { cn } from "../../lib/utils";
 import { machineName } from "../../screenMachine";
 import { localDeviceId } from "../../snapshot";
 import { useShellStore } from "../../store";
-import { FileMark } from "../file-mark";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { RowOverlayButton } from "../ui/row-button";
+import { ViewKindMark } from "../../viewMark";
 import { UnseenMark } from "./desk-job-card";
 
 /**
@@ -96,7 +95,8 @@ function TileFace({ file, preview, onRetry }: { file: TileFile; preview: Preview
   const icon = preview.state === "reading" ? <LoaderCircleIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground motion-safe:animate-spin" />
     : preview.state === "failed" ? <TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
     : preview.state === "offline" ? <WifiOffIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
-    : <FileMark icon={fileIcon(file.path ?? file.label)} />;
+    // A page (an address and no path) is marked as a page View is, never by its label, which is its title.
+    : <ViewKindMark kind={file.path === null && file.url !== null ? "browser" : "file"} label={file.path ?? file.label} />;
   return (
     <span className="flex size-full min-w-0 flex-col items-center justify-center gap-xxs px-xs text-center" data-desk-tile-reason={preview.state}>
       {icon}

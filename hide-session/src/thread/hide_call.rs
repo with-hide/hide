@@ -23,8 +23,16 @@ pub enum HideCall {
     /// `hide request send <to>`: a letter, with its body when it was written
     /// on the command line.
     Letter { to: String, body: Option<String> },
-    /// `hide browser|file|diff open <target>`: a View the session opened.
-    View { view: ViewKind, target: String },
+    /// `hide browser|file|diff open <target>`: a View the session opened,
+    /// by the target as typed, and the View id its answer named when the
+    /// call printed one (`opened_view`), which is how the View is found;
+    /// the typed target only names it on screen.
+    View {
+        view: ViewKind,
+        target: String,
+        #[serde(default)]
+        view_id: Option<String>,
+    },
     /// `hide mission ...`: a command of a mission, named when it said which.
     Mission { mission: Option<String> },
 }
@@ -72,6 +80,22 @@ pub fn spawned_agent(output: &str) -> Option<String> {
     })
 }
 
+/// The View a `hide browser|file|diff open` call's output names: the
+/// `view_id` of the `workspace_result` it printed, or of a `--wait`
+/// refusal that came after the View was placed (`applied`), whose View
+/// stands; a refused open names none.
+pub fn opened_view(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let answer = serde_json::from_str::<Value>(line.trim()).ok()?;
+        let placed = answer["applied"] == "applied";
+        answer["result"]["view_id"]
+            .as_str()
+            .or_else(|| answer["view_id"].as_str().filter(|_| placed))
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+    })
+}
+
 /// A command's words after the environment and prefix words, when its
 /// program is `hide`.
 fn program_words(words: &[String], syntax: Syntax) -> Option<&[String]> {
@@ -105,6 +129,7 @@ fn read(args: &[String]) -> Option<HideCall> {
                 _ => ViewKind::Diff,
             },
             target: positional(tail, &[])?.to_owned(),
+            view_id: None,
         }),
         ("mission", Some(_)) => Some(HideCall::Mission {
             mission: option(tail, "--mission"),
@@ -182,6 +207,7 @@ mod tests {
                 Some(HideCall::View {
                     view: ViewKind::Browser,
                     target: "http://localhost:5173".to_owned(),
+                    view_id: None,
                 }),
             ),
             (
@@ -189,6 +215,7 @@ mod tests {
                 Some(HideCall::View {
                     view: ViewKind::File,
                     target: "docs/mock.png".to_owned(),
+                    view_id: None,
                 }),
             ),
             (
@@ -244,8 +271,26 @@ mod tests {
             Some(HideCall::View {
                 view: ViewKind::File,
                 target: r".\out.png".to_owned(),
+                view_id: None,
             })
         );
+    }
+
+    #[test]
+    fn an_opens_answer_names_the_view_it_placed_and_a_refusal_names_none() {
+        let placed = "{\"type\":\"workspace_result\",\"ok\":true,\"result\":{\"view_id\":\"v3\",\"load\":7}}\n";
+        assert_eq!(opened_view(placed).as_deref(), Some("v3"));
+        // `--wait` gave up on the page after the View stood: it is still the session's.
+        let waited =
+            "{\"ok\":false,\"applied\":\"applied\",\"reason\":\"page_failed\",\"view_id\":\"v4\"}";
+        assert_eq!(opened_view(waited).as_deref(), Some("v4"));
+        let refused = "{\"ok\":false,\"reason\":\"browser_unsupported\",\"next_action\":\"Open the Hide desktop app and retry\"}";
+        assert_eq!(opened_view(refused), None);
+        assert_eq!(
+            opened_view("{\"ok\":false,\"reason\":\"x\",\"view_id\":\"v5\"}"),
+            None
+        );
+        assert_eq!(opened_view("no such file: a.html"), None);
     }
 
     #[test]

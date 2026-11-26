@@ -3898,7 +3898,8 @@ export type ThreadPart =
   | { kind: "plan" }
   | { kind: "spawn"; name: string | null; intent: string | null; agent_id: string | null }
   | { kind: "letter"; to: string; body: string | null }
-  | { kind: "view"; view: "browser" | "file" | "diff"; target: string }
+  /** `view_id`: the View the call's answer named, by which the session's View is found; null when it printed none (a refused open, an older reader). */
+  | { kind: "view"; view: "browser" | "file" | "diff"; target: string; view_id?: string | null }
   | { kind: "mission"; mission: string | null };
 /** Where a session a thread names runs: its pane as the agent rows key it, on its machine. */
 export type ThreadSession = { pane_id: string; machine: string };

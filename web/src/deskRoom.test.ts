@@ -77,12 +77,17 @@ describe("Desk's room", () => {
     expect(roomWidths(1100, 340, { view_width: 2000, session_width: null }, true)).toMatchObject({ view: 940 });
   });
 
-  it("finds the View a thread's file names, as a path, from its folder, or with a Windows device's backslashes", () => {
+  it("finds the View a thread's file names by its absolute path, `.` and `..` read, or with a Windows device's backslashes", () => {
     const posix = { ...output("notes"), path: "/repo/docs/notes.md" };
-    expect([namesView(posix, "/repo/docs/notes.md"), namesView(posix, "/repo/./docs/x/../notes.md"), namesView(posix, "docs/notes.md"), namesView(posix, "./notes.md")]).toEqual([true, true, true, true]);
-    expect([namesView(posix, "/other/docs/notes.md"), namesView(posix, "otes.md"), namesView(posix, "../notes.md"), namesView(posix, "docs\\notes.md")]).toEqual([false, false, false, false]);
+    expect([namesView(posix, "/repo/docs/notes.md"), namesView(posix, "/repo/./docs/x/../notes.md")]).toEqual([true, true]);
+    expect([namesView(posix, "/other/docs/notes.md"), namesView(posix, "docs\\notes.md")]).toEqual([false, false]);
     const windows = { ...output("notes"), path: "C:/repo/docs/notes.md" };
-    expect([namesView(windows, "C:\\repo\\docs\\notes.md"), namesView(windows, "c:/repo/docs/notes.md"), namesView(windows, "docs\\notes.md")]).toEqual([true, true, true]);
+    expect([namesView(windows, "C:\\repo\\docs\\notes.md"), namesView(windows, "c:/repo/docs/notes.md")]).toEqual([true, true]);
+  });
+
+  it("never names a View by a relative spelling, which a file of the same name in another folder would also end with", () => {
+    const posix = { ...output("notes"), path: "/repo/docs/notes.md" };
+    expect([namesView(posix, "docs/notes.md"), namesView(posix, "./notes.md"), namesView(posix, "notes.md")]).toEqual([false, false, false]);
   });
 });
 
@@ -103,6 +108,47 @@ describe("the output a session's own line names (B27)", () => {
     expect(outputNamed([], typed("docs/report.pdf"), { device: "mac", checkout: "/work/repo", folder: "/work/repo/web" }, "mac")).toMatchObject({ device_id: null, path: "/work/repo/web/docs/report.pdf" });
     expect(outputNamed([], typed("../shot.png"), { device: "deepbox", checkout: "/home/me/repo", folder: "/home/me/repo/app" }, "mac")).toMatchObject({ device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/shot.png" });
     expect(outputNamed([], typed(".\\out\\run.log"), { device: "winbox", checkout: "C:/src/repo", folder: "C:/src/repo" }, "mac")).toMatchObject({ path: "C:/src/repo/out/run.log" });
+  });
+
+  it("is the View its call's answer named, never another View of the same name in another folder, for a page and a file alike", () => {
+    // As the core lists a session's Views (`desk/jobs.rs`): two folders each hold an index.html and a notes.md.
+    const page = (id: string, url: string): DeskOutput => ({ ...output(id, "page"), label: id, path: null, device_id: "mac", checkout: "/work/repo", url });
+    const file = (id: string, path: string): DeskOutput => ({ ...output(id, "doc"), path, device_id: "mac", checkout: "/work/repo" });
+    const pageA = page("v1", "file:///work/repo/a/index.html");
+    const pageB = page("v2", "file:///work/repo/b/index.html");
+    const notesA = file("v3", "/work/repo/a/notes.md");
+    const notesB = file("v4", "/work/repo/b/notes.md");
+    const listed = [pageA, pageB, notesA, notesB];
+    // As a thread's view line carries it (`threadView.ts`): the call's argument as typed.
+    const typedPage = (target: string): DeskOutput => ({ ...output(target, "page"), label: target, device_id: null, checkout: null, path: null, url: target });
+    const place = { device: "mac", checkout: "/work/repo", folder: "/work/repo/a" };
+    expect(outputNamed(listed, typedPage("index.html"), place, "mac", "v2")).toBe(pageB);
+    expect(outputNamed(listed, typedPage("github.com/with-hide/hide/pull/2529/files"), place, "mac", "v1")).toBe(pageA);
+    expect(outputNamed(listed, typed("notes.md"), place, "mac", "v4")).toBe(notesB);
+  });
+
+  it("leaves a page line whose call named no View, or a View the card no longer lists, as the words it typed", () => {
+    const pageA = { ...output("v1", "page"), path: null, url: "file:///work/repo/a/index.html" };
+    const typedPage = (target: string): DeskOutput => ({ ...output(target, "page"), label: target, device_id: null, checkout: null, path: null, url: target });
+    const place = { device: "mac", checkout: "/work/repo", folder: "/work/repo/a" };
+    const refused = typedPage("index.html");
+    expect(outputNamed([pageA], refused, place, "mac", null)).toBe(refused);
+    const closed = typedPage("github.com/with-hide/hide/pull/2529/files");
+    expect(outputNamed([pageA], closed, place, "mac", "v9")).toBe(closed);
+  });
+
+  it("leaves a line whose call named no View as its words when they are relative, though the agent's folder holds a View of that name after a cd", () => {
+    // The pane's folder is /work/repo; the agent ran `cd b` and then `hide file open notes.md` and `hide browser open index.html`, which were refused.
+    const notesA = { ...output("v3", "doc"), path: "/work/repo/notes.md", device_id: "mac", checkout: "/work/repo" };
+    const pageA = { ...output("v1", "page"), path: null, url: "file:///work/repo/index.html", device_id: "mac", checkout: "/work/repo" };
+    const typedPage = (target: string): DeskOutput => ({ ...output(target, "page"), label: target, device_id: null, checkout: null, path: null, url: target });
+    const place = { device: "mac", checkout: "/work/repo", folder: "/work/repo" };
+    expect(outputNamed([notesA, pageA], typed("notes.md"), place, "mac", null)).not.toBe(notesA);
+    const page = typedPage("index.html");
+    expect(outputNamed([notesA, pageA], page, place, "mac", null)).toBe(page);
+    // Words that name one View alone still find it: an absolute path, an address with its scheme.
+    expect(outputNamed([notesA, pageA], typed("/work/repo/notes.md"), place, "mac", null)).toBe(notesA);
+    expect(outputNamed([notesA, pageA], typedPage("file:///work/repo/index.html"), place, "mac", null)).toBe(pageA);
   });
 
   it("leaves a file of this machine's own session as typed", () => {

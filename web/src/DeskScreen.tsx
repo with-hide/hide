@@ -531,8 +531,8 @@ function everyCard(): DeskJob[] {
 }
 
 /** The output a session's own line names, as `outputNamed` resolves it, on this machine's node. */
-function outputOf(job: DeskJob | undefined, output: DeskOutput, place?: { device: string; checkout: string; folder: string } | null): DeskOutput {
-  return outputNamed(job?.outputs ?? [], output, place ?? null, localDeviceId(useShellStore.getState().rest));
+function outputOf(job: DeskJob | undefined, output: DeskOutput, place?: { device: string; checkout: string; folder: string } | null, viewId: string | null = null): DeskOutput {
+  return outputNamed(job?.outputs ?? [], output, place ?? null, localDeviceId(useShellStore.getState().rest), viewId);
 }
 
 /** What a press in Desk opens (PRD desk-2-ui B2, B13, B16, B20, B47). */
@@ -801,7 +801,7 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
         />
       }
       foot={<SessionRecordFoot endedAt={record.ended_at_unix_ms} resume={button} blocked={reason} />}
-      outputOf={(output) => outputOf(undefined, output, filePlace)}
+      outputOf={(output, viewId) => outputOf(undefined, output, filePlace, viewId)}
       onOutput={(output) => actions.deskOpen({ kind: "output", output, project: job?.project.workspace_id ?? null })}
       onMission={room.mission}
       onSession={room.session}
@@ -910,7 +910,7 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
         />
       ) : null}
       onTerminal={() => actions.deskTerminal()}
-      outputOf={(output) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath, folder: place?.cwd ?? checkoutPath } : null)}
+      outputOf={(output, viewId) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath, folder: place?.cwd ?? checkoutPath } : null, viewId)}
       onOutput={(output) => actions.deskOpen({ kind: "output", output })}
       onMission={room.mission}
       onSession={room.session}
