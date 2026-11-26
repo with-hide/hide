@@ -18,7 +18,7 @@ import { Button } from "../ui/button";
 import { Hint } from "../ui/tooltip";
 import { DeskComposer, SentAttachments } from "./desk-composer";
 import { sentWords, type ComposerTray } from "../../deskComposer";
-import { DeskMissionChip } from "./desk-job-card";
+import { DeskMissionChip } from "../mission-chip";
 import { WorkingLine } from "./working-line";
 import { SessionChip, useSessionChipBridge } from "./session-chip";
 import { DeskOutputs } from "./desk-outputs";

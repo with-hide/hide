@@ -129,15 +129,21 @@ export function WorkPill({ tone, done, children, ...rest }: { tone: string; done
   );
 }
 
-/** What a mission chip shows, wherever it stands: `!` for the operator's turn, a pause while a delay holds it, its mark, and `k/n`. */
-export function MissionChipFace({ turn, delay, status, counts, icon = "size-(--size-icon-sm)" }: { turn: boolean; delay: boolean; status?: string; counts: string | null; icon?: string }) {
+/**
+ * What a mission chip shows, wherever it stands: `!` for the operator's turn, a pause while a delay holds it, its mark, and `k/n`.
+ * Desk's chip adds the mission's number and, as the Conductor pane's chip does, the state's word (`M1 · 계획 중`) before the count.
+ */
+export function MissionChipFace({ turn, delay, status, counts, icon = "size-(--size-icon-sm)", number = null, word = null }: { turn: boolean; delay: boolean; status?: string; counts: string | null; icon?: string; number?: string | null; word?: string | null }) {
   const Mark = status === "done" ? CheckIcon : WaypointsIcon;
   return (
     <>
       {turn ? <span aria-hidden="true" className="font-semibold">!</span> : null}
       {delay ? <PauseIcon aria-hidden="true" className={cn(icon, "shrink-0 text-muted-foreground")} /> : null}
       <Mark aria-hidden="true" className={cn(icon, "shrink-0")} />
-      {counts ? <span className="font-mono tabular-nums">{counts}</span> : null}
+      {number ? <span className="font-mono tabular-nums text-muted-foreground" data-mission-number={number}>{number}</span> : null}
+      {number && (word || counts) ? <span aria-hidden="true" className="text-muted-foreground">·</span> : null}
+      {word ? <span className="whitespace-nowrap">{word}</span> : null}
+      {counts ? <span className={cn("font-mono tabular-nums", number && "font-semibold")}>{counts}</span> : null}
     </>
   );
 }

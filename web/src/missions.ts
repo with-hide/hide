@@ -246,11 +246,21 @@ export function paneChipWords(mission: Mission): { state: PaneChipState; key: Me
 
 function paneStateWords(mission: Mission): { state: PaneChipState; key: MessageKey; counts: string | null } {
   const { done, total } = missionCounts(mission);
+  return chipStateWords(mission.status, { done, total }, mission.nodes.length > 0);
+}
+
+/**
+ * A mission chip's state, its word and its count, from what a chip holds: the
+ * Conductor pane's chip reads it from the record's nodes, Desk's from the
+ * counts its job carries, so both say the same for every status. A plan put
+ * up and not started yet counts from none done (approved board 4); `planned`
+ * says whether the plan has a node.
+ */
+export function chipStateWords(status: Mission["status"], { done, total }: { done: number; total: number }, planned: boolean): { state: PaneChipState; key: MessageKey; counts: string | null } {
   const counts = `${done}/${total}`;
-  switch (mission.status) {
+  switch (status) {
     case "planning":
-      // A plan put up and not started yet counts from none done (approved board 4).
-      return mission.nodes.length === 0 ? { state: "planning", key: "mission.pane.planning", counts: null } : { state: "running", key: "mission.chip", counts };
+      return planned ? { state: "running", key: "mission.chip", counts } : { state: "planning", key: "mission.pane.planning", counts: null };
     case "running":
       return { state: "running", key: "mission.chip", counts };
     case "merge_wait":
