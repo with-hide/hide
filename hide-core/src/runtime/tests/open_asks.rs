@@ -162,7 +162,7 @@ fn a_question_still_waiting_holds_a_resting_root_row_in_needs_you_and_counts_the
         "lead-session"
     );
     // Each carries the sentence its answer asks it in, for the thread's
-    // 본문 보기; one recorded without it carries none.
+    // question line; one recorded without it carries none.
     let items = &serde_json::to_value(&row).unwrap()["open_asks"]["items"];
     assert_eq!(items[0]["quote"], "로그를 볼 Google 계정을 알려 주세요.");
     assert!(items[1].get("quote").is_none());

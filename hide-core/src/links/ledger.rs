@@ -16,6 +16,10 @@ pub const NEW_MISSED_LIMIT: usize = 3;
 /// it repeats by id (`NewMissedWork::same_as`), which add no line.
 pub const TURN_MISSED_LIMIT: usize = 12;
 pub const MISSED_CHARS: usize = 80;
+/// The longest sentence a question keeps as the agent asked it (`quote`):
+/// the judgment's schema caps it, the prompt asks for it, and a longer one
+/// is not kept, so the line shows Hide AI's summary instead.
+pub const QUOTE_CHARS: usize = 200;
 /// The longest request summary kept: two lines of the widest language's
 /// line (B8), the one cap the label's schema, its parser and the ledger share.
 pub const SUMMARY_CHARS: usize = 160;
@@ -526,8 +530,8 @@ pub struct MissedWork {
     pub given: bool,
     /// For a question: the sentence of the agent's answer that asks it, as
     /// Hide AI quoted it and the core found it in that answer, refreshed when
-    /// a later answer asks it again. The thread's question line shows the
-    /// paragraph holding it. None on a line recorded before it was kept.
+    /// a later answer asks it again. The thread's question line shows it and
+    /// lights it in the message. None on a line recorded before it was kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quote: Option<String>,
 }

@@ -2063,8 +2063,8 @@ pub struct OpenAskSnapshot {
     pub text: String,
     pub at_unix_ms: u64,
     /// The sentence of the agent's answer that asks it, which the thread's
-    /// 본문 보기 shows the paragraph of; none on one recorded before Hide
-    /// kept it, which shows the whole answer.
+    /// question line shows and lights in the message it was asked in; none
+    /// on one recorded before Hide kept it, whose line shows `text`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quote: Option<String>,
 }

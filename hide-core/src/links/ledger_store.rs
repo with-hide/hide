@@ -207,8 +207,8 @@ ALTER TABLE ledger_missed ADD COLUMN given_at INTEGER;
 
 /// Version 19: a question keeps the sentence of the answer that asks it
 /// (`quote`), as Hide AI quoted it and the core found it there, so the
-/// thread's question line can show the paragraph holding it. Every line
-/// written before has none and shows the whole answer.
+/// thread's question line can show it and light it in the message. Every
+/// line written before has none and shows Hide AI's summary.
 pub(super) const ASK_QUOTE_SCHEMA: &str = "
 ALTER TABLE ledger_missed ADD COLUMN quote TEXT;
 ";
