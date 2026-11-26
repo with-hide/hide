@@ -1,6 +1,6 @@
-import { LoaderCircleIcon, PlayIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
+import { GlobeIcon, LoaderCircleIcon, PlayIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { browserStillOf, useBrowserStore } from "../../browserViews";
+import { browserStillOf, filePath, useBrowserStore } from "../../browserViews";
 import type { DeskOutput } from "../../desk";
 import { deviceConnected } from "../../devices";
 import { fileIcon } from "../../fileIcons";
@@ -96,13 +96,24 @@ function TileFace({ file, preview, onRetry }: { file: TileFile; preview: Preview
   const icon = preview.state === "reading" ? <LoaderCircleIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground motion-safe:animate-spin" />
     : preview.state === "failed" ? <TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
     : preview.state === "offline" ? <WifiOffIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
-    : <FileMark icon={fileIcon(file.path ?? file.label)} />;
+    : <KindMark file={file} />;
   return (
     <span className="flex size-full min-w-0 flex-col items-center justify-center gap-xxs px-xs text-center" data-desk-tile-reason={preview.state}>
       {icon}
       {reason ? <span className="line-clamp-2 text-micro text-muted-foreground">{reason}</span> : null}
     </span>
   );
+}
+
+/**
+ * A tile's kind when it has no preview: a file's type mark, a local page's
+ * by its file, and a web page's globe, as the shelf marks a page; never its
+ * label, which for a page is its title.
+ */
+function KindMark({ file }: { file: TileFile }) {
+  const path = file.path ?? (file.url !== null ? filePath(file.url) : null);
+  if (path === null && file.url !== null) return <GlobeIcon aria-hidden="true" data-desk-tile-mark="page" className="size-(--size-icon-sm) text-muted-foreground" />;
+  return <FileMark icon={fileIcon(path ?? file.label)} />;
 }
 
 /**
