@@ -26,7 +26,7 @@ import { caughtUp } from "./operatorFocus";
 import { useUiStore } from "./ui";
 import { commandLabel } from "./shortcutLabels";
 import { keyboardInputRevision, noteDrawnViews, useKeyboardOwner } from "./viewFocus";
-import { displayIdentity, displayMenu, displayName, focusRequestArrived, isFixedDisplay, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
+import { areasOf, displayIdentity, displayMenu, displayName, focusRequestArrived, isFixedDisplay, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
 import { findArea, locateDisplay } from "./areaLayout";
 import { DeskExpandButton, DeskPairButton, DeskWideButton, PairOthers } from "./DeskPairControls";
 import { DESK_SCREEN, type DeskWorkspace } from "./deskDesk";
@@ -389,8 +389,9 @@ function ExternalBadge({ path }: { path: string | null }) {
  * only where another file there has the same name and another checkout or
  * path, and then its checkout's project as the catalog names it.
  */
-function projectSuffixes(root: ViewLayoutSnapshot["root"], rest: SnapshotRest | null, t: Parameters<typeof cardTitle>[1]): Map<string, string> {
-  const files = shownDisplays(root).filter((display) => display.kind === "file" && display.origin);
+export function projectSuffixes(root: ViewLayoutSnapshot["root"], rest: SnapshotRest | null, t: Parameters<typeof cardTitle>[1]): Map<string, string> {
+  // Every tab, not only each area's front one: two of one name side by side in one strip are told apart too.
+  const files = areasOf(root).flatMap((area) => area.displays).filter((display) => display.kind === "file" && display.origin);
   const byName = new Map<string, ViewDisplaySnapshot[]>();
   for (const display of files) byName.set(displayName(display, t), [...(byName.get(displayName(display, t)) ?? []), display]);
   const projects = catalogWorkspaces(rest);
