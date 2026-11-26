@@ -23,18 +23,20 @@ enum State {
     StringEscape,
 }
 
-/// The characters a string sequence (OSC, DCS, SOS, PM, APC) may hold
-/// before its terminator: one that never ends stops being read as a
-/// sequence here, so it costs the reply at most this much and what follows
-/// shows (a link's address, the longest a terminal sends, fits well under).
+/// The characters a string sequence (OSC, DCS, SOS, PM, APC) is held for
+/// before its terminator. A terminal's longest, a link's address or a
+/// window title, fits well under; past it the sequence is taken as one that
+/// never ends, so its head alone goes and what it held shows as text.
 const MAX_STRING_CHARS: usize = 4096;
 
 /// Takes escape sequences out of a stream of text, chunk by chunk.
 #[derive(Debug, Default)]
 pub struct Escapes {
     state: State,
-    /// The characters the open string sequence has held.
-    string: usize,
+    /// What the open string sequence holds after its head, until its
+    /// terminator drops it or it turns out never to end.
+    held: String,
+    held_chars: usize,
 }
 
 impl Escapes {
@@ -43,34 +45,78 @@ impl Escapes {
     pub fn strip(&mut self, text: &str) -> String {
         let mut plain = String::with_capacity(text.len());
         for ch in text.chars() {
-            if matches!(self.state, State::String | State::StringEscape) {
-                self.string += 1;
-                if self.string > MAX_STRING_CHARS {
-                    self.state = State::Text;
-                }
-            } else {
-                self.string = 0;
-            }
-            self.state = match (self.state, ch) {
-                (_, '\x1b') if self.state != State::String => State::Escape,
-                (State::Text, ch) => {
-                    plain.push(ch);
-                    State::Text
-                }
-                (State::Escape, '[') => State::Csi,
-                (State::Escape, ']' | 'P' | 'X' | '^' | '_') => State::String,
-                (State::Escape | State::Intermediate, '\x20'..='\x2f') => State::Intermediate,
-                (State::Escape | State::Intermediate, _) => State::Text,
-                (State::Csi, '\x40'..='\x7e') => State::Text,
-                (State::Csi, _) => State::Csi,
-                (State::String, '\x07') => State::Text,
-                (State::String, '\x1b') => State::StringEscape,
-                (State::String, _) => State::String,
-                (State::StringEscape, '\\') => State::Text,
-                (State::StringEscape, _) => State::String,
-            };
+            self.step(ch, &mut plain);
         }
         plain
+    }
+
+    /// What a string sequence still open when the text ends held, as text:
+    /// its head is gone, its words are not lost.
+    pub fn finish(&mut self) -> String {
+        let mut plain = String::new();
+        if matches!(self.state, State::String | State::StringEscape) {
+            self.release(&mut plain);
+        }
+        self.state = State::Text;
+        plain
+    }
+
+    fn step(&mut self, ch: char, plain: &mut String) {
+        self.state = match (self.state, ch) {
+            (State::String, '\x07') => self.drop_held(),
+            (State::String, '\x1b') => State::StringEscape,
+            (State::StringEscape, '\\') => self.drop_held(),
+            (State::StringEscape, '\x1b') => {
+                self.hold('\x1b');
+                State::StringEscape
+            }
+            (State::String | State::StringEscape, ch) => {
+                if self.state == State::StringEscape {
+                    self.hold('\x1b');
+                }
+                self.hold(ch);
+                if self.held_chars > MAX_STRING_CHARS {
+                    self.release(plain);
+                    State::Text
+                } else {
+                    State::String
+                }
+            }
+            (_, '\x1b') => State::Escape,
+            (State::Text, ch) => {
+                plain.push(ch);
+                State::Text
+            }
+            (State::Escape, '[') => State::Csi,
+            (State::Escape, ']' | 'P' | 'X' | '^' | '_') => State::String,
+            (State::Escape | State::Intermediate, '\x20'..='\x2f') => State::Intermediate,
+            (State::Escape | State::Intermediate, _) => State::Text,
+            (State::Csi, '\x40'..='\x7e') => State::Text,
+            (State::Csi, _) => State::Csi,
+        };
+    }
+
+    fn hold(&mut self, ch: char) {
+        self.held.push(ch);
+        self.held_chars += 1;
+    }
+
+    /// The string ended at its terminator: what it held was the sequence's.
+    fn drop_held(&mut self) -> State {
+        self.held.clear();
+        self.held_chars = 0;
+        State::Text
+    }
+
+    /// The string never ended: what it held is read again as text, so an
+    /// escape inside it is still taken out.
+    fn release(&mut self, plain: &mut String) {
+        let held = std::mem::take(&mut self.held);
+        self.held_chars = 0;
+        self.state = State::Text;
+        for ch in held.chars() {
+            self.step(ch, plain);
+        }
     }
 }
 
@@ -102,14 +148,20 @@ mod tests {
         assert_eq!(strip(&["a\x1b]0;ti", "tle\x1b", "\\b"]), "ab");
     }
 
-    /// letter-48549: an OSC that never ends costs the reply at most
-    /// `MAX_STRING_CHARS`, and the words after it show.
+    /// letter-48550: a string sequence that never ends loses its head
+    /// only: past the cap, or at the text's end, what it held shows.
     #[test]
-    fn a_string_that_never_ends_stops_at_its_cap() {
-        let lost = "x".repeat(super::MAX_STRING_CHARS);
-        assert_eq!(strip(&["a\x1b]", &lost, "the rest"]), "athe rest");
-        // A string that ends within the cap is still taken out whole.
-        assert_eq!(strip(&["a\x1b]", &lost[1..], "\x07b"]), "ab");
+    fn a_string_that_never_ends_keeps_its_words() {
+        let long = "x".repeat(super::MAX_STRING_CHARS);
+        assert_eq!(
+            strip(&["a\x1b]", &long, "y rest"]),
+            format!("a{long}y rest")
+        );
+        let mut escapes = Escapes::default();
+        let said = escapes.strip("see \x1b]8;;the answer");
+        assert_eq!(said + &escapes.finish(), "see 8;;the answer");
+        // One that ends within the cap is still taken out whole.
+        assert_eq!(strip(&["a\x1b]", &long[1..], "\x07b"]), "ab");
     }
 
     #[test]

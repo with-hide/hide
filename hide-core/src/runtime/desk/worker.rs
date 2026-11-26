@@ -794,6 +794,11 @@ impl Worker {
                         .filter_map(|id| running.announced.get(id))
                         .map(hide_desk::permission::step)
                         .collect();
+                    // The reply's last words, an escape string that never
+                    // ended, come before the turn closes.
+                    if let Some(text) = answered.rest {
+                        self.report(Report::Text { tag, text });
+                    }
                     self.report(Report::Steps { tag, steps });
                     if let Some(compaction) = answered.compaction {
                         self.report(Report::Compacted { tag, compaction });

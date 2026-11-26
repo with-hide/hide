@@ -387,6 +387,9 @@ pub struct Answered {
     pub failed: Option<String>,
     /// A compaction the adapter told outside the reply, in the turn.
     pub compaction: Option<Compaction>,
+    /// The reply's last words, held as an escape string that never ended
+    /// (`Escapes::finish`): its owner adds them to the reply.
+    pub rest: Option<String>,
 }
 
 /// The turn an owner follows on a session: which one runs, what its reply
@@ -510,10 +513,20 @@ impl TurnReader {
             return None;
         }
         self.tag = None;
+        let rest = self.escapes.finish();
+        let mut failed = self.failed.take();
+        let rest = match &mut failed {
+            Some(words) => {
+                keep_failure(words, &rest);
+                None
+            }
+            None => (!rest.is_empty()).then_some(rest),
+        };
         Some(Answered {
             calls: std::mem::take(&mut self.calls),
-            failed: self.failed.take(),
+            failed,
             compaction: self.compaction.take(),
+            rest,
         })
     }
 }
@@ -599,6 +612,7 @@ mod tests {
                 calls: vec!["new".to_owned()],
                 failed: None,
                 compaction: None,
+                rest: None,
             })
         );
         assert_eq!(turn.running(), None);
@@ -615,6 +629,18 @@ mod tests {
             (4, said(";243m 12%\x1b[0m")),
         ]);
         assert_eq!(text.concat(), "░░ Context 12%");
+    }
+
+    /// letter-48550: a link an agent never closed loses its head only; what
+    /// it held comes with the turn's end as the reply's last words.
+    #[test]
+    fn a_reply_s_unclosed_escape_string_gives_its_words_back_at_the_end() {
+        let (mut turn, text) = numbered(&[(3, said("see \x1b]8;;")), (4, said("the answer"))]);
+        assert_eq!(text.concat(), "see ");
+        assert_eq!(
+            turn.end(7).and_then(|answered| answered.rest).as_deref(),
+            Some("8;;the answer")
+        );
     }
 
     /// codex-acp 2.5.0 with a model that failed (letter-47671, frames
