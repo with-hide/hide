@@ -12,10 +12,10 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { CodeBlock } from "./components/code-block";
 import { CopyWords } from "./components/copy-words";
-import { TooltipProvider } from "./components/ui/tooltip";
 import type { CopyText } from "./components/human-turn-copy";
 import { languageLoader } from "./editor/languages";
 import { markdownLive } from "./editor/markdownLivePlugin";
+import { fencedCode } from "./editor/markdownLive";
 import type { InlinePart } from "./mobile/markdown";
 import { baseTheme, liveTheme } from "./editor/theme";
 
@@ -129,18 +129,17 @@ function chipDecorations(text: string, chips: readonly MarkdownChip[]): Extensio
 
 /** A code block drawn whole by `CodeBlock`, with `복사` in its gutter, in a root of its own unmounted after the editor lets it go. */
 class CodeBlockWidget extends WidgetType {
-  constructor(readonly code: string, readonly copy: CopyText | undefined) {
+  constructor(readonly code: string, readonly language: string | null, readonly copy: CopyText | undefined) {
     super();
   }
   eq(other: CodeBlockWidget) {
-    return other.code === this.code && other.copy === this.copy;
+    return other.code === this.code && other.language === this.language && other.copy === this.copy;
   }
   toDOM() {
     const dom = document.createElement("div");
     dom.dataset.markdownCodeBlock = "true";
     const root = createRoot(dom);
-    // Its own root: the hint on `복사` needs a provider of its own here.
-    root.render(<TooltipProvider><CodeBlock code={this.code} action={this.copy && this.code ? <CopyWords icon text={this.code} what="code block" copy={this.copy} /> : undefined} /></TooltipProvider>);
+    root.render(<CodeBlock code={this.code} language={this.language} action={this.copy && this.code ? <CopyWords quiet text={this.code} what="code block" copy={this.copy} /> : undefined} />);
     roots.set(dom, root);
     return dom;
   }
@@ -155,30 +154,18 @@ class CodeBlockWidget extends WidgetType {
 }
 
 /**
- * A code block's own lines, read from the parse: a fence's lines between its
- * marks with the fence's indent taken off each, an indented block's lines
- * with their four spaces. `null` for a block that does not stand on lines of
- * its own (one opened after a list mark or a quote's `>`), which keeps the
- * Live drawing.
+ * A code block that stands on lines of its own, read from the parse: a
+ * fence's code (`fencedCode`) with its language, an indented block's lines
+ * with their four spaces. `null` for one opened after a list mark or a
+ * quote's `>`, which the Live view draws as a box of lines with the same
+ * head row and `복사`.
  */
-function codeBlockAt(doc: Text, node: SyntaxNode): { from: number; to: number; code: string } | null {
+function codeBlockAt(doc: Text, node: SyntaxNode): { from: number; to: number; code: string; language: string | null } | null {
   const open = doc.lineAt(node.from);
   const end = doc.lineAt(node.to);
   if (doc.sliceString(open.from, node.from).trim() !== "") return null;
-  if (node.name === "CodeBlock") {
-    const code = doc.sliceString(open.from, end.to).replace(/^ {1,4}/gm, "");
-    return { from: open.from, to: end.to, code };
-  }
-  const indent = node.from - open.from;
-  const marks = node.getChildren("CodeMark");
-  const close = marks.length > 1 ? doc.lineAt(marks[marks.length - 1]!.from) : null;
-  const last = close && close.number > open.number ? close.number - 1 : end.number;
-  const lines: string[] = [];
-  for (let number = open.number + 1; number <= last; number += 1) {
-    const text = doc.line(number).text;
-    lines.push(text.slice(Math.min(indent, text.length - text.trimStart().length)));
-  }
-  return { from: open.from, to: end.to, code: lines.join("\n") };
+  if (node.name === "CodeBlock") return { from: open.from, to: end.to, code: doc.sliceString(open.from, end.to).replace(/^ {1,4}/gm, ""), language: null };
+  return { from: open.from, to: end.to, ...fencedCode(doc, node) };
 }
 
 /** Every code block of the text drawn as a `CodeBlock`; a diagram drawn in its place keeps its drawing. */
@@ -190,7 +177,7 @@ function codeBlockDecorations(state: EditorState, copy: CopyText | undefined): D
       const info = node.node.getChild("CodeInfo");
       if (info && state.doc.sliceString(info.from, info.to).trim().toLowerCase() === "mermaid") return false;
       const block = codeBlockAt(state.doc, node.node);
-      if (block) ranges.push(Decoration.replace({ widget: new CodeBlockWidget(block.code, copy), block: true }).range(block.from, block.to));
+      if (block) ranges.push(Decoration.replace({ widget: new CodeBlockWidget(block.code, block.language, copy), block: true }).range(block.from, block.to));
       return false;
     },
   });
@@ -198,7 +185,7 @@ function codeBlockDecorations(state: EditorState, copy: CopyText | undefined): D
 }
 
 /**
- * The code blocks (Doop N 1 가), found again whenever the lazily loaded
+ * The code blocks (Doop N 1 나), found again whenever the lazily loaded
  * language parses the text. A block replaces whole lines, which only a
  * state field may give; it outranks the Live plan's own code lines.
  */
@@ -216,9 +203,9 @@ const NO_CHIPS: readonly MarkdownChip[] = [];
 /**
  * `size="chat"` sets the text at Desk's conversation size; `chips` draws
  * tokens of the text as parts (keep the array stable between renders);
- * `copyCode` puts `복사` in every code block's gutter (Doop E2, N 1 가),
- * always in view. The
- * text can be selected and copied as a page's text is.
+ * `copyCode` puts `복사` in every code block's head row (Doop E2, N 1 나),
+ * a block in a quote or a list included, always in view. The text can be
+ * selected and copied as a page's text is.
  */
 export function MarkdownText({ text, size = "body", chips = NO_CHIPS, copyCode }: { text: string; size?: "body" | "chat"; chips?: readonly MarkdownChip[]; copyCode?: CopyText }) {
   const host = useRef<HTMLDivElement>(null);
@@ -230,7 +217,7 @@ export function MarkdownText({ text, size = "body", chips = NO_CHIPS, copyCode }
       parent,
       state: EditorState.create({
         doc: text,
-        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false, parts: chips }), chipDecorations(text, chips), codeBlocks(copyCode), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
+        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false, parts: chips, copy: copyCode }), chipDecorations(text, chips), codeBlocks(copyCode), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
       }),
     });
     let live = true;

@@ -1,57 +1,39 @@
 // `복사` as words: a message's original Markdown, a code block's code.
 
 import { CheckIcon, CopyIcon } from "lucide-react";
-import type { MouseEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import { useCopied, type CopyText } from "./human-turn-copy";
 import { Button } from "./ui/button";
-import { Hint } from "./ui/tooltip";
 
 /**
  * `복사` (Doop E2): puts `text` on the clipboard of the screen the operator
  * looks at and turns into `복사함 ✓` for a moment (`useCopied`). It never
- * takes the keyboard from what the operator was doing. `icon` draws the icon
- * alone with its words as the hint.
+ * takes the keyboard from what the operator was doing. `quiet` draws it as
+ * words with no box, as a code block's head row holds it (Doop N 1 나).
  */
-export function CopyWords({ text, what, copy, icon = false, className }: { text: string; what: string; copy: CopyText; icon?: boolean; className?: string }) {
+export function CopyWords({ text, what, copy, quiet = false, className }: { text: string; what: string; copy: CopyText; quiet?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
   const { copied, run } = useCopied(copy);
-  const press = (event: MouseEvent) => {
-    event.stopPropagation();
-    run(text, what);
-  };
-  // A code block's gutter holds only the icon (Doop N 1 가); its words are the hint and the name.
-  if (icon) {
-    const label = copied ? t("common.copied") : t("desk.action.copy");
-    return (
-      <Hint label={label}>
-        <Button
-          type="button"
-          variant="row-action"
-          size="icon-xs"
-          aria-label={label}
-          className={cn(copied && "text-success", className)}
-          data-copy-words={what}
-          data-copied={copied ? "true" : undefined}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={press}
-        >
-          {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
-        </Button>
-      </Hint>
-    );
-  }
   return (
     <Button
       type="button"
-      variant="outline"
-      size="sm"
-      className={cn("h-(--size-control-compact) gap-xxs bg-background px-xs text-caption font-normal text-subtle-foreground", copied && "text-success", className)}
+      variant={quiet ? "text" : "outline"}
+      size={quiet ? "inline" : "sm"}
+      className={cn(
+        "gap-xxs text-caption font-normal",
+        quiet ? "px-xxs text-muted-foreground hover:text-foreground" : "h-(--size-control-compact) bg-background px-xs text-subtle-foreground",
+        copied && "text-success",
+        className,
+      )}
       data-copy-words={what}
       data-copied={copied ? "true" : undefined}
       onMouseDown={(event) => event.preventDefault()}
-      onClick={press}
+      onClick={(event) => {
+        event.stopPropagation();
+        run(text, what);
+      }}
     >
       {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
       {copied ? t("common.copied") : t("desk.action.copy")}

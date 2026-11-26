@@ -20,6 +20,14 @@ describe("renderMarkdown", () => {
     expect(out).not.toMatch(/\*\*|##|```|~~/);
   });
 
+  it("draws a code block as the desktop does, under a head row naming its language or saying it is code, with no 복사 on the phone (Doop N 1 나)", () => {
+    const out = html("```ts\nconst a = 1;\n```\n\n```\nls -la\n```");
+    expect(out.match(/data-code-block-language="[^"]*">[^<]*</g)).toEqual(['data-code-block-language="ts">ts<', 'data-code-block-language="">Code<']);
+    expect(out).toMatch(/<pre[^>]*>const a = 1;<\/pre>/);
+    expect(out).toMatch(/<pre[^>]*>ls -la<\/pre>/);
+    expect(out).not.toContain("data-copy-words");
+  });
+
   it("keeps a link and an image as text and never a target", () => {
     const out = html("[문서](https://example.com/docs) ![그림](a.png) <https://example.com/auto> https://example.com/bare");
     expect(out).toContain("<span>문서</span>");

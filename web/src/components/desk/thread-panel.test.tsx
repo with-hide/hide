@@ -338,7 +338,11 @@ it("unfolds several questions one per line, oldest first, each with its message 
 
   await act(async () => line().querySelector<HTMLElement>("[data-desk-thread-asks-more]")!.click());
   expect(line().getAttribute("data-desk-thread-asks-open")).toBe("true");
+  // The unfolded list is headed by how many wait and the first question, then one line each, oldest first, with when it was asked.
+  const head = () => line().querySelector("[data-desk-thread-ask-lead]")?.parentElement?.textContent;
+  expect(head()).toBe("Questions 2다크도 찍을지");
   expect(rows()).toEqual(["missed-1-0", "missed-2-0"]);
+  expect(Array.from(line().querySelectorAll("[data-desk-thread-ask-ago]")).every((ago) => /\S ago$/.test(ago.textContent ?? ""))).toBe(true);
   expect(line().querySelectorAll("[data-desk-thread-ask-body]")).toHaveLength(2);
   expect(line().querySelectorAll("[data-desk-thread-ask-dismiss]")).toHaveLength(2);
 
@@ -347,6 +351,8 @@ it("unfolds several questions one per line, oldest first, each with its message 
   const words = line().querySelector('[data-desk-thread-ask-words="missed-2-0"]')!;
   await act(() => vi.waitFor(() => expect(words.textContent).toContain("Play Console에 올리려면")));
   expect(words.querySelector("[data-desk-thread-ask-go]")).not.toBeNull();
+  // It opens right under its own line, inside the list.
+  expect(words.closest("[data-desk-thread-ask-row]")?.getAttribute("data-desk-thread-ask-row")).toBe("missed-2-0");
 
   // × is 무시하기: the core is told, and the line stays struck through with 되돌리기 until it is brought back.
   await act(async () => line().querySelector<HTMLElement>('[data-desk-thread-ask-dismiss="missed-2-0"]')!.click());
@@ -354,29 +360,53 @@ it("unfolds several questions one per line, oldest first, each with its message 
   const away = line().querySelector('[data-desk-thread-ask-row="missed-2-0"]')!;
   expect(away.getAttribute("data-dismissed")).toBe("true");
   expect(line().querySelector('[data-desk-thread-ask-words="missed-2-0"]')).toBeNull();
+  // The head counts what still waits.
+  expect(head()).toBe("Questions 1다크도 찍을지");
   await act(async () => away.querySelector<HTMLElement>('[data-desk-thread-ask-undo="missed-2-0"]')!.click());
   expect(set).toEqual([["missed-2-0", "dismissed"], ["missed-2-0", "open"]]);
   expect(line().querySelector('[data-desk-thread-ask-row="missed-2-0"]')?.getAttribute("data-dismissed")).toBeNull();
+  expect(head()).toBe("Questions 2다크도 찍을지");
 });
 
-it("draws a code block with room around the code and its copy button in a gutter of its own (Doop N 1 가)", async () => {
+it("unfolds one question's message under its line with 본문 보기 and folds it again with 접기 (Doop N 2)", async () => {
+  const answer = { sessionUpdate: "agent_message_chunk", messageId: "a", content: { type: "text", text: "다크 화면도 넣을까요?" }, _meta: { hide: { at_ms: 1_000 } } };
+  const { container } = await mount(job, null, { asks: [{ id: "missed-1-0", text: "다크도 찍을지", at_unix_ms: 1_500 }] });
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "찍어 줘" } }, answer], parts: {}, sessions: {} } }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  const line = () => container.querySelector("[data-desk-thread-asks]")!;
+  const toggle = () => line().querySelector<HTMLElement>('[data-desk-thread-ask-body="missed-1-0"]')!;
+  expect([toggle().textContent, toggle().getAttribute("aria-expanded")]).toEqual(["Show message", "false"]);
+  await act(async () => toggle().click());
+  await act(() => vi.waitFor(() => expect(line().querySelector('[data-desk-thread-ask-words="missed-1-0"]')?.textContent).toContain("다크 화면도 넣을까요?")));
+  expect([toggle().textContent, toggle().getAttribute("aria-expanded")]).toEqual(["Collapse", "true"]);
+  await act(async () => toggle().click());
+  expect(line().querySelector("[data-desk-thread-ask-words]")).toBeNull();
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+});
+
+it("draws a code block under a head row with its language and 복사, the code below it, a block in a quote too (Doop N 1 나)", async () => {
   const copied: string[] = [];
   const { container } = await mount(job, null, { onCopy: async (text) => { copied.push(text); return true; } });
-  const words = "한 줄:\n\n```\nopen https://play.google.com/console\n```\n\n여러 줄:\n\n```bash\npnpm --dir web install\npnpm --dir web build\n```";
+  const words = "한 줄:\n\n```\nopen https://play.google.com/console\n```\n\n여러 줄:\n\n```bash\npnpm --dir web install\npnpm --dir web build\n```\n\n> 인용 안:\n> ```sh\n> echo hi\n> ```";
   const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "알려 줘" } }, said(words)], parts: {}, sessions: {} };
   await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
-  await act(() => vi.waitFor(() => expect(container.querySelectorAll("[data-code-block]")).toHaveLength(2)));
+  await act(() => vi.waitFor(() => expect(container.querySelectorAll("[data-code-block-head]")).toHaveLength(3)));
   const [one, several] = Array.from(container.querySelectorAll<HTMLElement>("[data-code-block]"));
-  expect(one!.getAttribute("data-code-block")).toBe("line");
-  expect(several!.getAttribute("data-code-block")).toBe("lines");
-  // The code is the block's own text, without its fences; the button stands beside it, never inside it.
+  // The head names the fence's language, or says it is code when it names none.
+  expect([one, several].map((block) => block!.querySelector("[data-code-block-language]")?.textContent)).toEqual(["Code", "bash"]);
+  // The code is the block's own text, without its fences, and 복사 stands in the head, never in the code.
   expect(one!.querySelector("pre")?.textContent).toBe("open https://play.google.com/console");
   expect(several!.querySelector("pre")?.textContent).toBe("pnpm --dir web install\npnpm --dir web build");
   for (const block of [one!, several!]) {
-    const button = block.querySelector('[data-code-block-action] [data-copy-words="code block"]');
-    expect(button).not.toBeNull();
+    const button = block.querySelector('[data-code-block-head] [data-copy-words="code block"]');
+    expect(button?.textContent).toBe("Copy");
     expect(block.querySelector("pre")?.contains(button!)).toBe(false);
   }
   await act(async () => several!.querySelector<HTMLElement>('[data-copy-words="code block"]')!.click());
-  expect(copied).toEqual(["pnpm --dir web install\npnpm --dir web build"]);
+  // A block opened in a quote keeps its lines in the text and still has its head and 복사, which copies the code without the quote's marks.
+  const quoted = container.querySelector<HTMLElement>(".cm-md-code-head-row [data-code-block-head]")!;
+  expect(quoted.querySelector("[data-code-block-language]")?.textContent).toBe("sh");
+  await act(async () => quoted.querySelector<HTMLElement>('[data-copy-words="code block"]')!.click());
+  expect(copied).toEqual(["pnpm --dir web install\npnpm --dir web build", "echo hi"]);
+  // 복사 says it copied, in its own words.
+  expect(several!.querySelector('[data-copy-words="code block"]')?.textContent).toBe("Copied");
 });

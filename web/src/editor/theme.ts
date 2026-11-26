@@ -164,17 +164,23 @@ export const liveTheme = EditorView.theme({
   // The syntax colours stay with Source; a drawn heading reads in its line's colour.
   "& [class*='cm-md-heading-'] span": { color: "inherit" },
   "& .cm-line .cm-md-link": { color: "var(--file-blue)" },
-  // Code inside a line reads as code (Doop N 1 가): its own ground inside a hairline, as the phone draws it.
-  "& .cm-line .cm-md-code-inline": {
-    fontFamily: "var(--font-mono)",
-    fontSize: "0.9em",
-    padding: "var(--spacing-xxs) var(--spacing-xs)",
-    border: "var(--size-hairline) solid var(--border)",
-    borderRadius: "var(--radius-xs)",
+  // Code inside a line draws with `INLINE_CODE` (components/code-block.tsx), the classes the phone uses.
+  // A fenced block is one box (Doop N 1 나), drawn across its lines with the tokens `CodeBlock` uses:
+  // the head row (`CodeBlockHead`) on the opening fence's line, then the code on the block's ground
+  // inside one hairline, with the room and the corners on the first and last code line, never a
+  // border per line.
+  ".cm-line.cm-md-code-head": {
+    padding: "0",
     backgroundColor: "var(--secondary)",
+    borderInline: "var(--size-hairline) solid var(--border)",
+    borderTop: "var(--size-hairline) solid var(--border)",
+    borderStartStartRadius: "var(--radius-sm)",
+    borderStartEndRadius: "var(--radius-sm)",
   },
-  // A fenced block is one box (Doop N 1 가), drawn across its lines: its own ground inside one hairline, the corners and the room above and below on its first and last line, never a border per line.
-  ".cm-md-code": {
+  // The head row is the line's only content: the caret buffers the editor puts beside a widget would add a line box above and below it.
+  ".cm-md-code-head-row": { display: "block" },
+  ".cm-line.cm-md-code-head .cm-widgetBuffer": { display: "none" },
+  ".cm-line.cm-md-code": {
     fontFamily: "var(--font-mono)",
     fontSize: "0.9em",
     lineHeight: "1.6",
@@ -182,8 +188,8 @@ export const liveTheme = EditorView.theme({
     paddingInline: "var(--spacing-md)",
     borderInline: "var(--size-hairline) solid var(--border)",
   },
-  ".cm-md-code-first, .cm-md-code-only": { borderTop: "var(--size-hairline) solid var(--border)", borderStartStartRadius: "var(--radius-sm)", borderStartEndRadius: "var(--radius-sm)", paddingTop: "var(--spacing-sm)" },
-  ".cm-md-code-last, .cm-md-code-only": { borderBottom: "var(--size-hairline) solid var(--border)", borderEndStartRadius: "var(--radius-sm)", borderEndEndRadius: "var(--radius-sm)", paddingBottom: "var(--spacing-sm)" },
+  ".cm-line.cm-md-code-first, .cm-line.cm-md-code-only": { paddingTop: "var(--spacing-sm)" },
+  ".cm-line.cm-md-code-last, .cm-line.cm-md-code-only": { borderBottom: "var(--size-hairline) solid var(--border)", borderEndStartRadius: "var(--radius-sm)", borderEndEndRadius: "var(--radius-sm)", paddingBottom: "var(--spacing-sm)" },
   ".cm-md-link": { textDecoration: "underline" },
   ".cm-md-hidden-line": { display: "none" },
   ".cm-md-quote": {

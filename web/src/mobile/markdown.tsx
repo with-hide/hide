@@ -3,8 +3,8 @@
 // and drawn as plain elements, never an editor, so a page of messages costs a
 // few milliseconds. Nothing on the page navigates: a link is its text and an
 // image its description, as the terminal rows keep OSC 8 links as text. A
-// code block is the desktop's (`CodeBlock`): its long lines scroll inside it,
-// without highlighting.
+// code block is the desktop's (`CodeBlock`, Doop N 1 나): its head row names
+// the fence's language, its long lines scroll inside it, without highlighting.
 //
 // A pull request's body is drawn the same way with `html` on (PRD
 // record-card-readability D-11, B19, B20): the HTML GitHub draws in a body
@@ -27,7 +27,8 @@
 import type { SyntaxNode } from "@lezer/common";
 import { GFM, parser } from "@lezer/markdown";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
-import { CodeBlock } from "../components/code-block";
+import { CodeBlock, INLINE_CODE } from "../components/code-block";
+import { fenceLanguage } from "../editor/markdownLive";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { drawMermaid, isMermaidInfo, showMermaidSvg, watchPalette, type MermaidDrawing } from "../markdownMermaid";
 import { appHost } from "./appHost";
@@ -41,8 +42,6 @@ const TARGETS = new Set(["URL", "LinkTitle", "LinkLabel"]);
 
 const HEADINGS = /^(ATXHeading[1-6]|SetextHeading[12])$/;
 
-/** Code inside a line reads as code (Doop N 1 가), as the editor's `cm-md-code-inline` draws it. */
-const INLINE_CODE = "rounded-xs border border-border bg-secondary px-xs py-xxs font-mono text-[0.9em]";
 
 /** One parse: the source and whether its HTML is drawn. */
 /** Which address a link may carry, or null when it stays its text. */
@@ -147,7 +146,7 @@ function block(node: SyntaxNode, source: Source, key: number): ReactNode {
       const code = codeOf(node, text);
       const info = node.getChild("CodeInfo");
       if (info && isMermaidInfo(text.slice(info.from, info.to)) && code.trim() !== "") return <MermaidBlock key={key} source={code} />;
-      return <CodeBlock key={key} code={code} />;
+      return <CodeBlock key={key} code={code} language={info ? fenceLanguage(text.slice(info.from, info.to)) : null} />;
     }
     case "HorizontalRule":
       return <hr key={key} className="border-border" />;
@@ -282,11 +281,11 @@ function MermaidBlock({ source }: { source: string }) {
     return (
       <div className="space-y-xxs">
         <p className="text-caption text-muted-foreground">{t("documents.mermaidUnavailable", { reason: drawing.reason })}</p>
-        <CodeBlock code={source} />
+        <CodeBlock code={source} language="mermaid" />
       </div>
     );
   }
-  return <CodeBlock code={source} />;
+  return <CodeBlock code={source} language="mermaid" />;
 }
 
 /** The code between a fence's marks, or an indented block's lines. */
