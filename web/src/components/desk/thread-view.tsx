@@ -1,6 +1,6 @@
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, FilePenIcon, FileSearchIcon, GlobeIcon, MailIcon, PlusIcon, SquareTerminalIcon, WrenchIcon } from "lucide-react";
 import { pullLabel } from "../../codeHost";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithRef, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithRef, type ReactNode, type Ref } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
 import { askPlace, namedMention, threadPhase, threadTurns } from "../../desk";
@@ -17,6 +17,7 @@ import { StatusMark } from "../status-mark";
 import { Button } from "../ui/button";
 import { Hint } from "../ui/tooltip";
 import { DeskComposer, SentAttachments } from "./desk-composer";
+import type { ComposerMenus } from "./composer-menus";
 import { sentWords, type ComposerTray } from "../../deskComposer";
 import { DeskMissionChip } from "../mission-chip";
 import { WorkingLine } from "./working-line";
@@ -478,7 +479,11 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   mentions?: readonly DeskMention[];
   /** Desk handed the thread its task: the first message says so. */
   startedByDesk?: boolean;
-  composer: { value: string; tray: ComposerTray; focused?: boolean; held?: boolean; notice?: string | null; onChange: (value: string) => void; onSend: () => void };
+  /**
+   * The input box: its words and files, the `/` and `@` menus Desk's composer has (`useComposerMenus`), and the bar
+   * under it (`SessionAgentBar`).
+   */
+  composer: { value: string; tray: ComposerTray; focused?: boolean; held?: boolean; notice?: string | null; textRef?: Ref<HTMLTextAreaElement>; menus?: ComposerMenus; bar?: ReactNode; onChange: (value: string, caret: number) => void; onCaret?: (caret: number) => void; onSend: () => void };
   /** What the agent's own screen asks, at the conversation's end, answered in place (the choice card, PRD desk-2-ui B14). */
   ask?: ReactNode;
   /** The questions Hide found that still wait on the operator, oldest first (`open_asks`, the list 내 차례 reads). */
@@ -572,13 +577,22 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
             value={composer.value}
             label={t("desk.thread.composerLabel", { title: job?.title ?? "" })}
             placeholder={t("desk.thread.placeholder")}
+            textRef={composer.textRef}
             tray={composer.tray}
-            focused={composer.focused}
+            focused={composer.focused || composer.menus?.menuOpen}
             held={composer.held}
             notice={composer.notice}
+            menu={composer.menus?.menu}
+            menuOpen={composer.menus?.menuOpen}
+            menuEmpty={composer.menus?.menuEmpty}
+            onMenuOpenChange={composer.menus?.onMenuOpenChange}
+            onKeyDown={composer.menus?.onKeyDown}
             onChange={composer.onChange}
+            onCaret={composer.onCaret}
             onSend={composer.onSend}
-          />
+          >
+            {composer.bar}
+          </DeskComposer>
         </div>
       )}
     </div>

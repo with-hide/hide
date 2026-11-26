@@ -380,16 +380,17 @@ impl DeskJobFailure {
     }
 }
 
-/// The `desk_commands` section, the `/` menu: the commands the selected
-/// agent listed last, in its order, with what Desk leaves out already gone
-/// (`hide_desk::commands`). The list is the agent's last session's, saved
-/// in `desk/commands.json` across a restart, so a new conversation's first
-/// `/` has it before its session opens. `commands` is none until the agent
-/// has ever sent a list, and empty while its open session has sent none.
+/// The `desk_commands` section, the `/` menus: each agent's commands as it
+/// listed them last, in its order, with what Desk leaves out already gone
+/// (`hide_desk::commands`). Desk's composer reads its selected agent's, and
+/// a session's input its session's agent's (docs/ARCHITECTURE.md, Desk's
+/// commands). A list is the agent's last session's, saved in
+/// `desk/commands.json` across a restart, so a new conversation's first `/`
+/// has it before its session opens. An agent is absent until it has ever
+/// sent a list, and its list empty while its open session has sent none.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct DeskCommandsSnapshot {
-    pub agent: Option<AdapterId>,
-    pub commands: Option<Vec<hide_desk::commands::Command>>,
+    pub lists: std::collections::BTreeMap<AdapterId, Vec<hide_desk::commands::Command>>,
 }
 
 /// A compaction the agent told outside its reply (OpenCode's), shown as the

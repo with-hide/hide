@@ -53,3 +53,11 @@ permission = { allow = ["enter"], deny = ["esc"] }
 # and session delete removes the session Desk resumes.
 [desk]
 left_out = ["move", "wt", "ssh", "plugins", "force", "session delete"]
+
+# How a running session changes its thinking level (docs/ARCHITECTURE.md, A
+# session's model and effort), checked in a terminal of omp 18.7.0 on 2026-11-26.
+# Its `/model` opens a picker and takes no model as a word (one is sent to the
+# model as a prompt), so its model is changed in that picker only.
+[switch]
+effort = "/effort {effort}"
+efforts = ["off", "auto", "low", "medium", "high", "xhigh", "max"]

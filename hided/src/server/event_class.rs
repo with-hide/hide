@@ -399,6 +399,7 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("session_thread_input", Screen),
     ("session_thread_older", Screen),
     ("session_thread_open", Screen),
+    ("session_thread_switch", Screen),
     ("session_tree_toggle", Screen),
     ("session_work_search", Screen),
     ("sessions_refresh", Screen),

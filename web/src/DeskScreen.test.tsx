@@ -312,11 +312,12 @@ describe("Desk's room", () => {
   const key = async (name: string) => act(async () => { box().dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })); });
   const listed = () => Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-mention-session]")).map((row) => row.dataset.deskMentionSession);
 
-  const commands: DeskCommands = { agent: "claude", commands: [
+  const claudeList: NonNullable<DeskCommands["lists"]["claude"]> = [
     { name: "/compact", description: "Clear history but keep a summary", hint: "what to keep" },
     { name: "/context", description: "Show the context use" },
     { name: "/code-review", description: "Review the diff" },
-  ] };
+  ];
+  const commands: DeskCommands = { lists: { claude: claudeList } };
   // Each draft mounts the room anew, so the caret starts at the draft's end as it does when Desk opens.
   const withCommands = async (text: string, section: DeskCommands | null = commands) => {
     await act(async () => root.unmount());
@@ -365,7 +366,7 @@ describe("Desk's room", () => {
 
   it("opens no / menu for an agent whose session sent an empty list, past the first word or for a / inside the words", async () => {
     const cases: [string, DeskCommands | null][] = [
-      ["/", { agent: "claude", commands: [] }],
+      ["/", { lists: { claude: [] } }],
       ["/compact now", commands],
       ["see /compact", commands],
     ];
@@ -374,10 +375,10 @@ describe("Desk's room", () => {
       expect(document.body.querySelector("[data-desk-command-menu]"), text).toBeNull();
     }
     // Another agent's list is never the chosen one's rows.
-    await withCommands("/", { agent: "codex", commands: commands.commands });
+    await withCommands("/", { lists: { codex: claudeList } });
     expect(commandRowsShown()).toEqual([]);
     // With no menu ↵ sends the words as they are.
-    await withCommands("/", { agent: "claude", commands: [] });
+    await withCommands("/", { lists: { claude: [] } });
     await key("Enter");
     expect(sent("desk_send")).toEqual([{ text: "/", mentions: [] }]);
   });

@@ -1,28 +1,38 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { agentAdapter } from "../../agentAdapters";
+import { catalogFor, type ProviderKind } from "../../agentPicker";
 import type { Actions } from "../../actions";
 import { refusalText, submitThreadInput } from "../../attachments";
 import type { DeskJob, DeskMention } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { allAgents } from "../../paneAgents";
-import { keepSent, useComposerTray } from "../../deskComposer";
+import { fileWords, keepSent, mentionAt, pickCommand, pickWords, useComposerTray } from "../../deskComposer";
+import { sessionBarSlots, sessionMentions, sessionWords, switchCommand, useMentionFiles } from "../../sessionInput";
+import { checkoutOfPane } from "../../snapshot";
 import { useSessionThread } from "../../sessionThread";
 import { useShellStore } from "../../store";
 import { threadInputHeld, threadScreen } from "../../threadView";
 import type { ReactNode } from "react";
 import type { AskLine } from "../open-asks";
+import { useComposerMenus } from "./composer-menus";
+import { SessionAgentBar } from "./desk-composer";
 import { FileDropZone } from "./file-drop";
 import { NO_MENTIONS, ThreadView, type ThreadPartActions } from "./thread-view";
 
+const NO_CHOICE: { model?: string; effort?: string } = {};
+
 /** The refusals a thread's input words itself; any other is an attachment's, worded as a terminal attachment's is. */
-const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "uncertain", "unavailable", "device_unreachable", "too_long", "control_characters", "attachment_failed", "input_refused"]);
+const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "uncertain", "unavailable", "device_unreachable", "too_long", "control_characters", "attachment_failed", "input_refused", "switch_unsupported", "needs_model", "invalid_model", "invalid_effort", "invalid_request", "agent_asking", "agent_busy", "draft"]);
 
 /**
  * A session's conversation on screen, connected to the core (PRD desk-2-ui
  * D-01, D-20, B2, B15, B30): it opens the session thread of the pane while
  * it is shown and closes it after, draws the record as the core reads it
  * on, reads the page before when the conversation is scrolled to its top,
- * and types the input box's words and files into that pane. Its head (with
+ * and types the input box's words and files into that pane. The box has
+ * Desk's `/` and `@` menus and, under it, the session's model and effort
+ * with its agent fixed (mission-106). Its head (with
  * the outputs shelf under it), the agent's choice card, the questions Hide
  * found and what stands in the box's place while it sleeps are the caller's.
  */
@@ -31,7 +41,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   job: DeskJob | null;
   /** The pane whose thread this is; its card's when not given. */
   paneId?: string | null;
-  actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread">;
+  actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread" | "switchThread" | "observeCatalog" | "requestFileIndex">;
   mentions?: readonly DeskMention[];
   startedByDesk?: boolean;
   focused?: boolean;
@@ -60,9 +70,11 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   const screen = useMemo(() => threadScreen(thread, history, { plans, missions }, rows), [thread, history, plans, missions, rows]);
 
   const [text, setText] = useState("");
+  const [caret, setCaret] = useState(0);
+  const box = useRef<HTMLTextAreaElement>(null);
   const tray = useComposerTray();
-  // The request a send is waiting on and the tiles it carried.
-  const [sent, setSent] = useState<{ request: string; tiles: string[] } | null>(null);
+  // The request a send is waiting on and the tiles it carried; a change of model or effort keeps the words.
+  const [sent, setSent] = useState<{ request: string; tiles: string[]; keepWords?: boolean } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const words = (reason: string) => (INPUT_WORDS.has(reason) ? t(`desk.thread.input.${reason}` as MessageKey) : refusalText(reason, t));
 
@@ -75,7 +87,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
     if (!sent || input?.request_id !== sent.request || input.state === "sending") return;
     setSent(null);
     if (input.state === "sent") {
-      setText("");
+      if (!sent.keepWords) setText("");
       // Only the files this send carried: one dropped since stays for the next.
       sent.tiles.forEach(tray.remove);
       setNotice(null);
@@ -105,6 +117,78 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
       setNotice(words("forward_failed"));
     }
   };
+  // The `/` and `@` menus Desk's composer has: the session's agent's own commands, and the session's project's
+  // files above Desk's sessions. A pick is written as the agent reads it in its terminal.
+  const kind = rows.find((row) => row.pane_id === paneId)?.agent_kind ?? null;
+  const adapter = kind ? agentAdapter(kind) : undefined;
+  const lists = useShellStore((s) => s.deskCommands?.lists);
+  const deskMentions = useShellStore((s) => s.deskMentions);
+  const rest = useShellStore((s) => s.rest);
+  const named = useMemo(() => sessionMentions(deskMentions, rest, paneId), [deskMentions, rest, paneId]);
+  const checkout = paneId ? checkoutOfPane(rest, paneId) : null;
+  const place = useMemo(() => (checkout ? { device: checkout.device, root: checkout.checkout.path } : null), [checkout?.device, checkout?.checkout.path]);
+  const at = mentionAt(text, caret);
+  const files = useMentionFiles(actions.requestFileIndex, place, at?.query ?? null);
+  // A pick's words land on the next render, and the caret is placed after them in that render's layout pass.
+  const placed = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const at = placed.current;
+    if (at === null) return;
+    placed.current = null;
+    box.current?.focus();
+    box.current?.setSelectionRange(at, at);
+  }, [text]);
+  const write = (next: { text: string; caret: number }) => {
+    placed.current = next.caret;
+    setText(next.text);
+    setCaret(next.caret);
+  };
+  const menus = useComposerMenus({
+    text,
+    caret,
+    commands: adapter ? { agent: adapter.picker_label, list: lists?.[adapter.agent_cli as keyof typeof lists] ?? null } : null,
+    noList: "unknown",
+    mentions: named,
+    projects: false,
+    files,
+    onCommand: (slash, command) => {
+      const next = pickCommand({ text, mentions: [] }, slash, command);
+      write({ text: next.draft.text, caret: next.caret });
+    },
+    onMention: (place, mention) => write(pickWords(text, place, sessionWords(mention))),
+    onFile: (place, file) => write(pickWords(text, place, fileWords(file))),
+  });
+
+  // The model and effort under the box, the agent fixed: a change types the agent's own line into the session.
+  const ai = useShellStore((s) => s.rest?.status?.background_ai);
+  const startable = adapter?.can_start === true;
+  useEffect(() => (startable ? actions.observeCatalog() : undefined), [actions, startable]);
+  const catalog = adapter && startable ? catalogFor(ai, adapter.agent_cli as ProviderKind) : null;
+  const choice = thread?.choice ?? NO_CHOICE;
+  const slots = adapter ? sessionBarSlots(adapter.agent_cli, choice, catalog, t) : null;
+  const change = (to: { model: string } | { effort: string }) => {
+    if (!thread?.pane_id || held !== null || sent || ask !== null) return;
+    const request = actions.switchThread(thread.generation, thread.pane_id, to);
+    if (request) {
+      setSent({ request, tiles: [], keepWords: true });
+      setNotice(null);
+    } else {
+      setNotice(words("forward_failed"));
+    }
+  };
+  const bar = adapter && slots && !foot ? (
+    <SessionAgentBar
+      agent={{ kind: adapter.agent_cli, label: adapter.picker_label }}
+      model={slots.model}
+      effort={slots.effort}
+      switchHint={{ model: switchCommand(adapter.switch?.model), effort: switchCommand(adapter.switch?.effort) }}
+      // A question card on screen is answered first: the line's Enter would answer it.
+      held={held !== null || sent !== null || ask !== null}
+      onModel={(model) => change({ model })}
+      onEffort={(effort) => change({ effort })}
+    />
+  ) : null;
+
   // One ask per state the core shows: scroll events at the top come faster
   // than its answer, and a read that failed is asked again only after the
   // core moved.
@@ -157,7 +241,14 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
           focused,
           held: held !== null || sent !== null,
           notice: held === "pane_changed" || held === "pane_gone" ? words(held) : notice,
-          onChange: setText,
+          textRef: box,
+          menus,
+          bar,
+          onChange: (value, next) => {
+            setText(value);
+            setCaret(next);
+          },
+          onCaret: setCaret,
           onSend: send,
         }}
         onTerminal={onTerminal}

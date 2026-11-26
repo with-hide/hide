@@ -10,9 +10,11 @@ import { DeskMenuLine, DeskMenuList } from "./desk-menu";
  * What the `/` panel shows (feedback 1 frame P 가): the agent's commands
  * that match, a line that none does, a line while the agent's session
  * opens and its list is on its way, or a line that the list comes with
- * the first message, before the agent's session ever opened.
+ * the first message, before the agent's session ever opened; in a session's
+ * box, before the agent ever listed its commands to Desk, a line that none
+ * is known yet (`unknown`), where ↵ sends the words as typed.
  */
-export type DeskCommandPanel = { kind: "rows"; commands: readonly DeskCommand[] } | { kind: "none" } | { kind: "waiting" } | { kind: "first" };
+export type DeskCommandPanel = { kind: "rows"; commands: readonly DeskCommand[] } | { kind: "none" } | { kind: "waiting" } | { kind: "first" } | { kind: "unknown" };
 
 /**
  * The `/` menu in the panel Desk's composer menus share (`desk-menu.tsx`):
@@ -48,6 +50,14 @@ export function DeskCommandMenu({ agent, panel, query = "", active, onActive, on
       <DeskMenuLine heading={heading} data-desk-command-menu="waiting">
         <LoaderCircleIcon aria-hidden="true" className="size-(--size-icon-sm) motion-safe:animate-spin" />
         {t("desk.command.waiting")}
+      </DeskMenuLine>
+    );
+  }
+  if (panel.kind === "unknown") {
+    return (
+      <DeskMenuLine heading={heading} data-desk-command-menu="unknown">
+        {t("desk.command.unknown")} ·
+        <span className="flex items-center gap-xxs"><Trans i18n={i18n} t={t} i18nKey="desk.command.sendsAsIs" components={{ key: <Kbd /> }} /></span>
       </DeskMenuLine>
     );
   }

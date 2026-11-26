@@ -28,8 +28,9 @@ mod file;
 pub use file::{
     ACCOUNT_PART, AccountPath, AccountRule, AccountVar, Answer, Base, By, CommandSlot, Desk, Hooks,
     KEY_NAMES, LINE_BYTES, LINE_WORDS, LoginRule, MAX_ANSWER_KEYS, MAX_ID_BYTES, McpFormat,
-    PathRule, PermissionKeys, PlanKeys, QuestionKeys, ROW_LABEL, ROW_NUMBER, SCHEMA, Template,
-    TrustFormat, id_is_valid, is_plain_command, is_typable_word, reserved_variable, valid_variable,
+    PathRule, PermissionKeys, PlanKeys, QuestionKeys, ROW_LABEL, ROW_NUMBER, SCHEMA, Switch,
+    Template, TrustFormat, id_is_valid, is_plain_command, is_typable_word, reserved_variable,
+    switch_effort_is_valid, valid_variable,
 };
 use file::{Fields, Origin, required};
 
@@ -104,6 +105,9 @@ pub struct Definition {
     /// What Desk keeps out of the agent's own commands (`[desk]`); built-in
     /// agents alone, and their copies.
     pub desk: Desk,
+    /// How a running session changes its model and effort (`[switch]`);
+    /// built-in agents alone, and their copies.
+    pub switch: Switch,
     pub source: Source,
     /// The built-in agent a user file copied.
     pub based_on: Option<String>,
@@ -188,6 +192,71 @@ pub fn builtin_account(id: &str) -> Option<&'static AccountRule> {
 /// The built-in definition with this id.
 pub fn builtin(id: &str) -> Option<&'static Definition> {
     builtins().iter().find(|definition| definition.id == id)
+}
+
+/// One change a session input asks of a running session: a new model or a
+/// new effort.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SwitchTo<'a> {
+    Model(&'a str),
+    Effort(&'a str),
+}
+
+impl Switch {
+    /// The line that makes `to` in a session that runs with `now`, as
+    /// `[switch]` writes it: refused as `switch_unsupported` for a slot the
+    /// agent changes only in a menu of its own, `invalid_model` or
+    /// `invalid_effort` for a value the line could not carry as one word,
+    /// and `needs_model` for an effort line that names the model while the
+    /// session's model is the CLI's own default, which Hide cannot name.
+    pub fn line(
+        &self,
+        to: SwitchTo<'_>,
+        now: &crate::LaunchChoice,
+    ) -> Result<String, &'static str> {
+        match to {
+            SwitchTo::Model(model) => {
+                let line = self.model.as_deref().ok_or("switch_unsupported")?;
+                if !crate::valid_model(model) {
+                    return Err("invalid_model");
+                }
+                Ok(line.replace("{model}", model))
+            }
+            SwitchTo::Effort(effort) => {
+                let line = self.effort.as_deref().ok_or("switch_unsupported")?;
+                if !self.efforts.iter().any(|one| one == effort) {
+                    return Err("invalid_effort");
+                }
+                let line = line.replace("{effort}", effort);
+                if !line.contains("{model}") {
+                    return Ok(line);
+                }
+                let model = now.model.as_deref().ok_or("needs_model")?;
+                if !crate::valid_model(model) {
+                    return Err("invalid_model");
+                }
+                Ok(line.replace("{model}", model))
+            }
+        }
+    }
+
+    /// The choice the session runs with once the line for `to` is typed.
+    pub fn after(&self, to: SwitchTo<'_>, now: &crate::LaunchChoice) -> crate::LaunchChoice {
+        match to {
+            SwitchTo::Model(model) => crate::LaunchChoice {
+                model: Some(model.to_owned()),
+                effort: if self.model_resets_effort {
+                    None
+                } else {
+                    now.effort.clone()
+                },
+            },
+            SwitchTo::Effort(effort) => crate::LaunchChoice {
+                model: now.model.clone(),
+                effort: Some(effort.to_owned()),
+            },
+        }
+    }
 }
 
 /// The definition among `definitions` that `kind` names, by its id or one of
@@ -336,6 +405,7 @@ fn new_definition(
         account: file.account,
         answer: file.answer,
         desk: file.desk.unwrap_or_default(),
+        switch: file.switch.unwrap_or_default(),
         source,
         based_on: None,
     })
@@ -400,6 +470,7 @@ fn based_on(
         // A copy runs the same program, so its screens take the same keys.
         answer: builtin.answer.clone(),
         desk: builtin.desk.clone(),
+        switch: builtin.switch.clone(),
         source,
         based_on: Some(base.to_owned()),
     })

@@ -3985,6 +3985,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     closeThread() {
       dispatch({ schema_version: 2, kind: "session_thread_close", payload: {} });
     },
+    /**
+     * Changes the model or the effort of the session thread `generation` shows, the way its agent does in its
+     * terminal (`[switch]` of its definition); answered on the thread's input state by the request id returned,
+     * or null when nothing could be sent.
+     */
+    switchThread(generation: number, paneId: string, change: { model: string } | { effort: string }): string | null {
+      const requestId = crypto.randomUUID();
+      const sent = dispatch({ schema_version: 2, kind: "session_thread_switch", payload: { generation, pane_id: paneId, request_id: requestId, ...change } });
+      return sent === false ? null : requestId;
+    },
     /** The Overview panel's record: read, without the lane moving. */
     readSessionRecord(session: import("./snapshot").WorkSession) {
       dispatch({ schema_version: 2, kind: "session_record_open", payload: { session } });

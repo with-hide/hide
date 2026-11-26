@@ -233,3 +233,13 @@ permission = { allow = ["enter"], allow_always = ["down", "enter"], deny = ["esc
 # operator's terminal.
 [desk]
 left_out = ["logout"]
+
+# How a running session changes its model and its effort (docs/ARCHITECTURE.md,
+# A session's model and effort), each checked in a terminal of Codex 0.172.0 on
+# 2026-11-26: both hold for that session only, and `/model <model>` alone puts
+# the effort back to the model's own default.
+[switch]
+model = "/model {model}"
+effort = "/model --reasoning={effort}"
+efforts = ["minimal", "low", "medium", "high", "xhigh"]
+model_resets_effort = true
