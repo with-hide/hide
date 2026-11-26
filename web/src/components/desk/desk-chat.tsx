@@ -115,7 +115,10 @@ function DeskMissionMention({ mention }: { mention: DeskMissionMention }) {
  * stopped (B7). Given `copy`, it offers `복사` of its original words, each
  * session and mission said by its name, on hover and on every code block
  * (Doop E2). A compaction the agent told outside its words (OpenCode's
- * `/compact`) is one line of its own, so that answer is never empty.
+ * `/compact`) is one line of its own, so that answer is never empty; a
+ * finished answer with neither words nor a compaction is a command that
+ * ended without a word, which the core keeps only for one, and it says the
+ * command finished.
  */
 export function DeskReply({ text, stopped = false, live = false, mentions = [], missions = [], compaction = null, onMention, onMission, onFile, copy }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; missions?: readonly DeskMissionMention[]; compaction?: DeskCompaction | null; onMention?: (mention: DeskMention) => void; onMission?: (missionId: string) => void; /** A file path the answer names, pressed (feedback 2 frame M [2]); without it paths stay words. */ onFile?: (file: FoundAnswerPath) => void; copy?: CopyText }) {
   const { t } = useInterfaceTranslation();
@@ -145,6 +148,7 @@ export function DeskReply({ text, stopped = false, live = false, mentions = [], 
           {compaction.done ? t("desk.reply.compacted") : compaction.reason ? t("desk.reply.notCompactedWhy", { reason: compaction.reason }) : t("desk.reply.notCompacted")}
         </span>
       ) : null}
+      {text === "" && !compaction && !live && !stopped ? <span className="text-body text-subtle-foreground" data-desk-reply-command-done="true">{t("desk.reply.commandDone")}</span> : null}
       {stopped ? <span className="text-micro text-muted-foreground">{t("desk.reply.stopped")}</span> : null}
     </div>
   );

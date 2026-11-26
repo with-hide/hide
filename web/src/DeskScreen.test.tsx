@@ -407,15 +407,16 @@ describe("Desk's room", () => {
     expect(document.body.querySelector("[data-desk-command-match]")).toBeNull();
   });
 
-  it("shows a compaction the agent told outside its words as the answer's one line, and a left-out command's notice", async () => {
-    const reply = (compaction: { done: boolean; reason: string | null }, id: number): DeskItem => ({ kind: "reply", id, agent: "opencode", text: "", at_ms: 0, state: "done", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 }, mentions: [], missions: [], compaction });
+  it("shows a compaction the agent told outside its words as the answer's one line, a command that ended without a word as its own, and a left-out command's notice", async () => {
+    const reply = (compaction: { done: boolean; reason: string | null } | undefined, id: number): DeskItem => ({ kind: "reply", id, agent: "opencode", text: "", at_ms: 0, state: "done", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 }, mentions: [], missions: [], compaction });
     await render(desk([
       reply({ done: false, reason: "Nothing to compact yet" }, 1),
       reply({ done: true, reason: null }, 2),
       { kind: "notice", id: 3, notice: "command_left_out", agent: "codex", detail: null },
+      reply(undefined, 4),
     ]));
-    const lines = Array.from(document.body.querySelectorAll("[data-desk-reply-compaction]")).map((line) => line.textContent);
-    expect(lines).toEqual(["Couldn't compact the conversation · Nothing to compact yet", "Compacted the conversation"]);
+    const lines = Array.from(document.body.querySelectorAll("[data-desk-reply-compaction], [data-desk-reply-command-done]")).map((line) => line.textContent);
+    expect(lines).toEqual(["Couldn't compact the conversation · Nothing to compact yet", "Compacted the conversation", "Command finished"]);
     expect(document.body.querySelector("[data-desk-notice='command_left_out']")?.textContent).toBe("Desk doesn't send this command to Codex");
   });
 

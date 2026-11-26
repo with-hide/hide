@@ -1225,12 +1225,18 @@ impl Runtime {
         self.desk.stored.selection.agent
     }
 
-    /// Ends the turn: its reply joins the conversation.
+    /// Ends the turn: its reply joins the conversation. A command that ends
+    /// as it should without a word, and without a compaction its adapter
+    /// tells, still answers: its empty reply is the line that it finished,
+    /// whichever agent ran it (letter-48464).
     fn finish_turn(&mut self, state: DeskReplyState) {
         let Some(turn) = self.desk.turn.take() else {
             return;
         };
-        if !turn.text.is_empty() || turn.compaction.is_some() {
+        let finished_command = state == DeskReplyState::Done
+            && !turn.cut
+            && turn.kind == hide_desk::commands::Kind::Command;
+        if !turn.text.is_empty() || turn.compaction.is_some() || finished_command {
             let id = self.desk.stored.conversation.next_id();
             let mentions = hide_desk::session_mentions(&turn.text)
                 .into_iter()
@@ -4234,6 +4240,41 @@ mod tests {
         ended(&mut runtime);
         event(&mut runtime, "desk_send", json!({"text": "and now?"}));
         assert_eq!(sent(&received).resume, None);
+    }
+
+    /// Antigravity's `/compact` (letter-48464): a command that ends as it
+    /// should with no words leaves an empty reply, the line that it
+    /// finished; a message that ends so, or a command stopped, leaves none.
+    #[test]
+    fn a_command_that_ends_without_a_word_still_answers() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        listed(&mut runtime, AdapterId::CLAUDE, &["compact"]);
+        let ends = |runtime: &mut Runtime, text: &str, outcome: TurnOutcome| {
+            event(runtime, "desk_send", json!({"text": text}));
+            let tag = sent(&received).tag;
+            if !runtime.desk.host.open {
+                opened(runtime, AdapterId::CLAUDE);
+            }
+            runtime.desk_report(Report::TurnEnded { tag, outcome });
+            items(runtime).pop()
+        };
+        let last = ends(&mut runtime, "/compact", TurnOutcome::Done);
+        assert!(
+            matches!(&last, Some(DeskItem::Reply { text, compaction: None, state: DeskReplyState::Done, .. }) if text.is_empty()),
+            "{last:?}"
+        );
+        let last = ends(&mut runtime, "hello", TurnOutcome::Done);
+        assert!(
+            matches!(&last, Some(DeskItem::User { text, .. }) if text == "hello"),
+            "{last:?}"
+        );
+        let last = ends(&mut runtime, "/compact", TurnOutcome::Cancelled);
+        assert!(
+            matches!(&last, Some(DeskItem::User { text, .. }) if text == "/compact"),
+            "{last:?}"
+        );
     }
 
     /// OpenCode tells `/compact`'s end only in its session's `_meta`: the
