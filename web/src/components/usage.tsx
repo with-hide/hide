@@ -59,7 +59,7 @@ export const Usage = memo(function Usage({ actions }: { actions: Actions }) {
         const value = chip.percent !== null ? percentLabel(chip.percent) : chip.window ? t(chip.state === "not_started" ? "usage.notStarted" : "usage.expired") : chip.state === "loading" ? "…" : t("common.unavailable");
         return <PopoverTrigger key={`${chip.agent}-${chip.window ?? "none"}`} data-usage-trigger="true" data-usage-chip={chip.agent} data-usage-window={chip.window} data-usage-state={chip.state}
           aria-label={[label, chip.window ? windowLabel(chip.window, t) : "", value].filter(Boolean).join(", ")}
-          className={cn("flex h-(--size-control-sm) shrink-0 items-center gap-xxs rounded-sm bg-secondary px-xs font-mono text-micro font-semibold outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-accent", TEXT_TONE[usageTone(chip.percent)])}>
+          className={cn("flex h-(--size-control-sm) shrink-0 items-center gap-xxs rounded-sm bg-secondary px-xs font-mono text-micro font-semibold outline-none hover:fill-hovered focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:fill-hovered", TEXT_TONE[usageTone(chip.percent)])}>
           <AgentMark kind={chip.agent} className={chip.percent === null ? "opacity-(--opacity-dimmed) grayscale" : ""} />
           {chip.named && chip.window ? <span className="text-muted-foreground">{SHORT_WINDOW[chip.window]}</span> : null}
           {chip.percent !== null ? <span>{percentLabel(chip.percent)}</span> : null}

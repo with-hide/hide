@@ -315,7 +315,7 @@ export function DisplayTab({ display: sent, workspace, interaction, actions }: {
           <Button
             variant="ghost"
             size="icon-sm"
-            className={`${fit.close} shrink-0 hover:bg-popover hover:text-foreground focus-visible:visible group-hover:visible ${selected ? "visible" : "invisible"}`}
+            className={`${fit.close} shrink-0 hover:bg-accent hover:text-foreground focus-visible:visible group-hover:visible ${selected ? "visible" : "invisible"}`}
             aria-label={closeLabel}
             data-keyboard-stays="true"
             onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }}

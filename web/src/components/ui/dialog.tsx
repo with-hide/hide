@@ -4,6 +4,7 @@ import { useRef, type ComponentProps } from "react";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { useLayerOpen, useReturnFocus } from "./layer";
+import { ModalSurface } from "./floating-surface";
 
 /** Radix's dialog root, with its open state joined to the shell's Escape layers. */
 function Dialog({ open, defaultOpen, onOpenChange, baseEscape = false, ...props }: ComponentProps<typeof DialogPrimitive.Root> & { baseEscape?: boolean }) {
@@ -43,39 +44,42 @@ function DialogContent({
   const surface = useRef<HTMLDivElement>(null);
   const returnFocus = useReturnFocus(true, returnFocusTo ? { target: returnFocusTo, within: () => surface.current } : undefined);
   return (
-    <DialogPrimitive.Portal>
-      <DialogOverlay />
-      <DialogPrimitive.Content
-        ref={surface}
-        data-slot="dialog-content"
-        className={cn(
-          "fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100%-var(--spacing-xxl))] w-(--size-worktree-dialog) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-dialog text-body text-popover-foreground [--accent:var(--dialog-hover)] [--secondary:var(--dialog-raised)] shadow-modal outline-none",
-          className,
-        )}
-        onOpenAutoFocus={(event) => {
-          onOpenAutoFocus?.(event);
-          if (event.defaultPrevented || initialFocus !== "container") return;
-          event.preventDefault();
-          surface.current?.focus();
-        }}
-        onCloseAutoFocus={(event) => {
-          onCloseAutoFocus?.(event);
-          if (!event.defaultPrevented) returnFocus(event);
-        }}
-        {...props}
-      >
-        {children}
-        {showCloseButton ? (
-          <DialogPrimitive.Close
-            data-slot="dialog-close"
-            aria-label={t("common.close")}
-            className="absolute right-md top-md rounded-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring [&_svg]:size-(--size-icon)"
-          >
-            <XIcon />
-          </DialogPrimitive.Close>
-        ) : null}
-      </DialogPrimitive.Content>
-    </DialogPrimitive.Portal>
+    <ModalSurface>
+      <DialogPrimitive.Portal>
+        <DialogOverlay />
+        <DialogPrimitive.Content
+          ref={surface}
+          data-slot="dialog-content"
+          data-modal-surface="true"
+          className={cn(
+            "fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100%-var(--spacing-xxl))] w-(--size-worktree-dialog) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-dialog text-body text-popover-foreground shadow-modal outline-none",
+            className,
+          )}
+          onOpenAutoFocus={(event) => {
+            onOpenAutoFocus?.(event);
+            if (event.defaultPrevented || initialFocus !== "container") return;
+            event.preventDefault();
+            surface.current?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            onCloseAutoFocus?.(event);
+            if (!event.defaultPrevented) returnFocus(event);
+          }}
+          {...props}
+        >
+          {children}
+          {showCloseButton ? (
+            <DialogPrimitive.Close
+              data-slot="dialog-close"
+              aria-label={t("common.close")}
+              className="absolute right-md top-md rounded-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring [&_svg]:size-(--size-icon)"
+            >
+              <XIcon />
+            </DialogPrimitive.Close>
+          ) : null}
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </ModalSurface>
   );
 }
 

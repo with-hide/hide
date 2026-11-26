@@ -2,6 +2,7 @@ import { Popover as PopoverPrimitive } from "radix-ui";
 import type { ComponentProps } from "react";
 import { cn } from "../../lib/utils";
 import { useLayerOpen } from "./layer";
+import { useFloatingSurface } from "./floating-surface";
 
 /**
  * `escape` false leaves Escape to whatever has the keyboard, for a popover the
@@ -27,7 +28,7 @@ function PopoverContent({ className, align = "center", sideOffset = 4, ...props 
         data-slot="popover-content"
         align={align}
         sideOffset={sideOffset}
-        className={cn("z-50 w-(--size-pr-popover) max-w-(--radix-popover-content-available-width) rounded-md border border-border bg-popover p-sm text-body text-popover-foreground shadow-overlay outline-none", className)}
+        className={cn("z-50 w-(--size-pr-popover) max-w-(--radix-popover-content-available-width) rounded-md bg-popover p-sm text-body text-popover-foreground shadow-overlay outline-none", useFloatingSurface(), className)}
         {...props}
       />
     </PopoverPrimitive.Portal>

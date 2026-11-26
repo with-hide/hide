@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {contrast, failures, layerFailures} from '../check-token-contrast.mjs';
+import {contrast, failures, layerFailures, over} from '../check-token-contrast.mjs';
 
 // The expected ratios are the ones measured for hide-color-theme's intake,
 // independently of this checker: Tango red, blue, magenta and bright black on
@@ -65,27 +65,88 @@ test('a secondary grey is checked on the background, the sidebar and a card', ()
   assert.ok(found.every(line => line.includes('light') && line.includes('on --card')), found.join('\n'));
 });
 
-test('a layer that draws the same step as the one under it fails, named with its floor for that mode', () => {
+const fill = (alpha, light) => ({type: 'fill', value: {step: '--white', alpha}, light: {step: '--black', alpha: light}});
+
+function layered() {
   const step = (value, light) => color(value, light);
-  const tokens = {
+  return {
+    '--white': {type: 'palette', oklch: [100, 0, 0]},
+    '--black': {type: 'palette', oklch: [0, 0, 0]},
     '--background': step('#0E0F12', '#FFFFFF'),
     '--sidebar': step('#151619', '#F8F8FA'),
     '--card': step('#1C1D20', '#F3F3F5'),
-    '--secondary': step('#2A2B2E', '#E8E9EC'),
-    '--accent': step('#343539', '#E0E1E4'),
+    '--muted': step('#1C1D20', '#F3F3F5'),
+    '--raised': step('#2A2B2E', '#FFFFFF'),
+    '--input': step('#393A3E', '#D9DBDD'),
+    '--popover': step('#232427', '#FFFFFF'),
+    '--popover-nested': step('#2F3033', '#FFFFFF'),
     '--dialog': step('#232427', '#FFFFFF'),
-    '--dialog-raised': step('#2F3033', '#E8E9EC'),
-    '--dialog-hover': step('#3C3D40', '#D9DBDD'),
     '--border': step('#393A3E', '#D9DBDD'),
+    '--secondary': fill(0.06, 0.045),
+    '--accent': fill(0.05, 0.04),
+    '--hairline': fill(0.08, 0.07),
+    '--keycap-line': fill(0.16, 0.15),
+    '--code-block': fill(0.035, 0.025),
+    '--segment-on': {type: 'fill', value: {step: '--white', alpha: 0.16}, light: {step: '--white', alpha: 1}},
   };
+}
+
+// White at 6% over #1C1D20, by hand: 28 + 227 * 0.06 = 41.6, 29 + 226 * 0.06 = 42.6, 32 + 223 * 0.06 = 45.4.
+test('a see-through fill draws its step composited over the surface under it', () => {
+  const tokens = layered();
+  assert.equal(over(tokens, '--secondary', 'dark', '#1C1D20'), '#2a2b2d');
+  // Black at 4.5% over white: 255 * 0.955 = 243.5.
+  assert.equal(over(tokens, '--secondary', 'light', '#FFFFFF'), '#f4f4f4');
+});
+
+test('a layer that draws the same step as the one under it fails, named with its floor for that mode', () => {
+  const tokens = layered();
   assert.deepEqual(layerFailures(tokens), []);
-  tokens['--accent'] = {type: 'alias', value: '--secondary'};
+  tokens['--card'] = {type: 'alias', value: '--background'};
   assert.deepEqual(layerFailures(tokens), [
-    'neutral dark: --accent #2A2B2E on --secondary #2A2B2E is 1.00:1, under 1.06:1',
-    'neutral light: --accent #E8E9EC on --secondary #E8E9EC is 1.00:1, under 1.04:1',
-    'hide dark: --accent #2A2B2E on --secondary #2A2B2E is 1.00:1, under 1.06:1',
-    'hide light: --accent #E8E9EC on --secondary #E8E9EC is 1.00:1, under 1.04:1',
+    'neutral dark: --card on --background: #0E0F12 on #0E0F12 is 1.00:1, under 1.08:1',
+    'neutral light: --card on --background: #FFFFFF on #FFFFFF is 1.00:1, under 1.04:1',
+    'hide dark: --card on --background: #0E0F12 on #0E0F12 is 1.00:1, under 1.08:1',
+    'hide light: --card on --background: #FFFFFF on #FFFFFF is 1.00:1, under 1.04:1',
   ]);
+});
+
+test('a menu opened inside a modal has to stand a step above the modal, in Dark; Light tells them apart by shadow', () => {
+  const tokens = layered();
+  tokens['--popover-nested'] = {type: 'alias', value: '--dialog'};
+  assert.deepEqual(layerFailures(tokens), [
+    'neutral dark: --popover-nested on --dialog: #232427 on #232427 is 1.00:1, under 1.15:1',
+    'hide dark: --popover-nested on --dialog: #232427 on #232427 is 1.00:1, under 1.15:1',
+  ]);
+});
+
+test('a see-through fill is checked over every surface it can sit on, each composited on its own', () => {
+  const tokens = layered();
+  // White at 2% shows over the light grey of a popover but not over the darkest page.
+  tokens['--code-block'] = fill(0.02, 0.025);
+  const found = layerFailures(tokens);
+  assert.ok(found.some(line => line.startsWith('neutral dark: --code-block over --background:')), found.join('\n'));
+  assert.ok(!found.some(line => line.includes('over --popover:')), found.join('\n'));
+  assert.ok(found.every(line => line.includes('dark: --code-block over')), found.join('\n'));
+});
+
+test('a fill is checked over a picked row, the chosen accent at the selected share over the sidebar', () => {
+  const tokens = layered();
+  tokens['--opacity-selected-fill'] = {type: 'scalar', value: 0.12};
+  tokens['--accent-choice-lime'] = color('#B9FF66', '#84CC16');
+  assert.deepEqual(layerFailures(tokens), []);
+  // A hover the eye cannot find over a lime-tinted row is caught there and named by the accent.
+  tokens['--accent'] = fill(0.03, 0.04);
+  const found = layerFailures(tokens);
+  assert.ok(found.some(line => line.startsWith('neutral dark: --accent over selected lime:')), found.join('\n'));
+});
+
+test('a filled control\'s hover is checked laid over its own fill, so a hover fainter than the fill fails', () => {
+  const tokens = layered();
+  tokens['--accent'] = fill(0.01, 0.04);
+  const found = layerFailures(tokens);
+  assert.ok(found.some(line => line.startsWith('neutral dark: --accent over --secondary over --card:')), found.join('\n'));
+  assert.ok(found.every(line => line.includes('dark')), found.join('\n'));
 });
 
 test('the doorbell letter words are checked on their band, per theme and mode', () => {

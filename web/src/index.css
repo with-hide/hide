@@ -349,15 +349,29 @@ html[data-view-drag="row-resize"] * {
   & :is([data-variant="secondary"], [data-variant="outline"]):not(.border-dashed) { border-color: transparent; }
 }
 
-/* The chosen item of a segmented control: lifted white in Light; in Dark a shadow reads as a stroke and the raised gray sits too close to the track, so it is a stronger foreground tint with no shadow. */
+/* A filled control's hover: --secondary and --accent both see through, so the
+   hover fill is laid over the control's own fill rather than swapped in for it,
+   which would make the hovered control fainter than the resting one
+   (DESIGN_GUIDE.md, Tokens at a glance). */
+@utility fill-hovered {
+  background-image: linear-gradient(var(--accent), var(--accent));
+}
+
+/* An editor's tooltip renders inside the editor rather than through a portal,
+   so inside a modal it takes the nested step the way a floating part does
+   through useFloatingSurface() (components/ui/floating-surface.tsx). */
+[data-modal-surface] .cm-tooltip {
+  --popover: var(--popover-nested);
+}
+
+/* The chosen item of a segmented control (--segment-on over the --secondary track): lifted white in Light; in Dark a shadow reads as a stroke, so it is a stronger white fill with no shadow. */
 @utility segment-on {
   &, &:hover {
-    background-color: var(--raised);
+    background-color: var(--segment-on);
     color: var(--foreground);
     box-shadow: var(--shadow-raised);
   }
   .dark &, .dark &:hover {
-    background-color: color-mix(in srgb, var(--foreground) calc(var(--opacity-emphasis-fill) * 100%), transparent);
     box-shadow: none;
   }
 }

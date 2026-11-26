@@ -29,7 +29,7 @@ function ToggleGroup({ className, variant = "segmented", ...props }: ComponentPr
   return (
     <ToggleGroupPrimitive.Root
       data-slot="toggle-group"
-      className={cn("flex w-fit items-center", variant === "pill" ? "flex-wrap gap-xs" : "gap-xxs rounded-sm bg-foreground/6 p-xxs", className)}
+      className={cn("flex w-fit items-center", variant === "pill" ? "flex-wrap gap-xs" : "gap-xxs rounded-sm bg-secondary p-xxs", className)}
       {...props}
     />
   );

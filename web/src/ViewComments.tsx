@@ -154,7 +154,7 @@ export function PaneViews({ paneId, name, actions }: { paneId: string; name: str
             aria-label={unseen ? `${label}, ${t("agents.mark.look")}` : label}
             data-pane-views={paneId}
             data-pane-views-unseen={unseen ? "true" : undefined}
-            className="flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs px-xs outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary"
+            className="flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs px-xs outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary"
           >
             <span className="relative flex shrink-0">
               <FilesIcon aria-hidden="true" className="size-(--size-icon-sm)" />
@@ -244,7 +244,7 @@ export function NoteFormCard({ form, meta, full, workspace, actions, add, close 
   };
   return (
     <div
-      className="flex w-full flex-col gap-xs rounded-md border border-border bg-popover p-sm text-caption shadow-overlay"
+      className="flex w-full flex-col gap-xs rounded-md bg-popover p-sm text-caption shadow-overlay"
       data-view-note-form={form.displayId}
       onPointerDown={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
@@ -315,7 +315,7 @@ export function CommentCard({ comment, workspace, displayId, actions }: { commen
   const quoted = comment.changed && comment.anchor.kind === "lines" ? comment.anchor.lines.join(" ") : null;
   return (
     <div
-      className="flex w-full items-start gap-xs rounded-md border border-border bg-popover p-sm text-caption shadow-raised"
+      className="flex w-full items-start gap-xs rounded-md border border-border bg-raised p-sm text-caption shadow-raised"
       data-view-comment={comment.id}
       data-view-comment-number={comment.number}
       data-view-comment-changed={comment.changed ? "true" : "false"}
@@ -976,7 +976,7 @@ export function RegionHint({ displayId }: { displayId: string }) {
   if (!on) return null;
   return (
     <div className="pointer-events-none sticky top-sm z-20 flex h-0 justify-end pr-md" data-view-comment-hint={displayId}>
-      <span className="flex h-(--size-control-sm) items-center gap-xs rounded-full border border-border bg-popover px-sm text-caption text-foreground shadow-raised">
+      <span className="flex h-(--size-control-sm) items-center gap-xs rounded-full border border-border bg-raised px-sm text-caption text-foreground shadow-raised">
         {t("feedback.hint.region")}
       </span>
     </div>
