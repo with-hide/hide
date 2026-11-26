@@ -296,7 +296,7 @@ export function DeskJobCard({ job, selected = false, selectedOutput = null, ...a
   const ended = job.state === "cancelled" || job.state === "closed" || job.state === "moved_out" || job.state === "archived";
   return (
     <article
-      className={cn("relative min-w-0 rounded-lg border border-border", selected ? "bg-accent" : "hover:bg-accent/50")}
+      className={cn("relative min-w-0 rounded-lg border border-border", selected ? "bg-accent" : "hover:bg-accent")}
       aria-label={job.title}
       data-desk-job={job.state}
       data-desk-job-id={job.id}

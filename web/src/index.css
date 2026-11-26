@@ -357,15 +357,14 @@ html[data-view-drag="row-resize"] * {
   background-image: linear-gradient(var(--accent), var(--accent));
 }
 
-/* The chosen item of a segmented control: lifted white in Light; in Dark a shadow reads as a stroke and the raised gray sits too close to the track, so it is a stronger foreground tint with no shadow. */
+/* The chosen item of a segmented control (--segment-on over the --secondary track): lifted white in Light; in Dark a shadow reads as a stroke, so it is a stronger white fill with no shadow. */
 @utility segment-on {
   &, &:hover {
-    background-color: var(--raised);
+    background-color: var(--segment-on);
     color: var(--foreground);
     box-shadow: var(--shadow-raised);
   }
   .dark &, .dark &:hover {
-    background-color: color-mix(in srgb, var(--foreground) calc(var(--opacity-emphasis-fill) * 100%), transparent);
     box-shadow: none;
   }
 }

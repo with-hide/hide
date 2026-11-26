@@ -103,7 +103,11 @@ const LAYER_STEPS = [
 // A see-through fill (a `fill` token) sits on whatever surface is under it, so
 // it is composited over each surface a control or a row can sit on and has to
 // stand apart from every one of them. [fill, Dark minimum, Light minimum].
-const FILL_SURFACES = ['--background', '--sidebar', '--card', '--popover', '--dialog'];
+const FILL_SURFACES = ['--background', '--sidebar', '--card', '--muted', '--raised', '--input', '--popover', '--dialog'];
+// A picked row is the chosen accent at --opacity-selected-fill over the sidebar
+// (`--color-selected` in index.css); a fill such as a row's action sits on it,
+// so it is a surface too, once for each accent the operator can choose.
+const SELECTED_UNDER = '--sidebar';
 const FILL_STEPS = [
   ['--secondary', 1.12, 1.08],
   ['--accent', 1.1, 1.07],
@@ -117,7 +121,14 @@ const STACKED_STEPS = [
   ['--accent', '--secondary', 1.12, 1.07],
   ['--hairline', '--secondary', 1.2, 1.12],
   ['--hairline', '--code-block', 1.2, 1.12],
+  ['--segment-on', '--secondary', 1.25, 1.08],
 ];
+
+/** The hex `top` draws laid over `under` at `alpha`, source-over in sRGB. */
+function mix(top, alpha, under) {
+  const a = rgb(top), b = rgb(under);
+  return `#${b.map((byte, at) => Math.round(a[at] * alpha + byte * (1 - alpha)).toString(16).padStart(2, '0')).join('')}`;
+}
 
 /** Every layer that does not stand apart from the one it sits on, as readable lines. */
 export function layerFailures(tokens) {
@@ -133,12 +144,19 @@ export function layerFailures(tokens) {
       for (const [layer, under, dark, light] of LAYER_STEPS) {
         check(`${layer} on ${under}:`, at(layer), at(under), floor(dark, light));
       }
-      for (const surface of FILL_SURFACES) {
+      const selected = tokens['--opacity-selected-fill']?.value;
+      const surfaces = FILL_SURFACES.map(name => [name, at(name)]);
+      if (selected !== undefined) {
+        for (const choice of Object.keys(tokens).filter(name => name.startsWith('--accent-choice-'))) {
+          surfaces.push([`selected ${choice.slice('--accent-choice-'.length)}`, mix(at(choice), selected, at(SELECTED_UNDER))]);
+        }
+      }
+      for (const [surface, hex] of surfaces) {
         for (const [fill, dark, light] of FILL_STEPS) {
-          check(`${fill} over ${surface}:`, over(tokens, fill, mode, at(surface)), at(surface), floor(dark, light));
+          check(`${fill} over ${surface}:`, over(tokens, fill, mode, hex), hex, floor(dark, light));
         }
         for (const [top, fill, dark, light] of STACKED_STEPS) {
-          const under = over(tokens, fill, mode, at(surface));
+          const under = over(tokens, fill, mode, hex);
           check(`${top} over ${fill} over ${surface}:`, over(tokens, top, mode, under), under, floor(dark, light));
         }
       }

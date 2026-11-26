@@ -38,3 +38,25 @@ test('the public staged gate carries checker imports and logo registries without
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, /unstaged module must not run/);
 });
+
+test('the web token check refuses an opacity on a see-through fill and takes the fill itself', t => {
+  const repo = path.resolve(import.meta.dirname, '../..');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hide-web-tokens-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  fs.mkdirSync(path.join(root, 'design'));
+  fs.copyFileSync(path.join(repo, 'design/tokens.json'), path.join(root, 'design/tokens.json'));
+  fs.mkdirSync(path.join(root, 'web/src/generated'), {recursive: true});
+  fs.copyFileSync(path.join(repo, 'web/src/tokens.css'), path.join(root, 'web/src/tokens.css'));
+  fs.copyFileSync(path.join(repo, 'web/src/generated/accents.ts'), path.join(root, 'web/src/generated/accents.ts'));
+  const check = source => {
+    fs.writeFileSync(path.join(root, 'web/src/row.tsx'), `export const row = "${source}";\n`);
+    return spawnSync(process.execPath, [path.join(repo, 'scripts/check-web-tokens.mjs'), root], {encoding: 'utf8'});
+  };
+  for (const faded of ['hover:bg-accent/50', 'bg-secondary/40', 'border-hairline/30']) {
+    const refused = check(`rounded-xs ${faded}`);
+    assert.notEqual(refused.status, 0, faded);
+    assert.match(refused.stderr, /opacity on a see-through fill/);
+  }
+  const taken = check('rounded-xs bg-secondary hover:bg-accent border-hairline bg-warning/15');
+  assert.equal(taken.status, 0, taken.stdout + taken.stderr);
+});

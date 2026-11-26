@@ -75,6 +75,9 @@ function layered() {
     '--background': step('#0E0F12', '#FFFFFF'),
     '--sidebar': step('#151619', '#F8F8FA'),
     '--card': step('#1C1D20', '#F3F3F5'),
+    '--muted': step('#1C1D20', '#F3F3F5'),
+    '--raised': step('#2A2B2E', '#FFFFFF'),
+    '--input': step('#393A3E', '#D9DBDD'),
     '--popover': step('#414246', '#FFFFFF'),
     '--dialog': step('#232427', '#FFFFFF'),
     '--border': step('#393A3E', '#D9DBDD'),
@@ -83,6 +86,7 @@ function layered() {
     '--hairline': fill(0.08, 0.07),
     '--keycap-line': fill(0.16, 0.15),
     '--code-block': fill(0.035, 0.025),
+    '--segment-on': {type: 'fill', value: {step: '--white', alpha: 0.16}, light: {step: '--white', alpha: 1}},
   };
 }
 
@@ -114,6 +118,17 @@ test('a see-through fill is checked over every surface it can sit on, each compo
   assert.ok(found.some(line => line.startsWith('neutral dark: --code-block over --background:')), found.join('\n'));
   assert.ok(!found.some(line => line.includes('over --popover:')), found.join('\n'));
   assert.ok(found.every(line => line.includes('dark: --code-block over')), found.join('\n'));
+});
+
+test('a fill is checked over a picked row, the chosen accent at the selected share over the sidebar', () => {
+  const tokens = layered();
+  tokens['--opacity-selected-fill'] = {type: 'scalar', value: 0.12};
+  tokens['--accent-choice-lime'] = color('#B9FF66', '#84CC16');
+  assert.deepEqual(layerFailures(tokens), []);
+  // A hover the eye cannot find over a lime-tinted row is caught there and named by the accent.
+  tokens['--accent'] = fill(0.03, 0.04);
+  const found = layerFailures(tokens);
+  assert.ok(found.some(line => line.startsWith('neutral dark: --accent over selected lime:')), found.join('\n'));
 });
 
 test('a filled control\'s hover is checked laid over its own fill, so a hover fainter than the fill fails', () => {

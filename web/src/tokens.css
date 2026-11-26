@@ -55,6 +55,7 @@
   --color-hairline: var(--hairline);
   --color-keycap-line: var(--keycap-line);
   --color-code-block: var(--code-block);
+  --color-segment-on: var(--segment-on);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
@@ -555,6 +556,7 @@
   --hairline: rgba(0, 0, 0, 0.07);
   --keycap-line: rgba(0, 0, 0, 0.15);
   --code-block: rgba(0, 0, 0, 0.025);
+  --segment-on: rgba(255, 255, 255, 1);
   --secondary-foreground: var(--foreground);
   --muted: var(--gray-96-5);
   --muted-foreground: var(--gray-53);
@@ -684,6 +686,7 @@
   --hairline: rgba(255, 255, 255, 0.08);
   --keycap-line: rgba(255, 255, 255, 0.16);
   --code-block: rgba(255, 255, 255, 0.035);
+  --segment-on: rgba(255, 255, 255, 0.16);
   --secondary-foreground: var(--foreground);
   --muted: var(--gray-23);
   --muted-foreground: var(--gray-64);

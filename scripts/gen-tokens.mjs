@@ -83,7 +83,7 @@ export function fillMix(tokens, name, fill) {
   const {step, alpha, ...rest} = fill;
   if (Object.keys(rest).length) throw new Error(`${name} has unknown fill fields: ${Object.keys(rest).join(', ')}`);
   const hex = paletteHex(tokens, step);
-  if (typeof alpha !== 'number' || !(alpha > 0 && alpha < 1)) throw new Error(`${name} needs an alpha between 0 and 1, not ${alpha}`);
+  if (typeof alpha !== 'number' || !(alpha > 0 && alpha <= 1)) throw new Error(`${name} needs an alpha above 0 and at most 1, not ${alpha}`);
   const [r, g, b] = [1, 3, 5].map(at => Number.parseInt(hex.slice(at, at + 2), 16));
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }

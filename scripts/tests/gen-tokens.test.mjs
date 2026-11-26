@@ -64,5 +64,5 @@ test('a see-through fill is written as its palette step\'s sRGB at its alpha, th
 test('a see-through fill with a Hide value, an unknown step or an alpha outside 0..1 is refused', t => {
   assert.throws(() => generate(withTokens(t, tokens => { tokens['--secondary'].hide = {value: '#000000', light: '#FFFFFF'}; })), /--secondary is a see-through fill/);
   assert.throws(() => generate(withTokens(t, tokens => { tokens['--secondary'].value.step = '--gray-missing'; })), /--gray-missing is not a palette step/);
-  assert.throws(() => generate(withTokens(t, tokens => { tokens['--secondary'].light.alpha = 1.2; })), /--secondary needs an alpha between 0 and 1/);
+  assert.throws(() => generate(withTokens(t, tokens => { tokens['--secondary'].light.alpha = 1.2; })), /--secondary needs an alpha above 0 and at most 1/);
 });
