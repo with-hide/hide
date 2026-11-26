@@ -140,12 +140,14 @@ pub enum TerminalControl {
     /// The paste is being cancelled: keys for the pane are refused until it
     /// is released.
     AttachmentRefuse { intent: String },
-    /// The paste's text is ready: write it, then the keys held behind it,
-    /// to the session of `generation`.
+    /// The paste is ready: paste each shell-quoted path to the session of
+    /// `generation`, a space after each, then write the keys held behind
+    /// them. The pane's holder wraps each path in bracketed paste only when
+    /// the program turned that mode on, which only it can know.
     AttachmentDeliver {
         intent: String,
         generation: u64,
-        paste: String,
+        paths: Vec<String>,
     },
     /// The paste ended without being written: drop the keys held behind it.
     AttachmentRelease { intent: String },

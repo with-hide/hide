@@ -1162,7 +1162,7 @@ mod tests {
         router.control(TerminalControl::AttachmentDeliver {
             intent: "paste-1".into(),
             generation: 3,
-            paste: "'/tmp/a.png' ".into(),
+            paths: vec!["'/tmp/a.png'".into()],
         });
         router.control(TerminalControl::AttachmentRelease {
             intent: "paste-1".into(),

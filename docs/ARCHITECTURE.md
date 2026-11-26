@@ -687,12 +687,12 @@ A registration ends when its host's published session stops listing its pane: ea
 
 ## Explicit terminal attachments
 
-The browser cannot name a dropped file's or a pasted image's path, so hided's own staging (`hided/src/attachments.rs`, see hided and the WebSocket boundary) is the only source of a `terminal_attachment` intent: it writes the uploaded bytes to disk and sends the event carrying the original pane ID, bracketed-paste mode, a generated request UUID and the staged paths.
+The browser cannot name a dropped file's or a pasted image's path, so hided's own staging (`hided/src/attachments.rs`, see hided and the WebSocket boundary) is the only source of a `terminal_attachment` intent: it writes the uploaded bytes to disk and sends the event carrying the original pane ID, a generated request UUID and the staged paths.
 hided reports `terminal_attachment_ready` itself once a clipboard image's bytes are staged at the exact path the core reads it from.
 No clipboard image bytes enter the JSON event or the render mutex.
 
 `runtime/attachments.rs` owns admission, captured terminal and remote connection generations, one active worker, retry, cancellation and an ordered 64 KiB input reservation.
-Subsequent input to the originating pane is held by the pane's node until file preparation and transfer succeed, then the complete quoted path payload and held bytes enter the node's terminal writer together (`TerminalControl::AttachmentHold`, `AttachmentDeliver`).
+Subsequent input to the originating pane is held by the pane's node until file preparation and transfer succeed, then the node pastes each quoted path to the pane's holder, a space after each, and writes the held input behind them on the same writer (`TerminalControl::AttachmentHold`, `AttachmentDeliver`); the holder wraps each path in bracketed paste only when the program turned that mode on, which the screen cannot see (with-hide/hide issue 2952).
 No Enter is synthesized, and an upload failure never forwards held input, because it may contain an Enter that would submit an incomplete prompt.
 Retry keeps immutable prepared bytes; cancel discards held input explicitly.
 Missing, closed, released or reconnected targets retire the intent and cannot forward its data to a replacement session or fall back to the local host.

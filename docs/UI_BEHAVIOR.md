@@ -1466,7 +1466,7 @@ Paste captures PNG or TIFF clipboard images at the same ingress; pasted text goe
 The core reserves the original pane and connection generation before asynchronous image preparation, file validation, or transfer, so later focus changes cannot redirect the attachment.
 Clipboard images are normalized into private PNG files off the input thread, while the core owns transfer state, held input, retry, and cancellation.
 Local files keep their original paths after validation; a device's attachments are staged through that device's link and insert only the resulting device paths.
-When the terminal advertises bracketed paste, each path has its own paste frame and the complete drop is enqueued once in file order; otherwise the paths are inserted as shell-quoted text with a trailing space.
+Each path is a paste of its own, shell-quoted and followed by a space, and the complete drop is enqueued once in file order; a program that turned bracketed paste on gets each path in its own paste frame, any other gets the quoted text as typed.
 Spaces and apostrophes survive; shell expansion characters are escaped, and paths containing control characters, symlinks, directories, and special files are refused with an actionable notice.
 Nothing performs automatic Enter or replaces existing prompt text.
 One transfer is admitted at a time, capped in file count and size; clipboard decoding is also capped by megapixels.

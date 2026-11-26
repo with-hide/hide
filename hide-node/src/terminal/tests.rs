@@ -985,7 +985,7 @@ fn a_paste_for_a_sleeping_pane_waits_for_the_agent() {
         harness.service.control(TerminalControl::AttachmentDeliver {
             intent: "i1".into(),
             generation,
-            paste: protocol::encode_base64(b"'/tmp/a.png' "),
+            paths: vec!["'/tmp/a.png'".into()],
         });
     };
     deliver(&harness);
@@ -1001,7 +1001,9 @@ fn a_paste_for_a_sleeping_pane_waits_for_the_agent() {
     });
     deliver(&harness);
     // Only the paste and the key typed before the agent slept arrive, and in order.
-    assert_eq!(opened.next_input(), b"'/tmp/a.png' \r");
+    assert_eq!(opened.next_write(), ("paste", b"'/tmp/a.png'".to_vec()));
+    assert_eq!(opened.next_write(), ("input", b" ".to_vec()));
+    assert_eq!(opened.next_write(), ("input", b"\r".to_vec()));
 }
 
 #[test]
@@ -1436,9 +1438,11 @@ fn a_paste_is_written_before_the_keys_typed_behind_it() {
     harness.service.control(TerminalControl::AttachmentDeliver {
         intent: "i1".into(),
         generation,
-        paste: protocol::encode_base64(b"'/tmp/a.png' "),
+        paths: vec!["'/tmp/a.png'".into()],
     });
-    assert_eq!(opened.next_input(), b"'/tmp/a.png' \r");
+    assert_eq!(opened.next_write(), ("paste", b"'/tmp/a.png'".to_vec()));
+    assert_eq!(opened.next_write(), ("input", b" ".to_vec()));
+    assert_eq!(opened.next_write(), ("input", b"\r".to_vec()));
     harness.report_where(|report| {
         matches!(
             report,
@@ -1468,10 +1472,12 @@ fn a_screen_paste_reaches_the_writer_as_a_paste_and_submits_nothing() {
     ));
 }
 
-/// A paste typed while an attachment is prepared waits behind it with the
-/// keys around it, and all of them follow the attachment in the order typed.
+/// Each attached path goes to the holder as a paste of its own, for it to
+/// wrap in the program's paste mode (with-hide/hide issue 2952), a space after
+/// each; a paste typed while the attachment was prepared waits behind it with
+/// the keys around it, and all of them follow it in the order typed.
 #[test]
-fn a_paste_typed_behind_an_attachment_follows_it_in_order() {
+fn each_attached_path_is_a_paste_and_what_was_typed_behind_follows() {
     let harness = harness(RetryPolicy::Automatic);
     let opened = harness.controlling("w1:p1");
     let generation = harness.service.shared.lock().panes["w1:p1"]
@@ -1488,9 +1494,13 @@ fn a_paste_typed_behind_an_attachment_follows_it_in_order() {
     harness.service.control(TerminalControl::AttachmentDeliver {
         intent: "i1".into(),
         generation,
-        paste: protocol::encode_base64(b"'/tmp/a.png' "),
+        paths: vec!["'/tmp/a.png'".into(), "'/tmp/b.png'".into()],
     });
-    assert_eq!(opened.next_write(), ("input", b"'/tmp/a.png' a".to_vec()));
+    assert_eq!(opened.next_write(), ("paste", b"'/tmp/a.png'".to_vec()));
+    assert_eq!(opened.next_write(), ("input", b" ".to_vec()));
+    assert_eq!(opened.next_write(), ("paste", b"'/tmp/b.png'".to_vec()));
+    assert_eq!(opened.next_write(), ("input", b" ".to_vec()));
+    assert_eq!(opened.next_write(), ("input", b"a".to_vec()));
     assert_eq!(opened.next_write(), ("paste", b"p\rq".to_vec()));
     assert_eq!(opened.next_write(), ("input", b"b".to_vec()));
     harness.report_where(|report| {

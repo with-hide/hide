@@ -1190,15 +1190,11 @@ impl AttachmentHold {
         self.queued.clear();
     }
 
-    /// What follows the attachment's paste: the keys typed up to the first
-    /// paste, which go in the attachment's own write as they always did, and
-    /// everything from that paste on, written after it in order. Read
-    /// without taking, so a write that fails keeps them for the retry.
-    pub(super) fn behind(&self) -> (Vec<u8>, &[Typed]) {
-        match self.queued.split_first() {
-            Some((Typed::Bytes(keys), rest)) => (keys.clone(), rest),
-            _ => (Vec::new(), &self.queued),
-        }
+    /// What was typed behind the attachment's paste, in order. Read without
+    /// taking, so a paste that could not be handed over keeps it for the
+    /// retry.
+    pub(super) fn queued(&self) -> &[Typed] {
+        &self.queued
     }
 }
 

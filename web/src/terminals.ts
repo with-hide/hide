@@ -429,11 +429,6 @@ export function terminalFor(paneId: string | null): Terminal | null {
 let followingSnapshot = false;
 
 /** Moves keyboard focus to the pane the snapshot names; not an operator action. */
-/** Whether the pane's terminal asked for bracketed paste, which the core
- * wraps the attachment token in. */
-export function bracketedPaste(paneId: string): boolean {
-  return terminalFor(paneId)?.modes.bracketedPasteMode ?? false;
-}
 
 export function focusTerminal(paneId: string) {
   const instance = instances.get(paneId);
@@ -1106,7 +1101,7 @@ export function pasteExplorerFile(paneId: string, item: ExplorerDrag): void {
     state.setAttachmentRefusal({ pane_id: paneId, reason: "source_device" });
     return;
   }
-  if (isImageDrag(item)) void submitExplorerImage(paneId, item, bracketedPaste(paneId));
+  if (isImageDrag(item)) void submitExplorerImage(paneId, item);
   else {
     try { pasteText(paneId, terminalPathText(item.path)); }
     catch { state.setAttachmentRefusal({ pane_id: paneId, reason: "invalid_request_id" }); }
@@ -1128,12 +1123,12 @@ export async function copySelection(paneId: string, where: string): Promise<bool
 /**
  * Pastes the clipboard into the pane, for the menu's Paste and the paste
  * chord alike: an image as an attachment, the way ⌘V of one is, and text
- * as typed input, in bracketed paste when the program asked for it.
+ * as one paste, which the pane's holder brackets when the program asked for it.
  */
 export async function pasteClipboard(paneId: string, where: string): Promise<void> {
   const content = await instances.get(paneId)?.actions.readClipboard(where);
   if (!content) return;
-  if (content.kind === "image") return void submitFiles(paneId, [content.file], true, bracketedPaste(paneId));
+  if (content.kind === "image") return void submitFiles(paneId, [content.file], true);
   if (content.text && !pasteExplorerCopy(paneId, content.text)) pasteText(paneId, content.text);
 }
 

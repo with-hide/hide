@@ -4244,10 +4244,6 @@ fn handle_attachment_commit(state: &AppState, event: &Value) -> Vec<Message> {
                 .into(),
         )];
     }
-    let bracketed = event
-        .pointer("/payload/bracketed_paste")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
     let clipboard = event
         .pointer("/payload/clipboard")
         .and_then(Value::as_bool)
@@ -4294,7 +4290,6 @@ fn handle_attachment_commit(state: &AppState, event: &Value) -> Vec<Message> {
         "payload": {
             "request_id": request_id,
             "pane_id": pane_id,
-            "bracketed_paste": bracketed,
             "clipboard": clipboard,
             "paths": paths,
         },

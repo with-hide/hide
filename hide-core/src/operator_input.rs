@@ -150,9 +150,10 @@ impl Attach {
         } else {
             paths.to_vec()
         };
-        let quoted = crate::terminal_attachments::paste_bytes(&destinations, false, self.on_device)
+        let quoted = crate::terminal_attachments::quoted_paths(&destinations, self.on_device)
             .map_err(|_| "attachment_failed")?;
-        let mut words = String::from_utf8(quoted).map_err(|_| "attachment_failed")?;
+        let mut words = quoted.join(" ");
+        words.push(' ');
         words.push_str(text);
         Ok(words)
     }

@@ -207,10 +207,6 @@ impl ScreenUploads {
             "payload": {
                 "request_id": request_id,
                 "pane_id": pane,
-                "bracketed_paste": event
-                    .pointer("/payload/bracketed_paste")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true),
                 "clipboard": false,
                 "paths": paths,
                 "staged_on": self.node,
@@ -343,7 +339,7 @@ mod tests {
 
     fn commit(pane: &str, stages: &[&str], clipboard: bool) -> String {
         json!({"schema_version": 2, "kind": "attachment_commit",
-            "payload": {"request_id": BATCH, "pane_id": pane, "bracketed_paste": true,
+            "payload": {"request_id": BATCH, "pane_id": pane,
                 "clipboard": clipboard, "stages": stages}})
         .to_string()
     }

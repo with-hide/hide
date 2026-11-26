@@ -207,7 +207,7 @@ function sendChunks(requestId: string, bytes: Uint8Array): void {
  * with the staged paths (or, for a clipboard image, none, because the core
  * reads the staged image from its own path).
  */
-export function submitAttachments(paneId: string, files: AttachmentInput[], clipboard: boolean, bracketedPaste: boolean): void {
+export function submitAttachments(paneId: string, files: AttachmentInput[], clipboard: boolean): void {
   if (!sender || files.length === 0) return;
   // The caps the daemon enforces, checked before a byte leaves the page: a
   // 2 GiB drop must not be read into memory to be refused.
@@ -238,7 +238,6 @@ export function submitAttachments(paneId: string, files: AttachmentInput[], clip
     payload: {
       request_id: batch,
       pane_id: paneId,
-      bracketed_paste: bracketedPaste,
       clipboard,
       stages,
     },
@@ -250,7 +249,7 @@ export function submitAttachments(paneId: string, files: AttachmentInput[], clip
  * `File.size` before any byte is read: a 2 GiB drop must not become an
  * allocation to learn it is over the cap.
  */
-export async function submitFiles(paneId: string, files: File[], clipboard: boolean, bracketedPaste: boolean): Promise<void> {
+export async function submitFiles(paneId: string, files: File[], clipboard: boolean): Promise<void> {
   // A clipboard paste carries many representations of one image; the first
   // file is the image itself, and the batch cap allows exactly one.
   const list = Array.from(files);
@@ -260,13 +259,13 @@ export async function submitFiles(paneId: string, files: File[], clipboard: bool
     useShellStore.getState().setAttachmentRefusal({ pane_id: paneId, reason });
     return;
   }
-  submitAttachments(paneId, await readInputs(selected), clipboard, bracketedPaste);
+  submitAttachments(paneId, await readInputs(selected), clipboard);
 }
 
 /** One bounded Explorer image read at a time, before the existing staging cap. */
 let readingExplorerImage = false;
 
-export async function submitExplorerImage(paneId: string, item: ExplorerDrag, bracketedPaste: boolean): Promise<void> {
+export async function submitExplorerImage(paneId: string, item: ExplorerDrag): Promise<void> {
   const state = useShellStore.getState();
   const target = state.rest?.terminal?.panes?.find((pane) => pane.pane_id === paneId);
   if (!target || target.closed || typeof target.transport_generation !== "number" || !Number.isSafeInteger(target.transport_generation) || target.transport_generation < 0) {
@@ -293,7 +292,7 @@ export async function submitExplorerImage(paneId: string, item: ExplorerDrag, br
       return;
     }
     if (file.bytes.byteLength !== file.total) throw new Error("incomplete_read");
-    submitAttachments(paneId, [{ name: safeName(item.path.slice(item.path.lastIndexOf("/") + 1)), bytes: file.bytes }], false, bracketedPaste);
+    submitAttachments(paneId, [{ name: safeName(item.path.slice(item.path.lastIndexOf("/") + 1)), bytes: file.bytes }], false);
   } catch {
     state.setAttachmentRefusal({ pane_id: paneId, reason: "stage_failed" });
   } finally {

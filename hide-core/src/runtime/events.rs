@@ -15,7 +15,6 @@ pub(super) struct EventEnvelope {
 pub(super) struct AttachmentPayload {
     pub request_id: String,
     pub pane_id: String,
-    pub bracketed_paste: bool,
     #[serde(default)]
     pub clipboard: bool,
     #[serde(default)]

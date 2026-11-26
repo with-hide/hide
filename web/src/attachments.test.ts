@@ -69,10 +69,10 @@ describe("attachment upload", () => {
 
   it("stages each file, sends its bytes, then commits the batch", () => {
     const { events, binaries } = capture();
-    submitAttachments("pane-1", [{ name: "shot.png", bytes: new Uint8Array([9, 9, 9]) }], false, true);
+    submitAttachments("pane-1", [{ name: "shot.png", bytes: new Uint8Array([9, 9, 9]) }], false);
     expect(events.map((event) => event.kind)).toEqual(["attachment_stage", "attachment_commit"]);
     expect(events[0]!.payload).toMatchObject({ name: "shot.png", size: 3, clipboard: false });
-    expect(events[1]!.payload).toMatchObject({ pane_id: "pane-1", bracketed_paste: true, clipboard: false });
+    expect(events[1]!.payload).toMatchObject({ pane_id: "pane-1", clipboard: false });
     expect(Array.isArray(events[1]!.payload.stages)).toBe(true);
     const { header, body } = decodeFrame(binaries[0]!);
     expect(header).toMatchObject({ offset: 0, eof: true });
@@ -81,7 +81,7 @@ describe("attachment upload", () => {
 
   it("stages a clipboard image under the batch id the core reads it from", () => {
     const { events } = capture();
-    submitAttachments("pane-2", [{ name: "shot.png", bytes: new Uint8Array([1]) }], true, true);
+    submitAttachments("pane-2", [{ name: "shot.png", bytes: new Uint8Array([1]) }], true);
     const stage = events[0]!.payload.request_id as string;
     expect(stage).toBe(events[1]!.payload.request_id);
     expect(events[0]!.payload).toMatchObject({ clipboard: true });
@@ -92,15 +92,15 @@ describe("attachment upload", () => {
     const reads: Record<string, unknown>[] = [];
     configureFileBytes((event) => { reads.push(event.payload); });
     const item = { path: "/project/shot.png", directory: false, device: "device-1", root: "/project" };
-    const accepted = submitExplorerImage("pane-1", item, true);
+    const accepted = submitExplorerImage("pane-1", item);
     expect(reads[0]).toMatchObject({ path: item.path, device_id: "device-1", root: "/project", length: 20 * 1024 * 1024 + 1 });
     answerRead(reads[0]!, 1);
     await accepted;
     expect(events[0]?.payload).toMatchObject({ name: "shot.png", clipboard: false });
-    expect(events[1]?.payload).toMatchObject({ pane_id: "pane-1", bracketed_paste: true });
+    expect(events[1]?.payload).toMatchObject({ pane_id: "pane-1" });
     expect(decodeFrame(binaries[0]!).body).toEqual(new Uint8Array([9]));
     const count = events.length;
-    const oversized = submitExplorerImage("pane-1", item, false);
+    const oversized = submitExplorerImage("pane-1", item);
     answerRead(reads[1]!, 20 * 1024 * 1024 + 1);
     await oversized;
     expect(events).toHaveLength(count);
@@ -112,8 +112,8 @@ describe("attachment upload", () => {
     const reads: Record<string, unknown>[] = [];
     configureFileBytes((event) => { reads.push(event.payload); });
     const item = { path: "/project/shot.png", directory: false, device: "device-1", root: "/project" };
-    const pending = submitExplorerImage("pane-1", item, false);
-    await submitExplorerImage("pane-2", item, false);
+    const pending = submitExplorerImage("pane-1", item);
+    await submitExplorerImage("pane-2", item);
     expect(reads).toHaveLength(1);
     expect(useShellStore.getState().attachmentRefusal).toEqual({ pane_id: "pane-2", reason: "staging_full" });
     useShellStore.setState({ viewGeneration: useShellStore.getState().viewGeneration + 1 });
@@ -121,7 +121,7 @@ describe("attachment upload", () => {
     await pending;
     expect(events).toHaveLength(0);
     expect(useShellStore.getState().attachmentRefusal).toEqual({ pane_id: "pane-1", reason: "no_pane" });
-    const retry = submitExplorerImage("pane-1", item, false);
+    const retry = submitExplorerImage("pane-1", item);
     answerRead(reads[1]!, 1);
     await retry;
     expect(events.at(-1)?.kind).toBe("attachment_commit");
@@ -137,7 +137,7 @@ describe("attachment upload", () => {
     const reads: Record<string, unknown>[] = [];
     configureFileBytes((event) => { reads.push(event.payload); });
     useShellStore.setState({ rest: { terminal: { panes } } });
-    await submitExplorerImage("pane-1", { path: "/project/shot.png", directory: false, device: "device-1", root: "/project" }, false);
+    await submitExplorerImage("pane-1", { path: "/project/shot.png", directory: false, device: "device-1", root: "/project" });
     expect(reads).toHaveLength(0);
     expect(events).toHaveLength(0);
     expect(useShellStore.getState().attachmentRefusal).toEqual({ pane_id: "pane-1", reason: "no_pane" });
@@ -147,7 +147,7 @@ describe("attachment upload", () => {
     const { events } = capture();
     const reads: Record<string, unknown>[] = [];
     configureFileBytes((event) => { reads.push(event.payload); });
-    const pending = submitExplorerImage("pane-1", { path: "/project/shot.png", directory: false, device: "device-1", root: "/project" }, false);
+    const pending = submitExplorerImage("pane-1", { path: "/project/shot.png", directory: false, device: "device-1", root: "/project" });
     expect(reads).toHaveLength(1);
     useShellStore.setState({ rest: { terminal: { panes } } });
     answerRead(reads[0]!, 1);
@@ -178,7 +178,7 @@ describe("attachment upload", () => {
 
   it("routes a refusal to the pane the request belonged to", () => {
     const { events } = capture();
-    submitAttachments("pane-9", [{ name: "shot.png", bytes: new Uint8Array([1]) }], true, false);
+    submitAttachments("pane-9", [{ name: "shot.png", bytes: new Uint8Array([1]) }], true);
     const stage = events[0]!.payload.request_id as string;
     receiveAttachmentRefusal({ request_id: stage, reason: "too_large" });
     expect(useShellStore.getState().attachmentRefusal).toEqual({ pane_id: "pane-9", reason: "too_large" });

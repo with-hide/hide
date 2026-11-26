@@ -40,7 +40,7 @@ import type { AgentSleep, AgentStatusCode, PaneRow, RowMark, TerminalPane } from
 import { PaneNoticeBody } from "./PaneNotice";
 import { caughtUp } from "./operatorFocus";
 import { useShellStore } from "./store";
-import { attachTerminal, bracketedPaste, focusTerminal, pasteExplorerCopy, pasteExplorerFile, pasteText, requestView, setTextScale, terminalLinkAt, terminalSelectionText, typeReference } from "./terminals";
+import { attachTerminal, focusTerminal, pasteExplorerCopy, pasteExplorerFile, pasteText, requestView, setTextScale, terminalLinkAt, terminalSelectionText, typeReference } from "./terminals";
 
 /**
  * Transport states with a live stream; anything else is drawn as a caption in
@@ -260,7 +260,7 @@ export const PaneView = memo(function PaneView({
     const files = Array.from(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
-    void submitFiles(paneId, files, false, bracketedPaste(paneId));
+    void submitFiles(paneId, files, false);
   };
 
   const acceptsAgentDrag = () => {
@@ -353,7 +353,7 @@ export const PaneView = memo(function PaneView({
       event.preventDefault();
       event.stopPropagation();
       if (text && pasteExplorerCopy(paneId, text)) return;
-      if (files.length > 0) void submitFiles(paneId, files, true, bracketedPaste(paneId));
+      if (files.length > 0) void submitFiles(paneId, files, true);
       else pasteText(paneId, text);
     };
     host.addEventListener("paste", onPaste, true);
