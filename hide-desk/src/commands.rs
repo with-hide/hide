@@ -97,7 +97,8 @@ pub fn saved(commands: &[Command]) -> Value {
         commands
             .iter()
             .map(|command| {
-                let mut entry = serde_json::json!({"name": command.name, "description": command.description});
+                let mut entry =
+                    serde_json::json!({"name": command.name, "description": command.description});
                 if let Some(hint) = &command.hint {
                     entry["input"] = serde_json::json!({"hint": hint});
                 }

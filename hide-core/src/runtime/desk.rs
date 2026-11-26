@@ -4120,7 +4120,10 @@ mod tests {
         let (mut runtime, _received) = start(root.path());
         assert_eq!(slash(&runtime).1, ["/compact", "/context"]);
         let saved = crate::desk::DeskCommandsStore::new(path.clone()).restore();
-        assert_eq!(saved.keys().copied().collect::<Vec<_>>(), [AdapterId::CLAUDE]);
+        assert_eq!(
+            saved.keys().copied().collect::<Vec<_>>(),
+            [AdapterId::CLAUDE]
+        );
         listed(&mut runtime, AdapterId::CLAUDE, &["review"]);
         drop(runtime);
         let (runtime, _received) = start(root.path());

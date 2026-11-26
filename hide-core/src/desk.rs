@@ -480,7 +480,8 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
 }
 
 /// Each agent's last command list, by agent.
-pub(crate) type CommandLists = std::collections::BTreeMap<AdapterId, Vec<hide_desk::commands::Command>>;
+pub(crate) type CommandLists =
+    std::collections::BTreeMap<AdapterId, Vec<hide_desk::commands::Command>>;
 
 const COMMANDS_SCHEMA_VERSION: u32 = 1;
 /// Every agent at `MAX_COMMANDS` of the longest commands is under 1 MiB;
@@ -490,10 +491,17 @@ const COMMANDS_READ_CAP: u64 = 2 * 1024 * 1024;
 fn encode_commands(lists: &CommandLists) -> Result<Vec<u8>, String> {
     let agents: serde_json::Map<String, serde_json::Value> = lists
         .iter()
-        .map(|(adapter, list)| (adapter.as_str().to_owned(), hide_desk::commands::saved(list)))
+        .map(|(adapter, list)| {
+            (
+                adapter.as_str().to_owned(),
+                hide_desk::commands::saved(list),
+            )
+        })
         .collect();
-    serde_json::to_vec(&serde_json::json!({"schema_version": COMMANDS_SCHEMA_VERSION, "agents": agents}))
-        .map_err(|error| format!("could not be encoded: {error}"))
+    serde_json::to_vec(
+        &serde_json::json!({"schema_version": COMMANDS_SCHEMA_VERSION, "agents": agents}),
+    )
+    .map_err(|error| format!("could not be encoded: {error}"))
 }
 
 /// The lists in `bytes`, read leniently: an agent this build does not know
@@ -502,12 +510,21 @@ fn encode_commands(lists: &CommandLists) -> Result<Vec<u8>, String> {
 fn decode_commands(bytes: &[u8]) -> Result<CommandLists, String> {
     let file: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|error| format!("could not be decoded: {error}"))?;
-    let version = file.get("schema_version").and_then(serde_json::Value::as_u64);
+    let version = file
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64);
     if version != Some(u64::from(COMMANDS_SCHEMA_VERSION)) {
-        return Err(format!("has schema version {version:?}, expected {COMMANDS_SCHEMA_VERSION}"));
+        return Err(format!(
+            "has schema version {version:?}, expected {COMMANDS_SCHEMA_VERSION}"
+        ));
     }
     let mut lists = CommandLists::new();
-    for (name, entries) in file.get("agents").and_then(serde_json::Value::as_object).into_iter().flatten() {
+    for (name, entries) in file
+        .get("agents")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+    {
         let (Some(adapter), true) = (AdapterId::parse(name), entries.is_array()) else {
             crate::diagnostic!(serde_json::json!({
                 "component": "desk",
@@ -640,7 +657,10 @@ mod tests {
             },
         })).unwrap()).unwrap();
         let lists = store.restore();
-        assert_eq!(lists.keys().copied().collect::<Vec<_>>(), [AdapterId::CLAUDE]);
+        assert_eq!(
+            lists.keys().copied().collect::<Vec<_>>(),
+            [AdapterId::CLAUDE]
+        );
         assert_eq!(
             lists[&AdapterId::CLAUDE],
             [hide_desk::commands::Command {
