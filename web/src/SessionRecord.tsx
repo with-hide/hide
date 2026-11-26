@@ -612,7 +612,7 @@ function RequestRow({ request, locator }: { request: WorkRequest; locator?: Requ
   const letter = request.letter_from;
   // A History hit always shows the words it matched, marked.
   const opens = request.text.trim() !== preview.text || preview.cut || matched;
-  return <li ref={target} tabIndex={matched ? -1 : undefined} className={cn("min-w-0 py-xxs", matched && "rounded-xs bg-accent/40 px-xs outline-none focus:ring-1 focus:ring-ring")} data-record-request={request.offset} data-record-request-match={matched ? "true" : undefined} data-record-letter={letter ?? undefined}>
+  return <li ref={target} tabIndex={matched ? -1 : undefined} className={cn("min-w-0 py-xxs", matched && "rounded-xs bg-accent px-xs outline-none focus:ring-1 focus:ring-ring")} data-record-request={request.offset} data-record-request-match={matched ? "true" : undefined} data-record-letter={letter ?? undefined}>
     <RowButton className={cn("items-baseline gap-sm px-0 py-xxs disabled:opacity-100", !opens && "hover:bg-transparent")} aria-expanded={opens ? raw : undefined} disabled={!opens} onClick={() => setRaw(!raw)}>
       <RequestTime at={request.at_unix_ms} />
       <span className={cn("flex min-w-0 flex-1 items-baseline gap-xs", letter ? "text-muted-foreground" : "text-foreground")}>

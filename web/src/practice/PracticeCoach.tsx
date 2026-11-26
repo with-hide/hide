@@ -11,7 +11,7 @@ import type { MessageKey } from "../i18n/catalogs";
 import { commandLabel } from "../shortcutLabels";
 import { hostChord, hostRegistry, isCycleCommand, releaseModifier, type CommandId } from "../shortcuts";
 import { useShellStore } from "../store";
-import { pasteText, terminalFor } from "../terminals";
+import { terminalFor, typeText } from "../terminals";
 import { useUiStore, type Overlay } from "../ui";
 import type { PracticeChapter, PracticeDrag, PracticeMenu, PracticePick, PracticeStep, PracticeTyping } from "./chapter";
 import { FIRST_CHAPTER } from "./channel";
@@ -139,9 +139,9 @@ const LETTER_MS = 90;
 function typeInto(typing: PracticeTyping, pace: number): Promise<void> {
   if ("input" in typing) return typeInField(typing.input, typing.text, pace);
   if (!terminalFor(typing.pane)) throw new Error(`Practice step types into ${typing.pane}, which has no terminal on screen`);
-  pasteText(typing.pane, `\x15${"words" in typing ? clientI18n.t(typing.words as MessageKey) as string : typing.text}`);
+  typeText(typing.pane, `\x15${"words" in typing ? clientI18n.t(typing.words as MessageKey) as string : typing.text}`);
   return new Promise((resolve) => window.setTimeout(() => {
-    pasteText(typing.pane, "\r");
+    typeText(typing.pane, "\r");
     resolve();
   }, READ_MS * pace));
 }
@@ -518,7 +518,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onEnter, o
       const typing = step.gesture.type;
       // The learner's own words in a prompt are sent as they are, for the world to judge; the example goes only into an
       // empty one. A field that holds words never reaches here: ⏎ there is the palette's, and the palette hides the button.
-      if ("pane" in typing && promptWords(chapter.world, current.current, typing.pane)) return pasteText(typing.pane, "\r");
+      if ("pane" in typing && promptWords(chapter.world, current.current, typing.pane)) return typeText(typing.pane, "\r");
       return play(typeInto(typing, pace));
     }
     if (step.gesture && "menu" in step.gesture) return play(chooseFromMenu(step.gesture.menu, "menu", pace, setHand));

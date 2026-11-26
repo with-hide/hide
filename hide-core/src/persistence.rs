@@ -292,9 +292,15 @@ struct StoredUiState {
     /// empty. More entries than the limit (a hand edit) are cut to it.
     #[serde(default)]
     recent_checkouts: Vec<crate::model::RecentCheckout>,
-    /// Absent in a store written before the recent pane order existed, which
-    /// loads empty. More entries than the limit (a hand edit) are cut to it.
+    /// Absent in a store written before the recent place order existed,
+    /// which loads its `recent_pane_ids` instead. More entries than the
+    /// limit (a hand edit) are cut to it.
     #[serde(default)]
+    recent_places: Vec<crate::model::RecentPlace>,
+    /// The panes the keyboard had been in, as a build before places saved
+    /// them: read once into `recent_places` when that is absent, and never
+    /// written again.
+    #[serde(default, skip_serializing)]
     recent_pane_ids: Vec<String>,
     /// Absent in a store written before Rename was recorded, which loads
     /// empty: no tab named before then counts as the operator's until it is
@@ -897,9 +903,17 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 recent.truncate(crate::model::RECENT_CHECKOUT_LIMIT);
                 recent
             },
-            recent_pane_ids: {
-                let mut recent = stored.recent_pane_ids;
-                recent.truncate(crate::model::RECENT_PANE_LIMIT);
+            recent_places: {
+                let mut recent = if stored.recent_places.is_empty() {
+                    stored
+                        .recent_pane_ids
+                        .into_iter()
+                        .map(|pane_id| crate::model::RecentPlace::Pane { pane_id })
+                        .collect()
+                } else {
+                    stored.recent_places
+                };
+                recent.truncate(crate::model::RECENT_PLACE_LIMIT);
                 recent
             },
             operator_tab_names: stored
@@ -1091,7 +1105,8 @@ pub fn save(
         session_archive: state.session_archive.clone(),
         waits: state.waits.clone(),
         recent_checkouts: state.recent_checkouts.clone(),
-        recent_pane_ids: state.recent_pane_ids.clone(),
+        recent_places: state.recent_places.clone(),
+        recent_pane_ids: Vec::new(),
         operator_tab_names: state.operator_tab_names.clone(),
     };
     let bytes = serde_json::to_vec_pretty(&stored)

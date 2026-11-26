@@ -17,6 +17,15 @@
 // a semantic color names the step it draws through `palette`, which must match
 // the hex it records, and is written as var() of that step.
 //
+// A `fill` token is a see-through fill: per mode, a palette step and how much
+// of it covers the surface under it (`{"step": "--gray-100", "alpha": 0.06}`),
+// written as `rgba()` of that step's sRGB value: the phone's iOS 15 WebView has
+// no `color-mix()`, and code that reads a token as a color (Mermaid, a canvas)
+// parses `rgba()` where it cannot parse a mix. It draws the same in
+// both color themes, because the surface under it carries the theme; so it
+// takes no `hide` value. `check-token-contrast.mjs` composites it over each
+// surface it sits on before it compares.
+//
 // A `css` token is a value per mode that is not one color: an elevation's
 // box-shadow (`--elevation-*`, mapped onto Tailwind's `shadow-*`) or the scrim
 // under a modal (`--scrim`, a translucent color).
@@ -68,6 +77,17 @@ function slot(tokens, name, hex, step) {
   return `var(${step})`;
 }
 
+/** A see-through fill's value for one mode: its palette step's sRGB at its alpha. */
+export function fillMix(tokens, name, fill) {
+  if (!fill || typeof fill !== 'object') throw new Error(`${name} has no fill for every mode`);
+  const {step, alpha, ...rest} = fill;
+  if (Object.keys(rest).length) throw new Error(`${name} has unknown fill fields: ${Object.keys(rest).join(', ')}`);
+  const hex = paletteHex(tokens, step);
+  if (typeof alpha !== 'number' || !(alpha > 0 && alpha <= 1)) throw new Error(`${name} needs an alpha above 0 and at most 1, not ${alpha}`);
+  const [r, g, b] = [1, 3, 5].map(at => Number.parseInt(hex.slice(at, at + 2), 16));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 function cssValue(name, value) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} has no value`);
   if (/var\(|;|[{}]/.test(value)) throw new Error(`${name} must be a plain CSS value: ${value}`);
@@ -106,6 +126,11 @@ export function generate(root = process.cwd()) {
       if (name.startsWith('--elevation-')) mapped.push(`  --shadow-${name.slice('--elevation-'.length)}: var(${name});`);
       else if (name === '--scrim') mapped.push(`  --color-scrim: var(${name});`);
       else throw new Error(`${name} is a css token with no utility namespace`);
+    } else if (token.type === 'fill') {
+      if (token.hide !== undefined) throw new Error(`${name} is a see-through fill; the surface under it carries the color theme, so it takes no hide value`);
+      light.push(`  ${name}: ${fillMix(tokens, name, token.light)};`);
+      dark.push(`  ${name}: ${fillMix(tokens, name, token.value)};`);
+      mapped.push(`  --color-${name.slice(2)}: var(${name});`);
     } else if (token.type === 'color') {
       if (!token.light) throw new Error(`${name} has no Light value`);
       const steps = token.palette;

@@ -37,7 +37,7 @@ use hide_node_link::holders::{
     WATCH_LOST,
 };
 use hide_node_link::terminal::{
-    GridSize, KeyTarget, TerminalControl, TerminalNode, TerminalReport,
+    GridSize, KeyTarget, ScreenInput, TerminalControl, TerminalNode, TerminalReport,
 };
 
 use crate::fixture_v1;
@@ -391,8 +391,11 @@ impl Node {
     }
 
     fn type_into(&self, pane: &str, bytes: &[u8]) {
-        self.service
-            .key(KeyTarget::Pane(pane.to_owned()), bytes.to_vec(), 0);
+        self.service.type_into(
+            KeyTarget::Pane(pane.to_owned()),
+            ScreenInput::Keys(bytes.to_vec()),
+            0,
+        );
     }
 
     /// The pane's recent text, read on a connection of its own.
@@ -610,7 +613,11 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
     )
     .unwrap();
     screens.first_full(pane);
-    service.key(KeyTarget::Pane(pane.to_owned()), print_ok().to_vec(), 0);
+    service.type_into(
+        KeyTarget::Pane(pane.to_owned()),
+        ScreenInput::Keys(print_ok().to_vec()),
+        0,
+    );
     screens.wait_drawn_after(pane, 0, "hide-ok");
     assert!(
         !reports

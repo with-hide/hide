@@ -249,13 +249,14 @@ export type WorkspaceDialog =
   | { kind: "remove_project"; workspaceId: string };
 
 /**
- * A held switcher. `area` is a View area's tabs and `agents` the Agent area's
- * panes; both compare the highlight with `originKey`, while Recent Panels and
- * Recent Projects start on the row in use. An `agents` cycle with no pane in
- * use starts at -1, before its first row.
+ * A held switcher. `area` is a View area's tabs and `places` the places the
+ * operator has been (agent panes, missions, automations, Desk); both compare
+ * the highlight with `originKey`, while Recent Panels and Recent Projects
+ * start on the row in use. A `places` cycle with no place in use starts at
+ * -1, before its first row.
  */
 export type Cycle = {
-  kind: "panels" | "projects" | "area" | "agents";
+  kind: "panels" | "projects" | "area" | "places";
   scope?: import("./areaCycle").CycleScope;
   originKey?: string;
   items: CycleItem[];

@@ -92,7 +92,7 @@ export function DeviceWays({ state, actions }: { state: WaysState; actions: Acti
 function Way({ name, line, now, ...data }: { name: string; line: string; now: boolean } & Record<`data-${string}`, string>) {
   const { t } = useInterfaceTranslation();
   return (
-    <div className={cn("col-span-2 grid grid-cols-subgrid gap-x-md px-md py-sm", now && "bg-secondary/50")} data-device-way-now={String(now)} {...data}>
+    <div className={cn("col-span-2 grid grid-cols-subgrid gap-x-md px-md py-sm", now && "bg-accent")} data-device-way-now={String(now)} {...data}>
       <div className="flex items-baseline gap-xs">
         <span className="text-body font-semibold text-foreground">{name}</span>
         {now ? <Badge>{t("devices.ways.now")}</Badge> : null}

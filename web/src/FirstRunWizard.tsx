@@ -548,7 +548,7 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
           icon={<GraduationCapIcon />}
           title={t("firstRun.start.practice")}
           line={t("firstRun.start.practiceNote")}
-          className="border-border bg-secondary text-foreground hover:bg-accent"
+          className="border-hairline bg-secondary text-foreground hover:fill-hovered"
           lineClassName="text-muted-foreground"
           iconClassName="border-border bg-background text-(--practice-accent-strong)"
           onClick={practice}
@@ -558,7 +558,7 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
           icon={<FolderPlusIcon />}
           title={t("firstRun.start.project")}
           line={t("firstRun.start.projectNote")}
-          className="border-border bg-secondary text-foreground hover:bg-accent"
+          className="border-hairline bg-secondary text-foreground hover:fill-hovered"
           lineClassName="text-muted-foreground"
           iconClassName="border-border bg-background text-muted-foreground"
           onClick={() => showAdding(true)}
@@ -569,7 +569,7 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
             icon={<FolderInputIcon />}
             title={t("herdrImport.import.title")}
             line={t("herdrImport.import.note", { count: herdr })}
-            className="border-border bg-secondary text-foreground hover:bg-accent"
+            className="border-hairline bg-secondary text-foreground hover:fill-hovered"
             lineClassName="text-muted-foreground"
             iconClassName="border-border bg-background text-muted-foreground"
             onClick={() => {

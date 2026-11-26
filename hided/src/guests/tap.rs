@@ -24,7 +24,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use hide_core::guest_panes::{MAX_PANES, pane_is_listed};
 use hide_node::terminal::OutputSink;
 use hide_node_link::address::guest_pane_id;
-use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalNode};
+use hide_node_link::terminal::{GridSize, KeyTarget, ScreenInput, TerminalControl, TerminalNode};
 use hide_peer::protocol::core::Work;
 use hide_peer::protocol::panes::{self, Pane, Panes};
 use hide_peer::protocol::tap::{self, PaneSize, ToHost, ToNode};
@@ -70,6 +70,9 @@ struct State {
     /// The connection the reader of that number serves; a later attach
     /// takes its place.
     connection: u64,
+    /// The tap version the node welcomed that connection at, 0 until it
+    /// did: a paste goes as one only from [`tap::PASTE_TAP`].
+    version: u16,
     /// What the guest's core last told of its panes, by the node's pane
     /// ids, so a pane the node lists after it came is named as it joins;
     /// `None` until the core tells any after this daemon started, and the
@@ -307,6 +310,7 @@ impl GuestTap {
                 earlier.shutdown();
             }
             state.writer = Some(writer);
+            state.version = 0;
             state.connection
         };
         self.send(&ToNode::Hello {
@@ -332,8 +336,9 @@ impl GuestTap {
 
     fn take(&self, frame: ToHost) {
         match frame {
-            ToHost::Welcome { panes, .. } => {
+            ToHost::Welcome { version, panes } => {
                 let mut state = lock(&self.state);
+                state.version = version;
                 let earlier = std::mem::take(&mut state.panes);
                 let told = state.told.is_some();
                 let now = now_unix_ms();
@@ -581,10 +586,20 @@ impl TerminalNode for GuestTap {
         });
     }
 
-    fn key(&self, target: KeyTarget, bytes: Vec<u8>, _typed_at_unix_ms: u64) {
-        if let KeyTarget::Pane(pane) = target {
-            self.send(&ToNode::Input { pane, bytes });
-        }
+    /// A paste goes to a node that reads one as a paste, for the pane's
+    /// holder to wrap; to a node of an older build, which would skip it, as
+    /// the keys it was before.
+    fn type_into(&self, target: KeyTarget, input: ScreenInput, _typed_at_unix_ms: u64) {
+        let KeyTarget::Pane(pane) = target else {
+            return;
+        };
+        let frame = match input {
+            ScreenInput::Paste(text) if lock(&self.state).version >= tap::PASTE_TAP => {
+                ToNode::Paste { pane, text }
+            }
+            ScreenInput::Keys(bytes) | ScreenInput::Paste(bytes) => ToNode::Input { pane, bytes },
+        };
+        self.send(&frame);
     }
 
     fn view(&self, pane: &str, size: GridSize, new_view: bool) {
@@ -680,6 +695,52 @@ pub(crate) mod tests {
             .collect()
     }
 
+    /// with-hide/hide issue 2952: a screen's paste reaches a node that welcomed
+    /// the tap at its paste version as a paste, for the pane's holder to
+    /// wrap, and one of an older build, which would skip that frame, as the
+    /// keys it took before.
+    #[test]
+    fn a_paste_goes_as_one_only_to_a_node_that_reads_it() {
+        let root = short_root();
+        let file = root.path().join("h").join(panes::FILE);
+        let endpoint = root.path().join("tap.sock");
+        let listener = LocalListener::bind(&endpoint).unwrap();
+        let (tap, _drawn, changed) = tap(&file);
+        // Each node lists a pane of its own, so its welcome changes the list.
+        for (version, pane, pasted_as) in [
+            (tap::OLDEST_TAP, "w1:p1", "input"),
+            (tap::PASTE_TAP, "w2:p1", "paste"),
+        ] {
+            tap.attach(&endpoint);
+            let mut node = listener.accept().unwrap();
+            assert!(matches!(heard(&mut node), ToNode::Hello { .. }));
+            say(
+                &mut node,
+                &ToHost::Welcome {
+                    version,
+                    panes: vec![size(pane, 24, 80)],
+                },
+            );
+            changed.recv_timeout(WITHIN).expect("the welcome was read");
+            tap.type_into(
+                KeyTarget::Pane(pane.into()),
+                ScreenInput::Paste(b"a\rb".to_vec()),
+                1,
+            );
+            let expected = match pasted_as {
+                "input" => ToNode::Input {
+                    pane: pane.to_owned(),
+                    bytes: b"a\rb".to_vec(),
+                },
+                _ => ToNode::Paste {
+                    pane: pane.to_owned(),
+                    text: b"a\rb".to_vec(),
+                },
+            };
+            assert_eq!(heard(&mut node), expected, "a node on tap {version}");
+        }
+    }
+
     #[test]
     fn a_guests_panes_are_listed_drawn_and_typed_into_and_the_list_outlives_the_tap() {
         let root = short_root();
@@ -756,7 +817,11 @@ pub(crate) mod tests {
 
         // What a screen of this machine does reaches the node by the
         // node's own pane id.
-        tap.key(KeyTarget::Pane("w1:p1".to_owned()), b"ls\n".to_vec(), 0);
+        tap.type_into(
+            KeyTarget::Pane("w1:p1".to_owned()),
+            ScreenInput::Keys(b"ls\n".to_vec()),
+            0,
+        );
         assert_eq!(
             heard(&mut node),
             ToNode::Input {

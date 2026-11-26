@@ -21,12 +21,11 @@ pub(super) struct PendingAttachment {
     on_pane_machine: bool,
     clipboard: bool,
     clipboard_preparing: bool,
-    bracketed: bool,
     paths: Vec<String>,
     prepared: Option<Arc<Vec<AttachmentFile>>>,
-    /// The paste text, made when the files are ready and held while the
-    /// terminal is awaited.
-    paste: Option<Vec<u8>>,
+    /// The shell-quoted paths to paste, made when the files are ready and
+    /// held while the terminal is awaited.
+    paste: Option<Vec<String>>,
     /// Input bytes the node refused at the held input's cap; the keys under
     /// it wait on the node, behind the paste.
     rejected_bytes: usize,
@@ -343,7 +342,6 @@ impl Runtime {
             on_pane_machine,
             clipboard: payload.clipboard,
             clipboard_preparing: payload.clipboard,
-            bracketed: payload.bracketed_paste,
             paths: payload.paths,
             prepared: None,
             paste: None,
@@ -861,18 +859,16 @@ impl Runtime {
                 );
                 self.fail_attachment(&error, true);
             }
-            Ok(paths) => {
-                match ingress::paste_bytes(&paths, pending.bracketed, pending.remote.is_some()) {
-                    Ok(paste) => {
-                        pending.paste = Some(paste);
-                        self.deliver_attachment();
-                    }
-                    Err(error) => {
-                        self.fail_attachment(&error, false);
-                        return true;
-                    }
+            Ok(paths) => match ingress::quoted_paths(&paths, pending.remote.is_some()) {
+                Ok(paste) => {
+                    pending.paste = Some(paste);
+                    self.deliver_attachment();
                 }
-            }
+                Err(error) => {
+                    self.fail_attachment(&error, false);
+                    return true;
+                }
+            },
         }
         self.sync_async_operations();
         true
@@ -895,7 +891,7 @@ impl Runtime {
             let control = TerminalControl::AttachmentDeliver {
                 intent: pending.operation.id.clone(),
                 generation: pending.terminal_generation.unwrap_or_default(),
-                paste: hide_node_link::terminal::encode_base64(paste),
+                paths: paste.clone(),
             };
             pending.writing = true;
             self.terminals.control(control);
@@ -962,7 +958,6 @@ mod tests {
         assert!(runtime.begin_attachment(AttachmentPayload {
             request_id: id.to_owned(),
             pane_id: pane.to_owned(),
-            bracketed_paste: true,
             clipboard: true,
             paths: Vec::new(),
             staged_on: None,
@@ -977,7 +972,6 @@ mod tests {
         assert!(runtime.begin_attachment(AttachmentPayload {
             request_id: ID.to_owned(),
             pane_id: "pane-one".to_owned(),
-            bracketed_paste: true,
             clipboard: false,
             paths: vec!["/Users/example/shot.png".to_owned()],
             staged_on: Some("mini".to_owned()),
@@ -1000,15 +994,15 @@ mod tests {
         terminals
     }
 
-    /// The paste each AttachmentDeliver asked for, in order.
-    fn delivered(terminals: &RecordedTerminals) -> Vec<Vec<u8>> {
+    /// The paths each AttachmentDeliver asked to paste, in order.
+    fn delivered(terminals: &RecordedTerminals) -> Vec<Vec<String>> {
         terminals
             .take()
             .into_iter()
             .filter_map(|control| match control {
-                TerminalControl::AttachmentDeliver { intent, paste, .. } => {
+                TerminalControl::AttachmentDeliver { intent, paths, .. } => {
                     assert_eq!(intent, ID);
-                    Some(hide_node_link::terminal::decode_base64(&paste).unwrap())
+                    Some(paths)
                 }
                 _ => None,
             })
@@ -1054,7 +1048,7 @@ mod tests {
         runtime.finish_attachment(ID, None, Ok(vec!["/remote/private/image.png".to_owned()]));
         assert_eq!(
             delivered(&terminals),
-            [b"\x1b[200~\"/remote/private/image.png\"\x1b[201~".to_vec()]
+            [["\"/remote/private/image.png\"".to_owned()]]
         );
         assert!(written(&mut runtime, ID));
         assert!(runtime.attachment.is_none());
@@ -1286,20 +1280,14 @@ mod tests {
                 .iter()
                 .filter_map(|control| match control {
                     TerminalControl::AttachmentDeliver {
-                        generation, paste, ..
-                    } => Some((
-                        *generation,
-                        hide_node_link::terminal::decode_base64(paste).unwrap(),
-                    )),
+                        generation, paths, ..
+                    } => Some((*generation, paths.clone())),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
             assert_eq!(
                 deliveries,
-                [(
-                    3,
-                    b"\x1b[200~\"/state/attachments/image.png\"\x1b[201~".to_vec()
-                )],
+                [(3, vec!["\"/state/attachments/image.png\"".to_owned()])],
                 "files_first={files_first}"
             );
             assert!(written(&mut runtime, ID));

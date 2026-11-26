@@ -15,7 +15,6 @@ pub(super) struct EventEnvelope {
 pub(super) struct AttachmentPayload {
     pub request_id: String,
     pub pane_id: String,
-    pub bracketed_paste: bool,
     #[serde(default)]
     pub clipboard: bool,
     #[serde(default)]
@@ -1832,7 +1831,7 @@ pub(super) enum Event {
     StrayRestore(super::strays::StrayPayload),
     StrayHandOff(super::strays::StrayHandOffPayload),
     DeliverLettersNow(PaneTargetPayload),
-    PaneVisit(PaneTargetPayload),
+    PlaceVisit(super::recent_places::PlaceVisitPayload),
     AgentWake(AgentWakePayload),
     WakeSleepingSession(SleepingSessionPayload),
     CheckSleepingSession(SleepingSessionPayload),
@@ -2153,7 +2152,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "stray_restore" => decode!(super::strays::StrayPayload, StrayRestore),
         "stray_hand_off" => decode!(super::strays::StrayHandOffPayload, StrayHandOff),
         "deliver_letters_now" => decode!(PaneTargetPayload, DeliverLettersNow),
-        "pane_visit" => decode!(PaneTargetPayload, PaneVisit),
+        "place_visit" => decode!(super::recent_places::PlaceVisitPayload, PlaceVisit),
         "agent_wake" => decode!(AgentWakePayload, AgentWake),
         "wake_sleeping_session" => decode!(SleepingSessionPayload, WakeSleepingSession),
         "check_sleeping_session" => decode!(SleepingSessionPayload, CheckSleepingSession),
@@ -2651,7 +2650,7 @@ impl Runtime {
                 false
             }
             Event::DeliverLettersNow(payload) => self.deliver_letters_now(&payload.pane_id),
-            Event::PaneVisit(payload) => self.record_pane_visit(payload.pane_id),
+            Event::PlaceVisit(payload) => self.record_place_visit(payload.place),
             Event::AgentWake(payload) => self.request_agent_wake(payload),
             Event::WakeSleepingSession(payload) => self.request_dormant_wake(&payload.sleep_id),
             Event::CheckSleepingSession(payload) => self.request_dormant_status(&payload.sleep_id),
@@ -4953,9 +4952,9 @@ impl Runtime {
                     // The core records it on the front change; a shared save
                     // carries it through, or any save would empty the list.
                     recent_checkouts: current.recent_checkouts,
-                    // The shell's visits own this through `pane_visit`; a
+                    // The shell's visits own this through `place_visit`; a
                     // shared save carries it through for the same reason.
-                    recent_pane_ids: current.recent_pane_ids,
+                    recent_places: current.recent_places,
                 };
                 // Visibility and popover activity wake the provider reader,
                 // but they are not durable preferences. The shell sends the

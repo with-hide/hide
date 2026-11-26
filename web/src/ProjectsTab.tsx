@@ -202,7 +202,7 @@ function ProjectRow({ row, sessions, largest, actions }: { row: ProjectRowModel;
   const cleans = useShellStore((s) => readsHere(project, s.rest?.navigator?.devices));
   const activity = project.last_activity_unix_ms ?? null;
   return (
-    <div role="row" className={cn(COLUMNS, "relative border-b border-border px-md py-xl text-body hover:bg-accent", selected && "bg-secondary")} data-projects-row={project.id}>
+    <div role="row" className={cn(COLUMNS, "relative border-b border-border px-md py-xl text-body", selected ? "bg-secondary hover:fill-hovered" : "hover:bg-accent")} data-projects-row={project.id}>
       <RowOverlayButton hover={false} aria-label={project.label} aria-pressed={selected} className="rounded-sm" onClick={() => useUiStore.getState().setOverview({ projectId: project.id, panel: null })} />
       <span role="cell" className="pointer-events-none flex min-w-0 items-center gap-xs">
         {row.folder ? <FolderIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : hostRepository(project) ? <HostMark project={project} /> : <FolderGit2Icon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />}

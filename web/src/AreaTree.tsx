@@ -726,7 +726,7 @@ function FloatingTab({ display, start, reason }: { display: I; start: Point; rea
   }, []);
   return (
     <div
-      className="pointer-events-none fixed z-50 flex max-w-[var(--size-tab-preferred)] translate-x-sm translate-y-sm flex-col gap-xxs rounded-sm border border-border bg-secondary px-sm py-xxs text-caption text-foreground shadow-overlay"
+      className="pointer-events-none fixed z-50 flex max-w-[var(--size-tab-preferred)] translate-x-sm translate-y-sm flex-col gap-xxs rounded-sm bg-popover px-sm py-xxs text-caption text-popover-foreground shadow-overlay"
       style={{ left: point.x, top: point.y }}
       data-area-drag-tab={display.id} {...data("drag-tab", display.id)}
     >

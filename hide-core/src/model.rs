@@ -5487,13 +5487,15 @@ pub struct UiStateSnapshot {
     /// written before it existed, which loads empty.
     #[serde(default)]
     pub recent_checkouts: Vec<RecentCheckout>,
-    /// The terminal panes the keyboard has been in, newest first, at most
-    /// `RECENT_PANE_LIMIT`: the order the Agent area's Ctrl+Tab walks (issue
-    /// 301). The shell reports each visit with `pane_visit`; a remote pane is
-    /// held by its device-scoped id. Absent in a store written before it
-    /// existed, which loads empty.
+    /// The places the operator has been, newest first, at most
+    /// `RECENT_PLACE_LIMIT`: the order Ctrl+Tab walks outside a View area
+    /// (issue 301): the terminal panes the keyboard has been in, the missions
+    /// and automations whose detail was in front, and Desk. The shell reports
+    /// each visit with `place_visit`; a remote pane is held by its
+    /// device-scoped id. A store written before places existed holds its
+    /// panes as `recent_pane_ids`, which load as pane places.
     #[serde(default)]
-    pub recent_pane_ids: Vec<String>,
+    pub recent_places: Vec<RecentPlace>,
     /// The names the operator gave tabs through Rename, by tab id, at most
     /// `OPERATOR_TAB_NAME_LIMIT`: a tab is named, and outlives its agents,
     /// only while its label is still the name recorded here (the engine keeps tab
@@ -5511,8 +5513,27 @@ pub struct UiStateSnapshot {
 /// The most checkouts the recent list keeps; the oldest leave first.
 pub const RECENT_CHECKOUT_LIMIT: usize = 10;
 
-/// The most panes the recent pane order keeps; the oldest leave first.
-pub const RECENT_PANE_LIMIT: usize = 50;
+/// The most places the recent place order keeps; the oldest leave first.
+pub const RECENT_PLACE_LIMIT: usize = 50;
+
+/// One place of the recent place order (`UiStateSnapshot::recent_places`):
+/// somewhere the operator works and comes back to, which committing its
+/// Ctrl+Tab row brings to the front. A list screen (the Overview, the mission
+/// or automation table) is where the operator picks a place, not one.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RecentPlace {
+    /// A terminal pane the keyboard was in; a connected device's by its
+    /// device-scoped id. A pane running no agent is kept (an agent may start
+    /// in it later), though the shell draws no row for it.
+    Pane { pane_id: String },
+    /// A mission whose detail the mission screen showed.
+    Mission { mission_id: String },
+    /// An automation whose detail the automation screen showed.
+    Automation { automation_id: String },
+    /// Desk's room.
+    Desk,
+}
 
 /// The most tab names the operator's Rename is remembered for; past it, the
 /// names of tabs that are gone leave first, and a rename with no room left
@@ -6341,7 +6362,7 @@ impl Default for UiStateSnapshot {
             session_archive: crate::session_archive::SessionArchive::default(),
             waits: crate::waits::WaitStore::default(),
             recent_checkouts: Vec::new(),
-            recent_pane_ids: Vec::new(),
+            recent_places: Vec::new(),
             operator_tab_names: BTreeMap::new(),
             home_retire: Vec::new(),
         }

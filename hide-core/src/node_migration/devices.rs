@@ -1014,6 +1014,7 @@ mod tests {
                 "device_expanded_paths": {ALIAS: ["/srv/p/src"]},
                 "device_agent_permissions": {ALIAS: {"codex": {"mode": "ask"}}},
                 "selected_pane_id": pane(ALIAS),
+                "recent_places": [{"kind": "pane", "pane_id": pane(ALIAS)}, {"kind": "mission", "mission_id": "m-1"}, {"kind": "desk"}],
                 "session_open_folds": [format!("cleanup/{ALIAS}"), format!("asleep/{registered}")],
                 "collapsed_workspace_ids": [registered],
                 "pane_text_scales": {pane(ALIAS): 1.1},
@@ -1296,6 +1297,10 @@ mod tests {
             json!({MACHINE: {"codex": {"mode": "ask"}}})
         );
         assert_eq!(core["selected_pane_id"], json!(pane(MACHINE)));
+        assert_eq!(
+            core["recent_places"],
+            json!([{"kind": "pane", "pane_id": pane(MACHINE)}, {"kind": "mission", "mission_id": "m-1"}, {"kind": "desk"}])
+        );
         assert_eq!(
             core["session_open_folds"],
             json!([

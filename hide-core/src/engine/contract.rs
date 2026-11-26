@@ -1989,7 +1989,7 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
     use crate::agent_start::{ShellStart, start_at_shell_reusing_name};
     use crate::codex_launch::CodexDaemon;
     use crate::recent_closed::{ClosedAgent, resume_arguments};
-    use hide_node_link::terminal::{KeyTarget, TerminalControl, TerminalNode};
+    use hide_node_link::terminal::{KeyTarget, ScreenInput, TerminalControl, TerminalNode};
 
     const SESSION: &str = "0b8f1f3e-5c2a-4a8e-9a54-2d4c1f6b7e90";
     let built = BuiltHolders::start();
@@ -2070,9 +2070,11 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
         });
     };
     asleep(true);
-    built
-        .service
-        .key(KeyTarget::Pane(pane.clone()), b"stray".to_vec(), 0);
+    built.service.type_into(
+        KeyTarget::Pane(pane.clone()),
+        ScreenInput::Keys(b"stray".to_vec()),
+        0,
+    );
     end_agent(engine, &node, &pane, "claude")
         .unwrap_or_else(|error| panic!("the agent sleeps: {error:?}"));
     let args = resume_arguments(&ClosedAgent {

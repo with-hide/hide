@@ -416,7 +416,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
           <aside className="flex shrink-0 flex-col gap-xs border-l border-border p-lg" data-desk-scene-chip-card="open">
             <h3 className="text-micro text-muted-foreground">칩에 마우스를 올리면</h3>
             <span><SessionChip session={{ name: open.card!.title, mark: open.mark, agent_kind: open.agent_kind, pane_id: scene.open }} onPress={noop} className="ring-1 ring-mention-session" /></span>
-            <div className="w-(--size-pr-popover) max-w-full rounded-sm border border-border bg-popover text-popover-foreground shadow-overlay">
+            <div className="w-(--size-pr-popover) max-w-full rounded-sm bg-popover text-popover-foreground shadow-overlay">
               <SessionCard job={open.card!} since={open.since} parent={open.parent} onOpen={noop} onParent={noop} />
             </div>
           </aside>
@@ -434,7 +434,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
           <Room chat={chat(scene.items, <ChatComposer selection={CLAUDE} />)} session={<EndedColumn record={scene.record} />} />
           <aside className="flex shrink-0 flex-col gap-xs border-l border-border p-lg" data-desk-scene-chip-card="ended">
             <h3 className="text-micro text-muted-foreground">칩에 마우스를 올리면</h3>
-            <div className="w-(--size-pr-popover) max-w-full rounded-sm border border-border bg-popover text-popover-foreground shadow-overlay">
+            <div className="w-(--size-pr-popover) max-w-full rounded-sm bg-popover text-popover-foreground shadow-overlay">
               <SessionCard job={ended.card!} since={ended.since} parent={null} onOpen={noop} onParent={noop} />
             </div>
           </aside>
