@@ -5,7 +5,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { openLayout, startLayoutStack } from "./engine-fixture";
 
-test.describe.configure({ timeout: 90_000 });
+test.describe.configure({ timeout: 90_000 }); // wait-ok: a hided, its engine and a pane's shell started and stopped whole, with two commands typed and read
 
 const paneText = (page: Page, pane: string) => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane);
 
@@ -28,10 +28,10 @@ test("a multi-line paste is bracketed only for a program that turned bracketed p
     // typed command never matches it, and it is printed once the mode is set.
     const run = async (mode: "h" | "l", marker: string): Promise<string> => {
       await page.keyboard.type(`stty -echo; printf '\\033[?2004${mode}'; echo READY_${marker}_$((40+2)); cat -v\n`);
-      await expect.poll(() => paneText(page, pane), { timeout: 20_000 }).toContain(`READY_${marker}_42`);
+      await expect.poll(() => paneText(page, pane), { timeout: 20_000 }).toContain(`READY_${marker}_42`); // wait-ok: the pane's shell ran the typed command and printed its ready line
       await paste(page, pane, `${marker}_ONE\n${marker}_TWO`);
       await page.keyboard.press("Enter");
-      await expect.poll(() => paneText(page, pane), { timeout: 20_000 }).toMatch(new RegExp(`${marker}_TWO`));
+      await expect.poll(() => paneText(page, pane)).toMatch(new RegExp(`${marker}_TWO`));
       const read = (await paneText(page, pane)).split(`READY_${marker}_42`).pop()!;
       await page.keyboard.press("Control+C");
       return read;
