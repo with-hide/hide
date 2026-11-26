@@ -137,3 +137,17 @@ it("draws in a drawn table's cells the chips that arrive once the answer ends, i
   await draw([{ token: "@mission(mission-63 결제)", node, item: <i data-test-item="mission-63">M63 결제 · 3/4</i> }]);
   await vi.waitFor(() => expect(table?.querySelector("[data-test-item='mission-63']")?.textContent).toBe("M63 결제 · 3/4"));
 });
+
+it("draws a chip that arrives after the text was parsed over the Live plan's marks it covers", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted.push(root);
+  const text = "메모는 `note-pi.txt`에 남겼어요.";
+  const draw = (parts: readonly MarkdownChip[]) => act(async () => root.render(<TooltipProvider><MarkdownText text={text} size="chat" chips={parts} /></TooltipProvider>));
+  await draw([]);
+  // The language pack has parsed the text: the inline code is drawn as code.
+  await vi.waitFor(() => expect(host.querySelector(".cm-md-code-inline")).not.toBeNull());
+  await draw([{ token: "`note-pi.txt`", at: [4], node: <b data-test-file="note-pi.txt">note-pi.txt</b> }]);
+  await vi.waitFor(() => expect(host.querySelector("[data-markdown-chip] [data-test-file]")?.textContent).toBe("note-pi.txt"));
+});

@@ -328,9 +328,13 @@ function changeBetween(from: string, to: string): { from: number; to: number; in
   return { from: start, to: from.length - end, insert: to.slice(start, to.length - end) };
 }
 
-/** What the caller's chips and `복사` draw: the Live plan (a table's cells take the chips), the chips and the code blocks, swapped as one when either changes. */
+/**
+ * What the caller's chips and `복사` draw, swapped as one when either changes: the chips first, so a chip outranks the Live
+ * plan's marks on the letters it replaces (a file chip over inline code, its backticks included), then the Live plan (a
+ * table's cells take the chips) and the code blocks.
+ */
 function partsOf(chips: readonly MarkdownChip[], copyCode: CopyText | undefined): Extension {
-  return [markdownLive({ reveal: false, parts: cellParts(chips), copy: copyCode }), chipDecorations(chips), codeBlocks(copyCode)];
+  return [chipDecorations(chips), markdownLive({ reveal: false, parts: cellParts(chips), copy: copyCode }), codeBlocks(copyCode)];
 }
 
 type Drawn = { view: EditorView; parts: Compartment; marked: Compartment; text: string; chips: readonly MarkdownChip[]; copyCode: CopyText | undefined; mark: MarkdownMark | null };
