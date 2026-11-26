@@ -3,7 +3,7 @@ import { pullLabel } from "../../codeHost";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithRef, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
-import { askedAt, askedIn, namedMention, threadPhase, threadTurns } from "../../desk";
+import { askPlace, namedMention, threadPhase, threadTurns } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { MarkdownText, type MarkdownChip, type MarkdownMark } from "../../MarkdownText";
@@ -466,18 +466,27 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   // The session's own folder and machine, where its relative paths are read.
   const place = useShellStore(useShallow((s) => (job?.pane_id ? answerPlace(s.rest, job.pane_id) : null)));
   const words = useWords(mentions, actions.onSession, actions.onCopy, place, actions.onFile);
-  // A pressed question is looked for in the lines read, then in the pages before them, one page at a time, until its message is found or the record holds no more.
-  const [seek, setSeek] = useState<{ ask: AskLine; press: number } | null>(null);
+  // Where each question was asked, decided once for the line (`askPlace`): found, not known until the pages before are read, or gone.
+  const settled = !reading && failure === null;
+  const places = useMemo(() => new Map(asks.map((ask) => [ask.id, askPlace(turns, ask, { olderLeft, settled })])), [asks, turns, olderLeft, settled]);
+  const gone = useMemo(() => new Set(asks.filter((ask) => places.get(ask.id)?.state === "gone").map((ask) => ask.id)), [asks, places]);
+  // A pressed question not found yet reads the pages before, one at a time, until it is found or gone; a gone one does nothing.
+  const [seek, setSeek] = useState<{ id: string; press: number } | null>(null);
   const [lit, setLit] = useState<(Lit & { press: number }) | null>(null);
-  const [gone, setGone] = useState<string | null>(null);
-  const goTo = (ask: AskLine) => setSeek((now) => ({ ask, press: Math.max(now?.press ?? 0, lit?.press ?? 0) + 1 }));
+  const goTo = (ask: AskLine) => {
+    if (places.get(ask.id)?.state === "gone") return;
+    setSeek((now) => ({ id: ask.id, press: Math.max(now?.press ?? 0, lit?.press ?? 0) + 1 }));
+  };
   useEffect(() => {
-    if (!seek || reading) return;
-    const found = askedAt(turns, seek.ask);
-    if (found) {
+    if (!seek) return;
+    const place = places.get(seek.id);
+    if (!place || place.state === "gone") {
       setSeek(null);
-      setGone(null);
-      setLit({ id: found.line.id, sentence: found.sentence, ask: seek.ask.id, press: seek.press });
+      return;
+    }
+    if (place.state === "found") {
+      setSeek(null);
+      setLit({ id: place.line.id, sentence: place.sentence, ask: seek.id, press: seek.press });
       return;
     }
     if (olderLeft) {
@@ -485,14 +494,8 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
       const box = scroller.ref.current;
       if (box) box.scrollTop = 0;
       onReachTop?.();
-      return;
     }
-    // Every page read: a sentence the lines no longer hold goes to the answer it was asked in, unlit; with none, the conversation holds the question no more (a new record, or one cut short).
-    setSeek(null);
-    const answer = askedIn(turns, seek.ask.at_unix_ms);
-    if (answer) setLit({ id: answer.id, sentence: null, ask: seek.ask.id, press: seek.press });
-    else setGone(seek.ask.id);
-  }, [seek, turns, reading, olderLeft, onReachTop, scroller.ref]);
+  }, [seek, places, olderLeft, onReachTop, scroller.ref]);
   useEffect(() => {
     if (!lit) return undefined;
     const message = scroller.ref.current?.querySelector<HTMLElement>(`[data-desk-thread-message="${CSS.escape(lit.id)}"]`);
@@ -527,7 +530,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
         {running && !reading && !failure ? <WorkingLine phase={threadPhase(turns.at(-1))} since={workingSince} /> : null}
         {ask}
       </div>
-      {onAsk ? <ThreadAsks asks={asks} onGo={goTo} onSet={onAsk} lit={seek?.ask.id ?? lit?.ask ?? null} gone={gone} /> : null}
+      {onAsk ? <ThreadAsks asks={asks} onGo={goTo} onSet={onAsk} lit={seek?.id ?? lit?.ask ?? null} gone={gone} /> : null}
       {foot ?? (
         <div className="shrink-0 px-sm pb-sm">
           <DeskComposer

@@ -221,7 +221,7 @@ const NO_CHIPS: readonly MarkdownChip[] = [];
 /** A stretch of the text lit for a moment: the sentence a question line pressed (Doop N3 가). */
 export type MarkdownMark = { from: number; to: number };
 
-const LIT = Decoration.mark({ class: "rounded-xs bg-warning/20", attributes: { "data-markdown-lit": "true" } });
+const LIT = Decoration.mark({ class: "rounded-xs bg-open-ask/20", attributes: { "data-markdown-lit": "true" } });
 
 function markDecorations(mark: MarkdownMark | null, length: number): Extension {
   if (!mark || mark.from >= mark.to || mark.to > length) return [];

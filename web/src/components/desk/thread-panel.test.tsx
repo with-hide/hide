@@ -11,6 +11,7 @@ import type { AskLine } from "../open-asks";
 import type { DeskJob } from "../../desk";
 import type { SessionThreadSection, ThreadPage } from "../../snapshot";
 import { useShellStore } from "../../store";
+import { useUiStore } from "../../ui";
 import { TooltipProvider } from "../ui/tooltip";
 import { ThreadPanel } from "./thread-panel";
 import { clearPreviews } from "../../filePreview";
@@ -349,8 +350,9 @@ it("shows a question in the agent's own sentence above the box and lights only t
   expect(row.querySelector('[data-desk-thread-ask-dismiss="missed-1-0"]')).not.toBeNull();
   expect(line.querySelector("[data-desk-thread-ask-body]")).toBeNull();
   expect(line.compareDocumentPosition(container.querySelector("textarea")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  // Amber is only on 질문: the box is the neutral ground inside a hairline.
-  expect([/warning/.test(line.className), line.className.includes("border-border")]).toEqual([false, true]);
+  // The question colour is only on 질문: the box is the neutral ground inside a hairline.
+  expect(row.querySelector("[data-desk-thread-ask-lead]")?.className).toContain("text-open-ask");
+  expect([/warning|open-ask/.test(line.className), line.className.includes("border-border")]).toEqual([false, true]);
 
   vi.useFakeTimers();
   try {
@@ -394,6 +396,9 @@ it("reads the pages before for a question asked further up, and says so when the
   await act(async () => useShellStore.setState({ sessionThread: section({ has_older: false, tail: asked(answer("새로 시작했어요.", 1_000)) }) }));
   expect(container.querySelector('[data-desk-thread-ask-gone="missed-1-0"]')?.textContent).toBe("No longer in the conversation");
   expect(container.querySelector('[data-desk-thread-ask-row="missed-1-0"]')).not.toBeNull();
+  // A gone row has nothing to press, and reads no more pages.
+  expect(container.querySelector('[data-desk-thread-ask="missed-1-0"]')).toBeNull();
+  expect(actions.readOlderThread).toHaveBeenCalledTimes(1);
 });
 
 it("folds several questions to 질문 N and the first, unfolds them under 질문 N alone, oldest first, and keeps 무시하기 struck through with 되돌리기 (Doop N3 가)", async () => {
@@ -431,6 +436,30 @@ it("folds several questions to 질문 N and the first, unfolds them under 질문
   expect(head()).toBe("Questions 2");
   await act(async () => line().querySelector<HTMLElement>("[data-desk-thread-asks-fold]")!.click());
   expect(line().getAttribute("data-desk-thread-asks-open")).toBe("false");
+});
+
+it("folds the unfolded question list on Esc before Esc reaches the panel it stands in", async () => {
+  const asks: AskLine[] = [
+    { id: "missed-1-0", text: "다크도 찍을지", at_unix_ms: 1_500 },
+    { id: "missed-2-0", text: "본인 확인을 직접 해 줄 수 있는지", at_unix_ms: 2_500 },
+  ];
+  const panel = vi.fn();
+  const pop = useUiStore.getState().pushEscape(panel);
+  try {
+    const { container } = await mount(job, null, { asks });
+    await act(async () => useShellStore.setState({ sessionThread: section(), sessionThreadHistory: { generation: 4, pages: [] } }));
+    const line = () => container.querySelector("[data-desk-thread-asks]")!;
+    await act(async () => line().querySelector<HTMLElement>("[data-desk-thread-asks-more]")!.click());
+    expect(line().getAttribute("data-desk-thread-asks-open")).toBe("true");
+    // Esc runs the innermost layer, as keyboard.ts does.
+    await act(async () => useUiStore.getState().escapeLayers.at(-1)!());
+    expect(line().getAttribute("data-desk-thread-asks-open")).toBe("false");
+    expect(panel).not.toHaveBeenCalled();
+    // Folded, the next Esc is the panel's again.
+    expect(useUiStore.getState().escapeLayers.at(-1)).toBe(panel);
+  } finally {
+    pop();
+  }
 });
 
 it("draws a code block under a head row with its language and 복사, the code below it, a block in a quote too (Doop N 1 나)", async () => {

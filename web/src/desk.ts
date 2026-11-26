@@ -632,18 +632,6 @@ export function threadTurns(lines: readonly ThreadLine[]): ThreadTurn[] {
   return turns;
 }
 
-/**
- * The answer a question Hide found at a turn's end was asked in (B4 question
- * 나): the last answer written no later than the question was found, which
- * the question line goes to for a question kept without its sentence. Hide
- * AI lists a question only when the sentence that asks it is in the turn's
- * own answer, so that answer is where it stands; null when no answer of the
- * lines read says when it was written that early.
- */
-export function askedIn(turns: readonly ThreadTurn[], atUnixMs: number): Extract<ThreadLine, { kind: "agent" }> | null {
-  return answersBy(turns, atUnixMs)[0] ?? null;
-}
-
 /** The answer lines written no later than `atUnixMs`, newest first, the later in the conversation first among lines of one time. */
 function answersBy(turns: readonly ThreadTurn[], atUnixMs: number): Extract<ThreadLine, { kind: "agent" }>[] {
   return turns
@@ -653,23 +641,36 @@ function answersBy(turns: readonly ThreadTurn[], atUnixMs: number): Extract<Thre
     .sort((a, b) => (b.atMs ?? 0) - (a.atMs ?? 0));
 }
 
+/** A place in a message: where the sentence a question asks stands in it. */
+export type AskSentence = { from: number; to: number };
+
 /**
- * Where a question Hide found stands in the lines read (Doop N3 가): for one
- * kept with the agent's own sentence, the newest answer line written by the
- * time it was found that holds that sentence, and where in it; the core
+ * Whether the question line can take the operator to where a question was
+ * asked (Doop N3 가), the one place that decides it: `found`, with the message
+ * and the sentence of it; `unknown` while the record is being read or holds
+ * pages before the ones read, which a press reads first; `gone` once every
+ * page is read and none holds it (the agent compacted it away or started a
+ * new record), a row a press does nothing on.
+ *
+ * A question kept with the agent's own sentence is found in the newest answer
+ * line written by the time it was found that holds that sentence; the core
  * checked the sentence against the turn's answer messages together, so it can
- * stand in an earlier message of the turn than the last. For one kept without
- * its sentence, the answer `askedIn` gives, with no place in it. Null when no
- * line read holds it.
+ * stand in an earlier message of the turn than the last. Only a question kept
+ * before its sentence was goes by time alone, to the last answer written no
+ * later than it was found, with no sentence lit.
  */
-export function askedAt(turns: readonly ThreadTurn[], ask: { at_unix_ms: number; quote?: string }): { line: Extract<ThreadLine, { kind: "agent" }>; sentence: { from: number; to: number } | null } | null {
+export function askPlace(turns: readonly ThreadTurn[], ask: { at_unix_ms: number; quote?: string }, { olderLeft, settled }: { olderLeft: boolean; settled: boolean }):
+  | { state: "found"; line: Extract<ThreadLine, { kind: "agent" }>; sentence: AskSentence | null }
+  | { state: "unknown" | "gone" } {
+  const answers = answersBy(turns, ask.at_unix_ms);
   if (!ask.quote) {
-    const line = askedIn(turns, ask.at_unix_ms);
-    return line && { line, sentence: null };
+    const line = answers[0];
+    if (line) return { state: "found", line, sentence: null };
+  } else {
+    for (const line of answers) {
+      const sentence = sentenceIn(line.text, ask.quote);
+      if (sentence) return { state: "found", line, sentence };
+    }
   }
-  for (const line of answersBy(turns, ask.at_unix_ms)) {
-    const sentence = sentenceIn(line.text, ask.quote);
-    if (sentence) return { line, sentence };
-  }
-  return null;
+  return { state: olderLeft || !settled ? "unknown" : "gone" };
 }
