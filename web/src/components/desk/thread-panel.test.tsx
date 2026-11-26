@@ -412,8 +412,11 @@ it("unfolds several questions one per line, oldest first, each with its message 
   expect(head()).toBe("Questions 2다크도 찍을지");
 });
 
+// An answer of three paragraphs, the second asking.
+const ASKING = "라이트 화면을 찍었어요.\n\n다크 화면도 넣을까요? 넣으면 캡처가 두 배가 돼요.\n\n- 저장 위치: `shots/`";
+
 it("unfolds one question's message under its line with 본문 보기 and folds it again with 접기 (Doop N 2)", async () => {
-  const answer = { sessionUpdate: "agent_message_chunk", messageId: "a", content: { type: "text", text: "다크 화면도 넣을까요?" }, _meta: { hide: { at_ms: 1_000 } } };
+  const answer = { sessionUpdate: "agent_message_chunk", messageId: "a", content: { type: "text", text: ASKING }, _meta: { hide: { at_ms: 1_000 } } };
   const { container } = await mount(job, null, { asks: [{ id: "missed-1-0", text: "다크도 찍을지", at_unix_ms: 1_500 }] });
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "찍어 줘" } }, answer], parts: {}, sessions: {} } }), sessionThreadHistory: { generation: 4, pages: [] } }));
   const line = () => container.querySelector("[data-desk-thread-asks]")!;
@@ -421,10 +424,25 @@ it("unfolds one question's message under its line with 본문 보기 and folds i
   expect([toggle().textContent, toggle().getAttribute("aria-expanded")]).toEqual(["Show message", "false"]);
   await act(async () => toggle().click());
   await act(() => vi.waitFor(() => expect(line().querySelector('[data-desk-thread-ask-words="missed-1-0"]')?.textContent).toContain("다크 화면도 넣을까요?")));
+  // A question kept without the sentence that asks it shows the whole answer.
+  expect(line().querySelector('[data-desk-thread-ask-words="missed-1-0"]')?.textContent).toContain("라이트 화면을 찍었어요.");
   expect([toggle().textContent, toggle().getAttribute("aria-expanded")]).toEqual(["Collapse", "true"]);
   await act(async () => toggle().click());
   expect(line().querySelector("[data-desk-thread-ask-words]")).toBeNull();
   expect(toggle().getAttribute("aria-expanded")).toBe("false");
+});
+
+it("shows under 본문 보기 only the paragraph holding the sentence that asks, as the answer marks it up (Doop N 2)", async () => {
+  const answer = { sessionUpdate: "agent_message_chunk", messageId: "a", content: { type: "text", text: ASKING }, _meta: { hide: { at_ms: 1_000 } } };
+  const { container } = await mount(job, null, { asks: [{ id: "missed-1-0", text: "다크도 찍을지", at_unix_ms: 1_500, quote: "다크 화면도 넣을까요?" }] });
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "찍어 줘" } }, answer], parts: {}, sessions: {} } }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  const line = () => container.querySelector("[data-desk-thread-asks]")!;
+  await act(async () => line().querySelector<HTMLElement>('[data-desk-thread-ask-body="missed-1-0"]')!.click());
+  const words = () => line().querySelector('[data-desk-thread-ask-words="missed-1-0"]')?.textContent ?? "";
+  await act(() => vi.waitFor(() => expect(words()).toContain("다크 화면도 넣을까요? 넣으면 캡처가 두 배가 돼요.")));
+  expect(words()).not.toContain("라이트 화면을 찍었어요.");
+  expect(words()).not.toContain("저장 위치");
+  expect(line().querySelector('[data-desk-thread-ask-words="missed-1-0"] [data-desk-thread-ask-go]')).not.toBeNull();
 });
 
 it("draws a code block under a head row with its language and 복사, the code below it, a block in a quote too (Doop N 1 나)", async () => {

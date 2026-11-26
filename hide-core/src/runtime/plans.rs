@@ -1139,10 +1139,11 @@ impl Runtime {
                 let items: Vec<OpenAskSnapshot> = mine
                     .iter()
                     .filter_map(|(_, since, subject, _)| match subject {
-                        AskSubject::OpenAsk { id, line } => Some(OpenAskSnapshot {
+                        AskSubject::OpenAsk { id, line, quote } => Some(OpenAskSnapshot {
                             id: id.clone(),
                             text: line.clone(),
                             at_unix_ms: *since,
+                            quote: quote.clone(),
                         }),
                         _ => None,
                     })
@@ -1304,6 +1305,7 @@ impl Runtime {
                         AskSubject::OpenAsk {
                             id: ask.id.clone(),
                             line: ask.text.clone(),
+                            quote: ask.quote.clone(),
                         },
                         ask_id::open_ask(&work.session, &ask.id),
                     )

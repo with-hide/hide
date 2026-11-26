@@ -216,6 +216,7 @@ mod tests {
             reason: None,
             reopened,
             given: false,
+            quote: None,
         }
     }
 

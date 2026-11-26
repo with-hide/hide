@@ -205,6 +205,14 @@ ALTER TABLE ledger_missed ADD COLUMN reopened INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE ledger_missed ADD COLUMN given_at INTEGER;
 ";
 
+/// Version 19: a question keeps the sentence of the answer that asks it
+/// (`quote`), as Hide AI quoted it and the core found it there, so the
+/// thread's question line can show the paragraph holding it. Every line
+/// written before has none and shows the whole answer.
+pub(super) const ASK_QUOTE_SCHEMA: &str = "
+ALTER TABLE ledger_missed ADD COLUMN quote TEXT;
+";
+
 /// The inverse of [`FLOW_SCHEMA`], for tests that open a version 6 record.
 #[cfg(test)]
 pub(super) const UNDO_FLOW_SCHEMA: &str = "
@@ -336,7 +344,7 @@ fn ledger_missed_rows(
     let mut missed_items = Vec::new();
     let mut statement=connection.prepare("SELECT missed,kind,text,status,at,turn_offset,issue_repo,issue_number, \
         EXISTS(SELECT 1 FROM ledger_issue_attempts a WHERE a.device=m.device AND a.agent=m.agent AND a.id=m.id \
-        AND a.missed=m.missed AND a.state='creating'),turn_witness,backlog_key,reason,reopened,given_at IS NOT NULL \
+        AND a.missed=m.missed AND a.state='creating'),turn_witness,backlog_key,reason,reopened,given_at IS NOT NULL,quote \
         FROM ledger_missed m WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at DESC").map_err(failed)?;
     let missed = statement
         .query_map(
@@ -357,6 +365,7 @@ fn ledger_missed_rows(
                     r.get::<_, Option<String>>(11)?,
                     r.get::<_, bool>(12)?,
                     r.get::<_, bool>(13)?,
+                    r.get::<_, Option<String>>(14)?,
                 ))
             },
         )
@@ -377,6 +386,7 @@ fn ledger_missed_rows(
             reason,
             reopened,
             given,
+            quote,
         ) = missed.map_err(failed)?;
         missed_items.push(MissedWork {
             id,
@@ -393,6 +403,7 @@ fn ledger_missed_rows(
             reason,
             reopened,
             given,
+            quote,
         });
     }
     Ok(missed_items)
@@ -1330,13 +1341,14 @@ impl LinkStore {
                         .operator_only
                         .filter(|_| missed.kind == MissedKind::Ask);
                     // A question the turn names as one still open stays that
-                    // one line, however the turn worded it. One a reply just
+                    // one line, however the turn worded it, and takes the
+                    // sentence this answer asks it in. One a reply just
                     // closed above is not open, so it is listed anew.
                     if missed.kind == MissedKind::Ask
                         && let Some(same_as) = &missed.same_as
                         && tx
-                            .query_row(
-                                "SELECT 1 FROM ledger_missed WHERE device=?1 AND agent=?2 AND id=?3 \
+                            .execute(
+                                "UPDATE ledger_missed SET quote=COALESCE(?7,quote) WHERE device=?1 AND agent=?2 AND id=?3 \
                                 AND missed=?4 AND kind=?5 AND status=?6",
                                 params![
                                     session.device_id,
@@ -1344,13 +1356,12 @@ impl LinkStore {
                                     session.session_id,
                                     same_as,
                                     encoded(&MissedKind::Ask)?,
-                                    encoded(&MissedStatus::Open)?
+                                    encoded(&MissedStatus::Open)?,
+                                    missed.quote
                                 ],
-                                |_| Ok(()),
                             )
-                            .optional()
                             .map_err(failed)?
-                            .is_some()
+                            > 0
                     {
                         continue;
                     }
@@ -1396,10 +1407,11 @@ impl LinkStore {
                     } else {
                         MissedStatus::Open
                     };
-                    tx.execute("INSERT INTO ledger_missed(device,agent,id,missed,kind,text,status,at,turn_offset,turn_witness,operator_only) \
-                        VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                    tx.execute("INSERT INTO ledger_missed(device,agent,id,missed,kind,text,status,at,turn_offset,turn_witness,operator_only,quote) \
+                        VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
                         params![session.device_id,session.agent,session.session_id,format!("missed-{offset}-{index}"),
-                            encoded(&missed.kind)?,missed.text,encoded(&status)?,*at_unix_ms as i64,*offset as i64,turn_witness,operator_only]).map_err(failed)?;
+                            encoded(&missed.kind)?,missed.text,encoded(&status)?,*at_unix_ms as i64,*offset as i64,turn_witness,operator_only,
+                            missed.quote.as_deref().filter(|_| missed.kind == MissedKind::Ask)]).map_err(failed)?;
                 }
                 for resolved in &judgment.resolved {
                     // A printed existing issue is insufficient: only this

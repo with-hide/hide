@@ -512,10 +512,15 @@ impl JudgedWork {
             .into_iter()
             .filter_map(|line| {
                 let ask = line.kind == MissedKind::Ask;
+                // The sentence that asks it, kept only when it is in the answer, so
+                // the question line can show where it was asked; one asked again
+                // brings its new sentence.
+                let form = quote_form(&line.quote);
+                let quote = (ask && !form.is_empty() && answer.contains(&form))
+                    .then(|| line.quote.trim().to_owned());
                 if ask && line.same_as.is_none() {
                     checks.listed += 1;
-                    let quote = quote_form(&line.quote);
-                    if quote.is_empty() || !answer.contains(&quote) {
+                    if quote.is_none() {
                         checks.unquoted += 1;
                         return None;
                     }
@@ -527,6 +532,7 @@ impl JudgedWork {
                     kind: line.kind,
                     text: line.text,
                     same_as: line.same_as,
+                    quote,
                 })
             })
             .collect::<Vec<_>>();
@@ -1022,8 +1028,8 @@ mod tests {
     }
 
     /// A new question stays only when the sentence it quotes is in the
-    /// turn's own answer, however the answer marked it up; a repeated one
-    /// carries none. A question for the parent agent is kept
+    /// turn's own answer, however the answer marked it up, and keeps that
+    /// sentence; a repeated one carries none. A question for the parent agent is kept
     /// folded unless only a person can take its step, which stays the
     /// operator's own (B12).
     #[test]
@@ -1092,6 +1098,21 @@ mod tests {
             ]
         );
         assert_eq!(judgment.missed[1].same_as.as_deref(), Some("missed-1-0"));
+        // Each keeps the sentence it was found by, as the judgment quoted it,
+        // for the question line to show the paragraph holding it.
+        assert_eq!(
+            judgment
+                .missed
+                .iter()
+                .map(|line| line.quote.as_deref())
+                .collect::<Vec<_>>(),
+            [
+                Some("배포: 지금 main에 배포할까요?"),
+                None,
+                Some("127번 칩은 하나로 줄일지 알려 주세요."),
+                Some("머지는 운영자 캡처 확인을 기다립니다."),
+            ]
+        );
         assert_eq!(
             checks,
             AskChecks {

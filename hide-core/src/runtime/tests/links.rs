@@ -335,6 +335,7 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
                     same_as: None,
                     operator_only: None,
                     to_parent: false,
+                    quote: None,
                 }],
                 ..Default::default()
             },

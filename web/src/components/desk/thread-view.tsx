@@ -7,6 +7,7 @@ import { askedIn, namedMention, threadPhase, threadTurns } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { MarkdownText, type MarkdownChip } from "../../MarkdownText";
+import { markdownBlockHolding } from "../../markdownPlain";
 import { CopyableMessage } from "../copy-words";
 import type { CopyText } from "../human-turn-copy";
 import type { AskLine } from "../open-asks";
@@ -481,10 +482,12 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
     message.scrollIntoView({ block: "center" });
     setLit((now) => ({ id, press: (now?.press ?? 0) + 1 }));
   };
-  // 본문 보기: the words of the answer a question was asked in, as the conversation draws them.
+  // 본문 보기: the block of the answer a question was asked in that holds the sentence asking it, as the conversation draws it; the whole answer for a question kept without its sentence, or one the answer read here does not hold.
   const askedWords = (ask: AskLine) => {
     const answer = askedIn(turns, ask.at_unix_ms);
-    return answer ? <MarkdownText text={answer.text} chips={words.chips} copyCode={words.copy} /> : null;
+    if (!answer) return null;
+    const text = (ask.quote ? markdownBlockHolding(answer.text, ask.quote) : null) ?? answer.text;
+    return <MarkdownText text={text} chips={words.chips} copyCode={words.copy} />;
   };
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job?.id ?? ""}>

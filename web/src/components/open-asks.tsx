@@ -5,7 +5,7 @@ import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 
 /** A question the agent put to the operator that still waits: the record's id, its words and when it was asked. */
-export type AskLine = { id: string; text: string; at_unix_ms: number };
+export type AskLine = { id: string; text: string; at_unix_ms: number; quote?: string };
 
 /**
  * The open questions with the ones put away here (무시하기) kept in their
