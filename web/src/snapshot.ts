@@ -1869,6 +1869,17 @@ export type MissionSafetyNet = { conductor_present: boolean; since_unix_ms: numb
 export type MissionSkip = { node: string; title: string; line: string; kind: MissionCriterionKind; text?: string; reason: string; by: string; at_unix_ms: number };
 
 /** One mission as the map draws it (`MissionView`). */
+/**
+ * One place of the core's recent place order (`ui_state.recent_places`): a
+ * terminal pane the keyboard was in (a device's by its device-scoped id), a
+ * mission or an automation whose detail was in front, or Desk.
+ */
+export type RecentPlace =
+  | { kind: "pane"; pane_id: string }
+  | { kind: "mission"; mission_id: string }
+  | { kind: "automation"; automation_id: string }
+  | { kind: "desk" };
+
 export type Mission = {
   id: string;
   title: string;
@@ -4143,8 +4154,8 @@ export type SnapshotRest = {
     agent_start?: AgentStartChoice;
     /** The checkouts last brought to the front, newest first, up to ten (PRD cmdk-recent). */
     recent_checkouts?: RecentCheckout[];
-    /** The terminal panes the keyboard has been in, newest first, up to fifty: the Agent cycle's order (issue 301). */
-    recent_pane_ids?: string[];
+    /** The places the operator has been, newest first, up to fifty: the recent place cycle's order (issue 301). */
+    recent_places?: RecentPlace[];
     [key: string]: unknown;
   };
   status?: {

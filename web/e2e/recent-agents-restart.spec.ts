@@ -46,8 +46,8 @@ test("the recent agent pane order survives a daemon restart and a reload", async
     await expect(canvas).not.toHaveAttribute("data-canvas", beta.tab);
     const fixturePane = (await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view"))!;
     await page.locator(`[data-pane-view="${fixturePane}"]`).click({ position: { x: 30, y: 60 } });
-    const stored = () => (JSON.parse(fs.readFileSync(path.join(daemon!.stateDir, "core-state.json"), "utf8")) as { recent_pane_ids?: string[] }).recent_pane_ids;
-    await expect.poll(stored).toEqual([fixturePane, betaPane]);
+    const stored = () => (JSON.parse(fs.readFileSync(path.join(daemon!.stateDir, "core-state.json"), "utf8")) as { recent_places?: { kind: string; pane_id?: string }[] }).recent_places;
+    await expect.poll(stored).toEqual([{ kind: "pane", pane_id: fixturePane }, { kind: "pane", pane_id: betaPane }]);
 
     daemon = await daemon.restart();
     await page.goto("about:blank");
@@ -60,7 +60,7 @@ test("the recent agent pane order survives a daemon restart and a reload", async
     const sidebarOverview = page.locator('[data-sidebar-overview]');
     await sidebarOverview.focus();
     await expect(sidebarOverview).toBeFocused();
-    const agents = page.locator("[data-cycle=agents]");
+    const agents = page.locator("[data-cycle=places]");
     const cycleRow = page.locator("[data-cycle] [aria-selected=true]");
     await page.keyboard.down("Alt");
     await page.keyboard.press("Backquote");

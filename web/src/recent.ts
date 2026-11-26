@@ -10,22 +10,25 @@
 // Recent Panels walks it; Recent Projects walks the projects in the order
 // they were used and restores each one's last Workspace surface, which is
 // this same order narrowed to the project. Beside it, one recent-use order
-// of the terminal panes the keyboard has been in, on every device, project
-// and checkout, whose agent panes the Agent area's cycle walks (issue 301). The core reports what is in
-// front, not what was before, and the screens are the page's own navigation,
-// so these orders are the shell's convenience: nothing here is authority, and a
-// reload rebuilds them from use. The pane order is the exception: the page
-// still decides what a visit is, since only it knows where the keyboard is,
-// but the core keeps the order (`ui_state.recent_pane_ids`) and saves it, so
-// the Agent cycle survives a reload and a restart.
+// of the places the operator has been (the terminal panes the keyboard has
+// been in on every device, project and checkout, the missions and
+// automations whose detail was in front, and Desk), which the recent place
+// cycle walks (issue 301). The core reports what is in front, not what was
+// before, and the screens are the page's own navigation, so these orders are
+// the shell's convenience: nothing here is authority, and a reload rebuilds
+// them from use. The place order is the exception: the page still decides
+// what a visit is, since only it knows where the keyboard is and which
+// screen it shows, but the core keeps the order (`ui_state.recent_places`)
+// and saves it, so the cycle survives a reload and a restart.
 
+import { askingCount, deskOn } from "./desk";
 import { frontDeviceId, localDeviceId } from "./devices";
 import { allProjectsCount } from "./navigation";
 import { cardTitle } from "./cardTitle";
 import { translate } from "./i18n/client";
 import { remoteContext, remoteView } from "./remote";
 import { machineName, windowDeviceId } from "./screenMachine";
-import { listedWorkspaces, type AgentRow, type Checkout, type PaneRow, type SnapshotRest, type Tab, type ViewDisplaySnapshot, type Workspace } from "./snapshot";
+import { listedWorkspaces, type AgentRow, type Checkout, type Mission, type MissionStatus, type PaneRow, type RecentPlace, type SnapshotRest, type Tab, type ViewDisplaySnapshot, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import type { Screen } from "./ui";
 import { activeDisplay, areasOf } from "./viewLayout";
@@ -195,29 +198,43 @@ export function availableEntries(rest: SnapshotRest | null, remembered: readonly
   return entries;
 }
 
+/** One key per place, the row key of the place cycle; a pane's is `paneKey`. */
+export function placeKey(place: RecentPlace): string {
+  switch (place.kind) {
+    case "pane":
+      return paneKey(place.pane_id);
+    case "mission":
+      return `mission\u0000${place.mission_id}`;
+    case "automation":
+      return `automation\u0000${place.automation_id}`;
+    case "desk":
+      return "desk";
+  }
+}
+
 let entries: RecentEntry[] = [];
 let projects: string[] = [];
-/** Where a pane visit is reported: the core, which keeps the order (see `configurePaneVisits`). */
-let reportVisit: (paneId: string) => void = () => {};
-/** The pane last reported, so a repeated focus in the same pane is not reported again before the core echoes it. */
-let reported: string | null = null;
+/** Where a place visit is reported: the core, which keeps the order (see `configurePlaceVisits`). */
+let reportVisit: (place: RecentPlace) => void = () => {};
+/** The place last reported, so a repeated visit to the same place is not reported again before the core echoes it. */
+let reported: RecentPlace | null = null;
 /**
  * The core's order when `reported` was sent, until that order moves. While it
  * has not moved the core has not echoed the visit, and the order read back
- * puts the reported pane first, so a cycle opened in that gap starts where
- * the keyboard last was; once it moves, the core's order is the order.
+ * puts the reported place first, so a cycle opened in that gap starts where
+ * the operator last was; once it moves, the core's order is the order.
  */
 let reportedOver: string | null = null;
-const orderOf = (rest: SnapshotRest | null) => (rest?.ui_state?.recent_pane_ids ?? []).join("\n");
-/** The reported pane while the core's order has not moved since; the first look that sees it move ends the wait for good. */
-function unechoedVisit(rest: SnapshotRest | null): string | null {
+const orderOf = (rest: SnapshotRest | null) => (rest?.ui_state?.recent_places ?? []).map(placeKey).join("\n");
+/** The reported place while the core's order has not moved since; the first look that sees it move ends the wait for good. */
+function unechoedVisit(rest: SnapshotRest | null): RecentPlace | null {
   if (reportedOver !== null && orderOf(rest) !== reportedOver) reportedOver = null;
   return reportedOver === null ? null : reported;
 }
 /** The entry a Recent Panels or Recent Projects commit asked for, until the page shows it (see `expectSurface`). */
 let expected: string | null = null;
-/** The pane an Agent pane commit asked for, until the keyboard is in it (see `expectPane`). */
-let expectedPane: string | null = null;
+/** The place a place cycle commit asked for, by its key, until the operator is on it (see `expectPlace`). */
+let expectedPlace: string | null = null;
 
 /**
  * Brings the order up to date with what the session holds and moves the
@@ -255,41 +272,67 @@ export function observeEntries(rest: SnapshotRest | null, current: RecentEntry |
   entries = [visited, ...entries.filter((entry) => entry.key !== visited.key)];
 }
 
-/** Sends each pane visit to the core, which moves the pane to the front of `ui_state.recent_pane_ids`. */
-export function configurePaneVisits(report: (paneId: string) => void) {
+/** Sends each place visit to the core, which moves the place to the front of `ui_state.recent_places`. */
+export function configurePlaceVisits(report: (place: RecentPlace) => void) {
   reportVisit = report;
   reported = null;
   reportedOver = null;
 }
 
 /**
- * Reports the pane the keyboard is in as a visit. A pane joins the order only
- * once the keyboard has been in it, and only a pane a listed tab holds is
+ * Whether the shell holds what `place` names now: a pane a listed tab holds,
+ * a mission or automation the core lists, Desk while it is switched on.
+ */
+function placeHeld(rest: SnapshotRest | null, place: RecentPlace): boolean {
+  switch (place.kind) {
+    case "pane":
+      return allPanes(rest).some((row) => row.pane.id === place.pane_id);
+    case "mission":
+      return missionOf(rest, place.mission_id) !== null;
+    case "automation":
+      return automationOf(place.automation_id) !== null;
+    case "desk":
+      return deskOn(useShellStore.getState().desk);
+  }
+}
+
+/**
+ * Reports the place the operator is on as a visit. A place joins the order
+ * only once the operator has been on it, and only a place the shell holds is
  * reported. A commit's own frames (the checkout arriving before its pane is
  * focused) are not visits, as for `observeEntries`.
  */
-export function observePane(rest: SnapshotRest | null, current: string | null) {
+export function observePlace(rest: SnapshotRest | null, current: RecentPlace | null) {
   unechoedVisit(rest);
-  if (expectedPane && current !== expectedPane) return;
-  expectedPane = null;
-  if (!current || !allPanes(rest).some((row) => row.pane.id === current)) return;
-  // Another window's visit moves the core's head, so the same pane is reported again once it is not first.
-  if (current === reported && recentPanes(rest)[0] === current) return;
+  const key = current ? placeKey(current) : null;
+  if (expectedPlace && key !== expectedPlace) return;
+  expectedPlace = null;
+  if (!current || !placeHeld(rest, current)) return;
+  // Another window's visit moves the core's head, so the same place is reported again once it is not first.
+  const head = recentPlaces(rest)[0];
+  if (reported && placeKey(reported) === key && head && placeKey(head) === key) return;
   reported = current;
   reportedOver = orderOf(rest);
   reportVisit(current);
 }
 
-/** Marks the pane a commit is bringing forward: pane visits are not recorded until the keyboard is in it or the operator acts. */
-export function expectPane(paneId: string | null) {
-  expectedPane = paneId;
+/** Marks the place a commit is bringing forward, by its key: visits are not recorded until the operator is on it or acts. */
+export function expectPlace(key: string | null) {
+  expectedPlace = key;
 }
 
-/** Pane ids, the one the keyboard was in last first; remote ids are scoped to their device, so one id names one pane. */
-export function recentPanes(rest: SnapshotRest | null): readonly string[] {
-  const held = rest?.ui_state?.recent_pane_ids ?? [];
+/** The places, the one the operator was on last first; a remote pane id is scoped to its device, so one id names one pane. */
+export function recentPlaces(rest: SnapshotRest | null): readonly RecentPlace[] {
+  const held = rest?.ui_state?.recent_places ?? [];
   const pending = unechoedVisit(rest);
-  return pending === null ? held : [pending, ...held.filter((id) => id !== pending)];
+  if (pending === null) return held;
+  const key = placeKey(pending);
+  return [pending, ...held.filter((place) => placeKey(place) !== key)];
+}
+
+/** Pane ids of the place order, the one the keyboard was in last first. */
+export function recentPanes(rest: SnapshotRest | null): readonly string[] {
+  return recentPlaces(rest).flatMap((place) => (place.kind === "pane" ? [place.pane_id] : []));
 }
 
 /** The project in front, first in the Recent Projects order. */
@@ -327,7 +370,7 @@ export function resetRecent() {
   reported = null;
   reportedOver = null;
   expected = null;
-  expectedPane = null;
+  expectedPlace = null;
 }
 
 // --- rows -----------------------------------------------------------------
@@ -338,6 +381,12 @@ export type CycleTarget =
   | { kind: "surface"; surface: Surface }
   /** One terminal pane, with the tab it is in, which comes forward with it. */
   | { kind: "pane"; paneId: string; surface: Surface }
+  /** A mission's detail on the mission screen. */
+  | { kind: "mission"; missionId: string }
+  /** An automation's detail on the automation screen. */
+  | { kind: "automation"; automationId: string }
+  /** Desk's room. */
+  | { kind: "desk" }
   /** A device's Home Overview or a Project's Overview, which the page shows itself once the device is in front. */
   | { kind: "screen"; screen: PageScreen; deviceId: string }
   /** A project with no surface to restore, on its checkout and device. */
@@ -348,6 +397,12 @@ export type CycleDetail =
   /** Where a surface is and what it is; a null place is the device's Home. */
   | { kind: "surface"; place: string | null; surface: SurfaceKind }
   | { kind: "projects"; count: number }
+  /** A mission's project, then its kind and its state's word. */
+  | { kind: "mission"; project: string; status: MissionStatus }
+  /** The automation kind's word, then how many of its runs were not looked at. */
+  | { kind: "automation"; unseen: number }
+  /** How many of Desk's sessions ask the operator. */
+  | { kind: "desk"; asking: number }
   | { kind: "text"; text: string };
 
 /** What a switcher row draws and what committing it names. */
@@ -356,7 +411,7 @@ export type CycleItem = {
   /** The row's name; empty on a device's Home page (kind `main`), which the overlay names in the interface language. */
   title: string;
   detail: CycleDetail;
-  kind: SurfaceKind | "project" | PageScreen["kind"];
+  kind: SurfaceKind | "project" | PageScreen["kind"] | Exclude<RecentPlace["kind"], "pane">;
   /** The device's name when the row is not on the device in front, drawn as a chip (PRD home-device-rail D-16); null otherwise. */
   chip: DeviceChipView | null;
   /** The one agent a tab holds, drawn with its status mark and its own mark. */
@@ -420,6 +475,69 @@ export function paneItem(rest: SnapshotRest | null, paneId: string): CycleItem |
     agent,
     target: { kind: "pane", paneId, surface: tabSurface(place.checkout, place.tab.id, place.deviceId) },
   };
+}
+
+/** A mission the core lists, by its id. */
+function missionOf(rest: SnapshotRest | null, missionId: string): Mission | null {
+  return rest?.missions?.items.find((row) => row.id === missionId) ?? null;
+}
+
+/** An automation of the core's automations, by its id. */
+function automationOf(automationId: string) {
+  return useShellStore.getState().automations?.items.find((row) => row.id === automationId) ?? null;
+}
+
+/** A mission's project as the mission screen names it: the catalog's name, else its folder's. */
+function missionProject(rest: SnapshotRest | null, mission: Mission): string {
+  const row = allCheckouts(rest).find((candidate) => candidate.workspace.id === mission.workspace_id);
+  return row?.workspace.label ?? mission.project.split(/[\\/]/).filter(Boolean).at(-1) ?? mission.project;
+}
+
+/**
+ * A place cycle row, for a place the shell holds: an agent pane as the Agent
+ * pane row (`paneItem`), a mission by its title with its project and state
+ * and the chip of its device, an automation by its name with its runs not
+ * looked at, and Desk. A pane running no agent, a mission or automation
+ * the core no longer lists, and Desk switched off are no rows.
+ */
+export function placeItem(rest: SnapshotRest | null, place: RecentPlace): CycleItem | null {
+  const key = placeKey(place);
+  switch (place.kind) {
+    case "pane":
+      return paneItem(rest, place.pane_id);
+    case "mission": {
+      const mission = missionOf(rest, place.mission_id);
+      if (!mission) return null;
+      return { key, title: mission.title, detail: { kind: "mission", project: missionProject(rest, mission), status: mission.status }, kind: "mission", chip: deviceChip(rest, mission.device_id), agent: null, target: { kind: "mission", missionId: mission.id } };
+    }
+    case "automation": {
+      const automation = automationOf(place.automation_id);
+      if (!automation) return null;
+      // An automation is the core's own, on no device of the rail, so its row wears no chip.
+      return { key, title: automation.name, detail: { kind: "automation", unseen: automation.unseen }, kind: "automation", chip: null, agent: null, target: { kind: "automation", automationId: automation.id } };
+    }
+    case "desk": {
+      const state = useShellStore.getState();
+      if (!deskOn(state.desk)) return null;
+      return { key, title: "", detail: { kind: "desk", asking: askingCount(state.deskJobs?.jobs ?? []) }, kind: "desk", chip: null, agent: null, target: { kind: "desk" } };
+    }
+  }
+}
+
+/** The place a place cycle row stands for; null for a row of another switcher. */
+export function placeOfItem(item: CycleItem): RecentPlace | null {
+  switch (item.target.kind) {
+    case "pane":
+      return { kind: "pane", pane_id: item.target.paneId };
+    case "mission":
+      return { kind: "mission", mission_id: item.target.missionId };
+    case "automation":
+      return { kind: "automation", automation_id: item.target.automationId };
+    case "desk":
+      return { kind: "desk" };
+    default:
+      return null;
+  }
 }
 
 /**

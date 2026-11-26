@@ -431,9 +431,17 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Owned,
         Moves::Pane,
     ),
+    // Written by builds before the recent place order; read once into
+    // `recent_places`, and listed while a folder may still hold it.
     (
         CORE_STATE,
         "/recent_pane_ids/*",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        CORE_STATE,
+        "/recent_places/*/pane_id",
         Mechanism::Owned,
         Moves::Pane,
     ),
@@ -2089,6 +2097,14 @@ mod tests {
                 json!([{"device_id": "local", "registration_id": "workspace:a"}]),
             )
             .tap_insert("add_project_folder", json!("/Users/me/work"))
+            .tap_insert(
+                "recent_places",
+                json!([
+                    {"kind": "pane", "pane_id": "w1:p1"},
+                    {"kind": "mission", "mission_id": "mission-1"},
+                    {"kind": "pane", "pane_id": "remote:mini:pane:w2:p1"},
+                ]),
+            )
             .tap_insert(
                 "device_add_project_folders",
                 json!({"mini": "/home/me/projects"}),

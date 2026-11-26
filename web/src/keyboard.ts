@@ -17,7 +17,7 @@
 // store, so an unrevealed hold renders nothing. Losing the window, a page
 // going hidden, a layer opening or any key pressed during the hold ends it.
 
-import { agentCycle, agentOrigin, areaCycle, focusedCycleScope, focusedSurface, scopedSurfaces } from "./areaCycle";
+import { agentOrigin, areaCycle, focusedCycleScope, focusedSurface, placeCycle, placeOrigin, scopedSurfaces } from "./areaCycle";
 import type { Actions } from "./actions";
 import { focusBrowserDisplay } from "./browserViews";
 import { advanceHint, clearHint, holdModifiers, idleHint, modifiersOf, NO_MODIFIERS, revealedFamily, type HintState } from "./hints";
@@ -29,7 +29,7 @@ import { computerTiles, numberedComputers } from "./computers";
 import { areaFrame } from "./areaFrames";
 import { adjacentDisplay } from "./areaLayout";
 import { adjacentPane } from "./paneNavigation";
-import { availableEntries, currentEntry, expectPane, expectSurface, observeEntries, observePane, observeProject, paneItem, panelItem, projectItem, reconcileCycle, recentEntries, recentProjectOrder, type CycleItem } from "./recent";
+import { availableEntries, currentEntry, expectPlace, expectSurface, observeEntries, observePlace, observeProject, paneKey, panelItem, placeItem, placeOfItem, projectItem, reconcileCycle, recentEntries, recentPlaces, recentProjectOrder, type CycleItem } from "./recent";
 import { remoteContext } from "./remote";
 import { hostChord, hostRegistry, isNumberedCommand, isPaneFocusCommand, pageKeepsKeyboard, releaseModifier, matchHost, numberedCommand, REGISTRY, storedBindings, type CommandId, type Digit, type NumberedFamily } from "./shortcuts";
 import { editorFor, listedWorkspaces, type AgentRow, type SnapshotRest, type Workspace } from "./snapshot";
@@ -84,7 +84,7 @@ export function observeRecent(rest: SnapshotRest | null, moved: boolean) {
   const owner = keyboardCommandOwner();
   const surface = focusedSurface(rest, focusedCycleScope(rest, owner));
   observeEntries(rest, moved ? surface ?? currentEntry(useUiStore.getState().screen, rest, owner.kind === "view") : null);
-  observePane(rest, moved ? (agentOrigin(rest, owner)?.paneId ?? null) : null);
+  observePlace(rest, moved ? placeOrigin(rest, owner) : null);
   if (moved) observeProject(remoteContext(rest)?.session?.focused_workspace_id ?? rest?.navigator?.focused_workspace_id);
 }
 
@@ -93,15 +93,15 @@ export function reconcileHeldCycle(cycle: Cycle, rest: SnapshotRest | null): Cyc
   const membership = cycle.scope ? scopedSurfaces(rest, cycle.scope) : null;
   if (cycle.kind === "area" && !membership) return null;
   const alive = cycle.kind === "area" ? new Set(membership!.surfaces.map((surface) => surface.key)) :
-    cycle.kind === "agents"
-      ? new Set(cycle.items.filter((item) => item.target.kind === "pane" && paneItem(rest, item.target.paneId)).map((item) => item.key))
+    cycle.kind === "places"
+      ? new Set(cycle.items.filter((item) => { const place = placeOfItem(item); return place !== null && placeItem(rest, place) !== null; }).map((item) => item.key))
       : cycle.kind === "projects"
         ? new Set(allProjects(rest).map((workspace) => workspace.id))
         : new Set(availableEntries(rest, recentEntries()).map((entry) => entry.key));
   const kept = reconcileCycle(cycle.items, cycle.index, (item) => alive.has(item.key));
   if (!kept) return null;
-  // An Agent pane cycle whose origin is not, or is no longer, a row may hold one: that row is still somewhere to go.
-  const fewest = cycle.kind === "agents" && !kept.items.some((item) => item.key === cycle.originKey) ? 1 : 2;
+  // A place cycle whose origin is not, or is no longer, a row may hold one: that row is still somewhere to go.
+  const fewest = cycle.kind === "places" && !kept.items.some((item) => item.key === cycle.originKey) ? 1 : 2;
   return kept.items.length >= fewest ? { ...cycle, ...kept } : null;
 }
 
@@ -138,23 +138,28 @@ export function commitCycle(cycle: Cycle, actions: Actions): boolean {
   return goToItem(chosen, actions);
 }
 
-/** Where leaving Desk goes: the panel used before it, which leads Recent Panels since Desk is never one of them; none when none is left. */
+/**
+ * Where leaving Desk goes: the place used before it, the first of the recent
+ * places that is not Desk and still a row, which is where the recent place
+ * cycle's first chord lands from Desk; none when none is left.
+ */
 export function deskReturn(rest: SnapshotRest | null): CycleItem | null {
-  return recentEntries().map((entry) => panelItem(rest, entry)).find((item) => item !== null) ?? null;
+  return recentPlaces(rest).filter((place) => place.kind !== "desk").map((place) => placeItem(rest, place)).find((item) => item !== null) ?? null;
 }
 
-/** Where `deskReturn` goes, in words: its project and checkout, then its tab (`herdr-ide › 집중 모드 뷰 탭`); none when there is nowhere. */
+/** Where `deskReturn` goes, in words: its project and checkout, then its title (`herdr-ide › 집중 모드 뷰 탭`); none when there is nowhere. */
 export function deskReturnWords(item: CycleItem | null): string | null {
   if (!item) return null;
-  const place = item.detail.kind === "surface" ? item.detail.place : null;
+  const place = item.detail.kind === "surface" ? item.detail.place : item.detail.kind === "mission" ? item.detail.project : null;
   return [place, item.title].filter(Boolean).join(" › ") || null;
 }
 
 /**
  * Leaving Desk (PRD session-docs-and-assistant B41, feedback 1 D2): its head's
- * `나가기 ✕`, ⌃⇥, a press on the sidebar's Desk row while Desk is in front,
- * and Desk switched off while its room is in front all go back to the panel
- * used before it (`deskReturn`), or All projects when none is left.
+ * `나가기 ✕`, a press on the sidebar's Desk row while Desk is in front, and
+ * Desk switched off while its room is in front all go back to the place used
+ * before it (`deskReturn`), where ⌃⇥ from Desk lands too, or All projects
+ * when none is left.
  */
 export function leaveDesk(actions: Actions): void {
   const before = deskReturn(useShellStore.getState().rest);
@@ -168,6 +173,12 @@ export function pressDeskRow(actions: Actions): void {
   else actions.openDesk();
 }
 
+/** A commit to a screen of the page's own closes the Overview over it first, as a commit to a pane does through `openAgent`. */
+function leaveOverview() {
+  const ui = useUiStore.getState();
+  if (ui.overviewOpen) ui.setOverviewOpen(false);
+}
+
 function goToItem(chosen: CycleItem, actions: Actions): boolean {
   const target = chosen.target;
   switch (target.kind) {
@@ -177,9 +188,24 @@ function goToItem(chosen: CycleItem, actions: Actions): boolean {
     case "pane":
       // The tab and the pane both wait for the keyboard to land, so the frames on the way are not visits.
       expectSurface(target.surface.key);
-      expectPane(target.paneId);
+      expectPlace(paneKey(target.paneId));
       // As an agent chosen from the Agents list: its Workspace, device and pane in one event.
       actions.openAgent(target.paneId);
+      return true;
+    case "mission":
+      expectPlace(chosen.key);
+      leaveOverview();
+      // As a row of the mission screen: its detail beside the list, on the mission's device or its tool's cell.
+      actions.showMissionOnScreen(target.missionId);
+      return true;
+    case "automation":
+      expectPlace(chosen.key);
+      actions.openAutomation(target.automationId);
+      return true;
+    case "desk":
+      expectPlace(chosen.key);
+      leaveOverview();
+      actions.openDesk();
       return true;
     case "screen":
       // Expected like any commit, so an earlier commit still on its way cannot keep this from being the visit.
@@ -298,17 +324,15 @@ export function installKeyboard(actions: Actions): () => void {
       case "previous_recent_panel":
       case "recent_project":
       case "previous_recent_project": {
-        // In Desk's room the recent-tab chord leaves Desk for the tab in front before it, as `나가기 ✕` does.
-        if (id.endsWith("area_tab") && !ui().cycle && ui().screen?.kind === "desk") return leaveDesk(actions);
         const backward = id.startsWith("previous");
         const rest = useShellStore.getState().rest;
         const family = id.endsWith("area_tab") ? "area" : id.endsWith("panel") ? "panels" : "projects";
         const current = ui().cycle;
-        const held = current && (current.kind === "agents" ? "area" : current.kind) === family;
+        const held = current && (current.kind === "places" ? "area" : current.kind) === family;
         if (event && current && !held) return;
         const owner = keyboardCommandOwner();
-        // The Agent area and a View area never both hold the keyboard, so at most one of these is a cycle.
-        const fresh = () => family === "area" ? (agentCycle(rest, owner) ?? areaCycle(rest, owner)) : family === "panels" ? panelCycle(rest) : projectCycle(rest);
+        // A View area holding the keyboard is the one place the place cycle steps aside, so at most one of these is a cycle.
+        const fresh = () => family === "area" ? (placeCycle(rest, owner) ?? areaCycle(rest, owner)) : family === "panels" ? panelCycle(rest) : projectCycle(rest);
         const cycle = event && held ? reconcileHeldCycle(current, rest) : fresh();
         if (!cycle) return;
         const next = advance(cycle, backward);

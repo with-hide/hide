@@ -269,8 +269,8 @@ test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recen
     const paneFocusEvents = sent.get("focus_pane") ?? 0;
     await page.keyboard.down("Alt");
     await page.keyboard.press("Backquote");
-    await expect(page.locator("[data-cycle=agents] [aria-selected=true]")).toHaveAttribute("data-cycle-row", lastAgentPane);
-    await expect(page.locator(`[data-cycle=agents] [data-cycle-row="${secondTabShell}"]`)).toHaveCount(0);
+    await expect(page.locator("[data-cycle=places] [aria-selected=true]")).toHaveAttribute("data-cycle-row", lastAgentPane);
+    await expect(page.locator(`[data-cycle=places] [data-cycle-row="${secondTabShell}"]`)).toHaveCount(0);
     await page.keyboard.up("Alt");
     await expect(page.locator("[data-cycle]")).toHaveCount(0);
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", engine.tab);

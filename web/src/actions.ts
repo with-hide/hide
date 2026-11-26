@@ -83,6 +83,7 @@ import {
   type LinkTarget,
   type PrMergeMethod,
   type LookAt,
+  type RecentPlace,
   type SignInReply,
 } from "./snapshot";
 import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
@@ -309,7 +310,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * the same reason: the core owns them through `project_checkouts_fold`,
    * `checkout_agents_toggle`, `agent_tree_toggle`, `session_tree_toggle` and
    * `guest_work_fold_toggle`. The recent lists
-   * (`recent_checkouts`, `recent_pane_ids`) ride along and the core ignores
+   * (`recent_checkouts`, `recent_places`) ride along and the core ignores
    * them, keeping its own. The keyboard's pane, checkout and device are left
    * out too: the core moves them on their own events, and this copy can be
    * older than a click it has not echoed yet (issue 672).
@@ -2395,6 +2396,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const projectId = state.missions.projectId === mission.workspace_id ? state.missions.projectId : null;
       // A tool's mission screen lists the tool's missions on every device, so its row opens beside the list and the cell stays (B40).
       if (state.screen?.kind === "missions" && state.screen.tool !== undefined && keptBy(mission, state.screen.tool)) return state.setMissions({ selected: missionId, projectId });
+      // A mission a tool keeps is listed only in its tool's cell (B30, D-36), so from anywhere else its detail opens there.
+      if (mission.tool?.owns === true) {
+        state.setMissions({ selected: missionId, projectId: null });
+        return state.setScreen({ kind: "missions", tool: mission.tool.connection });
+      }
       if (mission.device_id !== frontDeviceId(rest())) this.focusDevice(mission.device_id);
       // A chip that leaves this mission out lets go, so the list beside it holds the mission (B10).
       state.setMissions({ deviceId: mission.device_id, selected: missionId, projectId });
@@ -3749,9 +3755,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "inactive_checkouts_toggle", payload: { project_path: projectPath } });
     },
 
-    /** Reports the keyboard's visit to a pane; the core keeps the Agent cycle's order (`ui_state.recent_pane_ids`). */
-    paneVisit(paneId: string) {
-      dispatch({ schema_version: 2, kind: "pane_visit", payload: { pane_id: paneId } });
+    /** Reports the operator's visit to a place; the core keeps the recent place cycle's order (`ui_state.recent_places`). */
+    placeVisit(place: RecentPlace) {
+      dispatch({ schema_version: 2, kind: "place_visit", payload: { place } });
     },
 
     /** Folds or unfolds an agent's children in the sidebar tree; the core keeps the choice. */

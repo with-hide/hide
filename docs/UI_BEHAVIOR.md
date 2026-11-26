@@ -1227,8 +1227,8 @@ Moved to a private document: `docs/desk.md` in with-hide/hide-private.
 
 Web owner: `web/src/DeskScreen.tsx`, `web/src/deskRoom.ts`, `web/src/components/desk/`, the Desk row in `web/src/components/sidebar-header.tsx`, the row click in `web/src/components/sidebar-agent-row.tsx`.
 While Settings › Labs › Desk is on, the sidebar's Desk row sits on its own line between the Overview row and the `미션` row, with the warning mark while a session Desk started asks the operator, and is drawn selected while Desk is in front; with the switch off there is no row.
-While Desk is in front its row also wears the green `켜짐` mark (`Badge variant="success"`) and shows a `✕` under the pointer or focus, and pressing the row leaves Desk; its hint says `작업 화면으로 돌아가요 · 마지막 탭: <project › tab>` with the recent-tab chord.
-Leaving Desk goes to the panel in front before it, the first row of Recent Panels since Desk is never one (`deskReturn` in `web/src/keyboard.ts`), or All projects when none is left: the row's press, the chat head's `나가기 ✕` at its right end, and Next recent tab (⌃⇥ in the desktop app, `` ⌥` `` in a browser, Ctrl+Tab on Windows and Linux) pressed in Desk's room all go there, as switching Desk off while it is in front does.
+While Desk is in front its row also wears the green `켜짐` mark (`Badge variant="success"`) and shows a `✕` under the pointer or focus, and pressing the row leaves Desk; its hint says `작업 화면으로 돌아가요 · 마지막에 본 곳: <project › place>` with the recent-tab chord.
+Leaving Desk goes to the place used before it, the first place of the recent place order that is not Desk and is still a row (`deskReturn` in `web/src/keyboard.ts`, see [Recent navigation](#recent-navigation)), or All projects when none is left: the row's press and the chat head's `나가기 ✕` at its right end go there, as switching Desk off while it is in front does, and Next recent tab (⌃⇥ in the desktop app, `` ⌥` `` in a browser, Ctrl+Tab on Windows and Linux) pressed in Desk's room lands there first, since Desk is itself a place of that order.
 The head of the session beside Desk carries a ↗ button before `파일` and `터미널 ⌘J`, its words `원래 화면에서 보기 · Desk에서 나가요` in its hint so the head keeps its room for the session's path and name at the panel's first width: it opens that session's own tab (its terminal with the sidebar and files) as a ⌘-click (Ctrl-click on Windows and Linux) on its sidebar row does, and Desk leaves the front; `터미널 ⌘J` still shows its pane in place.
 A session chip in Desk (a reply's, a handed line's, a thread's, the composer's) is named by the session's sidebar row while the sidebar lists it, the title every surface calls it by, whatever name the words that named it carry, so an agent id, pane id or branch an agent wrote never shows; a session the sidebar no longer lists keeps the name the words gave, dimmed. A Desk card is named by its session's sidebar row once it has one.
 A mission Desk's answer names as `@mission(<id> <title>)` is drawn as its title followed by the app's mission chip (its mark and done count, `MissionChip`'s face), which opens the mission's map in the tab panel; a mission the app does not hold keeps the answer's title with no chip.
@@ -1375,7 +1375,7 @@ The page tells the core which mission the detail shows, or none, with one event 
 While the page names none, the core sends the events of the mission whose card is the front tab of the active area of the front Agent tab's desk while the desk is drawn; the desk is the core's, so the card needs no event of its own.
 In a window too narrow for the list beside the detail the list stacks above it and the table leaves out its project column, which the chips still name (`missions-split`, 760 px of the screen's width); a long title truncates with its full text on hover (B23).
 On the screen, a mission of another device than the one in front brings that device's rail tile forward first, then opens on the mission (B13).
-⌃Tab (⌥` in a browser tab) goes to the most recent agent pane, the first stop of the recent cycle, as from the Overview or Desk; Esc closes an open menu or popover and nothing else, neither leaving the screen nor closing the detail; choosing a task, a project or a pane in the sidebar leaves the screen for it (B15, B16, B17).
+⌃Tab (⌥` in a browser tab) walks the recent places: from a mission's detail, which is itself a place, the first chord lands on the place used before it, and from the table on the most recent place, as from the Overview; Esc closes an open menu or popover and nothing else, neither leaving the screen nor closing the detail; choosing a task, a project or a pane in the sidebar leaves the screen for it (B15, B16, B17).
 Which mission is selected, the chip and the scroll are the page's own and are not saved; a mission's card tab is saved with its desk like any card, and a lane saved on the Mission tool loads with no tool column (B20).
 
 ### A mission's card tab
@@ -2490,25 +2490,27 @@ Existing Factory stores and historical usage records are preserved as legacy dat
 
 Web owner: `web/src/recent.ts`, `web/src/areaCycle.ts`, `web/src/viewFocus.ts`, `web/src/keyboard.ts`, and `CycleOverlay` in `web/src/Overlays.tsx`.
 
-Recent Agent pane or View tab cycling (⌃Tab / ⌃⇧Tab in the desktop app, ⌥` / ⌥⇧` in a browser) follows where the keyboard is.
+Recent place or View tab cycling (⌃Tab / ⌃⇧Tab in the desktop app, ⌥` / ⌥⇧` in a browser) follows where the keyboard is.
 In a View area it walks the tabs of that exact area, in recent-use order.
 The View scope includes device, checkout and area ID, so an Agent area with the same ID or another checkout cannot widen it.
 A document, diff, View tab bar or visible native browser page names its View area.
-Everywhere outside a View area it walks the agent panes the keyboard has been in, one row per pane, across every device, project and checkout, in recent-use order (issue #301); the order survives a reload, quitting the app and a daemon restart.
+Everywhere outside a View area it walks the places the operator has been, in recent-use order (issue #301): the agent panes the keyboard has been in, one row per pane across every device, project and checkout; the missions whose detail the mission screen showed; the automations whose detail the automation screen showed; and Desk's room. The order survives a reload, quitting the app and a daemon restart.
+A list is where the operator picks a place, never one: the Overview, the mission table and the automation table are no rows, and neither is an automation's form, a View display or a project.
 A terminal pane in a tab an Agent area of the Workspace in front draws (its normal tab or a delegated child's canvas), or that area's tab bar, puts the keyboard in the Agent area; from a tab bar the pane in use is the one the core focuses in that tab.
-A pane joins the order the first time the keyboard is in it, and a commit's passing frames on the way to its pane are not visits; a pane that closes is no longer a row.
-A pane row is titled by the agent it runs, with the place as Recent Panels names it and `Terminal` beneath, and the agent's status mark; a pane running no agent, a View display, an Overview and a project are never rows.
-From a pane running no agent, or from the sidebar, tools, search, Settings, a dialog, Main or Overview, the first chord lands on the most recent agent pane.
+A place joins the order the first time the operator is on it, and a commit's passing frames on the way to its place are not visits; a pane that closes, a mission or automation the core no longer lists and Desk switched off are no longer rows.
+A pane row is titled by the agent it runs, with the place as Recent Panels names it and `Terminal` beneath, and the agent's status mark; a pane running no agent is never a row.
+A mission row is titled by the mission, with its project, `미션` and its state's pill word beneath (`herdr-ide · 미션 · 진행 중`) and the mission screen's mark; an automation row by its name, with `자동화` and its runs not looked at beneath (`자동화 · 안 본 회차 2개`) and the automation row's mark; the Desk row is `Desk` with the Desk mark and, while its sessions ask the operator, how many beneath.
+From a pane running no agent, a mission or automation table, the sidebar, tools, search, Settings, a dialog, Main or Overview, the first chord lands on the most recent place; from a place (an agent pane, a mission's or an automation's detail, Desk) the cycle starts on it and the first chord lands on the place used before it.
 Outside the Agent area, opening the cycle neither invents a pane origin nor records the underlying pane as visited.
-The Overview modal and page supply no pane origin; their first Agent cycle chord selects the most recent visited agent, even with a Workspace View owner underneath.
-Escape cancels the cycle and keeps Overview; committing closes Overview and brings that pane forward with one event and keyboard focus.
-A focused View area keeps its own scope even when it has zero or one tab or its target retired; it never falls through to Agent panes.
-With no visited agent pane, or no other visited agent besides the pane in use, the Agent cycle is a no-op.
-Holding the chord's actual modifier freezes the order and scope and previews in Recent Agent panes or Recent View tabs without moving the committed tab, layout or keyboard owner.
+The Overview modal and page supply no origin; their first cycle chord selects the most recent place, even with a Workspace View owner underneath.
+Escape cancels the cycle and keeps Overview; committing closes Overview and brings that place forward.
+A focused View area keeps its own scope even when it has zero or one tab or its target retired; it never falls through to places.
+With no place visited, or no other place besides the one in use, the place cycle is a no-op.
+Holding the chord's actual modifier freezes the order and scope and previews in Recent places or Recent View tabs without moving the committed tab, layout, screen or keyboard owner.
 Repeated forward and backward chords walk that frozen order; Escape or losing the window cancels without a selection event.
-Releasing the modifier on a View tab commits one in-place selection; on a pane it brings the pane's device, project, tab and pane forward with one event, as choosing it in the Agents list does, and the pane receives the keyboard.
+Releasing the modifier on a View tab commits one in-place selection; on a pane it brings the pane's device, project, tab and pane forward with one event, as choosing it in the Agents list does, and the pane receives the keyboard; on a mission it shows that mission's detail on the mission screen as a row of the screen's list does (a mission of another device brings the device forward first, and a mission an external tool keeps opens in the tool's cell, the one list that holds it); on an automation it shows that automation's detail; on Desk it shows Desk's room.
 Closed or moved View tabs leave the frozen candidates; removal of the origin area or checkout cancels, and no other area replaces it.
-Closed panes and panes whose agent ended leave the frozen Agent candidates; a highlight that left moves to the next surviving pane, and with none left the cycle ends.
+Places that stopped being rows leave the frozen candidates; a highlight that left moves to the next surviving place, and with none left the cycle ends.
 
 Global Recent Panels is a separate, named command, unbound by default and assignable in Settings alongside the Agent pane and View tab commands.
 It walks every unified surface in recent-use order across projects, checkouts and connected devices: terminal tabs, View files, diffs and browser displays, plus the single Overview page.
@@ -2519,10 +2521,10 @@ A Global Recent Panels commit shows an Overview at once or brings one Workspace 
 Menu and palette invocations of either family select the next or previous valid target immediately, with no held modifier or second selection.
 A bound Global Recent Panels chord keeps the same hold, release and cancellation behavior.
 Recent Projects (⌥Tab / ⌥⇧Tab) retains its global project order and restores each Project's last Workspace surface, never its Overview.
-Both global lists and the Agent pane cycle carry a device chip on a row outside the device in front and move the rail, sidebar and center together when committed.
+Both global lists and the place cycle carry a device chip on a row outside the device in front (a pane or a mission of another device; an automation and Desk are the core's own and carry none) and move the rail, sidebar and center together when committed.
 The session uses one bounded recent-surface history; the View area cycle filters it and appends normal area tabs not yet visited.
-The Agent pane cycle reads the core's order of pane visits (`ui_state.recent_pane_ids`, saved with the UI state); the page decides what a visit is and reports it with `pane_visit`, and the fifty most recent panes are kept, shell panes included, since an agent may start in one later.
-Until the core's order moves after a report, the page puts the pane it reported first, so a cycle opened before the echo arrives starts where the keyboard last was.
+The place cycle reads the core's order of place visits (`ui_state.recent_places`, saved with the UI state); the page decides what a visit is and reports it with `place_visit`, and the fifty most recent places are kept, shell panes included, since an agent may start in one later; a state folder an earlier build wrote loads its pane order (`recent_pane_ids`) as pane places.
+Until the core's order moves after a report, the page puts the place it reported first, so a cycle opened before the echo arrives starts where the operator last was.
 The shown tab of the recorded keyboard area is the current visit, including native browser pages; intermediate commit frames are not visits.
 
 Reopen Closed Tab is disabled when the session-local recent-close stack is empty or a restore is already running, and restoration works regardless of which surface currently owns focus.
@@ -3046,7 +3048,7 @@ A checkout of a connected device is that device's live row; one a connected cata
 A checkout of a device that is not connected stays as a dimmed row drawn from the names the record kept (the branch, the project and the device's name): arrows pass over it, its detail names the checkout and offers nothing, and Enter does nothing and says nothing.
 Its row is the live one again when the device reconnects.
 A typed query hides Recent and searches as before, and recency does not rank results.
-Recent does not hold pull requests, issues or agents; ⌃Tab stays the agent pane cycle and Recent is the way back to a checkout. Unlike Recent Panels and Recent Projects, which the page holds for the session, it is the core's saved record and is still there after a restart.
+Recent does not hold pull requests, issues or agents; ⌃Tab stays the recent place cycle and Recent is the way back to a checkout. Unlike Recent Panels and Recent Projects, which the page holds for the session, it is the core's saved record and is still there after a restart.
 On a screen with nothing in front, such as Settings, the palette shows Recent alone; with no record and nothing in front it is the input alone with the placeholder `이름이나 #번호를 입력하세요`.
 
 ### The detail
