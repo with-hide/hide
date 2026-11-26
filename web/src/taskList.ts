@@ -6,6 +6,7 @@
 
 import type { ProjectTasksScope, TaskCardScope, TaskState } from "./agentScope";
 import { archivedProject } from "./archive";
+import { runAutomationId } from "./hideAiOrigin";
 import { ownAskDevice, ownAskProject, ownAskSince, type OwnAsk } from "./ownAsks";
 import type { AgentRow, ArchivedSession, Device, TaskView, Workspace } from "./snapshot";
 
@@ -142,7 +143,7 @@ export function taskList(tasks: ProjectTasksScope | null | undefined, deviceId: 
   const resting = entries.filter(({ card }) => card.state === "resting").sort(restingOrder);
   const cleanup = entries.filter(({ card }) => card.state === "cleanup");
   const archived = archivedRows.map((row) => ({ row, project: archivedProject(row, projects) }));
-  const inTurn = new Set([...open.filter(({ card }) => groupOf(card.state) === "needs_you").map(({ agent }) => runAutomation(agent)), ...asks.map(automationOf)]);
+  const inTurn = new Set([...open.filter(({ card }) => groupOf(card.state) === "needs_you").map(({ agent }) => runAutomationId(agent)), ...asks.map(automationOf)]);
   const restingItems = rests.filter((own) => !inTurn.has(automationOf(own)));
   if (view === "status") {
     const groups = TASK_GROUPS.map((state) => {
@@ -169,11 +170,6 @@ export function taskList(tasks: ProjectTasksScope | null | undefined, deviceId: 
     return { key: `project:${project?.id ?? ""}`, state: null, project, entries: bands.flatMap((band) => band.entries), bands, counts, resting: mine(resting), rests: restingItems.filter((own) => askProject(own) === project), cleanup: mine(cleanup), archived: archived.filter((entry) => entry.project === project) };
   });
   return { total: open.filter((entry) => entry.device === null).length, groups, resting: [], rests: [], cleanup: [], archived: [] };
-}
-
-/** The automation an automation run's agent row belongs to; null for any other row. */
-function runAutomation(agent: AgentRow): string | null {
-  return agent.hide_ai?.task?.kind === "automation" ? (agent.hide_ai.task.target ?? null) : null;
 }
 
 /** The automation an item is about; null for a mission's. */

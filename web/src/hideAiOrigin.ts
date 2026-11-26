@@ -51,6 +51,11 @@ export function automationRun(agent: Pick<AgentRow, "hide_ai">): boolean {
   return agent.hide_ai?.task?.kind === "automation";
 }
 
+/** The automation an automation run's agent row belongs to; null for any other row. */
+export function runAutomationId(agent: Pick<AgentRow, "hide_ai"> | undefined): string | null {
+  return agent?.hide_ai?.task?.kind === "automation" ? (agent.hide_ai.task.target ?? null) : null;
+}
+
 /** The glyph an automation run's badge carries: a once automation's clock, else the repeat arrow; none for any other row (mission-104 S-4). */
 export function automationBadge(agent: Pick<AgentRow, "hide_ai">): "repeat" | "once" | null {
   if (!automationRun(agent)) return null;
@@ -97,7 +102,7 @@ export function hideAiPlace(t: TFunction<"translation">, project: string, hideAi
  * null for any other row, or a run the section no longer lists.
  */
 export function automationOpening(section: AutomationsSection | null, agent: Pick<AgentRow, "hide_ai" | "pane_id"> | undefined): { id: string; run: number | null } | null {
-  const target = agent?.hide_ai?.task?.kind === "automation" ? agent.hide_ai.task.target : undefined;
+  const target = runAutomationId(agent);
   const automation = target ? section?.items.find((row) => row.id === target) : undefined;
   if (!automation || !agent) return null;
   const run = automation.records.find((record) => record.kind === "run" && record.pane_id === agent.pane_id);
