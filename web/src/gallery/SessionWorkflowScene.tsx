@@ -6,9 +6,11 @@ import { TaskLens } from "../TaskLens";
 import { TooltipProvider } from "../components/ui/tooltip";
 import type { TaskState } from "../agentScope";
 import { PaneView } from "../PaneView";
-import type { AgentRow, AgentState, AgentWait, Mission, PaneConnection, PaneHeader, PrState, RaisedAsk, SessionGroup, SessionPull } from "../snapshot";
+import type { AgentRow, AgentState, AgentWait, AutomationRecord, AutomationsSection, Mission, PaneConnection, PaneHeader, PrState, RaisedAsk, SessionGroup, SessionPull } from "../snapshot";
 import type { RowMark, StatusTone, RequestVerb, SubagentRow } from "../snapshot";
 import { useShellStore } from "../store";
+import { taskFoldKey } from "../taskList";
+import { useUiStore } from "../ui";
 import { TurnCardCases } from "./TurnCardCases";
 import { listedPull, REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import type { SceneParams } from "./SidebarScene";
@@ -129,6 +131,22 @@ const MARKS: [RowMark, StatusTone["kind"], RequestVerb][] = [
   ["going", "working", "waiting"], ["quiet", "subtle", "idle"], ["quiet", "subtle", "result"],
   ["turn", "warning", "answer"], ["turn", "warning", "answer"], ["waiting", "working", "waiting"], ["waiting", "working", "waiting"], ["turn", "warning", "answer"],
 ];
+
+/**
+ * state=resting: 쉬는 중 opened, with two automations' runs looked at after they came to 내 차례 resting among the tasks
+ * (operator decision 2026-11-26): a repeating one whose run opened a report, and a once one.
+ */
+function restingAutomations(now: number): AutomationsSection {
+  const run = (ended: number, results: boolean): AutomationRecord => ({ kind: "run", number: 3, trigger: "scheduled", started_at_unix_ms: ended - 6 * 60_000, ended_at_unix_ms: ended, state: "succeeded", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: true, ...(results ? { has_results: true } : {}) });
+  const folder = (name: string) => ({ path: `/Users/me/hide/automations/${name}`, default: true, worktree: false });
+  return {
+    unseen: 0,
+    items: [
+      { id: "brief", name: "아침 브리핑", task: "어제 들어온 이슈와 PR을 요약해 줘", schedule: { kind: "weekdays", time: "09:00" }, reads_as: { kind: "weekdays", time: "09:00" }, next_run_at_unix_ms: now + 20 * 3_600_000, agent: { kind: "claude" }, folder: folder("brief"), running: false, done: false, unseen: 0, records: [run(now - 40 * 60_000, true)] },
+      { id: "migrate", name: "DB 마이그레이션 확인", task: "새 열이 다 들어갔는지 확인해 줘", schedule: { kind: "once", date: "2026-11-25", time: "18:00" }, reads_as: { kind: "once", date: "2026-11-25", time: "18:00" }, next_run_at_unix_ms: null, agent: { kind: "codex" }, folder: folder("migrate"), running: false, done: true, unseen: 0, records: [run(now - 26 * 3_600_000, false)] },
+    ],
+  };
+}
 
 export function SessionWorkflowScene({ scene: kind, theme, content, scale, width, state }: SceneParams & { scene: "session-panel" | "pane-header" }) {
   const actions = useMemo(() => createActions(() => true), []);
@@ -276,12 +294,14 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
   // `turn-two-lines` and `turn-off` draw the turn cases in the View menu's other modes.
   const turnRow = state === "turn-two-lines" ? "two_lines" : state === "turn-off" ? "off" : "one_line";
   const turn = state === "turn" || state === "turn-two-lines" || state === "turn-off";
+  const resting = kind === "session-panel" && state === "resting";
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: { ...fixture.rest, ui_state: { ...fixture.rest.ui_state, pane_turn_row_mode: turnRow } }, agents: fixture.agents, connection: "gone" });
+    useShellStore.setState({ rest: { ...fixture.rest, ui_state: { ...fixture.rest.ui_state, pane_turn_row_mode: turnRow } }, agents: fixture.agents, connection: "gone", automations: resting ? restingAutomations(Date.now()) : null });
+    if (resting) useUiStore.setState({ taskFoldsOpen: [taskFoldKey("rest", "")] });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
-  }, [fixture, theme, scale, turnRow]);
+  }, [fixture, theme, scale, turnRow, resting]);
   // state=turn-card: the turn card opened on three sessions' facts (docs/UI_BEHAVIOR.md, the turn card).
   if (kind === "pane-header" && state === "turn-card") return <TurnCardCases seed={fixture.agents[0]!} />;
   // state=widths: one head, its PR, children and finished mission, at each width its chips fold at (docs/UI_BEHAVIOR.md, Agent panes).

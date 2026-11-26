@@ -46,13 +46,15 @@ export type TaskGroup = {
   /** Per state, the open rows and own-ask rows a project's head counts (B6). */
   counts: Partial<Record<TaskGroupState, number>>;
   resting: TaskEntry[];
+  /** The items that rest with no agent row of their own, drawn in 쉬는 중 among its tasks (`restingRows`). */
+  rests: OwnAsk[];
   cleanup: TaskEntry[];
   /** The project's archived roots, newest archived first, folded below 정리할 것 (프로젝트별 only). */
   archived: ArchivedEntry[];
 };
 
-/** One row of a band in the order drawn: a task, or a mission or an automation that is its own Needs You item. */
-export type BandRow = { kind: "task"; entry: TaskEntry } | { kind: "ask"; own: OwnAsk };
+/** One row of a band or of 쉬는 중 in the order drawn: a task, or an item with no agent row of its own (`OwnAsk`). */
+export type BandRow = { kind: "task"; entry: TaskEntry } | { kind: "item"; own: OwnAsk };
 
 export type TaskBand = { state: TaskGroupState; entries: TaskEntry[]; asks: OwnAsk[]; rows: BandRow[] };
 
@@ -67,6 +69,7 @@ export type TaskList = {
   groups: TaskGroup[];
   /** The 상태별 view's folds, drawn once under every group; `보관됨` the very last. */
   resting: TaskEntry[];
+  rests: OwnAsk[];
   cleanup: TaskEntry[];
   archived: ArchivedEntry[];
 };
@@ -105,10 +108,10 @@ function bandRows(entries: readonly TaskEntry[], asks: readonly OwnAsk[], device
     for (const entry of entries.filter((entry) => deviceOf(entry) === device)) {
       // An ask waits since its request, the core's own key, and one with no time stands last as the core puts it; a block lets every own ask stand first.
       const unread = entry.card.state === "needs_you";
-      while (next < waiting.length && (!unread || ownAskSince(waiting[next]!) > (entry.agent.state.request_since ?? -Infinity))) rows.push({ kind: "ask", own: waiting[next++]! });
+      while (next < waiting.length && (!unread || ownAskSince(waiting[next]!) > (entry.agent.state.request_since ?? -Infinity))) rows.push({ kind: "item", own: waiting[next++]! });
       rows.push({ kind: "task", entry });
     }
-    for (const own of waiting.slice(next)) rows.push({ kind: "ask", own });
+    for (const own of waiting.slice(next)) rows.push({ kind: "item", own });
     return rows;
   });
 }
@@ -120,9 +123,13 @@ function bandRows(entries: readonly TaskEntry[], asks: readonly OwnAsk[], device
  * item (`ownAsks.ts`), counted and drawn in 내 차례 with the tasks, under
  * their project in 프로젝트별 (an automation under none). `elsewhere` are other devices' 내 차례 tasks,
  * after the device's own in 내 차례 and under their own projects in 프로젝트별
- * (operator decision 2026-11-08); the total leaves them out.
+ * (operator decision 2026-11-08); the total leaves them out. `rests` are the
+ * automation runs the operator looked at after they came to Needs You
+ * (`automationRests`), in 쉬는 중 with no project; an automation that stands
+ * in 내 차례, by a run's row or its own line, rests nowhere else, so the list
+ * draws it once.
  */
-export function taskList(tasks: ProjectTasksScope | null | undefined, deviceId: string, rows: ReadonlyMap<string, AgentRow>, projects: readonly Workspace[], view: TaskView, archivedRows: readonly ArchivedSession[] = [], asks: readonly OwnAsk[] = [], elsewhere: readonly ElsewhereTask[] = []): TaskList {
+export function taskList(tasks: ProjectTasksScope | null | undefined, deviceId: string, rows: ReadonlyMap<string, AgentRow>, projects: readonly Workspace[], view: TaskView, archivedRows: readonly ArchivedSession[] = [], asks: readonly OwnAsk[] = [], elsewhere: readonly ElsewhereTask[] = [], rests: readonly OwnAsk[] = []): TaskList {
   const byCheckout = new Map(projects.flatMap((project) => project.checkouts.map((checkout) => [checkout.id, project] as const)));
   const entries: TaskEntry[] = [];
   const cards = [...(tasks?.cards ?? []).map((card) => ({ card, device: null, deviceId: null })), ...elsewhere];
@@ -135,18 +142,20 @@ export function taskList(tasks: ProjectTasksScope | null | undefined, deviceId: 
   const resting = entries.filter(({ card }) => card.state === "resting").sort(restingOrder);
   const cleanup = entries.filter(({ card }) => card.state === "cleanup");
   const archived = archivedRows.map((row) => ({ row, project: archivedProject(row, projects) }));
+  const inTurn = new Set([...open.filter(({ card }) => groupOf(card.state) === "needs_you").map(({ agent }) => runAutomation(agent)), ...asks.map(automationOf)]);
+  const restingItems = rests.filter((own) => !inTurn.has(automationOf(own)));
   if (view === "status") {
     const groups = TASK_GROUPS.map((state) => {
       const entries = inGroup(open, state);
-      return { key: `state:${state}`, state, project: null, entries, bands: [band(state, entries, asks, deviceId)], counts: {}, resting: [], cleanup: [], archived: [] };
+      return { key: `state:${state}`, state, project: null, entries, bands: [band(state, entries, asks, deviceId)], counts: {}, resting: [], rests: [], cleanup: [], archived: [] };
     }).filter((group) => rowCount(group.bands) > 0);
-    return { total: open.filter((entry) => entry.device === null).length, groups, resting, cleanup, archived };
+    return { total: open.filter((entry) => entry.device === null).length, groups, resting, rests: restingItems, cleanup, archived };
   }
   // One group per project, the projects that ask first, then in the order their first task stands (B6).
   const order: (Workspace | null)[] = [];
   const askProject = (own: OwnAsk) => projects.find((project) => project.id === ownAskProject(own)) ?? null;
   for (const { project } of entries) if (!order.includes(project)) order.push(project);
-  for (const own of asks) if (!order.includes(askProject(own))) order.push(askProject(own));
+  for (const own of [...asks, ...restingItems]) if (!order.includes(askProject(own))) order.push(askProject(own));
   // A project whose sessions are all archived still stands, after the ones with work.
   for (const { project } of archived) if (!order.includes(project)) order.push(project);
   const asking = (project: Workspace | null) => asks.some((own) => askProject(own) === project) || open.some((entry) => entry.project === project && groupOf(entry.card.state) === "needs_you");
@@ -157,9 +166,37 @@ export function taskList(tasks: ProjectTasksScope | null | undefined, deviceId: 
     const asked = asks.filter((own) => askProject(own) === project);
     const bands = TASK_GROUPS.map((state) => band(state, inGroup(shown, state), asked, deviceId)).filter((band) => rowCount([band]) > 0);
     const counts: Partial<Record<TaskGroupState, number>> = Object.fromEntries(bands.map((band) => [band.state, rowCount([band])]));
-    return { key: `project:${project?.id ?? ""}`, state: null, project, entries: bands.flatMap((band) => band.entries), bands, counts, resting: mine(resting), cleanup: mine(cleanup), archived: archived.filter((entry) => entry.project === project) };
+    return { key: `project:${project?.id ?? ""}`, state: null, project, entries: bands.flatMap((band) => band.entries), bands, counts, resting: mine(resting), rests: restingItems.filter((own) => askProject(own) === project), cleanup: mine(cleanup), archived: archived.filter((entry) => entry.project === project) };
   });
-  return { total: open.filter((entry) => entry.device === null).length, groups, resting: [], cleanup: [], archived: [] };
+  return { total: open.filter((entry) => entry.device === null).length, groups, resting: [], rests: [], cleanup: [], archived: [] };
+}
+
+/** The automation an automation run's agent row belongs to; null for any other row. */
+function runAutomation(agent: AgentRow): string | null {
+  return agent.hide_ai?.task?.kind === "automation" ? (agent.hide_ai.task.target ?? null) : null;
+}
+
+/** The automation an item is about; null for a mission's. */
+function automationOf(own: OwnAsk): string | null {
+  return own.kind === "mission" ? null : own.ask.automation.id;
+}
+
+/**
+ * The rows of 쉬는 중 in the order drawn: its tasks in `restingOrder`, and
+ * each item among them by when its run ended, newest first, as the rest stand
+ * by their latest prompt, so the ages read in order down the fold; the read
+ * asks stay first, and an item stands before a row with no known time.
+ */
+export function restingRows(entries: readonly TaskEntry[], items: readonly OwnAsk[]): BandRow[] {
+  const waiting = [...items].sort((a, b) => ownAskSince(b) - ownAskSince(a));
+  const rows: BandRow[] = [];
+  let next = 0;
+  for (const entry of entries) {
+    if (entry.card.read !== true) while (next < waiting.length && ownAskSince(waiting[next]!) >= (entry.agent.last_prompt_at_unix_ms ?? -Infinity)) rows.push({ kind: "item", own: waiting[next++]! });
+    rows.push({ kind: "task", entry });
+  }
+  for (const own of waiting.slice(next)) rows.push({ kind: "item", own });
+  return rows;
 }
 
 /**
@@ -188,6 +225,7 @@ export type TaskSection = {
   group: TaskGroup;
   /** The group's open rows, then the rows of each of its folds the page opened (프로젝트별 only). */
   resting: TaskEntry[];
+  rests: OwnAsk[];
   cleanup: TaskEntry[];
   archived: ArchivedEntry[];
 };
@@ -196,6 +234,7 @@ export type TaskSections = {
   sections: TaskSection[];
   /** The 상태별 view's folds under every group, their rows only while open. */
   resting: TaskEntry[];
+  rests: OwnAsk[];
   cleanup: TaskEntry[];
   archived: ArchivedEntry[];
 };
@@ -210,12 +249,14 @@ export function taskSections(list: TaskList, view: TaskView, open: ReadonlySet<s
   const sections = list.groups.map((group) => ({
     group,
     resting: view === "project" ? folded(group.resting, taskFoldKey("rest", group.key)) : [],
+    rests: view === "project" ? folded(group.rests, taskFoldKey("rest", group.key)) : [],
     cleanup: view === "project" ? folded(group.cleanup, taskFoldKey("cleanup", group.key)) : [],
     archived: view === "project" ? folded(group.archived, taskFoldKey("archived", group.key)) : [],
   }));
   return {
     sections,
     resting: view === "status" ? folded(list.resting, taskFoldKey("rest", "")) : [],
+    rests: view === "status" ? folded(list.rests, taskFoldKey("rest", "")) : [],
     cleanup: view === "status" ? folded(list.cleanup, taskFoldKey("cleanup", "")) : [],
     archived: view === "status" ? folded(list.archived, taskFoldKey("archived", "")) : [],
   };

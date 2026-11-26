@@ -4,7 +4,7 @@ import type { Actions } from "../actions";
 import { useAgentLogosShown } from "../agentLogoMode";
 import { deviceScope } from "../agentScope";
 import { LookLine } from "../automationMarks";
-import { pauseReasonText } from "../automationWords";
+import { isOnce, pauseReasonText } from "../automationWords";
 import { AgentRowMark } from "../AgentRowMark";
 import { frontDeviceId } from "../devices";
 import { useInterfaceTranslation } from "../i18n/client";
@@ -149,13 +149,20 @@ export function SidebarAutomationRow({ ask, inset, actions, ...data }: { ask: Au
  * · 4분` under it and the run's answer quoted; the row opens that run in the
  * automation screen, which puts it away. The 프로젝트 list's Needs You and the
  * 태스크 list's 내 차례 both draw it, after the automations stopped for a person.
+ * With `rest` it is an automation's run looked at after it came to Needs You,
+ * in the 태스크 list's 쉬는 중: the badge hollow as a read ask's, the clock or
+ * the repeat arrow as the automation runs, its line in a resting row's grey,
+ * and its time since the run ended.
  */
-export function SidebarAutomationLookRow({ look, inset, actions, ...data }: { look: AutomationLook; inset: string; actions: Actions } & Record<`data-${string}`, string>) {
+export function SidebarAutomationLookRow({ look, rest = false, inset, actions, ...data }: { look: AutomationLook; rest?: boolean; inset: string; actions: Actions } & Record<`data-${string}`, string>) {
   const { t } = useInterfaceTranslation();
   const device = useRowDevice(look.device_id);
-  const name = [look.automation.name, device, t("automationScreen.look.kind")].filter(Boolean).join(", ");
+  const once = isOnce(look.automation);
+  const kind = t(once ? "automationScreen.look.kind" : "automationScreen.look.kindRepeat");
+  const name = [look.automation.name, device, kind].filter(Boolean).join(", ");
+  const item = rest ? { "data-automation-rest": look.automation.id } : { "data-automation-look": look.automation.id };
   return (
-    <li data-automation-look={look.automation.id} data-automation-look-run={look.run?.number} className="group/row relative flex items-start gap-xs rounded-sm py-xs pr-xs text-body hover:bg-accent" style={{ paddingLeft: inset }}>
+    <li {...item} data-automation-look-run={look.run?.number} className="group/row relative flex items-start gap-xs rounded-sm py-xs pr-xs text-body hover:bg-accent" style={{ paddingLeft: inset }}>
       <Hint label={name} reveals>
         <Button
           variant="text"
@@ -164,13 +171,13 @@ export function SidebarAutomationLookRow({ look, inset, actions, ...data }: { lo
           data-automation-look-open={look.automation.id}
           {...data}
           className="absolute inset-0 rounded-sm focus-visible:ring-inset"
-          onClick={() => actions.openAutomation(look.automation.id, look.automation.look_run ?? null)}
+          onClick={() => actions.openAutomation(look.automation.id, look.run?.number ?? look.automation.look_run ?? null)}
         />
       </Hint>
       <SessionRowBody
         markClassName="pointer-events-none"
         mark={<>
-          <StatusMark mark="turn" automation="once" />
+          <StatusMark mark="turn" read={rest} automation={once ? "once" : "repeat"} />
           <AgentRowMark kind={look.automation.agent.kind} />
         </>}
         head={<>
@@ -180,7 +187,7 @@ export function SidebarAutomationLookRow({ look, inset, actions, ...data }: { lo
           <FoldLane />
         </>}
       >
-        <span aria-hidden="true" className="pointer-events-none flex min-w-0 items-baseline gap-xs leading-(--size-sidebar-line-detail)"><LookLine run={look.run} /></span>
+        <span aria-hidden="true" className="pointer-events-none flex min-w-0 items-baseline gap-xs leading-(--size-sidebar-line-detail)"><LookLine run={look.run} once={once} quiet={rest} /></span>
         <span aria-hidden="true" className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><AutomationLookAnswer look={look} /></span>
       </SessionRowBody>
     </li>
