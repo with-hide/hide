@@ -31,14 +31,15 @@ async function mount(sshHosts: SshHosts | undefined, devices: Device[] = []) {
   const root = createRoot(container);
   const saved = useShellStore.getState();
   const paired = vi.fn();
+  const shown = vi.fn();
   await act(async () => {
     useShellStore.setState({ connection: "live", pairingResult: null, rest: { status: { ssh_hosts: sshHosts }, ui_state: {} } } as never);
-    root.render(<AddDevice actions={actions} devices={devices} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" onPaired={paired} />);
+    root.render(<AddDevice actions={actions} devices={devices} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" onPaired={paired} onShowDevice={shown} />);
   });
   const q = (selector: string) => container.querySelector(selector) as HTMLElement | null;
   const rerender = async (next: Device[]) => {
     await act(async () => {
-      root.render(<AddDevice actions={actions} devices={next} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" onPaired={paired} />);
+      root.render(<AddDevice actions={actions} devices={next} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" onPaired={paired} onShowDevice={shown} />);
     });
   };
   // hided's answer to the last `pairing_<verb>` event this form sent.
@@ -48,7 +49,7 @@ async function mount(sshHosts: SshHosts | undefined, devices: Device[] = []) {
       useShellStore.setState({ pairingResult: { verb, request_id: request, ...result } } as never);
     });
   };
-  return { events, q, container, rerender, answer, paired, unmount: async () => { await act(async () => root.unmount()); useShellStore.setState(saved, true); } };
+  return { events, q, container, rerender, answer, paired, shown, unmount: async () => { await act(async () => root.unmount()); useShellStore.setState(saved, true); } };
 }
 
 const sent = (events: Parameters<DispatchFn>[0][], kind: string) => events.filter((event) => event.kind === kind);
@@ -173,14 +174,22 @@ it("says what to do on a machine whose Hide is too old or not running, and adds 
   await unmount();
 });
 
-it("leaves a Host with no Hide of its own, or one ssh did not reach, as it was", async () => {
-  const { q, answer, unmount } = await mount(hosts([host("lab")]));
+// with-hide/hide issue 3007: a machine with no Hide gets one from its row once it is added, never by installing the app there.
+it("says a Host with no Hide of its own gets Hide from its row once added here, and leaves one ssh did not reach as it was", async () => {
+  const { events, q, answer, unmount } = await mount(hosts([host("edge"), host("lab")]));
+  await act(async () => { q('[data-ssh-host="edge"] [role="radio"]')?.click(); });
+  await answer("look_ssh", { ok: true, alias: "edge", looked: { state: "not_reached" } });
+  expect(q("[data-ssh-look]")).toBeNull();
+  expect(q('[data-add-device="true"]')?.textContent).toBe("Add");
   await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
-  for (const state of ["absent", "not_reached"]) {
-    await answer("look_ssh", { ok: true, alias: "lab", looked: { state } });
-    expect(q("[data-ssh-look]")).toBeNull();
-    expect(q('[data-add-device="true"]')?.textContent).toBe("Add");
-  }
+  await answer("look_ssh", { ok: true, alias: "lab", looked: { state: "absent" } });
+  expect(q('[data-ssh-look="absent"]')?.textContent).toBe("·No Hide there yet · add it here, then press Connect as a server on its row to put Hide there");
+  expect(q('[data-ssh-look="absent"]')?.textContent).not.toMatch(/install Hide|link/);
+  expect(q('[data-add-device="true"]')?.textContent).toBe("Add");
+  // The look itself installed nothing; Add adds the Host over SSH, as before.
+  await act(async () => { q('[data-add-device="true"]')?.click(); });
+  expect(sent(events, "register_device").map((event) => (event.payload as { ssh_alias: string }).ssh_alias)).toEqual(["lab"]);
+  expect(sent(events, "pairing_pair_ssh")).toHaveLength(0);
   await unmount();
 });
 
@@ -198,11 +207,38 @@ it("waits for the device its alias added, under whatever id the core gives it", 
 
 it("dims a Host a device already uses, or whose address is unknown, and cannot choose it (B51, B52)", async () => {
   const { q, unmount } = await mount(hosts([host("mini", { added_as: "Mac mini" }), host("twin", { added_as: "Mac mini" }), host("broken", { address: null, problem: "ssh_failed" }), host("lab")]));
-  expect(q('[data-ssh-host-note="mini"]')?.textContent).toBe("Added as Mac mini");
-  expect(q('[data-ssh-host-note="twin"]')?.textContent).toBe("Added as Mac mini");
+  expect(q('[data-ssh-host-note="mini"]')?.textContent).toBe("Added over SSH as Mac mini");
+  expect(q('[data-ssh-host-note="twin"]')?.textContent).toBe("Added over SSH as Mac mini");
   expect(q('[data-ssh-host-note="broken"]')?.textContent).toBe("ssh couldn't read this host");
   for (const alias of ["mini", "twin", "broken"]) expect(q(`[data-ssh-host="${alias}"] [role="radio"]`)?.hasAttribute("disabled")).toBe(true);
   expect(q('[data-ssh-host="lab"] [role="radio"]')?.hasAttribute("disabled")).toBe(false);
+  await unmount();
+});
+
+// with-hide/hide issue 3007: a machine this computer already reaches answers any look with this computer's own helper there, so
+// adding it again could only say "update" or "refused"; what puts Hide there is that device's Connect as a server.
+it("points a Host or distribution this computer already reaches to its device's Connect as a server, and adds nothing", async () => {
+  const devices = [
+    { id: "4c1d2e3f-mini", ssh_alias: "mini", label: "Mac mini", kind: "remote" },
+    { id: "wsl-ubuntu-1a2b", ssh_alias: null, wsl_distro: "Ubuntu", label: "WSL Ubuntu", kind: "remote" },
+  ] as Device[];
+  const { events, q, shown, unmount } = await mount(hosts([host("mini", { added_as: "Mac mini" }), host("twin", { added_as: "Mac mini" }), host("lab")], { wsl: [distro("Ubuntu", { added_as: "WSL Ubuntu" })] }), devices);
+  expect(q('[data-ssh-host-server="lab"]')).toBeNull();
+  for (const [selector, id] of [
+    ['[data-ssh-host-server="mini"]', "4c1d2e3f-mini"],
+    // Another alias of the same machine names the device the core named for it.
+    ['[data-ssh-host-server="twin"]', "4c1d2e3f-mini"],
+    ['[data-wsl-distro-server="Ubuntu"]', "wsl-ubuntu-1a2b"],
+  ] as const) {
+    expect(q(selector)?.textContent).toBe("Connect as a server ›");
+    await act(async () => { q(selector)?.click(); });
+    expect(shown).toHaveBeenLastCalledWith(id);
+  }
+  // Nothing was looked at over SSH or added again.
+  expect(sent(events, "pairing_look_ssh")).toHaveLength(0);
+  expect(sent(events, "pairing_look_wsl")).toHaveLength(0);
+  expect(sent(events, "register_device")).toHaveLength(0);
+  expect(q('[data-ssh-host="mini"] [role="radio"]')?.hasAttribute("disabled")).toBe(true);
   await unmount();
 });
 
