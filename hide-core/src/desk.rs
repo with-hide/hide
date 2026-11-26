@@ -1042,7 +1042,13 @@ mod restart_tests {
     #[test]
     fn a_named_session_this_build_cannot_read_is_dropped_and_the_rest_of_desk_is_restored() {
         let mut stored = Stored::default();
-        stored.conversation.push(user(1, "어제 끝난 일 정리해줘"));
+        stored.conversation.push(DeskItem::User {
+            id: 1,
+            text: "어제 끝난 일 정리해줘".into(),
+            at_ms: 0,
+            mentions: Vec::new(),
+            attachments: Vec::new(),
+        });
         let known = serde_json::json!({
             "pane_id": "p1",
             "session": {"device_id": "node", "agent": "codex", "session_id": "s1"},
