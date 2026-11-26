@@ -59,7 +59,7 @@ export type AgentsModel = DeskModel & {
   /** What the learner said to the lead, and the answer they gave the reviewer. */
   said: string[];
   answer: string | null;
-  /** The agent panes, the one the keyboard was in last first, as the core keeps `recent_pane_ids`. */
+  /** The agent panes, the one the keyboard was in last first, as the core keeps them in `recent_places`. */
   recent: string[];
   closed: ClosedPane[];
   /** The pane the last reopen brought back with what it was. */
@@ -470,7 +470,7 @@ function snapshot(model: AgentsModel, nowMs: number): WorldSnapshot {
     rest: {
       ...drawn.rest,
       navigator: { ...navigator, devices: navigator.devices!.map((device) => ({ ...device, agent_scope: scope })), changes_root_path: ROOT },
-      ui_state: { ...drawn.rest.ui_state, sidebar_lens: "tasks", recent_pane_ids: model.recent, expanded_paths: model.expanded },
+      ui_state: { ...drawn.rest.ui_state, sidebar_lens: "tasks", recent_places: model.recent.map((pane_id) => ({ kind: "pane" as const, pane_id })), expanded_paths: model.expanded },
       workspace_view: viewOf(model, drawn.rest.workspace_view!),
       recent_closed: recentClosed(model),
       terminal: { headers },

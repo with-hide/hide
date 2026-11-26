@@ -109,7 +109,7 @@ mod ps;
 mod pull_requests;
 mod read_ahead;
 mod recent_checkouts;
-mod recent_panes;
+mod recent_places;
 mod rename;
 mod request_view;
 mod session;

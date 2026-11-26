@@ -152,8 +152,8 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     const paneFocuses = sent.get("focus_pane") ?? 0;
     await page.keyboard.down("Alt");
     await page.keyboard.press("Backquote");
-    const agents = page.locator("[data-cycle=agents]");
-    await expect(agents).toContainText("Recent Agent panes");
+    const agents = page.locator("[data-cycle=places]");
+    await expect(agents).toContainText("Recent");
     await expect(agents.locator("[role=option]").first()).toHaveAttribute("data-cycle-row", fixturePane);
     await expect(cycleRow).toHaveAttribute("data-cycle-row", betaPane);
     await expect(cycleRow).toContainText("beta · Terminal");
@@ -215,7 +215,7 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     await page.keyboard.down("Alt");
     await page.keyboard.press("Backquote");
     await expect(page.locator("[data-cycle=area]")).toContainText("Recent View tabs");
-    await expect(page.locator("[data-cycle=agents]")).toHaveCount(0);
+    await expect(page.locator("[data-cycle=places]")).toHaveCount(0);
     await page.keyboard.up("Alt");
     await expect(editor).toContainText("plan line");
     expect(sent.get("focus_pane") ?? 0).toBe(focuses);

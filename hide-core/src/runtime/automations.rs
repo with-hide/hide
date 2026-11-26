@@ -372,6 +372,15 @@ impl Runtime {
         self.automations_changed(save);
     }
 
+    /// Whether the book holds the automation whose id is `id`.
+    pub(super) fn automation_held(&self, id: &str) -> bool {
+        self.automations
+            .book
+            .automations
+            .iter()
+            .any(|automation| automation.id == id)
+    }
+
     /// Whether the automation `id` runs once (mission-104 O-4).
     pub(super) fn automation_once(&self, id: &str) -> bool {
         self.automations.once.contains(id)

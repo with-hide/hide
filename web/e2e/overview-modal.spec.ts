@@ -87,7 +87,7 @@ test("shared Overview preserves work, returns the keyboard and has direct sideba
     const cycle = held("recent_area_tab");
     for (const key of cycle.modifiers) await page.keyboard.down(key);
     await page.keyboard.press(cycle.key);
-    await expect(page.locator('[data-cycle="agents"] [aria-selected="true"]')).toHaveAttribute("data-cycle-row", paneId!);
+    await expect(page.locator('[data-cycle="places"] [aria-selected="true"]')).toHaveAttribute("data-cycle-row", paneId!);
     await page.keyboard.press("Escape");
     for (const key of cycle.modifiers) await page.keyboard.up(key);
     await expect(modal).toBeVisible();
