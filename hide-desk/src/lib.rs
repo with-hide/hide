@@ -5,6 +5,7 @@
 
 pub mod adapter;
 pub mod commands;
+mod escapes;
 pub mod host;
 pub mod install;
 pub mod permission;

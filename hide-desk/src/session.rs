@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::adapter::{Compaction, CompactionMark, FailedTurnMark};
+use crate::escapes::Escapes;
 use crate::rpc::{CallError, Connection, Incoming, Sink};
 
 /// How long a control request may take: a first `session/new` starts the
@@ -409,6 +410,9 @@ pub struct TurnReader {
     compaction: Option<Compaction>,
     /// The running turn met the mark: the text written since.
     failed: Option<String>,
+    /// What the turn's text has of a terminal's escape sequences is left
+    /// out of its reply and its failure words.
+    escapes: Escapes,
 }
 
 impl TurnReader {
@@ -444,6 +448,7 @@ impl TurnReader {
         self.reply = ReplyBlocks::default();
         self.failed = None;
         self.compaction = None;
+        self.escapes = Escapes::default();
     }
 
     /// What `update`, numbered `number`, adds to the running turn: its tag
@@ -473,6 +478,17 @@ impl TurnReader {
             }
             return None;
         }
+        let plain;
+        let update = match update {
+            Update::Text { text, message } => {
+                plain = Update::Text {
+                    text: self.escapes.strip(text),
+                    message: message.clone(),
+                };
+                &plain
+            }
+            other => other,
+        };
         if let (Some(words), Update::Text { text, .. }) = (&mut self.failed, update) {
             keep_failure(words, text);
             return None;
@@ -587,6 +603,18 @@ mod tests {
         );
         assert_eq!(turn.running(), None);
         assert_eq!(turn.end(7), None);
+    }
+
+    /// letter-48464 (omp's `/context`, frames from the audit): a command's
+    /// answer written for a terminal reaches the reply as its words only,
+    /// a colour split between two chunks included.
+    #[test]
+    fn a_reply_keeps_no_terminal_escape_sequence() {
+        let (_, text) = numbered(&[
+            (3, said("\x1b[38;5;243m░░\x1b[39m Context\x1b[38;5")),
+            (4, said(";243m 12%\x1b[0m")),
+        ]);
+        assert_eq!(text.concat(), "░░ Context 12%");
     }
 
     /// codex-acp 2.5.0 with a model that failed (letter-47671, frames
