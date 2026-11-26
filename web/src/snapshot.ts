@@ -3578,6 +3578,8 @@ export type AutomationRun = {
   answer?: string;
   /** What the run's agent opened for the operator, newest first, only while a window shows the run (operator choice 2026-11-24); a row is pressed by its `key`. */
   results?: AutomationRunResult[];
+  /** Its agent opened something for the operator, which put the run in Needs You (B15); said for every run, absent when it opened nothing. */
+  has_results?: boolean;
 };
 
 /** One row of a run's 결과: the View's kind and name, and the key a press names it by (`automation_run_result_open`). */
