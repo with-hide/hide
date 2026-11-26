@@ -1868,7 +1868,6 @@ export type MissionSafetyNet = { conductor_present: boolean; since_unix_ms: numb
 /** A line the Conductor skipped on its own, with no decision of the operator's (`SkippedAloneView`); `text` is the words of a line the plan wrote. */
 export type MissionSkip = { node: string; title: string; line: string; kind: MissionCriterionKind; text?: string; reason: string; by: string; at_unix_ms: number };
 
-/** One mission as the map draws it (`MissionView`). */
 /**
  * One place of the core's recent place order (`ui_state.recent_places`): a
  * terminal pane the keyboard was in (a device's by its device-scoped id), a
@@ -1880,6 +1879,7 @@ export type RecentPlace =
   | { kind: "automation"; automation_id: string }
   | { kind: "desk" };
 
+/** One mission as the map draws it (`MissionView`). */
 export type Mission = {
   id: string;
   title: string;
