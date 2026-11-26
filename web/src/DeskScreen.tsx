@@ -11,7 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { Actions } from "./actions";
 import type { FoundAnswerPath } from "./answerPaths";
 import { hostBridge } from "./host";
-import { deskOn, deskPhase, holdsFoot, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
+import { deskFavorites, deskOn, deskPhase, holdsFoot, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
 import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
 import { AreaEmpty } from "./AreaEmpty";
@@ -338,8 +338,10 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   }), [actions, onNoticeAction, room]);
   const place = useUiStore((s) => s.deskRoom);
   const front = activeTab(place.panel);
+  const candidates = useShellStore((s) => s.rest?.ui_state?.conductor_settings?.candidates);
 
   if (!desk) return null;
+  const favorites = deskFavorites(candidates ?? [], desk.agents, desk.selection);
   const working = jobs.filter((job) => job.state === "working").length;
   // The card or chip that opened what shows is marked (B16).
   const shownJob = place.session ? (jobs.find((job) => job.pane_id === place.session)?.id ?? null) : null;
@@ -385,7 +387,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     >
       <DeskPermissionMenu permission={desk.settings.permission} agent={desk.agents.find((agent) => agent.id === desk.selection.agent)?.label ?? null} onPermission={(permission) => actions.deskPermission(permission)} />
       <Separator orientation="vertical" className="mx-xxs data-[orientation=vertical]:h-(--size-icon)" />
-      <DeskAgentBar agents={desk.agents} selection={desk.selection} onAgent={(id) => actions.deskSelect(id, null, null)} onModel={(model) => actions.deskSelect(null, model, null)} onEffort={(effort) => actions.deskSelect(null, null, effort)} onAgentSettings={() => actions.openSettings("agents")} />
+      <DeskAgentBar agents={desk.agents} selection={desk.selection} favorites={favorites} onFavorite={(favorite) => actions.deskSelect(favorite.agent.id, favorite.model, favorite.effort)} onAgent={(id) => actions.deskSelect(id, null, null)} onModel={(model) => actions.deskSelect(null, model, null)} onEffort={(effort) => actions.deskSelect(null, null, effort)} onAgentSettings={() => actions.openSettings("agents")} />
     </DeskComposer>
   );
   return (
