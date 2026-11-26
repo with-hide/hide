@@ -283,7 +283,8 @@ pub(crate) fn settle_desk_views(layout: &mut crate::view_layout::Layout) -> Vec<
     if !stray.is_empty() {
         notes.push(format!("{} views Desk's desk never holds", stray.len()));
     }
-    notes.extend(layout.repair());
+    // Past the cap the Views looked at longest ago go, before the tree's
+    // own repair, which would cut the last ones in tree order instead.
     let excess = layout.display_count().saturating_sub(MAX_VIEW_DISPLAYS);
     if excess > 0 {
         let mut oldest: Vec<(u64, String)> = layout
@@ -298,6 +299,7 @@ pub(crate) fn settle_desk_views(layout: &mut crate::view_layout::Layout) -> Vec<
             "{excess} views past {MAX_VIEW_DISPLAYS} were closed"
         ));
     }
+    notes.extend(layout.repair());
     notes
 }
 
@@ -845,6 +847,107 @@ mod tests {
             .find(|display| display.kind == DisplayKind::Browser)
             .expect("the page stays");
         assert_eq!(page.origin.as_ref(), Some(&origin));
+    }
+
+    /// The fields of Desk's store that name a machine, which the node-id
+    /// migration does not map yet (with-hide/hide issue 3044): a View's
+    /// checkout's machine, a named session's machine and a queued spawn's
+    /// machine. A new field that names a machine fails here, so it reaches
+    /// that issue's list instead of a renamed device unnoticed.
+    const DESK_MACHINE_FIELDS: &[&str] = &[
+        "/named/*/session/device_id",
+        "/queue/*/command/machine",
+        "/views/root/area/displays/*/origin/device_id",
+    ];
+
+    #[test]
+    fn the_machine_ids_desks_store_saves_are_the_listed_ones() {
+        use crate::view_layout::{DisplayKind, ViewOrigin};
+        let origin = ViewOrigin {
+            device_id: "d".into(),
+            path: "/p".into(),
+        };
+        let mut stored = Stored::default();
+        let area = stored.views.active_area().id.clone();
+        let mut file = stored
+            .views
+            .new_display("/p/a.md", DisplayKind::File, None, false);
+        file.origin = Some(origin.clone());
+        stored.views.append(&area, file).unwrap();
+        let mut page = stored
+            .views
+            .new_browser_display("http://localhost:5173/", 1);
+        page.origin = Some(origin);
+        stored.views.append(&area, page).unwrap();
+        stored.named.push(NamedSession {
+            pane_id: "p1".into(),
+            session: crate::links::ledger::SessionIdentity {
+                device_id: "d".into(),
+                agent: "codex".into(),
+                session_id: "s1".into(),
+            },
+            agent_kind: "codex".into(),
+            thread: None,
+        });
+        stored.queue.push(QueuedJob {
+            intent: "desk:1".into(),
+            command: crate::coordination::Command::Spawn {
+                pick: None,
+                parent: None,
+                machine: Some("d".into()),
+                name: "worker".into(),
+                intent: "desk:1".into(),
+                kind: "codex".into(),
+                repo: Some("/r".into()),
+                branch: Some("main".into()),
+                path: None,
+                args: Vec::new(),
+                launch: Default::default(),
+                task: None,
+                brief: Some("go".into()),
+                beside: false,
+                mission: None,
+                plan_node: None,
+                plan: None,
+                profile: None,
+            },
+            queued_at_ms: 1,
+            state: QueuedState::Waiting,
+            code: None,
+        });
+        let saved: serde_json::Value = serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+
+        fn walk(
+            value: &serde_json::Value,
+            at: String,
+            found: &mut std::collections::BTreeSet<String>,
+        ) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    for (key, value) in map {
+                        let here = format!("{at}/{key}");
+                        if matches!(key.as_str(), "device_id" | "machine" | "node" | "device") {
+                            found.insert(here.clone());
+                        }
+                        walk(value, here, found);
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for item in items {
+                        walk(item, format!("{at}/*"), found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut found = std::collections::BTreeSet::new();
+        walk(&saved, String::new(), &mut found);
+
+        assert_eq!(
+            found.iter().map(String::as_str).collect::<Vec<_>>(),
+            DESK_MACHINE_FIELDS,
+            "a field of desk.json that names a machine is listed in DESK_MACHINE_FIELDS and issue 3044"
+        );
     }
 
     fn user(id: u64, text: &str) -> DeskItem {
