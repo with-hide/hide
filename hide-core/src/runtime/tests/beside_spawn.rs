@@ -1154,7 +1154,7 @@ fn a_caller_here_starts_a_child_in_a_devices_plain_folder() {
     let child = spawner
         .spawn_in_folder("there", false, Some(DEVICE), Some(CHECKOUT))
         .unwrap();
-    assert_eq!(child["pane"], "w2:p1");
+    assert_eq!(child["pane"], "remote:mini:pane:w2:p1");
     assert_eq!(
         spawner.device.lock().unwrap().launched,
         [("w2".to_owned(), CHECKOUT.to_owned())]

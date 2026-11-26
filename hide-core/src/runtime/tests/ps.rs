@@ -194,7 +194,7 @@ fn every_live_pane_is_listed_with_its_place_agent_parent_and_watch() {
             (crate::node::TEST_NODE, "main", "lead", false),
             (crate::node::TEST_NODE, "main", "shell", true),
             (crate::node::TEST_NODE, "feat/x", "child", false),
-            ("mini", "main", "w1:p1", false),
+            ("mini", "main", "remote:mini:pane:w1:p1", false),
         ]
     );
     let shell = ps.panes.iter().find(|pane| pane.pane == "shell").unwrap();
@@ -220,13 +220,58 @@ fn every_live_pane_is_listed_with_its_place_agent_parent_and_watch() {
     );
     assert_eq!(child.watched_by.as_deref(), Some("lead"));
     assert_eq!(child.kind, "codex");
-    let far = agent(&ps, "w1:p1");
+    let far = agent(&ps, "remote:mini:pane:w1:p1");
     assert_eq!(
         (far.id.as_deref(), far.state),
         (Some("agent-4"), PsState::Disconnected)
     );
     assert_eq!(ps.panes[3].machine_label.as_deref(), Some("mini"));
     assert_eq!(ps.panes[0].machine_label, None);
+}
+
+/// A child on the device `mini` delegated by this machine's lead nests under
+/// it for a caller on either machine: the answer names each pane, and its
+/// parent's, as that caller uses it (bare on the caller's own machine), so
+/// the `(machine, pane)` `hide ps` links a child to its parent by still
+/// meets.
+#[test]
+fn a_device_child_links_to_its_parent_for_a_caller_on_either_machine() {
+    let mut runtime = fixture();
+    {
+        let session = runtime.snapshot.status.remote[0].session.as_mut().unwrap();
+        session.workspaces[0].checkouts[0].tabs[0]
+            .panes
+            .push(pane("remote:mini:pane:w1:p2", "/far/main"));
+        let mut child = session.agents[0].clone();
+        child.pane_id = "remote:mini:pane:w1:p2".into();
+        child.lineage_parent_pane_id = Some("lead".into());
+        session.agents.push(child);
+    }
+    for (device, caller, child_pane, parent_pane) in [
+        ("test-node", "shell", "remote:mini:pane:w1:p2", "lead"),
+        ("mini", "w1:p1", "w1:p2", "remote:test-node:pane:lead"),
+    ] {
+        let ps = runtime.ps_rows(device, caller).unwrap().answer(false);
+        let child = agent(&ps, child_pane);
+        assert_eq!(
+            (
+                child.parent_machine.as_deref(),
+                child.parent_pane.as_deref()
+            ),
+            (Some("test-node"), Some(parent_pane)),
+            "{device}"
+        );
+        let parent = ps
+            .panes
+            .iter()
+            .find(|pane| (pane.machine.as_str(), pane.pane.as_str()) == ("test-node", parent_pane))
+            .unwrap_or_else(|| panic!("{device}: the parent's pane"));
+        assert_eq!(
+            parent.agent.as_ref().and_then(|agent| agent.id.as_deref()),
+            Some("agent-1"),
+            "{device}"
+        );
+    }
 }
 
 #[test]

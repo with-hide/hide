@@ -217,6 +217,36 @@ impl Actor {
         crate::address::CoreAddress::parse(self.pane_id.strip_prefix(HIDE_PREFIX)?)?.ok()
     }
 
+    /// Who an answer to this actor names panes to: an agent of another core
+    /// (`Actor::core`, whose machine is this core's node) reads them as this
+    /// core's, any other caller from its own machine.
+    pub(crate) fn pane_reader(&self) -> crate::address::Reader<'_> {
+        if self.core_address().is_some() {
+            crate::address::Reader::Core(&self.device_id)
+        } else {
+            crate::address::Reader::On(&self.device_id)
+        }
+    }
+
+    /// This actor as an answer to `reader` shows it: its pane as that reader
+    /// uses it (`address::pane_for_caller`), from the machine it runs on and
+    /// that machine's own id for it. A code-owned identity (Hide's own, a
+    /// tool's, the operator's) and a guest's pane name no pane of this core
+    /// and stay as they are.
+    pub(crate) fn read_by(&self, reader: crate::address::Reader<'_>) -> Actor {
+        use crate::address::PaneAddress;
+        let mut actor = self.clone();
+        if !self.code_owned()
+            && !self.pane_id.starts_with(HIDE_PREFIX)
+            && let Ok(pane @ (PaneAddress::Node(_) | PaneAddress::Device { .. })) =
+                PaneAddress::parse(&self.pane_id)
+        {
+            actor.pane_id =
+                crate::address::pane_for_caller(reader, &self.device_id, pane.device_pane_id());
+        }
+        actor
+    }
+
     /// The operator's own code-owned identity on `node`, the core's own:
     /// the sender of a feedback letter (PRD view-opener-feedback D-17).
     pub fn operator(node: &str) -> Self {
