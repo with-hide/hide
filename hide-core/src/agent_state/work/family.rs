@@ -189,7 +189,7 @@ impl Recorded {
 /// The state the record keeps (`ledger_outputs.state`): merged, closed, CI
 /// failed, and otherwise open with checks it did not keep, which never read
 /// as a pass.
-fn recorded_state(state: &str) -> PrState {
+pub(crate) fn recorded_state(state: &str) -> PrState {
     match state {
         "merged" => PrState::Merged,
         "closed" => PrState::Closed,

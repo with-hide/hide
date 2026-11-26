@@ -343,14 +343,14 @@ it("shows a question in the agent's own sentence above the box and lights only t
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: asked(answer("라이트를 찍었어요. 다크 화면도 넣을까요? 넣으면 두 배예요.", 1_000)) }), sessionThreadHistory: { generation: 4, pages: [] } }));
   const line = container.querySelector("[data-desk-thread-asks]")!;
   const row = line.querySelector('[data-desk-thread-ask-row="missed-1-0"]')!;
-  // One row above the box: 질문, the agent's sentence, when it was asked and ×; no message unfolds under it.
-  expect(row.querySelector("[data-desk-thread-ask-lead]")?.textContent).toBe("Question");
+  // One row above the box: 확인할 것, the agent's sentence, when it was asked and ×; no message unfolds under it.
+  expect(row.querySelector("[data-desk-thread-ask-lead]")?.textContent).toBe("To check");
   expect(row.querySelector('[data-desk-thread-ask-words="missed-1-0"]')?.textContent).toBe("다크 화면도 넣을까요?");
   expect(row.querySelector("[data-desk-thread-ask-ago]")?.textContent).toMatch(/\S ago$/);
   expect(row.querySelector('[data-desk-thread-ask-dismiss="missed-1-0"]')).not.toBeNull();
   expect(line.querySelector("[data-desk-thread-ask-body]")).toBeNull();
   expect(line.compareDocumentPosition(container.querySelector("textarea")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  // The question colour is only on 질문: the box is the neutral ground inside a hairline.
+  // The question colour is only on 확인할 것: the box is the neutral ground inside a hairline.
   expect(row.querySelector("[data-desk-thread-ask-lead]")?.className).toContain("text-open-ask");
   expect([/warning|open-ask/.test(line.className), line.className.includes("border-hairline"), line.className.includes("bg-code-block")]).toEqual([false, true, true]);
 
@@ -439,7 +439,7 @@ it("draws a question whose message is gone dim, whole and inert, with a hollow d
   expect(look("missed-1-0")).toEqual({ dot: "true", dim: false, clamped: true, said: long, tail: null, pressable: true, dismissable: true });
 });
 
-it("folds several questions to 질문 N and the first, unfolds them under 질문 N alone, oldest first, and keeps 무시하기 struck through with 되돌리기 (Doop N3 가)", async () => {
+it("folds several questions to 확인할 것 N and the first, unfolds them under 확인할 것 N alone, oldest first, and keeps 무시하기 struck through with 되돌리기 (Doop N3 가)", async () => {
   const set: [string, string][] = [];
   const asks: AskLine[] = [
     { id: "missed-2-0", text: "본인 확인을 직접 해 줄 수 있는지", at_unix_ms: 2_500, quote: "본인 확인을 직접 해 줄 수 있어?" },
@@ -450,14 +450,14 @@ it("folds several questions to 질문 N and the first, unfolds them under 질문
   const line = () => container.querySelector("[data-desk-thread-asks]")!;
   const rows = () => Array.from(line().querySelectorAll("[data-desk-thread-ask-row]")).map((row) => row.getAttribute("data-desk-thread-ask-row"));
   const more = line().querySelector<HTMLElement>("[data-desk-thread-asks-more]")!;
-  expect(more.textContent).toBe("Questions 2 ·다크도 찍을까요?");
+  expect(more.textContent).toBe("To check 2 ·다크도 찍을까요?");
   expect(rows()).toEqual([]);
 
   await act(async () => more.click());
   expect(line().getAttribute("data-desk-thread-asks-open")).toBe("true");
   // The head says how many wait and folds; the rows follow, oldest first, each with its dot, its time and ×.
   const head = () => line().querySelector("[data-desk-thread-ask-lead]")?.textContent;
-  expect(head()).toBe("Questions 2");
+  expect(head()).toBe("To check 2");
   expect(line().querySelector("[data-desk-thread-asks-fold]")?.textContent).toBe("Collapse");
   expect(rows()).toEqual(["missed-1-0", "missed-2-0"]);
   expect(line().querySelectorAll("[data-desk-thread-ask-dot]")).toHaveLength(2);
@@ -468,10 +468,10 @@ it("folds several questions to 질문 N and the first, unfolds them under 질문
   expect(set).toEqual([["missed-2-0", "dismissed"]]);
   const away = line().querySelector('[data-desk-thread-ask-row="missed-2-0"]')!;
   expect(away.getAttribute("data-dismissed")).toBe("true");
-  expect(head()).toBe("Questions 1");
+  expect(head()).toBe("To check 1");
   await act(async () => away.querySelector<HTMLElement>('[data-desk-thread-ask-undo="missed-2-0"]')!.click());
   expect(set).toEqual([["missed-2-0", "dismissed"], ["missed-2-0", "open"]]);
-  expect(head()).toBe("Questions 2");
+  expect(head()).toBe("To check 2");
   await act(async () => line().querySelector<HTMLElement>("[data-desk-thread-asks-fold]")!.click());
   expect(line().getAttribute("data-desk-thread-asks-open")).toBe("false");
 });

@@ -1152,7 +1152,9 @@ impl Runtime {
         };
         if !turn.text.is_empty() {
             let id = self.desk.stored.conversation.next_id();
-            let mentions = hide_desk::session_mentions(&turn.text)
+            // Each chip's token is kept as the chip names it, a quoted name without its quotes.
+            let text = hide_desk::unquoted_mentions(&turn.text);
+            let mentions = hide_desk::session_mentions(&text)
                 .into_iter()
                 .map(|(pane_id, name)| crate::model::DeskSessionChip {
                     pane_id,
@@ -1161,14 +1163,14 @@ impl Runtime {
                     mark: None,
                 })
                 .collect();
-            let missions = hide_desk::mission_mentions(&turn.text)
+            let missions = hide_desk::mission_mentions(&text)
                 .into_iter()
                 .map(|(id, title)| crate::model::DeskMissionMention { id, title })
                 .collect();
             self.desk.stored.conversation.push(DeskItem::Reply {
                 id,
                 agent: turn.agent,
-                text: turn.text,
+                text,
                 at_ms: crate::links::now_ms(),
                 state: if turn.cut {
                     DeskReplyState::Stopped
@@ -1577,6 +1579,12 @@ impl Runtime {
 
     /// The `desk` section, a new `Arc` whenever it is composed.
     fn compose_desk(&mut self) {
+        self.compose_desk_moved(None);
+    }
+
+    /// [`Self::compose_desk`] with the gone chips' pairs a refresh already
+    /// read, so its chips do not read them again.
+    fn compose_desk_moved(&mut self, moved: Option<&[(String, String)]>) {
         if self.desk.worker.is_none() {
             return;
         }
@@ -1637,7 +1645,7 @@ impl Runtime {
                 generation: *generation,
                 items: {
                     let mut items = items.clone();
-                    self.desk_fill_chips(&mut items);
+                    self.desk_fill_chips(&mut items, moved);
                     items
                 },
                 dropped: *dropped,
@@ -2636,6 +2644,37 @@ mod tests {
         assert_eq!((steps.sessions, steps.letters), (2, 1));
         let live = runtime.snapshot.desk_live.as_ref().unwrap();
         assert_eq!((live.text.as_deref(), live.step), (None, None));
+    }
+
+    /// An agent that quotes a session's name, `@session(h1:p2 "note")`,
+    /// gets a chip named `note`, and the reply Desk keeps writes the token
+    /// the way the chip names it, so the chip stands where the words named it.
+    #[test]
+    fn a_quoted_session_name_in_a_reply_is_its_chip_s_name_without_the_quotes() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        event(&mut runtime, "desk_send", json!({"text": "who wrote it?"}));
+        let send = sent(&received);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        runtime.desk_report(Report::Text {
+            tag: send.tag,
+            text: "@session(h1:p2 \"note-claude\") wrote it.".into(),
+        });
+        runtime.desk_report(Report::TurnEnded {
+            tag: send.tag,
+            outcome: TurnOutcome::Done,
+        });
+        let desk = runtime.snapshot.desk.as_ref().unwrap();
+        let Some(DeskItem::Reply { text, mentions, .. }) = desk.conversation.items.last() else {
+            panic!("no reply");
+        };
+        let names: Vec<_> = mentions
+            .iter()
+            .map(|chip| (chip.pane_id.as_str(), chip.name.as_str()))
+            .collect();
+        assert_eq!(names, [("h1:p2", "note-claude")]);
+        assert_eq!(text, "@session(h1:p2 note-claude) wrote it.");
     }
 
     #[test]

@@ -5,7 +5,8 @@
 // time the room is entered (B26); the core keeps only the two panels' widths
 // (`desk.lane`, B23).
 
-import type { DeskItem, DeskJob, DeskOutput } from "./snapshot";
+import { ENDED_JOB_STATES, livePane } from "./desk";
+import type { DeskItem, DeskJob, DeskMoved, DeskOutput } from "./snapshot";
 import { absolutePathRoot, underFolder } from "./terminalLinks";
 
 /**
@@ -87,9 +88,6 @@ export function followFrom(generation: number, items: readonly DeskItem[]): NewS
   return { generation, after: items.at(-1)?.id ?? -1, settled: null };
 }
 
-/** Job states with no pane to open now: the turn's first session is the next job, unless this one starts again. */
-const NO_PANE_COMING: ReadonlySet<DeskJob["state"]> = new Set<DeskJob["state"]>(["failed", "cancelled", "closed", "moved_out", "archived"]);
-
 /**
  * The open-beside rule of a session a Desk turn starts (frame J, 가-2, 나-1,
  * 다). A session Desk started is its turn's `job` line, the core's record of
@@ -111,12 +109,25 @@ export function newSessionBeside(follow: NewSessionFollow, generation: number, i
     // A job the core has not listed yet, or one still waiting for its pane, holds the turn's first place.
     if (!card) return { follow: now, open: null };
     // A start that failed is no session: the next one is the turn's first, and a start retried under the same job is looked at again.
-    if (NO_PANE_COMING.has(card.state)) continue;
+    // An ended job has no pane to open now: the turn's first session is the next job, unless this one starts again.
+    if (ENDED_JOB_STATES.has(card.state)) continue;
     if (!card.pane_id) return { follow: now, open: null };
     const empty = room.session === null && room.panel === null;
     return { follow: { ...now, settled: turn }, open: empty ? card.pane_id : null };
   }
   return { follow: now, open: null };
+}
+
+/**
+ * The room once a gone session runs again in another pane (`desk_jobs.moved`,
+ * one `이어서 하기` resumed): the session open beside Desk, and the one ⌘E
+ * opens again, are that pane, so the panel's files, terminal and input reach
+ * the live session; the tab panel stays, being the same session's.
+ */
+export function followMoved(room: DeskRoomWindow, moved: readonly DeskMoved[]): DeskRoomWindow {
+  const session = room.session === null ? null : livePane(moved, room.session);
+  const closed = room.closed === null ? null : livePane(moved, room.closed);
+  return session === room.session && closed === room.closed ? room : { ...room, session, closed };
 }
 
 /** The session panel's `✕`, Escape or ⌘E (B6): Desk widens again and the tab panel, which was that session's, goes with it; the session is kept for ⌘E to open again. */

@@ -9,7 +9,7 @@
 // own, which the threads node reads from the session record.
 
 import { sentenceIn } from "./markdownPlain";
-import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskItem, DeskOption, DeskOptionKind, DeskJob, DeskJobsSection, DeskRecord, DeskMention as WireMention, DeskMission, DeskMissionMention, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
+import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskItem, DeskOption, DeskOptionKind, DeskJob, DeskJobsSection, DeskMoved, DeskRecord, DeskMention as WireMention, DeskMission, DeskMissionMention, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
 
 export type { DeskAgent, DeskAgentId, DeskRecord, DeskAgentState, DeskApprovalState, DeskChoice, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskMissionMention, DeskOption, DeskOptionKind, DeskOutput, DeskOutputKind, DeskPermission, DeskQueuedMessage, DeskSteps } from "./snapshot";
 
@@ -63,6 +63,8 @@ export function cardOfSession(cards: readonly DeskJob[], session: DeskSessionRef
  */
 export type SessionFacts = {
   listed: boolean;
+  /** Where it runs now, the pane a press opens: its row's (a gone pane's session resumed in another pane is that pane's, `desk_jobs.moved`), the chip's own for a recorded session, null for one with nothing to open. */
+  pane_id: string | null;
   /** The name its sidebar row shows, which a chip draws in place of the name the words wrote (an agent's reply may name it by an id). */
   name: string | null;
   mark: RowMark | null;
@@ -81,21 +83,48 @@ function rowSession(row: AgentRow): DeskSessionRef {
 }
 
 /**
- * A chip's session as the sidebar and Desk's cards know it now (D-86): a
- * session named by its pane that no row has any more is not listed, so its
- * chip is dimmed; one named only by a name no row carries is not known, and
- * its chip keeps the values it came with.
+ * The job states that end a job: no pane is coming for it, until a failed or
+ * cancelled one is started again. Desk's room passes over such a job for the
+ * turn's next session, and its card is dimmed, all but a failed one, whose
+ * failure and `다시` are the operator's to act on.
  */
-export function sessionFacts(rows: ReadonlyMap<string, AgentRow>, cards: readonly DeskJob[], session: DeskSessionRef, records: readonly DeskRecord[] = []): SessionFacts | null {
-  const row = session.pane_id ? rows.get(session.pane_id) : [...rows.values()].find((one) => one.identity_label === session.name);
+export const ENDED_JOB_STATES: ReadonlySet<DeskJob["state"]> = new Set<DeskJob["state"]>(["failed", "cancelled", "closed", "moved_out", "archived"]);
+
+/** Whether a job card is dimmed: an ended job's, but a failed one's (see `ENDED_JOB_STATES`). */
+export function jobDimmed(state: DeskJob["state"]): boolean {
+  return ENDED_JOB_STATES.has(state) && state !== "failed";
+}
+
+/**
+ * The pane a chip's session runs in now: a gone pane whose session the core
+ * found running in another pane is that pane (`desk_jobs.moved`), any other
+ * pane itself.
+ */
+export function livePane(moved: readonly DeskMoved[] | undefined, pane: string): string {
+  return moved?.find((one) => one.pane_id === pane)?.live_pane_id ?? pane;
+}
+
+/** What Desk's section says of the sessions whose pane is gone: their records and the ones running in another pane. */
+export type GoneSessions = Pick<DeskJobsSection, "records" | "moved">;
+
+/**
+ * A chip's session as the sidebar and Desk's cards know it now (D-86): a
+ * session named by its pane that no row has any more, and that runs in no
+ * other pane, is not listed, so its chip draws its record or is dimmed; one
+ * named only by a name no row carries is not known, and its chip keeps the
+ * values it came with.
+ */
+export function sessionFacts(rows: ReadonlyMap<string, AgentRow>, cards: readonly DeskJob[], session: DeskSessionRef, gone: GoneSessions | null = null): SessionFacts | null {
+  const row = session.pane_id ? rows.get(livePane(gone?.moved, session.pane_id)) : [...rows.values()].find((one) => one.identity_label === session.name);
   if (!row) {
     if (!session.pane_id) return null;
-    const record = records.find((one) => one.pane_id === session.pane_id) ?? null;
-    return { listed: false, name: record?.title ?? null, mark: null, agent_kind: record?.agent_kind ?? null, card: record ? recordCard(record) : null, since: record?.ended_at_unix_ms ?? null, parent: null, record };
+    const record = gone?.records.find((one) => one.pane_id === session.pane_id) ?? null;
+    return { listed: false, pane_id: record ? session.pane_id : null, name: record?.title ?? null, mark: null, agent_kind: record?.agent_kind ?? null, card: record ? recordCard(record) : null, since: record?.ended_at_unix_ms ?? null, parent: null, record };
   }
   const parent = row.lineage_parent_pane_id ? rows.get(row.lineage_parent_pane_id) : undefined;
   return {
     listed: true,
+    pane_id: row.pane_id,
     name: row.identity_label,
     mark: row.mark,
     agent_kind: row.agent_kind,

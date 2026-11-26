@@ -107,7 +107,7 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
     receiveAgentNotice({ notices: [{ tag: "node|w1:p1", device_id: "node", pane_id: "w1:p1", title: "Add a dark mode switch", state: "done", status_code: "done", detail: null, place: "" }], clear: [] });
   });
   expect(shown.slice(1).map((notice) => notice.slice(1, 3))).toEqual([
-    ["Add a dark mode switch", "Question · 배포할 환경을 골라 주세요 · my-app"],
+    ["Add a dark mode switch", "To check · 배포할 환경을 골라 주세요 · my-app"],
     ["Add a dark mode switch", "Approval · 계획 승인 대기 · my-app"],
     ["Add a dark mode switch", "Blocked · 로그인이 필요해요 · my-app"],
     ["Add a dark mode switch", "Done · 배포 완료 · my-app"],
@@ -116,7 +116,7 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
   ]);
   await act(async () => { await clientI18n.changeLanguage("ko"); });
   await act(async () => receiveAgentNotice({ notices: [{ tag: "node|w1:p1", device_id: "node", pane_id: "w1:p1", title: "Add a dark mode switch", state: "needs_you", status_code: "question", detail: "Choose staging?", place: "" }], clear: [] }));
-  expect(shown.at(-1)?.slice(1, 3)).toEqual(["Add a dark mode switch", "질문 · Choose staging?"]);
+  expect(shown.at(-1)?.slice(1, 3)).toEqual(["Add a dark mode switch", "확인할 것 · Choose staging?"]);
   await act(async () => {
     receiveAgentNotice({ notices: [{ tag: "node|w1:p1", device_id: "node", pane_id: "w1:p1", title: "Add a dark mode switch", state: "done", status_code: "done", detail: null, place: "my-app" }], clear: [] });
     receiveAgentNotice({ notices: [{ tag: "node|w1:p1", device_id: "node", pane_id: "w1:p1", title: "Add a dark mode switch", state: "needs_you", status_code: "approval", detail: null, place: "my-app" }], clear: [] });
@@ -127,7 +127,7 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
   await act(async () => receiveAgentNotice({ notices: [review], clear: [] }));
   await act(async () => { await clientI18n.changeLanguage("en"); });
   await act(async () => receiveAgentNotice({ notices: [review], clear: [] }));
-  expect(shown.slice(-2).map((notice) => notice[2])).toEqual(["질문 · 작업 단계 검토 · 5단계 · my-app", "Question · Task steps review · 5 steps · my-app"]);
+  expect(shown.slice(-2).map((notice) => notice[2])).toEqual(["확인할 것 · 작업 단계 검토 · 5단계 · my-app", "To check · Task steps review · 5 steps · my-app"]);
 
   // A View to look at says the eye's word and the View's name (status-model.md, A View to look at).
   await act(async () => receiveAgentNotice({ notices: [{ tag: "node|w1:p1", device_id: "node", pane_id: "w1:p1", title: "Add a dark mode switch", state: "needs_you", status_code: "look", detail: "report.html", place: "my-app" }], clear: [] }));
@@ -151,7 +151,7 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
     useShellStore.setState({ rest: { ui_state: { desktop_notifications: true }, navigator: { devices: [], peers: [{ key: "ab12", device_id: "device-mini", name: "Mac mini" }] } } } as never);
   });
   await act(async () => receiveAgentNotice({ notices: [{ tag: "peer:ab12|node|w1:p1", peer: "ab12", device_id: "node", pane_id: "w1:p1", title: "Fix login", state: "needs_you", status_code: "question", detail: "Which branch?", place: "shop-api" }], clear: [] }));
-  expect(shown.at(-1)).toEqual(["agent:peer:ab12|node|w1:p1", "Fix login", "Question · Which branch? · shop-api", { unlessFocused: true }]);
+  expect(shown.at(-1)).toEqual(["agent:peer:ab12|node|w1:p1", "Fix login", "To check · Which branch? · shop-api", { unlessFocused: true }]);
   const before = events.length;
   await act(async () => open?.("agent:peer:ab12|node|w1:p1"));
   expect(events.slice(before)).toEqual([{ schema_version: 2, kind: "focus_device", payload: { device_id: "device-mini" } }]);
