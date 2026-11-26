@@ -260,9 +260,10 @@ impl Ledger {
         })
     }
 
-    /// The pending letters no bell has named to their recipient yet: none of
-    /// their own was typed, no prompt hook was handed them, and no bell was
-    /// typed into the same recipient's pane since they were queued. A bell at
+    /// The pending letters a bell is still to name to their recipient: one
+    /// rings for them (`Letter::rings`), none of their own was typed, no
+    /// prompt hook was handed them, and no bell was typed into the same
+    /// recipient's pane since they were queued. A bell at
     /// rest names every letter waiting for its recipient (` · and N more`,
     /// `doorbell::Hold::Announced`), and the prompt hook that takes it is
     /// handed them all as one bundle; a kind with no prompt hook, or whose
@@ -290,6 +291,7 @@ impl Ledger {
         }
         self.letters.iter().filter(move |letter| {
             letter.state == State::Pending
+                && letter.rings()
                 && !letter.bell_sent
                 && !letter.handed
                 && last_bell
@@ -300,6 +302,17 @@ impl Ledger {
 }
 
 impl Letter {
+    /// Whether a bell is rung for this letter while its recipient is awake,
+    /// at rest or at work: every kind but `progress`, which is news and
+    /// never the reason a turn starts, `--now` or not. A progress letter
+    /// rides whatever next hands its recipient's letters over: another
+    /// letter's bell, a tool gap, `hide inbox`. A `--force` letter keeps the
+    /// bell its sender asked for. Asleep, fewer still wake the agent
+    /// ([`Letter::wakes_a_sleeper`]).
+    pub(crate) fn rings(&self) -> bool {
+        self.forced || self.kind != "progress"
+    }
+
     /// Whether this letter wakes its recipient when Hide put it to sleep:
     /// one that asks something of it (`request`, `block`), or the
     /// operator's Done on its person's turn, which it is to act on now

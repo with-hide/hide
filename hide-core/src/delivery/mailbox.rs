@@ -910,10 +910,12 @@ fn rang(ledger: &Ledger, actor: &Actor, digest: &str) -> bool {
 }
 
 /// Whether a bell is still coming for the letter. A letter whose three bells
-/// are spent, or whose recipient is never belled, stays pending for
-/// `hide inbox`; the operator's own prompt promises it nothing.
+/// are spent, whose recipient is never belled, or that no bell rings for
+/// (`Letter::rings`) stays pending for the next handover or `hide inbox`;
+/// the operator's own prompt promises it nothing.
 fn bell_pending(letter: &Letter) -> bool {
     letter.state == State::Pending
+        && letter.rings()
         && !letter.handed
         && letter.attempts() < super::ledger::BELLS
         && super::doorbell::bell_target(&letter.recipient.kind)
@@ -2510,6 +2512,36 @@ mod tests {
         ledger.letters[2].bell_attempts = Some(3);
         let operator = pull_for(&mut ledger, &recipient, "operator");
         assert!(operator.ids.is_empty() && operator.context.is_empty());
+    }
+
+    /// No bell is coming for a progress letter (`Letter::rings`), so the
+    /// operator's prompt leaves it out of its count; the bell rung for
+    /// another letter hands it over in its bundle.
+    #[test]
+    fn a_progress_letter_is_left_out_of_the_count_and_rides_the_next_bell() {
+        let mut ledger = Ledger::default();
+        let (worker, conductor) = (actor("worker"), actor("conductor"));
+        let progress = letters_from(&mut ledger, &worker, &conductor, &["progress"], 1);
+        let operator = pull_for(&mut ledger, &conductor, "operator");
+        assert!(
+            operator.ids.is_empty() && operator.context.is_empty(),
+            "{operator:?}"
+        );
+        let report = letters_from(&mut ledger, &worker, &conductor, &["report"], 2);
+        let operator = pull_for(&mut ledger, &conductor, "operator");
+        assert_eq!(
+            operator.context.trim(),
+            "Hide 편지 1통 대기 중, 이 턴이 끝난 뒤 전달"
+        );
+        ring(&mut ledger, 1, LINE);
+        let bell = pull_for(&mut ledger, &conductor, &format!("{LINE}\n"));
+        let mut taken = bell.ids.clone();
+        taken.sort();
+        let mut sent = [progress, report].concat();
+        sent.sort();
+        assert_eq!(taken, sent);
+        assert!(bell.context.contains("body of worker at 1"), "{bell:?}");
+        assert!(bell.context.contains("body of worker at 2"), "{bell:?}");
     }
 
     #[test]

@@ -104,6 +104,9 @@ pub(crate) enum Hold {
     /// an empty composer: no declaration for the kind, none where it is
     /// declared, as under a menu or a dialog, or a failed or cut read.
     ComposerUnread,
+    /// A `progress` letter, which no bell rings for (`Letter::rings`): it
+    /// rides the next handover of its recipient's letters.
+    Rides,
 }
 
 impl Hold {
@@ -143,6 +146,7 @@ impl Hold {
             Self::Letter => "letter_changed",
             Self::Exhausted => "attempts_exhausted",
             Self::ComposerUnread => "composer_unconfirmed",
+            Self::Rides => "rides_next_handover",
         }
     }
 }
@@ -702,6 +706,11 @@ impl Doorbell {
                 continue;
             }
             let pane = &letter.recipient.pane_id;
+            // Counted among the letters another bell names, never rung.
+            if !letter.rings() {
+                self.hold(&letter.id, pane, Hold::Rides);
+                continue;
+            }
             let verdict = owner
                 .lock()
                 .map(|guard| {
@@ -2592,13 +2601,18 @@ mod tests {
 
         /// Another letter from the same sender to the same pane, pending.
         fn send_another(&self, intent: &str, now: bool) -> String {
-            self.send_with(intent, now, false)
+            self.send_with(intent, "report", now, false)
+        }
+
+        /// Another letter of `kind` from the same sender to the same pane.
+        fn send_kind(&self, intent: &str, kind: &str, now: bool, force: bool) -> String {
+            self.send_with(intent, kind, now, force)
         }
 
         /// Another letter as `--force` records it, its composer already read
         /// empty when it was sent.
         fn send_forced(&self, intent: &str) -> String {
-            self.send_with(intent, false, true)
+            self.send_with(intent, "report", false, true)
         }
 
         fn letter_forced(&self, id: &str) -> bool {
@@ -2612,7 +2626,7 @@ mod tests {
                 .forced
         }
 
-        fn send_with(&self, intent: &str, now: bool, force: bool) -> String {
+        fn send_with(&self, intent: &str, kind: &str, now: bool, force: bool) -> String {
             use crate::delivery::Command;
             use crate::runtime::delivery::tests::authority;
             let (sender, recipient) = {
@@ -2634,7 +2648,7 @@ mod tests {
                             target: "recipient".into(),
                             intent: intent.into(),
                             body: "private".into(),
-                            kind: "report".into(),
+                            kind: kind.into(),
                             now,
                             force,
                         }),
@@ -5646,5 +5660,91 @@ mod tests {
         let again = typed(&bell);
         assert_eq!(again.len(), 2, "the recurrence rings: {again:?}");
         assert!(again[1].contains("child blocked again"), "{again:?}");
+    }
+
+    /// A `progress` letter is news, never the reason a turn starts
+    /// (`Letter::rings`): alone it is rung neither at rest nor mid-turn, past
+    /// the mid-turn wait or sent with `--now`, and its hold is none the
+    /// operator acts on. A `--force` one keeps the bell its sender asked for.
+    #[test]
+    fn a_progress_letter_alone_is_never_rung_at_rest_or_mid_turn_even_with_now() {
+        let bell = Bell::start(json!({}));
+        // The fixture's report is answered: only progress letters wait.
+        bell.ack(&bell.letter);
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        let progress = bell.send_kind("plan", "progress", false, false);
+        let urgent = bell.send_kind("pushed", "progress", true, false);
+        bell.pass(&mut doorbell, start);
+        assert!(bell.typed().is_empty(), "at rest");
+        for id in [&progress, &urgent] {
+            assert_eq!(doorbell.held.get(id), Some(&Hold::Rides), "{id}");
+        }
+        assert_eq!(crate::delivery::held::held_for(Hold::Rides), None);
+        bell.working_since(start - MID_TURN_WAIT_MS);
+        bell.pass(&mut doorbell, start + 1_000);
+        assert!(bell.typed().is_empty(), "mid-turn, past the wait and --now");
+        let forced = bell.send_kind("forced", "progress", false, true);
+        bell.pass(&mut doorbell, start + 2_000);
+        assert_eq!(bell.typed().len(), 1, "the --force letter is typed");
+        assert!(bell.letter_forced(&forced));
+    }
+
+    /// A progress letter rides the next bell rung for another letter to its
+    /// recipient: the line counts it among the letters it names.
+    #[test]
+    fn the_next_bell_for_another_letter_names_a_waiting_progress_letter() {
+        let bell = Bell::start(json!({}));
+        bell.ack(&bell.letter);
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        bell.send_kind("plan", "progress", false, false);
+        bell.pass(&mut doorbell, start);
+        assert!(bell.typed().is_empty());
+        bell.send_kind("done", "report", false, false);
+        bell.pass(&mut doorbell, start + 1_000);
+        let typed = bell.typed();
+        assert_eq!(typed.len(), 1, "{typed:?}");
+        assert!(typed[0].to_string().contains("and 1 more"), "{typed:?}");
+    }
+
+    /// A status cell rings with the `progress` word on its line, which is no
+    /// progress letter: it still rings at rest while one waits beside it,
+    /// and its turn takes no letter.
+    #[test]
+    fn a_status_cell_still_rings_at_rest_beside_a_waiting_progress_letter() {
+        use crate::runtime::delivery::tests::observed;
+        let bell = Bell::start(json!({}));
+        bell.runtime
+            .lock()
+            .unwrap()
+            .install_delivery_client(bell.client.clone());
+        bell.ack(&bell.letter);
+        let progress = bell.send_kind("plan", "progress", false, false);
+        let recipient = observed(&bell.runtime.lock().unwrap(), "recipient").actor;
+        bell.runtime
+            .lock()
+            .unwrap()
+            .post_status(
+                &recipient,
+                "child:w1:p9".into(),
+                "CI failed".into(),
+                false,
+                1,
+            )
+            .unwrap();
+        let mut doorbell = Doorbell::default();
+        bell.pass(&mut doorbell, now());
+        let typed = bell.typed();
+        assert_eq!(typed.len(), 1, "{typed:?}");
+        assert!(typed[0].to_string().contains("CI failed"), "{typed:?}");
+        let guard = bell.runtime.lock().unwrap();
+        let ledger = guard.delivery_state().unwrap();
+        let letter = ledger
+            .letters
+            .iter()
+            .find(|letter| letter.id == progress)
+            .unwrap();
+        assert!(letter.state == State::Pending && !letter.handed && !letter.bell_sent);
     }
 }

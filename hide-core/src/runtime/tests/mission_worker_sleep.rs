@@ -742,6 +742,16 @@ fn only_a_pending_letter_yet_to_reach_the_conversation_holds_its_recipient() {
             "{state:?}, rung {rung}, handed {handed}"
         );
     }
+    // No bell is coming for a progress letter (`Letter::rings`): it holds
+    // no one awake, and asleep it waits for the next wake.
+    edit_letter(&mut runtime, &id, |letter| {
+        letter.state = State::Pending;
+        letter.bell_sent = false;
+        letter.handed = false;
+        letter.kind = "progress".into();
+    });
+    let waits = crate::agent_sleep::LetterWaits::of(&runtime.delivery_state().unwrap());
+    assert!(!waits.holds(&worker));
 }
 
 /// A bell at rest names every letter waiting for its recipient (` · and 1
