@@ -23,10 +23,18 @@ enum State {
     StringEscape,
 }
 
+/// The characters a string sequence (OSC, DCS, SOS, PM, APC) may hold
+/// before its terminator: one that never ends stops being read as a
+/// sequence here, so it costs the reply at most this much and what follows
+/// shows (a link's address, the longest a terminal sends, fits well under).
+const MAX_STRING_CHARS: usize = 4096;
+
 /// Takes escape sequences out of a stream of text, chunk by chunk.
 #[derive(Debug, Default)]
 pub struct Escapes {
     state: State,
+    /// The characters the open string sequence has held.
+    string: usize,
 }
 
 impl Escapes {
@@ -35,6 +43,14 @@ impl Escapes {
     pub fn strip(&mut self, text: &str) -> String {
         let mut plain = String::with_capacity(text.len());
         for ch in text.chars() {
+            if matches!(self.state, State::String | State::StringEscape) {
+                self.string += 1;
+                if self.string > MAX_STRING_CHARS {
+                    self.state = State::Text;
+                }
+            } else {
+                self.string = 0;
+            }
             self.state = match (self.state, ch) {
                 (_, '\x1b') if self.state != State::String => State::Escape,
                 (State::Text, ch) => {
@@ -84,6 +100,16 @@ mod tests {
             "░░ done"
         );
         assert_eq!(strip(&["a\x1b]0;ti", "tle\x1b", "\\b"]), "ab");
+    }
+
+    /// letter-48549: an OSC that never ends costs the reply at most
+    /// `MAX_STRING_CHARS`, and the words after it show.
+    #[test]
+    fn a_string_that_never_ends_stops_at_its_cap() {
+        let lost = "x".repeat(super::MAX_STRING_CHARS);
+        assert_eq!(strip(&["a\x1b]", &lost, "the rest"]), "athe rest");
+        // A string that ends within the cap is still taken out whole.
+        assert_eq!(strip(&["a\x1b]", &lost[1..], "\x07b"]), "ab");
     }
 
     #[test]
