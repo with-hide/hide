@@ -129,3 +129,52 @@ it("leaves a tap and a scrolling finger to the target, with no menu", async () =
   });
   expect(document.querySelector('[role="menu"]')).toBeNull();
 });
+
+/** A pointer event on `target` from a mouse, or from a finger when `pointerType` is "touch". */
+function pointer(type: "pointerdown" | "pointerup", target: Element, pointerType = "mouse") {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 20, clientY: 20 });
+  Object.defineProperty(event, "pointerType", { value: pointerType });
+  target.dispatchEvent(event);
+}
+
+async function renderChoosable(onSelect: () => void) {
+  await act(async () => {
+    root.render(
+      <ContextMenu>
+        <ContextMenuTrigger><button>page.html</button></ContextMenuTrigger>
+        <ContextMenuContent><ContextMenuItem onSelect={onSelect}>Open to the side</ContextMenuItem></ContextMenuContent>
+      </ContextMenu>,
+    );
+  });
+  return document.querySelector("button")!;
+}
+
+const item = () => document.querySelector<HTMLElement>('[role="menuitem"]')!;
+
+it("leaves the menu open and chooses nothing when the right button that opened it is released over an item", async () => {
+  // macOS sends `contextmenu` on the press, so the menu opens under the pointer and the release lands on its first item.
+  const onSelect = vi.fn();
+  const row = await renderChoosable(onSelect);
+  await act(async () => {
+    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }));
+    await vi.runOnlyPendingTimersAsync();
+  });
+  await act(async () => { pointer("pointerup", item()); await vi.runOnlyPendingTimersAsync(); });
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(document.querySelector('[role="menu"]')).not.toBeNull();
+  // The next click on the item chooses it.
+  await act(async () => { pointer("pointerdown", item()); pointer("pointerup", item()); item().click(); await vi.runOnlyPendingTimersAsync(); });
+  expect(onSelect).toHaveBeenCalledTimes(1);
+});
+
+it("chooses nothing when the finger whose long press opened the menu lifts over an item", async () => {
+  const onSelect = vi.fn();
+  const row = await renderChoosable(onSelect);
+  await act(async () => {
+    touch("pointerdown", row);
+    await vi.advanceTimersByTimeAsync(500);
+  });
+  await act(async () => { pointer("pointerup", item(), "touch"); await vi.runOnlyPendingTimersAsync(); });
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(document.querySelector('[role="menu"]')).not.toBeNull();
+});
