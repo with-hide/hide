@@ -107,6 +107,10 @@ function DeskMissionMention({ mention }: { mention: DeskMissionMention }) {
   );
 }
 
+/** A reply's defaults, one array each, so a live answer that names nothing keeps the same chips while its words stream. */
+const NO_REPLY_MENTIONS: readonly DeskMention[] = [];
+const NO_REPLY_MISSIONS: readonly DeskMissionMention[] = [];
+
 /**
  * Desk's answer as plain Markdown (D-75), where a session it names is that
  * session's chip and a mission its title, with its mission chip in a row behind the paragraph, each pressed to
@@ -116,7 +120,7 @@ function DeskMissionMention({ mention }: { mention: DeskMissionMention }) {
  * session and mission said by its name, on hover and on every code block
  * (Doop E2).
  */
-export function DeskReply({ text, stopped = false, live = false, mentions = [], missions = [], onMention, onMission, onFile, copy }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; missions?: readonly DeskMissionMention[]; onMention?: (mention: DeskMention) => void; onMission?: (missionId: string) => void; /** A file path the answer names, pressed (feedback 2 frame M [2]); without it paths stay words. */ onFile?: (file: FoundAnswerPath) => void; copy?: CopyText }) {
+export function DeskReply({ text, stopped = false, live = false, mentions = NO_REPLY_MENTIONS, missions = NO_REPLY_MISSIONS, onMention, onMission, onFile, copy }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; missions?: readonly DeskMissionMention[]; onMention?: (mention: DeskMention) => void; onMission?: (missionId: string) => void; /** A file path the answer names, pressed (feedback 2 frame M [2]); without it paths stay words. */ onFile?: (file: FoundAnswerPath) => void; copy?: CopyText }) {
   const { t } = useInterfaceTranslation();
   // Each chip is drawn in a root of its own inside the Markdown, so the screen's chip source is bridged to it.
   const bridge = useSessionChipBridge();

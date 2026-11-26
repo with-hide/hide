@@ -2,10 +2,17 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { DeskReply } from "./components/desk/desk-chat";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { markdownLive } from "./editor/markdownLivePlugin";
 import { MarkdownText, type MarkdownChip } from "./MarkdownText";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
+// The Live plan is built where the text's parts are swapped in; counting its builds counts the swaps.
+vi.mock("./editor/markdownLivePlugin", async (real) => {
+  const plugin = await real<typeof import("./editor/markdownLivePlugin")>();
+  return { ...plugin, markdownLive: vi.fn(plugin.markdownLive) };
+});
 
 let mounted: ReturnType<typeof createRoot>[] = [];
 
@@ -39,9 +46,14 @@ it("keeps every part drawn before a streamed update as the same node, and draws 
   const root = createRoot(host);
   mounted.push(root);
   let text = "";
+  let parts = chips;
+  const draw = async () => {
+    await act(async () => root.render(<TooltipProvider><MarkdownText text={text} size="chat" chips={parts} copyCode={copy} /></TooltipProvider>));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+  };
   const stream = async (step: string) => {
     text += step;
-    await act(async () => root.render(<TooltipProvider><MarkdownText text={text} size="chat" chips={chips} copyCode={copy} /></TooltipProvider>));
+    await act(async () => root.render(<TooltipProvider><MarkdownText text={text} size="chat" chips={parts} copyCode={copy} /></TooltipProvider>));
     // A part the editor let go of is unmounted a microtask later; give that time to show.
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
   };
@@ -71,4 +83,38 @@ it("keeps every part drawn before a streamed update as the same node, and draws 
   await act(async () => copyButton!.click());
   // A fence not closed yet runs to the end of the text, its last line break included.
   expect(copies.at(-1)?.trimEnd()).toBe("const a = 1;\nconst b = 2;");
+
+  // A word changed in the middle, then a line taken off the end, are edits of the same drawing too.
+  text = text.replace("| Desk 2차 | running |", "| Desk 2차 | done |");
+  await draw();
+  expect(table()).toBe(drawnTable);
+  await vi.waitFor(() => expect(drawnTable?.textContent).toContain("done"));
+  text = text.replace("const b = 2;\n", "");
+  await draw();
+  expect(host.querySelector("[data-markdown-chip]")).toBe(chip);
+  expect(host.querySelector("[data-copy-words='code block']")).toBe(copyButton);
+  await act(async () => copyButton!.click());
+  expect(copies.at(-1)?.trimEnd()).toBe("const a = 1;");
+
+  // The same session drawn anew (its chip's part changed) redraws inside the chip already there.
+  parts = [{ token: chips[0]!.token, node: <b data-test-chip="journey">journey · 작업 중</b> }];
+  await draw();
+  expect(host.querySelector("[data-markdown-chip]")).toBe(chip);
+  expect(chip?.textContent).toBe("journey · 작업 중");
+});
+
+it("swaps no part of Desk's answer while it streams, though each word draws the reply again", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted.push(root);
+  const built = vi.mocked(markdownLive).mock.calls.length;
+  let text = "";
+  for (const step of ["## 미션\n\n| 미션 | 상태 |\n| --- | --- |\n", "| Desk 2차 | running |\n", "\n진행 중입니다.", " 곧 끝납니다."]) {
+    text += step;
+    await act(async () => root.render(<TooltipProvider><DeskReply text={text} live /></TooltipProvider>));
+  }
+  await vi.waitFor(() => expect(host.querySelector(".cm-md-table")?.textContent).toContain("Desk 2차"));
+  expect(host.textContent).toContain("곧 끝납니다.");
+  expect(vi.mocked(markdownLive).mock.calls.length - built).toBe(1);
 });

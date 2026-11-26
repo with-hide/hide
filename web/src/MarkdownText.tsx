@@ -270,6 +270,16 @@ function markDecorations(mark: MarkdownMark | null, length: number): Extension {
   return field;
 }
 
+/** Whether two chip lists draw the same parts: a caller that builds an equal list again (a new empty one each render) swaps nothing. */
+function sameChips(a: readonly MarkdownChip[], b: readonly MarkdownChip[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((chip, at) => {
+    const other = b[at]!;
+    return chip.token === other.token && chip.node === other.node && chip.after === other.after && chip.at?.join(" ") === other.at?.join(" ");
+  });
+}
+
 /** The one edit that turns `from` into `to`: the stretch between their common start and their common end. */
 function changeBetween(from: string, to: string): { from: number; to: number; insert: string } {
   const most = Math.min(from.length, to.length);
@@ -289,8 +299,8 @@ type Drawn = { view: EditorView; parts: Compartment; marked: Compartment; text: 
 
 /**
  * `size="chat"` sets the text at Desk's conversation size; `chips` draws
- * tokens of the text as parts (keep the array stable between renders, or every
- * part is looked up again); `copyCode` puts `복사` in every code block's head
+ * tokens of the text as parts (a list with the same chips, even a new array,
+ * swaps nothing; a chip with a new node redraws in place); `copyCode` puts `복사` in every code block's head
  * row (Doop E2, N 1 나), a block in a quote or a list included, always in
  * view; `mark` lights a stretch of the text, by offsets into it. The text can
  * be selected and copied as a page's text is. A new `text` is written into the
@@ -333,12 +343,13 @@ export function MarkdownText({ text, size = "body", chips = NO_CHIPS, copyCode, 
     const now = drawn.current;
     if (!now) return;
     const changes = now.text === text ? undefined : changeBetween(now.text, text);
+    const kept = sameChips(now.chips, chips) ? now.chips : chips;
     const effects = [];
-    if (now.chips !== chips || now.copyCode !== copyCode) effects.push(now.parts.reconfigure(partsOf(chips, copyCode)));
+    if (kept !== now.chips || now.copyCode !== copyCode) effects.push(now.parts.reconfigure(partsOf(kept, copyCode)));
     if (now.mark !== mark) effects.push(now.marked.reconfigure(markDecorations(mark, text.length)));
     if (!changes && !effects.length) return;
     now.view.dispatch({ changes, effects });
-    drawn.current = { ...now, text, chips, copyCode, mark };
+    drawn.current = { ...now, text, chips: kept, copyCode, mark };
   }, [text, chips, copyCode, mark]);
   return <div ref={host} className="min-w-0" data-markdown-text="true" />;
 }
