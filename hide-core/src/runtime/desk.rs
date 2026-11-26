@@ -95,13 +95,16 @@ pub(super) struct Desk {
     /// session has not opened while hided runs. Never stored: the next
     /// session sends its own (letter-48308).
     commands: BTreeMap<AdapterId, Vec<hide_desk::commands::Command>>,
-    /// The running session that opened new on a command and has not been
-    /// told Desk's guide yet, which goes with its first ordinary message
+    /// The session that opened new on a command and has not been told
+    /// Desk's guide yet, which goes with its first ordinary message
     /// (`hide_desk::Guide`). It joins `stored.sessions` only once that
-    /// message's turn ended done (`desk_session_told`), so a session loaded
-    /// again is always one that was told: when the process ends first (its
-    /// end, a failed open, a switch, a new conversation, Desk off), the next
-    /// message opens a new session that carries the conversation.
+    /// message's turn ended done in an open session (`desk_session_told`),
+    /// so a session loaded again is always one that was told. Each open
+    /// sets it afresh, so one left by a process that ended first (its end,
+    /// a failed open, a switch, a new conversation, Desk off) is never
+    /// stored: the next message opens a new session that carries the
+    /// conversation. It lives in memory only, since a session never told
+    /// is never loaded again.
     untold: Option<(AdapterId, String)>,
     /// The queued starts the queue handed to be run, in order; tests answer
     /// them themselves.
@@ -1016,7 +1019,6 @@ impl Runtime {
     /// each waiting card closes as a refusal.
     fn end_desk_process(&mut self) {
         self.order(Order::End);
-        self.desk.untold = None;
         self.close_approvals();
         self.forget_refusal();
         self.finish_turn(DeskReplyState::Stopped);
@@ -1066,7 +1068,6 @@ impl Runtime {
                 .stored
                 .sessions
                 .retain(|(adapter, _)| *adapter != agent);
-            self.desk.untold = None;
             self.desk.stored.selection = crate::model::DeskSelection {
                 agent: Some(agent),
                 model: payload.model,
@@ -1389,7 +1390,6 @@ impl Runtime {
                 // the operator sends again or restarts. A turn started since,
                 // by `다시 시작` or a new conversation, is not this one.
                 self.desk.held = true;
-                self.desk.untold = None;
                 if turn.is_some() && self.desk_turn_tag() == turn {
                     self.desk_requeue_untaken();
                     self.desk_close_turn(TurnOutcome::Cancelled);
@@ -1644,7 +1644,6 @@ impl Runtime {
                 }
                 self.close_approvals();
                 self.forget_refusal();
-                self.desk.untold = None;
                 if unexpected {
                     self.desk.host = Host {
                         state: Some(DeskHostState::Stopped),
