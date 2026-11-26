@@ -19807,9 +19807,12 @@ fn a_checkers_record_ends_its_parents_watch_and_sleeps_it_until_the_next_round()
     let actor = |runtime: &Runtime, pane: &str| runtime.delivery_observations[pane].actor.clone();
     let conductor = actor(&runtime, "sender");
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    // Past the three registrations, so the store keeps what it is handed.
+    ledger.next_id = 4;
     for pane in ["recipient", "reviewer"] {
         crate::delivery::watch::start(&mut ledger, &conductor, &actor(&runtime, pane), 1).unwrap();
     }
+    ledger.validate().unwrap();
     runtime.delivery_ledger = Ok(Arc::new(ledger));
     let marks = |runtime: &Runtime| {
         runtime

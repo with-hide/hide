@@ -2985,19 +2985,17 @@ impl MissionCommand {
             }
             Self::Show { mission, node } => id_ok(mission) && id_ok(node),
             Self::Node { mission, node, .. } => id_ok(mission) && valid_key(node),
+            // The evidence is `evidence_text`'s to judge, with its way on.
             Self::Record {
                 mission,
                 node,
                 line,
-                evidence,
                 commit,
                 ..
             } => {
-                // A blank line is the core's own refusal, with its way on.
                 id_ok(mission)
                     && valid_key(node)
                     && valid_key(line)
-                    && (evidence.trim().is_empty() || valid_text(evidence, LINE_LIMIT))
                     && commit.as_deref().is_none_or(valid_commit)
             }
             Self::Skip {
@@ -4271,14 +4269,20 @@ pub(crate) fn summary_line(summary: Option<String>) -> Result<Option<String>, St
 }
 
 /// A record's `--evidence`, trimmed: what its result rests on, which for a
-/// checker is every finding, graded, since its record is its answer.
-/// Refused empty (`mission_evidence_missing`) or past a letter body's cap
-/// (`delivery::BODY_LIMIT`, `mission_evidence_too_long`), so the book,
-/// which keeps every line's and every checker's last answer, stays bounded.
+/// checker is every finding, graded, since its record is its answer, so it
+/// may run to several lines. Refused empty (`mission_evidence_missing`),
+/// with a control character other than a line break or a tab
+/// (`mission_text_invalid`), or past a letter body's cap
+/// (`delivery::BODY_LIMIT`, `mission_evidence_too_long`, where it was one
+/// line of `LINE_LIMIT`), so the book, which keeps every line's and every
+/// checker's last answer, stays bounded.
 pub(crate) fn evidence_text(evidence: &str) -> Result<String, String> {
     let evidence = evidence.trim();
     if evidence.is_empty() {
         return Err("mission_evidence_missing".into());
+    }
+    if !valid_text(evidence, usize::MAX) {
+        return Err("mission_text_invalid".into());
     }
     if evidence.len() > crate::delivery::BODY_LIMIT {
         return Err(crate::coordination::refusal(
