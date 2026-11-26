@@ -1,10 +1,14 @@
-// An item that is its own Needs You line, with no agent row to carry what
-// waits on the operator: a mission's (PRD mission-node-simple D-19, B14), an
-// automation stopped for a person to fix (PRD automations D-12, B23), or a
-// once automation whose run ended and waits to be opened (mission-104 S-4). The
-// device's scope names both and counts them in its Needs You number, so each
-// list that draws the number draws these rows with its agents.
+// An item that is its own line of a list, with no agent row to carry it.
+// In Needs You it is what waits on the operator: a mission's (PRD
+// mission-node-simple D-19, B14), an automation stopped for a person to fix
+// (PRD automations D-12, B23), or a once automation whose run ended and waits
+// to be opened (mission-104 S-4). The device's scope names those and counts
+// them in its Needs You number, so each list that draws the number draws
+// these rows with its agents. In the 태스크 list's 쉬는 중 it is an
+// automation's run the operator looked at after it came to Needs You
+// (`automation_rest`), which the list reads from the automation's records.
 
+import { isOnce } from "./automationWords";
 import type { MissionAsk } from "./missions";
 import type { Automation, AutomationPauseReason, AutomationRecord, AutomationsSection, SnapshotRest } from "./snapshot";
 
@@ -14,7 +18,7 @@ export type AutomationAsk = { automation: Automation; reason: AutomationPauseRea
 /** A once automation whose run ended (S-4): the run (`look_run`), with the agent's answer, when it ended, and the machine that runs it. */
 export type AutomationLook = { automation: Automation; run: Extract<AutomationRecord, { kind: "run" }> | null; since_unix_ms: number; device_id: string };
 
-export type OwnAsk = { kind: "mission"; ask: MissionAsk } | { kind: "automation"; ask: AutomationAsk } | { kind: "automation_look"; ask: AutomationLook };
+export type OwnAsk = { kind: "mission"; ask: MissionAsk } | { kind: "automation"; ask: AutomationAsk } | { kind: "automation_look"; ask: AutomationLook } | { kind: "automation_rest"; ask: AutomationLook };
 
 export function missionOwnAsks(asks: readonly MissionAsk[]): OwnAsk[] {
   return asks.map((ask) => ({ kind: "mission", ask }));
@@ -73,6 +77,22 @@ export function automationLooks(section: AutomationsSection | null, ids: readonl
     if (!automation || automation.look_run === undefined) return [];
     const run = automation.records.find((record): record is Extract<AutomationRecord, { kind: "run" }> => record.kind === "run" && record.number === automation.look_run) ?? null;
     return [{ automation, run, since_unix_ms: run ? (run.ended_at_unix_ms ?? run.started_at_unix_ms) : 0, device_id: deviceId }];
+  });
+}
+
+/**
+ * Each automation's last run looked at after it came to Needs You, resting in
+ * the 태스크 list's 쉬는 중: its newest finished run that is seen and that came
+ * there, a once automation's by its end and another's by what its agent opened
+ * (`has_results`, B15). A newer one looked at takes its place; the older ones
+ * stay in the automation's records. A run that only asked and opened nothing
+ * leaves no mark in its record, so it does not rest here.
+ */
+export function automationRests(section: AutomationsSection | null, deviceId: string): OwnAsk[] {
+  if (!section) return [];
+  return section.items.flatMap((automation): OwnAsk[] => {
+    const run = automation.records.find((record): record is Extract<AutomationRecord, { kind: "run" }> => record.kind === "run" && record.seen && record.ended_at_unix_ms !== undefined && (isOnce(automation) || record.has_results === true));
+    return run ? [{ kind: "automation_rest", ask: { automation, run, since_unix_ms: run.ended_at_unix_ms!, device_id: deviceId } }] : [];
   });
 }
 

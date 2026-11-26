@@ -144,3 +144,18 @@ it("offers no Apply for an agent's server Hide cannot read", async () => {
     await unmount();
   }
 });
+
+it("lists the skills Hide installs, each with its mark, what it is for and the help it points at, and says they cannot be removed (PRD hide-task-skill-merge B8)", async () => {
+  const { container, unmount } = await render(report([]));
+  try {
+    const q = (selector: string) => container.querySelector(selector);
+    expect([...container.querySelectorAll("[data-agents-skill]")].map((row) => row.getAttribute("data-agents-skill"))).toEqual(["hide", "hide-mission", "hide-issue"]);
+    expect(q('[data-agents-skill="hide-mission"]')?.textContent).toBe("hide-missionLead agents in a mission; do small tasks directly · hide mission help");
+    expect(q('[data-agents-skill="hide-mission"] svg')?.getAttribute("class")).toContain("lucide-waypoints");
+    expect(q('[data-agents-skill="hide-issue"]')?.textContent).toBe("hide-issueReport a bug in Hide with its error and steps · gh issue create");
+    expect(q("[data-agents-skills]")?.textContent).toContain("They cannot be removed.");
+    expect(q("[data-agents-skills] button")).toBeNull();
+  } finally {
+    await unmount();
+  }
+});

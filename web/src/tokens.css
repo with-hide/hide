@@ -253,8 +253,7 @@
   --size-tree-ideal: 240px;
   --size-lane-panel-min: 360px;
   --size-lane-panel-ideal: 400px;
-  --size-desk-output-thumb: 88px;
-  --size-desk-shelf-thumb: 136px;
+  --size-desk-output-thumb: 150px;
   --size-desk-shelf-list: 336px;
   --size-desk-attach-thumb: 56px;
   --size-tool-rail: 48px;
@@ -376,6 +375,8 @@
   --size-mission-edge: 1.5px;
   --size-chip-bar: 44px;
   --size-chip-edge-bar: 2px;
+  --size-mission-card-min: 168px;
+  --size-mission-card-max: 280px;
   --size-flow-title: 196px;
   --size-flow-bar: 8px;
   --size-pr-number: 38px;

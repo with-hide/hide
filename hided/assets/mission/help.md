@@ -48,7 +48,7 @@ With `--json` it prints the record itself instead, `{"mission":…}`, or for one
 
 ## 1. Before the plan
 
-- Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates, the verification strength (`default_strength`) and whether a merged worktree is cleaned up (`clean_merged`).
+- Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the favorite models (`candidates`), the verification strength (`default_strength`) and whether a merged worktree is cleaned up (`clean_merged`).
   Each candidate is an agent item: `item` is its name, and `profile` the `--profile` value that starts it (`default` for the built-in); a candidate with `profile_gone` names a profile this machine no longer has and starts no worker.
 - Run `hide agent catalog` for the agent items here: each agent's built-in default and each of its profiles a start can take, `profile` being the `--profile` value that starts it (`default` for the built-in), with its models, its efforts and its account's weekly usage.
   A model is named as listed; `model_labels` gives the name the agent shows for it, and `models_from_default` says a profile's own list could not be read and its agent's is listed instead.
@@ -172,8 +172,8 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   On gitlab.com, a merge that deletes the lower branch (the merge request's own "delete source branch", on by default for a new project) points the merge request above at the lower one's target by itself; when the lower branch is kept, or deleted by hand after its merge, the merge request above stays open on that branch, so point it yourself (`glab mr update <n> --target-branch <destination>`).
   Name lines of one node only (`mission_dependency_stack_split`) and a line that node has when you plan, from `hide mission show <node>` (`mission_dependency_line_unknown`; `ci` is added later and cannot be named), and in `merge_order` name the one under it before the stacked node, or leave both out (`mission_merge_order_stack`).
   Hide wakes you when the line is met and the node can start, with its stack (`line_met`; a held node or one behind a start gate is told by its hold or gate), and once per line when it opens again after nodes waiting on it started, naming them (`line_reopened`: a fail, a reopened record, or a check whose commit the folder left): it stops nothing, so tell their workers what changed, hold them, or let them go on.
-- Choose workers from the candidates in Settings › Mission and nowhere else; with no candidates, choose among the agents installed on this machine.
-  A mission admits the candidates it was created with and the ones Settings › Mission holds now: one the operator adds or changes while it runs can be planned and started at once (run `hide mission settings` again to see it), and one removed there, like the old form of a changed one, still runs in this mission and is gone from the next.
+- Choose workers from the favorite models in Settings › Agents and nowhere else; with none, choose among the agents installed on this machine.
+  A mission admits the favorite models it was created with and the ones Settings › Agents holds now: one the operator adds or changes while it runs can be planned and started at once (run `hide mission settings` again to see it), and one removed there, like the old form of a changed one, still runs in this mission and is gone from the next.
   A mission created with no candidates keeps admitting any installed agent.
   Every worker that takes a model names one (`mission_model_missing` otherwise): the candidate's fixed model, your choice from the catalog, or the catalog's `cli_default_model`; an agent that takes no model (`takes_model: false`) keeps `model: null`.
   A candidate with a fixed effort keeps it; with none, choose the effort per node and mark it `effort_auto`.
@@ -242,7 +242,7 @@ Hide counts the review rounds against it: a node's rounds are the most heads any
   Settle it yourself, without asking the operator: have the worker fix the serious findings in the node; file each ordinary and minor one as a follow-up issue, name them on the pull request, and skip the line with `hide mission skip <node> review --reason "<issue numbers>"` (`verify` for a verification).
   A serious finding still open after the fix gets the checker's look again; the ordinary and minor ones never hold the node past the limit (`docs/CODE_REVIEW.md`, Writing a finding).
 - A minor finding that blocks nothing gets no push of its own: the worker gathers them and sends them with the next push the node needs.
-- Choose every checker from the worker candidates in Settings › Mission, as you choose workers; with no candidates, among the agents installed here.
+- Choose every checker from the favorite models in Settings › Agents, as you choose workers; with none, among the agents installed here.
   Prefer a different kind of agent than the node's worker (a codex checker for a claude worker, a claude one for a codex worker); when the candidates have none, any candidate.
 - A mission created before verification strength has none and shows the review and verify defaults it recorded (`checkers` in `hide mission show --json`) instead: follow them, or name a strength in the next plan.
 

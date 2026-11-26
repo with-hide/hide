@@ -347,7 +347,6 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("pane_reopen", Screen),
     ("pane_text_scale", Screen),
     ("pane_turn_row_mode_set", Screen),
-    ("pane_visit", Screen),
     ("path_copy", Screen),
     ("path_import", Screen),
     ("path_move", Screen),
@@ -357,6 +356,7 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     // What another machine told of its own work (D-50).
     ("peer_work", Daemon),
     ("phone_viewing", Daemon),
+    ("place_visit", Screen),
     ("pr_card_read", Screen),
     ("pr_delegate", Screen),
     ("pr_feedback_read", Screen),

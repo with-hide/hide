@@ -1,20 +1,18 @@
 import { ChevronRightIcon, GitBranchIcon, GlobeIcon, ImageIcon } from "lucide-react";
 import { pullLabel } from "../../codeHost";
 import type { ReactNode } from "react";
-import type { DeskAsk, DeskJob, DeskJobFailure, DeskMission, DeskOutput } from "../../desk";
+import type { DeskAsk, DeskJob, DeskJobFailure, DeskOutput } from "../../desk";
 import { AgentMark } from "../../AgentMark";
 import { fileIcon } from "../../fileIcons";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import type { MessageKey } from "../../i18n/catalogs";
-import { missionToneOf, type CellTone } from "../../missions";
+import type { CellTone } from "../../missions";
 
-/** Desk's job card carries a mission's counts, not its nodes' states, so its chip draws a running mission in the working colour; the sidebar's and the pane's chips read the stall. */
-const DESK_NOT_STALLED = false;
 import { PlanChipFace, planChipLook } from "../../PanePlanChip";
 import { DeviceChip } from "../device-chip";
 import { FileMark } from "../file-mark";
-import { MissionChipView } from "../mission-chip";
+import { DeskMissionChip } from "../mission-chip";
 import { PrMark } from "../pr-mark";
 import { StatusMark } from "../status-mark";
 import { Badge } from "../ui/badge";
@@ -207,20 +205,6 @@ export function OutputsChip({ outputs, selected = null, onOpen }: { outputs: rea
       {outputs.some((output) => !output.seen) ? <UnseenMark /> : null}
     </Button>
   );
-}
-
-const MISSION_WORDS: Record<DeskMission["status"], MessageKey> = {
-  planning: "mission.chip.plan",
-  running: "mission.chip",
-  merge_wait: "mission.chip.mergeWait",
-  done: "mission.chip.done",
-  cancelled: "mission.chip.cancelled",
-};
-
-/** A Conductor's `미션 k/n` chip (B34), drawn from the mission the job carries. */
-export function DeskMissionChip({ mission, onOpen }: { mission: DeskMission; onOpen: (missionId: string) => void }) {
-  const { t } = useInterfaceTranslation();
-  return <MissionChipView id={mission.id} title={mission.title} words={t(MISSION_WORDS[mission.status])} counts={mission.status === "running" ? `${mission.done}/${mission.total}` : null} tone={missionToneOf(mission.status, mission.turn !== null, DESK_NOT_STALLED)} turn={mission.turn} delay={mission.delay ? { line: mission.delay, until: mission.delay_until_unix_ms ?? null } : null} status={mission.status} onOpen={onOpen} />;
 }
 
 /** A job's plan as the pane head's plan chip draws it (B24): its cells, `n/m`, and `검토` while it waits for review. */

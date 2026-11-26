@@ -18,10 +18,14 @@ import { Button } from "../ui/button";
 import { Hint } from "../ui/tooltip";
 import { DeskComposer, SentAttachments } from "./desk-composer";
 import { sentWords, type ComposerTray } from "../../deskComposer";
-import { DeskMissionChip } from "./desk-job-card";
+import { DeskMissionChip } from "../mission-chip";
 import { WorkingLine } from "./working-line";
 import { SessionChip, useSessionChipBridge } from "./session-chip";
 import { DeskOutputs } from "./desk-outputs";
+import { answerPlace, type AnswerPlace, type FoundAnswerPath } from "../../answerPaths";
+import { useShellStore } from "../../store";
+import { useShallow } from "zustand/react/shallow";
+import { useFilePathChips } from "./file-path-chip";
 import { ThreadAsks } from "./thread-asks";
 
 const TOOL_ICON: Partial<Record<AcpToolKind, typeof WrenchIcon>> = {
@@ -131,10 +135,13 @@ export type ThreadPartActions = {
   onSession: (session: DeskSessionRef) => void;
   /** Puts a message's or a code block's words on the clipboard (Doop E2). */
   onCopy: CopyText;
+  /** A file path the session's words name, pressed (feedback 2 frame M [2]); without it paths stay words. */
+  onFile?: (file: FoundAnswerPath) => void;
 };
 
 /** How the thread draws the agent's words: the `@name`s as chips, and the clipboard its `복사` writes to; both kept stable between renders. */
-type Words = { chips: readonly MarkdownChip[]; copy: CopyText };
+/** `place` is where the session's relative paths are read (null when its file paths stay words), `file` what a file chip's press does. */
+type Words = { chips: readonly MarkdownChip[]; copy: CopyText; place: AnswerPlace | null; file: (file: FoundAnswerPath) => void };
 
 /**
  * A line a Hide part takes in the thread: an icon and its words, with no box.
@@ -210,7 +217,7 @@ function WorkLine({ line, words, actions }: { line: ThreadLine; words: Words; ac
     case "user":
       return null;
     case "agent":
-      return <AgentWords line={line} words={words} lit={false} />;
+      return <AgentWords line={line} words={words} lit={false} live={false} />;
     case "thought":
       return <p className="line-clamp-2 min-w-0 whitespace-pre-wrap text-caption text-muted-foreground" title={line.text} data-desk-thread-line="thought">{t("desk.thread.thought")} · {line.text}</p>;
     case "tool":
@@ -229,10 +236,13 @@ function WorkLine({ line, words, actions }: { line: ThreadLine; words: Words; ac
  * question Hide found was asked in, for a moment after the question line
  * brought it into view.
  */
-function AgentWords({ line, words, lit }: { line: Extract<ThreadLine, { kind: "agent" }>; words: Words; lit: boolean }) {
+function AgentWords({ line, words, lit, live }: { line: Extract<ThreadLine, { kind: "agent" }>; words: Words; lit: boolean; live: boolean }) {
+  // The file paths it names become chips once the turn has said them (feedback 2 frame M [2]).
+  const files = useFilePathChips(line.text, words.place, live, words.file);
+  const chips = useMemo(() => (files.length ? [...words.chips, ...files] : words.chips), [words.chips, files]);
   return (
     <CopyableMessage text={line.text} copy={words.copy} className={cn("-mx-xs rounded-md px-xs transition-colors", lit && "bg-open-ask/10 ring-1 ring-open-ask")} data-desk-thread-line="agent" data-desk-thread-message={line.id} data-desk-thread-lit={lit ? "true" : undefined}>
-      <MarkdownText text={line.text} size="chat" chips={words.chips} copyCode={words.copy} />
+      <MarkdownText text={line.text} size="chat" chips={chips} copyCode={words.copy} />
     </CopyableMessage>
   );
 }
@@ -304,13 +314,38 @@ function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; l
       ) : null}
       {open && turn.work.length ? (
         <ol className="ml-xxs flex min-w-0 flex-col gap-xs border-l border-border pl-sm" data-desk-thread-work={turn.work.length}>
-          {turn.work.map((line) => <li key={line.id} className="min-w-0"><WorkLine line={line} words={words} actions={actions} /></li>)}
+          {workRows(turn.work).map((row) =>
+            Array.isArray(row) ? (
+              <li key={row[0]!.id} className="min-w-0">
+                <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={row.map((line) => actions.outputOf(line.part.output))} onOpen={actions.onOutput} /></div>
+              </li>
+            ) : (
+              <li key={row.id} className="min-w-0"><WorkLine line={row} words={words} actions={actions} /></li>
+            ))}
         </ol>
       ) : null}
-      {turn.answer.map((line) => <AgentWords key={line.id} line={line} words={words} lit={lit === line.id} />)}
+      {turn.answer.map((line) => <AgentWords key={line.id} line={line} words={words} lit={lit === line.id} live={live} />)}
       {!open && turn.parts.length ? <FoldedParts parts={turn.parts} actions={actions} /> : null}
     </li>
   );
+}
+
+type ViewLine = Extract<ThreadLine, { kind: "hide" }> & { part: Extract<ThreadHidePart, { kind: "view" }> };
+
+/** A turn's work as its open fold draws it: views opened one after another share one row of tiles, as the folded turn's do (feedback 2, frame M 나). */
+function workRows(work: readonly ThreadLine[]): (ThreadLine | ViewLine[])[] {
+  const rows: (ThreadLine | ViewLine[])[] = [];
+  for (const line of work) {
+    const last = rows.at(-1);
+    if (!isViewLine(line)) rows.push(line);
+    else if (Array.isArray(last)) last.push(line);
+    else rows.push([line]);
+  }
+  return rows;
+}
+
+function isViewLine(line: ThreadLine): line is ViewLine {
+  return line.kind === "hide" && line.part.kind === "view";
 }
 
 /** What a folded turn keeps in view (B26): its lines that lead somewhere, then the outputs it opened as one row of pictures. */
@@ -370,16 +405,17 @@ const LIT_MS = 2_000;
 export const NO_MENTIONS: readonly DeskMention[] = [];
 const NO_ASKS: readonly AskLine[] = [];
 
-function useWords(mentions: readonly DeskMention[], onSession: ThreadPartActions["onSession"], onCopy: CopyText): Words {
-  const latest = useRef({ onSession, onCopy });
-  latest.current = { onSession, onCopy };
+function useWords(mentions: readonly DeskMention[], onSession: ThreadPartActions["onSession"], onCopy: CopyText, place: AnswerPlace | null, onFile: ThreadPartActions["onFile"]): Words {
+  const latest = useRef({ onSession, onCopy, onFile });
+  latest.current = { onSession, onCopy, onFile };
   const bridge = useSessionChipBridge();
   const chips = useMemo<MarkdownChip[]>(() => mentions.map((mention) => {
     const session: DeskSessionRef = { name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null };
     return { token: namedMention(mention), node: bridge(<SessionChip session={session} onPress={() => latest.current.onSession(session)} />) };
   }), [mentions, bridge]);
   const copy = useCallback<CopyText>((text, what) => latest.current.onCopy(text, what), []);
-  return useMemo(() => ({ chips, copy }), [chips, copy]);
+  const file = useCallback((found: FoundAnswerPath) => latest.current.onFile?.(found), []);
+  return useMemo(() => ({ chips, copy, place: onFile ? place : null, file }), [chips, copy, place, onFile, file]);
 }
 
 /**
@@ -411,7 +447,8 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   asks?: readonly AskLine[];
   /** Drawn in the input box's place, as a sleeping session's wake line is (B43). */
   foot?: ReactNode;
-  onTerminal: () => void;
+  /** The session's terminal, which a record it cannot read points to; none for a session whose pane is gone. */
+  onTerminal?: () => void;
   /** The conversation was scrolled to its top: the page before it can be read. */
   onReachTop?: () => void;
 } & ThreadPartActions) {
@@ -419,7 +456,9 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   const scroller = useThreadScroll(lines, onReachTop);
   const turns = useMemo(() => threadTurns(lines), [lines]);
   const running = job?.state === "working" || job?.state === "starting";
-  const words = useWords(mentions, actions.onSession, actions.onCopy);
+  // The session's own folder and machine, where its relative paths are read.
+  const place = useShellStore(useShallow((s) => (job?.pane_id ? answerPlace(s.rest, job.pane_id) : null)));
+  const words = useWords(mentions, actions.onSession, actions.onCopy, place, actions.onFile);
   // A press again on the same question lights it again for the whole time.
   const [lit, setLit] = useState<{ id: string; press: number } | null>(null);
   useEffect(() => {
@@ -447,7 +486,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
           <p role="alert" className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" data-desk-thread-failure={failure}>
             <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-warning" />
             <span className="min-w-0 text-subtle-foreground">{t(failure === "no_record" ? "desk.thread.readFailed.no_record" : "desk.thread.readFailed.refused")}</span>
-            <Button variant="text-link" size="inline" onClick={onTerminal}>{t("desk.thread.toTerminal")}</Button>
+            {onTerminal ? <Button variant="text-link" size="inline" onClick={onTerminal}>{t("desk.thread.toTerminal")}</Button> : null}
           </p>
         ) : reading ? (
           <p role="status" className="animate-pulse text-caption text-muted-foreground" data-desk-thread-reading="true">{t("desk.thread.reading")}</p>

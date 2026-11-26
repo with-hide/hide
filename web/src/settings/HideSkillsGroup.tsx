@@ -5,8 +5,9 @@ import { useInterfaceTranslation } from "../i18n/client";
 /**
  * The skills Hide installs for every agent that is on (PRD hide-plan B20,
  * D-13, D-16): each with its mark, one line on what it is for and the help it
- * points at. They come and go with each agent's switch above; the list is the
- * kit's own (`hide_kit::agents::SKILLS`).
+ * points at. They come and go with each agent's switch in Settings › Agents
+ * and cannot be removed here; the list is the kit's own
+ * (`hide_kit::agents::SKILLS`). Settings › Skills & MCP shows them.
  */
 const SKILLS = [
   { name: "hide", icon: BookOpenTextIcon, help: "hide guide", what: "agents.skills.hide" },
@@ -17,7 +18,7 @@ const SKILLS = [
 export function HideSkillsGroup() {
   const { t } = useInterfaceTranslation();
   return (
-    <Group title={t("agents.skills.title")} data-agents-skills="true">
+    <Group title={t("agents.skills.title")} note={t("agents.skills.note")} data-agents-skills="true">
       {SKILLS.map((skill) => (
         <Row
           key={skill.name}

@@ -135,7 +135,7 @@ osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); ObjC.deepUnwrap(ObjC.ca
 
 ### Focused-area navigation
 
-`web/src/areaCycle.test.ts` checks full device/checkout/area identity for View areas, the Agent pane order across devices and checkouts, commit events, Agent cycling outside a View without inventing visits, and single-tab or retired View no-op boundaries.
+`web/src/areaCycle.test.ts` checks full device/checkout/area identity for View areas, the place order across devices and checkouts (agent panes, missions, automations and Desk in one order), commit events and the screen a mission, automation or Desk commit shows, place cycling outside a View without inventing visits, leaving Desk for the place before it, and single-tab or retired View no-op boundaries.
 `web/e2e/recent.spec.ts` commits an Agent pane in another project on a real isolated daemon, opens the list from the sidebar, Explorer and Overview, and keeps focused files in their own View scope.
 `web/e2e/recent-agents-restart.spec.ts` restarts hided and reloads the page, then reaches an agent pane visited only before the restart from the same cycle.
 `desktop/e2e/keys.spec.ts` walks ⌃Tab over Agent panes in the desktop host, including from sidebar focus.

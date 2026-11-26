@@ -1261,6 +1261,146 @@ fn an_open_approval_outlives_the_main_turns_end_and_closes_with_its_call() {
     assert_eq!(row(&runtime), ("none".into(), "stopped".into()));
 }
 
+/// The operator allowed a call, and it runs for a minute: no hook event comes
+/// until it ends, and the row left Needs You only then. The engine reads the
+/// dialog on the screen and then the agent going on past it, so the row
+/// leaves Needs You at the answer; a dialog on the screen again holds it
+/// again, and the next call's request waits for its own dialog's answer.
+#[test]
+fn an_approval_leaves_needs_you_once_the_screen_shows_its_dialog_answered() {
+    use hide_node_link::panes::HookTurn;
+    let mut runtime = runtime();
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    let publish = |runtime: &mut Runtime, status: &str| {
+        let mut engine_session = session(&[("w1:p1", "claude", false)]);
+        engine_session["agents"][0]["agent_status"] = status.into();
+        runtime.ingest_session(Ok(
+            crate::sidebar::owned_label_fixture(engine_session).expect("session payload")
+        ));
+    };
+    let report = |runtime: &mut Runtime, waiting: &[&str]| {
+        let report = hide_node_link::panes::HookStatusReport {
+            runtime: "claude-code".to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: Some("session-w1:p1".to_owned()),
+            turn: Some(HookTurn::Working),
+            counts: None,
+            subagents: None,
+            session_start: false,
+            waiting: Some(waiting.iter().map(|call| (*call).to_owned()).collect()),
+            account: None,
+            refused: None,
+            asked: None,
+        };
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)
+            .expect("the report is recorded");
+    };
+    let row = |runtime: &Runtime| {
+        let row = runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|row| row.pane_id == "w1:p1")
+            .expect("the agent is a row");
+        (row.demand.clone(), row.activity.clone(), row.blocked)
+    };
+    let approval = || ("approval".to_owned(), "stopped".to_owned(), true);
+    let working = || ("none".to_owned(), "working".to_owned(), false);
+    let call = "Bash:0123456789abcdef";
+
+    report(&mut runtime, &[call]);
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), approval(), "before the dialog is drawn");
+    publish(&mut runtime, "blocked");
+    assert_eq!(row(&runtime), approval());
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), working(), "answered while the call runs");
+    // Another hook event while the call runs names it again.
+    report(&mut runtime, &[call]);
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), working());
+    publish(&mut runtime, "blocked");
+    assert_eq!(row(&runtime), approval(), "a dialog is on the screen again");
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), working());
+    // The call ended, and the next one asks.
+    report(&mut runtime, &[]);
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), working());
+    report(&mut runtime, &["Bash:fedcba9876543210"]);
+    publish(&mut runtime, "working");
+    assert_eq!(
+        row(&runtime),
+        approval(),
+        "the next call's dialog is not answered yet"
+    );
+}
+
+/// Codex's permission request names no call, so the turn itself waits; its
+/// dialog answered on the screen sets the turn going again before the call
+/// it allowed ends.
+#[test]
+fn a_waiting_turn_goes_on_once_the_screen_shows_its_dialog_answered() {
+    use hide_node_link::panes::HookTurn;
+    let mut runtime = runtime();
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    let publish = |runtime: &mut Runtime, status: &str| {
+        let mut engine_session = session(&[("w1:p1", "codex", false)]);
+        engine_session["agents"][0]["agent_status"] = status.into();
+        runtime.ingest_session(Ok(
+            crate::sidebar::owned_label_fixture(engine_session).expect("session payload")
+        ));
+    };
+    let report = |runtime: &mut Runtime, turn| {
+        let report = hide_node_link::panes::HookStatusReport {
+            runtime: "codex".to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: Some("session-w1:p1".to_owned()),
+            turn: Some(turn),
+            counts: None,
+            subagents: None,
+            session_start: false,
+            waiting: None,
+            account: None,
+            refused: None,
+            asked: None,
+        };
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)
+            .expect("the report is recorded");
+    };
+    let row = |runtime: &Runtime| {
+        let row = runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|row| row.pane_id == "w1:p1")
+            .expect("the agent is a row");
+        (row.demand.clone(), row.activity.clone())
+    };
+
+    report(&mut runtime, HookTurn::Working);
+    publish(&mut runtime, "working");
+    report(&mut runtime, HookTurn::Waiting);
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), ("approval".into(), "stopped".into()));
+    publish(&mut runtime, "blocked");
+    assert_eq!(row(&runtime), ("approval".into(), "stopped".into()));
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), ("none".into(), "working".into()));
+    // The call ended.
+    report(&mut runtime, HookTurn::Working);
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), ("none".into(), "working".into()));
+    // The next request waits again, until its own dialog is answered.
+    report(&mut runtime, HookTurn::Waiting);
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), ("approval".into(), "stopped".into()));
+}
+
 /// Claude Code opens its question dialog (`AskUserQuestion`) with the same
 /// permission request a call's approval takes. The engine's state moves as
 /// the operator answers, before that state's session read or the call's end

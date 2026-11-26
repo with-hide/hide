@@ -123,4 +123,22 @@ describe("the session panel's head (Doop H 다, operator decision 2026-11-25)", 
       useShellStore.setState(saved, true);
     }
   });
+
+  it("draws the mission it conducts as the two-line chip with the pane's hover card, which a press still opens as the map", async () => {
+    const saved = useShellStore.getState();
+    const mission = { id: "mission-101", title: "Desk 2차", device_id: "mac", status: "running", nodes: [], conductor: { pane_id: "w1:p2", present: true, session: null }, decision: null, question: null, delay: null, closed_at_unix_ms: null, created_at_unix_ms: 1 };
+    useShellStore.setState({ rest: { missions: { items: [mission] } } as unknown as SnapshotRest, agents: [{ pane_id: "w1:p2", device_id: "mac" } as AgentRow] });
+    try {
+      const container = await head(null);
+      const chip = container.querySelector<HTMLElement>("[data-desk-session-meta] [data-mission-chip]")!;
+      expect([chip.dataset.missionChipCard, chip.textContent]).toEqual(["true", "M101Desk 2차0/0"]);
+      expect(document.body.querySelector("[data-pane-mission]")).toBeNull();
+      await act(async () => chip.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, relatedTarget: null })));
+      const card = document.body.querySelector<HTMLElement>("[data-pane-mission='mission-101']")!;
+      // Radix keeps a card with no anchor above the screen (`translate(0, -200%)`).
+      await vi.waitFor(() => expect(card.parentElement!.style.transform).toMatch(/^translate\([^%]*\)$/));
+    } finally {
+      useShellStore.setState(saved, true);
+    }
+  });
 });

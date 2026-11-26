@@ -11,6 +11,7 @@ import { useShellStore } from "../../store";
 import { threadInputHeld, threadScreen } from "../../threadView";
 import type { ReactNode } from "react";
 import type { AskLine } from "../open-asks";
+import { FileDropZone } from "./file-drop";
 import { NO_MENTIONS, ThreadView, type ThreadPartActions } from "./thread-view";
 
 /** The refusals a thread's input words itself; any other is an attachment's, worded as a terminal attachment's is. */
@@ -41,7 +42,8 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   ask?: ReactNode;
   asks?: readonly AskLine[];
   foot?: ReactNode;
-  onTerminal: () => void;
+  /** The session's terminal; none for a session whose pane is gone. */
+  onTerminal?: () => void;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
   useSessionThread(actions, paneId);
@@ -130,7 +132,8 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
     );
   }
   return (
-    <div ref={root} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""}>
+    // The whole panel, its head, conversation and box, takes a dropped file into the box while the box stands (Doop L 나).
+    <FileDropZone ref={root} tray={foot ? null : tray} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""}>
       {head}
       <ThreadView
         job={job}
@@ -156,6 +159,6 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
         onReachTop={reachTop}
         {...parts}
       />
-    </div>
+    </FileDropZone>
   );
 }

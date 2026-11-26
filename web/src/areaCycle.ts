@@ -1,11 +1,12 @@
 // The focused-area cycle. In a View area it narrows the page MRU to that one
-// drawn area; everywhere else it walks every agent pane the keyboard has
-// been in, across devices, projects and checkouts (issue 301).
-// No committed selection lives here.
+// drawn area; everywhere else it walks every place the operator has been:
+// the agent panes the keyboard has been in across devices, projects and
+// checkouts, the missions and automations whose detail was in front, and
+// Desk (issue 301). No committed selection lives here.
 import { areaFrame } from "./areaFrames";
 import { areasOf, findArea } from "./areaLayout";
-import { displaySurface, paneItem, paneKey, panelItem, recentEntries, recentPanes, tabSurface, type CycleItem, type Surface } from "./recent";
-import { frontCheckout, type SnapshotRest } from "./snapshot";
+import { displaySurface, panelItem, placeItem, placeKey, recentEntries, recentPlaces, tabSurface, type CycleItem, type Surface } from "./recent";
+import { frontCheckout, type RecentPlace, type SnapshotRest } from "./snapshot";
 import { focusedPaneOf } from "./store";
 import { deskOnScreen } from "./pairView";
 import { workspaceViewOf } from "./workspace";
@@ -93,20 +94,47 @@ export function agentOrigin(rest: SnapshotRest | null, owner: KeyboardOwner = ke
 }
 
 /**
- * The Agent pane cycle: the pane in use, then every agent pane the keyboard
- * has been in, most recent first, on any device, project or checkout. When
- * the pane in use runs no agent, or there is none, the first chord lands on
- * the most recent agent pane, so the cycle starts before it. Only View
- * ownership on the Workspace excludes this list; the sidebar, tools and
- * other screens do not need a drawn Agent area, and do not supply a pane visit.
+ * The place the operator is on now, as the recent place order names it: the
+ * pane the keyboard is in while the front Workspace's Agent area holds it,
+ * the mission or automation whose detail the screen shows, or Desk's room.
+ * Null anywhere else: a list (the Overview, the mission or automation table,
+ * an automation's form), a View area, the Overview over any screen.
  */
-export function agentCycle(rest: SnapshotRest | null, owner: KeyboardOwner = keyboardOwner()): Cycle | null {
+export function placeOrigin(rest: SnapshotRest | null, owner: KeyboardOwner = keyboardOwner()): RecentPlace | null {
+  const ui = useUiStore.getState();
+  if (ui.overviewOpen) return null;
+  switch (ui.screen?.kind) {
+    case "workspace": {
+      const paneId = agentOrigin(rest, owner)?.paneId;
+      return paneId ? { kind: "pane", pane_id: paneId } : null;
+    }
+    case "missions":
+      return ui.missions.selected !== null ? { kind: "mission", mission_id: ui.missions.selected } : null;
+    case "automations":
+      return ui.automations.selected !== null && ui.automations.form === null ? { kind: "automation", automation_id: ui.automations.selected } : null;
+    case "desk":
+      return { kind: "desk" };
+    default:
+      return null;
+  }
+}
+
+/**
+ * The recent place cycle: the place in use, then every place the operator
+ * has been, most recent first: an agent pane on any device, project or
+ * checkout, a mission, an automation, Desk. When the place in use is no row
+ * (a pane running no agent) or the operator is on no place (a list, the
+ * sidebar, Settings), the first chord lands on the most recent place, so the
+ * cycle starts before it. Only View ownership on the Workspace excludes this
+ * list; there the View area cycle walks that area's tabs.
+ */
+export function placeCycle(rest: SnapshotRest | null, owner: KeyboardOwner = keyboardOwner()): Cycle | null {
   if (owner.kind === "view" && useUiStore.getState().screen?.kind === "workspace" && !useUiStore.getState().overviewOpen) return null;
-  const origin = agentOrigin(rest, owner) ?? { paneId: null };
-  const ids = [...(origin.paneId ? [origin.paneId] : []), ...recentPanes(rest).filter((id) => id !== origin.paneId)];
-  const items = ids.map((id) => paneItem(rest, id)).filter((item): item is CycleItem => item !== null);
-  const originKey = origin.paneId ? paneKey(origin.paneId) : undefined;
+  const origin = placeOrigin(rest, owner);
+  const originKey = origin ? placeKey(origin) : undefined;
+  const places = [...(origin ? [origin] : []), ...recentPlaces(rest).filter((place) => placeKey(place) !== originKey)];
+  const items = places.map((place) => placeItem(rest, place)).filter((item): item is CycleItem => item !== null);
   const atOrigin = items[0] !== undefined && items[0].key === originKey;
   if (items.length < (atOrigin ? 2 : 1)) return null;
-  return { kind: "agents", originKey, items, index: atOrigin ? 0 : -1 };
+  return { kind: "places", originKey, items, index: atOrigin ? 0 : -1 };
 }

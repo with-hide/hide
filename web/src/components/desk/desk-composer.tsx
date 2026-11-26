@@ -1,9 +1,9 @@
-import { ArrowUpIcon, ChevronDownIcon, LoaderCircleIcon, PaperclipIcon, ShieldIcon, SquareIcon, UploadIcon, XIcon } from "lucide-react";
-import { useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { ArrowUpIcon, CheckIcon, ChevronDownIcon, LoaderCircleIcon, PaperclipIcon, ShieldIcon, SquareIcon, XIcon } from "lucide-react";
+import { useRef, type ClipboardEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { MAX_BATCH_BYTES, MAX_FILE_BYTES, MAX_FILES } from "../../attachments";
-import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskPermission, DeskSelection } from "../../desk";
-import { agentPickable, deskAgentWord } from "../../desk";
-import { dragHasFiles, traySendable, type ComposerTray, type SentAttachment, type TrayFile } from "../../deskComposer";
+import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskFavorite, DeskPermission, DeskSelection } from "../../desk";
+import { agentPickable, deskAgentWord, favoriteChosen } from "../../desk";
+import { traySendable, type ComposerTray, type SentAttachment, type TrayFile } from "../../deskComposer";
 import { fileIcon } from "../../fileIcons";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
@@ -22,6 +22,7 @@ import { Hint } from "../ui/tooltip";
 import { composingKey } from "../../keys";
 import { useNoticeFloor } from "../../noticeFloor";
 import type { DeskDraft } from "../../ui";
+import { useFileDropOver } from "./file-drop";
 import { MentionInput, type MentionInputHandle } from "./mention-input";
 
 const MIB = MAX_FILE_BYTES / (1024 * 1024);
@@ -102,9 +103,9 @@ export function SentAttachments({ files }: { files: readonly SentAttachment[] })
  * B29, B41): the words, the attached files above them, 📎, and send, which
  * becomes stop while Desk answers. `menu` is the `@` menu, opened above the
  * box while `menuOpen`; `children` sits in the box's foot between 📎 and
- * send (Desk's bar). With `tray`, the box takes files: dropped on it (the
- * frame marks itself as the place to drop while files are dragged over it),
- * pasted into it, or picked with 📎; a send waits while one is still read
+ * send (Desk's bar). With `tray`, the box takes files: dropped anywhere on
+ * the column it stands in (`FileDropZone`, whose drag lights the box's
+ * border and nothing else), pasted into it, or picked with 📎; a send waits while one is still read
  * in or one is past the cap. With `draft`, the box is Desk's, where picked
  * mentions stand as chips (D-85) and `value` is the draft's text; without,
  * it is a plain text box.
@@ -143,7 +144,6 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, tray,
 }) {
   const { t } = useInterfaceTranslation();
   const picker = useRef<HTMLInputElement>(null);
-  const [over, setOver] = useState(false);
   const files = tray?.files ?? [];
   const empty = value.trim() === "" && files.length === 0;
   const blocked = empty || held || (files.length > 0 && traySendable(files) === null);
@@ -154,23 +154,7 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, tray,
     event.preventDefault();
     if (!blocked) onSend();
   };
-  // Only a drag of files from the system is taken: text, links and Hide's own rows keep their own drop.
-  const dragOver = (event: DragEvent<HTMLElement>) => {
-    if (!tray || !dragHasFiles([...event.dataTransfer.types])) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
-    setOver(true);
-  };
-  const dragLeave = (event: DragEvent<HTMLElement>) => {
-    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(false);
-  };
-  const drop = (event: DragEvent<HTMLElement>) => {
-    setOver(false);
-    if (!tray || event.dataTransfer.files.length === 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-    tray.add([...event.dataTransfer.files]);
-  };
+  const over = useFileDropOver();
   // A paste that carries files attaches them; words paste as words.
   const paste = (event: ClipboardEvent<HTMLElement>) => {
     if (!tray || event.clipboardData.files.length === 0) return;
@@ -187,10 +171,6 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, tray,
           <div
             className={cn("relative flex min-w-0 flex-col gap-xs rounded-xl border bg-background px-md py-sm", focused || menuOpen || over ? "border-ring ring-1 ring-ring" : "border-input")}
             data-desk-composer-frame={over ? "drop" : focused ? "focused" : "rest"}
-            onDragEnter={dragOver}
-            onDragOver={dragOver}
-            onDragLeave={dragLeave}
-            onDrop={drop}
             onPasteCapture={paste}
           >
             {files.length > 0 ? (
@@ -220,12 +200,6 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, tray,
                 </Hint>
               )}
             </div>
-            {over ? (
-              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-xxs rounded-xl bg-background" data-desk-composer-drop="true">
-                <span className="flex items-center gap-xs text-caption text-foreground"><UploadIcon aria-hidden="true" className="size-(--size-icon-sm)" />{t("desk.composer.dropHere")}</span>
-                <span className="text-micro text-muted-foreground">{t("desk.composer.dropLimit", { limit: MIB })}</span>
-              </div>
-            ) : null}
           </div>
         </PopoverAnchor>
         {menu ? (
@@ -308,8 +282,11 @@ function BarMenu({ name, value, open, onOpenChange, highlight = false, wide = fa
  * only the agent menu shows; before its first session the model and effort
  * read as the agent's default. `open` opens one menu, for review.
  */
-export function DeskAgentBar({ agents, selection, open = null, onAgent, onModel, onEffort, onAgentSettings }: {
+export function DeskAgentBar({ agents, selection, favorites = [], open = null, onAgent, onFavorite, onModel, onEffort, onAgentSettings }: {
   agents: readonly DeskAgent[];
+  /** The favorite models Settings › Agents keeps, listed first (`deskFavorites`). */
+  favorites?: readonly DeskFavorite[];
+  onFavorite?: (favorite: DeskFavorite) => void;
   selection: DeskSelection;
   open?: "agent" | "model" | "effort" | null;
   onAgent: (agent: DeskAgentId) => void;
@@ -332,6 +309,22 @@ export function DeskAgentBar({ agents, selection, open = null, onAgent, onModel,
           <span>{t("desk.bar.agent")}</span>
           <span className="font-normal text-muted-foreground" data-desk-agent-count={registered}>{t("desk.bar.registered", { n: registered })}</span>
         </DropdownMenuLabel>
+        {favorites.length > 0 ? (
+          <>
+            <DropdownMenuLabel className="font-normal text-muted-foreground" data-desk-favorites={String(favorites.length)}>{t("desk.bar.favorites")}</DropdownMenuLabel>
+            {favorites.map((favorite) => (
+              <DropdownMenuItem key={favorite.key} onSelect={() => onFavorite?.(favorite)} className="items-start gap-sm" data-desk-favorite={favorite.key} data-desk-favorite-chosen={String(favoriteChosen(favorite, selection))}>
+                <AgentMark kind={favorite.agent.id} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate">{favorite.modelLabel || favorite.agent.label}{favorite.modelLabel ? <span className="ml-xs font-normal text-muted-foreground">{favorite.agent.label}</span> : null}</span>
+                  {favorite.purpose ? <span className="truncate text-caption text-muted-foreground">{favorite.purpose}</span> : null}
+                </span>
+                {favoriteChosen(favorite, selection) ? <CheckIcon aria-hidden="true" className="size-(--size-icon) shrink-0" /> : null}
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
         <DropdownMenuRadioGroup value={selection.agent ?? undefined} onValueChange={(value) => onAgent(value as DeskAgentId)}>
           {agents.map((one) => {
             const pickable = agentPickable(one);
@@ -399,13 +392,13 @@ export function DeskPermissionMenu({ permission, agent, open, onPermission }: {
       <DropdownMenuLabel className="font-normal text-muted-foreground">{t("desk.permission.heading")}</DropdownMenuLabel>
       <DropdownMenuRadioGroup value={permission} onValueChange={(value) => value !== permission && onPermission(value as DeskPermission)}>
         {PERMISSIONS.map((one) => (
-          <DropdownMenuRadioItem key={one} value={one} className="items-start" data-desk-permission-choice={one}>
+          <DropdownMenuRadioItem key={one} value={one} mark="check" className="items-start" data-desk-permission-choice={one}>
             <span className="flex min-w-0 flex-col gap-xxs">
               <span className="flex items-center gap-xs text-foreground">
                 {t(PERMISSION_NAME[one])}
                 {one === "allow_all" ? <Badge variant="secondary">{t("desk.permission.default")}</Badge> : null}
               </span>
-              <span className="whitespace-normal break-keep text-caption text-muted-foreground">
+              <span className="whitespace-normal break-keep text-caption text-subtle-foreground">
                 {one === "allow_all" ? t("desk.permission.allow_allDetail") : t("desk.permission.agentDetail", { agent: agent ?? t("desk.bar.agent") })}
               </span>
             </span>

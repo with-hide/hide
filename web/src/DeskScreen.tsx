@@ -6,11 +6,13 @@
 // screen keeps what the operator is writing, where the `@` menu is, and the
 // room's window state (`deskRoom.ts`), which the core keeps only the widths of.
 
-import { MapIcon, XIcon } from "lucide-react";
+import { LoaderCircleIcon, MapIcon, PlayIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Actions } from "./actions";
-import { deskOn, deskPhase, holdsFoot, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
-import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
+import { answerPlace, type FoundAnswerPath } from "./answerPaths";
+import { hostBridge } from "./host";
+import { deskFavorites, deskOn, deskPhase, holdsFoot, laneCards, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
+import { activeTab, closePanel, closeSide, closeTab, fileName, followFrom, keepTab, newSessionBeside, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab, type NewSessionFollow } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
 import { AreaEmpty } from "./AreaEmpty";
 import { DisplayEditor, DocumentKeeper } from "./Editor";
@@ -20,7 +22,10 @@ import { MissionMap } from "./MissionMap";
 import { OutputMark } from "./components/desk/desk-job-card";
 import { ThreadPanel } from "./components/desk/thread-panel";
 import { SessionChipProvider, type SessionChipSource } from "./components/desk/session-chip";
-import { SessionAskCard, SessionHead, SessionSleepingFoot } from "./components/desk/desk-session";
+import { SessionAskCard, SessionHead, SessionRecordFoot, SessionSleepingFoot } from "./components/desk/desk-session";
+import { LineButton } from "./LinkSessions";
+import { resumeBlock, resumeCheckout } from "./linkPanel";
+import { resumeFailureText, resumeReason, resumeRequest, useSessionResume } from "./useSessionResume";
 import { OutputShelf } from "./components/desk/output-shelf";
 import { rowPulls } from "./prMark";
 import { useElapsed } from "./components/elapsed";
@@ -44,7 +49,7 @@ import { useEscapeLayer } from "./components/ui/layer";
 import { useInterfaceTranslation } from "./i18n/client";
 import { composingKey } from "./keys";
 import { machineName } from "./screenMachine";
-import { catalogWorkspaces, checkoutAtRoot, checkoutOfPane, localDeviceId, paneRowOf, type AgentRow, type SleepingSession, type ViewDisplaySnapshot } from "./snapshot";
+import { catalogOf, catalogWorkspaces, checkoutAtRoot, checkoutOfPane, localDeviceId, paneRowOf, type AgentRow, type SleepingSession, type ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { windowIsActive } from "./viewFocus";
@@ -102,6 +107,25 @@ function useReadShownCards(scroller: RefObject<HTMLDivElement | null>, jobs: rea
       document.removeEventListener("visibilitychange", soon);
     };
   }, [scroller, jobs, onRead]);
+}
+
+/**
+ * Opens beside Desk the first session a turn starts, as `newSessionBeside`
+ * rules (frame J), from the lines and cards this visit of the room sees
+ * arrive; the lines there when the room was entered are old.
+ */
+function useNewSessionBeside(actions: Actions, generation: number | undefined, items: readonly DeskItem[] | undefined, cards: Readonly<Record<string, DeskJob>>) {
+  const follow = useRef<NewSessionFollow | null>(null);
+  useEffect(() => {
+    if (generation === undefined || !items) return;
+    if (!follow.current) {
+      follow.current = followFrom(generation, items);
+      return;
+    }
+    const next = newSessionBeside(follow.current, generation, items, cards, useUiStore.getState().deskRoom);
+    follow.current = next.follow;
+    if (next.open) actions.openDeskSession(next.open);
+  }, [actions, generation, items, cards]);
 }
 
 /** Where the `@` menu stands: the `@` word Esc closed it on, the project ⇥ entered, and the parents the operator folded open or shut. */
@@ -199,6 +223,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   }, [empty, drawn]);
 
   useReadShownCards(scroller, jobs, actions.deskJobRead);
+  useNewSessionBeside(actions, desk?.conversation.generation, items, byId);
 
   const send = (words = draft) => {
     if (!canSend || !items) return;
@@ -332,11 +357,14 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       if (project && checkout) actions.openWorkspace(project.device_id, project.id, checkout.id);
     },
     onHanded: (paneId) => room.session({ name: "", mark: null, agent_kind: null, pane_id: paneId }),
+    onFile: (file) => openAnswerFile(actions, file),
   }), [actions, onNoticeAction, room]);
   const place = useUiStore((s) => s.deskRoom);
   const front = activeTab(place.panel);
+  const candidates = useShellStore((s) => s.rest?.ui_state?.conductor_settings?.candidates);
 
   if (!desk) return null;
+  const favorites = deskFavorites(candidates ?? [], desk.agents, desk.selection);
   const working = jobs.filter((job) => job.state === "working").length;
   // The card or chip that opened what shows is marked (B16).
   const shownJob = place.session ? (jobs.find((job) => job.pane_id === place.session)?.id ?? null) : null;
@@ -382,7 +410,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     >
       <DeskPermissionMenu permission={desk.settings.permission} agent={desk.agents.find((agent) => agent.id === desk.selection.agent)?.label ?? null} onPermission={(permission) => actions.deskPermission(permission)} />
       <Separator orientation="vertical" className="mx-xxs data-[orientation=vertical]:h-(--size-icon)" />
-      <DeskAgentBar agents={desk.agents} selection={desk.selection} onAgent={(id) => actions.deskSelect(id, null, null)} onModel={(model) => actions.deskSelect(null, model, null)} onEffort={(effort) => actions.deskSelect(null, null, effort)} onAgentSettings={() => actions.openSettings("agents")} />
+      <DeskAgentBar agents={desk.agents} selection={desk.selection} favorites={favorites} onFavorite={(favorite) => actions.deskSelect(favorite.agent.id, favorite.model, favorite.effort)} onAgent={(id) => actions.deskSelect(id, null, null)} onModel={(model) => actions.deskSelect(null, model, null)} onEffort={(effort) => actions.deskSelect(null, null, effort)} onAgentSettings={() => actions.openSettings("agents")} />
     </DeskComposer>
   );
   return (
@@ -392,7 +420,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
           actions={actions}
           room={room}
           chat={(
-            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} />} composer={composer} scrollRef={scroller}>
+            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} />} composer={composer} tray={tray} scrollRef={scroller}>
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
@@ -410,16 +438,19 @@ export function DeskScreen({ actions }: { actions: Actions }) {
  * Where Desk's chips read their sessions (D-86): the sidebar's rows and
  * every card Desk has, so a chip in the chat or the session panel shows its
  * row's mark, dims once the row is gone, and opens its card under the
- * pointer; a press opens the session beside Desk.
+ * pointer; a press opens the session beside Desk, and the chip of the session
+ * open there is ringed (frame J).
  */
 function useSessionChipSource(room: RoomActions): SessionChipSource {
   const rows = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
   const section = useShellStore((s) => s.deskJobs);
+  const open = useUiStore((s) => s.deskRoom.session);
   return useMemo(() => {
     const byPane = new Map(rows.map((row) => [row.pane_id, row]));
     const cards = laneCards(section);
-    return { facts: (session) => sessionFacts(byPane, cards, session), onOpen: room.session };
-  }, [rows, section, room]);
+    const records = section?.records ?? [];
+    return { facts: (session) => sessionFacts(byPane, cards, session, records), onOpen: room.session, open };
+  }, [rows, section, room, open]);
 }
 
 /** Every card Desk has: its jobs, their missions' workers, and the other sessions its conversation names. */
@@ -428,7 +459,7 @@ function everyCard(): DeskJob[] {
 }
 
 /** The output a session's own line names, as `outputNamed` resolves it, on this machine's node. */
-function outputOf(job: DeskJob | undefined, output: DeskOutput, place?: { device: string; checkout: string } | null): DeskOutput {
+function outputOf(job: DeskJob | undefined, output: DeskOutput, place?: { device: string; checkout: string; folder: string } | null): DeskOutput {
   return outputNamed(job?.outputs ?? [], output, place ?? null, localDeviceId(useShellStore.getState().rest));
 }
 
@@ -465,7 +496,8 @@ function useRoomActions(actions: Actions): RoomActions {
       mission: (missionId) => {
         actions.deskOpen({ kind: "mission", mission: missionId, title: missionTitle(missionId) });
       },
-      // D-09, B9: a session is its sidebar row's; by its pane, else by the work name the row shows.
+      // D-09, B9: a session is its sidebar row's; by its pane, else by the work name the row shows. A pane that is gone opens
+      // its record (frame K); a chip with no record cannot be pressed.
       session: (session) => {
         const state = useShellStore.getState();
         const pane = session.pane_id ?? allAgents(state.agents, state.rest?.status?.remote).find((row) => row.identity_label === session.name)?.pane_id;
@@ -505,6 +537,19 @@ function useDeskPartActions(actions: Actions, room: RoomActions, scope: Explorer
 function openPullRequest(actions: Actions, url: string, label: string) {
   const listed = everyCard().flatMap((job) => job.outputs).find((output) => output.kind === "pr" && output.url === url);
   actions.deskOpen({ kind: "output", output: listed ?? { id: `pr:${url}`, kind: "pr", label, thumb: null, seen: true, pr_state: null, device_id: null, checkout: null, path: null, url } });
+}
+
+/**
+ * A file chip an answer drew, pressed (feedback 2 frame M [2]): a project's
+ * file opens in the tab panel as the app's file view; a path outside every
+ * project never reaches the core, and this computer's file manager only
+ * shows it, selected in its folder.
+ */
+function openAnswerFile(actions: Actions, file: FoundAnswerPath) {
+  if (file.kind === "project") return actions.deskOpen({ kind: "file", device_id: file.device, root: file.root, path: file.path });
+  const bridge = hostBridge();
+  if (!bridge) return useShellStore.getState().noteDiagnostic("desk file chip: no desktop host to reveal an outside path");
+  bridge.revealPath(file.path);
 }
 
 /** A file Desk's Explorer opened: in the tab panel, under the session's checkout it lists (B36, B37). */
@@ -567,6 +612,89 @@ const NO_WIDTHS = { view_width: null, session_width: null };
  * and its input box, or `에이전트 깨우기` in the box's place while it sleeps.
  */
 function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: string; actions: Actions; deskActions: Actions; room: RoomActions }) {
+  const listed = useShellStore((s) => agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(paneId));
+  const record = useShellStore((s) => (listed ? null : ((s.deskJobs?.records ?? []).find((one) => one.pane_id === paneId) ?? null)));
+  if (record) return <DeskRecordPanel record={record} actions={actions} deskActions={deskActions} room={room} />;
+  return <DeskLivePanel paneId={paneId} actions={actions} deskActions={deskActions} room={room} />;
+}
+
+/**
+ * A session whose pane is gone, opened beside Desk from Hide's record of it
+ * (feedback 2, frame K, 다): its head with `끝남` and only `✕`, its machine
+ * and pull requests under it, its conversation read where it ran as any
+ * session's, and in the input box's place the session record row's
+ * `이어서 하기`, which resumes it as that row does, or the one line the app
+ * gives why it cannot.
+ */
+function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskRecord; actions: Actions; deskActions: Actions; room: RoomActions }) {
+  const { t } = useInterfaceTranslation();
+  const job = useMemo(() => recordCard(record), [record]);
+  const ownJob = useShellStore((s) => s.deskJobs?.jobs.some((one) => one.pane_id === record.pane_id) ?? false);
+  const node = useShellStore((s) => localDeviceId(s.rest));
+  const devices = useShellStore((s) => s.rest?.navigator?.devices);
+  const workspaces = useShellStore((s) => s.rest?.navigator?.workspaces);
+  const remote = useShellStore((s) => s.rest?.status?.remote);
+  const device = record.session.device_id;
+  // Only another device is named: this machine goes without saying (Doop H 다).
+  const machine = device !== node ? machineName(devices, device, t) : null;
+  // Where it resumes and why it cannot, as the session record screen decides it (`SessionRecord.tsx`, `linkPanel.ts`).
+  const checkout = resumeCheckout({ device_id: device, cwd: record.cwd }, catalogOf(workspaces, remote), null, node);
+  const live = useShellStore((s) => s.connection === "live");
+  const blocked = resumeBlock({ agent: record.session.agent, file: record.path ? "present" : "missing", device_id: device }, checkout, devices, node);
+  const reason = resumeReason(blocked, live, t);
+  // The resumed session opens beside Desk, as any session Desk opens does, not in its own tab.
+  const { resume, start } = useSessionResume((pane) => actions.openDeskSession(pane));
+  const resumeNow = () => {
+    const send = reason ? null : resumeRequest(actions.startAgent, { ...record.session, path: record.path }, checkout, node);
+    if (send) start(send);
+  };
+  const resuming = resume.request !== null && !resume.uncertain;
+  const failure = resumeFailureText(resume, t);
+  const button = (
+    <>
+      {failure ? <span role="alert" className="mr-xs min-w-0 break-words text-warning" data-desk-session-resume-failed="true">{failure}</span> : null}
+      <LineButton icon={resuming ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <PlayIcon aria-hidden="true" />} label={t(resume.uncertain ? "groups.confirm" : resuming ? "links.resuming" : "links.resume")} blocked={null} busy={resuming} onClick={resumeNow} data="resume" id={record.session.session_id} />
+    </>
+  );
+  return (
+    <ThreadPanel
+      job={job}
+      paneId={record.pane_id}
+      actions={actions}
+      startedByDesk={ownJob}
+      head={
+        <SessionHead
+          paneId={record.pane_id}
+          title={record.title}
+          job={job}
+          row={null}
+          pane={null}
+          machine={machine}
+          disconnected={false}
+          sleeping={false}
+          ended={{ pulls: record.pull_requests }}
+          explorerOpen={false}
+          filesChord={null}
+          terminalChord={null}
+          deskActions={deskActions}
+          onFiles={() => undefined}
+          onTerminal={() => undefined}
+          onOwnTab={() => undefined}
+          onClose={() => actions.deskCloseSession()}
+        />
+      }
+      foot={<SessionRecordFoot endedAt={record.ended_at_unix_ms} resume={button} blocked={reason} />}
+      outputOf={(output) => output}
+      onOutput={(output) => actions.deskOpen({ kind: "output", output })}
+      onMission={room.mission}
+      onSession={room.session}
+      onCopy={(text, what) => actions.copyText(text, what)}
+    />
+  );
+}
+
+/** The session beside Desk while its pane is there, or was, with no record to read in its place. */
+function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string; actions: Actions; deskActions: Actions; room: RoomActions }) {
   const { t } = useInterfaceTranslation();
   const job = useShellStore((s) => (s.deskJobs ? laneCards(s.deskJobs).find((one) => one.pane_id === paneId) ?? null : null));
   const ownJob = useShellStore((s) => s.deskJobs?.jobs.some((one) => one.pane_id === paneId) ?? false);
@@ -658,11 +786,12 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
         />
       ) : null}
       onTerminal={() => actions.deskTerminal()}
-      outputOf={(output) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath } : null)}
+      outputOf={(output) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath, folder: answerPlace(useShellStore.getState().rest, paneId)?.cwd ?? checkoutPath } : null)}
       onOutput={(output) => actions.deskOpen({ kind: "output", output })}
       onMission={room.mission}
       onSession={room.session}
       onCopy={(text, what) => actions.copyText(text, what)}
+      onFile={(file) => openAnswerFile(actions, file)}
     />
   );
 }
