@@ -4285,6 +4285,7 @@ Related sessions, fork destinations and copied session details are submenus; Age
 Only directions already offered by the layout are shown under Move.
 The command identities and their eligibility stay the same; a submenu whose choices share the same refusal shows that reason once on its disabled trigger, and mixed eligibility keeps the reason beside each disabled choice.
 Escape closes the innermost submenu first, returns focus to its trigger, then closes the root menu and restores the original target's focus.
+A menu that opens at the pointer on a right-click, which macOS sends on the button's press, chooses nothing when that button is released over one of its items; the menu stays open and the next click chooses (`useOpeningPressGuard`, `web/src/components/ui/context-menu.tsx`).
 Close and archive stay neutral, while removing an archived session keeps the destructive color and existing confirmation.
 The Tasks action formerly labelled `pane으로` reads `터미널로 이동`; the four supported interface languages use the same structure.
 The approved B layout is implemented by the shared action-menu components; original visual boards are maintained separately.
