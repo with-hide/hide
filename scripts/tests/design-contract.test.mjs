@@ -71,4 +71,25 @@ test('the web token check refuses an opacity on a see-through fill and takes the
   fs.writeFileSync(sheet, '.row { background: color-mix(in srgb, var(--warning) 10%, transparent); }\n');
   const mixed = run();
   assert.equal(mixed.status, 0, mixed.stdout + mixed.stderr);
+  fs.rmSync(sheet);
+});
+
+test('the web token check refuses a modal drawn on bg-dialog that does not mark itself for the menus opened in it', t => {
+  const repo = path.resolve(import.meta.dirname, '../..');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hide-web-modal-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  fs.mkdirSync(path.join(root, 'design'));
+  fs.copyFileSync(path.join(repo, 'design/tokens.json'), path.join(root, 'design/tokens.json'));
+  fs.mkdirSync(path.join(root, 'web/src/generated'), {recursive: true});
+  fs.copyFileSync(path.join(repo, 'web/src/tokens.css'), path.join(root, 'web/src/tokens.css'));
+  fs.copyFileSync(path.join(repo, 'web/src/generated/accents.ts'), path.join(root, 'web/src/generated/accents.ts'));
+  const check = source => {
+    fs.writeFileSync(path.join(root, 'web/src/panel.tsx'), source);
+    return spawnSync(process.execPath, [path.join(repo, 'scripts/check-web-tokens.mjs'), root], {encoding: 'utf8'});
+  };
+  const bare = check('export const Panel = () => <div role="dialog" className="bg-dialog shadow-modal" />;\n');
+  assert.notEqual(bare.status, 0);
+  assert.match(bare.stderr, /modal on bg-dialog outside ModalSurface/);
+  const marked = check('export const Panel = () => <ModalSurface><div role="dialog" data-modal-surface="true" className="bg-dialog shadow-modal" /></ModalSurface>;\n');
+  assert.equal(marked.status, 0, marked.stdout + marked.stderr);
 });

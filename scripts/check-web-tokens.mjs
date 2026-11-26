@@ -70,6 +70,10 @@ for (const file of files) {
   if (text) failures.push(`${rel}: Tailwind default text size \`${text[0]}\`; use a --text-* token`);
   const faded = FILL_OPACITY?.exec(source) ?? FILL_MIX?.exec(source);
   if (faded) failures.push(`${rel}: opacity on a see-through fill \`${faded[0]}\`; use the fill itself, or another fill token`);
+  // A modal drawn on --dialog marks itself, or a menu opened in it draws the modal's own step (DESIGN_GUIDE.md, Surfaces).
+  if (/role="dialog"/.test(source) && /(?<![\w-])bg-dialog(?![\w-])/.test(source) && !(/<ModalSurface>/.test(source) && /data-modal-surface/.test(source))) {
+    failures.push(`${rel}: a modal on bg-dialog outside ModalSurface; wrap it in <ModalSurface> and mark it data-modal-surface, or build it from Dialog`);
+  }
   const breakpoint = VAR_BREAKPOINT.exec(source);
   if (breakpoint) failures.push(`${rel}: query variant on a custom property \`${breakpoint[0]}\` never applies; add a variant to scripts/gen-tokens.mjs, as pane-wide is`);
 }
