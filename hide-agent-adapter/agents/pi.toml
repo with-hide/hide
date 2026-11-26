@@ -45,9 +45,26 @@ mcp_format = "pi"
 vars = ["PI_CODING_AGENT_SESSION_DIR"]
 
 [screen]
-version = "2026.10.01.1"
+version = "2026.11.26.1"
 min_engine_version = 1
-updated_at = "2026-10-01T00:00:00Z"
+updated_at = "2026-11-26T00:00:00Z"
+
+# Pi 1.0.4's question whether to trust a folder, drawn at its first start in
+# a folder whose project files it would load. Read as idle, a brief typed
+# there was taken by it, its Enter picking "Trust" (measured 2026-11-26,
+# tests/fixtures/screens/pi/blocked-trust-folder.txt); read as this
+# question, the start waits for the operator's answer.
+[[screen.rules]]
+id = "trust_folder"
+state = "blocked"
+asks = "folder_trust"
+priority = 950
+region = "whole_recent"
+visible_blocker = true
+all = [
+  { contains = ["Trust project folder?"] },
+  { contains = ["Do not trust"] },
+]
 
 [[screen.rules]]
 id = "working_literal"
