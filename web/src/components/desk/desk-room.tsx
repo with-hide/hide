@@ -10,7 +10,9 @@ import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Hint } from "../ui/tooltip";
+import type { ComposerTray } from "../../deskComposer";
 import { DeskMark } from "./desk-entry";
+import { FileDropZone } from "./file-drop";
 
 /** One arrow key on a focused edge moves it this many pixels, as the lane's divider does. */
 const EDGE_STEP = 32;
@@ -34,14 +36,14 @@ export function DeskChatHead({ onNewConversation, onLeave, leaveTo = null, leave
   );
 }
 
-/** Desk's chat column: its head (the name and `＋ 새 대화`), the conversation, and the composer at the foot. `scrollRef` is the conversation's scroller. */
-export function DeskChatColumn({ head, children, composer, scrollRef }: { head: ReactNode; children: ReactNode; composer: ReactNode; scrollRef?: Ref<HTMLDivElement> }) {
+/** Desk's chat column: its head (the name and `＋ 새 대화`), the conversation, and the composer at the foot, all one place to drop files into the composer. `scrollRef` is the conversation's scroller. */
+export function DeskChatColumn({ head, children, composer, tray = null, dragging = false, scrollRef }: { head: ReactNode; children: ReactNode; composer: ReactNode; /** The box's files: a file dropped anywhere on the column attaches there (Doop L). */ tray?: ComposerTray | null; /** A drag of files in progress, for review. */ dragging?: boolean; scrollRef?: Ref<HTMLDivElement> }) {
   return (
-    <>
+    <FileDropZone tray={tray} dragging={dragging} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-chat-drop="true">
       <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-xs border-b border-border px-md text-caption" data-desk-chat-head="true">{head}</div>
       <div ref={scrollRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto" data-desk-chat-scroll="true">{children}</div>
       <div className="mx-auto w-full max-w-(--size-editor-measure) shrink-0 px-lg pb-md pt-xs">{composer}</div>
-    </>
+    </FileDropZone>
   );
 }
 
