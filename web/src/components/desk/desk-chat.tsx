@@ -68,7 +68,7 @@ export function DeskUserMessage({ text, mentions, attachments = [], onMention, c
   return (
     <div className="flex min-w-0 flex-col items-end gap-xs" data-desk-item="user">
       <SentAttachments files={files} />
-      {bubble && copy ? <CopyableMessage text={namedText(text, mentions)} copy={copy} align="end">{bubble}</CopyableMessage> : bubble}
+      {bubble && copy ? <CopyableMessage text={namedText(text, mentions)} copy={copy} own>{bubble}</CopyableMessage> : bubble}
     </div>
   );
 }

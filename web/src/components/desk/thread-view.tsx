@@ -282,7 +282,7 @@ function UserLine({ line, handed, copy, actions }: { line: Extract<ThreadLine, {
       {handed ? <span className="text-micro text-muted-foreground" data-desk-thread-handed="true">{t("desk.thread.handedByDesk")}</span> : null}
       <SentAttachments files={sent.files} />
       {sent.words ? (
-        <CopyableMessage text={sent.words} copy={copy} align="end">
+        <CopyableMessage text={sent.words} copy={copy} own>
           <p data-desk-thread-bubble="true" className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]">{sent.words}</p>
         </CopyableMessage>
       ) : null}
