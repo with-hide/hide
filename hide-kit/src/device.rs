@@ -23,9 +23,10 @@ pub fn device_target(root: &Path, home: &Path, cli_dir: &Path, stop: Arc<AtomicB
         install: crate::layout::install_of_root(root),
         kit_dir: root.join(CURRENT),
         cli_dir: cli_dir.to_path_buf(),
-        // The old layout's root too, so its `hide` link is re-pointed rather
-        // than left as the operator's (D-13).
-        owned_roots: vec![root.to_path_buf(), crate::layout::legacy_helper_root(home)],
+        // The account's other install roots and the old layout's root too, so
+        // a `hide` link one of them left is re-pointed rather than left as the
+        // operator's (D-13).
+        owned_roots: owned_roots(root, home),
         codex: crate::agents::find(home, login_shell.as_deref(), &stop, "codex"),
         login_shell,
         legacy_coordination_home: relocated,
@@ -36,6 +37,20 @@ pub fn device_target(root: &Path, home: &Path, cli_dir: &Path, stop: Arc<AtomicB
         profiles: None,
         hooks_only: false,
     }
+}
+
+/// The roots a `hide` link into which is Hide's for the kit of the install
+/// root `root`: that root, the account's install roots
+/// ([`crate::layout::placed_roots`]) and the old layout's helper root.
+fn owned_roots(root: &Path, home: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![root.to_path_buf()];
+    for own in crate::layout::placed_roots(home) {
+        if !roots.contains(&own) {
+            roots.push(own);
+        }
+    }
+    roots.push(crate::layout::legacy_helper_root(home));
+    roots
 }
 
 /// The kit target of another machine's work on this account, whose builds

@@ -72,12 +72,13 @@ pub fn local_target(kit_dir: &Path, home: &Path, stop: Arc<AtomicBool>) -> KitTa
         install: hide_agent_hooks::route::APP_INSTALL.to_owned(),
         kit_dir: kit_dir.to_path_buf(),
         cli_dir: home.join(".local").join("bin"),
-        // A `hide` linked into a device helper root is Hide's too: this Mac
-        // may once have been another Mac's device, under either layout.
-        owned_roots: vec![
-            crate::layout::helper_root(home),
-            crate::layout::legacy_helper_root(home),
-        ],
+        // A `hide` linked into one of the account's install roots is Hide's
+        // too: this Mac may once have been another Mac's device, under either
+        // layout, or run its core from a login item's build.
+        owned_roots: crate::layout::placed_roots(home)
+            .into_iter()
+            .chain([crate::layout::legacy_helper_root(home)])
+            .collect(),
         codex: crate::agents::find(home, login_shell.as_deref(), &stop, "codex"),
         login_shell,
         legacy_coordination_home: relocated,
@@ -147,6 +148,36 @@ mod tests {
         assert_eq!(bundled_kit_dir(&daemon), None, "unfinished: no marker");
         std::fs::write(copy.join(crate::runtime::MARKER), "0.4.0-aaaaaaaaaaaa").unwrap();
         assert_eq!(bundled_kit_dir(&daemon), Some(copy));
+    }
+
+    /// A `hide` link left pointing into one of the account's install roots
+    /// after that root's build went is Hide's own, so the app's kit points
+    /// it at its own `hide` rather than leaving it as another program's:
+    /// a login item's core runs from `~/.hide/core`, which a server-connected
+    /// machine's kit links `hide` into.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_link_left_into_an_install_root_is_the_apps_to_point_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let resources = dir.path().join("hide.app/Contents/Resources");
+        std::fs::create_dir_all(&resources).unwrap();
+        std::fs::write(resources.join("hide"), "").unwrap();
+        let target = local_target(&resources, &home, Arc::default());
+        let link = crate::cli::link_path(&target);
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        for root in [
+            crate::layout::helper_root(&home),
+            crate::layout::core_root(&home),
+        ] {
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(root.join("current/hide"), &link).unwrap();
+            assert!(
+                matches!(crate::cli::observe(&target), crate::Observed::Stale(_)),
+                "{}",
+                root.display()
+            );
+        }
     }
 
     #[test]

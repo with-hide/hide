@@ -1087,9 +1087,10 @@ pub enum KitPlace {
     /// points `current` at its build and removes the others, since the
     /// connection placed them.
     Installed,
-    /// A build Hide placed in the account's helper root that runs as a core
-    /// or a node, as a moved core's login item runs it
-    /// (`~/.hide/host-helper/<16 hex>/hided`, `kit::placed_build`): the kit
+    /// A build Hide placed in one of the account's install roots that runs
+    /// as a core or a node, as a login item's core runs it
+    /// (`~/.hide/core/<16 hex>/hided`, or `~/.hide/host-helper/<16 hex>/hided`
+    /// for a core moved before 1.2.0; `kit::placed_build`): the kit
     /// installs from `<root>/current`, which it points at this build, and
     /// removes no build, since the core update keeps the one it may go back
     /// to (`kit::adopt_build`).
@@ -1113,7 +1114,8 @@ impl KitPlace {
     /// Where the kit of a core's own node, or of a node that dialed its
     /// core, takes its parts from, read from the program it runs and the
     /// account `home` it installs into: a desktop package, or a build Hide
-    /// placed in that account's helper root. Any other copy, a Cargo build
+    /// placed in one of that account's install roots
+    /// (`hide_kit::layout::placed_roots`). Any other copy, a Cargo build
     /// directory among them, installs nothing, because a hook that names a
     /// folder the next build deletes fails every session after it (the
     /// 2026-09-10 hook incident).

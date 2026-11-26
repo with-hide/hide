@@ -589,6 +589,18 @@ pub fn helper_root(home: &Path) -> PathBuf {
     expand_home(HELPER_ROOT, home)
 }
 
+/// The account's own install roots Hide places whole builds in, one version
+/// folder each (`<root>/<16 hex>/`): a device helper's, which a core moved
+/// before 1.2.0 runs from too, and a login item's core ([`core_root`]), which
+/// a paired machine or a machine connected as a server runs. A core or a
+/// node run from a build in one of them installs its kit from that root
+/// under the root's installation name ([`install_of_root`]), the name the
+/// panes it starts carry, so its hooks act in them
+/// (`hide_host::kit::placed_build`, `hide_host::kit::pane_install`).
+pub fn placed_roots(home: &Path) -> [PathBuf; 2] {
+    [helper_root(home), core_root(home)]
+}
+
 pub fn legacy_helper_root(home: &Path) -> PathBuf {
     expand_home(LEGACY_HELPER_ROOT, home)
 }

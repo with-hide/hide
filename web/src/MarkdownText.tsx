@@ -2,13 +2,15 @@
 // (PRD overview-lenses-issues D-43): the same language pack, Live plan and
 // theme a Markdown document uses, so an issue's body reads like the file
 // viewer's preview. The language pack loads lazily, as a document's does; the
-// text stands plain until it arrives.
+// text stands plain until it arrives. One editor draws the text for as long as
+// it stands: a changed text (an answer streaming in) is one edit of the words
+// that changed, so the parts already drawn keep their nodes.
 
 import { syntaxTree } from "@codemirror/language";
 import { Compartment, EditorState, Prec, StateField, type Extension, type Range, type Text } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { CodeBlock } from "./components/code-block";
 import { CopyWords } from "./components/copy-words";
@@ -67,6 +69,13 @@ class ChipWidget extends WidgetType {
     roots.set(dom, root);
     return dom;
   }
+  updateDOM(dom: HTMLElement) {
+    const root = roots.get(dom);
+    if (!root) return false;
+    dom.dataset.markdownChip = String(this.index);
+    root.render(this.node);
+    return true;
+  }
   destroy(dom: HTMLElement) {
     const root = roots.get(dom);
     roots.delete(dom);
@@ -90,6 +99,13 @@ class ChipRowWidget extends WidgetType {
     root.render(this.nodes.map((node, at) => <span key={at} className="contents">{node}</span>));
     roots.set(dom, root);
     return dom;
+  }
+  updateDOM(dom: HTMLElement) {
+    const root = roots.get(dom);
+    if (!root) return false;
+    dom.dataset.markdownChipRow = this.indexes;
+    root.render(this.nodes.map((node, at) => <span key={at} className="contents">{node}</span>));
+    return true;
   }
   destroy(dom: HTMLElement) {
     const root = roots.get(dom);
@@ -170,8 +186,9 @@ function chipSet(state: EditorState, chips: readonly MarkdownChip[]): Decoration
   return Decoration.set(ranges, true);
 }
 
-/** The chips, placed again when the text changes or the parse moves (the lazily loaded language parsing it), never on other updates. */
+/** The chips, placed again when the text changes or the parse moves (the lazily loaded language parsing it), never on other updates; none at all when there are no chips, so a streamed word reads no text for them. */
 function chipDecorations(chips: readonly MarkdownChip[]): Extension {
+  if (!chips.length) return [];
   const field = StateField.define<DecorationSet>({
     create: (state) => chipSet(state, chips),
     update: (placed, transaction) => (transaction.docChanged || syntaxTree(transaction.state) !== syntaxTree(transaction.startState) ? chipSet(transaction.state, chips) : placed),
@@ -197,9 +214,18 @@ class CodeBlockWidget extends WidgetType {
     const dom = document.createElement("div");
     dom.dataset.markdownCodeBlock = "true";
     const root = createRoot(dom);
-    root.render(<CodeBlock code={this.code} language={this.language} action={this.copy && this.code ? <CopyWords quiet text={this.code} what="code block" copy={this.copy} /> : undefined} />);
+    root.render(this.block());
     roots.set(dom, root);
     return dom;
+  }
+  updateDOM(dom: HTMLElement) {
+    const root = roots.get(dom);
+    if (!root) return false;
+    root.render(this.block());
+    return true;
+  }
+  private block() {
+    return <CodeBlock code={this.code} language={this.language} action={this.copy && this.code ? <CopyWords quiet text={this.code} what="code block" copy={this.copy} /> : undefined} />;
   }
   destroy(dom: HTMLElement) {
     const root = roots.get(dom);
@@ -263,51 +289,109 @@ export type MarkdownMark = { from: number; to: number };
 
 const LIT = Decoration.mark({ class: "rounded-xs bg-open-ask/20", attributes: { "data-markdown-lit": "true" } });
 
+/** The lit stretch, moved with the words an edit adds before it. */
 function markDecorations(mark: MarkdownMark | null, length: number): Extension {
   if (!mark || mark.from >= mark.to || mark.to > length) return [];
-  return EditorView.decorations.of(Decoration.set([LIT.range(mark.from, mark.to)]));
+  const field = StateField.define<DecorationSet>({
+    create: () => Decoration.set([LIT.range(mark.from, mark.to)]),
+    update: (lit, transaction) => lit.map(transaction.changes),
+    provide: (own) => EditorView.decorations.from(own),
+  });
+  return field;
+}
+
+/** Whether two chip lists draw the same parts: a caller that builds an equal list again (a new empty one each render) swaps nothing. */
+function sameChips(a: readonly MarkdownChip[], b: readonly MarkdownChip[]): boolean {
+  if (a === b) return true;
+  return a.length === b.length && a.every((chip, at) => sameChip(chip, b[at]!));
+}
+
+/** Every key of the two chips holds the same value, an array (`at`) the same items, so a field a chip gains is compared too. */
+function sameChip(a: MarkdownChip, b: MarkdownChip): boolean {
+  const keys = Object.keys(a) as (keyof MarkdownChip)[];
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((key) => {
+    const one = a[key];
+    const other = b[key];
+    if (Array.isArray(one) && Array.isArray(other)) return one.length === other.length && one.every((item, at) => item === other[at]);
+    return one === other;
+  });
+}
+
+/** The one edit that turns `from` into `to`: the stretch between their common start and their common end. */
+function changeBetween(from: string, to: string): { from: number; to: number; insert: string } {
+  const most = Math.min(from.length, to.length);
+  let start = 0;
+  while (start < most && from.charCodeAt(start) === to.charCodeAt(start)) start++;
+  let end = 0;
+  while (end < most - start && from.charCodeAt(from.length - 1 - end) === to.charCodeAt(to.length - 1 - end)) end++;
+  return { from: start, to: from.length - end, insert: to.slice(start, to.length - end) };
 }
 
 /**
+ * What the caller's chips and `복사` draw, swapped as one when either changes: the chips first, so a chip outranks the Live
+ * plan's marks on the letters it replaces (a file chip over inline code, its backticks included), then the Live plan (a
+ * table's cells take the chips) and the code blocks.
+ */
+function partsOf(chips: readonly MarkdownChip[], copyCode: CopyText | undefined): Extension {
+  return [chipDecorations(chips), markdownLive({ reveal: false, parts: cellParts(chips), copy: copyCode }), codeBlocks(copyCode)];
+}
+
+type Drawn = { view: EditorView; parts: Compartment; marked: Compartment; text: string; chips: readonly MarkdownChip[]; copyCode: CopyText | undefined; mark: MarkdownMark | null };
+
+/**
  * `size="chat"` sets the text at Desk's conversation size; `chips` draws
- * tokens of the text as parts (keep the array stable between renders);
- * `copyCode` puts `복사` in every code block's head row (Doop E2, N 1 나),
- * a block in a quote or a list included, always in view; `mark` lights a
- * stretch of the text, by offsets into it. The text can be
- * selected and copied as a page's text is.
+ * tokens of the text as parts (a list with the same chips, even a new array,
+ * swaps nothing; a chip with a new node redraws in place); `copyCode` puts `복사` in every code block's head
+ * row (Doop E2, N 1 나), a block in a quote or a list included, always in
+ * view; `mark` lights a stretch of the text, by offsets into it. The text can
+ * be selected and copied as a page's text is. A new `text` is written into the
+ * editor already drawn as one edit, so a streamed answer adds its words
+ * without drawing again what it said before.
  */
 export function MarkdownText({ text, size = "body", chips = NO_CHIPS, copyCode, mark = null }: { text: string; size?: "body" | "chat"; chips?: readonly MarkdownChip[]; copyCode?: CopyText; mark?: MarkdownMark | null }) {
   const host = useRef<HTMLDivElement>(null);
-  // The lit stretch changes without drawing the text again.
-  const lit = useRef<{ view: EditorView; compartment: Compartment } | null>(null);
-  const markNow = useRef(mark);
-  markNow.current = mark;
-  useEffect(() => {
+  const drawn = useRef<Drawn | null>(null);
+  const latest = useRef({ text, chips, copyCode, mark });
+  latest.current = { text, chips, copyCode, mark };
+  // The editor lives as long as the text's size; the language pack lights it up once.
+  useLayoutEffect(() => {
     const parent = host.current;
     if (!parent) return;
+    const now = latest.current;
     const language = new Compartment();
+    const parts = new Compartment();
     const marked = new Compartment();
     const view = new EditorView({
       parent,
       state: EditorState.create({
-        doc: text,
-        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false, parts: cellParts(chips), copy: copyCode }), chipDecorations(chips), codeBlocks(copyCode), marked.of(markDecorations(markNow.current, text.length)), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
+        doc: now.text,
+        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), parts.of(partsOf(now.chips, now.copyCode)), marked.of(markDecorations(now.mark, now.text.length)), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
       }),
     });
-    lit.current = { view, compartment: marked };
+    drawn.current = { view, parts, marked, ...now };
     let live = true;
     void languageLoader("markdown", "issue.md")?.().then((extension) => {
       if (live) view.dispatch({ effects: language.reconfigure(extension) });
     });
     return () => {
       live = false;
-      lit.current = null;
+      drawn.current = null;
       view.destroy();
     };
-  }, [text, size, chips, copyCode]);
-  useEffect(() => {
-    const now = lit.current;
-    now?.view.dispatch({ effects: now.compartment.reconfigure(markDecorations(mark, now.view.state.doc.length)) });
-  }, [mark]);
+  }, [size]);
+  // A changed text is one edit of the stretch that changed; changed parts or a changed lit stretch go in the same transaction.
+  useLayoutEffect(() => {
+    const now = drawn.current;
+    if (!now) return;
+    const changes = now.text === text ? undefined : changeBetween(now.text, text);
+    const kept = sameChips(now.chips, chips) ? now.chips : chips;
+    const effects = [];
+    if (kept !== now.chips || now.copyCode !== copyCode) effects.push(now.parts.reconfigure(partsOf(kept, copyCode)));
+    if (now.mark !== mark) effects.push(now.marked.reconfigure(markDecorations(mark, text.length)));
+    if (!changes && !effects.length) return;
+    now.view.dispatch({ changes, effects });
+    drawn.current = { ...now, text, chips: kept, copyCode, mark };
+  }, [text, chips, copyCode, mark]);
   return <div ref={host} className="min-w-0" data-markdown-text="true" />;
 }

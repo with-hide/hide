@@ -60,6 +60,9 @@ export function FilePathChip({ file, onOpen }: { file: FoundAnswerPath; onOpen: 
  * still `live` (an answer being written), nor for a session no checkout
  * holds (`place` null).
  */
+/** No file chips, one array, so an answer still streaming (it has none yet) keeps its chips array while its words change. */
+const NO_FILE_CHIPS: MarkdownChip[] = [];
+
 export function useFilePathChips(text: string, place: AnswerPlace | null, live: boolean, onOpen: (file: FoundAnswerPath) => void): MarkdownChip[] {
   const bridge = useSessionChipBridge();
   const latest = useRef(onOpen);
@@ -80,6 +83,7 @@ export function useFilePathChips(text: string, place: AnswerPlace | null, live: 
     };
   }, [written, device, cwd]);
   return useMemo(() => {
+    if (written.length === 0) return NO_FILE_CHIPS;
     const chips: MarkdownChip[] = [];
     for (const one of written) {
       const file = found.get(one.written);
