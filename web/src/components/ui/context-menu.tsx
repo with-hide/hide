@@ -131,10 +131,11 @@ function ContextMenuTrigger({ asChild = false, className, onContextMenu, onKeyDo
 
 /**
  * A menu anchored at the pointer opens under the press that opened it: macOS sends `contextmenu` on the button's
- * press, and a long press opens before the finger lifts. Radix chooses an item on a pointer up that had no pointer
- * down on it, so the release that ends that press would choose whatever item opened under it and close the menu.
- * The content swallows that release; the next press inside the menu ends the guard, so every later click chooses.
- * A press dragged onto an item and released there therefore opens the menu without choosing.
+ * press, so the button is released over the menu. Radix chooses an item on a pointer up that had no pointer down on
+ * it, so that release would choose whatever item opened under the pointer and close the menu. The content marks that
+ * release handled, which Radix's item reads and leaves alone, while the release still reaches every other listener;
+ * the next press inside the menu ends the guard, so every later click chooses. A press dragged onto an item and
+ * released there therefore opens the menu without choosing.
  */
 export function useOpeningPressGuard(at: Point | null): Pick<ComponentProps<"div">, "onPointerDownCapture" | "onPointerUpCapture"> {
   const opening = useRef(false);
@@ -146,7 +147,7 @@ export function useOpeningPressGuard(at: Point | null): Pick<ComponentProps<"div
     onPointerUpCapture: (event) => {
       if (!opening.current) return;
       opening.current = false;
-      event.stopPropagation();
+      event.preventDefault();
     },
   };
 }

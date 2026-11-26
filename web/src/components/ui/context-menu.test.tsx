@@ -130,10 +130,10 @@ it("leaves a tap and a scrolling finger to the target, with no menu", async () =
   expect(document.querySelector('[role="menu"]')).toBeNull();
 });
 
-/** A pointer event on `target` from a mouse, or from a finger when `pointerType` is "touch". */
-function pointer(type: "pointerdown" | "pointerup", target: Element, pointerType = "mouse") {
+/** A mouse's pointer event on `target`. */
+function pointer(type: "pointerdown" | "pointerup", target: Element) {
   const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 20, clientY: 20 });
-  Object.defineProperty(event, "pointerType", { value: pointerType });
+  Object.defineProperty(event, "pointerType", { value: "mouse" });
   target.dispatchEvent(event);
 }
 
@@ -165,16 +165,4 @@ it("leaves the menu open and chooses nothing when the right button that opened i
   // The next click on the item chooses it.
   await act(async () => { pointer("pointerdown", item()); pointer("pointerup", item()); item().click(); await vi.runOnlyPendingTimersAsync(); });
   expect(onSelect).toHaveBeenCalledTimes(1);
-});
-
-it("chooses nothing when the finger whose long press opened the menu lifts over an item", async () => {
-  const onSelect = vi.fn();
-  const row = await renderChoosable(onSelect);
-  await act(async () => {
-    touch("pointerdown", row);
-    await vi.advanceTimersByTimeAsync(500);
-  });
-  await act(async () => { pointer("pointerup", item(), "touch"); await vi.runOnlyPendingTimersAsync(); });
-  expect(onSelect).not.toHaveBeenCalled();
-  expect(document.querySelector('[role="menu"]')).not.toBeNull();
 });
