@@ -2655,7 +2655,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_no_job_is_has_a_card_while_its_thread_is_open_or_glance_lists_it() {
+    fn a_glance_session_has_a_card_while_its_row_stands() {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = desk(root.path(), 2, &[]);
         runtime.start_test_desk();
@@ -2686,9 +2686,24 @@ mod tests {
         // Closed, it stays one of 한눈에's, whose row reads its card.
         assert!(runtime.close_session_thread());
         assert_eq!(named(&runtime), ["p9"]);
-        runtime.desk.stored.glance.clear();
+        let listed = |runtime: &Runtime| {
+            runtime
+                .snapshot
+                .desk_jobs
+                .as_ref()
+                .unwrap()
+                .glance
+                .sessions
+                .clone()
+        };
+        assert_eq!(listed(&runtime), ["p9"]);
+        // Its tab closed, the row is gone and so is it from 한눈에, though
+        // the store still keeps it until newer sessions push it out.
+        runtime.snapshot.navigator.agents.clear();
         runtime.compose_desk_jobs();
         assert!(named(&runtime).is_empty());
+        assert!(listed(&runtime).is_empty());
+        assert_eq!(runtime.desk.stored.glance.len(), 1);
     }
 
     #[test]
