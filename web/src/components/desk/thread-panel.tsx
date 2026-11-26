@@ -42,7 +42,8 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   ask?: ReactNode;
   asks?: readonly AskLine[];
   foot?: ReactNode;
-  onTerminal: () => void;
+  /** The session's terminal; none for a session whose pane is gone. */
+  onTerminal?: () => void;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
   useSessionThread(actions, paneId);

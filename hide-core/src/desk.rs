@@ -202,6 +202,96 @@ pub(crate) struct Stored {
     /// older Hide reads past the key.
     #[serde(default)]
     pub queued: Vec<crate::model::DeskQueuedMessage>,
+    /// The sessions the conversation's chips name, by pane, the one named
+    /// least recently first, so a chip whose pane is gone still reads its
+    /// session's record and thread (feedback 2, frame K). An older Hide
+    /// reads past the key, and an entry a later Hide wrote in a shape this
+    /// one cannot read is dropped alone (`named_leniently`).
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "named_leniently"
+    )]
+    pub named: Vec<NamedSession>,
+}
+
+/// The sessions [`Stored::named`] keeps; past it the one named least
+/// recently that no chip of the newest lines names goes.
+pub(crate) const MAX_NAMED_SESSIONS: usize = 64;
+
+/// Reads each kept session on its own: one a later build wrote with an agent
+/// or a field this build does not know is dropped with a diagnostic, never
+/// the whole store, which holds the conversation a downgrade keeps (B29).
+fn named_leniently<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<NamedSession>, D::Error> {
+    let entries = match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Array(entries) => entries,
+        _ => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "desk", "kind": "desk_store.named_unreadable",
+            }));
+            return Ok(Vec::new());
+        }
+    };
+    let total = entries.len();
+    let named: Vec<NamedSession> = entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect();
+    if named.len() < total {
+        crate::diagnostic!(serde_json::json!({
+            "component": "desk", "kind": "desk_store.named_dropped",
+            "dropped": total - named.len(),
+        }));
+    }
+    Ok(named)
+}
+
+/// A session a chip of the conversation names, as its pane last ran it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct NamedSession {
+    pub pane_id: String,
+    pub session: crate::links::ledger::SessionIdentity,
+    /// The Hide agent kind its row had, which its chip's agent mark draws.
+    pub agent_kind: String,
+    /// Where its thread is read on its machine; none for an agent Hide reads
+    /// no thread of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<crate::runtime::ThreadReference>,
+}
+
+impl Stored {
+    /// Keeps the sessions the newest lines' chips name, `chipped` newest
+    /// first, as their panes run them now: a pane named again moves to the
+    /// recent end, taking the new session if it changed. Only the newest
+    /// [`MAX_NAMED_SESSIONS`] chipped are kept, and past the cap the one named
+    /// least recently that no chip names goes, so an entry in use is never
+    /// dropped and the same chips do not churn the store. Whether a session
+    /// changed, for a save; an order alone saves nothing.
+    pub(crate) fn keep_named(&mut self, mut chipped: Vec<NamedSession>) -> bool {
+        chipped.truncate(MAX_NAMED_SESSIONS);
+        let mut changed = false;
+        for named in chipped.iter().rev() {
+            match self
+                .named
+                .iter()
+                .position(|kept| kept.pane_id == named.pane_id)
+            {
+                Some(at) => {
+                    let kept = self.named.remove(at);
+                    changed |= kept != *named;
+                }
+                None => changed = true,
+            }
+            self.named.push(named.clone());
+        }
+        // The chipped, at most the cap, now stand at the recent end, so the
+        // oldest past the cap are never ones a chip names.
+        let excess = self.named.len().saturating_sub(MAX_NAMED_SESSIONS);
+        self.named.drain(..excess);
+        changed
+    }
 }
 
 /// Spawns the queue holds; one past it is refused `desk_queue_full`.
@@ -366,6 +456,16 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
     stored.queued.truncate(crate::model::DESK_QUEUED_MAX + 1);
     let excess = stored.marks.len().saturating_sub(MAX_MARKS);
     stored.marks.drain(..excess);
+    stored.named.retain(|named| {
+        named.pane_id.len() <= 1024
+            && named.agent_kind.len() <= 64
+            && named
+                .thread
+                .as_ref()
+                .is_none_or(crate::runtime::ThreadReference::bounded)
+    });
+    let excess = stored.named.len().saturating_sub(MAX_NAMED_SESSIONS);
+    stored.named.drain(..excess);
     let width = |width: Option<u32>| {
         width.filter(|width| (1..=crate::model::DESK_LANE_WIDTH_MAX).contains(width))
     };
@@ -846,6 +946,141 @@ mod restart_tests {
                 ("waiting", QueuedState::Waiting),
                 ("failed", QueuedState::Failed)
             ]
+        );
+    }
+
+    /// A session a chip names is kept by its pane: the same pane with a new
+    /// session takes it in its place, past the cap the one named longest ago
+    /// goes, and the store reads back what it kept within the cap (feedback
+    /// 2, frame K).
+    #[test]
+    fn named_sessions_keep_the_newest_sixty_four_and_read_back_within_the_cap() {
+        let named = |pane: usize, session: &str| NamedSession {
+            pane_id: format!("p{pane}"),
+            session: crate::links::ledger::SessionIdentity {
+                device_id: "node".into(),
+                agent: "codex".into(),
+                session_id: session.into(),
+            },
+            agent_kind: "codex".into(),
+            thread: Some(
+                serde_json::from_value(serde_json::json!({
+                    "agent": "codex", "account": "default", "reference_kind": "id",
+                    "reference_value": session, "cwd": "/repo",
+                }))
+                .unwrap(),
+            ),
+        };
+        let panes = |stored: &Stored| {
+            stored
+                .named
+                .iter()
+                .map(|named| named.pane_id.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut stored = Stored::default();
+        for pane in 0..=MAX_NAMED_SESSIONS {
+            assert!(stored.keep_named(vec![named(pane, &format!("s{pane}"))]));
+        }
+        assert_eq!(stored.named.len(), MAX_NAMED_SESSIONS);
+        assert_eq!(stored.named[0].pane_id, "p1");
+        assert_eq!(
+            stored.named.last().unwrap().pane_id,
+            format!("p{MAX_NAMED_SESSIONS}")
+        );
+        // Named again, p5 moves to the recent end without a save, and its new session is kept.
+        assert!(!stored.keep_named(vec![named(5, "s5")]));
+        assert_eq!(stored.named.last().unwrap().pane_id, "p5");
+        assert!(stored.keep_named(vec![named(5, "s5-cleared")]));
+        assert_eq!(
+            stored.named.last().unwrap().session.session_id,
+            "s5-cleared"
+        );
+        // One more named lets p1 go, the least recently named, not p5.
+        assert!(stored.keep_named(vec![named(100, "s100")]));
+        assert!(
+            !panes(&stored).contains(&"p1".to_owned()) && panes(&stored).contains(&"p5".to_owned())
+        );
+        // A session a chip still names is never the one that goes, though it is the oldest kept.
+        let oldest = stored.named[0].clone();
+        assert!(stored.keep_named(vec![named(101, "s101"), oldest.clone()]));
+        assert_eq!(stored.named.len(), MAX_NAMED_SESSIONS);
+        assert!(panes(&stored).contains(&oldest.pane_id));
+        // More chips than the cap keep their newest 64, and the same chips again change nothing.
+        let many: Vec<_> = (200..200 + MAX_NAMED_SESSIONS + 6)
+            .rev()
+            .map(|pane| named(pane, &format!("s{pane}")))
+            .collect();
+        assert!(stored.keep_named(many.clone()));
+        assert_eq!(stored.named.len(), MAX_NAMED_SESSIONS);
+        assert!(!stored.keep_named(many));
+        assert_eq!(
+            decode(&encode(&stored).unwrap()).unwrap().named,
+            stored.named
+        );
+
+        // A file holding more than the cap, from a hand edit, reads its newest.
+        let mut over: serde_json::Value =
+            serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+        over["named"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::to_value(named(99, "s99")).unwrap());
+        let read = decode(&serde_json::to_vec(&over).unwrap()).unwrap();
+        assert_eq!(read.named.len(), MAX_NAMED_SESSIONS);
+        assert_eq!(read.named.last().unwrap().pane_id, "p99");
+        assert_eq!(
+            read.named[0].pane_id, stored.named[1].pane_id,
+            "the oldest kept goes"
+        );
+    }
+
+    /// A later Hide may keep a session with an agent or a field this build
+    /// does not know: that entry goes alone, and the conversation, the
+    /// queue and the settings a downgrade keeps are read (B29).
+    #[test]
+    fn a_named_session_this_build_cannot_read_is_dropped_and_the_rest_of_desk_is_restored() {
+        let mut stored = Stored::default();
+        stored.conversation.push(DeskItem::User {
+            id: 1,
+            text: "어제 끝난 일 정리해줘".into(),
+            at_ms: 0,
+            mentions: Vec::new(),
+            attachments: Vec::new(),
+        });
+        let known = serde_json::json!({
+            "pane_id": "p1",
+            "session": {"device_id": "node", "agent": "codex", "session_id": "s1"},
+            "agent_kind": "codex",
+            "thread": {"agent": "codex", "account": "default", "reference_kind": "id", "reference_value": "s1", "cwd": "/repo"},
+        });
+        let mut later_agent = known.clone();
+        later_agent["pane_id"] = "p2".into();
+        later_agent["thread"]["agent"] = "an-agent-added-later".into();
+        let mut later_field = known.clone();
+        later_field["pane_id"] = "p3".into();
+        later_field["chosen_name"] = "a field added later".into();
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+        file["named"] = serde_json::json!([later_agent, known, later_field]);
+        let read = decode(&serde_json::to_vec(&file).unwrap()).unwrap();
+        assert_eq!(read.conversation.items, stored.conversation.items);
+        let panes: Vec<_> = read
+            .named
+            .iter()
+            .map(|named| named.pane_id.as_str())
+            .collect();
+        assert_eq!(
+            panes,
+            ["p1", "p3"],
+            "an unknown agent drops its entry; an unknown field is read past"
+        );
+
+        file["named"] = "a shape a later Hide chose".into();
+        let read = decode(&serde_json::to_vec(&file).unwrap()).unwrap();
+        assert_eq!(
+            (read.conversation.items, read.named),
+            (stored.conversation.items, Vec::new())
         );
     }
 
