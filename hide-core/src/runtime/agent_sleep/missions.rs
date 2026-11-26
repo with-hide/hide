@@ -7,7 +7,8 @@
 //! an agent that started a turn between the check and the end is tried again
 //! the next minute; a node opened again drops its marks, and a child's next
 //! letter to its parent that is not a report, or a `request` or `block` sent
-//! to it, drops its report's.
+//! to it, drops its report's. A mission checker's record of its line is its
+//! report (`Origin::Record`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -29,6 +30,13 @@ pub(in crate::runtime) enum Origin {
     Plan { plan: String, step: String },
     /// Its report to its parent, the letter by id.
     Report { letter: String },
+    /// Its record of its checker line `line` on node `node`, which is its
+    /// report to its parent: a later letter drops it as it drops a report's.
+    Record {
+        mission: String,
+        node: String,
+        line: String,
+    },
     /// Its open wait, by id (PRD core-wait D-09): spent when its end lands,
     /// dropped when the wait ends or is cancelled first.
     Wait { wait: String },
@@ -41,8 +49,16 @@ impl Origin {
             Self::Node { .. } => "mission",
             Self::Plan { .. } => "plan",
             Self::Report { .. } => "report",
+            Self::Record { .. } => "record",
             Self::Wait { .. } => "wait",
         }
+    }
+
+    /// Whether the agent's own report asked for the sleep, by a letter or
+    /// by its checker record: a later letter drops it, and a node's or plan
+    /// step's finish takes its place.
+    fn reported(&self) -> bool {
+        matches!(self, Self::Report { .. } | Self::Record { .. })
     }
 
     fn fields(&self) -> serde_json::Value {
@@ -50,6 +66,11 @@ impl Origin {
             Self::Node { mission, node } => json!({"mission": mission, "node": node}),
             Self::Plan { plan, step } => json!({"plan": plan, "step": step}),
             Self::Report { letter } => json!({"letter": letter}),
+            Self::Record {
+                mission,
+                node,
+                line,
+            } => json!({"mission": mission, "node": node, "line": line}),
             Self::Wait { wait } => json!({"wait": wait}),
         }
     }
@@ -71,10 +92,7 @@ impl SleepMark {
     /// Returns whether the marks changed.
     pub(in crate::runtime) fn ask(marks: &mut Vec<Self>, agent_id: &str, origin: Origin) -> bool {
         match marks.iter_mut().find(|mark| mark.agent_id == agent_id) {
-            Some(mark)
-                if matches!(mark.origin, Origin::Report { .. })
-                    && !matches!(origin, Origin::Report { .. }) =>
-            {
+            Some(mark) if mark.origin.reported() && !origin.reported() => {
                 mark.origin = origin;
                 true
             }
@@ -168,7 +186,10 @@ impl Runtime {
         let missions = &mut self.missions;
         missions.sleep_marks.retain(|mark| match &mark.origin {
             Origin::Node { mission, node } => now.contains(&(mission.clone(), node.clone())),
-            Origin::Plan { .. } | Origin::Report { .. } | Origin::Wait { .. } => true,
+            Origin::Plan { .. }
+            | Origin::Report { .. }
+            | Origin::Record { .. }
+            | Origin::Wait { .. } => true,
         });
         for mission in &missions.book.missions {
             for node in &mission.nodes {
@@ -262,6 +283,62 @@ impl Runtime {
         }
     }
 
+    /// A mission checker's record of its `review` or `verify` line `line`
+    /// on node `node` is its report (with-hide/hide-private docs/missions.md,
+    /// Checkers): Hide does what a confirmed `report` letter from it to its
+    /// parent does, so it sends its Conductor no letter about it. Its
+    /// parent's watch on it ends, and it is marked to sleep at its next rest
+    /// (`Origin::Record`) unless it conducts an open mission; the next
+    /// round's cell wakes it. A checker with no parent (a root) has no
+    /// report to make. Run on every record a checker's line takes, the same
+    /// answer again included.
+    pub(in crate::runtime) fn checker_reported(
+        &mut self,
+        agent: &str,
+        mission: &str,
+        node: &str,
+        line: &str,
+    ) {
+        let Ok(ledger) = self.delivery_state() else {
+            return;
+        };
+        if !ledger
+            .agents
+            .iter()
+            .any(|record| record.id == agent && !record.ended && record.parent.is_some())
+        {
+            return;
+        }
+        if let Some(client) = self.delivery_client.clone()
+            && let Err(code) = client.post(crate::delivery::worker::Effect::Reported {
+                agent: agent.to_owned(),
+            })
+        {
+            crate::diagnostic!(json!({
+                "component": "agent_sleep", "kind": "agent_sleep.record_watch_kept",
+                "agent_id": agent, "code": code,
+            }));
+        }
+        let conducts =
+            self.missions.book.missions.iter().any(|open| {
+                open.status.open() && open.conductor.agent_id.as_deref() == Some(agent)
+            });
+        if conducts {
+            return;
+        }
+        let origin = Origin::Record {
+            mission: mission.to_owned(),
+            node: node.to_owned(),
+            line: line.to_owned(),
+        };
+        if SleepMark::ask(&mut self.missions.sleep_marks, agent, origin) {
+            crate::diagnostic!(json!({
+                "component": "agent_sleep", "kind": "agent_sleep.record_marked",
+                "agent_id": agent, "mission": mission, "node": node, "line": line,
+            }));
+        }
+    }
+
     /// Drops the report marks of the registrations whose agent `addressed`
     /// names, for `letter`.
     fn drop_report_marks(
@@ -271,7 +348,7 @@ impl Runtime {
         addressed: impl Fn(&crate::delivery::Actor) -> bool,
     ) {
         self.missions.sleep_marks.retain(|mark| {
-            let dropped = matches!(mark.origin, Origin::Report { .. })
+            let dropped = mark.origin.reported()
                 && ledger
                     .agents
                     .iter()

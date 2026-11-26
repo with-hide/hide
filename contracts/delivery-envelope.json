@@ -281,7 +281,7 @@
           },
           "conductor": null
         },
-        "hint": "Mission mission-3 · checking node core (review) · range up to the PR; the operator merges · criteria 2/5 · left: c2, review, ci · no merging · no starting agents\nRecord your verdict with `hide mission record core review --pass|--fail --evidence <one line>`.",
+        "hint": "Mission mission-3 · checking node core (review) · range up to the PR; the operator merges · criteria 2/5 · left: c2, review, ci · no merging · no starting agents\nRecord your verdict with `hide mission record core review --pass|--fail --evidence <every finding, graded>`: your record is your answer, send your Conductor no letter about it.",
         "commands": [
           {
             "tool": "shell",

@@ -2562,8 +2562,10 @@ mod tests {
         let text: String = (1..=21)
             .map(|n| format!("@session(p{n} job-{n}) "))
             .collect();
-        let mentions = hide_desk::session_mentions(&text)
-            .into_iter()
+        let mentions = hide_desk::Answer::read(&text)
+            .sessions()
+            .iter()
+            .cloned()
             .map(|(pane_id, name)| crate::model::DeskSessionChip {
                 pane_id,
                 name,

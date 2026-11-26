@@ -499,6 +499,13 @@ pub(crate) enum Effect {
         recipient: String,
         seen: BTreeMap<String, u64>,
     },
+    /// Registration `agent` reported to its parent without a letter: a
+    /// mission checker recorded its line (`Runtime::checker_reported`), so
+    /// its parent's watch on it ends, as a confirmed report's does
+    /// (`Ledger::end_parent_watch`).
+    Reported {
+        agent: String,
+    },
     /// A Reopen is about to bring these closed agents back: the letters
     /// that wait for them now end, before anything starts (B2, B7; see
     /// `Runtime::delivery_closed`). The store answers once they are saved.
@@ -1085,6 +1092,10 @@ fn apply(
             });
             return Ok((Value::Null, true));
         }
+        Effect::Reported { agent } => {
+            let ended = ledger.end_parent_watch(agent);
+            return Ok((json!({ "ended": ended }), ended));
+        }
         Effect::EndClosed(closed) => {
             let mut ended = false;
             for agent in closed {
@@ -1196,7 +1207,7 @@ fn apply(
                 stored.last_engine = target.engine.clone();
                 stored.status_changed_at_unix_ms = target.status_changed_at_unix_ms;
             }
-            Ok(json!(stored))
+            Ok(json!(stored.read_by(actor.pane_reader())))
         }
         Command::WatchStop { id } => {
             watch::stop(ledger, actor, id)?;
@@ -1211,20 +1222,24 @@ fn apply(
             ..
         } => {
             let observer = target.as_ref().ok_or("target_unavailable")?;
-            Ok(json!(watch::assign(
-                ledger,
-                actor,
-                id,
-                &observer.actor,
-                *expected_generation,
-                approval.as_deref()
-            )?))
+            Ok(json!(
+                watch::assign(
+                    ledger,
+                    actor,
+                    id,
+                    &observer.actor,
+                    *expected_generation,
+                    approval.as_deref()
+                )?
+                .read_by(actor.pane_reader())
+            ))
         }
         Command::WatchList => Ok(json!(
             ledger
                 .watches
                 .iter()
                 .filter(|watch| watch.parent.same_identity(actor))
+                .map(|watch| watch.read_by(actor.pane_reader()))
                 .collect::<Vec<_>>()
         )),
         // A tool event's ask carries the caller's own pane as its target,
@@ -1282,7 +1297,9 @@ fn apply(
                     .letters
                     .iter()
                     .find(|letter| letter.id == id)
-                    .map_or(value.clone(), |letter| json!(letter)),
+                    .map_or(value.clone(), |letter| {
+                        json!(letter.read_by(actor.pane_reader()))
+                    }),
                 _ => value,
             }
         }),

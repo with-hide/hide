@@ -59,7 +59,7 @@ pub(super) fn end(
         close(client, record)?
     };
     Ok(json!(AgentEnd {
-        agent: agent_view(record, &ledger, &sleeping),
+        agent: agent_view(record, &ledger, &sleeping, actor.pane_reader()),
         pane,
         conversation,
     }))

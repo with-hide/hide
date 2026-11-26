@@ -16,12 +16,59 @@ const WARN: &str = "⚠";
 /// The core's answer to `show` as text, read at `now`; refused when a
 /// node's `waiting_on` is not one this build reads.
 pub fn draw(result: &Value, now: u64) -> Result<String, String> {
-    let result = one_line(result);
+    let result = shown(result);
     if result["node"].is_object() {
         draw_node(&result, now)
     } else {
         draw_mission(&result["mission"], now)
     }
+}
+
+/// `value` with every control character a space (`one_line`), but for the
+/// line breaks of an `evidence` text: a checker's findings, which its
+/// worker reads here, keep the lines they were written in
+/// (`evidence_words`).
+fn shown(value: &Value) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, field)| {
+                    let field = match field {
+                        Value::String(text) if key == "evidence" => Value::String(
+                            text.lines()
+                                .map(|line| one_line(&Value::from(line)))
+                                .filter_map(|line| line.as_str().map(str::to_owned))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        ),
+                        other => shown(other),
+                    };
+                    (key.clone(), field)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(shown).collect()),
+        other => one_line(other),
+    }
+}
+
+/// A line's or a checker's evidence, as the words on the line it answers
+/// and the lines under it: one line stays on that line; several, a
+/// checker's findings, go each on its own line under it, indented by
+/// `indent`, so a whole review reads as it was written.
+fn evidence_words(evidence: &str, indent: &str) -> (String, String) {
+    if !evidence.contains('\n') {
+        return (format!(" · 근거 {evidence}"), String::new());
+    }
+    let mut under = String::new();
+    for line in evidence.lines() {
+        under.push('\n');
+        if !line.trim().is_empty() {
+            let _ = write!(under, "{indent}{line}");
+        }
+    }
+    (" · 근거".to_owned(), under)
 }
 
 fn text<'a>(value: &'a Value, field: &str) -> &'a str {
@@ -564,8 +611,11 @@ fn draw_line(out: &mut String, line: &Value, now: u64) {
     if let Some(summary) = line["summary"].as_str() {
         let _ = write!(words, " · {summary}");
     }
+    let mut under = String::new();
     if let Some(evidence) = line["evidence"].as_str() {
-        let _ = write!(words, " · 근거 {evidence}");
+        let (on, below) = evidence_words(evidence, "      ");
+        words.push_str(&on);
+        under = below;
     }
     if line["by"].is_object() {
         let _ = write!(
@@ -574,7 +624,7 @@ fn draw_line(out: &mut String, line: &Value, now: u64) {
             recorded_words(&line["by"], &line["by"]["at_unix_ms"], now)
         );
     }
-    let _ = writeln!(out, "{words}");
+    let _ = writeln!(out, "{words}{under}");
     for checker in line["checkers"].as_array().into_iter().flatten() {
         let mut words = format!(
             "    {} {}",
@@ -593,7 +643,9 @@ fn draw_line(out: &mut String, line: &Value, now: u64) {
             let _ = write!(words, " · {summary}");
         }
         if let Some(evidence) = checker["evidence"].as_str() {
-            let _ = write!(words, " · 근거 {evidence}");
+            let (on, below) = evidence_words(evidence, "        ");
+            words.push_str(&on);
+            words.push_str(&below);
         }
         let _ = writeln!(out, "{words}");
     }
@@ -1119,6 +1171,32 @@ mod tests {
                 .unwrap()
                 .ends_with("최근 편지 · 읽지 못함\n")
         );
+    }
+
+    /// A checker's record holds every finding, one per line, and its worker
+    /// reads them here: `show` prints them whole, each on its own line under
+    /// the checker's, a control character still a space; a line's one-line
+    /// evidence stays on its line.
+    #[test]
+    fn a_checkers_findings_read_as_written_under_its_line() {
+        let mut node = mission()["mission"]["nodes"][0].clone();
+        let tail = "x".repeat(4000);
+        let findings =
+            format!("S1 serious: input lost\u{1b}[31m at a.rs:7\r\n\nO1 ordinary: {tail}\n");
+        node["criteria"][0]["evidence"] = json!("unit test");
+        node["criteria"][1]["checkers"] = json!([
+            {"worker": {"agent": "codex"}, "agent_id": "agent-3", "state": "fail",
+             "evidence": findings, "at_unix_ms": NOW - 20 * MINUTE}]);
+        let text = draw(
+            &json!({"mission_id": "mission-33", "node": node, "letters": []}),
+            NOW,
+        )
+        .unwrap();
+        let expected = format!(
+            "\x20   codex 실패 · agent-3 · 20분 전 · 근거\n\x20       S1 serious: input lost [31m at a.rs:7\n\n\x20       O1 ordinary: {tail}\n"
+        );
+        assert!(text.contains(&expected), "{text}");
+        assert!(text.contains("\x20 c1 통과 · 근거 unit test\n"), "{text}");
     }
 
     /// A worker launched with a profile names it beside its agent, and one

@@ -153,7 +153,9 @@ struct Turn {
     /// The operator's message the turn answers; none for a turn Desk
     /// started itself to tell the agent of a plain refusal.
     message: Option<u64>,
-    text: String,
+    /// The words so far, with the sessions and missions they name read as
+    /// each token closes.
+    answer: hide_desk::Answer,
     cut: bool,
     started_at_ms: u64,
     first_text_at_ms: Option<u64>,
@@ -796,7 +798,7 @@ impl Runtime {
             tag,
             agent,
             message,
-            text: String::new(),
+            answer: hide_desk::Answer::default(),
             cut: false,
             started_at_ms: crate::links::now_ms(),
             first_text_at_ms: None,
@@ -927,7 +929,11 @@ impl Runtime {
                     .as_ref()
                     .is_none_or(|refusal| refusal.text.is_none())
             {
-                let said = self.desk.turn.as_ref().map_or(0, |turn| turn.text.len());
+                let said = self
+                    .desk
+                    .turn
+                    .as_ref()
+                    .map_or(0, |turn| turn.answer.written());
                 self.desk.refusal = Some(Refusal {
                     command: approval.command,
                     kind: approval.kind,
@@ -1242,23 +1248,12 @@ impl Runtime {
         let finished_command = state == DeskReplyState::Done
             && !turn.cut
             && turn.kind == hide_desk::commands::Kind::Command;
-        if !turn.text.is_empty() || turn.compaction.is_some() || finished_command {
+        if turn.answer.written() > 0 || turn.compaction.is_some() || finished_command {
             let id = self.desk.stored.conversation.next_id();
             // Each chip's token is kept as the chip names it, a quoted name without its quotes.
-            let text = hide_desk::unquoted_mentions(&turn.text);
-            let mentions = hide_desk::session_mentions(&text)
-                .into_iter()
-                .map(|(pane_id, name)| crate::model::DeskSessionChip {
-                    pane_id,
-                    name,
-                    agent_kind: None,
-                    mark: None,
-                })
-                .collect();
-            let missions = hide_desk::mission_mentions(&text)
-                .into_iter()
-                .map(|(id, title)| crate::model::DeskMissionMention { id, title })
-                .collect();
+            let text = turn.answer.text().to_owned();
+            let mentions = session_chips(&turn.answer);
+            let missions = mission_mentions(&turn.answer);
             self.desk.stored.conversation.push(DeskItem::Reply {
                 id,
                 agent: turn.agent,
@@ -1458,16 +1453,16 @@ impl Runtime {
                 if turn.cut {
                     return false;
                 }
-                let room = MAX_REPLY_BYTES.saturating_sub(turn.text.len());
+                let room = MAX_REPLY_BYTES.saturating_sub(turn.answer.written());
                 if text.len() > room {
                     let mut end = room;
                     while !text.is_char_boundary(end) {
                         end -= 1;
                     }
-                    turn.text.push_str(&text[..end]);
+                    turn.answer.push(&text[..end]);
                     turn.cut = true;
                 } else {
-                    turn.text.push_str(&text);
+                    turn.answer.push(&text);
                 }
                 self.compose_desk_live();
                 return true;
@@ -1526,10 +1521,9 @@ impl Runtime {
                 // went on said so itself.
                 let silent = matches!(outcome, TurnOutcome::Done | TurnOutcome::Cancelled)
                     && self.desk.turn.as_ref().is_some_and(|turn| {
-                        self.desk
-                            .refusal
-                            .as_ref()
-                            .is_some_and(|refusal| !turn.cut && turn.text.len() == refusal.said)
+                        self.desk.refusal.as_ref().is_some_and(|refusal| {
+                            !turn.cut && turn.answer.written() == refusal.said
+                        })
                     });
                 self.desk_close_turn(outcome);
                 if self.desk.host.open {
@@ -1900,11 +1894,43 @@ impl Runtime {
         }
         let turn = self.desk.turn.as_ref();
         self.snapshot.desk_live = Some(Arc::new(DeskLiveSnapshot {
-            text: turn.map(|turn| turn.text.clone()),
+            text: turn.map(|turn| turn.answer.text().to_owned()),
             started_at_ms: turn.map(|turn| turn.started_at_ms),
             step: turn.and_then(|turn| turn.now),
+            mentions: turn
+                .map(|turn| session_chips(&turn.answer))
+                .unwrap_or_default(),
+            missions: turn
+                .map(|turn| mission_mentions(&turn.answer))
+                .unwrap_or_default(),
         }));
     }
+}
+
+/// The sessions `answer` names so far, as its chips.
+fn session_chips(answer: &hide_desk::Answer) -> Vec<crate::model::DeskSessionChip> {
+    answer
+        .sessions()
+        .iter()
+        .map(|(pane_id, name)| crate::model::DeskSessionChip {
+            pane_id: pane_id.clone(),
+            name: name.clone(),
+            agent_kind: None,
+            mark: None,
+        })
+        .collect()
+}
+
+/// The missions `answer` names so far.
+fn mission_mentions(answer: &hide_desk::Answer) -> Vec<crate::model::DeskMissionMention> {
+    answer
+        .missions()
+        .iter()
+        .map(|(id, title)| crate::model::DeskMissionMention {
+            id: id.clone(),
+            title: title.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -2782,8 +2808,24 @@ mod tests {
         assert_eq!(step(&runtime), None);
         runtime.desk_report(Report::Text {
             tag: send.tag,
-            text: " in @mission(mission-63 결제 흐름 정리 (11-25)).".into(),
+            text: " in @mission(mission-63 결제 흐름 정리 (11-25".into(),
         });
+        // A mission whose token is still open is words; the chunk that
+        // closes it puts its chip in the reply being written.
+        let live = runtime.snapshot.desk_live.as_ref().unwrap();
+        assert!(live.missions.is_empty());
+        runtime.desk_report(Report::Text {
+            tag: send.tag,
+            text: ")).".into(),
+        });
+        let live = runtime.snapshot.desk_live.as_ref().unwrap();
+        assert_eq!(
+            live.missions,
+            [crate::model::DeskMissionMention {
+                id: "mission-63".into(),
+                title: "결제 흐름 정리 (11-25)".into(),
+            }]
+        );
         runtime.desk_report(Report::Step {
             tag: send.tag,
             step: Some(hide_desk::permission::Step::Letter),

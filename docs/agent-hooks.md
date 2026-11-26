@@ -808,7 +808,7 @@ The prompt hook adds the record's lines to the session context:
 
 - the plan's, `Task: now <step> (n/m) · next <step> · updated <N> min ago`, with the review's rule after it while the plan waits for review, or, when it was not updated for 30 minutes, the `hide task node <key> --status done` command; a finished plan has none;
 - a mission worker's, `Mission <id> · node <key> · range <its own lines or title> · criteria <met>/<total> · left: <keys> · no merging · no starting agents`, without `no merging` for a mission that goes through the merge, and without the criteria for a mission made before node criteria (PRD mission-map-git-criteria D-19, B22); while a line is left, a second line names `hide mission record <node> <line> --pass|--fail --evidence <one line>`, the check line with `--commit <sha>`;
-- a checker's, `Mission <id> · checking node <key> (<review or verify>) · range <its own lines or title> · criteria …`, followed by the one `hide mission record` command for its own line;
+- a checker's, `Mission <id> · checking node <key> (<review or verify>) · range <its own lines or title> · criteria …`, followed by the one `hide mission record` command for its own line, with every finding graded in `--evidence`, and that the record is its answer, so it sends its Conductor no letter about it;
 - a Conductor's, `Mission <done>/<nodes> · working <n> · letters <n> · decision waiting: <yes/no>`, with ` · reported with lines left: <nodes>` when a worker sent its report while its node still has a line open.
 
 The lines only tell: no hook refuses a call or ends a turn because a line is open, and the core alone refuses a node's `done` (D-12).

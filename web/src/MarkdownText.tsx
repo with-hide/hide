@@ -30,26 +30,25 @@ const prose = EditorView.theme({
   "&.cm-editor .cm-content": { fontFamily: "var(--font-sans)", fontSize: "var(--text-body)", lineHeight: "1.5", padding: "0" },
   ".cm-line": { padding: "0" },
   "&.cm-focused": { outline: "none" },
+  // A chip in a line of words keeps room from the words beside it.
+  "[data-markdown-chip]": { margin: "0 var(--spacing-xxs)" },
 });
 
 // Desk's conversation reads larger and looser than a panel (PRD
-// session-docs-and-assistant D-75): the subhead size at a relaxed leading.
+// session-docs-and-assistant D-75): the subhead size at a leading that holds
+// a chip in a line (a session's, a file's, a mission's one-line chip) with
+// room above and below it (mission-106 answer, picture section 1).
 const chat = EditorView.theme({
-  "&.cm-editor .cm-content": { fontSize: "var(--text-subhead)", lineHeight: "1.625" },
+  "&.cm-editor .cm-content": { fontSize: "var(--text-subhead)", lineHeight: "calc(var(--text-subhead) + var(--spacing-md))" },
 });
 
 /**
  * A token of the text drawn as a part instead of its letters, such as a
  * session a Desk reply names: everywhere it stands, or only at the offsets
  * `at` names (a file path, which a code block keeps as code). A table's cells
- * draw the ones without `at`. `after` is a part that does not fit a line of
- * words: the token's place keeps `node`, and `after` stands in a row of its
- * own right behind the paragraph that holds the token, with the other parts
- * that paragraph has. `item` is the part a table's cell or a list's item
- * draws in the token's place instead, with no row after it (Doop Q 가): there
- * the token stands among other names, so the part takes the name's place.
+ * draw the ones without `at`.
  */
-export type MarkdownChip = InlinePart & { at?: readonly number[]; after?: ReactNode; item?: ReactNode };
+export type MarkdownChip = InlinePart & { at?: readonly number[] };
 
 const roots = new WeakMap<HTMLElement, Root>();
 
@@ -83,72 +82,25 @@ class ChipWidget extends WidgetType {
   }
 }
 
-/** A row of parts under a paragraph, in a root of its own, unmounted after the editor lets it go. */
-class ChipRowWidget extends WidgetType {
-  constructor(readonly indexes: string, readonly nodes: readonly ReactNode[]) {
-    super();
-  }
-  eq(other: ChipRowWidget) {
-    return other.indexes === this.indexes && other.nodes.every((node, at) => node === this.nodes[at]);
-  }
-  toDOM() {
-    const dom = document.createElement("div");
-    dom.className = "cm-md-chip-row";
-    dom.dataset.markdownChipRow = this.indexes;
-    const root = createRoot(dom);
-    root.render(this.nodes.map((node, at) => <span key={at} className="contents">{node}</span>));
-    roots.set(dom, root);
-    return dom;
-  }
-  updateDOM(dom: HTMLElement) {
-    const root = roots.get(dom);
-    if (!root) return false;
-    dom.dataset.markdownChipRow = this.indexes;
-    root.render(this.nodes.map((node, at) => <span key={at} className="contents">{node}</span>));
-    return true;
-  }
-  destroy(dom: HTMLElement) {
-    const root = roots.get(dom);
-    roots.delete(dom);
-    if (root) queueMicrotask(() => root.unmount());
-  }
-  ignoreEvent() {
-    return true;
-  }
-}
-
-// The row's room: the words' spacing and the parts side by side, wrapping to the next line when they run out.
-const chipRow = EditorView.theme({
-  ".cm-md-chip-row": { display: "flex", flexWrap: "wrap", gap: "var(--spacing-sm)", padding: "var(--spacing-xs) 0" },
-});
-
-/** Where the paragraph holding `at` ends: before its blank line, or the text's end. */
-function paragraphEnd(text: string, at: number): number {
-  const blank = text.indexOf("\n\n", at);
-  return blank < 0 ? text.length : blank;
-}
-
 /**
- * Where the editor's parse puts the stretch: in code (inline code or a code
- * block, which keeps its letters), in a table or a list item, or in running
- * text; `null` while the lazily loaded language has not parsed that far. The
- * text is read once, by the parse that draws it, never by a second parser.
+ * Whether the editor's parse puts the stretch in code (inline code or a code
+ * block, which keeps its letters); not while the lazily loaded language has
+ * not parsed that far. The text is read once, by the parse that draws it,
+ * never by a second parser.
  */
-function placeOf(state: EditorState, from: number, to: number): "code" | "item" | "text" | null {
+function inCode(state: EditorState, from: number, to: number): boolean {
   const tree = syntaxTree(state);
-  if (tree.length < to) return null;
+  if (tree.length < to) return false;
   for (let node: SyntaxNode | null = tree.resolveInner(from, 1); node; node = node.parent) {
-    if (node.name === "InlineCode" || node.name === "FencedCode" || node.name === "CodeBlock") return "code";
-    if (node.name === "ListItem" || node.name === "Table") return "item";
+    if (node.name === "InlineCode" || node.name === "FencedCode" || node.name === "CodeBlock") return true;
   }
-  return "text";
+  return false;
 }
 
 /**
- * Every place a chip's token stands in the text, replaced by the chip, and each paragraph's `after` parts in a row behind it;
- * where two chips would cover the same letters, the one that starts first, then the earlier chip, wins. A token in code keeps
- * its letters. In a table's cell or a list's item a chip with `item` draws it there and adds no row; until the parse has reached
- * a chip, it draws `node` and no row, so a row never comes and goes. A chip whose part did not change keeps its DOM (`ChipWidget.eq`).
+ * Every place a chip's token stands in the text, replaced by the chip; where two chips would cover the same letters, the one
+ * that starts first, then the earlier chip, wins. A token in code keeps its letters. A chip whose part did not change keeps
+ * its DOM (`ChipWidget.eq`).
  */
 function chipSet(state: EditorState, chips: readonly MarkdownChip[]): DecorationSet {
   if (!chips.length) return Decoration.none;
@@ -164,24 +116,14 @@ function chipSet(state: EditorState, chips: readonly MarkdownChip[]): Decoration
   });
   found.sort((a, b) => a.from - b.from || a.index - b.index);
   const ranges: Range<Decoration>[] = [];
-  const rows = new Map<number, Set<number>>();
   let end = 0;
   for (const span of found) {
     if (span.from < end) continue;
     end = span.to;
     const chip = chips[span.index]!;
     // A token in code keeps its letters; one placed by offsets (`at`) was already placed outside code.
-    const where = chip.at ? "text" : placeOf(state, span.from, span.to);
-    if (where === "code") continue;
-    ranges.push(Decoration.replace({ widget: new ChipWidget(span.index, where === "item" && chip.item !== undefined ? chip.item : chip.node) }).range(span.from, span.to));
-    if (chip.after && where === "text") {
-      const close = paragraphEnd(text, span.from);
-      rows.set(close, (rows.get(close) ?? new Set()).add(span.index));
-    }
-  }
-  for (const [at, held] of rows) {
-    const indexes = [...held].sort((a, b) => a - b);
-    ranges.push(Decoration.widget({ widget: new ChipRowWidget(indexes.join(" "), indexes.map((index) => chips[index]!.after)), block: true, side: 1 }).range(at));
+    if (!chip.at && inCode(state, span.from, span.to)) continue;
+    ranges.push(Decoration.replace({ widget: new ChipWidget(span.index, chip.node) }).range(span.from, span.to));
   }
   return Decoration.set(ranges, true);
 }
@@ -194,12 +136,12 @@ function chipDecorations(chips: readonly MarkdownChip[]): Extension {
     update: (placed, transaction) => (transaction.docChanged || syntaxTree(transaction.state) !== syntaxTree(transaction.startState) ? chipSet(transaction.state, chips) : placed),
     provide: (own) => EditorView.decorations.from(own),
   });
-  return [chipRow, field];
+  return field;
 }
 
-/** What a table's cells draw for the chips (`markdownLive`'s parts): every chip without offsets, as its `item` where it has one. */
+/** What a table's cells draw for the chips (`markdownLive`'s parts): every chip without offsets. */
 function cellParts(chips: readonly MarkdownChip[]): InlinePart[] {
-  return chips.filter((chip) => !chip.at).map((chip) => (chip.item !== undefined ? { token: chip.token, node: chip.item } : chip));
+  return chips.filter((chip) => !chip.at);
 }
 
 /** A code block drawn whole by `CodeBlock`, with `복사` in its gutter, in a root of its own unmounted after the editor lets it go. */

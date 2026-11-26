@@ -974,6 +974,11 @@ pub struct DeskLiveSnapshot {
     /// nothing since it, named as `DeskSteps` counts it: the line under the
     /// reply says it until the turn ends.
     pub step: Option<DeskStepKind>,
+    /// The sessions the text names so far, each read once its token
+    /// closes, so its chip shows while the rest is still written.
+    pub mentions: Vec<DeskSessionChip>,
+    /// The missions the text names so far, read as `mentions` are.
+    pub missions: Vec<DeskMissionMention>,
 }
 
 /// One of `DeskSteps`' kinds, by the name its count has there.
