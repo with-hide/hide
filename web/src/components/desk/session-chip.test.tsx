@@ -151,6 +151,29 @@ it("draws a mission a table's cell or a list's item names as the one-line chip i
   }
 });
 
+it("keeps the answer's title in a table cell for a mission the app does not hold, draws a mission named twice in each place with one row per paragraph, and leaves code as its letters", async () => {
+  const saved = useShellStore.getState();
+  const held = { id: "mission-63", title: "결제 흐름 정리", status: "running", nodes: [], conductor: { present: true }, decision: null, question: null, delay: null, closed_at_unix_ms: null };
+  useShellStore.setState({ rest: { missions: { items: [held] } } as unknown as SnapshotRest });
+  try {
+    const missions = [{ id: "mission-63", title: "결제 흐름 정리" }, { id: "mission-9", title: "모르는 미션" }];
+    const known = "@mission(mission-63 결제 흐름 정리)";
+    const text = `| 미션 |\n| --- |\n| ${known} |\n| @mission(mission-9 모르는 미션) |\n\n${known} 다음, ${known} 마무리.\n\n\`${known}\` 는 토큰이에요.\n\n\`\`\`\n${known}\n\`\`\``;
+    const host = await render(<DeskReply text={text} missions={missions} onMission={() => {}} />);
+    await act(() => vi.waitFor(() => expect(host.querySelector(".cm-md-table [data-mission-chip]")).not.toBeNull()));
+    const chips = [...host.querySelectorAll("[data-mission-chip]")];
+    // The table holds one chip, for the mission the app holds; the paragraph naming it twice has one row with one chip.
+    expect(chips.map((chip) => [chip.getAttribute("data-mission-chip"), chip.getAttribute("data-mission-chip-lines") ?? "2", chip.closest(".cm-md-table") !== null])).toEqual([["mission-63", "1", true], ["mission-63", "2", false]]);
+    expect(host.querySelector(".cm-md-table")?.textContent).toContain("모르는 미션");
+    expect(host.querySelector(".cm-md-table")?.textContent).not.toContain("@mission(");
+    expect([...host.querySelectorAll("[data-markdown-chip-row]")].map((row) => row.querySelectorAll("[data-mission-chip]").length)).toEqual([1]);
+    // Inline code and a code block keep the token as written.
+    expect(host.textContent?.split(known).length).toBe(3);
+  } finally {
+    useShellStore.setState(saved, true);
+  }
+});
+
 it("redraws no answer when a mission changes unless the answer names that mission, so a selection in it stays", async () => {
   const saved = useShellStore.getState();
   const held = (title: string) => ({ id: "mission-63", title, status: "running", nodes: [], conductor: { present: true }, decision: null, question: null, delay: null, closed_at_unix_ms: null });

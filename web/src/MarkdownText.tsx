@@ -113,24 +113,29 @@ function paragraphEnd(text: string, at: number): number {
 }
 
 /**
- * Whether the editor's parse puts the stretch in a table or a list item, or
- * `null` while the lazily loaded language has not parsed that far: the text
- * is read once, by the parse that draws it, never by a second parser.
+ * Where the editor's parse puts the stretch: in code (inline code or a code
+ * block, which keeps its letters), in a table or a list item, or in running
+ * text; `null` while the lazily loaded language has not parsed that far. The
+ * text is read once, by the parse that draws it, never by a second parser.
  */
-function inItem(state: EditorState, from: number, to: number): boolean | null {
+function placeOf(state: EditorState, from: number, to: number): "code" | "item" | "text" | null {
   const tree = syntaxTree(state);
   if (tree.length < to) return null;
-  for (let node: SyntaxNode | null = tree.resolveInner(from, 1); node; node = node.parent) if (node.name === "ListItem" || node.name === "Table") return true;
-  return false;
+  for (let node: SyntaxNode | null = tree.resolveInner(from, 1); node; node = node.parent) {
+    if (node.name === "InlineCode" || node.name === "FencedCode" || node.name === "CodeBlock") return "code";
+    if (node.name === "ListItem" || node.name === "Table") return "item";
+  }
+  return "text";
 }
 
 /**
  * Every place a chip's token stands in the text, replaced by the chip, and each paragraph's `after` parts in a row behind it;
- * where two chips would cover the same letters, the one that starts first, then the earlier chip, wins. In a table's cell or a
- * list's item a chip with `item` draws it there and adds no row; until the parse has reached a chip that has `item` or `after`,
- * it draws `node` and no row, so a row never comes and goes. A chip whose part did not change keeps its DOM (`ChipWidget.eq`).
+ * where two chips would cover the same letters, the one that starts first, then the earlier chip, wins. A token in code keeps
+ * its letters. In a table's cell or a list's item a chip with `item` draws it there and adds no row; until the parse has reached
+ * a chip, it draws `node` and no row, so a row never comes and goes. A chip whose part did not change keeps its DOM (`ChipWidget.eq`).
  */
 function chipSet(state: EditorState, chips: readonly MarkdownChip[]): DecorationSet {
+  if (!chips.length) return Decoration.none;
   const text = state.doc.toString();
   const found: { from: number; to: number; index: number }[] = [];
   chips.forEach((chip, index) => {
@@ -149,9 +154,11 @@ function chipSet(state: EditorState, chips: readonly MarkdownChip[]): Decoration
     if (span.from < end) continue;
     end = span.to;
     const chip = chips[span.index]!;
-    const listed = chip.item !== undefined || chip.after !== undefined ? inItem(state, span.from, span.to) : false;
-    ranges.push(Decoration.replace({ widget: new ChipWidget(span.index, listed && chip.item !== undefined ? chip.item : chip.node) }).range(span.from, span.to));
-    if (chip.after && listed === false) {
+    // A token in code keeps its letters; one placed by offsets (`at`) was already placed outside code.
+    const where = chip.at ? "text" : placeOf(state, span.from, span.to);
+    if (where === "code") continue;
+    ranges.push(Decoration.replace({ widget: new ChipWidget(span.index, where === "item" && chip.item !== undefined ? chip.item : chip.node) }).range(span.from, span.to));
+    if (chip.after && where === "text") {
       const close = paragraphEnd(text, span.from);
       rows.set(close, (rows.get(close) ?? new Set()).add(span.index));
     }
