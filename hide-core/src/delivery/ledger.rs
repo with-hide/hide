@@ -302,6 +302,16 @@ impl Ledger {
 }
 
 impl Letter {
+    /// The letter as an answer to `reader` shows it, its sender's and
+    /// recipient's panes as that reader uses them (`Actor::read_by`).
+    pub(crate) fn read_by(&self, reader: crate::address::Reader<'_>) -> Letter {
+        Letter {
+            sender: self.sender.read_by(reader),
+            recipient: self.recipient.read_by(reader),
+            ..self.clone()
+        }
+    }
+
     /// Whether a bell is rung for this letter while its recipient is awake,
     /// at rest or at work: every kind but `progress`, which is news and
     /// never the reason a turn starts, `--now` or not. A progress letter
@@ -813,6 +823,31 @@ impl Ledger {
         self.watches.retain(|watch| {
             !(sender.same_identity(&watch.target) && recipient.same_identity(&watch.parent))
         });
+    }
+
+    /// Ends the watch the parent of registration `agent` keeps on it, as a
+    /// confirmed report from it would (`end_report_watch`): a mission
+    /// checker's record of its line is its report
+    /// (`Runtime::checker_reported`). Returns whether a watch ended.
+    pub(crate) fn end_parent_watch(&mut self, agent: &str) -> bool {
+        let Some(child) = self
+            .agents
+            .iter()
+            .find(|record| record.id == agent && !record.ended)
+        else {
+            return false;
+        };
+        let Some(parent) = child
+            .parent
+            .as_ref()
+            .and_then(|parent| self.agents.iter().find(|record| &record.id == parent))
+        else {
+            return false;
+        };
+        let (sender, recipient) = (child.actor.clone(), parent.actor.clone());
+        let before = self.watches.len();
+        self.end_report_watch(&sender, &recipient);
+        self.watches.len() != before
     }
 
     /// The core on connection `key` took letter `id`, which this core's

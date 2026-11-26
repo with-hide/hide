@@ -12,7 +12,7 @@ import { createActions } from "../actions";
 import { AgentMark } from "../AgentMark";
 import { DeskAgentBar, DeskComposer, DeskPermissionMenu, SessionAgentBar } from "../components/desk/desk-composer";
 import { sampleShot } from "../components/sample-shot";
-import { DeskApprovalCard, DeskChat, DeskEmpty, DeskHandedLine, type DeskChatActions } from "../components/desk/desk-chat";
+import { DeskApprovalCard, DeskChat, DeskEmpty, DeskHandedLine, type DeskChatActions, type DeskLiveAnswer } from "../components/desk/desk-chat";
 import { DeskPaneReturn } from "../components/desk/desk-entry";
 import { DeskJobCard, JobMark, OutputMark } from "../components/desk/desk-job-card";
 import { DeskChatColumn, DeskChatHead, DeskRoom, DeskTabPanel, type PanelTab } from "../components/desk/desk-room";
@@ -282,7 +282,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
   }, [mission, layout, state, theme, params]);
 
   const pick = (...ids: string[]) => ids.map((id) => jobs[id]!);
-  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; working?: WorkingPhase; queued?: DeskQueuedMessage[] } = {}) => (
+  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: DeskLiveAnswer | null; working?: WorkingPhase; queued?: DeskQueuedMessage[] } = {}) => (
     <DeskChatColumn head={<ChatHead />} composer={composer}>
       <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} working={options.working ? { phase: options.working, since: now - 3_000 } : null} queued={options.queued ?? []} {...CHAT_ACTIONS} />
     </DeskChatColumn>
@@ -436,7 +436,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       body = <OutputsCriteria />;
       break;
     case "chat-states":
-      body = <Room chat={chat(stateItems(now), <ChatComposer agents={AGENTS_PREPARING} selection={CODEX} answering />, { live: "지금 돌고 있는 일은 세 개예요. mention 버튼 정리는 테스트를 돌리는 중이고", queued: [{ id: 900, text: "끝나면 release 노트도 정리해줘", at_ms: now, mentions: [] }] })} />;
+      body = <Room chat={chat(stateItems(now), <ChatComposer agents={AGENTS_PREPARING} selection={CODEX} answering />, { live: { text: "지금 돌고 있는 일은 세 개예요. @session(w1:record-now record-now)는 테스트를 돌리는 중이고 @session(w1:gallery 갤러리", mentions: [{ pane_id: "w1:record-now", name: "record-now", agent_kind: null, mark: null }], missions: [] }, queued: [{ id: 900, text: "끝나면 release 노트도 정리해줘", at_ms: now, mentions: [] }] })} />;
       break;
     case "thread-states": {
       const fresh = deskJob(jobs.mention!, { id: "fresh", title: "로그 정리", state: "starting", now: null, plan: null, pull_requests: [], outputs: [] });

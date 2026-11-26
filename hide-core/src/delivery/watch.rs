@@ -89,6 +89,16 @@ pub struct View {
 }
 
 impl Watch {
+    /// The watch as an answer to `reader` shows it, its parent's and
+    /// target's panes as that reader uses them (`Actor::read_by`).
+    pub(crate) fn read_by(&self, reader: crate::address::Reader<'_>) -> Watch {
+        Watch {
+            parent: self.parent.read_by(reader),
+            target: self.target.read_by(reader),
+            ..self.clone()
+        }
+    }
+
     /// The last settled reading the watch took of its target.
     pub(crate) fn last_read(&self) -> StateRead<'_> {
         StateRead {

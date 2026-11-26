@@ -152,8 +152,8 @@ impl Runtime {
     pub(super) fn spawn_pane_id(&self, spawn: &SpawnRecord) -> Option<String> {
         let pane = spawn.pane.as_deref()?;
         let node = self.node.as_str();
-        Some(crate::address::pane_id_on(
-            node,
+        Some(crate::address::pane_for_caller(
+            crate::address::Reader::On(node),
             spawn.machine.as_deref().unwrap_or(node),
             pane,
         ))
@@ -1711,7 +1711,7 @@ pub(crate) mod tests {
         };
         crate::coordination::executor::Shown::read(runtime, &parent, spawn)
             .unwrap()
-            .answer(TEST_NODE)["state"]["pending_inputs"][0]["phase"]
+            .answer(crate::address::Reader::On(TEST_NODE))["state"]["pending_inputs"][0]["phase"]
             .clone()
     }
 

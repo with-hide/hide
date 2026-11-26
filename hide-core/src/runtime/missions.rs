@@ -1696,12 +1696,15 @@ fn round_body(
                 .max_by_key(|checker| checker.at_unix_ms)
                 .map(|checker| checker.commit.as_deref());
             let confirm = "When the worker asks you to confirm its plan for a serious finding, answer only OK or what to change.";
+            // The record is the checker's report: its parent's watch ends
+            // and it sleeps until the next round (`checker_reported`).
+            let answer = "Record every finding, graded, in `--evidence`; your record is your answer, send your Conductor no letter about it.";
             match last {
                 None => format!(
-                    "{place} is ready for your {lines}: {signal}.\nRead it with {show}, check it and record your result with `hide mission record`.\nGive every finding in this one round, each graded serious, ordinary or minor (docs/CODE_REVIEW.md). {confirm}"
+                    "{place} is ready for your {lines}: {signal}.\nRead it with {show}, check it and record your result with `hide mission record`.\nGive every finding in this one round, each graded serious, ordinary or minor (docs/CODE_REVIEW.md). {answer} {confirm}"
                 ),
                 Some(last) => format!(
-                    "{place} is ready for your {lines} again: {}, and {signal}.\nRead only your earlier findings and what changed since then; raise a new finding only when it is serious. {confirm}",
+                    "{place} is ready for your {lines} again: {}, and {signal}.\nRead only your earlier findings and what changed since then; raise a new finding only when it is serious. {answer} {confirm}",
                     last.map_or_else(
                         || "after your last answer".to_owned(),
                         |commit| format!("you last checked commit {}", short(commit))
@@ -2068,6 +2071,38 @@ pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<
     });
     mission.wakes.push(wake);
     Some(intent)
+}
+
+/// `view` as the snapshot's missions section carries it: each line's and
+/// each checker's evidence past `missions::LINE_LIMIT` bytes cut on a
+/// character boundary and ended with "…", so the reader sees it was cut.
+/// The section has no generation: it is compared on every read and cloned
+/// whole under the lock when any mission moves, so it keeps the bound a
+/// record's evidence had before a checker's record held every finding (up
+/// to `delivery::BODY_LIMIT`). The whole text is `hide mission show`'s,
+/// whose view (`Runtime::mission_view_for`) never passes here.
+fn for_snapshot(mut view: MissionView) -> MissionView {
+    let cut = |evidence: &mut Option<String>| {
+        let Some(text) = evidence
+            .as_mut()
+            .filter(|text| text.len() > crate::missions::LINE_LIMIT)
+        else {
+            return;
+        };
+        let mut end = crate::missions::LINE_LIMIT - '…'.len_utf8();
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push('…');
+    };
+    for line in view.nodes.iter_mut().flat_map(|node| &mut node.criteria) {
+        cut(&mut line.evidence);
+        for checker in &mut line.checkers {
+            cut(&mut checker.evidence);
+        }
+    }
+    view
 }
 
 /// Takes the Conductor's standing CI and review cells of node `node` out
@@ -5868,10 +5903,10 @@ impl Runtime {
                     .flatten();
                 match kept {
                     Some(view) => view.clone(),
-                    None => MissionView {
+                    None => for_snapshot(MissionView {
                         destination: self.judged_destination(mission),
                         ..self.view_mission(mission, &agents, &sleeping, ledger.as_deref())
-                    },
+                    }),
                 }
             })
             .collect();

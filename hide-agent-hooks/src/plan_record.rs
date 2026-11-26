@@ -244,7 +244,7 @@ pub fn hint(context: &PlanContext, now: u64) -> Option<String> {
         lines.push(line);
         if checker {
             lines.push(format!(
-                "Record your verdict with `hide mission record {} {} --pass|--fail --evidence <one line>`.",
+                "Record your verdict with `hide mission record {} {} --pass|--fail --evidence <every finding, graded>`: your record is your answer, send your Conductor no letter about it.",
                 work.node,
                 work.line.as_deref().unwrap_or("review")
             ));
