@@ -1110,7 +1110,13 @@ fn an_own_mode_bot_reaches_its_own_work_by_exact_identity_and_nothing_else() {
         "terminal-mini",
         false,
     );
-    let device_pane = |pane: &str| crate::address::pane_id_on(crate::node::TEST_NODE, "mini", pane);
+    let device_pane = |pane: &str| {
+        crate::address::pane_for_caller(
+            crate::address::Reader::On(crate::node::TEST_NODE),
+            "mini",
+            pane,
+        )
+    };
     {
         let mut guard = fixture.runtime.lock().unwrap();
         let tab = &mut guard.snapshot.navigator.workspaces[0].checkouts[0].tabs[0];

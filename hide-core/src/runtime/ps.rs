@@ -308,7 +308,8 @@ impl PsRows {
         // each pane as the caller uses it, a parent's pane the same way, so
         // `(machine, pane)` still links a child to its parent.
         let address = |machine: &str, pane: &mut String| {
-            *pane = crate::address::pane_for_caller(&device, machine, pane);
+            *pane =
+                crate::address::pane_for_caller(crate::address::Reader::On(&device), machine, pane);
         };
         let address_agent = |agent: &mut PsAgent| {
             address(&agent.machine, &mut agent.pane);

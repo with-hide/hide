@@ -676,7 +676,14 @@ impl Runtime {
                     .map(|prepared| Call::Delivery(Box::new(prepared)))
             }
             Asked::Pane(command) => self
-                .pane_command_as(&node, "", &context, None, command)
+                .pane_command_as(
+                    &node,
+                    crate::address::Reader::Core(&node),
+                    "",
+                    &context,
+                    None,
+                    command,
+                )
                 .map(|prepared| Call::Pane(Box::new(prepared))),
         }
     }
@@ -703,7 +710,6 @@ impl Runtime {
         Ok(Forward {
             link,
             key: machine.key.clone(),
-            device: machine.device_id.clone(),
             from,
             asked,
         })

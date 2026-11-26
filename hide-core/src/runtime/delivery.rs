@@ -309,7 +309,11 @@ impl Runtime {
             {
                 continue;
             }
-            let pane_id = crate::address::pane_id_on(self.node.as_str(), device, pane);
+            let pane_id = crate::address::pane_for_caller(
+                crate::address::Reader::On(self.node.as_str()),
+                device,
+                pane,
+            );
             if !self.delivery_observations.contains_key(&pane_id)
                 && self.delivery_observations.len() >= OBSERVATION_LIMIT
             {
@@ -686,7 +690,11 @@ impl Runtime {
             {
                 continue;
             }
-            let pane_id = crate::address::pane_id_on(self.node.as_str(), device, pane);
+            let pane_id = crate::address::pane_for_caller(
+                crate::address::Reader::On(self.node.as_str()),
+                device,
+                pane,
+            );
             let actor = Actor {
                 pane_id,
                 name: name.to_owned(),
@@ -1869,7 +1877,11 @@ impl Runtime {
         let Command::Send { target, .. } = &mut command else {
             return Err("invalid_request".into());
         };
-        let pane_id = crate::address::pane_id_on(self.node.as_str(), device, pane);
+        let pane_id = crate::address::pane_for_caller(
+            crate::address::Reader::On(self.node.as_str()),
+            device,
+            pane,
+        );
         let observed = self
             .delivery_observations
             .get(&pane_id)
@@ -5281,7 +5293,8 @@ pub(crate) mod tests {
         let result = prepared.run(Duration::from_secs(5)).unwrap();
         assert_eq!(result["sender"]["kind"], "claude");
         assert_eq!(result["sender"]["device_id"], "device");
-        assert_eq!(result["sender"]["pane_id"], caller);
+        // The device's agent is handed its own pane bare, as it names it.
+        assert_eq!(result["sender"]["pane_id"], "sender");
         // Stopped before its file is read: the store passes on its own too.
         drop(worker);
         let stored = crate::delivery::store::load(&path).unwrap();
@@ -5348,6 +5361,185 @@ pub(crate) mod tests {
         }
     }
 
+    /// Every pane an answer hands a caller is taken back as written
+    /// (with-hide/hide#3037): for this machine's agent and for a device's
+    /// agent, the address each is handed for the core's `w1:p2` and for the
+    /// device's `w1:p2` reaches that pane in `hide request send` (which
+    /// hands the same address back), `hide agent read` and `hide pane read`;
+    /// `hide agent show`'s reading is `coordination`'s
+    /// `show_reads_back_the_address_each_caller_is_handed`, since this
+    /// fixture registers no agent.
+    #[test]
+    fn an_address_an_answer_hands_a_caller_reaches_the_same_pane_in_every_command() {
+        use crate::pane_command::{PaneCommand, Step};
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, _, path) = fixture(root.path());
+        let (_worker, client) = Worker::store(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        let fake = crate::engine::fake::FakeEngine::start(|method, _| {
+            panic!("admission calls no engine method, got {method}")
+        });
+        let (local_caller, device_caller) = {
+            let mut guard = runtime.lock().unwrap();
+            guard.install_delivery_client(client);
+            guard.live = Some(fake.live());
+            two_machines_with_one_pane_id(&mut guard)
+        };
+        let context = |device: &str, caller: &str| {
+            runtime
+                .lock()
+                .unwrap()
+                .workspace_control_query(device, caller, Query::Info)
+                .unwrap()
+                .context
+        };
+        // (caller's machine, caller, address it is handed, the core's id for
+        // the pane, the machine the pane is on)
+        let node = crate::node::TEST_NODE;
+        for (device, caller, handed, core_id, machine) in [
+            (node, local_caller.as_str(), "w1:p2", "w1:p2", node),
+            (
+                node,
+                local_caller.as_str(),
+                "remote:device:pane:w1:p2",
+                "remote:device:pane:w1:p2",
+                "device",
+            ),
+            (
+                "device",
+                device_caller.as_str(),
+                "remote:test-node:pane:w1:p2",
+                "w1:p2",
+                node,
+            ),
+            (
+                "device",
+                device_caller.as_str(),
+                "w1:p2",
+                "remote:device:pane:w1:p2",
+                "device",
+            ),
+        ] {
+            let case = format!("{handed} from {device}");
+            let run = |command: Command| {
+                let context = context(device, caller);
+                let prepared = runtime
+                    .lock()
+                    .unwrap()
+                    .prepare_delivery(device, caller, &context, None, command);
+                prepared.and_then(|prepared| prepared.run(Duration::from_secs(5)))
+            };
+            let sent = run(report_to(handed, &format!("round-{device}-{handed}"))).unwrap();
+            assert_eq!(
+                (
+                    sent["recipient"]["pane_id"].as_str(),
+                    sent["recipient"]["device_id"].as_str()
+                ),
+                (Some(handed), Some(machine)),
+                "{case}"
+            );
+            let stored = runtime.lock().unwrap().delivery_state().unwrap();
+            let kept = stored
+                .letters
+                .iter()
+                .find(|letter| letter.id == sent["id"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(kept.recipient.pane_id, core_id, "{case}");
+            for command in [
+                PaneCommand::AgentRead {
+                    agent: handed.into(),
+                    lines: 10,
+                },
+                PaneCommand::Read {
+                    pane: handed.into(),
+                    lines: 10,
+                },
+            ] {
+                // The context is read before the lock is taken: `context`
+                // takes the same lock, and a std mutex taken twice on one
+                // thread never returns.
+                let context = context(device, caller);
+                let prepared = runtime
+                    .lock()
+                    .unwrap()
+                    .prepare_pane_command(device, caller, &context, command);
+                if machine == node {
+                    match prepared.map(|prepared| prepared.step) {
+                        Ok(Step::Read { pane, raw, .. }) => {
+                            assert_eq!((pane.as_str(), raw.as_str()), (handed, "w1:p2"), "{case}")
+                        }
+                        other => panic!("{case}: a read, got {:?}", other.err()),
+                    }
+                } else {
+                    // Found on the device, whose engine this fixture does not
+                    // run.
+                    assert_eq!(
+                        prepared.err().as_deref(),
+                        Some("engine_unavailable"),
+                        "{case}"
+                    );
+                }
+            }
+        }
+
+        // A letter's sender is handed the same way: the device's agent reads
+        // the letter this machine's agent wrote it with the sender's pane in
+        // full, and a letter to that address reaches the sender's pane.
+        let run = |device: &str, caller: &str, command: Command| {
+            let context = context(device, caller);
+            let prepared = runtime
+                .lock()
+                .unwrap()
+                .prepare_delivery(device, caller, &context, None, command);
+            prepared.and_then(|prepared| prepared.run(Duration::from_secs(5)))
+        };
+        let letter = run(
+            node,
+            &local_caller,
+            Command::Send {
+                target: device_caller.clone(),
+                intent: "to-the-device".into(),
+                body: "look".into(),
+                kind: "request".into(),
+                now: false,
+                force: false,
+            },
+        )
+        .unwrap();
+        let shown = run(
+            "device",
+            &device_caller,
+            Command::Show {
+                id: letter["id"].as_str().unwrap().into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(shown["sender"]["pane_id"], "remote:test-node:pane:sender");
+        let back = run(
+            "device",
+            &device_caller,
+            report_to("remote:test-node:pane:sender", "back-to-the-sender"),
+        )
+        .unwrap();
+        let stored = runtime.lock().unwrap().delivery_state().unwrap();
+        let kept = stored
+            .letters
+            .iter()
+            .find(|letter| letter.id == back["id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            (
+                kept.recipient.pane_id.as_str(),
+                kept.recipient.device_id.as_str()
+            ),
+            ("sender", node)
+        );
+    }
+
     #[test]
     fn a_bare_pane_id_names_a_pane_on_the_callers_own_machine() {
         let root = tempfile::tempdir().unwrap();
@@ -5373,12 +5565,13 @@ pub(crate) mod tests {
         };
 
         // The device's agent writes `w1:p2`, the number its own engine shows,
-        // and the core has a different agent under the same number.
+        // and the core has a different agent under the same number; the
+        // answer names the recipient's pane as the device's agent does.
         let result = prepare("device", &device_caller, report_to("w1:p2", "from-device"))
             .unwrap()
             .run(Duration::from_secs(5))
             .unwrap();
-        assert_eq!(result["recipient"]["pane_id"], "remote:device:pane:w1:p2");
+        assert_eq!(result["recipient"]["pane_id"], "w1:p2");
         assert_eq!(result["recipient"]["device_id"], "device");
 
         // The core's own agent writes the same number and gets its own pane.
@@ -5415,7 +5608,13 @@ pub(crate) mod tests {
         .unwrap()
         .run(Duration::from_secs(5))
         .unwrap();
-        assert_eq!(result["recipient"]["pane_id"], "remote:device:pane:w1:p5");
+        assert_eq!(
+            (
+                result["recipient"]["pane_id"].as_str(),
+                result["recipient"]["device_id"].as_str()
+            ),
+            (Some("w1:p5"), Some("device"))
+        );
         let result = prepare(
             crate::node::TEST_NODE,
             &local_caller,

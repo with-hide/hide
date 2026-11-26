@@ -296,7 +296,7 @@
                     ]
                 },
                 "pane": {
-                    "description": "The agent's pane as the caller uses it: bare on the caller's own machine, `remote:<device>:pane:<id>` for one this core runs on another machine, `core:<device>:pane:<id>` for one another machine's own core keeps. Pass it as written.",
+                    "description": "The agent's pane as the caller uses it: bare on the caller's own machine, `remote:<device>:pane:<id>` for one this core runs on another machine, `core:<device>:pane:<id>` for one another machine's own core keeps. Pass it as written. `hide agent end` answers `pane` with what became of the pane instead (`closed`, `kept`, `gone`, `other_agent`, `left`), so it names no address.",
                     "type": "string"
                 },
                 "parent": {
@@ -660,7 +660,7 @@
                     ]
                 },
                 "pane": {
-                    "description": "The agent's pane as the caller uses it: bare on the caller's own machine, `remote:<device>:pane:<id>` for one this core runs on another machine, `core:<device>:pane:<id>` for one another machine's own core keeps. Pass it as written.",
+                    "description": "The agent's pane as the caller uses it: bare on the caller's own machine, `remote:<device>:pane:<id>` for one this core runs on another machine, `core:<device>:pane:<id>` for one another machine's own core keeps. Pass it as written. `hide agent end` answers `pane` with what became of the pane instead (`closed`, `kept`, `gone`, `other_agent`, `left`), so it names no address.",
                     "type": "string"
                 },
                 "parent": {
@@ -805,7 +805,7 @@
                             ]
                         },
                         "pane": {
-                            "description": "The agent's pane as the caller uses it: bare on the caller's own machine, `remote:<device>:pane:<id>` for one this core runs on another machine, `core:<device>:pane:<id>` for one another machine's own core keeps. Pass it as written.",
+                            "description": "The agent's pane as the caller uses it: bare on the caller's own machine, `remote:<device>:pane:<id>` for one this core runs on another machine, `core:<device>:pane:<id>` for one another machine's own core keeps. Pass it as written. `hide agent end` answers `pane` with what became of the pane instead (`closed`, `kept`, `gone`, `other_agent`, `left`), so it names no address.",
                             "type": "string"
                         },
                         "parent": {
@@ -1553,7 +1553,7 @@
                     ]
                 },
                 "pane": {
-                    "description": "The agent's pane as the caller uses it: bare on the caller's own machine, `remote:<device>:pane:<id>` for one this core runs on another machine, `core:<device>:pane:<id>` for one another machine's own core keeps. Pass it as written.",
+                    "description": "The agent's pane as the caller uses it: bare on the caller's own machine, `remote:<device>:pane:<id>` for one this core runs on another machine, `core:<device>:pane:<id>` for one another machine's own core keeps. Pass it as written. `hide agent end` answers `pane` with what became of the pane instead (`closed`, `kept`, `gone`, `other_agent`, `left`), so it names no address.",
                     "type": "string"
                 },
                 "parent": {
@@ -9805,7 +9805,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:da0e7fe5ed91c25df904025c0340e306f5a45c8d6b84997cc85ef3da4e77c54d",
+    "digest": "sha256:33fd5fc38fc71ab9f3f5a21f258820c6fae39d4ffb450664dd53dc93872c4016",
     "envelopes": {
         "access": {
             "answer": "value",

@@ -1218,7 +1218,7 @@ impl AgentRecord {
     /// is, or finds its agent row, takes it from here, never from `pane`,
     /// which is the device's own id (with-hide/hide-private#679).
     pub(crate) fn pane_on(&self, node: &str) -> String {
-        crate::address::pane_id_on(node, &self.machine, &self.pane)
+        crate::address::pane_for_caller(crate::address::Reader::On(node), &self.machine, &self.pane)
     }
 
     /// The name this agent has on the wire and in the ledger: the name it
@@ -1693,14 +1693,14 @@ pub(crate) fn life(record: &AgentRecord, sleeping: &RegistrationFacts) -> Runtim
     }
 }
 
-/// `record` as an answer to a caller on machine `device` shows it.
+/// `record` as an answer to `reader` shows it.
 pub(crate) fn view(
     record: &AgentRecord,
     ledger: &Ledger,
     sleeping: &RegistrationFacts,
-    device: &str,
+    reader: crate::address::Reader<'_>,
 ) -> Value {
-    json!(agent_view(record, ledger, sleeping, device))
+    json!(agent_view(record, ledger, sleeping, reader))
 }
 
 /// The name of the bot whose connection started `record`, read
@@ -1716,13 +1716,13 @@ pub(crate) fn origin_tool(record: &AgentRecord, ledger: &Ledger) -> Option<Strin
         .map(str::to_owned)
 }
 
-/// `record` as an answer to a caller on machine `device` shows it, its pane
-/// spelled as that caller uses it (`address::pane_for_caller`).
+/// `record` as an answer to `reader` shows it, its pane spelled as that
+/// reader uses it (`address::pane_for_caller`).
 pub(crate) fn agent_view(
     record: &AgentRecord,
     ledger: &Ledger,
     sleeping: &RegistrationFacts,
-    device: &str,
+    reader: crate::address::Reader<'_>,
 ) -> AgentView {
     let runtime = life(record, sleeping);
     AgentView {
@@ -1737,7 +1737,7 @@ pub(crate) fn agent_view(
         host_scope: record.host_scope.clone(),
         session: record.session.clone(),
         instance: record.instance.clone(),
-        pane: crate::address::pane_for_caller(device, &record.machine, &record.pane),
+        pane: crate::address::pane_for_caller(reader, &record.machine, &record.pane),
         parent: record.parent.clone(),
         origin: record.origin.clone().or_else(|| record.parent.clone()),
         origin_tool: origin_tool(record, ledger),
@@ -1756,7 +1756,7 @@ pub(crate) fn agent_view(
             .watches
             .iter()
             .find(|watch| watch.target.same_identity(&record.actor))
-            .cloned(),
+            .map(|watch| watch.read_by(reader)),
     }
 }
 
@@ -2012,7 +2012,7 @@ pub(crate) fn apply_with(
                     .ok_or("agent_unavailable")?,
                 ledger,
                 &RegistrationFacts::NONE,
-                &caller.device_id,
+                caller.reader(),
             ))
         }
         Mutation::Reserve { parent, command } => {
@@ -2821,7 +2821,7 @@ fn hand_child(
 
 /// The device a spawn's child lives on: the one the caller named, else the
 /// caller's own, which its parent registration names.
-fn spawn_machine<'a>(ledger: &'a Ledger, spawn: &'a SpawnRecord) -> Option<&'a str> {
+pub(super) fn spawn_machine<'a>(ledger: &'a Ledger, spawn: &'a SpawnRecord) -> Option<&'a str> {
     spawn.machine.as_deref().or_else(|| {
         ledger
             .agents
@@ -2870,7 +2870,7 @@ fn insert_record(
             existing,
             ledger,
             &RegistrationFacts::NONE,
-            &existing.machine,
+            crate::address::Reader::On(&existing.machine),
         ));
     }
     if ledger.agents.iter().any(|existing| {
@@ -2897,7 +2897,7 @@ fn insert_record(
         &record,
         ledger,
         &RegistrationFacts::NONE,
-        &record.machine,
+        crate::address::Reader::On(&record.machine),
     ))
 }
 
@@ -3896,7 +3896,12 @@ mod tests {
         assert_eq!(ledger, before);
         let id = register(&mut ledger, fork(), &source.actor);
         let fork = ledger.agents.iter().find(|record| record.id == id).unwrap();
-        let shown = view(fork, &ledger, &RegistrationFacts::NONE, "local");
+        let shown = view(
+            fork,
+            &ledger,
+            &RegistrationFacts::NONE,
+            crate::address::Reader::On("local"),
+        );
         assert!(shown["parent"].is_null());
         assert_eq!(shown["origin"], source_id);
         // Without the fork's provenance, the source is not the new pane.
@@ -4966,6 +4971,77 @@ mod tests {
         child.actor.device_id = device.into();
         child.project = Some("/fixture/topic".into());
         (ledger, actor, parent_id, id, child)
+    }
+
+    /// `hide agent show` reads back the pane address each caller is handed
+    /// for this machine's `w1:p2` and the device `mini`'s `w1:p2`, and hands
+    /// the same address in its answer (with-hide/hide#3037).
+    #[test]
+    fn show_reads_back_the_address_each_caller_is_handed() {
+        use crate::address::Reader;
+        let mut ledger = Ledger::default();
+        let here = record("w1:p2", "here-session", None);
+        let here_id = register(&mut ledger, here.clone(), &here.actor);
+        let mut there = record("w1:p2", "there-session", None);
+        there.name = Some("there-agent".into());
+        there.machine = "mini".into();
+        there.actor.pane_id = "remote:mini:pane:w1:p2".into();
+        there.actor.device_id = "mini".into();
+        let there_id = register(&mut ledger, there.clone(), &there.actor);
+        for (device, handed, id) in [
+            ("local", "w1:p2", &here_id),
+            ("local", "remote:mini:pane:w1:p2", &there_id),
+            ("mini", "remote:local:pane:w1:p2", &here_id),
+            ("mini", "w1:p2", &there_id),
+        ] {
+            let pane = crate::address::named_pane_id("local", device, handed);
+            let Ok(Some(Named::Agent(found))) = resolve_key(&ledger, None, &pane, handed) else {
+                panic!("{handed} from {device} names no agent");
+            };
+            assert_eq!(&found.id, id, "{handed} from {device}");
+            assert_eq!(
+                agent_view(found, &ledger, &RegistrationFacts::NONE, Reader::On(device)).pane,
+                handed
+            );
+        }
+    }
+
+    /// A spawn names no machine when its child runs on its caller's own,
+    /// which is its parent's: a reader elsewhere is handed the pane in full,
+    /// and a spawn whose parent is gone is read on the core's node
+    /// (with-hide/hide#3037).
+    #[test]
+    fn a_spawn_that_names_no_machine_is_on_its_parents_machine() {
+        use crate::address::Reader;
+        let (mut ledger, _, _, id, _) = pending_spawn_mode(SpawnMode::Delegation, "mini");
+        let spawn = ledger
+            .spawns
+            .iter()
+            .find(|spawn| spawn.id == id)
+            .unwrap()
+            .clone();
+        assert_eq!(spawn.machine, None);
+        let pane =
+            |ledger: &Ledger, reader| executor::spawn_ref(&spawn, ledger, "core-node", reader).pane;
+        for (reader, expected) in [
+            (Reader::On("mini"), "worker-pane"),
+            (Reader::On("core-node"), "remote:mini:pane:worker-pane"),
+            (
+                Reader::Core("core-node"),
+                "core:core-node:pane:remote:mini:pane:worker-pane",
+            ),
+        ] {
+            assert_eq!(
+                pane(&ledger, reader).as_deref(),
+                Some(expected),
+                "{reader:?}"
+            );
+        }
+        ledger.agents.clear();
+        assert_eq!(
+            pane(&ledger, Reader::On("mini")).as_deref(),
+            Some("remote:core-node:pane:worker-pane")
+        );
     }
 
     /// A pending spawn with a brief, its agent's start typed: what is left is
@@ -6104,7 +6180,12 @@ mod tests {
                 assert!(ended.ended);
                 assert_eq!(ended.parent, expected_parent);
                 assert_eq!(
-                    view(ended, &ledger, &RegistrationFacts::NONE, "local")["origin"],
+                    view(
+                        ended,
+                        &ledger,
+                        &RegistrationFacts::NONE,
+                        crate::address::Reader::On("local")
+                    )["origin"],
                     origin
                 );
                 assert!(ledger.watches.is_empty());
@@ -6135,7 +6216,12 @@ mod tests {
                 assert!(!child.ended);
                 assert_eq!(child.parent, expected_parent);
                 assert_eq!(
-                    view(child, &ledger, &RegistrationFacts::NONE, "local")["origin"],
+                    view(
+                        child,
+                        &ledger,
+                        &RegistrationFacts::NONE,
+                        crate::address::Reader::On("local")
+                    )["origin"],
                     origin
                 );
                 assert_eq!(ledger.watches.len(), 1);
@@ -6183,7 +6269,7 @@ mod tests {
                     .unwrap(),
                 &ledger,
                 &RegistrationFacts::NONE,
-                "local",
+                crate::address::Reader::On("local"),
             );
             assert!(child_view["parent"].is_null());
             assert_eq!(child_view["origin"], origin);
@@ -6193,7 +6279,7 @@ mod tests {
                     &ledger.agents[0],
                     &ledger,
                     &RegistrationFacts::NONE,
-                    "local"
+                    crate::address::Reader::On("local")
                 )["origin"]
                     .is_null()
             );
@@ -6248,7 +6334,12 @@ mod tests {
                 .unwrap();
             assert!(!live.ended);
             assert_eq!(
-                view(live, &restored, &RegistrationFacts::NONE, "local")["origin"],
+                view(
+                    live,
+                    &restored,
+                    &RegistrationFacts::NONE,
+                    crate::address::Reader::On("local")
+                )["origin"],
                 origin
             );
             apply(
@@ -6363,7 +6454,7 @@ mod tests {
                 &restored.agents[1],
                 &restored,
                 &RegistrationFacts::NONE,
-                "local"
+                crate::address::Reader::On("local")
             )["origin"],
             parent
         );

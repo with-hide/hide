@@ -206,7 +206,7 @@ fn a_fork_whose_session_arrives_late_registers_as_the_operators_root_from_its_so
         fork,
         &ledger,
         &crate::coordination::RegistrationFacts::NONE,
-        crate::node::TEST_NODE,
+        crate::address::Reader::On(crate::node::TEST_NODE),
     );
     let listed = serde_json::to_value(listed).unwrap();
     assert_eq!(

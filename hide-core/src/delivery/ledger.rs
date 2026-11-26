@@ -300,6 +300,16 @@ impl Ledger {
 }
 
 impl Letter {
+    /// The letter as an answer to `reader` shows it, its sender's and
+    /// recipient's panes as that reader uses them (`Actor::read_by`).
+    pub(crate) fn read_by(&self, reader: crate::address::Reader<'_>) -> Letter {
+        Letter {
+            sender: self.sender.read_by(reader),
+            recipient: self.recipient.read_by(reader),
+            ..self.clone()
+        }
+    }
+
     /// Whether this letter wakes its recipient when Hide put it to sleep:
     /// one that asks something of it (`request`, `block`), or the
     /// operator's Done on its person's turn, which it is to act on now

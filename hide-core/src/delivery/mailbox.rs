@@ -446,7 +446,7 @@ pub fn apply_in(
                 |stored| target.is_some_and(|target| target.same_identity(stored)),
                 now,
             ) {
-                return Ok(json!(letter));
+                return Ok(json!(letter.read_by(actor.reader())));
             }
         }
         // A reply goes to its original's sender, so the same original is the
@@ -464,7 +464,7 @@ pub fn apply_in(
                 |_| true,
                 now,
             ) {
-                return Ok(json!(letter));
+                return Ok(json!(letter.read_by(actor.reader())));
             }
         }
         _ => {}
@@ -499,7 +499,7 @@ pub fn apply_in(
                 stored.forced = *force;
                 letter = stored.clone();
             }
-            Ok(json!(letter))
+            Ok(json!(letter.read_by(actor.reader())))
         }
         Command::Reply {
             id,
@@ -583,7 +583,7 @@ pub fn apply_in(
             };
             let letter = letter.clone();
             end_report_watches(ledger, ended);
-            Ok(json!(letter))
+            Ok(json!(letter.read_by(actor.reader())))
         }
         Command::AckBundle { bundle } => {
             let (newest, _) = bundle.rsplit_once(BUNDLE_MARK).ok_or("invalid_request")?;
@@ -630,7 +630,9 @@ pub fn apply_in(
                 acknowledged,
             }))
         }
-        Command::Show { id } => Ok(json!(show(ledger, actor, also_reads, id)?)),
+        Command::Show { id } => Ok(json!(
+            show(ledger, actor, also_reads, id)?.read_by(actor.reader())
+        )),
         Command::Inbox { bundle: true } => Ok(json!(inbox(ledger, actor))),
         Command::Inbox { bundle: false } => Ok(legacy_inbox(ledger, actor)),
         // A tool event's ask is answered by the worker with the pane's own
@@ -1270,7 +1272,7 @@ fn legacy_inbox(ledger: &Ledger, actor: &Actor) -> Value {
                     || letter.sender.same_identity(actor) && returned(letter)
             })
             .map(|letter| {
-                let mut entry = json!(letter);
+                let mut entry = json!(letter.read_by(actor.reader()));
                 if acknowledges
                     && letter.state == State::Pending
                     && letter.recipient.same_identity(actor)

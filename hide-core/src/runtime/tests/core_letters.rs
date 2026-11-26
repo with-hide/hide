@@ -833,16 +833,18 @@ fn an_agent_reads_another_cores_agents_and_the_opened_machine_reads_none() {
     let mut there: Vec<&str> = pair.mini.ids.values().map(String::as_str).collect();
     there.sort();
     assert_eq!(ids, there, "the Mac mini's own agents");
-    // The Mac mini names its own panes bare, as to its own agents; the agent
-    // that asked here is handed each as another core's pane, which `hide
-    // pane read` takes as written.
+    // The Mac mini answers an agent of another core with its own panes as
+    // its own core's, `core:<its node>:pane:<id>`, so the asking core passes
+    // the answer on as it came. Its node is the device id it says in its
+    // hello, which the asking machine knows it by; both cores of this
+    // fixture run on `test-node`, so that is the device the address names.
     let worker_row = listed["items"]
         .as_array()
         .unwrap()
         .iter()
         .find(|item| item["id"] == pair.mini.ids["worker"].as_str())
         .unwrap();
-    assert_eq!(worker_row["pane"], "core:mac-mini:pane:worker");
+    assert_eq!(worker_row["pane"], "core:test-node:pane:worker");
     let shown = pair
         .mac
         .agent(
@@ -855,7 +857,32 @@ fn an_agent_reads_another_cores_agents_and_the_opened_machine_reads_none() {
         )
         .unwrap();
     assert_eq!(shown["id"], pair.mini.ids["other"]);
-    assert_eq!(shown["pane"], "core:mac-mini:pane:other");
+    assert_eq!(shown["pane"], "core:test-node:pane:other");
+    // The id inside the address is the pane the Mac mini reads when the
+    // asking core passes on a read of it, and the read's answer hands the
+    // same address back.
+    // The asker is read before the Mac mini's lock is taken, so no lock is
+    // held while another is waited for.
+    let asker = worker(&pair.mac);
+    let read = pair.mini.runtime.lock().unwrap().prepare_core_call(
+        &mac_key(),
+        &asker,
+        Asked::Pane(PaneCommand::Read {
+            pane: "worker".into(),
+            lines: 10,
+        }),
+    );
+    match read {
+        Ok(crate::core_calls::Call::Pane(prepared)) => match prepared.step {
+            crate::pane_command::Step::Read { pane, raw, .. } => assert_eq!(
+                (pane.as_str(), raw.as_str()),
+                ("core:test-node:pane:worker", "worker")
+            ),
+            _ => panic!("a read"),
+        },
+        Ok(_) => panic!("a pane read"),
+        Err(reason) => panic!("the read was refused: {reason}"),
+    }
 
     assert_eq!(
         pair.mini.agent("worker", list(MAC)).unwrap_err(),

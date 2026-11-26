@@ -28,7 +28,9 @@ pub struct AgentView {
     /// The agent's pane as the caller uses it: bare on the caller's own
     /// machine, `remote:<device>:pane:<id>` for one this core runs on another
     /// machine, `core:<device>:pane:<id>` for one another machine's own core
-    /// keeps. Pass it as written.
+    /// keeps. Pass it as written. `hide agent end` answers `pane` with what
+    /// became of the pane instead (`closed`, `kept`, `gone`, `other_agent`,
+    /// `left`), so it names no address.
     pub pane: String,
     pub parent: Option<String>,
     /// The spawner, independently of responsibility; null for ordinary roots.
