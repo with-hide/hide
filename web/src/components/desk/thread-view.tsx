@@ -22,9 +22,7 @@ import { DeskMissionChip } from "../mission-chip";
 import { WorkingLine } from "./working-line";
 import { SessionChip, useSessionChipBridge } from "./session-chip";
 import { DeskOutputs } from "./desk-outputs";
-import { answerPlace, type AnswerPlace, type FoundAnswerPath } from "../../answerPaths";
-import { useShellStore } from "../../store";
-import { useShallow } from "zustand/react/shallow";
+import type { AnswerPlace, FoundAnswerPath } from "../../answerPaths";
 import { useFilePathChips } from "./file-path-chip";
 import { ThreadAsks } from "./thread-asks";
 
@@ -137,6 +135,8 @@ export type ThreadPartActions = {
   onCopy: CopyText;
   /** A file path the session's words name, pressed (feedback 2 frame M [2]); without it paths stay words. */
   onFile?: (file: FoundAnswerPath) => void;
+  /** Where the session's words were written, its machine and its own folder, where its relative paths are read: its pane's while the pane is there, its record's once it is gone; without it paths stay words. */
+  place?: AnswerPlace | null;
 };
 
 /** How the thread draws the agent's words: the `@name`s as chips, and the clipboard its `복사` writes to; both kept stable between renders. */
@@ -456,9 +456,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   const scroller = useThreadScroll(lines, onReachTop);
   const turns = useMemo(() => threadTurns(lines), [lines]);
   const running = job?.state === "working" || job?.state === "starting";
-  // The session's own folder and machine, where its relative paths are read.
-  const place = useShellStore(useShallow((s) => (job?.pane_id ? answerPlace(s.rest, job.pane_id) : null)));
-  const words = useWords(mentions, actions.onSession, actions.onCopy, place, actions.onFile);
+  const words = useWords(mentions, actions.onSession, actions.onCopy, actions.place ?? null, actions.onFile);
   // A press again on the same question lights it again for the whole time.
   const [lit, setLit] = useState<{ id: string; press: number } | null>(null);
   useEffect(() => {

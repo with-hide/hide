@@ -8,10 +8,11 @@
 
 import { LoaderCircleIcon, MapIcon, PlayIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "./actions";
-import { answerPlace, type FoundAnswerPath } from "./answerPaths";
+import { answerPlace, type AnswerPlace, type FoundAnswerPath } from "./answerPaths";
 import { hostBridge } from "./host";
-import { deskFavorites, deskOn, deskPhase, holdsFoot, laneCards, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
+import { deskFavorites, deskOn, deskPhase, holdsFoot, laneCards, livePane, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
 import { activeTab, closePanel, closeSide, closeTab, fileName, followFrom, keepTab, newSessionBeside, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab, type NewSessionFollow } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
 import { AreaEmpty } from "./AreaEmpty";
@@ -448,8 +449,8 @@ function useSessionChipSource(room: RoomActions): SessionChipSource {
   return useMemo(() => {
     const byPane = new Map(rows.map((row) => [row.pane_id, row]));
     const cards = laneCards(section);
-    const records = section?.records ?? [];
-    return { facts: (session) => sessionFacts(byPane, cards, session, records), onOpen: room.session, open };
+    // The record open beside Desk whose session runs again in another pane is that pane, as the panel shows it.
+    return { facts: (session) => sessionFacts(byPane, cards, session, section), onOpen: room.session, open: open === null ? null : livePane(section?.moved, open) };
   }, [rows, section, room, open]);
 }
 
@@ -497,10 +498,10 @@ function useRoomActions(actions: Actions): RoomActions {
         actions.deskOpen({ kind: "mission", mission: missionId, title: missionTitle(missionId) });
       },
       // D-09, B9: a session is its sidebar row's; by its pane, else by the work name the row shows. A pane that is gone opens
-      // its record (frame K); a chip with no record cannot be pressed.
+      // the pane its session runs in now, else its record (frame K); a chip with no record cannot be pressed.
       session: (session) => {
         const state = useShellStore.getState();
-        const pane = session.pane_id ?? allAgents(state.agents, state.rest?.status?.remote).find((row) => row.identity_label === session.name)?.pane_id;
+        const pane = session.pane_id ? livePane(state.deskJobs?.moved, session.pane_id) : allAgents(state.agents, state.rest?.status?.remote).find((row) => row.identity_label === session.name)?.pane_id;
         if (!pane) return state.noteDiagnostic("desk session: no pane for the session pressed");
         open(pane);
       },
@@ -611,7 +612,9 @@ const NO_WIDTHS = { view_width: null, session_width: null };
  * its conversation read from its pane, the question it waits on as a card,
  * and its input box, or `에이전트 깨우기` in the box's place while it sleeps.
  */
-function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: string; actions: Actions; deskActions: Actions; room: RoomActions }) {
+function DeskSessionPanel({ paneId: opened, actions, deskActions, room }: { paneId: string; actions: Actions; deskActions: Actions; room: RoomActions }) {
+  // A gone session's record open here gives way to the session once it runs again in another pane.
+  const paneId = useShellStore((s) => livePane(s.deskJobs?.moved, opened));
   const listed = useShellStore((s) => agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(paneId));
   const record = useShellStore((s) => (listed ? null : ((s.deskJobs?.records ?? []).find((one) => one.pane_id === paneId) ?? null)));
   if (record) return <DeskRecordPanel record={record} actions={actions} deskActions={deskActions} room={room} />;
@@ -639,6 +642,11 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
   const machine = device !== node ? machineName(devices, device, t) : null;
   // Where it resumes and why it cannot, as the session record screen decides it (`SessionRecord.tsx`, `linkPanel.ts`).
   const checkout = resumeCheckout({ device_id: device, cwd: record.cwd }, catalogOf(workspaces, remote), null, node);
+  // Where it ran, from its record, since its pane is gone: its machine and its own folder, where its relative paths
+  // and the files it opened are read, as its pane's are while it runs.
+  const folder = record.cwd ?? record.project;
+  const place = useMemo<AnswerPlace>(() => ({ device, cwd: folder }), [device, folder]);
+  const filePlace = checkout ? { device, checkout: checkout.path, folder: folder ?? checkout.path } : null;
   const live = useShellStore((s) => s.connection === "live");
   const blocked = resumeBlock({ agent: record.session.agent, file: record.path ? "present" : "missing", device_id: device }, checkout, devices, node);
   const reason = resumeReason(blocked, live, t);
@@ -684,11 +692,13 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
         />
       }
       foot={<SessionRecordFoot endedAt={record.ended_at_unix_ms} resume={button} blocked={reason} />}
-      outputOf={(output) => output}
+      outputOf={(output) => outputOf(undefined, output, filePlace)}
       onOutput={(output) => actions.deskOpen({ kind: "output", output })}
       onMission={room.mission}
       onSession={room.session}
       onCopy={(text, what) => actions.copyText(text, what)}
+      onFile={(file) => openAnswerFile(actions, file)}
+      place={place}
     />
   );
 }
@@ -701,6 +711,8 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
   const row = useShellStore((s) => agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).get(paneId) ?? null);
   const pane = useShellStore((s) => paneRowOf(s.rest, paneId));
   const checkoutPath = useShellStore((s) => checkoutOfPane(s.rest, paneId)?.checkout.path ?? null);
+  // The session's own folder and machine, where its relative paths are read.
+  const place = useShellStore(useShallow((s) => answerPlace(s.rest, paneId)));
   // Only another device is named: this machine goes without saying (Doop H 다).
   const machine = useShellStore((s) => (row && row.device_id !== localDeviceId(s.rest) ? machineName(s.rest?.navigator?.devices, row.device_id, t) : null));
   const pulls = useMemo(() => (row ? rowPulls(row) : []), [row]);
@@ -786,12 +798,13 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
         />
       ) : null}
       onTerminal={() => actions.deskTerminal()}
-      outputOf={(output) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath, folder: answerPlace(useShellStore.getState().rest, paneId)?.cwd ?? checkoutPath } : null)}
+      outputOf={(output) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath, folder: place?.cwd ?? checkoutPath } : null)}
       onOutput={(output) => actions.deskOpen({ kind: "output", output })}
       onMission={room.mission}
       onSession={room.session}
       onCopy={(text, what) => actions.copyText(text, what)}
       onFile={(file) => openAnswerFile(actions, file)}
+      place={place}
     />
   );
 }

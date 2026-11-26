@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, approvalButtons, deskFavorites, favoriteChosen, askedIn, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
+import { agentPickable, approvalButtons, deskFavorites, favoriteChosen, askedIn, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, livePane, ENDED_JOB_STATES, jobDimmed, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
 import type { AgentRow, DeskRecord } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -222,11 +222,11 @@ describe("a chip's session (D-86, B50)", () => {
 
   it("reads a listed session's name, mark, card, time and parent from its row", () => {
     const facts = sessionFacts(rows, cards, { name: "agent-47656", mark: null, agent_kind: null, pane_id: "w1:p1" });
-    expect(facts).toEqual({ listed: true, name: "agent-journey", mark: "going", agent_kind: "codex", card: cards[0], since: 1_000, parent: { name: "agent-14586", mark: "turn", agent_kind: "claude", pane_id: "w1:p0" }, record: null });
+    expect(facts).toEqual({ listed: true, pane_id: "w1:p1", name: "agent-journey", mark: "going", agent_kind: "codex", card: cards[0], since: 1_000, parent: { name: "agent-14586", mark: "turn", agent_kind: "claude", pane_id: "w1:p0" }, record: null });
   });
 
   it("reads a session the sidebar no longer lists as gone, with no mark and no card", () => {
-    expect(sessionFacts(rows, cards, { name: "m349", mark: "done", agent_kind: "claude", pane_id: "w1:gone" })).toEqual({ listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null, record: null });
+    expect(sessionFacts(rows, cards, { name: "m349", mark: "done", agent_kind: "claude", pane_id: "w1:gone" })).toEqual({ listed: false, pane_id: null, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null, record: null });
   });
 
   // Frame K: a session whose pane is gone reads as Hide's record of it, its card the app's SessionCard of that record.
@@ -236,11 +236,23 @@ describe("a chip's session (D-86, B50)", () => {
       started_at_unix_ms: 100, ended_at_unix_ms: 900, line: "서명까지 확인했어요", pull_requests: [{ number: 2930, state: "merged" }],
       cwd: "/repo/.worktrees/release-1.3.0-rc9", path: null, project: "/repo/herdr-ide", thread: true,
     };
-    const facts = sessionFacts(rows, cards, { name: "m349", mark: "done", agent_kind: "claude", pane_id: "w1:gone" }, [record]);
+    const facts = sessionFacts(rows, cards, { name: "m349", mark: "done", agent_kind: "claude", pane_id: "w1:gone" }, { records: [record], moved: [] });
     expect([facts?.listed, facts?.name, facts?.mark, facts?.agent_kind, facts?.since, facts?.record]).toEqual([false, "1.3.0 후보 빌드 만들기", null, "claude", 900, record]);
     expect(facts?.card).toMatchObject({ title: "1.3.0 후보 빌드 만들기", state: "done", now: "서명까지 확인했어요", pull_requests: [{ number: 2930, state: "merged" }], project: { label: "herdr-ide" }, location: { label: "release-1.3.0-rc9" } });
     // Another pane's record is not this one's.
-    expect(sessionFacts(rows, cards, { name: "m350", mark: null, agent_kind: null, pane_id: "w1:other" }, [record])?.record).toBeNull();
+    expect(sessionFacts(rows, cards, { name: "m350", mark: null, agent_kind: null, pane_id: "w1:other" }, { records: [record], moved: [] })?.record).toBeNull();
+  });
+
+  // The audit's 보통 5: a gone pane whose session runs again in another pane is that live session, never its record.
+  it("reads a gone pane whose session runs in another pane as that pane's row, with no record", () => {
+    const record: DeskRecord = {
+      pane_id: "w1:gone", session: { device_id: "mini", agent: "codex", session_id: "s1" }, agent_kind: "codex", title: "옛 기록",
+      started_at_unix_ms: 100, ended_at_unix_ms: 900, line: null, pull_requests: [], cwd: null, path: null, project: null, thread: true,
+    };
+    const facts = sessionFacts(rows, cards, { name: "m349", mark: null, agent_kind: null, pane_id: "w1:gone" }, { records: [record], moved: [{ pane_id: "w1:gone", live_pane_id: "w1:p1" }] });
+    expect([facts?.listed, facts?.pane_id, facts?.name, facts?.mark, facts?.record, facts?.card]).toEqual([true, "w1:p1", "agent-journey", "going", null, cards[0]]);
+    expect(livePane([{ pane_id: "w1:gone", live_pane_id: "w1:p1" }], "w1:gone")).toBe("w1:p1");
+    expect(livePane([{ pane_id: "w1:gone", live_pane_id: "w1:p1" }], "w1:p0")).toBe("w1:p0");
   });
 
   it("finds a session named only by its name, and leaves one no row carries to its own values", () => {
@@ -302,5 +314,14 @@ describe("the favorite models the agent menu lists first", () => {
     const favorite = deskFavorites([{ agent: "claude", model: "opus", purpose: "" }], [agent("claude", ["opus"])], selection("claude"))[0]!;
     expect(favoriteChosen(favorite, { agent: "claude", model: "opus", effort: "high" })).toBe(true);
     expect(favoriteChosen(favorite, { agent: "claude", model: "sonnet", effort: null })).toBe(false);
+  });
+});
+
+// The audit's 사소 3: one set of ended job states for Desk's room and its job card.
+describe("an ended job", () => {
+  it("is every state no pane comes for, and its card is dimmed unless it failed", () => {
+    expect([...ENDED_JOB_STATES].sort()).toEqual(["archived", "cancelled", "closed", "failed", "moved_out"]);
+    const states = ["queued", "starting", "working", "asking", "done", "sleeping", "failed", "cancelled", "closed", "moved_out", "archived"] as const;
+    expect(states.filter(jobDimmed)).toEqual(["cancelled", "closed", "moved_out", "archived"]);
   });
 });

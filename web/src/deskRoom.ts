@@ -5,6 +5,7 @@
 // time the room is entered (B26); the core keeps only the two panels' widths
 // (`desk.lane`, B23).
 
+import { ENDED_JOB_STATES } from "./desk";
 import type { DeskItem, DeskJob, DeskOutput } from "./snapshot";
 import { absolutePathRoot, underFolder } from "./terminalLinks";
 
@@ -87,9 +88,6 @@ export function followFrom(generation: number, items: readonly DeskItem[]): NewS
   return { generation, after: items.at(-1)?.id ?? -1, settled: null };
 }
 
-/** Job states with no pane to open now: the turn's first session is the next job, unless this one starts again. */
-const NO_PANE_COMING: ReadonlySet<DeskJob["state"]> = new Set<DeskJob["state"]>(["failed", "cancelled", "closed", "moved_out", "archived"]);
-
 /**
  * The open-beside rule of a session a Desk turn starts (frame J, 가-2, 나-1,
  * 다). A session Desk started is its turn's `job` line, the core's record of
@@ -111,7 +109,8 @@ export function newSessionBeside(follow: NewSessionFollow, generation: number, i
     // A job the core has not listed yet, or one still waiting for its pane, holds the turn's first place.
     if (!card) return { follow: now, open: null };
     // A start that failed is no session: the next one is the turn's first, and a start retried under the same job is looked at again.
-    if (NO_PANE_COMING.has(card.state)) continue;
+    // An ended job has no pane to open now: the turn's first session is the next job, unless this one starts again.
+    if (ENDED_JOB_STATES.has(card.state)) continue;
     if (!card.pane_id) return { follow: now, open: null };
     const empty = room.session === null && room.panel === null;
     return { follow: { ...now, settled: turn }, open: empty ? card.pane_id : null };

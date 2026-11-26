@@ -1,7 +1,7 @@
 import { ChevronRightIcon, GitBranchIcon, GlobeIcon, ImageIcon } from "lucide-react";
 import { pullLabel } from "../../codeHost";
 import type { ReactNode } from "react";
-import type { DeskAsk, DeskJob, DeskJobFailure, DeskOutput } from "../../desk";
+import { jobDimmed, type DeskAsk, type DeskJob, type DeskJobFailure, type DeskOutput } from "../../desk";
 import { AgentMark } from "../../AgentMark";
 import { fileIcon } from "../../fileIcons";
 import { useInterfaceTranslation } from "../../i18n/client";
@@ -277,7 +277,7 @@ function action(t: T, job: DeskJob, actions: DeskJobCardActions): ReactNode {
  */
 export function DeskJobCard({ job, selected = false, selectedOutput = null, ...actions }: { job: DeskJob; selected?: boolean; selectedOutput?: string | null } & DeskJobCardActions) {
   const { t } = useInterfaceTranslation();
-  const ended = job.state === "cancelled" || job.state === "closed" || job.state === "moved_out" || job.state === "archived";
+  const ended = jobDimmed(job.state);
   return (
     <article
       className={cn("relative min-w-0 rounded-lg border border-border", selected ? "bg-accent" : "hover:bg-accent/50")}
