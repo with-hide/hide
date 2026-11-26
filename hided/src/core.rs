@@ -1728,10 +1728,11 @@ fn own_node(
             home.clone(),
         )));
     // The install kit's parts ship beside this binary: in the app bundle, or
-    // in the build folder a move or a core update placed in this account's
-    // helper root, which a moved core's login item runs. A daemon anywhere
-    // else, a development build among them, installs nothing (PRD
-    // device-parity D-19).
+    // in the build folder a login item, a core update or a move before 1.2.0
+    // placed in one of this account's install roots, which the login item's
+    // core runs on a machine that may have no app. A daemon anywhere else, a
+    // development build among them, installs nothing (PRD device-parity
+    // D-19).
     // A login item's copy of the app's build installs the app's kit, from
     // the package it stands in for (`always_on::app_package`).
     if let Some(package) = crate::always_on::app_package() {

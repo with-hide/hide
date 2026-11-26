@@ -11,10 +11,11 @@
 //! once nothing names them (`hide_kit::legacy::device`), whose paths are
 //! constants of the helper, never a request's.
 //!
-//! A core or a node that runs a build Hide placed under a helper root (a
-//! moved core's login item runs one) keeps its kit from that root too, but
-//! leaves the builds where the move and the core update put them
-//! (`KitPlace::Build`).
+//! A core or a node that runs a build Hide placed in one of the account's
+//! install roots (a login item's core runs one, on a machine that may have
+//! no app) keeps its kit from that root too, under the installation name
+//! the panes it starts carry, but leaves the builds where the move and the
+//! core update put them (`KitPlace::Build`).
 //!
 //! When the link closes, the serving loop raises its [`Env`]'s stop flag,
 //! which ends a child the kit is waiting on, so the helper does not outlive
@@ -304,17 +305,20 @@ fn install_layout(executable: &Path) -> HostResult<(PathBuf, String)> {
 const BUILD_PROGRAMS: [&str; 2] = ["hide", "hide-agent-hooks"];
 
 /// The root and build of a program Hide placed for the account at `home`:
-/// in that account's own helper root (`~/.hide/host-helper`), in a build
-/// folder holding the kit's other programs beside it. A copy anywhere else,
+/// in one of that account's own install roots
+/// ([`hide_kit::layout::placed_roots`]: `~/.hide/host-helper`,
+/// `~/.hide/core`), in a build folder holding the kit's other programs
+/// beside it. A copy anywhere else,
 /// or a lone `hided` there, is no build Hide placed, so it installs nothing
 /// into the account: a development build copied into a folder of that
 /// name, or a fixture's build while HOME is the operator's.
 pub(crate) fn placed_build(executable: &Path, home: &Path) -> Option<(PathBuf, String)> {
     let (root, version) = build_layout(executable)?;
-    let own = hide_kit::layout::helper_root(home);
     let canonical = hide_platform::fs::identity::canonical;
-    let in_own_root = root == own
-        || matches!((canonical(&root), canonical(&own)), (Ok(root), Ok(own)) if root == own);
+    let in_own_root = hide_kit::layout::placed_roots(home).iter().any(|own| {
+        root == *own
+            || matches!((canonical(&root), canonical(own)), (Ok(root), Ok(own)) if root == own)
+    });
     let whole = BUILD_PROGRAMS.iter().all(|program| {
         root.join(&version)
             .join(format!("{program}{}", std::env::consts::EXE_SUFFIX))
@@ -807,8 +811,9 @@ mod tests {
     /// A core or a node installs the kit only from a program Hide put on
     /// the machine: the app's package on each system (a macOS bundle, a
     /// Linux or Windows package's resources, a Windows build's runtime
-    /// copy), or a whole build in the account's own helper root, which a
-    /// moved core's login item runs. A copy of a build anywhere else, a
+    /// copy), or a whole build in one of the account's own install roots
+    /// (`a_placed_core_installs_the_hooks_of_the_installation_its_panes_carry`).
+    /// A copy of a build anywhere else, a
     /// lone `hided` in a build folder, a development build, or a node with
     /// no home installs nothing into the account.
     #[test]
@@ -854,6 +859,41 @@ mod tests {
                 KitPlace::Standalone,
                 "{}",
                 elsewhere.display()
+            );
+        }
+    }
+
+    /// A core run from a whole build in either install root Hide places
+    /// builds in for the account, the device helper's (`~/.hide/host-helper`)
+    /// and a login item's core (`~/.hide/core`), installs its kit from that
+    /// root, under the installation name the panes it starts carry, so its
+    /// hooks act in them. On 2026-11-26 a Mac connected as a server ran its
+    /// core from `~/.hide/core`, installed no hooks, and no agent it started
+    /// ever reported its session.
+    #[test]
+    fn a_placed_core_installs_the_hooks_of_the_installation_its_panes_carry() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let whole = ["hided", "hide", "hide-agent-hooks"];
+        for root in [
+            hide_kit::layout::helper_root(&home),
+            hide_kit::layout::core_root(&home),
+        ] {
+            let program = programs(&root.join("0123456789abcdef"), &whole);
+            assert_eq!(
+                KitPlace::of_program(&program, Some(&home)),
+                KitPlace::Build {
+                    root: root.clone(),
+                    version: "0123456789abcdef".to_owned(),
+                },
+                "{}",
+                program.display()
+            );
+            assert_eq!(
+                pane_install(&program).map(|install| install.id),
+                Some(hide_kit::layout::install_of_root(&root)),
+                "{}",
+                program.display()
             );
         }
     }
