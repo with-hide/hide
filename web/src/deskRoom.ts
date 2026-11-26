@@ -87,7 +87,7 @@ export function followFrom(generation: number, items: readonly DeskItem[]): NewS
   return { generation, after: items.at(-1)?.id ?? -1, settled: null };
 }
 
-/** Job states with no pane to open, now or later: its turn's first session settles with nothing opened. */
+/** Job states with no pane to open now: the turn's first session is the next job, unless this one starts again. */
 const NO_PANE_COMING: ReadonlySet<DeskJob["state"]> = new Set<DeskJob["state"]>(["failed", "cancelled", "closed", "moved_out", "archived"]);
 
 /**
@@ -105,13 +105,18 @@ export function newSessionBeside(follow: NewSessionFollow, generation: number, i
   const now = follow.generation === generation ? follow : { generation, after: -1, settled: null };
   const turn = items.reduce((last, item) => (item.kind === "user" ? item.id : last), -1);
   if (now.settled === turn) return { follow: now, open: null };
-  const first = items.find((item): item is Extract<DeskItem, { kind: "job" }> => item.kind === "job" && item.id > now.after && item.id > turn);
-  const card = first ? cards[first.job_id] : undefined;
-  if (!card) return { follow: now, open: null };
-  if (NO_PANE_COMING.has(card.state)) return { follow: { ...now, settled: turn }, open: null };
-  if (!card.pane_id) return { follow: now, open: null };
-  const empty = room.session === null && room.panel === null;
-  return { follow: { ...now, settled: turn }, open: empty ? card.pane_id : null };
+  for (const item of items) {
+    if (item.kind !== "job" || item.id <= now.after || item.id <= turn) continue;
+    const card = cards[item.job_id];
+    // A job the core has not listed yet, or one still waiting for its pane, holds the turn's first place.
+    if (!card) return { follow: now, open: null };
+    // A start that failed is no session: the next one is the turn's first, and a start retried under the same job is looked at again.
+    if (NO_PANE_COMING.has(card.state)) continue;
+    if (!card.pane_id) return { follow: now, open: null };
+    const empty = room.session === null && room.panel === null;
+    return { follow: { ...now, settled: turn }, open: empty ? card.pane_id : null };
+  }
+  return { follow: now, open: null };
 }
 
 /** The session panel's `✕`, Escape or ⌘E (B6): Desk widens again and the tab panel, which was that session's, goes with it; the session is kept for ⌘E to open again. */

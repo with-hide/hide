@@ -230,9 +230,12 @@ describe("a session a Desk turn starts (frame J)", () => {
     expect(newSessionBeside(follow, 1, items, cards, closeSession(openSession(DESK_ROOM_CLOSED, "p1"))).open).toBeNull();
   });
 
-  it("settles a turn whose first session never gets a pane, opening none of the others", () => {
+  it("passes over a start that failed: the turn's next session opens, and a start retried under the same job opens once it has its pane", () => {
     const items = [user(1), jobLine(2, "j1"), jobLine(3, "j2")];
-    expect(run([{ items, cards: [card("j1", null, "failed"), card("j2", "p2")] }])).toEqual([]);
+    expect(run([{ items, cards: [card("j1", null, "failed"), card("j2", "p2")] }])).toEqual(["p2"]);
+    // The candidate's Pi: its first `hide agent spawn` was refused (`invalid_agent_name`) and the retry kept the job.
+    const retried = [user(1), jobLine(2, "j1")];
+    expect(run([{ items: retried, cards: [card("j1", null, "failed")] }, { items: retried, cards: [card("j1", null, "starting")] }, { items: retried, cards: [card("j1", "p1")] }])).toEqual(["p1"]);
   });
 
   it("reads every line of a new conversation as new", () => {
