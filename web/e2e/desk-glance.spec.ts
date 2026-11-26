@@ -106,7 +106,7 @@ test("⟩ folds 한눈에 so Desk's chat takes the room, the core keeps it folde
   }
 });
 
-test("a session beside Desk shows ‹ 한눈에 › above it, whose ‹ and Escape go back to 한눈에, and its head has no ✕ but keeps ↗ @platform", async ({ page }) => {
+test("a session beside Desk shows the way back to 한눈에 above it, whose ‹ and Escape go back there, and its head has no ✕ but keeps ↗ @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const { engine, daemon } = await startGlance(page, "desk-glance-crumb");
   try {
