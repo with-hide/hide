@@ -245,6 +245,9 @@ pub struct BrowserPage {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BrowserRouteSource {
     pub device_id: String,
+    /// The checkout a `file:` page reads its own files from, the one whose
+    /// root holds the page's file even when another checkout's Workspace
+    /// shows it; the View's own checkout for a web page.
     pub checkout_path: String,
     pub url: String,
     pub load: u64,
@@ -289,6 +292,10 @@ pub struct Refusal {
 /// The daemon reads it on a request worker before asking the owner to commit.
 pub struct ActionSource {
     root: DocumentRoot,
+    /// The catalog ids (Workspace, checkout) of the checkout `root` is: the
+    /// caller's own, or for a file or a page, the checkout of its device
+    /// whose root holds the path (`Runtime::display_source`).
+    checkout: (String, String),
     channel: Arc<dyn NodeLink>,
     path: String,
     kind: SourceKind,
@@ -309,6 +316,8 @@ enum SourceKind {
 pub struct ActionMaterial {
     pub(crate) file: Option<(EditorDocumentSnapshot, DocumentPlace)>,
     pub(crate) path: String,
+    /// The checkout it was read from, whose document a file's tab is.
+    pub(crate) checkout: (String, String),
 }
 
 pub enum ActionPreparation {
@@ -320,6 +329,7 @@ pub enum ActionPreparation {
 impl ActionSource {
     pub(crate) fn file(
         root: DocumentRoot,
+        checkout: (String, String),
         channel: Arc<dyn NodeLink>,
         path: String,
         already_open: bool,
@@ -327,6 +337,7 @@ impl ActionSource {
     ) -> Self {
         Self {
             root,
+            checkout,
             channel,
             path,
             kind: SourceKind::File,
@@ -337,12 +348,14 @@ impl ActionSource {
 
     pub(crate) fn diff(
         root: DocumentRoot,
+        checkout: (String, String),
         channel: Arc<dyn NodeLink>,
         path: String,
         local: bool,
     ) -> Self {
         Self {
             root,
+            checkout,
             channel,
             path,
             kind: SourceKind::Diff,
@@ -353,12 +366,14 @@ impl ActionSource {
 
     pub(crate) fn browser(
         root: DocumentRoot,
+        checkout: (String, String),
         channel: Arc<dyn NodeLink>,
         path: String,
         local: bool,
     ) -> Self {
         Self {
             root,
+            checkout,
             channel,
             path,
             kind: SourceKind::Browser,
@@ -370,13 +385,19 @@ impl ActionSource {
     pub fn read(self) -> Result<ActionMaterial, Refusal> {
         let relative = files::relative_in_root(self.channel.as_ref(), &self.root.path, &self.path)
             .map_err(|_| {
-                if self.local {
-                    // A file outside every checkout of the core's machine
-                    // never comes here (hided opens it by the window's
-                    // grant), so this one is in another checkout.
+                if matches!(self.kind, SourceKind::Diff) {
                     Refusal {
                         reason: "path_outside_checkout",
-                        next_action: "Choose a path inside the calling pane's checkout",
+                        next_action: "Choose a changed file of the calling pane's checkout",
+                    }
+                } else if self.local {
+                    // A file outside every checkout of the core's machine
+                    // never comes here (hided opens it by the window's
+                    // grant), and one of another checkout is read from that
+                    // checkout, so this one leaves its checkout by a link.
+                    Refusal {
+                        reason: "path_outside_checkout",
+                        next_action: "Choose a path inside the checkout that holds it",
                     }
                 } else {
                     // Only the core's machine has a window to grant a file
@@ -408,14 +429,22 @@ impl ActionSource {
                     next_action: "Check that the HTML file is readable and retry",
                 }
             })?;
-            return Ok(ActionMaterial { file: None, path });
+            return Ok(ActionMaterial {
+                file: None,
+                path,
+                checkout: self.checkout,
+            });
         }
         if matches!(self.kind, SourceKind::File) {
             // A file with a tab is read again too, so the open shows what
             // it says now; one that cannot be read then shows its tab as is.
             let read = files::open_document(self.channel.as_ref(), &self.root, &path);
             if self.already_open && read.is_err() {
-                return Ok(ActionMaterial { file: None, path });
+                return Ok(ActionMaterial {
+                    file: None,
+                    path,
+                    checkout: self.checkout,
+                });
             }
             let opened = read.map_err(|failure| match failure {
                 OpenFailure::Missing => Refusal {
@@ -430,6 +459,7 @@ impl ActionSource {
             return Ok(ActionMaterial {
                 file: Some(opened),
                 path,
+                checkout: self.checkout,
             });
         }
         let (changes, _) = changes::read(&ChangesRequest {
@@ -459,7 +489,11 @@ impl ActionSource {
                 next_action: "Refresh the changed file and retry",
             });
         }
-        Ok(ActionMaterial { file: None, path })
+        Ok(ActionMaterial {
+            file: None,
+            path,
+            checkout: self.checkout,
+        })
     }
 }
 

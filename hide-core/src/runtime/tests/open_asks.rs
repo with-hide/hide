@@ -38,6 +38,7 @@ fn ask(id: &str, text: &str, at: u64) -> MissedWork {
         reason: None,
         reopened: false,
         given: false,
+        quote: None,
     }
 }
 
@@ -131,7 +132,10 @@ fn ids(row: &SidebarAgentSnapshot) -> Vec<String> {
 fn a_question_still_waiting_holds_a_resting_root_row_in_needs_you_and_counts_the_rest() {
     let mut runtime = asking(vec![
         ask("m2", "영문 사업자명 알려주기", ASKED + 10),
-        ask("m1", "중계 서버 로그 Google 계정 알려주기", ASKED),
+        MissedWork {
+            quote: Some("로그를 볼 Google 계정을 알려 주세요.".into()),
+            ..ask("m1", "중계 서버 로그 Google 계정 알려주기", ASKED)
+        },
     ]);
     let row = laid(&mut runtime, row("idle"));
     assert_eq!(
@@ -144,6 +148,7 @@ fn a_question_still_waiting_holds_a_resting_root_row_in_needs_you_and_counts_the
         Some(AskSubject::OpenAsk {
             id: "m1".into(),
             line: "중계 서버 로그 Google 계정 알려주기".into(),
+            quote: Some("로그를 볼 Google 계정을 알려 주세요.".into()),
         })
     );
     assert_eq!(
@@ -156,6 +161,11 @@ fn a_question_still_waiting_holds_a_resting_root_row_in_needs_you_and_counts_the
         serde_json::to_value(&row).unwrap()["open_asks"]["session"]["session_id"],
         "lead-session"
     );
+    // Each carries the sentence its answer asks it in, for the thread's
+    // question line; one recorded without it carries none.
+    let items = &serde_json::to_value(&row).unwrap()["open_asks"]["items"];
+    assert_eq!(items[0]["quote"], "로그를 볼 Google 계정을 알려 주세요.");
+    assert!(items[1].get("quote").is_none());
 }
 
 #[test]
@@ -455,7 +465,8 @@ mod letter_woken {
                 read.ask_subject,
                 Some(AskSubject::OpenAsk {
                     id: "m1".into(),
-                    line: QUESTION.into()
+                    line: QUESTION.into(),
+                    quote: None,
                 })
             );
             assert!(read.revisit.is_some_and(|revisit| revisit.read_ask));

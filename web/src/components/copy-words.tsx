@@ -10,17 +10,23 @@ import { Button } from "./ui/button";
 /**
  * `복사` (Doop E2): puts `text` on the clipboard of the screen the operator
  * looks at and turns into `복사함 ✓` for a moment (`useCopied`). It never
- * takes the keyboard from what the operator was doing.
+ * takes the keyboard from what the operator was doing. `quiet` draws it as
+ * words with no box, as a code block's head row holds it (Doop N 1 나).
  */
-export function CopyWords({ text, what, copy, className }: { text: string; what: string; copy: CopyText; className?: string }) {
+export function CopyWords({ text, what, copy, quiet = false, className }: { text: string; what: string; copy: CopyText; quiet?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
   const { copied, run } = useCopied(copy);
   return (
     <Button
       type="button"
-      variant="outline"
-      size="sm"
-      className={cn("h-(--size-control-compact) gap-xxs bg-background px-xs text-caption font-normal text-subtle-foreground", copied && "text-success", className)}
+      variant={quiet ? "text" : "outline"}
+      size={quiet ? "inline" : "sm"}
+      className={cn(
+        "gap-xxs text-caption font-normal",
+        quiet ? "px-xxs text-muted-foreground hover:text-foreground" : "h-(--size-control-compact) bg-background px-xs text-subtle-foreground",
+        copied && "text-success",
+        className,
+      )}
       data-copy-words={what}
       data-copied={copied ? "true" : undefined}
       onMouseDown={(event) => event.preventDefault()}

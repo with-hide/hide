@@ -131,7 +131,7 @@ it("draws a past flow's settled pull requests, a moved-on wait and a closing lin
     expect(text(result("flow-1"))).toContain("2 PRs");
     expect(result("flow-1").querySelector("time")).not.toBeNull();
     expect(text(result("flow-2"))).toBe("Moved onPick the scope");
-    expect(text(result("flow-2"))).not.toContain("Question");
+    expect(text(result("flow-2"))).not.toContain("To check");
     expect(text(result("flow-3"))).toBe("PRD written, 12 decisions");
     expect(text(result("flow-4"))).toContain("Closed");
     expect(text(result("flow-4"))).toContain(`#${1095}`);

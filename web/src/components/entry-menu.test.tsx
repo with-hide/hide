@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { EntryContextMenu, type MenuEntry } from "./entry-menu";
+import { EntryContextMenu, EntryPointMenu, type MenuEntry } from "./entry-menu";
 import { useUiStore } from "../ui";
 
 let root: Root;
@@ -127,4 +127,28 @@ it("nested destinations close one keyboard level at a time and stay closed after
   await render(items, selected);
   expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1);
   expect(selected).toEqual([]);
+});
+
+it("a menu opened at the pointer chooses nothing on the release of the press that opened it, and the next click chooses", async () => {
+  // The Explorer opens its menu at the pointer on `contextmenu`, which macOS sends on the press (issue 3018).
+  const selected: string[] = [];
+  const onClose = vi.fn();
+  const items: MenuEntry[] = [
+    { id: "open-beside", label: "Open to the side", unavailable: null },
+    { id: "open-browser", label: "Open in Browser", unavailable: null },
+  ];
+  await act(async () => root.render(<EntryPointMenu label="page.html actions" items={items} at={{ x: 20, y: 20 }} onClose={onClose} onSelect={(id) => selected.push(id)} data-explorer-menu="/page.html" />));
+  await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+  const first = () => document.querySelector<HTMLElement>('[data-explorer-menu] [data-menu-item="open-beside"]')!;
+  const release = (target: Element, type: "pointerdown" | "pointerup") => {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 20, clientY: 20 });
+    Object.defineProperty(event, "pointerType", { value: "mouse" });
+    target.dispatchEvent(event);
+  };
+  await act(async () => { release(first(), "pointerup"); await vi.runOnlyPendingTimersAsync(); });
+  expect(selected).toEqual([]);
+  expect(onClose).not.toHaveBeenCalled();
+  const browser = document.querySelector<HTMLElement>('[data-explorer-menu] [data-menu-item="open-browser"]')!;
+  await act(async () => { release(browser, "pointerdown"); release(browser, "pointerup"); browser.click(); await vi.runOnlyPendingTimersAsync(); });
+  expect(selected).toEqual(["open-browser"]);
 });

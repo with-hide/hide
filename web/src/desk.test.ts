@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, approvalButtons, askedIn, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, livePane, ENDED_JOB_STATES, jobDimmed, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
+import { agentPickable, approvalButtons, askPlace, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, livePane, ENDED_JOB_STATES, jobDimmed, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
 import type { AgentRow, DeskRecord } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -145,7 +145,7 @@ describe("a letter's sender and a command's start (B25, D-75)", () => {
   });
 });
 
-describe("the answer a question Hide found was asked in (B4 question 나)", () => {
+describe("where a question Hide found was asked (Doop N3 가)", () => {
   const answer = (words: string, at: number | null): AcpSessionUpdate => ({ sessionUpdate: "agent_message_chunk", messageId: words, content: { type: "text", text: words }, ...(at === null ? {} : { _meta: { hide: { at_ms: at } } }) });
   const lines = threadLines([
     text("user_message_chunk", "스크린샷 찍어 줘"),
@@ -156,20 +156,46 @@ describe("the answer a question Hide found was asked in (B4 question 나)", () =
     answer("끝났어요.", 3_000),
   ]);
   const turns = threadTurns(lines);
-  const said = (id: string | null) => {
-    const line = lines.find((one) => one.id === id);
-    return line?.kind === "agent" ? line.text : null;
-  };
+  const read = { olderLeft: false, settled: true };
 
-  it("is the last answer written no later than the question was found", () => {
-    expect(said(askedIn(turns, 2_500))).toBe("본인 확인은 직접 해 줄 수 있어?");
-    expect(said(askedIn(turns, 2_000))).toBe("본인 확인은 직접 해 줄 수 있어?");
-    expect(said(askedIn(turns, 1_200))).toBe("라이트를 찍었어요. 다크도 찍을까요?");
+  it("is the newest answer by the time it was found that holds the question's sentence, and where in it", () => {
+    const at = (quote: string, time = 3_500) => {
+      const place = askPlace(turns, { at_unix_ms: time, quote }, read);
+      return place.state === "found" ? [place.line.text, place.line.text.slice(place.sentence!.from, place.sentence!.to)] : place.state;
+    };
+    expect(at("다크도 찍을까요?")).toEqual(["라이트를 찍었어요. 다크도 찍을까요?", "다크도 찍을까요?"]);
+    expect(at("본인 확인은 직접 해 줄 수 있어?", 2_500)).toEqual(["본인 확인은 직접 해 줄 수 있어?", "본인 확인은 직접 해 줄 수 있어?"]);
+    // A sentence written after the question was found is not where it was asked.
+    expect(at("끝났어요.", 2_500)).toEqual(["본인 확인은 직접 해 줄 수 있어?", "본인 확인은 직접 해 줄 수 있어?"]);
   });
 
-  it("is none when no answer read is that old or says when it was written", () => {
-    expect(askedIn(turns, 500)).toBeNull();
-    expect(askedIn(threadTurns(threadLines([text("user_message_chunk", "해줘"), answer("할까요?", null)])), 9_000)).toBeNull();
+  it("goes to the newest answer by then, lit whole, when no answer holds the sentence as the core read it, and is gone only when no answer was written by then", () => {
+    // A reader that wrote the message a little differently: the message is there, so the question goes to it.
+    const place = askPlace(turns, { at_unix_ms: 2_500, quote: "본인 확인을 직접 해 주실 수 있나요?" }, read);
+    expect(place.state === "found" ? [place.line.text, place.line.text.slice(place.sentence!.from, place.sentence!.to)] : place.state).toEqual(["본인 확인은 직접 해 줄 수 있어?", "본인 확인은 직접 해 줄 수 있어?"]);
+    const padded = threadTurns(threadLines([text("user_message_chunk", "해줘"), answer("\n다크도 찍을까요\n", 1_000)]));
+    const whole = askPlace(padded, { at_unix_ms: 1_500, quote: "다크도 찍을까요?" }, read);
+    expect(whole.state === "found" ? whole.line.text.slice(whole.sentence!.from, whole.sentence!.to) : whole.state).toBe("다크도 찍을까요");
+    // No answer written by the time it was found: gone, whatever its sentence.
+    expect(askPlace(turns, { at_unix_ms: 900, quote: "라이트를 찍었어요." }, read).state).toBe("gone");
+  });
+
+  it("goes by time alone only for a question kept without its sentence: the last answer written no later than it was found", () => {
+    const said = (time: number) => {
+      const place = askPlace(turns, { at_unix_ms: time }, read);
+      return place.state === "found" ? place.line.text : null;
+    };
+    expect(said(2_500)).toBe("본인 확인은 직접 해 줄 수 있어?");
+    expect(said(2_000)).toBe("본인 확인은 직접 해 줄 수 있어?");
+    expect(said(1_200)).toBe("라이트를 찍었어요. 다크도 찍을까요?");
+    expect(askPlace(turns, { at_unix_ms: 1_200 }, read)).toMatchObject({ state: "found", sentence: null });
+  });
+
+  it("is not known while pages before remain or the record is being read, and gone once every page is read without it", () => {
+    expect(askPlace(turns, { at_unix_ms: 500 }, read).state).toBe("gone");
+    expect(askPlace(threadTurns(threadLines([text("user_message_chunk", "해줘"), answer("할까요?", null)])), { at_unix_ms: 9_000 }, read).state).toBe("gone");
+    expect(askPlace(turns, { at_unix_ms: 500 }, { olderLeft: true, settled: true }).state).toBe("unknown");
+    expect(askPlace(turns, { at_unix_ms: 500 }, { olderLeft: false, settled: false }).state).toBe("unknown");
   });
 });
 

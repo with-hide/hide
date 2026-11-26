@@ -8,6 +8,7 @@
 // The fields no section carries (marked `wire gap` below) are a thread's
 // own, which the threads node reads from the session record.
 
+import { sentenceIn } from "./markdownPlain";
 import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskItem, DeskOption, DeskOptionKind, DeskJob, DeskJobsSection, DeskMoved, DeskRecord, DeskMention as WireMention, DeskMission, DeskMissionMention, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
 
 export type { DeskAgent, DeskAgentId, DeskRecord, DeskAgentState, DeskApprovalState, DeskChoice, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskMissionMention, DeskOption, DeskOptionKind, DeskOutput, DeskOutputKind, DeskPermission, DeskQueuedMessage, DeskSteps } from "./snapshot";
@@ -625,19 +626,53 @@ export function threadTurns(lines: readonly ThreadLine[]): ThreadTurn[] {
   return turns;
 }
 
+/** The answer lines written no later than `atUnixMs`, newest first, the later in the conversation first among lines of one time. */
+function answersBy(turns: readonly ThreadTurn[], atUnixMs: number): Extract<ThreadLine, { kind: "agent" }>[] {
+  return turns
+    .flatMap((turn) => turn.answer)
+    .filter((line) => line.atMs !== null && line.atMs <= atUnixMs)
+    .reverse()
+    .sort((a, b) => (b.atMs ?? 0) - (a.atMs ?? 0));
+}
+
+/** A place in a message: where the sentence a question asks stands in it, or the whole message. */
+export type AskSentence = { from: number; to: number };
+
 /**
- * The answer a question Hide found at a turn's end was asked in (B4 question
- * 나): the last answer written no later than the question was found, whose
- * line id it returns. Hide AI lists a question only when the sentence that
- * asks it is in the turn's own answer, so that answer is where it stands;
- * null when no answer of the lines read says when it was written that early.
+ * Whether the question line can take the operator to where a question was
+ * asked (Doop N3 가), the one place that decides it: `found`, with the message
+ * and what of it to light; `unknown` while the record is being read or holds
+ * pages before the ones read, which a press reads first; `gone` once every
+ * page is read and no answer was written by the time Hide found the question
+ * (the agent started a new record, or the record was cut short), a row a
+ * press does nothing on.
+ *
+ * Time decides whether the message is there: the answer lines written no
+ * later than the question was found (`_meta.hide.at_ms`). The agent's own
+ * sentence only decides what of it to light: the newest of them that holds
+ * the sentence, lit at the sentence, since the core checked it against the
+ * turn's answer messages together; when none holds it as the core read it (a
+ * reader that writes the message a little differently), the newest of them,
+ * lit whole. A question kept before its sentence was goes to the newest of
+ * them with nothing lit.
  */
-export function askedIn(turns: readonly ThreadTurn[], atUnixMs: number): string | null {
-  let found: { id: string; at: number } | null = null;
-  for (const turn of turns) {
-    for (const line of turn.answer) {
-      if (line.atMs !== null && line.atMs <= atUnixMs && (!found || line.atMs >= found.at)) found = { id: line.id, at: line.atMs };
+export function askPlace(turns: readonly ThreadTurn[], ask: { at_unix_ms: number; quote?: string }, { olderLeft, settled }: { olderLeft: boolean; settled: boolean }):
+  | { state: "found"; line: Extract<ThreadLine, { kind: "agent" }>; sentence: AskSentence | null }
+  | { state: "unknown" | "gone" } {
+  const answers = answersBy(turns, ask.at_unix_ms);
+  const newest = answers[0];
+  if (newest) {
+    if (!ask.quote) return { state: "found", line: newest, sentence: null };
+    for (const line of answers) {
+      const sentence = sentenceIn(line.text, ask.quote);
+      if (sentence) return { state: "found", line, sentence };
     }
+    return { state: "found", line: newest, sentence: wholeOf(newest.text) };
   }
-  return found?.id ?? null;
+  return { state: olderLeft || !settled ? "unknown" : "gone" };
+}
+
+/** The whole of a message's text, its white space at either end left out. */
+function wholeOf(text: string): AskSentence {
+  return { from: text.length - text.trimStart().length, to: text.trimEnd().length };
 }
