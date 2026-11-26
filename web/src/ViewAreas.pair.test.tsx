@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { BUILDER, FOCUS_WORLD, type FocusModel } from "./practice/worlds/focus";
-import type { ViewDisplaySnapshot } from "./snapshot";
+import { catalogWorkspaces, frontCheckout, type ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { ViewAreas } from "./ViewAreas";
@@ -81,6 +81,14 @@ describe("the desk's ✕ in focus mode (UI_BEHAVIOR, Focus mode)", () => {
     expect([title(), line()]).toEqual(["report.pdf", "~/Downloads/report.pdf"]);
     await draw(FOCUS_WORLD.initial(), { path: "/Volumes/disk/report.pdf", label: "report.pdf" });
     expect(line()).toBe("/Volumes/disk/report.pdf");
+  });
+
+  it("leads a file from another checkout with its project, as Desk's desk shows it (PRD desk-own-desk B2)", async () => {
+    const { rest } = FOCUS_WORLD.snapshot(FOCUS_WORLD.initial(), Date.now());
+    const checkout = frontCheckout(rest)!;
+    const project = catalogWorkspaces(rest).find((row) => row.checkouts.some((one) => one.path === checkout.path))!;
+    await draw(FOCUS_WORLD.initial(), { path: `${checkout.path}/docs/plan.md`, label: "plan.md", origin: { device_id: project.device_id, path: checkout.path } });
+    expect(container.querySelector("[data-editor-path]")?.textContent).toBe(`${project.label} › docs › plan.md`);
   });
 
   it("keeps its ◧ and closes the documents outside the mode", async () => {

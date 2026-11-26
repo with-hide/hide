@@ -225,12 +225,13 @@ function DisplayBody({ display, workspace: desk, actions }: { display: ViewDispl
   const { t } = useInterfaceTranslation();
   // A file on Desk's desk is its own checkout's document, named from that checkout's folder (PRD desk-own-desk B2).
   const workspace = display.origin ?? desk;
-  const root = display.origin?.path;
+  const project = useShellStore((s) => (display.origin ? originProject(s.rest, display.origin) : null));
+  const place = display.origin && project !== null ? { root: display.origin.path, project } : undefined;
   if (display.kind === "browser") return <BrowserDisplay display={display} workspace={desk} actions={actions} />;
   if (display.kind === "external") return <ExternalDisplay display={display} workspace={desk} actions={actions} />;
   if (display.kind === "card") return display.card ? <CardBody item={display.card} ownerPane={display.owner_pane ?? null} actions={actions} /> : <AreaEmpty state="view-unavailable" text={display.reason ?? ""} />;
   if (display.state === "open") {
-    return <DisplayEditor display={display} workspace={workspace} placeKey={placeKey(workspaceKey(desk), display)} actions={actions} root={root} />;
+    return <DisplayEditor display={display} workspace={workspace} placeKey={placeKey(workspaceKey(desk), display)} actions={actions} place={place} />;
   }
   const state = display.state === "opening" ? <AreaEmpty state="view-opening" text={t("documents.view.openingNamed", { label: display.label })} /> : display.state === "waiting" ? <AreaEmpty state="view-waiting" text={display.reason ?? t("documents.view.waitingPath", { path: display.path })} /> : (
     <AreaEmpty state="view-unavailable" text={display.reason ? t("documents.view.unavailableReason", { path: display.path, reason: display.reason }) : t("documents.view.unavailable", { path: display.path })}>
@@ -245,7 +246,7 @@ function DisplayBody({ display, workspace: desk, actions }: { display: ViewDispl
     </AreaEmpty>
   );
   return <>
-    <PendingDocumentHeader display={display} actions={actions} root={root} />
+    <PendingDocumentHeader display={display} actions={actions} place={place} />
     {state}
   </>;
 
@@ -394,14 +395,16 @@ function projectSuffixes(root: ViewLayoutSnapshot["root"], rest: SnapshotRest | 
   const named = new Map<string, string>();
   for (const same of byName.values()) {
     if (new Set(same.map((display) => `${display.origin!.device_id}\u0000${display.origin!.path}\u0000${display.path}`)).size < 2) continue;
-    for (const display of same) {
-      const origin = display.origin!;
-      const place = checkoutAtRoot(rest, origin.device_id, origin.path);
-      const project = projects.find((row) => row.id === place?.workspace && row.device_id === origin.device_id);
-      named.set(display.id, project?.label ?? origin.path.split("/").filter(Boolean).at(-1) ?? origin.path);
-    }
+    for (const display of same) named.set(display.id, originProject(rest, display.origin!, projects));
   }
   return named;
+}
+
+/** The project a file on Desk's desk comes from, as the catalog names its checkout's project, else the checkout's folder name. */
+function originProject(rest: SnapshotRest | null, origin: NonNullable<ViewDisplaySnapshot["origin"]>, projects = catalogWorkspaces(rest)): string {
+  const place = checkoutAtRoot(rest, origin.device_id, origin.path);
+  const project = projects.find((row) => row.id === place?.workspace && row.device_id === origin.device_id);
+  return project?.label ?? origin.path.split("/").filter(Boolean).at(-1) ?? origin.path;
 }
 
 /** A display's name on its tab, a card's short one from what the shell holds of its subject. */
