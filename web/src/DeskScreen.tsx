@@ -13,7 +13,7 @@ import type { Actions } from "./actions";
 import { answerPlace, type AnswerPlace, type FoundAnswerPath } from "./answerPaths";
 import { hostBridge } from "./host";
 import { deskFavorites, deskOn, deskPhase, holdsFoot, laneCards, livePane, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
-import { activeTab, closePanel, closeSide, closeTab, fileName, followFrom, keepTab, newSessionBeside, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab, type NewSessionFollow } from "./deskRoom";
+import { activeTab, closePanel, closeSide, closeTab, fileName, followFrom, followMoved, keepTab, newSessionBeside, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab, type NewSessionFollow } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
 import { AreaEmpty } from "./AreaEmpty";
 import { DisplayEditor, DocumentKeeper } from "./Editor";
@@ -129,6 +129,18 @@ function useNewSessionBeside(actions: Actions, generation: number | undefined, i
   }, [actions, generation, items, cards]);
 }
 
+/**
+ * Moves the room to the pane a gone session runs in again (`followMoved`),
+ * before the screen paints, so the session panel and each of its actions
+ * (files, terminal, input) reach the live session, never the gone pane.
+ */
+function useFollowMoved() {
+  const moved = useShellStore((s) => s.deskJobs?.moved);
+  useLayoutEffect(() => {
+    if (moved?.length) useUiStore.getState().setDeskRoom((room) => followMoved(room, moved));
+  }, [moved]);
+}
+
 /** Where the `@` menu stands: the `@` word Esc closed it on, the project ⇥ entered, and the parents the operator folded open or shut. */
 type MenuPlace = { dismissed: number | null; entered: string | null; active: string; folds: Record<string, boolean> };
 
@@ -225,6 +237,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
 
   useReadShownCards(scroller, jobs, actions.deskJobRead);
   useNewSessionBeside(actions, desk?.conversation.generation, items, byId);
+  useFollowMoved();
 
   const send = (words = draft) => {
     if (!canSend || !items) return;
@@ -449,8 +462,7 @@ function useSessionChipSource(room: RoomActions): SessionChipSource {
   return useMemo(() => {
     const byPane = new Map(rows.map((row) => [row.pane_id, row]));
     const cards = laneCards(section);
-    // The record open beside Desk whose session runs again in another pane is that pane, as the panel shows it.
-    return { facts: (session) => sessionFacts(byPane, cards, session, section), onOpen: room.session, open: open === null ? null : livePane(section?.moved, open) };
+    return { facts: (session) => sessionFacts(byPane, cards, session, section), onOpen: room.session, open };
   }, [rows, section, room, open]);
 }
 
@@ -612,9 +624,7 @@ const NO_WIDTHS = { view_width: null, session_width: null };
  * its conversation read from its pane, the question it waits on as a card,
  * and its input box, or `에이전트 깨우기` in the box's place while it sleeps.
  */
-function DeskSessionPanel({ paneId: opened, actions, deskActions, room }: { paneId: string; actions: Actions; deskActions: Actions; room: RoomActions }) {
-  // A gone session's record open here gives way to the session once it runs again in another pane.
-  const paneId = useShellStore((s) => livePane(s.deskJobs?.moved, opened));
+function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: string; actions: Actions; deskActions: Actions; room: RoomActions }) {
   const listed = useShellStore((s) => agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(paneId));
   const record = useShellStore((s) => (listed ? null : ((s.deskJobs?.records ?? []).find((one) => one.pane_id === paneId) ?? null)));
   if (record) return <DeskRecordPanel record={record} actions={actions} deskActions={deskActions} room={room} />;

@@ -5,8 +5,8 @@
 // time the room is entered (B26); the core keeps only the two panels' widths
 // (`desk.lane`, B23).
 
-import { ENDED_JOB_STATES } from "./desk";
-import type { DeskItem, DeskJob, DeskOutput } from "./snapshot";
+import { ENDED_JOB_STATES, livePane } from "./desk";
+import type { DeskItem, DeskJob, DeskMoved, DeskOutput } from "./snapshot";
 import { absolutePathRoot, underFolder } from "./terminalLinks";
 
 /**
@@ -116,6 +116,18 @@ export function newSessionBeside(follow: NewSessionFollow, generation: number, i
     return { follow: { ...now, settled: turn }, open: empty ? card.pane_id : null };
   }
   return { follow: now, open: null };
+}
+
+/**
+ * The room once a gone session runs again in another pane (`desk_jobs.moved`,
+ * one `이어서 하기` resumed): the session open beside Desk, and the one ⌘E
+ * opens again, are that pane, so the panel's files, terminal and input reach
+ * the live session; the tab panel stays, being the same session's.
+ */
+export function followMoved(room: DeskRoomWindow, moved: readonly DeskMoved[]): DeskRoomWindow {
+  const session = room.session === null ? null : livePane(moved, room.session);
+  const closed = room.closed === null ? null : livePane(moved, room.closed);
+  return session === room.session && closed === room.closed ? room : { ...room, session, closed };
 }
 
 /** The session panel's `✕`, Escape or ⌘E (B6): Desk widens again and the tab panel, which was that session's, goes with it; the session is kept for ⌘E to open again. */

@@ -873,6 +873,12 @@ describe("Desk's room", () => {
     expect(document.body.querySelector("[data-desk-session-head]")?.getAttribute("data-desk-session-head")).not.toBe("ended");
     expect(sent("session_thread_open").at(-1)).toEqual({ pane_id: "w1:p20" });
     expect(chip?.getAttribute("data-desk-session-open")).toBe("true");
+    // The room itself moved, so the panel's terminal reaches the live pane, not the gone one.
+    expect(useUiStore.getState().deskRoom.session).toBe("w1:p20");
+    stubTabStripTokens();
+    await press("[data-desk-session-terminal]");
+    expect(useUiStore.getState().deskReturn).toBe("w1:p20");
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await act(async () => useUiStore.getState().setDeskRoom((now) => ({ ...now, session: null })));
     await act(async () => chip!.click());
     expect(useUiStore.getState().deskRoom.session).toBe("w1:p20");
