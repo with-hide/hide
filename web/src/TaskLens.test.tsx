@@ -654,7 +654,7 @@ it("rests a read question with a hollow ! and no 읽음 word, and its ☆ puts i
   expect(at("asked").querySelector("[data-mark]")?.getAttribute("data-mark")).toBe("turn");
   expect(at("asked").querySelector("[data-mark]")?.getAttribute("data-mark-read")).toBe("true");
   expect(at("asked").querySelector("[data-task-read-tag]")).toBeNull();
-  expect(at("asked").querySelector('[data-task-focus="row"]')?.getAttribute("aria-label")).toContain("쉬는 중 · 읽은 질문");
+  expect(at("asked").querySelector('[data-task-focus="row"]')?.getAttribute("aria-label")).toContain("쉬는 중 · 확인할 것 · 읽음");
   expect(at("kept").getAttribute("data-task-read")).toBeNull();
   const button = (id: string) => container.querySelector<HTMLButtonElement>(`[data-task-revisit="${id}"]`)!;
   expect(button("asked").getAttribute("aria-pressed")).toBe("false");
