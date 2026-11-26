@@ -22,8 +22,8 @@ import { requestFileBytesWithTotal } from "./fileBytes";
 import { hostBridge } from "./host";
 import { windowDeviceId } from "./screenMachine";
 import { catalogWorkspaces, type SnapshotRest } from "./snapshot";
-import { normalize, pathLookups, probePaths, terminalPathOwner } from "./terminalLinkProvider";
-import { absolutePathRoot, parseToken } from "./terminalLinks";
+import { pathLookups, probePaths, terminalPathOwner } from "./terminalLinkProvider";
+import { absolutePathRoot, normalize, parseToken } from "./terminalLinks";
 
 /** Paths one answer looks up; the rest stay words. */
 export const MAX_PATHS = 32;

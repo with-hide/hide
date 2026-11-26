@@ -466,6 +466,19 @@ export function absolutePathRoot(path: string): string | null {
   return path.startsWith("/") ? "/" : null;
 }
 
+/** `.` and `..` resolved while keeping the wire path's drive, share or POSIX root. */
+export function normalize(path: string): string {
+  const root = absolutePathRoot(path);
+  if (!root) throw new Error("path: normalization needs an absolute wire path");
+  const parts: string[] = [];
+  for (const part of path.slice(root.length).split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return `${root}${parts.join("/")}`;
+}
+
 function pathShaped(path: string): boolean {
   const root = absolutePathRoot(path);
   if (path.length > 1024 || path.includes("…") || path.slice(root?.length ?? 0).includes(":") || /\p{Cc}/u.test(path)) return false;

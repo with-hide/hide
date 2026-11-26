@@ -24,7 +24,7 @@ import { windowDeviceId } from "./screenMachine";
 import { bufferRow, type CellRow } from "./selection";
 import { catalogWorkspaces, localDeviceId, type Checkout, type SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
-import { absolutePathRoot, JOIN_ROWS, linkCandidates, osc8Target, type LinkCandidate, type LinkTarget } from "./terminalLinks";
+import { absolutePathRoot, JOIN_ROWS, linkCandidates, normalize, osc8Target, type LinkCandidate, type LinkTarget } from "./terminalLinks";
 import { paneRowWraps } from "./terminalWrap";
 
 /** A path the host found: its physical spelling and kind. */
@@ -103,19 +103,6 @@ export async function probePaths(paths: string[], probe: (paths: string[]) => Pr
 /** Forgets every cached answer (tests). */
 export function clearProbeCache(): void {
   cache.clear();
-}
-
-/** `.` and `..` resolved while keeping the wire path's drive, share or POSIX root. */
-export function normalize(path: string): string {
-  const root = absolutePathRoot(path);
-  if (!root) throw new Error("terminal link: normalization needs an absolute wire path");
-  const parts: string[] = [];
-  for (const part of path.slice(root.length).split("/")) {
-    if (part === "" || part === ".") continue;
-    if (part === "..") parts.pop();
-    else parts.push(part);
-  }
-  return `${root}${parts.join("/")}`;
 }
 
 /** The spellings to look a written path up under, in order: as written when absolute, else under the pane's folder and then the checkout's root. */

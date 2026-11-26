@@ -6,7 +6,7 @@
 // (`desk.lane`, B23).
 
 import type { DeskOutput } from "./snapshot";
-import { absolutePathRoot } from "./terminalLinks";
+import { absolutePathRoot, normalize } from "./terminalLinks";
 
 /**
  * A tab of the tab panel (B18, B19): an output the session opened (a page,
@@ -276,15 +276,7 @@ function underFolder(folder: string, written: string): string {
   const windows = /^[A-Za-z]:\//u.test(folder) || folder.startsWith("//");
   const wire = windows ? written.replaceAll("\\", "/") : written;
   if (absolutePathRoot(wire)) return wire;
-  const root = absolutePathRoot(folder);
-  if (!root) return written;
-  const parts = folder.slice(root.length).split("/").filter((part) => part !== "");
-  for (const part of wire.split("/")) {
-    if (part === "" || part === ".") continue;
-    if (part === "..") parts.pop();
-    else parts.push(part);
-  }
-  return `${root}${parts.join("/")}`;
+  return absolutePathRoot(folder) ? normalize(`${folder}/${wire}`) : written;
 }
 
 /**
