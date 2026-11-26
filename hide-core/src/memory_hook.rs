@@ -146,6 +146,16 @@ where
         asks: None,
         sessions: None,
     };
+    // A doorbell's turn is the bell's line, not the operator's words: no card
+    // answers it, and its open questions ride beside this answer.
+    if ask.event == HookEvent::UserPromptSubmit
+        && ask
+            .prompt
+            .as_deref()
+            .is_some_and(hide_session::is_bell_line)
+    {
+        return without(HookOutcome::Empty);
+    }
     // A store that does not exist yet costs no node call.
     if !scope.store.is_file() {
         return without(HookOutcome::Unavailable);
@@ -204,16 +214,33 @@ mod tests {
         false
     }
 
-    #[test]
-    fn short_continuations_use_only_the_prepared_confirmed_task() {
-        let temp = tempfile::tempdir().unwrap();
-        let project = hide_project::resolve(temp.path(), "local").unwrap();
-        let path = hide_memory::database_path(temp.path());
+    /// A Project with Memory on whose store holds `cards`, each a text, a
+    /// title and one alias, and no confirmed task.
+    fn seeded(temp: &std::path::Path, cards: &[(&str, &str, &str)]) -> Scope {
+        let project = hide_project::resolve(temp, "local").unwrap();
+        let path = hide_memory::database_path(temp);
         let mut store = hide_memory::MemoryStore::open(&path).unwrap();
         store
             .ensure_project(&project.id, &project.root, "local")
             .unwrap();
         store.set_enabled(&project.id, true, true).unwrap();
+        let candidates: Vec<_> = (1..)
+            .zip(cards)
+            .map(|(offset, (text, title, alias))| hide_memory::Candidate {
+                text: (*text).into(),
+                title: (*title).into(),
+                aliases: vec![(*alias).into()],
+                kind: hide_memory::CandidateKind::Rule,
+                confidence: 0.9,
+                salience: 0.9,
+                source_offsets: vec![offset],
+                human_offsets: vec![offset],
+                source_times: Default::default(),
+                source_words: Default::default(),
+                cited_paths: vec![],
+                relation: hide_memory::CandidateRelation::New,
+            })
+            .collect();
         store
             .apply_candidates(
                 &hide_memory::AnalysisBatch {
@@ -225,44 +252,41 @@ mod tests {
                     content_hash: "seed".into(),
                     created_at_unix_ms: 1,
                 },
-                &[
-                    hide_memory::Candidate {
-                        text: "Use nextest for test execution".into(),
-                        title: "Repository test runner".into(),
-                        aliases: vec!["테스트 실행기".into()],
-                        kind: hide_memory::CandidateKind::Rule,
-                        confidence: 0.9,
-                        salience: 0.9,
-                        source_offsets: vec![1],
-                        human_offsets: vec![1],
-                        source_times: Default::default(),
-                        source_words: Default::default(),
-                        cited_paths: vec![],
-                        relation: hide_memory::CandidateRelation::New,
-                    },
-                    hide_memory::Candidate {
-                        text: "Granite slabs are catalogued by quarry".into(),
-                        title: "Granite catalogue".into(),
-                        aliases: vec!["화강암".into()],
-                        kind: hide_memory::CandidateKind::Rule,
-                        confidence: 0.9,
-                        salience: 0.9,
-                        source_offsets: vec![2],
-                        human_offsets: vec![2],
-                        source_times: Default::default(),
-                        source_words: Default::default(),
-                        cited_paths: vec![],
-                        relation: hide_memory::CandidateRelation::New,
-                    },
-                ],
+                &candidates,
             )
             .unwrap();
-        drop(store);
-        let mut scope = Scope {
+        Scope {
             store: path,
             project,
             task_context: None,
-        };
+        }
+    }
+
+    /// The card every bell below and the ordinary prompt beside them match.
+    const GRANITE: [(&str, &str, &str); 1] = [(
+        "Granite reviews run nextest before the pull request opens",
+        "Granite review runner",
+        "화강암",
+    )];
+
+    #[test]
+    fn short_continuations_use_only_the_prepared_confirmed_task() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut scope = seeded(
+            temp.path(),
+            &[
+                (
+                    "Use nextest for test execution",
+                    "Repository test runner",
+                    "테스트 실행기",
+                ),
+                (
+                    "Granite slabs are catalogued by quarry",
+                    "Granite catalogue",
+                    "화강암",
+                ),
+            ],
+        );
         let ask = Ask::from_wire(&json!({"event":"UserPromptSubmit","runtime":"claude","session":"task-session","prompt":"계속해 주세요"})).unwrap();
         assert_eq!(
             answer_until(&scope, &ask, never).outcome,
@@ -316,6 +340,95 @@ mod tests {
             answer_until(&scope, &ask, never).outcome,
             HookOutcome::Empty,
             "ranking context beyond the combined 8 KiB limit is never searched"
+        );
+    }
+
+    fn prompt(runtime: &str, session: &str, prompt: &str) -> Ask {
+        Ask::from_wire(&json!({
+            "event": "UserPromptSubmit", "runtime": runtime, "session": session, "prompt": prompt,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_doorbells_turn_gets_no_card_and_reads_no_store() {
+        use crate::delivery::bell::{Ring, line};
+        use crate::model::InterfaceLanguage;
+        let temp = tempfile::tempdir().unwrap();
+        let scope = seeded(temp.path(), &GRANITE);
+        let ring = |inbox| {
+            line(&Ring {
+                sender: "granite-review",
+                kind: "report",
+                body: "granite review nextest passed",
+                others: 1,
+                inbox,
+                language: InterfaceLanguage::English,
+            })
+        };
+        let claude = ring(false);
+        let codex = ring(true);
+        // Codex CLI on Windows records the line without the owl.
+        let codex_windows: String = codex.chars().filter(|c| u32::from(*c) <= 0xFFFF).collect();
+        assert!(!codex_windows.contains(hide_session::bell_line::BELL_MARK));
+        let ordinary = prompt("claude", "operator", "granite review nextest passed");
+        assert_eq!(
+            answer_until(&scope, &ordinary, never).outcome,
+            HookOutcome::Provided { count: 1 },
+            "the bells' own words find the card when the operator types them"
+        );
+
+        // A store that is not there would answer `Unavailable`, so `Empty`
+        // proves the bell was answered before the store was looked at.
+        let missing = Scope {
+            store: temp.path().join("missing.sqlite3"),
+            project: scope.project.clone(),
+            task_context: scope.task_context.clone(),
+        };
+        for (runtime, bell) in [
+            ("claude", &claude),
+            ("codex", &codex),
+            ("codex", &codex_windows),
+        ] {
+            let ask = prompt(runtime, &format!("{runtime}-bell"), bell);
+            let result = answer_until(&scope, &ask, never);
+            assert_eq!(result.outcome, HookOutcome::Empty, "{bell}");
+            assert!(result.context.is_none(), "{bell}");
+            assert_eq!(
+                answer_until(&missing, &ask, never).outcome,
+                HookOutcome::Empty,
+                "{bell}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_session_start_and_an_ordinary_prompt_still_read_the_store() {
+        let temp = tempfile::tempdir().unwrap();
+        let scope = seeded(temp.path(), &GRANITE);
+        let missing = Scope {
+            store: temp.path().join("missing.sqlite3"),
+            project: scope.project.clone(),
+            task_context: None,
+        };
+        let start = Ask::from_wire(&json!({
+            "event": "SessionStart", "runtime": "claude", "session": "starting",
+        }))
+        .unwrap();
+        let ordinary = prompt("claude", "operator", "화강암 리뷰 규칙 알려줘");
+        for ask in [&start, &ordinary] {
+            assert_eq!(
+                answer_until(&missing, ask, never).outcome,
+                HookOutcome::Unavailable
+            );
+        }
+        assert_eq!(
+            answer_until(&scope, &ordinary, never).outcome,
+            HookOutcome::Provided { count: 1 }
+        );
+        assert_ne!(
+            answer_until(&scope, &start, never).outcome,
+            HookOutcome::Unavailable
         );
     }
 
