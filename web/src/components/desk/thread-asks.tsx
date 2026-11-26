@@ -11,6 +11,9 @@ import { Hint } from "../ui/tooltip";
 
 const NO_GONE: ReadonlySet<string> = new Set();
 
+/** How much of a question whose message is gone it shows: the whole sentence, since there is nowhere else to read it, up to this many characters. */
+const GONE_CHARS = 200;
+
 // One row is two lines of the question at most, with room above and below;
 // the list is three rows tall, its hairlines included, and scrolls past that.
 const LIST_HEIGHT = "max-h-[calc((2lh+var(--spacing-sm)*2)*3+var(--size-hairline)*2)]";
@@ -24,8 +27,9 @@ const LIST_HEIGHT = "max-h-[calc((2lh+var(--spacing-sm)*2)*3+var(--size-hairline
  * shows: the answer is typed in the box below, and an agent's own choice card
  * stays in the conversation. Pressing a question goes to the message it was
  * asked in and lights its sentence (`onGo`); `lit` is the one lit now, and
- * `gone` the ones whose message the conversation no longer holds, which say
- * so under their words and do nothing when pressed. `×` is 무시하기, which
+ * `gone` the ones whose message the conversation no longer holds (Doop N3b
+ * 가): their words read dim and whole, end in a dim `대화에 없음`, their dot is
+ * a hollow ring, and pressing them does nothing. `×` is 무시하기, which
  * takes the question out of 내 차례 and leaves it struck through with 되돌리기
  * while this session stays open (`useAwayAsks`). Several fold to `질문 N ·
  * first question ⌄` and unfold under a head of `질문 N` and `접기 ⌃`, one row
@@ -83,7 +87,7 @@ export function ThreadAsks({ asks, onGo, onSet, lit = null, gone = NO_GONE }: {
         ) : (
           <RowButton className="gap-xs rounded-none px-md py-sm" aria-expanded={false} onClick={() => setListOpen(true)} data-desk-thread-asks-more={lines.length - 1}>
             <span className="shrink-0 font-semibold text-open-ask" data-desk-thread-ask-lead="true">{t("desk.asks.count", { count: open.length })} ·</span>
-            <span className={cn("min-w-0 flex-1 truncate", isAway(first.id) && "text-muted-foreground line-through")}>{words(first)}</span>
+            <span className={cn("min-w-0 flex-1 truncate", (isAway(first.id) || gone.has(first.id)) && "text-muted-foreground", isAway(first.id) && "line-through")}>{words(first)}</span>
             <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
           </RowButton>
         )}
@@ -95,6 +99,12 @@ export function ThreadAsks({ asks, onGo, onSet, lit = null, gone = NO_GONE }: {
 /** What a question line says: the agent's own sentence, or Hide AI's summary for one kept without it. */
 function words(ask: AskLine): string {
   return ask.quote || ask.text;
+}
+
+/** The words a gone question shows in full, cut at [`GONE_CHARS`] with `…`. */
+function whole(said: string): string {
+  const chars = Array.from(said);
+  return chars.length > GONE_CHARS ? `${chars.slice(0, GONE_CHARS).join("")}…` : said;
 }
 
 /**
@@ -114,19 +124,17 @@ function AskRow({ ask, inList, away, lit, gone, onGo, onAway, onBack }: {
 }) {
   const { t } = useInterfaceTranslation();
   const said = words(ask);
+  const dim = away || gone;
   return (
     <div className={cn("relative flex min-w-0 items-start gap-xs py-sm pl-md pr-xs", lit && "bg-accent")} data-desk-thread-ask-row={ask.id} data-dismissed={away ? "true" : undefined} data-lit={lit ? "true" : undefined}>
       {away || gone ? null : <RowOverlayButton className="rounded-none" aria-label={t("desk.asks.go", { question: said })} onClick={onGo} data-desk-thread-ask={ask.id} />}
       <span className="pointer-events-none relative flex min-w-0 flex-1 items-start gap-xs">
         {inList ? (
-          <span aria-hidden="true" className="flex h-[1lh] shrink-0 items-center"><span className={cn("size-(--size-tab-status-dot) rounded-full", away ? "bg-muted-foreground" : "bg-open-ask")} data-desk-thread-ask-dot="true" /></span>
+          <span aria-hidden="true" className="flex h-[1lh] shrink-0 items-center"><span className={cn("size-(--size-tab-status-dot) rounded-full", away ? "bg-muted-foreground" : gone ? "border border-open-ask" : "bg-open-ask")} data-desk-thread-ask-dot={gone && !away ? "ring" : "true"} /></span>
         ) : (
           <span className={cn("shrink-0 font-semibold", away ? "text-muted-foreground" : "text-open-ask")} data-desk-thread-ask-lead="true">{t("desk.ask.question")}</span>
         )}
-        <span className="flex min-w-0 flex-1 flex-col gap-xxs">
-          <span className={cn("min-w-0", away ? "truncate text-muted-foreground line-through" : "line-clamp-2 text-foreground")} title={said} data-desk-thread-ask-words={ask.id}>{said}</span>
-          {gone && !away ? <span className="text-micro text-muted-foreground" data-desk-thread-ask-gone={ask.id}>{t("desk.asks.gone")}</span> : null}
-        </span>
+        <span className={cn("min-w-0 flex-1", away ? "truncate line-through" : gone ? "whitespace-pre-wrap break-words" : "line-clamp-2", dim ? "text-muted-foreground" : "text-foreground")} title={gone ? undefined : said} data-desk-thread-ask-words={ask.id}>{gone && !away ? whole(said) : said}</span>
       </span>
       <span className="relative flex shrink-0 items-center gap-xxs">
         {away ? (
@@ -136,6 +144,7 @@ function AskRow({ ask, inList, away, lit, gone, onGo, onAway, onBack }: {
           </>
         ) : (
           <>
+            {gone ? <span className="px-xxs text-caption text-muted-foreground" data-desk-thread-ask-gone={ask.id}>{t("desk.asks.gone")}</span> : null}
             <AskedAgo at={ask.at_unix_ms} />
             <Hint label={t("sessionWork.dismiss")}>
               <Button variant="row-action" size="icon-xs" aria-label={t("sessionWork.dismiss")} onClick={onAway} data-desk-thread-ask-dismiss={ask.id}>

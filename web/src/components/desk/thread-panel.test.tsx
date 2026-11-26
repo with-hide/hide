@@ -394,11 +394,48 @@ it("reads the pages before for a question asked further up, and says so when the
   expect(container.querySelector("[data-desk-thread-ask-gone]")).toBeNull();
   // Every page read and still not there: one quiet line says so, and the question stays.
   await act(async () => useShellStore.setState({ sessionThread: section({ has_older: false, tail: asked(answer("새로 시작했어요.", 1_000)) }) }));
-  expect(container.querySelector('[data-desk-thread-ask-gone="missed-1-0"]')?.textContent).toBe("No longer in the conversation");
+  expect(container.querySelector('[data-desk-thread-ask-gone="missed-1-0"]')?.textContent).toBe("Not in the conversation");
   expect(container.querySelector('[data-desk-thread-ask-row="missed-1-0"]')).not.toBeNull();
   // A gone row has nothing to press, and reads no more pages.
   expect(container.querySelector('[data-desk-thread-ask="missed-1-0"]')).toBeNull();
   expect(actions.readOlderThread).toHaveBeenCalledTimes(1);
+});
+
+it("draws a question whose message is gone dim, whole and inert, with a hollow dot, and back as N3 가 once its message is found (Doop N3b 가)", async () => {
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  Element.prototype.scrollIntoView = () => undefined;
+  const long = `${"이 화면을 어떻게 나눌지 정해야 해요. ".repeat(12)}어느 쪽으로 할까요?`;
+  const asks: AskLine[] = [
+    { id: "missed-1-0", text: "화면을 나눌지", at_unix_ms: 500, quote: long },
+    { id: "missed-2-0", text: "다크도 찍을지", at_unix_ms: 1_500, quote: "다크도 찍을까요?" },
+  ];
+  const { container } = await mount(job, null, { asks });
+  const thread = (said: string) => useShellStore.setState({ sessionThread: section({ has_older: false, tail: asked(answer(said, 400), answer("라이트를 찍었어요. 다크도 찍을까요?", 1_000)) }), sessionThreadHistory: { generation: 4, pages: [] } });
+  await act(async () => thread("새로 시작했어요."));
+  // Folded, the line takes the first question's look: dim.
+  const folded = container.querySelector<HTMLElement>("[data-desk-thread-asks-more]")!;
+  expect(folded.querySelector("[data-desk-thread-ask-lead]")?.className).toContain("text-open-ask");
+  expect(folded.textContent).toContain("이 화면을");
+  expect(folded.querySelector("span.truncate")?.className).toContain("text-muted-foreground");
+  await act(async () => folded.click());
+  const look = (id: string) => {
+    const row = container.querySelector(`[data-desk-thread-ask-row="${id}"]`)!;
+    const words = row.querySelector<HTMLElement>("[data-desk-thread-ask-words]")!;
+    return {
+      dot: row.querySelector("[data-desk-thread-ask-dot]")?.getAttribute("data-desk-thread-ask-dot"),
+      dim: words.className.includes("text-muted-foreground"),
+      clamped: words.className.includes("line-clamp-2"),
+      said: words.textContent,
+      tail: row.querySelector("[data-desk-thread-ask-gone]")?.textContent ?? null,
+      pressable: row.querySelector("[data-desk-thread-ask]") !== null,
+      dismissable: row.querySelector("[data-desk-thread-ask-dismiss]") !== null,
+    };
+  };
+  expect(look("missed-1-0")).toEqual({ dot: "ring", dim: true, clamped: false, said: `${Array.from(long).slice(0, 200).join("")}…`, tail: "Not in the conversation", pressable: false, dismissable: true });
+  expect(look("missed-2-0")).toEqual({ dot: "true", dim: false, clamped: true, said: "다크도 찍을까요?", tail: null, pressable: true, dismissable: true });
+  // Read again with the message in it: the row is N3 가 at once.
+  await act(async () => thread(long));
+  expect(look("missed-1-0")).toEqual({ dot: "true", dim: false, clamped: true, said: long, tail: null, pressable: true, dismissable: true });
 });
 
 it("folds several questions to 질문 N and the first, unfolds them under 질문 N alone, oldest first, and keeps 무시하기 struck through with 되돌리기 (Doop N3 가)", async () => {
