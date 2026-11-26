@@ -129,7 +129,11 @@ it("draws in a drawn table's cells the chips that arrive once the answer ends, i
   await draw([]);
   await vi.waitFor(() => expect(host.querySelector(".cm-md-table")?.textContent).toContain("@mission(mission-63 결제)"));
   const table = host.querySelector(".cm-md-table");
-  await draw([{ token: "@mission(mission-63 결제)", node: <b>결제</b>, item: <i data-test-item="mission-63">M63 결제</i> }]);
+  const node = <b>결제</b>;
+  await draw([{ token: "@mission(mission-63 결제)", node, item: <i data-test-item="mission-63">M63 결제</i> }]);
   expect(host.querySelector(".cm-md-table")).toBe(table);
   await vi.waitFor(() => expect(table?.querySelector("[data-test-item='mission-63']")?.textContent).toBe("M63 결제"));
+  // A chip whose item alone changed (its mission moved on) is a changed chip too.
+  await draw([{ token: "@mission(mission-63 결제)", node, item: <i data-test-item="mission-63">M63 결제 · 3/4</i> }]);
+  await vi.waitFor(() => expect(table?.querySelector("[data-test-item='mission-63']")?.textContent).toBe("M63 결제 · 3/4"));
 });

@@ -303,10 +303,18 @@ function markDecorations(mark: MarkdownMark | null, length: number): Extension {
 /** Whether two chip lists draw the same parts: a caller that builds an equal list again (a new empty one each render) swaps nothing. */
 function sameChips(a: readonly MarkdownChip[], b: readonly MarkdownChip[]): boolean {
   if (a === b) return true;
-  if (a.length !== b.length) return false;
-  return a.every((chip, at) => {
-    const other = b[at]!;
-    return chip.token === other.token && chip.node === other.node && chip.after === other.after && chip.item === other.item && chip.at?.join(" ") === other.at?.join(" ");
+  return a.length === b.length && a.every((chip, at) => sameChip(chip, b[at]!));
+}
+
+/** Every key of the two chips holds the same value, an array (`at`) the same items, so a field a chip gains is compared too. */
+function sameChip(a: MarkdownChip, b: MarkdownChip): boolean {
+  const keys = Object.keys(a) as (keyof MarkdownChip)[];
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((key) => {
+    const one = a[key];
+    const other = b[key];
+    if (Array.isArray(one) && Array.isArray(other)) return one.length === other.length && one.every((item, at) => item === other[at]);
+    return one === other;
   });
 }
 
