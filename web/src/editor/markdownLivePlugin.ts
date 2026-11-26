@@ -326,7 +326,7 @@ class TableWidget extends WidgetType {
     const root = document.createElement("div");
     root.className = "cm-md-table";
     const react = createRoot(root);
-    react.render(createElement(Drawn, { drawn: () => view.requestMeasure(), children: renderMarkdown(this.source, { html: true, link: liveLinkAddress }) }));
+    react.render(this.drawing(view));
     tableRoots.set(root, react);
     // A picture in a cell changes the table's height when it arrives or gives up.
     for (const type of ["load", "error"]) root.addEventListener(type, () => view.requestMeasure(), true);
@@ -348,6 +348,16 @@ class TableWidget extends WidgetType {
       });
     }
     return root;
+  }
+  /** A table that grew (an answer streaming its rows) is drawn into the node and root it has, so it never stands empty. */
+  updateDOM(dom: HTMLElement, view: EditorView): boolean {
+    const react = tableRoots.get(dom);
+    if (!react) return false;
+    react.render(this.drawing(view));
+    return true;
+  }
+  private drawing(view: EditorView): ReactElement {
+    return createElement(Drawn, { drawn: () => view.requestMeasure(), children: renderMarkdown(this.source, { html: true, link: liveLinkAddress }) });
   }
   destroy(dom: HTMLElement): void {
     const react = tableRoots.get(dom);
