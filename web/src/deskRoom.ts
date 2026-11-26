@@ -1,5 +1,5 @@
 // Desk's room in this window (PRD desk-2-ui D-01, D-05, D-12, D-13; PRD
-// desk-own-desk D-02, D-03, D-05, D-06, D-16): which session is open beside
+// desk-own-desk D-02, D-03, D-05, D-16): which session is open beside
 // Desk, and whether Desk's own desk shows, floating at that session's left
 // edge, or at the window's right edge when none is open. The desk's tabs are
 // the core's (`desk_view`, `deskDesk.ts`); the window keeps only whether it
@@ -14,7 +14,7 @@ import { absolutePathRoot, normalize, underFolder } from "./terminalLinks";
 export type DeskRoomWindow = {
   /** The pane whose session is open beside Desk, null while the right side is closed (B1, B2). */
   session: string | null;
-  /** Desk's desk is shown (B9, B17); with no tab and no Explorer column there is nothing to draw (`deskShown`). */
+  /** Desk's desk is shown (B9); with no tab and no Explorer column there is nothing to draw (`deskShown`). */
   desk: boolean;
   /** The desk covers Desk's chat whole (`⤢`, B40). */
   expanded: boolean;
@@ -35,7 +35,7 @@ export function panelPlace(room: DeskRoomWindow): DeskPanelPlace {
   return room.session !== null ? "beside_session" : "window_edge";
 }
 
-/** Whether Desk's desk is drawn: shown, and holding a tab or the Explorer's column (B6, B19). */
+/** Whether Desk's desk is drawn: shown, and holding a tab or the Explorer's column (B6). */
 export function deskShown(room: DeskRoomWindow, tabs: number): boolean {
   return room.desk && (tabs > 0 || (room.explorer && room.session !== null));
 }
@@ -51,12 +51,12 @@ export function openSession(room: DeskRoomWindow, pane: string, options: { answe
   return { ...room, session: pane, explorer: false, answer };
 }
 
-/** Something opened on Desk's desk, or the `▤` pressed with tabs there: the desk shows (B10, B11, B17). */
+/** Something opened on Desk's desk: the desk shows with every tab it holds (B9-B11, B14). */
 export function showDesk(room: DeskRoomWindow): DeskRoomWindow {
   return room.desk ? room : { ...room, desk: true };
 }
 
-/** `✕`, Escape, a press on the dimmed outside, or the `▤` again: the desk hides and its tabs stay (B18). */
+/** `✕`, Escape or a press on the dimmed outside: the desk hides and its tabs stay (B18). */
 export function hideDesk(room: DeskRoomWindow): DeskRoomWindow {
   return room.desk || room.expanded || room.explorer ? { ...room, desk: false, expanded: false, explorer: false } : room;
 }

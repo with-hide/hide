@@ -35,7 +35,7 @@ export function deskWorkspaceOf(rest: SnapshotRest | null | undefined): ViewWork
 /** Desk's desk as its View areas draw it: its workspace and its layout. */
 export type DeskWorkspace = DeskViewSnapshot;
 
-/** How many tabs Desk's desk holds, the `▤ N` of Desk's head (D-06). */
+/** How many tabs Desk's desk holds. */
 export function deskTabCount(view: DeskViewSnapshot | null): number {
   return view?.layout.display_count ?? 0;
 }

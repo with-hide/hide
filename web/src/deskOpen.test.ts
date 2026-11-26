@@ -98,16 +98,16 @@ describe("what Desk opens on its own desk", () => {
     expect(sent).toEqual([]);
   });
 
-  it("shows the desk from `▤` only while it holds a tab, hides it on a second press, and keeps it through a session change (B13, B17, B19)", () => {
-    actions.deskToggleDesk();
+  it("keeps the desk shown through a session change, and hides it with its tabs kept (B13, B18)", () => {
+    actions.deskOpen(mission);
     expect(shown()).toBe(true);
     actions.openDeskSession("p-session");
     expect(shown()).toBe(true);
-    actions.deskToggleDesk();
+    actions.deskHideDesk();
     expect(shown()).toBe(false);
-    useShellStore.setState({ rest: { ...rest, desk_view: { device_id: "local", path: "hide:desk", layout: { ...layout, display_count: 0 }, opened: 0 } } as unknown as SnapshotRest });
-    actions.deskToggleDesk();
-    expect(useUiStore.getState().deskRoom.desk).toBe(false);
+    // Opening anything again shows the desk with every tab it holds (B9).
+    actions.deskOpen(mission);
+    expect(shown()).toBe(true);
   });
 
   it("starts the room closed the next time it is entered (B26), and ⌘J brings back the session it left for (B7)", () => {

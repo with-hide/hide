@@ -3,7 +3,7 @@ import { closeSession, DESK_ROOM_CLOSED, deskShown, followFrom, followMoved, hid
 import type { DeskItem, DeskJob, DeskOutput } from "./snapshot";
 
 // Expected answers are PRD desk-2-ui D-05, D-15, B16-B26 and PRD
-// desk-own-desk D-02, D-03, D-05, D-06, D-14, D-16, B6, B9, B13, B16-B19,
+// desk-own-desk D-02, D-03, D-05, D-14, D-16, B6, B9, B13, B16, B18,
 // B36, B37, B40, and docs/UI_BEHAVIOR.md, Desk. Desk's desk's tabs are the
 // core's; the window keeps only whether it shows.
 
@@ -39,7 +39,7 @@ describe("Desk's room", () => {
     expect(closeSession(closed)).toBe(closed);
   });
 
-  it("draws the desk only while it shows and holds a tab or the Explorer's column, so its last tab closing closes it (B6, B19)", () => {
+  it("draws the desk only while it shows and holds a tab or the Explorer's column, so its last tab closing closes it (B6)", () => {
     const shown = showDesk(DESK_ROOM_CLOSED);
     expect([deskShown(shown, 2), deskShown(shown, 0), deskShown(DESK_ROOM_CLOSED, 2)]).toEqual([true, false, false]);
     const explorer = toggleExplorer(openSession(DESK_ROOM_CLOSED, "p1"), 0);

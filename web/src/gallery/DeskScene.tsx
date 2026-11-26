@@ -136,8 +136,8 @@ function SceneSidebar({ jobs, selected }: { jobs: readonly DeskJob[]; selected: 
 }
 
 /** The chat column's head, as a scene sets it. */
-function ChatHead({ documents = 0 }: { documents?: number }) {
-  return <DeskChatHead documents={{ count: documents, shown: documents > 0, onToggle: noop }} onNewConversation={noop} onLeave={noop} leaveTo="herdr-ide › Windows 파일 링크 버그" leaveChord="⌃⇥" />;
+function ChatHead() {
+  return <DeskChatHead onNewConversation={noop} onLeave={noop} leaveTo="herdr-ide › Windows 파일 링크 버그" leaveChord="⌃⇥" />;
 }
 
 /** Desk's composer with its bar in the box's foot, as a scene sets them. */
@@ -286,8 +286,8 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
   }, [mission, layout, state, theme, params]);
 
   const pick = (...ids: string[]) => ids.map((id) => jobs[id]!);
-  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; live?: string | null; working?: WorkingPhase; queued?: DeskQueuedMessage[] } = {}, documents = 0) => (
-    <DeskChatColumn head={<ChatHead documents={documents} />} composer={composer}>
+  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; live?: string | null; working?: WorkingPhase; queued?: DeskQueuedMessage[] } = {}) => (
+    <DeskChatColumn head={<ChatHead />} composer={composer}>
       <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} selectedJob={options.selectedJob ?? null} live={options.live ?? null} working={options.working ? { phase: options.working, since: now - 3_000 } : null} queued={options.queued ?? []} {...CHAT_ACTIONS} />
     </DeskChatColumn>
   );
@@ -333,7 +333,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       const done = deskJob(jobs.gallery!, { state: "done", ask: null, question: null, summary: "차이 3곳", plan: { done: 5, total: 5 }, outputs: [OUTPUTS.compareLight, OUTPUTS.compareDark, OUTPUTS.notes] });
       const items: DeskItem[] = [{ kind: "job", id: 1, job_id: "gallery" }];
       // The session's page opened on Desk's desk as a page of Desk's own (B34), drawn from its still.
-      body = <Room chat={chat(items, <ChatComposer selection={CLAUDE} />, { jobs: { gallery: done }, selectedJob: "gallery" }, 2)}
+      body = <Room chat={chat(items, <ChatComposer selection={CLAUDE} />, { jobs: { gallery: done }, selectedJob: "gallery" })}
         panel={<SceneDesk displays={S7_DESK} active="page" actions={actions} />}
         session={<ThreadColumn job={done} updates={GALLERY_DONE_THREAD.updates} parts={GALLERY_DONE_THREAD.parts} />} />;
       break;

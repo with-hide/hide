@@ -15,7 +15,7 @@ import { answerPlace, type AnswerPlace, type FoundAnswerPath } from "./answerPat
 import { hostBridge } from "./host";
 import { deskOn, deskPhase, holdsFoot, laneCards, livePane, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
 import { deskShown, followFrom, followMoved, newSessionBeside, openSession, outputNamed, showDesk, type NewSessionFollow } from "./deskRoom";
-import { deskTabCount, deskViewOf, DESK_SCREEN } from "./deskDesk";
+import { deskViewOf, DESK_SCREEN } from "./deskDesk";
 import { CardPlaceContext, type CardPlace } from "./deskFront";
 import { DeskViewAreas } from "./ViewAreas";
 import { ExplorerTree, type ExplorerScope } from "./ExplorerTree";
@@ -424,7 +424,6 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     onFile: (file) => openAnswerFile(actions, file),
   }), [actions, onNoticeAction, room]);
   const place = useUiStore((s) => s.deskRoom);
-  const documents = useShellStore((s) => deskTabCount(deskViewOf(s.rest)));
   useDeskAgentOpens();
 
   if (!desk) return null;
@@ -493,7 +492,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
           actions={actions}
           room={room}
           chat={(
-            <DeskChatColumn head={<DeskChatHead documents={{ count: documents, shown: deskShown(place, documents), onToggle: () => actions.deskToggleDesk() }} onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} />} composer={composer} tray={tray} scrollRef={scroller}>
+            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} />} composer={composer} tray={tray} scrollRef={scroller}>
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
@@ -674,8 +673,8 @@ function DeskRoomView({ actions, room, chat }: { actions: Actions; room: RoomAct
 
 /**
  * B35: a file Desk's agent puts on Desk's desk shows it while this window
- * shows Desk; on any other screen nothing moves, and the tab waits under the
- * `▤`. Only a move of the core's count after the room opened shows it.
+ * shows Desk; on any other screen nothing moves, and the tab waits on the desk
+ * until something next opens there. Only a move of the core's count after the room opened shows it.
  */
 function useDeskAgentOpens() {
   const opened = useShellStore((s) => deskViewOf(s.rest)?.opened ?? null);

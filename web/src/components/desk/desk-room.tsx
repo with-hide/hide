@@ -1,7 +1,8 @@
-import { FilesIcon, PlusIcon, XIcon } from "lucide-react";
+import { PlusIcon, XIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { DividerGrip } from "../../LaneDivider";
 import { holdShellDrag } from "../../shellDrag";
+import { noteShellLayer } from "../../browserViews";
 import { DESK_WIDTHS, roomWidths } from "../../deskRoom";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
@@ -15,51 +16,21 @@ import { FileDropZone } from "./file-drop";
 const EDGE_STEP = 32;
 
 /**
- * The chat column's head: Desk's own mark and name, the documents button
- * `▤ N` (PRD desk-own-desk D-06, B17, B19), `＋ 새 대화` (B10; Doop ①) and
+ * The chat column's head: Desk's own mark and name, `＋ 새 대화` (B10; Doop ①) and
  * at its right end `나가기 ✕` (feedback 1 D2), which goes back to the tab in
  * front before Desk (`leaveTo`), as `leaveChord` does.
  */
-export function DeskChatHead({ documents, onNewConversation, onLeave, leaveTo = null, leaveChord = null }: { documents: { count: number; shown: boolean; onToggle: () => void }; onNewConversation: () => void; onLeave: () => void; leaveTo?: string | null; leaveChord?: string | null }) {
+export function DeskChatHead({ onNewConversation, onLeave, leaveTo = null, leaveChord = null }: { onNewConversation: () => void; onLeave: () => void; leaveTo?: string | null; leaveChord?: string | null }) {
   const { t } = useInterfaceTranslation();
   const hint = [t("desk.leave.hint"), leaveTo ? t("desk.leave.to", { place: leaveTo }) : null].filter(Boolean).join(" · ");
   return (
     <>
       <span className="flex flex-1 items-center gap-xs font-semibold text-foreground"><DeskMark />{t("desk.name")}</span>
-      <DocumentsButton {...documents} />
       <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-new-conversation="true" onClick={onNewConversation}><PlusIcon />{t("desk.newConversation")}</Button>
       <Hint label={hint} shortcut={leaveChord ?? undefined}>
         <Button variant="ghost" size="sm" aria-label={`${t("desk.leave")} · ${hint}`} className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-leave="true" onClick={onLeave}>{t("desk.leave")}<XIcon /></Button>
       </Hint>
     </>
-  );
-}
-
-/**
- * `▤ N`, N being Desk's desk's tabs (D-06, B17, B19): pressed, the desk
- * shows and the button stays pressed; pressed again it hides. With no tab it
- * is dimmed, says so, and opens nothing.
- */
-function DocumentsButton({ count, shown, onToggle }: { count: number; shown: boolean; onToggle: () => void }) {
-  const { t } = useInterfaceTranslation();
-  const hint = count > 0 ? t("desk.head.documents", { count }) : t("panes.lane.noDocuments");
-  return (
-    <Hint label={hint}>
-      <Button
-        variant="ghost"
-        size="sm"
-        // `aria-disabled`, not `disabled`, so its hint still opens, as the rail's documents button does.
-        className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground aria-pressed:bg-secondary aria-pressed:text-foreground aria-disabled:opacity-(--opacity-disabled) aria-disabled:hover:bg-transparent"
-        aria-label={hint}
-        aria-pressed={shown}
-        aria-disabled={count === 0 || undefined}
-        data-desk-documents={count}
-        onClick={() => count > 0 && onToggle()}
-      >
-        <FilesIcon />
-        {count > 0 ? <span className="tabular-nums">{count}</span> : null}
-      </Button>
-    </Hint>
   );
 }
 
@@ -203,6 +174,11 @@ export function DeskRoom({ chat, session = null, panel = null, expanded = false,
   const [room, available, reach] = useRoomWidth();
   const [guide, setGuide] = useState<number | null>(null);
   const placed = roomWidths(available, reach, widths, session !== null);
+  // The desk moves without changing size when the session beside it opens,
+  // closes or changes width, which no resize of a page's slot reports: each
+  // render of the room places the desk's pages again, at most once a frame,
+  // and the host is sent nothing when a page's rectangle did not move.
+  useLayoutEffect(() => noteShellLayer());
   const state = panel !== null ? "panel" : session !== null ? "session" : "closed";
   return (
     <div ref={room} className="relative flex min-h-0 min-w-0 flex-1" data-desk-room={state}>

@@ -271,8 +271,6 @@ export const deskEnglish = {
   "desk.views.seen": "Seen {{count}}",
   "desk.views.older": "Older views are not listed",
   "desk.pulls.chip": "PR {{count}}",
-  "desk.head.documents_one": "Documents · {{count}} tab",
-  "desk.head.documents_other": "Documents · {{count}} tabs",
 };
 
 const ko: Catalog<typeof deskEnglish> = {
@@ -542,8 +540,6 @@ const ko: Catalog<typeof deskEnglish> = {
   "desk.views.seen": "본 것 {{count}}",
   "desk.views.older": "오래된 뷰는 목록에 없어요",
   "desk.pulls.chip": "PR {{count}}",
-  "desk.head.documents_one": "문서 · 탭 {{count}}개",
-  "desk.head.documents_other": "문서 · 탭 {{count}}개",
 };
 
 const zh: Catalog<typeof deskEnglish> = {
@@ -813,8 +809,6 @@ const zh: Catalog<typeof deskEnglish> = {
   "desk.views.seen": "已看 {{count}}",
   "desk.views.older": "更早的视图未列出",
   "desk.pulls.chip": "PR {{count}}",
-  "desk.head.documents_one": "文档 · {{count}} 个标签页",
-  "desk.head.documents_other": "文档 · {{count}} 个标签页",
 };
 
 const ja: Catalog<typeof deskEnglish> = {
@@ -1084,8 +1078,6 @@ const ja: Catalog<typeof deskEnglish> = {
   "desk.views.seen": "見たもの {{count}}",
   "desk.views.older": "古いビューは一覧にありません",
   "desk.pulls.chip": "PR {{count}}",
-  "desk.head.documents_one": "ドキュメント · タブ {{count}} 個",
-  "desk.head.documents_other": "ドキュメント · タブ {{count}} 個",
 };
 
 export const deskCatalogs = { en: deskEnglish, ko, "zh-CN": zh, ja } satisfies Catalogs<typeof deskEnglish>;

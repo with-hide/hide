@@ -95,7 +95,7 @@ import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
 import { deskOn, laneCards } from "./desk";
-import { closeSession as closeDeskSession, deskShown, hideDesk, openSession as openDeskSession, showDesk, toggleExpanded as toggleDeskExpanded, toggleExplorer as toggleDeskExplorer } from "./deskRoom";
+import { closeSession as closeDeskSession, hideDesk, openSession as openDeskSession, showDesk, toggleExpanded as toggleDeskExpanded, toggleExplorer as toggleDeskExplorer } from "./deskRoom";
 import { deskOpenSend, deskTabCount, deskViewOf, deskWorkspaceOf, DESK_SCREEN, isDeskWorkspace, type DeskOpen } from "./deskDesk";
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type ExplorerTarget, type PendingClose, type PendingViewsClose } from "./ui";
@@ -2866,14 +2866,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** The session beside Desk's `✕`, or Escape with no layer open; Desk's desk stays (B13). */
     deskCloseSession() {
       ui().setDeskRoom(closeDeskSession);
-    },
-
-    /** Desk's head `▤ N` (PRD desk-own-desk D-06, B17, B19): the desk shows, or hides when it shows; with no tab nothing opens. */
-    deskToggleDesk() {
-      const tabs = deskTabCount(deskViewOf(rest()));
-      if (deskShown(ui().deskRoom, tabs)) return ui().setDeskRoom(hideDesk);
-      if (tabs === 0) return diagnostic("desk desk: no tab to show");
-      ui().setDeskRoom(showDesk);
     },
 
     /** The desk's `✕`, Escape or a press on the dimmed outside (B18): the desk hides and its tabs stay. */
