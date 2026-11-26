@@ -28,8 +28,8 @@ mod file;
 pub use file::{
     ACCOUNT_PART, AccountPath, AccountRule, AccountVar, Answer, Base, By, CommandSlot, Desk, Hooks,
     KEY_NAMES, LINE_BYTES, LINE_WORDS, LoginRule, MAX_ANSWER_KEYS, MAX_ID_BYTES, McpFormat,
-    PathRule, PermissionKeys, PlanKeys, QuestionKeys, ROW_LABEL, ROW_NUMBER, SCHEMA, Switch, Template,
-    TrustFormat, id_is_valid, is_plain_command, is_typable_word, reserved_variable,
+    PathRule, PermissionKeys, PlanKeys, QuestionKeys, ROW_LABEL, ROW_NUMBER, SCHEMA, Switch,
+    Template, TrustFormat, id_is_valid, is_plain_command, is_typable_word, reserved_variable,
     switch_effort_is_valid, valid_variable,
 };
 use file::{Fields, Origin, required};
@@ -209,7 +209,11 @@ impl Switch {
     /// `invalid_effort` for a value the line could not carry as one word,
     /// and `needs_model` for an effort line that names the model while the
     /// session's model is the CLI's own default, which Hide cannot name.
-    pub fn line(&self, to: SwitchTo<'_>, now: &crate::LaunchChoice) -> Result<String, &'static str> {
+    pub fn line(
+        &self,
+        to: SwitchTo<'_>,
+        now: &crate::LaunchChoice,
+    ) -> Result<String, &'static str> {
         match to {
             SwitchTo::Model(model) => {
                 let line = self.model.as_deref().ok_or("switch_unsupported")?;
@@ -241,7 +245,11 @@ impl Switch {
         match to {
             SwitchTo::Model(model) => crate::LaunchChoice {
                 model: Some(model.to_owned()),
-                effort: if self.model_resets_effort { None } else { now.effort.clone() },
+                effort: if self.model_resets_effort {
+                    None
+                } else {
+                    now.effort.clone()
+                },
             },
             SwitchTo::Effort(effort) => crate::LaunchChoice {
                 model: now.model.clone(),

@@ -130,7 +130,9 @@ fn check_switch(name: &str, switch: &Switch) -> Result<(), String> {
     if let Some(model) = &switch.model {
         line("model", model, SWITCH_MODEL)?;
         if model.contains(SWITCH_EFFORT) {
-            return Err(format!("{name}: switch.model {model:?} names {SWITCH_EFFORT}"));
+            return Err(format!(
+                "{name}: switch.model {model:?} names {SWITCH_EFFORT}"
+            ));
         }
     }
     if let Some(effort) = &switch.effort {
@@ -143,7 +145,11 @@ fn check_switch(name: &str, switch: &Switch) -> Result<(), String> {
             "{name}: switch.efforts lists 1 to {MAX_SWITCH_EFFORTS} efforts with switch.effort, and none without"
         ));
     }
-    if let Some(bad) = switch.efforts.iter().find(|effort| !switch_effort_is_valid(effort)) {
+    if let Some(bad) = switch
+        .efforts
+        .iter()
+        .find(|effort| !switch_effort_is_valid(effort))
+    {
         return Err(format!(
             "{name}: switch.efforts {bad:?} is not 1 to 16 lowercase letters, digits and dashes"
         ));
@@ -1578,7 +1584,12 @@ mod tests {
             );
         }
         assert_eq!(
-            read("x.toml", &file("model = \"/model {model}\"\n"), Origin::User).unwrap_err(),
+            read(
+                "x.toml",
+                &file("model = \"/model {model}\"\n"),
+                Origin::User
+            )
+            .unwrap_err(),
             "x.toml: switch is for the built-in agents' files"
         );
     }

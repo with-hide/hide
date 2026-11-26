@@ -271,7 +271,7 @@ function BarMenu({ name, hint, value, open, onOpenChange, highlight = false, wid
           </Button>
         </DropdownMenuTrigger>
       </Hint>
-      <DropdownMenuContent align="end" side="top" sideOffset={DESK_MENU_GAP} className={cn(DESK_MENU_DROPDOWN, wide ? "w-(--size-picker-popover) max-w-(--radix-dropdown-menu-content-available-width)" : "min-w-(--size-tab-preferred)")}>{children}</DropdownMenuContent>
+      <DropdownMenuContent align="end" side="top" sideOffset={DESK_MENU_GAP} className={cn(DESK_MENU_DROPDOWN, "max-h-(--radix-dropdown-menu-content-available-height)", wide ? "w-(--size-picker-popover) max-w-(--radix-dropdown-menu-content-available-width)" : "min-w-(--size-tab-preferred)")}>{children}</DropdownMenuContent>
     </DropdownMenu>
   );
 }

@@ -646,7 +646,10 @@ impl Runtime {
     /// Keeps `choice` as the session's in `pane_id` once its line was typed.
     fn keep_session_choice(&mut self, pane_id: &str, choice: &hide_agent_adapter::LaunchChoice) {
         let session = self.reported_session(pane_id).cloned();
-        let row = self.agent_rows().find(|row| row.pane_id == pane_id).cloned();
+        let row = self
+            .agent_rows()
+            .find(|row| row.pane_id == pane_id)
+            .cloned();
         if row.is_some_and(|row| self.keep_launch_choice(&row, choice)) {
             if let Some(session) = &session {
                 self.session_thread.switched.remove(session);
@@ -1978,7 +1981,10 @@ mod tests {
         node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
         open(&mut runtime);
         let generation = thread(&runtime).generation;
-        assert_eq!(thread(&runtime).choice, hide_agent_adapter::LaunchChoice::default());
+        assert_eq!(
+            thread(&runtime).choice,
+            hide_agent_adapter::LaunchChoice::default()
+        );
         let switch = |runtime: &mut Runtime, model: Option<&str>, effort: Option<&str>| {
             node.answer(Ok(page(100, 100, false, Vec::new())));
             runtime.switch_session_thread(ThreadSwitchPayload {
@@ -1988,7 +1994,9 @@ mod tests {
                 model: model.map(str::to_owned),
                 effort: effort.map(str::to_owned),
             });
-            thread(runtime).input.map(|input| (input.state, input.reason))
+            thread(runtime)
+                .input
+                .map(|input| (input.state, input.reason))
         };
         assert_eq!(
             switch(&mut runtime, Some("sonnet"), None),
@@ -2055,14 +2063,18 @@ mod tests {
         let grok = hide_agent_adapter::definition::builtin("grok").unwrap();
         let effort = hide_agent_adapter::definition::SwitchTo::Effort("low");
         assert_eq!(
-            grok.switch.line(effort, &hide_agent_adapter::LaunchChoice::default()),
+            grok.switch
+                .line(effort, &hide_agent_adapter::LaunchChoice::default()),
             Err("needs_model")
         );
         let known = hide_agent_adapter::LaunchChoice {
             model: Some("grok-4.7".to_owned()),
             effort: None,
         };
-        assert_eq!(grok.switch.line(effort, &known).as_deref(), Ok("/model grok-4.7 low"));
+        assert_eq!(
+            grok.switch.line(effort, &known).as_deref(),
+            Ok("/model grok-4.7 low")
+        );
         // Codex's model line puts the effort back to the model's own.
         let codex = hide_agent_adapter::definition::builtin("codex").unwrap();
         let after = codex.switch.after(
