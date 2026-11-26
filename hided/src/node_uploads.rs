@@ -162,7 +162,7 @@ impl ScreenUploads {
             return Handled::Answer(vec![refused(&request_id, "no_pane")]);
         }
         if hide_node_link::address::is_pane_of(pane, &self.node) {
-            return self.commit_here(event, &request_id, pane, &stages, clipboard);
+            return self.commit_here(&request_id, pane, &stages, clipboard);
         }
         self.send_on(&request_id, text, &stages).await
     }
@@ -171,7 +171,6 @@ impl ScreenUploads {
     /// the core is told their paths here.
     fn commit_here(
         &mut self,
-        event: &Value,
         request_id: &str,
         pane: &str,
         stages: &[String],
