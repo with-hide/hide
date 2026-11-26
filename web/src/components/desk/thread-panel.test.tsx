@@ -280,7 +280,7 @@ it("draws an image the session showed as its tile's picture, made from the file'
   await answer(reads[1]!, [1, 2], 2);
   const tile = container.querySelector('[data-desk-hide-part="view"] [data-desk-output-thumb="image"]');
   await vi.waitFor(() => expect(tile?.querySelector("[data-desk-tile-picture]")?.getAttribute("src")).toBe("data:image/jpeg;drawn"));
-  expect(drawPreview).toHaveBeenCalledWith("image", new Uint8Array([1, 2]), "/repo/shots/dark.png");
+  expect(drawPreview).toHaveBeenCalledWith("image", new Uint8Array([1, 2]), "/repo/shots/dark.png", expect.any(AbortSignal));
 });
 
 it("draws a turn an agent recorded as interrupted as one quiet line, never as the operator's bubble", async () => {
