@@ -13,7 +13,6 @@ import { AgentRow, NotInstalledRow } from "./AgentRow";
 import { AgentFilesGroup } from "./AgentFilesGroup";
 import { useMachineProfiles } from "./AgentProfiles";
 import { IdleAgentsGroup } from "./IdleAgentsGroup";
-import { FavoriteModelsGroup } from "./FavoriteModelsGroup";
 import { StartingWorkGroup } from "./StartingWorkGroup";
 import { useAgentsDemand } from "./useAgentsDemand";
 import { coreErrorText } from "../coreError";
@@ -154,8 +153,6 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
           ) : null}
         </>
       ) : null}
-      {/* The favorite models are this machine's: their profiles are its own. */}
-      {device.kind !== "remote" ? <FavoriteModelsGroup actions={actions} /> : null}
       {/* The core's machine reads the operator's agent files. */}
       {device.kind !== "remote" ? <AgentFilesGroup actions={actions} /> : null}
     </div>

@@ -219,7 +219,17 @@ export function DevicesTab({ actions }: { actions: Actions }) {
               {addStep !== "computer" ? null : addKind === "hide" ? (
                 <AddByLink actions={actions} onStarted={() => setAdding(null)} />
               ) : (
-                <AddDevice actions={actions} devices={rows} helperRoot={localRoot} cliDir={localCliDir} onPaired={() => setAdding(null)} />
+                <AddDevice
+                  actions={actions}
+                  devices={rows}
+                  helperRoot={localRoot}
+                  cliDir={localCliDir}
+                  onPaired={() => setAdding(null)}
+                  onShowDevice={(id) => {
+                    setAdding(null);
+                    useUiStore.getState().openDevice(id);
+                  }}
+                />
               )}
             </DialogBody>
           </DialogContent>

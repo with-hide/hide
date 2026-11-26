@@ -4,7 +4,7 @@
 // made up; nothing here is read from a machine.
 import type { AcpSessionUpdate, DeskAgent, DeskItem, DeskJob, DeskMention, DeskMission, DeskOption, DeskOutput, DeskSessionRef, DeskSteps, SessionFacts, SessionViewKind, ThreadHidePart } from "../desk";
 import { recordCard } from "../desk";
-import type { ConductorCandidate, DeskRecord, DeskSessionChip, RowMark } from "../snapshot";
+import type { DeskRecord, DeskSessionChip, RowMark } from "../snapshot";
 import type { MentionProject, MentionSession } from "../components/desk/desk-mention-menu";
 import { planFixture } from "./PlanScene";
 
@@ -33,14 +33,6 @@ export const AGENTS: DeskAgent[] = [
   { id: "omp", label: "omp", state: "ready", detail: null, signed_in: null, login_command: "omp login", models: [], efforts: [] },
   { id: "grok", label: "Grok", state: "ready", detail: null, signed_in: true, login_command: "grok login", models: [], efforts: [] },
   { id: "agy", label: "Antigravity", state: "ready", detail: null, signed_in: false, login_command: "agy", models: [], efforts: [] },
-];
-
-/** Settings › Agents' favorite models as the agent menu lists them first: invented, each naming a model the scene's agents offer. */
-export const FAVORITE_MODELS: ConductorCandidate[] = [
-  { agent: "claude", model: "opus", purpose: "범용 (더 어려운 작업)" },
-  { agent: "claude", model: "sonnet", purpose: "범용" },
-  { agent: "codex", model: "gpt", purpose: "리뷰·검증 전용" },
-  { agent: "codex", model: "gpt-mini", purpose: "간단한 작업" },
 ];
 
 /** Right after Desk is turned on: every adapter not in place downloads at once (D-80). */

@@ -529,6 +529,8 @@ type UiStore = {
   /** The rows of Settings › Devices that are opened on how their device is connected; emptied when the tab closes. */
   devicesOpen: string[];
   toggleDeviceOpen: (deviceId: string) => void;
+  /** Opens a device's row and leaves an opened one as it is: Add device's way to that device's 서버로 연결. */
+  openDevice: (deviceId: string) => void;
   closeDevices: () => void;
   /** How this window's last press of 서버로 연결 ended for a device that was not switched, until it is pressed again or its row reads the machine again (folded or opened again). */
   switchOutcomes: Record<string, import("./settings/switchWays").SwitchOutcome>;
@@ -730,6 +732,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   markSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? state : { switchedDevices: [...state.switchedDevices, deviceId] })),
   clearSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? { switchedDevices: state.switchedDevices.filter((id) => id !== deviceId) } : state)),
   toggleDeviceOpen: (deviceId) => set((state) => ({ devicesOpen: state.devicesOpen.includes(deviceId) ? state.devicesOpen.filter((id) => id !== deviceId) : [...state.devicesOpen, deviceId] })),
+  openDevice: (deviceId) => set((state) => (state.devicesOpen.includes(deviceId) ? state : { devicesOpen: [...state.devicesOpen, deviceId] })),
   closeDevices: () => set((state) => (state.devicesOpen.length === 0 ? state : { devicesOpen: [] })),
   setSwitchOutcome: (deviceId, outcome) =>
     set((state) => {

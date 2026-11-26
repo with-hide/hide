@@ -2016,7 +2016,7 @@ export type PlanView = {
 /** The plans the core keeps for the panes on screen, and the plans of the children their steps are handed to, whether or not those panes are shown (`pane_id` empty then). */
 export type PlansSnapshot = { items: PlanView[] };
 
-/** Settings › Mission (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
+/** Settings › Mission (D-31): the cap, the default scope, a new mission's verification strength, and the agent list Settings › Models by purpose edits. */
 /** A candidate's `profile` is a profile's id on this machine, absent for the agent's built-in default (PRD agent-profiles-phase2 D-08, B14). */
 export type ConductorCandidate = { agent: string; profile?: string | null; model?: string | null; effort?: string | null; purpose: string };
 /** Which way every mission's map runs: what a node waits on above it, or to its left. */

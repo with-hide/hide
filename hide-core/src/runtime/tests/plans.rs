@@ -735,7 +735,7 @@ fn delegation(runtime: &Runtime, step: &str) -> Option<crate::plans::Delegation>
 
 /// B1, B2, B4: a step is handed by its own plan's session to its own child,
 /// only once the steps it waits on are finished and the plan is not
-/// waiting for the operator's review, to one of the operator's candidates;
+/// waiting for the operator's review;
 /// each refusal names the step or the reason before anything is made, and
 /// the admitted spawn takes the intent the core made for its attempt.
 #[test]
@@ -768,20 +768,10 @@ fn a_step_is_handed_to_a_child_only_after_its_earlier_steps_and_the_review() {
         "plan_review_pending"
     );
     command(&mut runtime, &sender, json!({"verb": "approve"})).unwrap();
-    // Settings › Mission's candidates hold a plan's children as a
-    // mission's workers.
+    // The operator's agent list is no limit: a child that is none of its
+    // rows is handed the step.
     runtime.snapshot.ui_state.conductor_settings.candidates =
         vec![serde_json::from_value(json!({"agent": "claude"})).unwrap()];
-    assert_eq!(
-        prepare(&mut runtime, &sender, "web", Some("here")),
-        crate::coordination::refusal("plan_candidate_refused", "Codex")
-    );
-    runtime
-        .snapshot
-        .ui_state
-        .conductor_settings
-        .candidates
-        .clear();
     assert_eq!(
         prepare(&mut runtime, &sender, "web", Some("here")),
         "delivery_unavailable",
