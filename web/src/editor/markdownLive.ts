@@ -21,7 +21,7 @@ import type { SyntaxNode, Tree } from "@lezer/common";
 import type { Text } from "@codemirror/state";
 import { isMermaidInfo } from "../markdownMermaid";
 
-export type LiveKind = "hide" | "bullet" | "checkbox" | "heading" | "codeBlock" | "fenceLine" | "quote" | "link" | "codeInline" | "html" | "image" | "mermaid" | "table";
+export type LiveKind = "hide" | "bullet" | "checkbox" | "heading" | "codeBlock" | "fenceLine" | "quote" | "link" | "plain" | "codeInline" | "html" | "image" | "mermaid" | "table";
 
 export type LiveRange = {
   from: number;
@@ -229,8 +229,11 @@ export function markdownLivePlan(tree: Tree, doc: Text, selection: { from: numbe
       if (name === "Link") {
         // `[words]` with no address and no definition of that label is no
         // link (CommonMark), as a terminal's bars in brackets are not: it
-        // stays as written.
-        if (!node.getChild("URL") && !defined.has(referenceLabel(node, doc))) return;
+        // stays as written, in its line's colour.
+        if (!node.getChild("URL") && !defined.has(referenceLabel(node, doc))) {
+          ranges.push({ from: node.from, to: node.to, kind: "plain" });
+          return;
+        }
         if (!overlaps(node.from, node.to)) {
           for (let child = node.firstChild; child; child = child.nextSibling) {
             if (child.name === "LinkMark" || child.name === "URL" || child.name === "LinkTitle") {

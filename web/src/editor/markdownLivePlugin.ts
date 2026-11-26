@@ -414,6 +414,9 @@ function build(state: EditorState, reveal: boolean, drawing: Drawing): Decoratio
       case "link":
         ranges.push(Decoration.mark({ class: "cm-md-link" }).range(range.from, range.to));
         break;
+      case "plain":
+        ranges.push(Decoration.mark({ class: "cm-md-plain" }).range(range.from, range.to));
+        break;
       case "codeInline":
         ranges.push(Decoration.mark({ class: "cm-md-code-inline" }).range(range.from, range.to));
         break;

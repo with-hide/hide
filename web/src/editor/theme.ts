@@ -165,6 +165,8 @@ export const liveTheme = EditorView.theme({
   // The syntax colours stay with Source; a drawn heading reads in its line's colour.
   "& [class*='cm-md-heading-'] span": { color: "inherit" },
   "& .cm-line .cm-md-link": { color: "var(--file-blue)" },
+  // Words in brackets that are no link take none of a link's syntax colour.
+  "& .cm-line .cm-md-plain, & .cm-line .cm-md-plain span": { color: "inherit", textDecoration: "none" },
   "& .cm-line .cm-md-code-inline": {
     fontFamily: "var(--font-mono)",
     fontSize: "0.86em",
