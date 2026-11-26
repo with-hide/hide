@@ -78,7 +78,7 @@ public class NoticeTest {
         assertEquals("To check · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("en-US"))));
         assertEquals("확인할 것 · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("fr-FR", "ko"))));
         assertEquals("To check · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("fr-FR"))));
-        assertEquals("提问 · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("zh-Hans-CN"))));
+        assertEquals("待确认 · Which branch? · contong", asking.body(NoticeWords.forLanguages(List.of("zh-Hans-CN"))));
         Notice letter = read(NoticeSealer.notice(ROOM).put("state", "letter_undelivered").put("status_code", JSONObject.NULL).put("detail", JSONObject.NULL).put("place", "letter-7"));
         assertEquals("Letter not delivered · letter-7", letter.body(NoticeWords.forLanguages(List.of("en"))));
     }
