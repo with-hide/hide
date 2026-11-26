@@ -54,7 +54,6 @@ const REFUSED_LOOK_WAIT_MS: u64 = 5_000;
 /// for a session its conversation names (`crate::desk::NamedSession`), so
 /// the thread is read after the pane is gone.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ThreadReference {
     agent: hide_session::Agent,
     /// The account the agent's profile names (PRD agent-profiles B19).
@@ -153,6 +152,40 @@ struct OpenThread {
     inputting: bool,
 }
 
+impl OpenThread {
+    /// A thread opened on `pane_id`, read on `device`, before any page or
+    /// look; a live pane's sets its terminal and status over it.
+    fn opened(
+        generation: u64,
+        pane_id: String,
+        device: String,
+        reference: Option<ThreadReference>,
+    ) -> Self {
+        Self {
+            generation,
+            pane_id,
+            device,
+            raw_pane: String::new(),
+            terminal_id: None,
+            reference,
+            status: String::new(),
+            state_change_seq: None,
+            tail_start: None,
+            tail_end: None,
+            starts: Vec::new(),
+            reading: false,
+            owed: false,
+            reading_older: false,
+            checking: false,
+            activity: None,
+            look_failure: None,
+            next_check_ms: 0,
+            retry_at_ms: None,
+            inputting: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ThreadOpenPayload {
@@ -243,26 +276,16 @@ impl Runtime {
                 thread.failure = None;
             }
             self.session_thread.open = Some(OpenThread {
-                generation,
-                pane_id: payload.pane_id.clone(),
-                device: observation.actor.device_id.clone(),
                 raw_pane: observation.raw_pane_id.clone(),
                 terminal_id: observation.terminal_id.clone(),
-                reference,
                 status: observation.status.clone(),
                 state_change_seq: observation.state_change_seq,
-                tail_start: None,
-                tail_end: None,
-                starts: Vec::new(),
-                reading: false,
-                owed: false,
-                reading_older: false,
-                checking: false,
-                activity: None,
-                look_failure: None,
-                next_check_ms: 0,
-                retry_at_ms: None,
-                inputting: false,
+                ..OpenThread::opened(
+                    generation,
+                    payload.pane_id.clone(),
+                    observation.actor.device_id.clone(),
+                    reference,
+                )
             });
         } else if let Some((device, reference)) = self.desk_named_thread(&payload.pane_id) {
             // A session a Desk chip names whose pane is gone: its kept
@@ -272,28 +295,12 @@ impl Runtime {
             thread.state = ThreadState::Loading;
             thread.failure = None;
             thread.pane = ThreadPane::Gone;
-            self.session_thread.open = Some(OpenThread {
+            self.session_thread.open = Some(OpenThread::opened(
                 generation,
-                pane_id: payload.pane_id.clone(),
+                payload.pane_id.clone(),
                 device,
-                raw_pane: String::new(),
-                terminal_id: None,
-                reference: Some(reference),
-                status: String::new(),
-                state_change_seq: None,
-                tail_start: None,
-                tail_end: None,
-                starts: Vec::new(),
-                reading: false,
-                owed: false,
-                reading_older: false,
-                checking: false,
-                activity: None,
-                look_failure: None,
-                next_check_ms: 0,
-                retry_at_ms: None,
-                inputting: false,
-            });
+                Some(reference),
+            ));
         } else {
             thread.pane = ThreadPane::Gone;
         }

@@ -19,15 +19,22 @@ use crate::model::{DeskItem, DeskPullRequest, DeskRecordSnapshot, PrState};
 
 /// The pull requests a record's chip and card count at most.
 const RECORD_PULLS: usize = 8;
+/// How long a read that failed (a timeout, a busy record) waits before the
+/// sessions still unread are asked again, on a later compose.
+const RECORD_RETRY_MS: u64 = 30_000;
 
 /// What the link record answered for each named session, and whether a read
 /// is out; the runtime's, never stored, and only for sessions still named.
 #[derive(Default)]
 pub(super) struct Records {
-    /// `None` for a session the record does not hold or could not read: its
-    /// chip stays dimmed, and it is not asked again while Hide runs.
+    /// `None` for a session the record does not hold: its chip stays
+    /// dimmed, and it is not asked again while Hide runs. A read that failed
+    /// leaves its sessions out, so they are asked again after
+    /// [`RECORD_RETRY_MS`].
     read: BTreeMap<SessionIdentity, Option<DeskRecordSnapshot>>,
     reading: bool,
+    /// No read starts before this (`crate::links::now_ms`), after one failed.
+    retry_at_ms: u64,
 }
 
 /// One answer of the reader.
@@ -79,7 +86,9 @@ impl Runtime {
                 let row = rows.get(pane)?;
                 let agent = super::super::links::session_agent(&row.agent_kind)?;
                 // The machine as the one address owner reads it from the pane, as a row's is stamped.
-                let device_id = crate::address::split_pane(self.node.as_str(), pane).0.to_owned();
+                let device_id = crate::address::split_pane(self.node.as_str(), pane)
+                    .0
+                    .to_owned();
                 Some(NamedSession {
                     pane_id: pane.to_owned(),
                     session: SessionIdentity {
@@ -95,12 +104,7 @@ impl Runtime {
                 })
             })
             .collect();
-        // Oldest first, so past the cap the newest named stay.
-        let mut changed = false;
-        for named in found.into_iter().rev() {
-            changed |= self.desk.stored.keep_named(named);
-        }
-        changed
+        self.desk.stored.keep_named(found)
     }
 
     /// The records of the sessions the newest lines' chips name whose pane
@@ -114,7 +118,12 @@ impl Runtime {
             if rows.contains(pane) {
                 continue;
             }
-            let Some(named) = self.desk.stored.named.iter().find(|named| named.pane_id == pane)
+            let Some(named) = self
+                .desk
+                .stored
+                .named
+                .iter()
+                .find(|named| named.pane_id == pane)
             else {
                 continue;
             };
@@ -135,7 +144,10 @@ impl Runtime {
     /// Reads `sessions`' records on a worker, one read out at a time; the
     /// lock is not held while the link record answers.
     fn desk_read_records(&mut self, sessions: Vec<SessionIdentity>) {
-        if self.desk.records.reading || sessions.is_empty() {
+        if self.desk.records.reading
+            || sessions.is_empty()
+            || crate::links::now_ms() < self.desk.records.retry_at_ms
+        {
             return;
         }
         let Some(client) = self.links_work.client.clone() else {
@@ -149,7 +161,12 @@ impl Runtime {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     sessions
                         .iter()
-                        .map(|session| (session.clone(), client.call(LedgerCall::Record(session.clone()))))
+                        .map(|session| {
+                            (
+                                session.clone(),
+                                client.call(LedgerCall::Record(session.clone())),
+                            )
+                        })
                         .collect::<Vec<Answer>>()
                 }))
                 .unwrap_or_else(|_| {
@@ -191,22 +208,30 @@ impl Runtime {
                     }));
                     None
                 }
+                // A session the record never held is the dimmed chip, not a failure.
+                (Err(code), _) if code == "ledger_session_missing" => None,
                 (Err(code), _) => {
-                    // A session the record never held is the dimmed chip, not a failure.
-                    if code != "ledger_session_missing" {
-                        crate::diagnostic!(serde_json::json!({
-                            "component": "desk", "kind": "desk.record_read_failed",
-                            "session_id": session.session_id, "code": code,
-                        }));
-                    }
-                    None
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "desk", "kind": "desk.record_read_failed",
+                        "session_id": session.session_id, "code": code,
+                    }));
+                    self.desk.records.retry_at_ms = crate::links::now_ms() + RECORD_RETRY_MS;
+                    continue;
                 }
             };
             self.desk.records.read.insert(session, record);
         }
-        let named: HashSet<&SessionIdentity> =
-            self.desk.stored.named.iter().map(|named| &named.session).collect();
-        self.desk.records.read.retain(|session, _| named.contains(session));
+        let named: HashSet<&SessionIdentity> = self
+            .desk
+            .stored
+            .named
+            .iter()
+            .map(|named| &named.session)
+            .collect();
+        self.desk
+            .records
+            .read
+            .retain(|session, _| named.contains(session));
         self.compose_desk_jobs();
         true
     }
@@ -217,7 +242,12 @@ impl Runtime {
         &self,
         pane: &str,
     ) -> Option<(String, crate::runtime::ThreadReference)> {
-        let named = self.desk.stored.named.iter().find(|named| named.pane_id == pane)?;
+        let named = self
+            .desk
+            .stored
+            .named
+            .iter()
+            .find(|named| named.pane_id == pane)?;
         Some((named.session.device_id.clone(), named.thread.clone()?))
     }
 }
@@ -330,15 +360,34 @@ mod tests {
             .stored
             .named
             .iter()
-            .map(|named| (named.pane_id.as_str(), named.session.session_id.as_str(), named.agent_kind.as_str()))
+            .map(|named| {
+                (
+                    named.pane_id.as_str(),
+                    named.session.session_id.as_str(),
+                    named.agent_kind.as_str(),
+                )
+            })
             .collect();
         // p3 never had a row: Hide never knew its session.
         assert_eq!(kept, [("p2", "other", "codex"), ("p1", SESSION, "codex")]);
-        assert!(records(&runtime).is_empty(), "a live pane's chip draws its row");
+        assert!(
+            records(&runtime).is_empty(),
+            "a live pane's chip draws its row"
+        );
 
         runtime.snapshot.navigator.agents.clear();
         runtime.refresh_desk_jobs();
-        let session = |id: &str| runtime.desk.stored.named.iter().find(|named| named.session.session_id == id).unwrap().session.clone();
+        let session = |id: &str| {
+            runtime
+                .desk
+                .stored
+                .named
+                .iter()
+                .find(|named| named.session.session_id == id)
+                .unwrap()
+                .session
+                .clone()
+        };
         let (built, missing) = (session(SESSION), session("other"));
         let record = SessionRecord {
             session: built.clone(),
@@ -353,9 +402,18 @@ mod tests {
             (missing, Err("ledger_session_missing".into())),
         ]);
         let drawn = records(&runtime);
-        assert_eq!(drawn.len(), 1, "a session the record lacks stays the dimmed chip");
         assert_eq!(
-            (drawn[0].pane_id.as_str(), drawn[0].title.as_str(), drawn[0].agent_kind.as_str(), drawn[0].ended_at_unix_ms),
+            drawn.len(),
+            1,
+            "a session the record lacks stays the dimmed chip"
+        );
+        assert_eq!(
+            (
+                drawn[0].pane_id.as_str(),
+                drawn[0].title.as_str(),
+                drawn[0].agent_kind.as_str(),
+                drawn[0].ended_at_unix_ms
+            ),
             ("p1", "1.3.0 후보 빌드 만들기", "codex", Some(20))
         );
         assert_eq!(drawn[0].session, built);
@@ -364,6 +422,34 @@ mod tests {
         runtime.snapshot.navigator.agents = vec![row("p1", SESSION)];
         runtime.refresh_desk_jobs();
         assert!(records(&runtime).is_empty());
+    }
+
+    /// A read that failed (a timeout, a busy record) is not taken for "no
+    /// record": the session is asked again later and draws once it answers.
+    #[test]
+    fn a_record_read_that_failed_is_asked_again_and_draws_once_it_answers() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _orders) = super::super::tests::runtime(root.path());
+        runtime.snapshot.navigator.agents = vec![row("p1", SESSION)];
+        reply_naming(&mut runtime, &["p1"]);
+        runtime.refresh_desk_jobs();
+        runtime.snapshot.navigator.agents.clear();
+        runtime.refresh_desk_jobs();
+        let built = runtime.desk.stored.named[0].session.clone();
+        runtime.desk_records_read(vec![(built.clone(), Err("ledger_rpc_capacity".into()))]);
+        assert!(records(&runtime).is_empty());
+        assert!(
+            !runtime.desk.records.read.contains_key(&built),
+            "a failure is not remembered as no record"
+        );
+        assert!(runtime.desk.records.retry_at_ms > crate::links::now_ms());
+        let record = SessionRecord {
+            session: built.clone(),
+            title: "후보 빌드".into(),
+            ..SessionRecord::default()
+        };
+        runtime.desk_records_read(vec![(built, Ok(LedgerAnswer::Record(Box::new(record))))]);
+        assert_eq!(records(&runtime).len(), 1);
     }
 
     /// desk.json is outside the node migration (PR Decide): a session kept
@@ -378,12 +464,12 @@ mod tests {
             agent: "codex".into(),
             session_id: SESSION.into(),
         };
-        runtime.desk.stored.keep_named(NamedSession {
+        runtime.desk.stored.keep_named(vec![NamedSession {
             pane_id: "p1".into(),
             session: old.clone(),
             agent_kind: "codex".into(),
             thread: None,
-        });
+        }]);
         reply_naming(&mut runtime, &["p1"]);
         runtime.refresh_desk_jobs();
         // The link record moved its rows to the machine's new id with the node migration.
@@ -395,7 +481,7 @@ mod tests {
     fn a_gone_pane_a_chip_names_opens_its_kept_thread_read_only_and_any_other_has_no_record() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, _orders) = super::super::tests::runtime(root.path());
-        runtime.desk.stored.keep_named(NamedSession {
+        runtime.desk.stored.keep_named(vec![NamedSession {
             pane_id: "p1".into(),
             session: SessionIdentity {
                 device_id: "test-node".into(),
@@ -410,13 +496,17 @@ mod tests {
                 }))
                 .unwrap(),
             ),
-        });
+        }]);
         let open = |runtime: &mut Runtime, pane: &str| {
             runtime.open_session_thread(serde_json::from_value(json!({"pane_id": pane})).unwrap());
             runtime.snapshot.session_thread.as_deref().unwrap().clone()
         };
         let kept = open(&mut runtime, "p1");
-        assert_eq!(kept.pane, ThreadPane::Gone, "no input reaches a session whose pane is gone");
+        assert_eq!(
+            kept.pane,
+            ThreadPane::Gone,
+            "no input reaches a session whose pane is gone"
+        );
         // Read where the session ran; this test's node holds no such file, so what it answers is the reader's.
         assert_eq!(kept.machine.as_deref(), Some("test-node"));
 
