@@ -143,7 +143,7 @@
   "desk_approval_state": ["waiting", "allowed", "rejected", "closed"],
   "desk_option_kind": ["allow_once", "allow_always", "reject_once", "reject_always", "other"],
   "desk_permission": ["allow_all", "agent"],
-  "desk_notice": ["preparing", "host_stopped", "resume_failed", "login_needed", "install_failed", "turn_failed", "attachments_gone"],
+  "desk_notice": ["preparing", "host_stopped", "resume_failed", "login_needed", "install_failed", "turn_failed", "attachments_gone", "command_left_out"],
   "desk_location": ["desk", "worktree", "checkout"],
   "desk_mention_kind": ["session", "project"],
   "desk_carried": ["all", "trimmed", "none"],

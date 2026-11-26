@@ -133,6 +133,24 @@ impl AdapterId {
         }
     }
 
+    /// Where the adapter tells a compaction's end, when it tells it outside
+    /// the reply ([`CompactionMark`]).
+    pub fn compaction_mark(self) -> Option<CompactionMark> {
+        match self.0 {
+            AgentId::OpenCode => Some(CompactionMark {
+                pointer: "/_meta/opencode~1compaction",
+            }),
+            _ => None,
+        }
+    }
+
+    /// The commands Desk keeps out of the agent's own list, as its definition
+    /// file names them (`[desk] left_out`, [`crate::commands`]).
+    pub fn left_out(self) -> &'static [String] {
+        hide_agent_adapter::definition::builtin(self.catalog().id)
+            .map_or(&[], |definition| &definition.desk.left_out)
+    }
+
     /// How the adapter marks a turn that failed when it still answers the
     /// prompt as ended: codex-acp passes Codex's own thread status on, which
     /// is `systemError` only after a failed turn, and then writes the
@@ -145,6 +163,45 @@ impl AdapterId {
                 pointer: "/_meta/codex/threadStatus/type",
                 value: "systemError",
             }),
+            _ => None,
+        }
+    }
+}
+
+/// Where an adapter tells a compaction's end only in a `session_info_update`
+/// field rather than in reply text, so a `/compact` turn would read empty:
+/// OpenCode 2.0.29 sets `_meta["opencode/compaction"]` to `{status, error}`,
+/// `status` `completed` or `failed` with the reason in `error.message`
+/// (ACP v2's `compaction_update` is the standard form, which Desk, on v1,
+/// is not sent).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompactionMark {
+    pub pointer: &'static str,
+}
+
+/// How a compaction ended, as its adapter told it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Compaction {
+    Done,
+    /// With the agent's own reason, when it gave one.
+    Failed(Option<String>),
+}
+
+impl CompactionMark {
+    /// The compaction's end the update tells, if it tells one.
+    pub fn read(self, update: &Value) -> Option<Compaction> {
+        let field = update.pointer(self.pointer)?;
+        match field.get("status").and_then(Value::as_str)? {
+            "completed" => Some(Compaction::Done),
+            "failed" => Some(Compaction::Failed(
+                field
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .and_then(|reason| reason.lines().next())
+                    .map(str::trim)
+                    .filter(|reason| !reason.is_empty())
+                    .map(|reason| reason.chars().take(200).collect()),
+            )),
             _ => None,
         }
     }
@@ -385,6 +442,30 @@ mod tests {
             .iter()
             .find(|(name, _)| name == key)
             .map(|(_, value)| value.clone())
+    }
+
+    #[test]
+    fn opencode_s_compaction_end_reads_from_its_meta_field() {
+        let mark = AdapterId::OPENCODE.compaction_mark().unwrap();
+        // The updates OpenCode 2.0.29 sent for `/compact` (mission-101 slash-research probe).
+        let update = |status: Value| json!({"sessionUpdate": "session_info_update", "_meta": {"opencode/compaction": status}});
+        assert_eq!(
+            mark.read(&update(json!({"status": "started", "reason": "manual"}))),
+            None
+        );
+        assert_eq!(
+            mark.read(&update(json!({"status": "failed", "reason": "manual",
+                "error": {"type": "compaction.unavailable", "message": "Nothing to compact yet"}}))),
+            Some(Compaction::Failed(Some("Nothing to compact yet".into())))
+        );
+        assert_eq!(
+            mark.read(&update(json!({"status": "completed"}))),
+            Some(Compaction::Done)
+        );
+        assert_eq!(
+            mark.read(&json!({"sessionUpdate": "session_info_update", "title": "x"})),
+            None
+        );
     }
 
     #[test]

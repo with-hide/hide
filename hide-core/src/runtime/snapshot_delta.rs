@@ -45,6 +45,8 @@ pub(super) struct DeltaState {
     last_desk_jobs: Option<Arc<crate::model::DeskJobsSnapshot>>,
     desk_mentions_revision: u64,
     last_desk_mentions: Option<Arc<crate::model::DeskMentionsSnapshot>>,
+    desk_commands_revision: u64,
+    last_desk_commands: Option<Arc<crate::model::DeskCommandsSnapshot>>,
     access_revision: u64,
     last_access: Option<Arc<crate::model::AccessSnapshot>>,
     automations_revision: u64,
@@ -304,6 +306,17 @@ impl Runtime {
             self.delta.desk_mentions_revision = self.delta.revision;
             self.delta.last_desk_mentions = Some(Arc::clone(mentions));
         }
+        if let Some(commands) = &self.snapshot.desk_commands
+            && self
+                .delta
+                .last_desk_commands
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, commands))
+        {
+            self.delta.revision += 1;
+            self.delta.desk_commands_revision = self.delta.revision;
+            self.delta.last_desk_commands = Some(Arc::clone(commands));
+        }
         if let Some(access) = &self.snapshot.access
             && self
                 .delta
@@ -472,6 +485,12 @@ impl Runtime {
                 .last_desk_mentions
                 .as_ref()
                 .filter(|_| self.delta.desk_mentions_revision > have_revision)
+                .map(Arc::clone),
+            desk_commands: self
+                .delta
+                .last_desk_commands
+                .as_ref()
+                .filter(|_| self.delta.desk_commands_revision > have_revision)
                 .map(Arc::clone),
             access: self
                 .delta

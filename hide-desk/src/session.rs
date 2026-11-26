@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::adapter::FailedTurnMark;
+use crate::adapter::{Compaction, CompactionMark, FailedTurnMark};
 use crate::rpc::{CallError, Connection, Incoming, Sink};
 
 /// How long a control request may take: a first `session/new` starts the
@@ -264,6 +264,9 @@ pub enum Update {
     },
     /// The model or effort lists or values moved.
     Choices(Choices),
+    /// The agent's commands (`available_commands_update`), the whole list
+    /// again, read by [`crate::commands::read`] for the agent it came from.
+    Commands(Value),
     /// The session's own facts moved (`session_info_update`): its title, or
     /// what an adapter adds in `_meta`, such as a failed turn's mark.
     Info(Value),
@@ -295,6 +298,7 @@ pub fn read_update(params: &Value) -> Update {
                 call: update.clone(),
             }),
         Some("config_option_update") => Update::Choices(choices(update)),
+        Some("available_commands_update") => Update::Commands(update.clone()),
         Some("session_info_update") => Update::Info(update.clone()),
         _ => Update::Other,
     }
@@ -335,7 +339,7 @@ impl ReplyBlocks {
                 self.open = None;
                 None
             }
-            Update::Choices(_) | Update::Info(_) | Update::Other => None,
+            Update::Choices(_) | Update::Commands(_) | Update::Info(_) | Update::Other => None,
         }
     }
 }
@@ -380,6 +384,8 @@ pub struct Answered {
     /// The turn met its adapter's failed-turn mark: the text that came after
     /// it, which is the agent's error and not a reply.
     pub failed: Option<String>,
+    /// A compaction the adapter told outside the reply, in the turn.
+    pub compaction: Option<Compaction>,
 }
 
 /// The turn an owner follows on a session: which one runs, what its reply
@@ -397,15 +403,24 @@ pub struct TurnReader {
     reply: ReplyBlocks,
     /// The adapter's mark of a failed turn, when it has one.
     mark: Option<FailedTurnMark>,
+    /// Where the adapter tells a compaction's end, when it does so outside
+    /// the reply.
+    compaction_mark: Option<CompactionMark>,
+    compaction: Option<Compaction>,
     /// The running turn met the mark: the text written since.
     failed: Option<String>,
 }
 
 impl TurnReader {
-    pub fn new(prelude: Option<String>, mark: Option<FailedTurnMark>) -> Self {
+    pub fn new(
+        prelude: Option<String>,
+        mark: Option<FailedTurnMark>,
+        compaction_mark: Option<CompactionMark>,
+    ) -> Self {
         Self {
             prelude,
             mark,
+            compaction_mark,
             ..Self::default()
         }
     }
@@ -428,6 +443,7 @@ impl TurnReader {
         self.calls.clear();
         self.reply = ReplyBlocks::default();
         self.failed = None;
+        self.compaction = None;
     }
 
     /// What `update`, numbered `number`, adds to the running turn: its tag
@@ -447,6 +463,13 @@ impl TurnReader {
         if let Update::Info(info) = update {
             if self.tag.is_some() && self.mark.is_some_and(|mark| mark.marks(info)) {
                 self.failed.get_or_insert_with(String::new);
+            }
+            if let Some(compaction) = self
+                .compaction_mark
+                .filter(|_| self.tag.is_some())
+                .and_then(|mark| mark.read(info))
+            {
+                self.compaction = Some(compaction);
             }
             return None;
         }
@@ -474,6 +497,7 @@ impl TurnReader {
         Some(Answered {
             calls: std::mem::take(&mut self.calls),
             failed: self.failed.take(),
+            compaction: self.compaction.take(),
         })
     }
 }
@@ -523,7 +547,7 @@ mod tests {
     }
 
     fn numbered(updates: &[(u64, Value)]) -> (TurnReader, Vec<String>) {
-        let mut turn = TurnReader::new(Some("pi v1 started".into()), None);
+        let mut turn = TurnReader::new(Some("pi v1 started".into()), None, None);
         turn.start(7, 3);
         let text = updates
             .iter()
@@ -558,6 +582,7 @@ mod tests {
             Some(Answered {
                 calls: vec!["new".to_owned()],
                 failed: None,
+                compaction: None,
             })
         );
         assert_eq!(turn.running(), None);
@@ -586,7 +611,7 @@ mod tests {
         let title =
             json!({"sessionUpdate": "session_info_update", "title": "fail please @@fail429"});
         let read = |mark, updates: &[Value]| {
-            let mut turn = TurnReader::new(None, mark);
+            let mut turn = TurnReader::new(None, mark, None);
             turn.start(7, 0);
             let text: String = updates
                 .iter()
@@ -652,7 +677,7 @@ mod tests {
     /// cap still gives the failure line its first words.
     #[test]
     fn a_failed_turn_s_words_are_cut_at_the_cap_and_say_so() {
-        let mut turn = TurnReader::new(None, AdapterId::CODEX.failed_turn_mark());
+        let mut turn = TurnReader::new(None, AdapterId::CODEX.failed_turn_mark(), None);
         turn.start(7, 0);
         let long = "한도를 넘었어요 ".repeat(400);
         assert!(long.len() > MAX_FAILURE_BYTES);

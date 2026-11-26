@@ -470,6 +470,7 @@ mod tests {
             steps: Default::default(),
             mentions: Vec::new(),
             missions: Vec::new(),
+            compaction: None,
         });
         let carried = conversation.carried().unwrap();
         assert_eq!(carried, "Operator: what runs now?\nCodex: two sessions");

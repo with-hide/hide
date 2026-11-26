@@ -3400,7 +3400,8 @@ export type DeskOptionKind = "allow_once" | "allow_always" | "reject_once" | "re
 export type DeskOption = { id: string; kind: DeskOptionKind; name: string };
 /** A message sent while a reply was being written, waiting for the turn before it whole: its words, chips and files (`attachments`, absent when it has none); `desk_queued_remove` takes it out, and none is in `items` until its turn starts. */
 export type DeskQueuedMessage = { id: number; text: string; at_ms: number; mentions: DeskMention[]; attachments?: DeskAttachment[] };
-export type DeskNotice = "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "turn_failed" | "attachments_gone";
+/** `command_left_out`: the message starts with a command Desk keeps from this agent (its definition's `[desk] left_out`), so it was not sent. */
+export type DeskNotice = "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "turn_failed" | "attachments_gone" | "command_left_out";
 export type DeskLocation = "desk" | "worktree" | "checkout";
 export type DeskChoice = { id: string; label: string };
 export type DeskMention = { kind: "session" | "project"; id: string; name: string };
@@ -3432,7 +3433,7 @@ export type DeskItem =
   /** `attachments` are the files sent with it, each staged at `path` on the core's machine; absent when none. */
   | { kind: "user"; id: number; text: string; at_ms: number; mentions: DeskMention[]; attachments?: DeskAttachment[] }
   /** `thought_ms` and `steps` fold the turn into one line: `생각 8초 · 세션 4개 읽음`; `mentions` are the sessions its text names as `@session(<pane> <name>)`. */
-  | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps; mentions: DeskSessionChip[]; missions: DeskMissionMention[] }
+  | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps; mentions: DeskSessionChip[]; missions: DeskMissionMention[]; /** A compaction the agent told outside its reply (OpenCode's `/compact`), shown as one line; absent otherwise. */ compaction?: DeskCompaction }
   | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }
   | { kind: "model"; id: number; model: string | null; effort: string | null }
   /**
@@ -3508,6 +3509,19 @@ export type DeskJob = {
   /** The panes of a Conductor's workers. */
   workers: string[];
 };
+/** How a compaction the agent told outside its reply ended: done, or not with the agent's own reason. */
+export type DeskCompaction = { done: boolean; reason: string | null };
+
+/** One of the agent's own commands (ACP slash commands): `name` as the operator types it to run it (`/compact`, or Codex's `$skill` as the agent names it); `hint` is what follows it. */
+export type DeskCommand = { name: string; description: string; hint?: string };
+
+/**
+ * The `desk_commands` section, the `/` menu: the selected agent's commands as
+ * its last session listed them, kept while hided runs, with what Desk keeps
+ * from the agent already gone; empty for an agent that sent none.
+ */
+export type DeskCommands = { agent: DeskAgentId | null; commands: DeskCommand[] };
+
 /**
  * The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes.
  * A session's `parent` is the pane it was spawned from, always one listed too (D-84); `project` and `branch` are its second line's.

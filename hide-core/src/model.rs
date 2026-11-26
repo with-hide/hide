@@ -182,6 +182,11 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_optional_shared")]
     pub desk_mentions: Option<Arc<DeskMentionsSnapshot>>,
+    /// Desk's `/` menu, the agent's own commands, its own section for the
+    /// same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub desk_commands: Option<Arc<DeskCommandsSnapshot>>,
     /// External tools: requests waiting and approved connections (PRD
     /// hide-external-control). Its own section, so a tool's use never
     /// resends anything else.
@@ -9070,6 +9075,7 @@ impl Snapshot {
             desk_live: None,
             desk_jobs: None,
             desk_mentions: None,
+            desk_commands: None,
             access: None,
             automations: None,
             link_summaries: None,
@@ -9131,6 +9137,7 @@ pub struct SnapshotDeltaPayload {
     pub desk_live: Option<Arc<DeskLiveSnapshot>>,
     pub desk_jobs: Option<Arc<DeskJobsSnapshot>>,
     pub desk_mentions: Option<Arc<DeskMentionsSnapshot>>,
+    pub desk_commands: Option<Arc<DeskCommandsSnapshot>>,
     pub access: Option<Arc<AccessSnapshot>>,
     pub automations: Option<Arc<crate::automations::AutomationsSnapshot>>,
     pub link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
@@ -9192,6 +9199,8 @@ pub struct SnapshotDeltaWire<'a> {
     pub desk_jobs: Option<&'a DeskJobsSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub desk_mentions: Option<&'a DeskMentionsSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desk_commands: Option<&'a DeskCommandsSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access: Option<&'a AccessSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -9256,6 +9265,7 @@ impl<'a> SnapshotDeltaWire<'a> {
             desk_live: payload.desk_live.as_deref(),
             desk_jobs: payload.desk_jobs.as_deref(),
             desk_mentions: payload.desk_mentions.as_deref(),
+            desk_commands: payload.desk_commands.as_deref(),
             access: payload.access.as_deref(),
             automations: payload.automations.as_deref(),
             link_summaries: payload.link_summaries.as_deref(),
@@ -11978,6 +11988,7 @@ mod wire_enum_tests {
                 DeskNotice::InstallFailed,
                 DeskNotice::TurnFailed,
                 DeskNotice::AttachmentsGone,
+                DeskNotice::CommandLeftOut,
             ],
         );
         checked.insert("desk_notice");

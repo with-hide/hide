@@ -84,6 +84,11 @@ pub(super) struct Desk {
     /// opened: their word reads signed out whatever Hide AI's read of the
     /// login says, since a login file can outlive its sign-in.
     sign_in_refused: BTreeSet<AdapterId>,
+    /// Each agent's commands as its last session listed them, kept while
+    /// hided runs, so a new conversation's first `/` has a list before its
+    /// session opens; replaced whole by each list the agent sends. Never
+    /// stored: the next session sends its own (letter-48308).
+    commands: BTreeMap<AdapterId, Vec<hide_desk::commands::Command>>,
     /// The queued starts the queue handed to be run, in order; tests answer
     /// them themselves.
     #[cfg(test)]
@@ -132,6 +137,8 @@ struct Turn {
     steps: crate::model::DeskSteps,
     /// What its newest tool call does, until the agent writes again.
     now: Option<crate::model::DeskStepKind>,
+    /// The compaction the agent told outside its reply.
+    compaction: Option<crate::model::DeskCompaction>,
 }
 
 /// A card waiting for the operator, and how to answer the agent.
@@ -538,6 +545,22 @@ impl Runtime {
         if self.desk_agent_state(agent) != DeskAgentState::Ready {
             return refused("agent_not_ready");
         }
+        // A command Desk keeps from this agent never goes: the message
+        // stays in the conversation with the notice that says so.
+        if hide_desk::commands::kind(agent, self.desk_commands_of(agent), text)
+            == hide_desk::commands::Kind::LeftOut
+        {
+            let id = self.desk.stored.conversation.next_id();
+            self.desk.stored.conversation.push(DeskItem::User {
+                id,
+                text: text.to_owned(),
+                at_ms: crate::links::now_ms(),
+                mentions: payload.mentions,
+                attachments: files,
+            });
+            self.push_notice(DeskNotice::CommandLeftOut, Some(agent), None);
+            return true;
+        }
         // While a reply is being written, or earlier messages still wait,
         // the message waits its turn with its files (letter-47148).
         if self.desk.turn.is_some() || !self.desk.stored.queued.is_empty() {
@@ -713,8 +736,19 @@ impl Runtime {
         attachments: Vec<DeskAttachment>,
     ) {
         let files: Vec<String> = attachments.iter().map(|file| file.path.clone()).collect();
-        let quoted: String = files.iter().map(|path| format!("\"{path}\" ")).collect();
-        let sent = format!("{quoted}{sent}");
+        let kind = hide_desk::commands::kind(agent, self.desk_commands_of(agent), &sent);
+        // A command is the prompt's first words, so its files follow it.
+        let sent = match (kind, files.is_empty()) {
+            (_, true) => sent,
+            (hide_desk::commands::Kind::Command, false) => {
+                let quoted: Vec<String> = files.iter().map(|path| format!("\"{path}\"")).collect();
+                format!("{sent} {}", quoted.join(" "))
+            }
+            (_, false) => {
+                let quoted: String = files.iter().map(|path| format!("\"{path}\" ")).collect();
+                format!("{quoted}{sent}")
+            }
+        };
         let node = (!files.is_empty()).then(|| self.own_node());
         let carried = (!self.desk.host.open)
             .then(|| self.desk.stored.conversation.carried())
@@ -742,6 +776,7 @@ impl Runtime {
             first_text_at_ms: None,
             steps: Default::default(),
             now: None,
+            compaction: None,
         });
         let resume = self
             .desk
@@ -758,6 +793,7 @@ impl Runtime {
             resume,
             model: self.desk.stored.selection.model.clone(),
             effort: self.desk.stored.selection.effort.clone(),
+            kind,
             placement: match self.desk.stored.settings.location {
                 DeskLocation::Desk => hide_desk::Placement::PerTask,
                 DeskLocation::Worktree => hide_desk::Placement::Worktree,
@@ -1146,7 +1182,7 @@ impl Runtime {
         let Some(turn) = self.desk.turn.take() else {
             return;
         };
-        if !turn.text.is_empty() {
+        if !turn.text.is_empty() || turn.compaction.is_some() {
             let id = self.desk.stored.conversation.next_id();
             let mentions = hide_desk::session_mentions(&turn.text)
                 .into_iter()
@@ -1177,6 +1213,7 @@ impl Runtime {
                 steps: turn.steps,
                 mentions,
                 missions,
+                compaction: turn.compaction,
             });
             // The sessions it names get their cards (D-86).
             self.compose_desk_jobs();
@@ -1474,6 +1511,40 @@ impl Runtime {
                 });
                 self.save_desk();
             }
+            Report::Commands { adapter, commands } => {
+                if commands.cut > 0 {
+                    crate::diagnostic!(json!({
+                        "component": "desk",
+                        "kind": "desk.commands_cut",
+                        "adapter": adapter.as_str(),
+                        "kept": commands.commands.len(),
+                        "cut": commands.cut,
+                    }));
+                }
+                if self.desk.commands.get(&adapter) == Some(&commands.commands) {
+                    return false;
+                }
+                self.desk.commands.insert(adapter, commands.commands);
+                self.compose_desk_commands();
+                return true;
+            }
+            Report::Compacted { tag, compaction } => {
+                if let Some(turn) = self.desk.turn.as_mut().filter(|turn| turn.tag == tag) {
+                    turn.compaction = Some(match compaction {
+                        hide_desk::adapter::Compaction::Done => crate::model::DeskCompaction {
+                            done: true,
+                            reason: None,
+                        },
+                        hide_desk::adapter::Compaction::Failed(reason) => {
+                            crate::model::DeskCompaction {
+                                done: false,
+                                reason,
+                            }
+                        }
+                    });
+                }
+                return false;
+            }
             Report::Choices { adapter, choices } => {
                 if !self.learn_choices(adapter, &choices) {
                     return false;
@@ -1647,6 +1718,8 @@ impl Runtime {
             lane: desk.stored.lane,
             opens: desk.opens.snapshot(),
         }));
+        // The `/` menu follows the agent chosen.
+        self.compose_desk_commands();
     }
 
     /// Desk's agents as the catalog says them now, in its order.
@@ -1694,6 +1767,34 @@ impl Runtime {
         self.compose_desk();
         self.compose_desk_jobs();
         self.compose_desk_mentions();
+    }
+
+    /// The commands `agent` listed last, while hided runs; none before it
+    /// sent a list.
+    fn desk_commands_of(&self, agent: AdapterId) -> &[hide_desk::commands::Command] {
+        self.desk.commands.get(&agent).map_or(&[], Vec::as_slice)
+    }
+
+    /// The `desk_commands` section, the selected agent's list, sent again
+    /// only when that agent or its list moved.
+    fn compose_desk_commands(&mut self) {
+        if self.desk.worker.is_none() {
+            return;
+        }
+        let agent = self.desk.stored.selection.agent;
+        let commands = agent.map_or(&[][..], |agent| self.desk_commands_of(agent));
+        if self
+            .snapshot
+            .desk_commands
+            .as_deref()
+            .is_some_and(|shown| shown.agent == agent && shown.commands == commands)
+        {
+            return;
+        }
+        self.snapshot.desk_commands = Some(Arc::new(crate::model::DeskCommandsSnapshot {
+            agent,
+            commands: commands.to_vec(),
+        }));
     }
 
     fn compose_desk_live(&mut self) {
@@ -3818,5 +3919,170 @@ mod tests {
             );
         }
         assert_eq!(lane(&runtime), crate::model::DeskLane::default());
+    }
+
+    fn listed(runtime: &mut Runtime, adapter: AdapterId, names: &[&str]) {
+        let update = json!({"sessionUpdate": "available_commands_update", "availableCommands":
+            names.iter().map(|name| json!({"name": name, "description": format!("{name} it")})).collect::<Vec<_>>()});
+        runtime.desk_report(Report::Commands {
+            adapter,
+            commands: hide_desk::commands::read(adapter, &update),
+        });
+    }
+
+    fn slash(runtime: &Runtime) -> (Option<AdapterId>, Vec<String>) {
+        let section = runtime
+            .snapshot
+            .desk_commands
+            .as_ref()
+            .expect("desk_commands");
+        (
+            section.agent,
+            section
+                .commands
+                .iter()
+                .map(|command| command.name.clone())
+                .collect(),
+        )
+    }
+
+    /// The `/` menu is the selected agent's last list, with what its
+    /// definition leaves out gone, and it stays for the next conversation,
+    /// whose session has not opened yet.
+    #[test]
+    fn the_slash_section_is_the_selected_agent_s_last_list_and_outlives_its_conversation() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        assert_eq!(slash(&runtime), (Some(AdapterId::CLAUDE), Vec::new()));
+        listed(
+            &mut runtime,
+            AdapterId::CLAUDE,
+            &["compact", "config", "context", "remote-control"],
+        );
+        assert_eq!(
+            slash(&runtime),
+            (
+                Some(AdapterId::CLAUDE),
+                vec!["/compact".to_owned(), "/context".to_owned()]
+            )
+        );
+        // Another agent's list never shows under Claude.
+        listed(&mut runtime, AdapterId::PI, &["session"]);
+        assert_eq!(slash(&runtime).1, ["/compact", "/context"]);
+        event(&mut runtime, "desk_select", json!({"agent": "pi"}));
+        assert_eq!(
+            slash(&runtime),
+            (Some(AdapterId::PI), vec!["/session".to_owned()])
+        );
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        event(&mut runtime, "desk_new_conversation", json!({}));
+        assert_eq!(slash(&runtime).1, ["/compact", "/context"]);
+        // A new list replaces the old one whole.
+        listed(&mut runtime, AdapterId::CLAUDE, &["review"]);
+        assert_eq!(slash(&runtime).1, ["/review"]);
+    }
+
+    /// A message whose first word is a command the agent listed goes as
+    /// written, its files after it; any other message, and a command the
+    /// agent has not listed, is a message.
+    #[test]
+    fn a_listed_command_goes_as_a_command_with_its_files_after_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        let turn = |runtime: &mut Runtime, payload: Value| {
+            event(runtime, "desk_send", payload);
+            let send = sent(&received);
+            runtime.desk_report(Report::TurnEnded {
+                tag: send.tag,
+                outcome: TurnOutcome::Done,
+            });
+            (send.kind, send.text)
+        };
+        use hide_desk::commands::Kind;
+        // No list yet: a `/` word is the operator's words.
+        assert_eq!(
+            turn(&mut runtime, json!({"text": "/compact"})),
+            (Kind::Message, "/compact".to_owned())
+        );
+        listed(&mut runtime, AdapterId::CLAUDE, &["compact"]);
+        assert_eq!(
+            turn(&mut runtime, json!({"text": "/compact keep the plan"})),
+            (Kind::Command, "/compact keep the plan".to_owned())
+        );
+        let file = json!([{"name": "a.png", "bytes": 3, "path": "/d/a.png"}]);
+        assert_eq!(
+            turn(&mut runtime, json!({"text": "/compact", "files": file})),
+            (Kind::Command, "/compact \"/d/a.png\"".to_owned())
+        );
+        assert_eq!(
+            turn(&mut runtime, json!({"text": "look", "files": file})),
+            (Kind::Message, "\"/d/a.png\" look".to_owned())
+        );
+        assert_eq!(
+            turn(&mut runtime, json!({"text": "/compactly"})),
+            (Kind::Message, "/compactly".to_owned())
+        );
+    }
+
+    /// A command the agent's definition leaves out never reaches it, listed
+    /// or not: the message stays in the conversation with a notice.
+    #[test]
+    fn a_left_out_command_is_never_sent_and_the_conversation_says_so() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        assert!(event(&mut runtime, "desk_send", json!({"text": "/logout"})));
+        assert!(
+            received
+                .try_iter()
+                .all(|order| !matches!(order, Order::Send(_)))
+        );
+        // The last two lines: the operator's message and the notice under it.
+        let items = items(&runtime);
+        assert!(
+            matches!(&items[items.len().saturating_sub(2)..], [
+                DeskItem::User { text, .. },
+                DeskItem::Notice { notice: DeskNotice::CommandLeftOut, agent: Some(AdapterId::CODEX), .. },
+            ] if text == "/logout"),
+            "{items:?}"
+        );
+        // The same words to an agent that keeps the command go.
+        event(&mut runtime, "desk_select", json!({"agent": "pi"}));
+        event(&mut runtime, "desk_send", json!({"text": "/logout"}));
+        assert_eq!(sent(&received).text, "/logout");
+    }
+
+    /// OpenCode tells `/compact`'s end only in its session's `_meta`: the
+    /// answer is that one line, not an empty reply.
+    #[test]
+    fn a_compaction_told_outside_the_reply_is_the_answer_s_line() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "opencode"}));
+        event(&mut runtime, "desk_send", json!({"text": "/compact"}));
+        let tag = sent(&received).tag;
+        opened(&mut runtime, AdapterId::OPENCODE);
+        runtime.desk_report(Report::Compacted {
+            tag,
+            compaction: hide_desk::adapter::Compaction::Failed(Some(
+                "Nothing to compact yet".into(),
+            )),
+        });
+        runtime.desk_report(Report::TurnEnded {
+            tag,
+            outcome: TurnOutcome::Done,
+        });
+        let last = items(&runtime).pop();
+        assert!(
+            matches!(&last, Some(DeskItem::Reply { text, compaction: Some(compaction), .. })
+            if text.is_empty()
+                && *compaction == crate::model::DeskCompaction {
+                    done: false,
+                    reason: Some("Nothing to compact yet".into()),
+                }),
+            "{last:?}"
+        );
     }
 }

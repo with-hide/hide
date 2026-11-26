@@ -79,6 +79,9 @@ pub(super) struct Send {
     pub effort: Option<String>,
     /// Where Settings › Labs › Desk puts each task's work (B19).
     pub placement: hide_desk::Placement,
+    /// Whether the message runs one of the agent's commands, which goes
+    /// with nothing before it; the core decides it from the agent's list.
+    pub kind: hide_desk::commands::Kind,
     /// The files `text` names (PRD desk-2-ui B41), each looked for on
     /// `node`, the core's own, before the agent is asked.
     pub files: Vec<String>,
@@ -145,6 +148,17 @@ pub(super) enum Report {
     Choices {
         adapter: AdapterId,
         choices: Choices,
+    },
+    /// The agent's commands, the whole list again.
+    Commands {
+        adapter: AdapterId,
+        commands: hide_desk::commands::Commands,
+    },
+    /// The turn compacted the conversation, or failed to, as its adapter
+    /// told outside the reply; sent just before the turn ends.
+    Compacted {
+        tag: u64,
+        compaction: hide_desk::adapter::Compaction,
     },
     /// The process ended: `unexpected` when nobody asked it to. `turn` is
     /// the turn that ends with it and how, told here and nowhere else, so
@@ -290,9 +304,9 @@ struct Running {
     /// arrived after its prompt went out, so a `session/load`'s replay still
     /// waiting in the channel is no turn's.
     turn: session::TurnReader,
-    /// The work placement this session was last told; none for a session
-    /// resumed from an earlier run.
-    placement: Option<hide_desk::Placement>,
+    /// What this session has been told of Desk's guide and the work
+    /// placement, which decides how each message goes to it.
+    guide: hide_desk::Guide,
     /// The running turn's newest call, by id, and the step last sent for
     /// it as `Report::Step`: an update of an older call never moves it, and
     /// the agent writing forgets it, so the next call is told even when it
@@ -485,12 +499,13 @@ impl Worker {
         {
             self.end_process(false);
         }
-        let mut new_session = false;
         if self.running.is_none() {
             self.report(Report::Starting);
             match self.open(&send) {
-                Ok((running, resume_failed, choices)) => {
-                    new_session = send.resume.is_none() || resume_failed;
+                Ok((mut running, resume_failed, choices)) => {
+                    if send.resume.is_none() || resume_failed {
+                        running.guide = hide_desk::Guide::new_session(send.carried.clone());
+                    }
                     self.report(Report::Opened {
                         adapter: send.adapter,
                         session_id: running.session_id.clone(),
@@ -512,13 +527,7 @@ impl Worker {
         let Some(running) = &mut self.running else {
             return;
         };
-        let text = if new_session {
-            hide_desk::first_message(send.placement, send.carried.as_deref(), &send.text)
-        } else {
-            let changed = (running.placement != Some(send.placement)).then_some(send.placement);
-            hide_desk::next_message(changed, &send.text)
-        };
-        running.placement = Some(send.placement);
+        let text = running.guide.message(send.placement, send.kind, &send.text);
         let from = self.arrivals.next();
         match session::prompt(
             running.host.connection(),
@@ -653,8 +662,12 @@ impl Worker {
                 credential,
                 announced: HashMap::new(),
                 announced_order: Vec::new(),
-                turn: session::TurnReader::new(opened.prelude, adapter.failed_turn_mark()),
-                placement: None,
+                turn: session::TurnReader::new(
+                    opened.prelude,
+                    adapter.failed_turn_mark(),
+                    adapter.compaction_mark(),
+                ),
+                guide: hide_desk::Guide::resumed(),
                 now: None,
             },
             opened.resume_failed,
@@ -742,6 +755,10 @@ impl Worker {
                         }
                     }
                     Update::Choices(choices) => self.report(Report::Choices { adapter, choices }),
+                    Update::Commands(update) => self.report(Report::Commands {
+                        adapter,
+                        commands: hide_desk::commands::read(adapter, &update),
+                    }),
                     Update::Text { .. } | Update::Break | Update::Info(_) | Update::Other => {}
                 }
                 if let Some((tag, text)) = text {
@@ -778,6 +795,9 @@ impl Worker {
                         .map(hide_desk::permission::step)
                         .collect();
                     self.report(Report::Steps { tag, steps });
+                    if let Some(compaction) = answered.compaction {
+                        self.report(Report::Compacted { tag, compaction });
+                    }
                 }
                 let outcome = match result {
                     Ok(answer) => match (session::stop_reason(&answer), failed) {
@@ -1185,7 +1205,8 @@ mod tests {
         };
         let arrivals = session::Arrivals::default();
         let host = Host::start(&launch, arrivals.sink(|_, _| {})).unwrap();
-        let mut turn = session::TurnReader::new(None, adapter.failed_turn_mark());
+        let mut turn =
+            session::TurnReader::new(None, adapter.failed_turn_mark(), adapter.compaction_mark());
         turn.start(tag, arrivals.next());
         let (orders, _) = mpsc::channel();
         Worker {
@@ -1210,7 +1231,7 @@ mod tests {
                 announced: HashMap::new(),
                 announced_order: Vec::new(),
                 turn,
-                placement: None,
+                guide: hide_desk::Guide::resumed(),
                 now: None,
             }),
             installing: Vec::new(),
