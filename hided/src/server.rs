@@ -29,7 +29,7 @@ use crate::terminal_hub::Resume;
 use crate::watch::WatchService;
 use base64::Engine as _;
 use hide_node::opener::OpenHandler;
-use hide_node_link::terminal::{GridSize, KeyTarget, MAX_PANE_ID_BYTES, TerminalNode};
+use hide_node_link::terminal::{GridSize, KeyTarget, MAX_PANE_ID_BYTES, ScreenInput, TerminalNode};
 
 const FALLBACK_INDEX: &str = include_str!("../fallback-ui/index.html");
 
@@ -1550,10 +1550,8 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         // hide-plan-delegate B5, B6).
         code if code.starts_with("plan_") => hide_core::plans::next_action(code),
         // A spawn under a mission node that may not start yet (PRD
-        // node-presets D-06), or of an item none of the mission's candidates
-        // admits, is refused as the mission words it for a plan too.
-        code
-        @ ("mission_node_held" | "mission_gate_before_start" | "mission_candidate_refused") => {
+        // node-presets D-06) is refused as the mission words it for a plan too.
+        code @ ("mission_node_held" | "mission_gate_before_start") => {
             hide_core::missions::next_action(code)
         }
         "agent_pane_required" => {
@@ -2973,11 +2971,11 @@ fn handle_client_text(
         // only what the node reports of them (PRD core-host-node-terminal
         // D-05).
         Some("key") => {
-            let (target, bytes) = terminal_key(&event)?;
+            let (target, input) = terminal_key(&event)?;
             if let KeyTarget::Pane(pane) = &target {
                 screen_input(state, connection, pane);
             }
-            state.core.terminals.key(target, bytes, unix_ms_now());
+            state.core.terminals.type_into(target, input, unix_ms_now());
             return Ok(ClientAction::Replies(Vec::new()));
         }
         Some("terminal_mouse") => {
@@ -4244,10 +4242,6 @@ fn handle_attachment_commit(state: &AppState, event: &Value) -> Vec<Message> {
                 .into(),
         )];
     }
-    let bracketed = event
-        .pointer("/payload/bracketed_paste")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
     let clipboard = event
         .pointer("/payload/clipboard")
         .and_then(Value::as_bool)
@@ -4294,7 +4288,6 @@ fn handle_attachment_commit(state: &AppState, event: &Value) -> Vec<Message> {
         "payload": {
             "request_id": request_id,
             "pane_id": pane_id,
-            "bracketed_paste": bracketed,
             "clipboard": clipboard,
             "paths": paths,
         },
@@ -5364,7 +5357,11 @@ pub(crate) fn device_root_known(
 
 /// A `key` event's target, a pane or a creation request (exactly one), and
 /// its bytes.
-pub(crate) fn terminal_key(event: &Value) -> Result<(KeyTarget, Vec<u8>), String> {
+/// A `key` event: the pane or creation it is typed into, and what was typed.
+/// `paste: true` marks text the screen pasted, its line breaks carriage
+/// returns, which the pane's holder wraps for the program's paste mode
+/// (with-hide/hide issue 2952); a daemon before it reads the same event as keys.
+pub(crate) fn terminal_key(event: &Value) -> Result<(KeyTarget, ScreenInput), String> {
     let field = |name: &str| {
         event
             .pointer(&format!("/payload/{name}"))
@@ -5387,7 +5384,20 @@ pub(crate) fn terminal_key(event: &Value) -> Result<(KeyTarget, Vec<u8>), String
                 .decode(data)
                 .map_err(|error| format!("key.bytes_base64: {error}"))
         })?;
-    Ok((target, bytes))
+    let paste = match event.pointer("/payload/paste") {
+        None => false,
+        Some(paste) => paste
+            .as_bool()
+            .ok_or_else(|| "key.paste must be a boolean".to_owned())?,
+    };
+    Ok((
+        target,
+        if paste {
+            ScreenInput::Paste(bytes)
+        } else {
+            ScreenInput::Keys(bytes)
+        },
+    ))
 }
 
 /// A `terminal_viewport` event: the pane, the grid its view draws at, and
@@ -6656,6 +6666,35 @@ mod tests {
         assert!(view(&too_long).is_err());
     }
 
+    /// with-hide/hide issue 2952: a screen marks the text it pasted, which goes on
+    /// as a paste for the pane's holder to wrap; an unmarked key, or one a
+    /// page built before the mark sends, is keys, and a mark that is no
+    /// boolean is refused rather than guessed.
+    #[test]
+    fn a_key_marked_paste_is_a_paste_and_an_unmarked_one_is_keys() {
+        let read = |payload: Value| terminal_key(&json!({"type": "key", "payload": payload}));
+        assert_eq!(
+            read(json!({"pane_id": "w1:p1", "bytes_base64": "YQ1i", "paste": true})),
+            Ok((
+                KeyTarget::Pane("w1:p1".into()),
+                ScreenInput::Paste(b"a\rb".to_vec())
+            ))
+        );
+        for payload in [
+            json!({"pane_id": "w1:p1", "bytes_base64": "YQ1i"}),
+            json!({"pane_id": "w1:p1", "bytes_base64": "YQ1i", "paste": false}),
+        ] {
+            assert_eq!(
+                read(payload),
+                Ok((
+                    KeyTarget::Pane("w1:p1".into()),
+                    ScreenInput::Keys(b"a\rb".to_vec())
+                ))
+            );
+        }
+        assert!(read(json!({"pane_id": "w1:p1", "bytes_base64": "YQ1i", "paste": "yes"})).is_err());
+    }
+
     /// A spawn or a pane send that stopped partway answers its code and its
     /// own next step, with what it left (the spawn and pane, or what landed)
     /// as a field the caller reads, not a sentence.
@@ -6688,16 +6727,10 @@ mod tests {
     }
 
     /// A spawn under a mission node held or behind its start gate says what
-    /// the mission owes, not to retry the same spawn (PRD node-presets D-06),
-    /// and a spawn none of the mission's candidates admits is told what a
-    /// plan naming that item is told.
+    /// the mission owes, not to retry the same spawn (PRD node-presets D-06).
     #[test]
     fn a_spawn_the_mission_refuses_says_what_the_mission_owes() {
-        for code in [
-            "mission_node_held",
-            "mission_gate_before_start",
-            "mission_candidate_refused",
-        ] {
+        for code in ["mission_node_held", "mission_gate_before_start"] {
             let next = delivery_next_action(&format!("{code}\u{1f}ship"));
             assert_eq!(next, hide_core::missions::next_action(code));
             assert!(!next.contains("retry the same intent"), "{next}");
@@ -6803,10 +6836,6 @@ mod tests {
             ("plan_node_finished\u{1f}web", "already done or dropped"),
             ("plan_node_unknown\u{1f}nope", "hide task show"),
             ("plan_delegate_full\u{1f}3", "do this step yourself"),
-            (
-                "plan_candidate_refused\u{1f}Codex · team",
-                "worker candidates",
-            ),
         ] {
             let (code, detail) = hide_core::coordination::split_refusal(reason);
             let detail = detail.unwrap();

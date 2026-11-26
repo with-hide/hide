@@ -4,6 +4,7 @@ import type { ComponentProps } from "react";
 import { cn } from "../../lib/utils";
 import { useLayerOpen } from "./layer";
 import { menuContent, menuItem, menuLabel, menuSeparator, menuShortcut } from "./menu-styles";
+import { useFloatingSurface } from "./floating-surface";
 
 /** Radix's menu root, with its open state joined to the shell's Escape layers. */
 function DropdownMenu({ open, defaultOpen, onOpenChange, ...props }: ComponentProps<typeof DropdownMenuPrimitive.Root>) {
@@ -18,7 +19,7 @@ function DropdownMenuTrigger(props: ComponentProps<typeof DropdownMenuPrimitive.
 function DropdownMenuContent({ className, sideOffset = 4, ...props }: ComponentProps<typeof DropdownMenuPrimitive.Content>) {
   return (
     <DropdownMenuPrimitive.Portal>
-      <DropdownMenuPrimitive.Content data-slot="dropdown-menu-content" sideOffset={sideOffset} className={cn(menuContent, className)} {...props} />
+      <DropdownMenuPrimitive.Content data-slot="dropdown-menu-content" sideOffset={sideOffset} className={cn(menuContent, useFloatingSurface(), className)} {...props} />
     </DropdownMenuPrimitive.Portal>
   );
 }
@@ -53,12 +54,13 @@ function DropdownMenuRadioGroup(props: ComponentProps<typeof DropdownMenuPrimiti
   return <DropdownMenuPrimitive.RadioGroup data-slot="dropdown-menu-radio-group" {...props} />;
 }
 
-function DropdownMenuRadioItem({ className, children, ...props }: ComponentProps<typeof DropdownMenuPrimitive.RadioItem>) {
+/** A choice among a few: a dot marks the chosen row, or, with `mark="check"`, a green ✓ and a lit row for a short list read at a glance. */
+function DropdownMenuRadioItem({ className, children, mark = "dot", ...props }: ComponentProps<typeof DropdownMenuPrimitive.RadioItem> & { mark?: "dot" | "check" }) {
   return (
-    <DropdownMenuPrimitive.RadioItem data-slot="dropdown-menu-radio-item" className={cn(menuItem, "pl-xl", className)} {...props}>
+    <DropdownMenuPrimitive.RadioItem data-slot="dropdown-menu-radio-item" className={cn(menuItem, "pl-xl", mark === "check" && "data-[state=checked]:bg-accent", className)} {...props}>
       <span className="pointer-events-none absolute left-sm flex size-(--size-icon) items-center justify-center">
         <DropdownMenuPrimitive.ItemIndicator>
-          <CircleIcon className="size-(--size-icon-sm) fill-current" />
+          {mark === "check" ? <CheckIcon className="size-(--size-icon-sm) text-success" /> : <CircleIcon className="size-(--size-icon-sm) fill-current" />}
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
       {children}
@@ -92,7 +94,7 @@ function DropdownMenuSubTrigger({ className, inset, children, ...props }: Compon
 }
 
 function DropdownMenuSubContent({ className, ...props }: ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
-  return <DropdownMenuPrimitive.SubContent data-slot="dropdown-menu-sub-content" className={cn(menuContent, className)} {...props} />;
+  return <DropdownMenuPrimitive.SubContent data-slot="dropdown-menu-sub-content" className={cn(menuContent, useFloatingSurface(), className)} {...props} />;
 }
 
 export {

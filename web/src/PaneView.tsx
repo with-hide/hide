@@ -40,7 +40,7 @@ import type { AgentSleep, AgentStatusCode, PaneRow, RowMark, TerminalPane } from
 import { PaneNoticeBody } from "./PaneNotice";
 import { caughtUp } from "./operatorFocus";
 import { useShellStore } from "./store";
-import { attachTerminal, bracketedPaste, focusTerminal, pasteExplorerCopy, pasteExplorerFile, requestView, setTextScale, terminalLinkAt, terminalSelectionText, typeReference } from "./terminals";
+import { attachTerminal, focusTerminal, pasteExplorerCopy, pasteExplorerFile, pasteText, requestView, setTextScale, terminalLinkAt, terminalSelectionText, typeReference } from "./terminals";
 
 /**
  * Transport states with a live stream; anything else is drawn as a caption in
@@ -260,7 +260,7 @@ export const PaneView = memo(function PaneView({
     const files = Array.from(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
-    void submitFiles(paneId, files, false, bracketedPaste(paneId));
+    void submitFiles(paneId, files, false);
   };
 
   const acceptsAgentDrag = () => {
@@ -338,25 +338,23 @@ export const PaneView = memo(function PaneView({
     focusTerminal(paneId);
   }, [paneId, focused, snapshotIncludesLastClick, keysStayOnDesk, entryInput, entryKeys]);
 
-  // ⌘V of an image is the shell's; text paste stays xterm's own. The listener
-  // runs in the capture phase, before xterm's textarea sees the event.
+  // Every paste into the pane is the shell's, before xterm's textarea sees it
+  // (the listener runs in the capture phase): an image as an attachment, and
+  // text as a paste the pane's holder wraps for the program (`pasteText`),
+  // since xterm never learns the program's paste mode.
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return undefined;
     const onPaste = (event: ClipboardEvent) => {
       const text = event.clipboardData?.getData("text/plain") ?? "";
-      if (text && pasteExplorerCopy(paneId, text)) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
       const items = Array.from(event.clipboardData?.items ?? []).filter((item) => item.type.startsWith("image/"));
-      if (items.length === 0) return;
       const files = items.map((item) => item.getAsFile()).filter((file): file is File => file !== null);
-      if (files.length === 0) return;
+      if (!text && files.length === 0) return;
       event.preventDefault();
       event.stopPropagation();
-      void submitFiles(paneId, files, true, bracketedPaste(paneId));
+      if (text && pasteExplorerCopy(paneId, text)) return;
+      if (files.length > 0) void submitFiles(paneId, files, true);
+      else pasteText(paneId, text);
     };
     host.addEventListener("paste", onPaste, true);
     return () => host.removeEventListener("paste", onPaste, true);
@@ -486,7 +484,7 @@ export const PaneView = memo(function PaneView({
         </div>
         {/* The zoom shows only on the pane that holds the keyboard or is pointed at, so it leads the right side: the controls
             always drawn stay at its end, and the place it keeps while hidden reads as the title's own margin (B20). */}
-        {!zoomed && paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-popover ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
+        {!zoomed && paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-accent ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
         <PaneDeskReturn paneId={paneId} actions={actions} />
         {agentKind ? <PaneHeadChildren paneId={paneId} actions={actions} /> : null}
         <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
@@ -495,7 +493,7 @@ export const PaneView = memo(function PaneView({
             <Button
               variant="ghost"
               size="sm"
-              className="shrink-0 gap-xxs px-xs text-caption text-foreground hover:bg-popover"
+              className="shrink-0 gap-xxs px-xs text-caption text-foreground hover:bg-accent"
               aria-label={hidden > 0 ? t("panes.unzoomHidden", { count: hidden }) : t("panes.unzoom")}
               disabled={moving}
               data-pane-zoom={hidden}
@@ -518,7 +516,7 @@ export const PaneView = memo(function PaneView({
           <Button
             variant="ghost"
             size="icon-sm"
-            className="shrink-0 text-subtle-foreground hover:bg-popover hover:text-foreground"
+            className="shrink-0 text-subtle-foreground hover:bg-accent hover:text-foreground"
             aria-haspopup="menu"
             data-pane-menu={paneId}
             onClick={(event) => {
@@ -537,7 +535,7 @@ export const PaneView = memo(function PaneView({
         </Hint>
         } />
         <Hint label={t("panes.close", { name: title })}>
-          <Button variant="ghost" size="icon-sm" className="shrink-0 text-subtle-foreground hover:bg-popover hover:text-foreground" disabled={moving} onClick={() => actions.closePane(paneId)}>
+          <Button variant="ghost" size="icon-sm" className="shrink-0 text-subtle-foreground hover:bg-accent hover:text-foreground" disabled={moving} onClick={() => actions.closePane(paneId)}>
             <XIcon />
           </Button>
         </Hint>
@@ -614,7 +612,7 @@ function PaneSplit({ paneId, name, actions }: { paneId: string; name: string; ac
           <Button
             variant="ghost"
             size="icon-sm"
-            className={`shrink-0 ${pressed ? "bg-pair-view text-primary-foreground hover:bg-pair-view hover:text-primary-foreground" : "text-subtle-foreground hover:bg-popover"} pane-head-narrow:hidden`}
+            className={`shrink-0 ${pressed ? "bg-pair-view text-primary-foreground hover:bg-pair-view hover:text-primary-foreground" : "text-subtle-foreground hover:bg-accent"} pane-head-narrow:hidden`}
             aria-label={label}
             aria-pressed={pressed}
             data-pane-pair={offer}

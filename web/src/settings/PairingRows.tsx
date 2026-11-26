@@ -222,6 +222,10 @@ export function PeerRow({ peer, request, actions, own, onRemove, onDetails, onRe
   const open = useUiStore((s) => switched && s.devicesOpen.includes(device));
   const server = own && switched;
   const switching = useDeviceSwitch(device, actions, server && (open || !peer.connected), open);
+  // A switched distribution of this PC is reached inside the one machine
+  // (`path: local`), which sleeps with this computer; the snapshot names no
+  // distro for a paired machine, so one that is not connected reads as SSH.
+  const direct = peer.path === "local" ? "wsl" : "ssh";
   const signedOut = !peer.connected && switching.look?.state === "read" && switching.look.condition.kind === "signed_out";
   const act = (verb: "pause" | "resume" | "retry", direction?: Direction) => actions.pairing(verb, direction ? { device: named, direction } : { device: named });
   const ask = () => {
@@ -241,7 +245,7 @@ export function PeerRow({ peer, request, actions, own, onRemove, onDetails, onRe
                 open,
                 onToggle: () => useUiStore.getState().toggleDeviceOpen(device),
                 label: t(open ? "devices.ways.close" : "devices.ways.open", { name: peer.name }),
-                body: <DeviceWays state={{ deviceId: device, name: peer.name, way: "server", windows: false, connected: peer.connected, look: switching.look, step, pressed: false, onRead: switching.read, onSwitch: switching.press }} actions={actions} />,
+                body: <DeviceWays state={{ deviceId: device, name: peer.name, way: "server", direct, windows: false, connected: peer.connected, look: switching.look, step, pressed: false, onRead: switching.read, onSwitch: switching.press }} actions={actions} />,
               }
       }
       label={

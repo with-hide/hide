@@ -5,8 +5,8 @@
 // time the room is entered (B26); the core keeps only the two panels' widths
 // (`desk.lane`, B23).
 
-import type { DeskOutput } from "./snapshot";
-import { absolutePathRoot } from "./terminalLinks";
+import type { DeskItem, DeskJob, DeskOutput } from "./snapshot";
+import { absolutePathRoot, underFolder } from "./terminalLinks";
 
 /**
  * A tab of the tab panel (B18, B19): an output the session opened (a page,
@@ -72,6 +72,51 @@ export function openSession(room: DeskRoomWindow, pane: string, options: { answe
   const answer = options.answer ? room.answer + 1 : room.answer;
   if (room.session === pane) return { ...room, answer };
   return { ...room, session: pane, panel: null, answer };
+}
+
+/**
+ * Where the room follows the sessions Desk's turns start (feedback 2, frame
+ * J): the conversation it follows, the newest line it held when the room was
+ * entered (nothing before it opens by itself, B26), and the turn whose first
+ * new session was already settled, opened or left as a chip.
+ */
+export type NewSessionFollow = { generation: number; after: number; settled: number | null };
+
+/** The follow a room starts with: every line already there is old. */
+export function followFrom(generation: number, items: readonly DeskItem[]): NewSessionFollow {
+  return { generation, after: items.at(-1)?.id ?? -1, settled: null };
+}
+
+/** Job states with no pane to open now: the turn's first session is the next job, unless this one starts again. */
+const NO_PANE_COMING: ReadonlySet<DeskJob["state"]> = new Set<DeskJob["state"]>(["failed", "cancelled", "closed", "moved_out", "archived"]);
+
+/**
+ * The open-beside rule of a session a Desk turn starts (frame J, 가-2, 나-1,
+ * 다). A session Desk started is its turn's `job` line, the core's record of
+ * the start, never a name read from the answer; a letter handed to a session
+ * that already runs is a `handed` line and opens nothing. The turn's first
+ * new session, once its pane exists, opens beside Desk when the right side
+ * is empty, no session and no tab panel shown; when something shows it stays
+ * and the session is only its chip. Either way the turn is settled, so its
+ * other sessions, and the first one again after a close, stay chips.
+ */
+export function newSessionBeside(follow: NewSessionFollow, generation: number, items: readonly DeskItem[], cards: Readonly<Record<string, DeskJob>>, room: DeskRoomWindow): { follow: NewSessionFollow; open: string | null } {
+  // A new conversation starts empty: every line in it is new.
+  const now = follow.generation === generation ? follow : { generation, after: -1, settled: null };
+  const turn = items.reduce((last, item) => (item.kind === "user" ? item.id : last), -1);
+  if (now.settled === turn) return { follow: now, open: null };
+  for (const item of items) {
+    if (item.kind !== "job" || item.id <= now.after || item.id <= turn) continue;
+    const card = cards[item.job_id];
+    // A job the core has not listed yet, or one still waiting for its pane, holds the turn's first place.
+    if (!card) return { follow: now, open: null };
+    // A start that failed is no session: the next one is the turn's first, and a start retried under the same job is looked at again.
+    if (NO_PANE_COMING.has(card.state)) continue;
+    if (!card.pane_id) return { follow: now, open: null };
+    const empty = room.session === null && room.panel === null;
+    return { follow: { ...now, settled: turn }, open: empty ? card.pane_id : null };
+  }
+  return { follow: now, open: null };
 }
 
 /** The session panel's `✕`, Escape or ⌘E (B6): Desk widens again and the tab panel, which was that session's, goes with it; the session is kept for ⌘E to open again. */
@@ -252,15 +297,20 @@ export function namesView(made: DeskOutput, written: string): boolean {
 
 /**
  * The output a session's own line names, as its card lists it when it does: the View's id, or its address or file.
- * A line the card does not list names a file as the session typed it, read where the session runs (B27), so it
- * carries that session's device and checkout when they are another machine's; read without them it would go to
- * this machine's boundary, which refuses a path of another machine's checkout.
+ * A line the card does not list names a file as the session typed it, read where the session runs (B27): a relative
+ * spelling under the session's own folder (`folder`, its pane's folder), and with that session's device and checkout
+ * when they are another machine's; read without them it would go to this machine's boundary, which refuses a path of
+ * another machine's checkout.
  */
-export function outputNamed(listed: readonly DeskOutput[], output: DeskOutput, place: { device: string; checkout: string } | null, node: string): DeskOutput {
+export function outputNamed(listed: readonly DeskOutput[], output: DeskOutput, place: { device: string; checkout: string; folder: string } | null, node: string): DeskOutput {
   const made = listed.find((one) => one.id === output.id || (output.url !== null && one.url === output.url) || (output.path !== null && namesView(one, output.path)));
   if (made) return made;
-  return place && output.path !== null && output.device_id === null && place.device !== node ? { ...output, device_id: place.device, checkout: place.checkout } : output;
+  if (!place || output.path === null || output.device_id !== null) return output;
+  const path = absolutePathRoot(place.folder) ? underFolder(place.folder, output.path) : output.path;
+  if (place.device !== node) return { ...output, path, device_id: place.device, checkout: place.checkout };
+  return path === output.path ? output : { ...output, path };
 }
+
 
 /**
  * The panels' first widths before the operator drags one, and their floors

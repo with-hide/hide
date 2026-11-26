@@ -60,6 +60,13 @@ pub struct DeviceSwitchSource {
     /// The helper root the operator allowed on the device, as the consent
     /// spells it.
     pub helper_root: String,
+    /// The program the device's node was started from on its connection,
+    /// as that connection put it there: this core's build, whose `hide`
+    /// every step of the switch runs, because the `hide` the account links
+    /// follows a build only once that build's kit has run there
+    /// (with-hide/hide#3007). None while the device has not connected
+    /// since this core started.
+    pub node_program: Option<String>,
     /// The folders registered as projects on the device, as the device
     /// spells them, which its machine's own Hide lists from then on (PRD
     /// device-connect-iroh D-48); at most [`SWITCHED_PROJECTS`].
@@ -181,6 +188,7 @@ impl Runtime {
                 .as_ref()
                 .map(|consent| consent.helper_root.clone())
                 .unwrap_or_else(|| self.host_helper_root()),
+            node_program: self.device_node_program(device_id),
             projects: self
                 .snapshot
                 .ui_state
@@ -207,6 +215,15 @@ impl Runtime {
             .get(device_id)
             .filter(|_| connected)
             .map(|session| super::remote_live_pane_ids(session).len())
+    }
+
+    /// The program `device_id`'s node was started from on its latest
+    /// connection ([`DeviceSwitchSource::node_program`]).
+    fn device_node_program(&self, device_id: &str) -> Option<String> {
+        match &self.device_hosts.get(device_id)?.phase {
+            super::hosts::HostPhase::Ready { helper_path, .. } => helper_path.clone(),
+            _ => None,
+        }
     }
 
     /// Where the switch of `device_id` to the machine under `key` stands,

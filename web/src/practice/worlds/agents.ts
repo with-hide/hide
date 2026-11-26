@@ -14,7 +14,7 @@ import type { ProjectTasksScope } from "../../agentScope";
 import type { AgentRow, ChangesSnapshot, LayoutNode, PaneHeader, RecentClosed } from "../../snapshot";
 import type { DirectoryList } from "../../store";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
-import { agent, applyDesk, deskSnapshot, focusedPane, keyText, panesOf, rowRequest, rowState, shellScreen, typed, viewedFileFrames, withViewedFile, type DeskModel, type PracticePane, type PracticePlace, type PracticeTab, type ViewedFile } from "./kit";
+import { agent, applyDesk, deskSnapshot, focusedPane, panesOf, rowRequest, rowState, shellScreen, typed, typedText, viewedFileFrames, withViewedFile, type DeskModel, type PracticePane, type PracticePlace, type PracticeTab, type ViewedFile } from "./kit";
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 const ROOT = `/work/${PLACE.project}`;
@@ -59,7 +59,7 @@ export type AgentsModel = DeskModel & {
   /** What the learner said to the lead, and the answer they gave the reviewer. */
   said: string[];
   answer: string | null;
-  /** The agent panes, the one the keyboard was in last first, as the core keeps `recent_pane_ids`. */
+  /** The agent panes, the one the keyboard was in last first, as the core keeps them in `recent_places`. */
   recent: string[];
   closed: ClosedPane[];
   /** The pane the last reopen brought back with what it was. */
@@ -242,7 +242,7 @@ function apply(model: AgentsModel, event: CoreEvent): AgentsModel | null {
       const role = pane && roleOf(pane);
       if (typeof p.bytes_base64 !== "string" || (role !== "lead" && role !== "rev")) return null;
       const base = model.draftIn === id ? model : { ...model, draft: "", draftIn: id };
-      return typed(base, keyText(p.bytes_base64), (one) => submit(one, id));
+      return typed(base, typedText({ bytes_base64: p.bytes_base64, paste: p.paste }), (one) => submit(one, id));
     }
     case "focus_pane": {
       const id = String(p.pane_id);
@@ -470,7 +470,7 @@ function snapshot(model: AgentsModel, nowMs: number): WorldSnapshot {
     rest: {
       ...drawn.rest,
       navigator: { ...navigator, devices: navigator.devices!.map((device) => ({ ...device, agent_scope: scope })), changes_root_path: ROOT },
-      ui_state: { ...drawn.rest.ui_state, sidebar_lens: "tasks", recent_pane_ids: model.recent, expanded_paths: model.expanded },
+      ui_state: { ...drawn.rest.ui_state, sidebar_lens: "tasks", recent_places: model.recent.map((pane_id) => ({ kind: "pane" as const, pane_id })), expanded_paths: model.expanded },
       workspace_view: viewOf(model, drawn.rest.workspace_view!),
       recent_closed: recentClosed(model),
       terminal: { headers },

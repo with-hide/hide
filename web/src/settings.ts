@@ -17,7 +17,7 @@ import { redact } from "./redact";
 
 type Translate = TFunction<"translation">;
 
-export type SettingsTab = "general" | "notifications" | "usage" | "devices" | "shortcuts" | "agents" | "skills" | "hideAi" | "conductor" | "externalTools" | "github" | "labs" | "about" | "privacy";
+export type SettingsTab = "general" | "notifications" | "usage" | "devices" | "shortcuts" | "agents" | "delegation" | "skills" | "hideAi" | "conductor" | "externalTools" | "github" | "labs" | "about" | "privacy";
 
 /**
  * The Settings list, top to bottom (PRD settings-left-nav B2): the App group,
@@ -26,7 +26,7 @@ export type SettingsTab = "general" | "notifications" | "usage" | "devices" | "s
  */
 export const SETTINGS_GROUPS: readonly { id: "app" | "machine"; tabs: readonly SettingsTab[] }[] = [
   { id: "app", tabs: ["general", "notifications", "usage", "devices", "shortcuts"] },
-  { id: "machine", tabs: ["agents", "skills", "hideAi", "conductor", "externalTools", "github", "labs"] },
+  { id: "machine", tabs: ["agents", "delegation", "skills", "hideAi", "conductor", "externalTools", "github", "labs"] },
 ];
 
 /**

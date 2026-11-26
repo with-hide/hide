@@ -53,8 +53,8 @@ use hide_node_link::device::SignInReply;
 
 use crate::screen_sign_in::{NotOwner, Shown};
 use hide_node_link::terminal::{
-    KeyTarget, MAX_PANE_ID_BYTES, TerminalDown, TerminalLine, TerminalNode, TerminalUp,
-    decode_base64, encode_base64,
+    KeyTarget, MAX_PANE_ID_BYTES, ScreenInput, TerminalDown, TerminalLine, TerminalNode,
+    TerminalUp, decode_base64, encode_base64,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};

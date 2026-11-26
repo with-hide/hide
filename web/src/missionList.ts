@@ -32,17 +32,21 @@ export function deviceMissions<M extends Pick<Mission, "device_id" | "tool">>(mi
 /** A project chip (B3): the catalog project a mission belongs to, by its id, and the name it shows. */
 export type MissionProject = { id: string; label: string };
 
+/** The name a mission's project shows: the catalog's, else its path's last folder for a project the catalog does not hold. */
+export function missionProjectLabel(mission: Pick<Mission, "workspace_id" | "project">, catalog: readonly Pick<Workspace, "id" | "label">[]): string {
+  return catalog.find((row) => row.id === mission.workspace_id)?.label ?? mission.project.split(/[\\/]/).filter(Boolean).at(-1) ?? mission.project;
+}
+
 /**
  * The chips over the table (B3): each project one of `missions` belongs to,
- * once, by name. A mission whose project the catalog does not hold is named
- * by its path's last folder, so its chip still narrows to it.
+ * once, by name (`missionProjectLabel`), so a project the catalog does not
+ * hold still has a chip that narrows to it.
  */
 export function missionProjects(missions: readonly Pick<Mission, "workspace_id" | "project">[], catalog: readonly Pick<Workspace, "id" | "label">[]): MissionProject[] {
   const seen = new Map<string, MissionProject>();
   for (const mission of missions) {
     if (seen.has(mission.workspace_id)) continue;
-    const label = catalog.find((row) => row.id === mission.workspace_id)?.label ?? mission.project.split(/[\\/]/).filter(Boolean).at(-1) ?? mission.project;
-    seen.set(mission.workspace_id, { id: mission.workspace_id, label });
+    seen.set(mission.workspace_id, { id: mission.workspace_id, label: missionProjectLabel(mission, catalog) });
   }
   return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label));
 }

@@ -263,6 +263,34 @@ function paneStateWords(mission: Mission): { state: PaneChipState; key: MessageK
 }
 
 /**
+ * The two-line mission chip's second line (Doop N2 가), the one rule Desk's
+ * answers and the session beside Desk read: a planning mission and a
+ * cancelled one say their word with no cells; a running one has its cells and
+ * `k/n`; a merge wait and a finished one keep both and add their word. The
+ * operator's turn, when it waits, says `! 내 차례` in place of the word.
+ */
+export function chipLine(status: Mission["status"], { done, total }: { done: number; total: number }, turn: boolean): { cells: boolean; counts: string | null; word: MessageKey | null } {
+  const word = turn ? "agents.mark.turn" : null;
+  switch (status) {
+    case "planning":
+      return { cells: false, counts: null, word: word ?? "mission.pane.planning" };
+    case "running":
+      return { cells: true, counts: `${done}/${total}`, word };
+    case "merge_wait":
+      return { cells: true, counts: `${done}/${total}`, word: word ?? "mission.pane.mergeWait" };
+    case "done":
+      return { cells: true, counts: `${done}/${total}`, word: "mission.pill.done" };
+    case "cancelled":
+      return { cells: false, counts: null, word: "mission.pane.cancelled" };
+  }
+}
+
+/** The cells of a mission known by its counts alone, as a Desk card carries it: the done ones, then those still ahead. */
+export function cellsFromCounts({ done, total }: { done: number; total: number }): CellTone[] {
+  return Array.from({ length: total }, (_, index) => (index < done ? "done" : "waiting"));
+}
+
+/**
  * A node's state as the head's and the chip's cells colour it (PRD
  * mission-node-simple D-01, D-02, B5): waiting, in progress, stopped (in
  * progress with no one moving it, `nodePace`), done, and a node someone has

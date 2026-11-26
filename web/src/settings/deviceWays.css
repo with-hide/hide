@@ -1,0 +1,131 @@
+/*
+ * The two ways a device is connected, side by side (operator decision
+ * 2026-11-26): each card draws where Hide runs, and one shared beat of eight
+ * seconds shows this computer awake, then asleep. Asleep, the direct way's
+ * missions and automations stop and the server way's keep running; the
+ * picture and the rows under it move together because they share the beat.
+ * The plain rules below are the asleep frame, the moment the two ways differ,
+ * which a reduced-motion setting keeps; the loop runs only under
+ * `no-preference`, and only while the cards are on screen (`data-playing`,
+ * `useOnScreen`). The row is drawn only while it is open, so a folded row
+ * runs nothing. Colours are tokens; sizes, type included, are the drawing's
+ * own coordinates, so the picture scales as one image with the card.
+ */
+
+.dw-frame {
+  fill: none;
+  stroke: var(--muted-foreground);
+}
+.dw-base {
+  fill: var(--muted-foreground);
+}
+.dw-label {
+  fill: var(--muted-foreground);
+}
+.dw-phase {
+  fill: var(--subtle-foreground);
+  font-weight: 600;
+}
+.dw-hide {
+  fill: var(--primary);
+}
+.dw-hide-text {
+  fill: var(--primary-foreground);
+  font-weight: 700;
+}
+.dw-tool {
+  fill: none;
+  stroke: var(--muted-foreground);
+  stroke-dasharray: 2 2;
+}
+.dw-tool-text {
+  fill: var(--muted-foreground);
+}
+.dw-wire {
+  stroke: var(--muted-foreground);
+  stroke-dasharray: 3 3;
+}
+.dw-flow {
+  stroke: var(--foreground);
+  stroke-linecap: round;
+  stroke-dasharray: 0 10;
+}
+.dw-ring {
+  fill: none;
+  stroke: var(--primary);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.dw-zz {
+  fill: var(--muted-foreground);
+  font-weight: 700;
+}
+
+/* The asleep frame: the lid closed, the link gone, the asleep words shown. */
+.dw-lid {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transform: scaleY(0.08);
+  opacity: var(--opacity-dimmed);
+}
+.dw-wire,
+.dw-flow,
+.dw-ring,
+.dw-awake {
+  opacity: 0;
+}
+
+/* A row's two words share one cell; the one of the moment shows. */
+.dw-moment {
+  grid-area: 1 / 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .dw-ways:not([data-playing="true"]) * {
+    animation-play-state: paused !important;
+  }
+  .dw-lid { animation: dw-lid 8s infinite; }
+  .dw-wire { animation: dw-link 8s infinite; }
+  .dw-flow { animation: dw-flow 0.7s linear infinite, dw-link 8s infinite; }
+  .dw-awake { animation: dw-awake 8s infinite; }
+  .dw-asleep { animation: dw-asleep 8s infinite; }
+  .dw-ring { animation: dw-ring 8s infinite; }
+}
+
+@keyframes dw-flow { to { stroke-dashoffset: -10; } }
+
+/* This computer closes its lid at the beat's middle and opens it at its end. */
+@keyframes dw-lid {
+  0%, 42% { transform: scaleY(1); opacity: 1; }
+  48%, 92% { transform: scaleY(0.08); opacity: var(--opacity-dimmed); }
+  98%, 100% { transform: scaleY(1); opacity: 1; }
+}
+
+/* The link between the two machines carries work only while it is awake. */
+@keyframes dw-link {
+  0%, 42% { opacity: 1; }
+  46%, 95% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes dw-awake {
+  0%, 42% { opacity: 1; }
+  47%, 93% { opacity: 0; }
+  98%, 100% { opacity: 1; }
+}
+
+@keyframes dw-asleep {
+  0%, 44% { opacity: 0; }
+  50%, 92% { opacity: 1; }
+  97%, 100% { opacity: 0; }
+}
+
+/* The other machine's Hide shows it is still running while this one sleeps. */
+@keyframes dw-ring {
+  0%, 50% { opacity: 0; transform: scale(1); }
+  58% { opacity: 1; transform: scale(1); }
+  70% { opacity: 0; transform: scale(1.35); }
+  72% { opacity: 0; transform: scale(1); }
+  78% { opacity: 1; transform: scale(1); }
+  90%, 100% { opacity: 0; transform: scale(1.35); }
+}

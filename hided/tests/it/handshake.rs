@@ -1975,7 +1975,6 @@ async fn attachment_stages_over_the_cap_and_unknown_commits_are_refused() {
         json!({
             "request_id": "01234567-0123-0123-0123-0123456789ab",
             "pane_id": "p1",
-            "bracketed_paste": true,
             "clipboard": false,
             "stages": ["never-staged"],
         }),
@@ -1991,7 +1990,6 @@ async fn attachment_stages_over_the_cap_and_unknown_commits_are_refused() {
         json!({
             "request_id": "not-a-uuid",
             "pane_id": "p1",
-            "bracketed_paste": true,
             "clipboard": false,
             "stages": ["never-staged"],
         }),
@@ -2008,7 +2006,6 @@ async fn attachment_stages_over_the_cap_and_unknown_commits_are_refused() {
         json!({
             "request_id": "b2",
             "pane_id": "p1",
-            "bracketed_paste": true,
             "clipboard": true,
             "stages": ["never-staged"],
         }),
@@ -2025,7 +2022,6 @@ async fn attachment_stages_over_the_cap_and_unknown_commits_are_refused() {
         json!({
             "request_id": "01234567-0123-0123-0123-0123456789ab",
             "pane_id": "p1",
-            "bracketed_paste": true,
             "clipboard": true,
             "stages": [],
         }),

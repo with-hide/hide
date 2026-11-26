@@ -23,8 +23,8 @@ import { requestWords, senderName, turnResponse } from "./PaneTurnCard";
 import { boardProjects } from "./navigation";
 import { cardLine, cardOfPane, cardQuestion, everyAgent } from "./overviewTasks";
 import { destinationOf } from "./overviewBacklog";
-import { folderName, resumeBlock, resumeProvider } from "./linkPanel";
-import { useSessionResume } from "./useSessionResume";
+import { folderName, resumeBlock } from "./linkPanel";
+import { resumeFailureText, resumeReason, resumeRequest, useSessionResume } from "./useSessionResume";
 import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
@@ -218,11 +218,10 @@ function RestoreSession({ record, checkout: original, actions }: { record: Recor
   const { resume, start } = useSessionResume();
   const busy = resume.request !== null && !resume.uncertain;
   const off = blocked !== null || !connected;
-  const reason = blocked ? "device" in blocked ? t(blocked.key, { device: blocked.device }) : t(blocked.key) : !connected ? t("devices.rail.notConnected") : null;
+  const reason = resumeReason(blocked, connected, t);
   const restore = () => {
-    const provider = resumeProvider(record.session.agent);
-    if (off || busy || !provider || !checkout) return;
-    start((requestId, confirmOnly) => actions.startAgent({ target: { checkoutPath: checkout.path }, deviceId: record.session.device_id === node ? undefined : record.session.device_id, provider, resumeSessionId: record.session.session_id, resumeSessionPath: record.path ?? undefined, requestId, confirmOnly }));
+    const send = off || busy ? null : resumeRequest(actions.startAgent, { ...record.session, path: record.path }, checkout, node);
+    if (send) start(send);
   };
   return <div className="flex min-w-0 flex-col items-end gap-xs" data-record-restore="true">
     <Button variant="secondary" size="sm" disabled={off || busy} aria-busy={busy || undefined} onClick={restore} data-record-restore-button="true">
@@ -231,7 +230,7 @@ function RestoreSession({ record, checkout: original, actions }: { record: Recor
     {resume.uncertain ? <p role="status" className="text-micro text-muted-foreground [overflow-wrap:anywhere]">{t("links.resumeUnknown")}</p> : null}
     {reason ? <p className="text-micro text-muted-foreground [overflow-wrap:anywhere]" data-record-restore-unavailable="true">{reason}</p> : null}
     {resume.failure !== null ? <div role="alert" className="flex min-w-0 flex-wrap items-center gap-xs text-caption text-warning" data-record-restore-failed="true">
-      <span className="min-w-0 [overflow-wrap:anywhere]">{resume.uncertain ? resume.failure : resume.failure ? t("links.resumeFailed", { reason: resume.failure }) : t("links.resumeFailedPlain")}</span>
+      <span className="min-w-0 [overflow-wrap:anywhere]">{resumeFailureText(resume, t)}</span>
       {!resume.uncertain ? <Button size="sm" variant="ghost" disabled={off || busy} onClick={restore}>{t("common.retry")}</Button> : null}
     </div> : null}
   </div>;
@@ -613,7 +612,7 @@ function RequestRow({ request, locator }: { request: WorkRequest; locator?: Requ
   const letter = request.letter_from;
   // A History hit always shows the words it matched, marked.
   const opens = request.text.trim() !== preview.text || preview.cut || matched;
-  return <li ref={target} tabIndex={matched ? -1 : undefined} className={cn("min-w-0 py-xxs", matched && "rounded-xs bg-accent/40 px-xs outline-none focus:ring-1 focus:ring-ring")} data-record-request={request.offset} data-record-request-match={matched ? "true" : undefined} data-record-letter={letter ?? undefined}>
+  return <li ref={target} tabIndex={matched ? -1 : undefined} className={cn("min-w-0 py-xxs", matched && "rounded-xs bg-accent px-xs outline-none focus:ring-1 focus:ring-ring")} data-record-request={request.offset} data-record-request-match={matched ? "true" : undefined} data-record-letter={letter ?? undefined}>
     <RowButton className={cn("items-baseline gap-sm px-0 py-xxs disabled:opacity-100", !opens && "hover:bg-transparent")} aria-expanded={opens ? raw : undefined} disabled={!opens} onClick={() => setRaw(!raw)}>
       <RequestTime at={request.at_unix_ms} />
       <span className={cn("flex min-w-0 flex-1 items-baseline gap-xs", letter ? "text-muted-foreground" : "text-foreground")}>

@@ -81,7 +81,13 @@ fn with_the_switch_off_the_catalog_and_spawn_keep_the_seven_agents_and_nothing_i
     top.sort_unstable();
     assert_eq!(
         top,
-        ["installed_known", "items", "machine", "models_read_pending"]
+        [
+            "candidates",
+            "installed_known",
+            "items",
+            "machine",
+            "models_read_pending"
+        ]
     );
     // A spawn starts the same kinds; a definition-only agent is not one.
     for id in SEVEN {

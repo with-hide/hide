@@ -13,7 +13,6 @@ import { AgentRow, NotInstalledRow } from "./AgentRow";
 import { AgentFilesGroup } from "./AgentFilesGroup";
 import { useMachineProfiles } from "./AgentProfiles";
 import { IdleAgentsGroup } from "./IdleAgentsGroup";
-import { HideSkillsGroup } from "./HideSkillsGroup";
 import { StartingWorkGroup } from "./StartingWorkGroup";
 import { useAgentsDemand } from "./useAgentsDemand";
 import { coreErrorText } from "../coreError";
@@ -56,7 +55,6 @@ export function AgentsTab({ actions }: { actions: Actions }) {
         </ToggleGroup>
       ) : null}
       {machine ? <MachineAgents key={machine.device.id} machine={machine} actions={actions} /> : <Note>{t("agents.reading")}</Note>}
-      <HideSkillsGroup />
       <IdleAgentsGroup actions={actions} />
       <StartingWorkGroup actions={actions} />
     </>

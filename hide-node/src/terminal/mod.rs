@@ -4,7 +4,7 @@
 //! The core decides which panes attach and says so with
 //! [`TerminalControl`]; this service attaches, holds, writes and reads, and
 //! tells the core what changed with [`TerminalReport`]. A key from the screen
-//! reaches a pane's writer through [`TerminalNode::key`] and a frame reaches
+//! reaches a pane's writer through [`TerminalNode::type_into`] and a frame reaches
 //! the screen through the [`OutputSink`], neither passing the core.
 //!
 //! The rules are the ones the core ran before this layer (D-12): an attach
@@ -41,7 +41,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hide_node_link::terminal::{
     AttachmentInputOutcome, GridSize, KeyTarget, MAX_ATTACHED_PANES, MAX_ATTACHMENT_INPUT_BYTES,
-    MAX_FRAME_WATCHES, PaneTerminalState, TerminalControl, TerminalNode, TerminalReport,
+    MAX_FRAME_WATCHES, PaneTerminalState, ScreenInput, TerminalControl, TerminalNode,
+    TerminalReport,
 };
 use serde_json::json;
 
@@ -569,6 +570,22 @@ impl Service {
             .run(|inner, _| inner.route_input(target, chunk, now));
     }
 
+    /// What a screen typed or pasted: the operator's input, taken and held
+    /// the same way whichever it is.
+    fn operator_input(&self, target: KeyTarget, input: Typed, typed_at_unix_ms: u64) {
+        self.route_input(
+            target,
+            HeldChunk {
+                command: None,
+                permit: None,
+                typed_at: Instant::now(),
+                typed_at_unix_ms,
+                input,
+                by: Typist::Operator,
+            },
+        );
+    }
+
     /// Types `input` into `pane` as the core's own engine, behind every key
     /// typed there before it. It is not the operator's typing: no input fact
     /// is reported for it, and a letter's hold does not take it. A pane no
@@ -928,17 +945,12 @@ impl TerminalNode for Service {
             .run(|inner, shared| inner.control(shared, control));
     }
 
-    fn key(&self, target: KeyTarget, bytes: Vec<u8>, typed_at_unix_ms: u64) {
-        let now = Instant::now();
-        let chunk = HeldChunk {
-            command: None,
-            permit: None,
-            typed_at: now,
-            typed_at_unix_ms,
-            input: Typed::Bytes(bytes),
-            by: Typist::Operator,
+    fn type_into(&self, target: KeyTarget, input: ScreenInput, typed_at_unix_ms: u64) {
+        let typed = match input {
+            ScreenInput::Keys(bytes) => Typed::Bytes(bytes),
+            ScreenInput::Paste(text) => Typed::Paste(text),
         };
-        self.route_input(target, chunk);
+        self.operator_input(target, typed, typed_at_unix_ms);
     }
 
     fn view(&self, pane: &str, size: GridSize, new_view: bool) {
@@ -1580,11 +1592,7 @@ impl Inner {
             TerminalControl::AttachmentHold { pane, intent } => {
                 self.attachment = Some(Attachment {
                     pane,
-                    hold: AttachmentHold {
-                        intent,
-                        queued: Vec::new(),
-                        cancelling: false,
-                    },
+                    hold: AttachmentHold::new(intent),
                     delivering: false,
                 });
             }
@@ -1595,14 +1603,14 @@ impl Inner {
                     .filter(|attachment| attachment.hold.intent == intent)
                 {
                     attachment.hold.cancelling = true;
-                    attachment.hold.queued.clear();
+                    attachment.hold.clear();
                 }
             }
             TerminalControl::AttachmentDeliver {
                 intent,
                 generation,
-                paste,
-            } => self.deliver_attachment(shared, &intent, generation, &paste),
+                paths,
+            } => self.deliver_attachment(shared, &intent, generation, &paths),
             TerminalControl::AttachmentRelease { intent } => {
                 if self
                     .attachment
@@ -1646,7 +1654,7 @@ impl Inner {
         shared: &Arc<Shared>,
         intent: &str,
         generation: u64,
-        paste: &str,
+        paths: &[String],
     ) {
         let not_written = |inner: &mut Self| {
             inner.report(TerminalReport::AttachmentDelivered {
@@ -1675,10 +1683,7 @@ impl Inner {
             }));
             return not_written(self);
         }
-        let Ok(mut bytes) = protocol::decode_base64(paste) else {
-            return not_written(self);
-        };
-        bytes.extend_from_slice(&attachment.hold.queued);
+        let queued = attachment.hold.queued().to_vec();
         let Some(session) = self
             .panes
             .get(&attachment.pane)
@@ -1689,23 +1694,52 @@ impl Inner {
             // behind it for the retry.
             return not_written(self);
         };
+        // Each path goes to the pane's holder as a paste of its own, which
+        // the holder wraps in bracketed paste only when the program turned
+        // that mode on, with a space typed after it.
+        let mut pieces = paths.iter().flat_map(|path| {
+            [
+                Typed::Paste(path.as_bytes().to_vec()),
+                Typed::Bytes(b" ".to_vec()),
+            ]
+        });
+        if pieces
+            .next()
+            .is_none_or(|first| Self::write_session(session, first).is_err())
+        {
+            return not_written(self);
+        }
         let told = Arc::downgrade(shared);
         let told_intent = intent.to_owned();
-        let handed = session.write_then(
-            &bytes,
-            session::Written::new(move |written| {
-                if let Some(shared) = told.upgrade() {
-                    shared.run(|inner, _| inner.attachment_written(&told_intent, written));
-                }
-            }),
-        );
-        match handed {
-            Ok(()) => {
-                let attachment = self.attachment.as_mut().expect("matched above");
-                attachment.hold.queued.clear();
-                attachment.delivering = true;
-            }
-            Err(_) => not_written(self),
+        // The barrier after the paths says when they were written. A refusal
+        // once the first path was handed over is not retried, which would
+        // type the paths again: the paste ends as written and the refusal is
+        // reported.
+        let unconfirmed = match pieces.find_map(|piece| Self::write_session(session, piece).err()) {
+            Some(refused) => Some(refused),
+            None => session
+                .after_writes(session::Written::new(move |written| {
+                    if let Some(shared) = told.upgrade() {
+                        shared.run(|inner, _| inner.attachment_written(&told_intent, written));
+                    }
+                }))
+                .err(),
+        };
+        // What was typed behind the paste follows it on the same writer, in
+        // the order typed.
+        let behind = queued
+            .into_iter()
+            .find_map(|input| Self::write_session(session, input).err());
+        let pane = attachment.pane.clone();
+        let attachment = self.attachment.as_mut().expect("matched above");
+        attachment.hold.clear();
+        attachment.delivering = true;
+        let finished = unconfirmed.is_some();
+        for refused in [unconfirmed, behind].into_iter().flatten() {
+            self.error(&pane, "terminal.write_failed", refused.message(&pane));
+        }
+        if finished {
+            self.attachment_written(intent, true);
         }
     }
 
@@ -1943,9 +1977,9 @@ impl Inner {
             }
             return;
         }
-        // The operator's keys typed while an attachment is pasted wait
-        // behind it; the engine's input is not theirs and goes its way.
-        if let Typed::Bytes(bytes) = &chunk.input
+        // The operator's keys and pastes typed while an attachment is pasted
+        // wait behind it; the engine's input is not theirs and goes its way.
+        if matches!(chunk.input, Typed::Bytes(_) | Typed::Paste(_))
             && operator
             && let Some(attachment) = self
                 .attachment
@@ -1955,10 +1989,10 @@ impl Inner {
             let intent = attachment.hold.intent.clone();
             let outcome = if attachment.hold.cancelling {
                 Some(AttachmentInputOutcome::Cancelling)
-            } else if attachment.hold.queued.len() + bytes.len() > MAX_ATTACHMENT_INPUT_BYTES {
+            } else if attachment.hold.held() + chunk.input.len() > MAX_ATTACHMENT_INPUT_BYTES {
                 Some(AttachmentInputOutcome::Limit)
             } else {
-                attachment.hold.queued.extend_from_slice(bytes);
+                attachment.hold.hold(chunk.input.clone());
                 None
             };
             self.input_fact(

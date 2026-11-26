@@ -107,14 +107,12 @@ pub(crate) fn remove_staged(link: &dyn crate::node_access::NodeLink, request_id:
 /// One 20 MiB file across a device's link.
 const STAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// The text a terminal receives for the staged files. A destination on a
-/// device is that device's path, spelled with `/` whatever system the core
-/// runs on; a local one is this machine's own.
-pub(crate) fn paste_bytes(
-    paths: &[String],
-    bracketed: bool,
-    on_device: bool,
-) -> Result<Vec<u8>, String> {
+/// The staged files as a terminal receives them, one shell-quoted path each,
+/// in file order. The pane's node pastes each one to the pane's holder, which
+/// alone knows whether the program turned bracketed paste on. A destination
+/// on a device is that device's path, spelled with `/` whatever system the
+/// core runs on; a local one is this machine's own.
+pub(crate) fn quoted_paths(paths: &[String], on_device: bool) -> Result<Vec<String>, String> {
     if paths.is_empty() || paths.len() > MAX_FILES {
         return Err("Choose between 1 and 8 regular files.".to_owned());
     }
@@ -138,17 +136,9 @@ pub(crate) fn paste_bytes(
             value.push(character);
         }
         value.push('"');
-        quoted.push(if bracketed {
-            format!("\u{1b}[200~{value}\u{1b}[201~")
-        } else {
-            value
-        });
+        quoted.push(value);
     }
-    let mut text = quoted.join(" ");
-    if !bracketed {
-        text.push(' ');
-    }
-    Ok(text.into_bytes())
+    Ok(quoted)
 }
 
 /// Asks `node`, the core's own, to remove the clipboard image a paste left;
@@ -182,14 +172,10 @@ mod tests {
             "/tmp/a $HOME `echo` ".to_owned(),
         ];
         assert_eq!(
-            String::from_utf8(paste_bytes(&paths, true, true).unwrap()).unwrap(),
-            "\u{1b}[200~\"/tmp/한글's.png\"\u{1b}[201~ \u{1b}[200~\"/tmp/a \\$HOME \\`echo\\` \"\u{1b}[201~"
+            quoted_paths(&paths, true).unwrap(),
+            ["\"/tmp/한글's.png\"", "\"/tmp/a \\$HOME \\`echo\\` \""]
         );
-        assert_eq!(
-            paste_bytes(&["/tmp/image.png".to_owned()], false, true).unwrap(),
-            b"\"/tmp/image.png\" "
-        );
-        assert!(paste_bytes(&["/tmp/a\ncommand".to_owned()], true, true).is_err());
+        assert!(quoted_paths(&["/tmp/a\ncommand".to_owned()], true).is_err());
     }
 
     /// A device's destination is judged by its `/` spelling and a local one
@@ -199,10 +185,10 @@ mod tests {
     fn a_destination_is_absolute_by_the_machine_that_holds_it() {
         let local = std::env::temp_dir().join("image.png");
         let local = local.to_str().unwrap().to_owned();
-        assert!(paste_bytes(&[local], false, false).is_ok());
-        assert!(paste_bytes(&["image.png".to_owned()], false, false).is_err());
-        assert!(paste_bytes(&["/home/example/image.png".to_owned()], false, true).is_ok());
-        assert!(paste_bytes(&["image.png".to_owned()], false, true).is_err());
+        assert!(quoted_paths(&[local], false).is_ok());
+        assert!(quoted_paths(&["image.png".to_owned()], false).is_err());
+        assert!(quoted_paths(&["/home/example/image.png".to_owned()], true).is_ok());
+        assert!(quoted_paths(&["image.png".to_owned()], true).is_err());
     }
 
     #[test]

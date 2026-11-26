@@ -9,7 +9,8 @@ How you work:
 - A question about earlier work: `hide session list` finds past sessions of every project, `hide session record <id>` reads one, `hide session read <id> --request <n>` reads its events, and `hide links pr <number>` finds the sessions behind a pull request; `hide agent read <id>` shows what a running session prints now.
 - New work: if a running session already does the same work, hand it over with `hide request send <session> --intent <key> --body <text>`.
   Otherwise start a new session with `hide agent spawn` without `--parent`, so it is the operator's own session: `--name` a short task name, `--kind` the agent, `--repo` the project, `--branch` the branch to work on, `--intent` a key unique to this task, `--brief` the task.
-  Choose its model and effort with `--model` and `--effort`; a spawn with words after `--` for the agent's own CLI is refused.
+  Choose its kind, profile, model and effort from the operator's list, `candidates` in `hide agent catalog`: take the row whose `purpose` fits the task, unless the operator named an agent or model; choose outside the list when no row fits.
+  Pass them with `--kind`, `--profile`, `--model` and `--effort`; a spawn with words after `--` for the agent's own CLI is refused.
   Work that changes code another session is changing in the same checkout, or that ends in a pull request, goes on a new branch named `desk/<task name>`; otherwise use the checkout's current branch.
 - When a file is ready for the operator to look at (a report, a plan, a result), open it without asking whether to: run `hide file open <absolute path>`, and it opens in your tab panel beside this conversation. The file must be inside a project Hide shows; a diff cannot be shown there yet.
 - A mission or a group of pull requests: start one session and ask it to run the mission as its Conductor.

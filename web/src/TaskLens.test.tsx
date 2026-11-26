@@ -11,7 +11,7 @@ import { formatElapsed } from "./components/elapsed";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { withMissionAsk } from "./gallery/MissionScene";
 import { clientI18n } from "./i18n/translator";
-import type { AgentRow, Checkout, SessionPull, SnapshotRest, TaskView, Workspace } from "./snapshot";
+import type { AgentRow, Automation, AutomationRecord, AutomationsSection, Checkout, SessionPull, SnapshotRest, TaskView, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { TaskLens, ToolTaskLens } from "./TaskLens";
 import { useUiStore } from "./ui";
@@ -758,4 +758,58 @@ it("draws a tool's cell as the tool's turn, 작업 중 and 끝남, never in the 
   cleanup = null;
   const empty = await render(rest, [], null, { ...cell, turn: 0, devices: [] });
   expect(empty.container.querySelector("[data-tool-cell-empty]")?.textContent).toBe("아직 맡은 일이 없어요");
+});
+
+/** A finished run as the automations section lists it; `has_results` when its agent opened something for the operator. */
+function finishedRun(number: number, ended: number, over: { seen?: boolean; has_results?: boolean } = {}): AutomationRecord {
+  return { kind: "run", number, trigger: "scheduled", started_at_unix_ms: ended - 60_000, ended_at_unix_ms: ended, state: "succeeded", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: true, ...over };
+}
+
+function automation(id: string, records: AutomationRecord[], once = false): Automation {
+  const schedule = once ? { kind: "once" as const, date: "2026-11-25", time: "09:00" } : { kind: "daily" as const, time: "09:00" };
+  return { id, name: `자동화 ${id}`, task: "할 일", schedule, reads_as: schedule, next_run_at_unix_ms: null, agent: { kind: "claude" }, folder: { path: `/auto/${id}`, default: true, worktree: false }, running: false, done: once, unseen: 0, records };
+}
+
+/**
+ * Operator decision 2026-11-26: an automation's run the operator looked at after it came to 내 차례 rests in 쉬는 중, the
+ * newest one per automation, among the resting tasks by when it ended, and opens that run; a run that came to 내 차례 is
+ * a once automation's or one whose agent opened something. A run not looked at yet, or an automation in 내 차례 again,
+ * does not rest.
+ */
+it("rests each automation's last run looked at after it came to 내 차례 in 쉬는 중, and opens that run", async () => {
+  const runRow = row("fix-run", { hide_ai: { task: { kind: "automation", target: "fixci" }, home: "automations" } } as Partial<AgentRow>, { group: "needs_you" });
+  const agents = [row("rest", { last_prompt_at_unix_ms: 2_000 }), runRow];
+  const cards = [card("rest", "resting", "hide-main"), card("fix-run", "needs_you", "hide-main")];
+  const section: AutomationsSection = {
+    unseen: 1,
+    items: [
+      // The newest run opened nothing, so the one before it, which did, is the one that rests.
+      automation("brief", [finishedRun(3, 5_000), finishedRun(2, 3_000, { has_results: true }), finishedRun(1, 500, { has_results: true })]),
+      automation("migrate", [finishedRun(1, 1_000)], true),
+      automation("triage", [finishedRun(4, 4_000, { seen: false, has_results: true })]),
+      automation("fixci", [finishedRun(2, 6_000, { has_results: true })]),
+    ],
+  };
+  const { container } = await render(snapshot(agents, cards), agents);
+  await act(async () => useShellStore.setState({ automations: section }));
+  const fold = () => container.querySelector<HTMLElement>('[data-task-fold="rest"]')!;
+  expect(fold().querySelector("button")?.textContent).toBe("쉬는 중 3");
+  await act(async () => fold().querySelector<HTMLButtonElement>("button")!.click());
+  const drawn = [...fold().querySelectorAll("[data-task-row], [data-automation-rest]")].map((element) => element.getAttribute("data-task-row") ?? `run:${element.getAttribute("data-automation-rest")}#${element.getAttribute("data-automation-look-run")}`);
+  expect(drawn).toEqual(["run:brief#2", "rest", "run:migrate#1"]);
+  expect(fold().querySelector('[data-automation-rest="brief"] [data-mark-automation]')?.getAttribute("data-mark-automation")).toBe("repeat");
+  expect(fold().querySelector('[data-automation-rest="brief"] [data-automation-look-line]')?.textContent).toContain("자동화");
+  expect(fold().querySelector('[data-automation-rest="brief"] [data-automation-look-line]')?.textContent).not.toContain("한 번");
+  await act(async () => fold().querySelector<HTMLButtonElement>('[data-automation-rest="brief"] [data-automation-look-open]')!.click());
+  expect([useUiStore.getState().screen?.kind, useUiStore.getState().automations.selected, useUiStore.getState().automations.run]).toEqual(["automations", "brief", 2]);
+});
+
+it("rests an automation's run under the group outside projects in 프로젝트별", async () => {
+  const agents = [row("rest")];
+  const { container } = await render(snapshot(agents, [card("rest", "resting", "hide-main")], "project"), agents);
+  await act(async () => useShellStore.setState({ automations: { unseen: 0, items: [automation("brief", [finishedRun(2, 3_000, { has_results: true })])] } }));
+  const outside = container.querySelector<HTMLElement>('[data-task-group=""]');
+  expect(outside?.querySelector('[data-task-group-head="project"]')?.textContent).toBe("프로젝트 밖");
+  expect(outside?.querySelector('[data-task-fold="rest"] button')?.textContent).toBe("쉬는 중 1");
+  expect(container.querySelector('[data-task-group="hide"] [data-task-fold="rest"] button')?.textContent).toBe("쉬는 중 1");
 });

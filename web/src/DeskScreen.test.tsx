@@ -5,12 +5,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { configureAttachments } from "./attachments";
-import { configureFileBytes } from "./fileBytes";
+import { configureFileBytes, receiveBytes, receiveBytesError } from "./fileBytes";
+import { clearPreviews } from "./filePreview";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { DeskAgent, DeskItem, DeskJob, DeskOption, DeskOutput } from "./desk";
 import { DeskScreen, DeskSettingsPage } from "./DeskScreen";
 import { clientI18n } from "./i18n/translator";
-import type { DeskMentions, DeskSection, SnapshotRest } from "./snapshot";
+import type { DeskMentions, DeskRecord, DeskSection, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { emptyScope } from "../test/legacyAgentScope";
@@ -76,13 +77,14 @@ describe("Desk's room", () => {
     useShellStore.setState(saved, true);
     useUiStore.setState(savedUi, true);
     vi.unstubAllGlobals();
+    clearPreviews();
   });
 
   let actions = createActions(() => true);
   async function render(section: DeskSection, mentions: DeskMentions = { sessions: [], projects: [] }) {
     actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
-      useShellStore.setState({ connection: "live", rest, desk: section, deskLive: null, deskJobs: { jobs: [], workers: [], named: [] }, deskMentions: mentions });
+      useShellStore.setState({ connection: "live", rest, desk: section, deskLive: null, deskJobs: { jobs: [], workers: [], named: [], records: [] }, deskMentions: mentions });
       root.render(<TooltipProvider><DeskScreen actions={actions} /></TooltipProvider>);
     });
   }
@@ -162,12 +164,12 @@ describe("Desk's room", () => {
     expect(sent("desk_send")).toEqual([{ text: "@project(/work/repo-home repo) fix the build", mentions: [repo], again: 1 }]);
   });
 
-  const dropFile = async (name: string, bytes: number[]) => {
+  const dropFile = async (name: string, bytes: number[], at = "[data-desk-composer-frame]") => {
     const file = new File([new Uint8Array(bytes)], name);
     file.stream = () => new NodeBlob([new Uint8Array(bytes)]).stream() as ReadableStream<Uint8Array<ArrayBuffer>>;
     const drop = new Event("drop", { bubbles: true, cancelable: true });
     Object.defineProperty(drop, "dataTransfer", { value: { types: ["Files"], files: [file] } });
-    await act(async () => { document.body.querySelector("[data-desk-composer-frame]")!.dispatchEvent(drop); });
+    await act(async () => { document.body.querySelector(at)!.dispatchEvent(drop); });
     await vi.waitFor(() => expect(document.body.querySelector('[data-desk-attachment="reading"]')).toBeNull());
   };
   const tiles = () => [...document.body.querySelectorAll("[data-desk-composer-frame] [data-desk-attachment]")].map((tile) => [tile.getAttribute("data-desk-attachment"), tile.textContent]);
@@ -176,7 +178,8 @@ describe("Desk's room", () => {
     configureAttachments({ dispatch: (event) => { events.push(event); return true; }, sendBinary: () => undefined });
     useUiStore.setState({ deskDraft: { text: "왜 끊기는지 봐 줘", mentions: [] } });
     await render(desk([]));
-    await dropFile("install.log", [7, 8]);
+    // Dropped on the column's head, far from the box, the file still lands in it (Doop L 가).
+    await dropFile("install.log", [7, 8], "[data-desk-chat-head]");
 
     await press("[data-desk-composer-send]");
     const [message] = sent("desk_send") as { request_id: string; stages: string[] }[];
@@ -404,6 +407,7 @@ describe("Desk's room", () => {
           { id: "c-deep", workspace_id: "w-deep", path: "/home/me/repo", label: "main", active_tab_id: "t1", strip: [], tabs: [{ id: "t1", panes: [{ id: "d:p1" }] }] },
         ] }],
       },
+      status: { remote: [{ target_id: "deepbox", state: "connected" }] },
     } as unknown as SnapshotRest;
     const row = { pane_id: "d:p1", identity_label: "remote worker", agent_kind: "claude", mark: "going", device_id: "deepbox" } as never;
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
@@ -416,13 +420,12 @@ describe("Desk's room", () => {
       const card: DeskJob = { id: "pane:d:p1", pane_id: "d:p1", title: "remote worker", agent_kind: "claude", project: { workspace_id: "w-deep", label: "deep" }, location: { kind: "checkout", label: "main" },
         state: "working", queue_position: null, now: "쓰는 중", plan: null, question: null, summary: null, pull_requests: [], outputs, joined: false, reason: null, failure: null, ask: null,
         mark: "going", mark_read: false, machine: "deepbox", disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null };
-      useShellStore.setState({ rest: remoteRest, agents: [row], deskJobs: { jobs: [], workers: [], named: [card] } });
+      useShellStore.setState({ rest: remoteRest, agents: [row], deskJobs: { jobs: [], workers: [], named: [card], records: [] } });
       useUiStore.getState().setDeskRoom((now) => ({ ...now, session: "d:p1" }));
     });
     // The core answers the open with the session's thread.
     await act(async () => useShellStore.setState({ sessionThread: thread as never, sessionThreadHistory: { generation: 1, pages: [] } }));
-    // The tab strip reads its sizes from the design tokens, which jsdom has no stylesheet for.
-    for (const [name, value] of [["--size-tab-preferred", "160"], ["--size-tab-title-min", "48"], ["--size-tab-selected-max", "240"], ["--size-tab-icon-identity", "16"], ["--size-control-sm", "24"]] as const) document.documentElement.style.setProperty(name, value);
+    stubTabStripTokens();
     return reads;
   }
 
@@ -430,9 +433,9 @@ describe("Desk's room", () => {
 
   it("draws and opens a file a connected device's session showed from that device, which no card lists (PRD desk-2-ui B27)", async () => {
     const reads = await remoteSessionShowed(["/home/me/repo/new.md", "/home/me/repo/shot.png"], []);
-    // The image it showed is drawn from the file on that device, as the open below reads it.
-    expect(reads).toMatchObject([{ path: "/home/me/repo/shot.png", device_id: "deepbox", root: "/home/me/repo" }]);
-    await press("[data-desk-output='/home/me/repo/new.md']");
+    // Each tile's preview is read from the file on that device, as the open below reads it: the text's head, the image's size first.
+    expect(reads).toMatchObject([{ path: "/home/me/repo/new.md", length: 4096, device_id: "deepbox", root: "/home/me/repo" }, { path: "/home/me/repo/shot.png", length: 1, device_id: "deepbox", root: "/home/me/repo" }]);
+    await press("[data-desk-output='/home/me/repo/new.md'] [data-desk-tile-open]");
     expect(frontOutput()).toMatchObject({ kind: "output", output: { device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" } });
   });
 
@@ -440,8 +443,8 @@ describe("Desk's room", () => {
     const listed: DeskOutput = { id: "view-9", kind: "image", label: "shot.png", thumb: null, seen: true, pr_state: null, device_id: "deepbox", checkout: "/home/me/wt", path: "/home/me/wt/shot.png", url: null };
     const reads = await remoteSessionShowed(["/home/me/wt/shot.png"], [listed]);
     // The shelf and the conversation draw the same file, read once.
-    expect(reads).toMatchObject([{ path: "/home/me/wt/shot.png", device_id: "deepbox", root: "/home/me/wt" }]);
-    await press("[data-desk-hide-part='view'] [data-desk-output='view-9']");
+    expect(reads).toMatchObject([{ path: "/home/me/wt/shot.png", length: 1, device_id: "deepbox", root: "/home/me/wt" }]);
+    await press("[data-desk-hide-part='view'] [data-desk-output='view-9'] [data-desk-tile-open]");
     expect(frontOutput()).toMatchObject({ kind: "output", output: listed });
   });
 
@@ -461,6 +464,43 @@ describe("Desk's room", () => {
     await show(desk([]));
     await act(async () => useShellStore.setState({ deskLive: { text: null, started_at_ms: null } }));
     expect(line()).toBeNull();
+  });
+
+  it("draws a file an answer names inside a project as a chip that opens it in the tab panel, and leaves a missing path and code as words (feedback 2 frame M [2])", async () => {
+    const asked: Record<string, unknown>[] = [];
+    configureFileBytes((event) => {
+      const read = event.payload as Record<string, unknown>;
+      asked.push(read);
+      queueMicrotask(() => (read.path === "/work/repo-home/docs/report.md" ? answerBytes(read, [35], 40) : receiveBytesError({ request_id: read.request_id as string, reason: "not_found" })));
+    });
+    await render(desk([{ kind: "reply", id: 1, text: "정리는 /work/repo-home/docs/report.md 에, 옛 메모는 /work/repo-home/old/notes.md 에 있어요.\n```\ncat /work/repo-home/docs/report.md\n```", agent: "claude", at_ms: 0, state: "done", mentions: [], missions: [], thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } }]));
+    await vi.waitFor(() => expect(document.body.querySelectorAll("[data-desk-file-chip]")).toHaveLength(1));
+    const chip = document.body.querySelector<HTMLElement>("[data-desk-file-chip='project']")!;
+    expect(chip.textContent).toBe("report.md");
+    expect(document.body.textContent).toContain("/work/repo-home/old/notes.md");
+    expect(asked.map((read) => read.path).sort()).toEqual(["/work/repo-home/docs/report.md", "/work/repo-home/old/notes.md"]);
+    stubTabStripTokens();
+    await act(async () => chip.click());
+    expect(useUiStore.getState().deskRoom.panel?.tabs).toEqual([expect.objectContaining({ kind: "file", device_id: "local", root: "/work/repo-home", path: "/work/repo-home/docs/report.md" })]);
+  });
+
+  it("reveals a path outside every project from its ↗ chip in the file manager, and never reads or opens it (feedback 2 frame M [2])", async () => {
+    const outside = "/Users/me/Downloads/crash.log";
+    const revealPath = vi.fn();
+    const probePaths = vi.fn(async (paths: string[]) => paths.map((path) => (path === outside ? { real: path, kind: "file" as const } : null)));
+    window.hideHost = { kind: "electron", platform: "darwin", probePaths, revealPath } as never;
+    const asked: unknown[] = [];
+    configureFileBytes((event) => asked.push(event.payload));
+    try {
+      await render(desk([{ kind: "reply", id: 1, text: `크래시 로그는 ${outside} 에 있어요.`, agent: "claude", at_ms: 0, state: "done", mentions: [], missions: [], thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } }]));
+      await vi.waitFor(() => expect(document.body.querySelector("[data-desk-file-chip='outside']")).not.toBeNull());
+      await act(async () => document.body.querySelector<HTMLElement>("[data-desk-file-chip='outside']")!.click());
+      expect(revealPath).toHaveBeenCalledWith(outside);
+      expect(asked).toEqual([]);
+      expect(useUiStore.getState().deskRoom.panel?.tabs ?? []).toEqual([]);
+    } finally {
+      delete (window as { hideHost?: unknown }).hideHost;
+    }
   });
 
   it("opens the checkout a project chip names", async () => {
@@ -562,9 +602,28 @@ describe("Desk's room", () => {
       expect(card).toContain("npm run build");
       expect(card).toContain("~/repo/web");
       expect(buttons()).toEqual([["reject", "Reject…"], ["allow-with-updates", "Always allow"], ["allow-once", "Allow once"]]);
+      // Frame A2 가: the card stands on the ask surface with its kind first, the refusal is words, and only allow-once is the primary.
+      const surface = document.body.querySelector("[data-desk-item='approval']")!;
+      expect(surface.className).toContain("border-warning");
+      expect(surface.querySelector("p")!.textContent).toBe("Shell commandDesk wants to do this");
+      const fill = (id: string) => document.body.querySelector<HTMLElement>(`[data-desk-approval-option='${id}']`)!.className;
+      expect([fill("reject").includes("border"), fill("allow-with-updates").includes("bg-secondary"), fill("allow-once").includes("bg-warning")]).toEqual([false, true, true]);
       await press("[data-desk-approval-option='allow-with-updates']");
       await press("[data-desk-approval-option='allow-once']");
       expect(sent("desk_approval")).toEqual([{ id: 7, option: "allow-with-updates" }, { id: 7, option: "allow-once" }]);
+    });
+
+    it("draws the refusal as words and every allow-once option as the primary by the option's kind, though two options of a kind read no word", async () => {
+      const twice: DeskOption[] = [
+        { id: "no-1", kind: "reject_once", name: "No" },
+        { id: "no-2", kind: "reject_always", name: "No, and don't ask again" },
+        { id: "yes-1", kind: "allow_once", name: "Yes, once" },
+        { id: "yes-2", kind: "allow_once", name: "Yes, this time only" },
+        { id: "always", kind: "allow_always", name: "Always" },
+      ];
+      await render(desk([{ ...build, options: twice }]));
+      const look = (id: string) => { const names = document.body.querySelector<HTMLElement>(`[data-desk-approval-option='${id}']`)!.className; return names.includes("bg-warning") ? "primary" : names.includes("bg-secondary") ? "secondary" : "words"; };
+      expect(["no-1", "no-2", "yes-1", "yes-2", "always"].map(look)).toEqual(["words", "words", "primary", "primary", "secondary"]);
     });
 
     it("names answers of one kind by the agent's own names, so Claude's ways out of plan mode read apart", async () => {
@@ -599,6 +658,9 @@ describe("Desk's room", () => {
         ["allow_all", "checked", "Allow allDefaultDoes it right away without asking."],
         ["agent", "unchecked", "As the agentAsks each time Claude Code asks, with its own answers."],
       ]);
+      // The chosen row is lit with a green ✓; the other has neither.
+      const rows = [...document.body.querySelectorAll<HTMLElement>("[data-desk-permission-choice]")];
+      expect(rows.map((row) => [row.className.includes("data-[state=checked]:bg-accent"), row.querySelector("svg")?.getAttribute("class")?.includes("text-success") ?? false])).toEqual([[true, true], [true, false]]);
       await press("[data-desk-permission-choice='agent']");
       expect(sent("desk_settings_set")).toEqual([{ permission: "agent" }]);
 
@@ -701,12 +763,11 @@ describe("Desk's room", () => {
     expect(document.body.querySelector("[data-desk-room]")?.getAttribute("data-desk-room")).toBe("session");
 
     // The core sends the session's card with the open conversation; the head reads it.
-    await act(async () => useShellStore.setState({ deskJobs: { jobs: [], workers: [], named: [card] } }));
+    await act(async () => useShellStore.setState({ deskJobs: { jobs: [], workers: [], named: [card], records: [] } }));
     expect(document.body.querySelector("[data-desk-session-head]")?.textContent).toContain("fixer");
     expect(sent("session_thread_open")).toHaveLength(1);
 
-    // The tab strip reads its sizes from the design tokens, which jsdom has no stylesheet for.
-    for (const [name, value] of [["--size-tab-preferred", "160"], ["--size-tab-title-min", "48"], ["--size-tab-selected-max", "240"], ["--size-tab-icon-identity", "16"], ["--size-control-sm", "24"]] as const) document.documentElement.style.setProperty(name, value);
+    stubTabStripTokens();
     await act(async () => useUiStore.getState().setDeskRoom((now) => ({ ...now, panel: { tabs: [{ kind: "mission", mission: "mission-39", title: "1.3.0" }], preview: null, active: "mission:mission-39", explorer: false, beside: null } })));
     expect(document.body.querySelector("[data-desk-tab-panel]")?.getAttribute("data-desk-tab-panel")).toBe("beside_session");
     // Escape runs the innermost layer the shell's Escape owner holds, and with none open closes the session beside Desk,
@@ -725,6 +786,81 @@ describe("Desk's room", () => {
     expect(sent("session_thread_close")).toHaveLength(1);
   });
 
+  // Expected answers are feedback 2's frame K (가, 다) and the mission brief.
+  it("draws a chip whose pane is gone from its record, opens the record read-only beside Desk, and leaves a chip with no record dimmed (frame K)", async () => {
+    const built = { kind: "session" as const, id: "w1:p9", name: "agent-9" };
+    const lost = { kind: "session" as const, id: "w1:p8", name: "agent-8" };
+    const record: DeskRecord = {
+      pane_id: "w1:p9", session: { device_id: "local", agent: "codex", session_id: "s-9" }, agent_kind: "codex", title: "1.3.0 후보 빌드 만들기",
+      started_at_unix_ms: 1, ended_at_unix_ms: 2, line: "후보 빌드를 만들어 서명까지 확인했어요", pull_requests: [{ number: 2930, state: "merged" }],
+      cwd: "/gone/worktree", path: "/sessions/s-9.jsonl", project: "/repo", thread: true,
+    };
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([{ kind: "user", id: 1, text: "@session(w1:p9 agent-9) @session(w1:p8 agent-8) 어제 뭐 했어?", at_ms: 0, mentions: [built, lost] }]));
+    await act(async () => useShellStore.setState({ deskJobs: { jobs: [], workers: [], named: [], records: [record] } }));
+    // A chip is named by what it shows: the record's title, or the words that named a session with no record.
+    const chip = (name: string) => document.body.querySelector<HTMLElement>(`[data-desk-session-chip="${name}"]`);
+    expect(chip(record.title)?.getAttribute("data-desk-session-ended")).toBe("true");
+    expect(chip(record.title)?.className).toContain("opacity-(--opacity-secondary)");
+    expect(chip("agent-8")?.getAttribute("data-desk-session-gone")).toBe("true");
+    expect(chip("agent-8")?.tagName).toBe("SPAN");
+
+    await act(async () => chip(record.title)!.click());
+    expect(useUiStore.getState().deskRoom.session).toBe("w1:p9");
+    expect(sent("session_thread_open")).toEqual([{ pane_id: "w1:p9" }]);
+    const head = document.body.querySelector("[data-desk-session-head]");
+    expect(head?.getAttribute("data-desk-session-head")).toBe("ended");
+    expect(head?.textContent).toContain(record.title);
+    expect(head?.querySelector('[data-desk-session-pr="2930"]')).not.toBeNull();
+    // It has no pane: no terminal, files, own tab or menu, only `✕`.
+    expect(head?.querySelector("[data-desk-session-terminal], [data-desk-session-files], [data-desk-session-own-tab], [data-desk-session-menu]")).toBeNull();
+    expect(head?.querySelector("[data-desk-session-close]")).not.toBeNull();
+    // Its worktree is gone: the app's one line takes `이어서 하기`'s place, and no input box stands.
+    expect(document.body.querySelector("[data-desk-session-record-foot]")?.getAttribute("data-desk-session-record-foot")).toBe("blocked");
+    expect(document.body.querySelector("[data-desk-session-resume-blocked]")?.textContent).toBe("The worktree was cleaned up, so this session can't resume");
+    expect(document.body.querySelector("[data-desk-session-panel] [data-desk-composer-input]")).toBeNull();
+  });
+
+  // Expected answers are frame K 다 (`이어서 하기`, the record row's resume) and the room's rule that a session Desk opens stands beside it.
+  it("resumes a gone session from its record with the record's agent, session, file and checkout, and opens it beside Desk (frame K 다)", async () => {
+    const built = { kind: "session" as const, id: "w1:p9", name: "agent-9" };
+    const record: DeskRecord = {
+      pane_id: "w1:p9", session: { device_id: "local", agent: "codex", session_id: "s-9" }, agent_kind: "codex", title: "1.3.0 후보 빌드 만들기",
+      started_at_unix_ms: 1, ended_at_unix_ms: 2, line: null, pull_requests: [], cwd: "/work/repo-fix", path: "/sessions/s-9.jsonl", project: "/work/repo-fix", thread: true,
+    };
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([{ kind: "user", id: 1, text: "@session(w1:p9 agent-9) 어제 뭐 했어?", at_ms: 0, mentions: [built] }]));
+    // The checkout the session ran in is still there, so the record row's rule lets it resume.
+    const navigator = rest.navigator!;
+    const kept = { ...rest, navigator: { ...navigator, workspaces: navigator.workspaces!.map((workspace) => ({ ...workspace, checkouts: workspace.checkouts.map((checkout) => ({ ...checkout, exists: true })) })) } } as SnapshotRest;
+    await act(async () => useShellStore.setState({ rest: kept, deskJobs: { jobs: [], workers: [], named: [], records: [record] } }));
+    await press(`[data-desk-session-chip="${record.title}"]`);
+    const foot = document.body.querySelector("[data-desk-session-record-foot]");
+    expect(foot?.getAttribute("data-desk-session-record-foot")).toBe("resume");
+    expect(foot?.querySelector("[data-desk-session-record-ended]")?.textContent).toContain("Done");
+    await press("[data-desk-session-record-foot] button");
+    const starts = sent("agent_start_in_checkout") as { request_id: string }[];
+    expect(starts).toEqual([expect.objectContaining({ checkout_path: "/work/repo-fix", provider: "codex", resume_session_id: "s-9", resume_session_path: "/sessions/s-9.jsonl" })]);
+    expect(starts[0]).not.toHaveProperty("device_id");
+    const operation = { id: 7, kind: "agent_start" as const, phase: "ready" as const, repository_root: "/work/repo-fix", branch: null, base_branch: null, path: "/work/repo-fix", pane_id: "w1:p20", agent_kind: "codex", failure: null, agent_phase: "started", agent_reason: null, agent_line: null, request_id: starts[0]!.request_id };
+    await act(async () => useShellStore.setState({ rest: { ...kept, task_operation: operation } as unknown as SnapshotRest }));
+    expect(useUiStore.getState().screen?.kind).toBe("desk");
+    expect(useUiStore.getState().deskRoom.session).toBe("w1:p20");
+    expect(useUiStore.getState().focusWhenListed).toBeNull();
+  });
+
+  it("opens beside Desk the session a turn starts, as soon as its pane is there (frame J, 가-2)", async () => {
+    const card = (pane: string | null): DeskJob => ({ id: "intent-1", pane_id: pane, title: "Windows 설치 폴더 OneDrive 문제", agent_kind: "codex", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
+      state: pane ? "working" : "starting", queue_position: null, now: null, plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
+      mark: null, mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null });
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([{ kind: "user", id: 1, text: "고쳐 줘", at_ms: 0, mentions: [] }]));
+    await act(async () => useShellStore.setState({ desk: desk([{ kind: "user", id: 1, text: "고쳐 줘", at_ms: 0, mentions: [] }, { kind: "job", id: 2, job_id: "intent-1" }]), deskJobs: { jobs: [card(null)], workers: [], named: [], records: [] } }));
+    expect(useUiStore.getState().deskRoom.session).toBeNull();
+    await act(async () => useShellStore.setState({ deskJobs: { jobs: [card("w1:p5")], workers: [], named: [], records: [] } }));
+    expect(useUiStore.getState().deskRoom.session).toBe("w1:p5");
+  });
+
   it("reads what the session beside Desk asks and answers it as the phone does, once (B14)", async () => {
     const row = { pane_id: "w1:p2", device_id: "local", identity_label: "fixer", agent_kind: "claude", mark: "turn" } as never;
     const card: DeskJob = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
@@ -732,7 +868,7 @@ describe("Desk's room", () => {
       mark: "turn", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 5, read: true, mission: null, workers: [], agent_id: null };
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([]));
-    await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [], workers: [], named: [card] } }));
+    await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [], workers: [], named: [card], records: [] } }));
     await act(async () => useUiStore.getState().setDeskRoom(() => ({ session: "w1:p2", panel: null, closed: null, answer: 0 })));
     expect(sent("pane_ask")).toEqual([{ device_id: "local", pane_id: "w1:p2" }]);
     // Until the screen is read, no card stands at the conversation's end: what the agent asked stays in its
@@ -764,3 +900,18 @@ describe("Desk's room", () => {
     expect(sent("pane_ask")).toHaveLength(asks + 1);
   });
 });
+
+/** The file channel's answer to `read`: one frame with `bytes` of a file `total` long. */
+function answerBytes(read: Record<string, unknown>, bytes: number[], total: number) {
+  const header = new TextEncoder().encode(JSON.stringify({ type: "file_bytes", request_id: read.request_id, path: read.path, offset: 0, total, eof: true }));
+  const frame = new Uint8Array(4 + header.length + bytes.length);
+  new DataView(frame.buffer).setUint32(0, header.length, false);
+  frame.set(header, 4);
+  frame.set(bytes, 4 + header.length);
+  receiveBytes(frame.buffer);
+}
+
+/** The tab strip reads its sizes from the design tokens, which jsdom has no stylesheet for. */
+function stubTabStripTokens() {
+  for (const [name, value] of [["--size-tab-preferred", "160"], ["--size-tab-title-min", "48"], ["--size-tab-selected-max", "240"], ["--size-tab-icon-identity", "16"], ["--size-control-sm", "24"]] as const) document.documentElement.style.setProperty(name, value);
+}

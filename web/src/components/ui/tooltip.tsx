@@ -5,6 +5,7 @@ import { cn } from "../../lib/utils";
 import { shellDragging } from "../../shellDrag";
 import { hintSide, type HintSide } from "../../tooltipSide";
 import { useUiStore } from "../../ui";
+import { useFloatingSurface } from "./floating-surface";
 
 // A hint for a control whose meaning is its icon or its shortcut. The label a
 // tooltip shows is also the control's accessible name, so a screen reader and
@@ -93,7 +94,7 @@ function TooltipContent({ ref, className, side = "top", align = "center", sideOf
         side={clear ?? side}
         align={align}
         sideOffset={sideOffset}
-        className={cn("pointer-events-none z-50 max-w-(--size-tooltip-max-width) text-balance rounded-sm border border-border bg-popover px-sm py-xs text-caption text-popover-foreground shadow-overlay", className)}
+        className={cn("pointer-events-none z-50 max-w-(--size-tooltip-max-width) text-balance rounded-sm bg-popover px-sm py-xs text-caption text-popover-foreground shadow-overlay", useFloatingSurface(), className)}
         {...props}
         onEscapeKeyDown={(event) => {
           props.onEscapeKeyDown?.(event);

@@ -800,7 +800,7 @@ class Journey:
         # own reading of the screen can trail.
         self.wait_at_rest()
         # The operator has looked at the pane before they choose Sleep from its menu.
-        self.daemon.dispatch("pane_visit", {"pane_id": self.pane})
+        self.daemon.dispatch("place_visit", {"place": {"kind": "pane", "pane_id": self.pane}})
         self.daemon.dispatch("agent_sleep", {"pane_id": self.pane})
         if record["form"] == "sleeping_session":
             self.wake_session(record)

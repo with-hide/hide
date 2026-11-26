@@ -22,6 +22,8 @@ import { DeskPlanChip, JobLead, jobStateWords } from "./desk-job-card";
 export type SessionChipSource = {
   facts: (session: DeskSessionRef) => SessionFacts | null;
   onOpen: (session: DeskSessionRef) => void;
+  /** The pane of the session open beside Desk, whose chips are ringed as the open one (frame J); absent on a screen with no room. */
+  open?: string | null;
 };
 
 const SourceContext = createContext<SessionChipSource | null>(null);
@@ -64,33 +66,45 @@ export function useSessionChipBridge(): (node: ReactNode) => ReactNode {
  * side, a task handed on, a `@` the operator picked) in the session blue
  * (B26, B49, B50, D-75, D-85): its status, its agent and its name (its
  * sidebar row's while the sidebar lists it), the same
- * chip in the composer, the chat, a thread and its history. A session the sidebar no longer lists is dimmed with no status
- * (D-86). Under the pointer or focus a listed session shows its card; a
- * press, on the chip or the card's `스레드 열기 ›`, opens its thread.
- * `card={false}` draws the chip alone, as inside another card.
+ * chip in the composer, the chat, a thread and its history. A session the
+ * sidebar no longer lists whose record Hide keeps reads as that record, its
+ * title and agent with the ended session's empty mark, one step quieter, and
+ * still opens (feedback 2, frame K); one with no record is dimmed with no
+ * status and opens nothing (D-86). Under the pointer or focus a listed or
+ * recorded session shows its card; a press, on the chip or the card's
+ * `스레드 열기 ›`, opens its thread. The chip of the session open beside
+ * Desk is ringed (frame J). `card={false}` draws the chip alone, as inside
+ * another card.
  */
 export function SessionChip({ session, onPress, card: carded = true, className }: { session: DeskSessionRef; onPress?: () => void; card?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
   const source = useContext(SourceContext);
   const facts = source?.facts(session) ?? null;
   const gone = facts !== null && !facts.listed;
+  // A session the sidebar no longer lists, read from Hide's record of it.
+  const ended = gone && facts.record !== null;
+  const dimmed = gone && !ended;
+  const known = facts !== null && (facts.listed || ended);
   const mark = facts?.listed ? facts.mark : gone ? null : session.mark;
-  const agent = facts?.listed ? facts.agent_kind : gone ? null : session.agent_kind;
-  // A listed session is called what its sidebar row calls it, whatever name the words that named it wrote.
-  const name = (facts?.listed ? facts.name : null) ?? session.name;
+  const agent = known ? facts.agent_kind : gone ? null : session.agent_kind;
+  // A listed session is called what its sidebar row calls it, an ended one what its record does, whatever name the words that named it wrote.
+  const name = (known ? facts.name : null) ?? session.name;
   const lead = agent === null ? null : <><StatusMark mark={mark} /><AgentMark kind={agent} /></>;
-  const look = cn("inline-flex max-w-full min-w-0 items-center gap-xxs rounded-xs px-xxs align-middle", MENTION_TONE.session, gone && "opacity-(--opacity-dimmed)", className);
-  // A session no longer listed has nothing left to open.
-  const press = gone ? undefined : onPress;
+  // The chip of the session open beside Desk wears the selection ring an output in front of the tab panel wears (B16).
+  const shown = !dimmed && session.pane_id != null && source?.open === session.pane_id;
+  const look = cn("inline-flex max-w-full min-w-0 items-center gap-xxs rounded-xs px-xxs align-middle", MENTION_TONE.session, dimmed && "opacity-(--opacity-dimmed)", ended && "opacity-(--opacity-secondary)", shown && "ring-1 ring-ring", className);
+  const marks = { "data-desk-session-chip": name, "data-desk-session-gone": dimmed ? "true" : undefined, "data-desk-session-ended": ended ? "true" : undefined, "data-desk-session-open": shown ? "true" : undefined };
+  // A session no longer listed and not recorded has nothing left to open.
+  const press = dimmed ? undefined : onPress;
   const chip = !press ? (
-    <span className={look} aria-label={gone ? t("desk.chip.gone", { name }) : undefined} data-desk-session-chip={name} data-desk-session-gone={gone ? "true" : undefined}>{lead}<span className="truncate">{name}</span></span>
+    <span className={look} aria-label={dimmed ? t("desk.chip.gone", { name }) : undefined} {...marks}>{lead}<span className="truncate">{name}</span></span>
   ) : (
-    <Button variant="text" size="inline" className={cn(look, MENTION_PRESS.session)} aria-label={gone ? t("desk.chip.gone", { name }) : t("desk.mention.open", { name })} data-desk-session-chip={name} data-desk-session-gone={gone ? "true" : undefined} onClick={press}>
+    <Button variant="text" size="inline" className={cn(look, MENTION_PRESS.session)} aria-label={t("desk.mention.open", { name })} aria-current={shown ? "true" : undefined} {...marks} onClick={press}>
       {lead}
       <span className="truncate">{name}</span>
     </Button>
   );
-  if (!carded || !facts?.listed || !facts.card) return chip;
+  if (!carded || !known || !facts.card) return chip;
   return <SessionHover facts={{ ...facts, card: facts.card }} onOpen={onPress} onParent={source?.onOpen}>{chip}</SessionHover>;
 }
 

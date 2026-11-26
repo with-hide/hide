@@ -1868,6 +1868,17 @@ export type MissionSafetyNet = { conductor_present: boolean; since_unix_ms: numb
 /** A line the Conductor skipped on its own, with no decision of the operator's (`SkippedAloneView`); `text` is the words of a line the plan wrote. */
 export type MissionSkip = { node: string; title: string; line: string; kind: MissionCriterionKind; text?: string; reason: string; by: string; at_unix_ms: number };
 
+/**
+ * One place of the core's recent place order (`ui_state.recent_places`): a
+ * terminal pane the keyboard was in (a device's by its device-scoped id), a
+ * mission or an automation whose detail was in front, or Desk.
+ */
+export type RecentPlace =
+  | { kind: "pane"; pane_id: string }
+  | { kind: "mission"; mission_id: string }
+  | { kind: "automation"; automation_id: string }
+  | { kind: "desk" };
+
 /** One mission as the map draws it (`MissionView`). */
 export type Mission = {
   id: string;
@@ -2005,7 +2016,7 @@ export type PlanView = {
 /** The plans the core keeps for the panes on screen, and the plans of the children their steps are handed to, whether or not those panes are shown (`pane_id` empty then). */
 export type PlansSnapshot = { items: PlanView[] };
 
-/** Settings › Mission (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
+/** Settings › Mission (D-31): the cap, the default scope, a new mission's verification strength, and the agent list Settings › Models by purpose edits. */
 /** A candidate's `profile` is a profile's id on this machine, absent for the agent's built-in default (PRD agent-profiles-phase2 D-08, B14). */
 export type ConductorCandidate = { agent: string; profile?: string | null; model?: string | null; effort?: string | null; purpose: string };
 /** Which way every mission's map runs: what a node waits on above it, or to its left. */
@@ -3578,6 +3589,8 @@ export type AutomationRun = {
   answer?: string;
   /** What the run's agent opened for the operator, newest first, only while a window shows the run (operator choice 2026-11-24); a row is pressed by its `key`. */
   results?: AutomationRunResult[];
+  /** Its agent opened something for the operator, which put the run in Needs You (B15); said for every run, absent when it opened nothing. */
+  has_results?: boolean;
 };
 
 /** One row of a run's 결과: the View's kind and name, and the key a press names it by (`automation_run_result_open`). */
@@ -3669,6 +3682,27 @@ export type DeskJobsSection = {
   workers: DeskJob[];
   /** The other sessions the newest lines of the conversation name, as cards read from their sidebar rows: a chip's hover card and the thread it opens (D-86); never drawn in the chat or listed in Threads. */
   named: DeskJob[];
+  /** The sessions the newest lines name whose pane is gone, as Hide's record keeps them (feedback 2, frame K): a chip draws its record and opens it beside Desk; a session with no record has none. */
+  records: DeskRecord[];
+};
+/**
+ * A session whose pane is gone, as its record keeps it: what its chip, its
+ * hover card and its read-only thread draw, and where `이어서 하기` resumes it.
+ * `thread` is whether Hide kept where its conversation is read.
+ */
+export type DeskRecord = {
+  pane_id: string;
+  session: WorkSession;
+  agent_kind: string;
+  title: string;
+  started_at_unix_ms: number | null;
+  ended_at_unix_ms: number | null;
+  line: string | null;
+  pull_requests: { number: number; state: PrState }[];
+  cwd: string | null;
+  path: string | null;
+  project: string | null;
+  thread: boolean;
 };
 
 /** The `desk_live` section: the reply being written, `null` between turns. */
@@ -4143,8 +4177,8 @@ export type SnapshotRest = {
     agent_start?: AgentStartChoice;
     /** The checkouts last brought to the front, newest first, up to ten (PRD cmdk-recent). */
     recent_checkouts?: RecentCheckout[];
-    /** The terminal panes the keyboard has been in, newest first, up to fifty: the Agent cycle's order (issue 301). */
-    recent_pane_ids?: string[];
+    /** The places the operator has been, newest first, up to fifty: the recent place cycle's order (issue 301). */
+    recent_places?: RecentPlace[];
     [key: string]: unknown;
   };
   status?: {

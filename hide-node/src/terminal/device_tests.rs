@@ -23,6 +23,7 @@ fn key_line(pane: &str, bytes: &[u8]) -> Vec<u8> {
         target: KeyTarget::Pane(pane.to_owned()),
         data: encode_base64(bytes),
         typed_at_unix_ms: 1,
+        paste: false,
     })
     .unwrap()
 }
@@ -311,7 +312,12 @@ fn a_resident_nodes_pane_goes_up_only_while_its_core_has_it_attached() {
     pane.frame(SIZE, false, b"after the release");
     wait_for(|| tap.saw("w1:p1", b"after the release"));
     assert!(lock(&node.uplink.state).panes.is_empty());
-    TerminalNode::key(&node, KeyTarget::Pane("w1:p1".into()), b"typed".to_vec(), 1);
+    TerminalNode::type_into(
+        &node,
+        KeyTarget::Pane("w1:p1".into()),
+        ScreenInput::Keys(b"typed".to_vec()),
+        1,
+    );
     assert_eq!(pane.next_input(), b"typed");
 }
 
@@ -540,6 +546,11 @@ impl DeviceSink for Heard {
     }
 }
 
+/// A screen's keys for `pane`, as [`TerminalNode::type_into`] takes them.
+fn type_keys(node: &DeviceTerminals, pane: String, bytes: Vec<u8>, at: u64) {
+    node.type_into(KeyTarget::Pane(pane), ScreenInput::Keys(bytes), at);
+}
+
 fn proxy() -> (DeviceTerminals, Arc<GatedLink>, Arc<Heard>) {
     let link = Arc::new(GatedLink::default());
     let heard = Arc::new(Heard::default());
@@ -600,7 +611,7 @@ fn a_pane_past_its_unsent_keys_reads_ended_while_other_panes_keys_go_on() {
         .iter()
         .all(|(_, report)| !matches!(report, TerminalReport::Error { .. }))
     {
-        proxy.key(KeyTarget::Pane("w1:p1".into()), chunk.clone(), 1);
+        type_keys(&proxy, "w1:p1".into(), chunk.clone(), 1);
         taken += 1;
         assert!(taken < 64, "the cap was never reached");
     }
@@ -616,7 +627,7 @@ fn a_pane_past_its_unsent_keys_reads_ended_while_other_panes_keys_go_on() {
     assert_eq!(ended.state, "ended");
     assert_eq!(ended.generation, 4);
     // Refused once; later keys add nothing and send nothing.
-    proxy.key(KeyTarget::Pane("w1:p1".into()), b"late".to_vec(), 1);
+    type_keys(&proxy, "w1:p1".into(), b"late".to_vec(), 1);
     assert_eq!(heard.reports.lock().unwrap().len(), reports.len());
     // The device's own word on the pane waits until it is attached again.
     inbound(
@@ -630,7 +641,7 @@ fn a_pane_past_its_unsent_keys_reads_ended_while_other_panes_keys_go_on() {
     );
     assert_eq!(heard.reports.lock().unwrap().len(), reports.len());
     // Another pane's keys still go.
-    proxy.key(KeyTarget::Pane("w1:p2".into()), b"other".to_vec(), 1);
+    type_keys(&proxy, "w1:p2".into(), b"other".to_vec(), 1);
     link.release();
     let lines = link.wait_for_lines(|lines| ends_with_key(lines, "w1:p2", b"other"));
     // The keys it took before the cap were written, in order, before it.
@@ -648,7 +659,7 @@ fn a_pane_past_its_unsent_keys_reads_ended_while_other_panes_keys_go_on() {
         size: None,
         manual: true,
     });
-    proxy.key(KeyTarget::Pane("w1:p1".into()), b"again".to_vec(), 1);
+    type_keys(&proxy, "w1:p1".into(), b"again".to_vec(), 1);
     link.wait_for_lines(|lines| ends_with_key(lines, "w1:p1", b"again"));
 }
 
@@ -661,6 +672,7 @@ fn key_lines(lines: &[TerminalDown]) -> Vec<(String, Vec<u8>, u64)> {
                 target: KeyTarget::Pane(pane),
                 data,
                 typed_at_unix_ms,
+                paste: false,
             } => Some((
                 pane.clone(),
                 decode_base64(data).unwrap(),
@@ -691,13 +703,13 @@ fn a_stalled_link_takes_256_kib_of_one_byte_keys_and_refuses_only_the_next() {
         .map(|index| b'a' + (index % 26) as u8)
         .collect();
     for (index, key) in typed.iter().enumerate() {
-        proxy.key(KeyTarget::Pane("w1:p1".into()), vec![*key], index as u64);
+        type_keys(&proxy, "w1:p1".into(), vec![*key], index as u64);
     }
     assert!(
         heard.reports.lock().unwrap().is_empty(),
         "no key was refused"
     );
-    proxy.key(KeyTarget::Pane("w1:p1".into()), b"z".to_vec(), u64::MAX);
+    type_keys(&proxy, "w1:p1".into(), b"z".to_vec(), u64::MAX);
     let refused: Vec<String> = heard
         .reports
         .lock()
@@ -709,7 +721,7 @@ fn a_stalled_link_takes_256_kib_of_one_byte_keys_and_refuses_only_the_next() {
         })
         .collect();
     assert_eq!(refused, ["w1:p1 terminal.device_input_overflow"]);
-    proxy.key(KeyTarget::Pane("w1:p2".into()), b"other".to_vec(), 1);
+    type_keys(&proxy, "w1:p2".into(), b"other".to_vec(), 1);
     link.release();
     let arrived = |lines: &[TerminalDown], pane: &str| -> Vec<u8> {
         key_lines(lines)
@@ -733,9 +745,8 @@ fn a_stalled_link_takes_256_kib_of_one_byte_keys_and_refuses_only_the_next() {
 fn a_waiting_run_of_keys_stops_at_a_pane_a_control_an_enter_and_an_escape() {
     let (proxy, link, _heard) = proxy();
     stall(&proxy);
-    let key = |pane: &str, bytes: &[u8], at: u64| {
-        proxy.key(KeyTarget::Pane(pane.into()), bytes.to_vec(), at)
-    };
+    let key =
+        |pane: &str, bytes: &[u8], at: u64| type_keys(&proxy, pane.into(), bytes.to_vec(), at);
     key("w1:p1", b"a", 1);
     key("w1:p1", b"b", 2);
     key("w1:p1", b"\r", 3);
@@ -789,6 +800,71 @@ fn a_waiting_run_of_keys_stops_at_a_pane_a_control_an_enter_and_an_escape() {
     assert_eq!(control, d + 1);
 }
 
+/// with-hide/hide issue 2952: a screen's paste for a device's pane goes down as a
+/// key line of its own marked `paste`, so the device's node hands its holder
+/// a paste; keys typed around it never join it, and an older line with no
+/// mark reads as keys.
+#[test]
+fn a_paste_goes_down_as_a_line_of_its_own_marked_paste() {
+    let (proxy, link, _heard) = proxy();
+    stall(&proxy);
+    let pane = || KeyTarget::Pane("w1:p1".into());
+    proxy.type_into(pane(), ScreenInput::Keys(b"a".to_vec()), 1);
+    proxy.type_into(pane(), ScreenInput::Keys(b"b".to_vec()), 2);
+    proxy.type_into(pane(), ScreenInput::Paste(b"x\ry".to_vec()), 3);
+    proxy.type_into(pane(), ScreenInput::Keys(b"c".to_vec()), 4);
+    proxy.type_into(pane(), ScreenInput::Keys(b"d".to_vec()), 5);
+    link.release();
+    let all = link.wait_for_lines(|lines| ends_with_key(lines, "w1:p1", b"cd"));
+    let sent: Vec<(Vec<u8>, bool)> = all
+        .iter()
+        .filter_map(|line| match line {
+            TerminalDown::Key { data, paste, .. } => Some((decode_base64(data).unwrap(), *paste)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            (b"ab".to_vec(), false),
+            (b"x\ry".to_vec(), true),
+            (b"cd".to_vec(), false),
+        ]
+    );
+    let older: TerminalLine<TerminalDown> = serde_json::from_str(
+        r#"{"terminal":{"kind":"key","target":{"pane":"w1:p1"},"data":"YQ==","typed_at_unix_ms":1}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        older.terminal,
+        TerminalDown::Key { paste: false, .. }
+    ));
+    let keys = String::from_utf8(key_line("w1:p1", b"a")).unwrap();
+    assert!(
+        !keys.contains("paste"),
+        "a key line carries no mark: {keys}"
+    );
+}
+
+/// The device's node hands a key line marked `paste` to its pane's holder
+/// as a paste, and one with no mark as keys.
+#[test]
+fn a_device_node_hands_a_marked_line_to_its_holder_as_a_paste() {
+    let (node, opened) = node();
+    let pane = attach(&node, &opened, "w1:p1");
+    let pasted = line_of(TerminalDown::Key {
+        target: KeyTarget::Pane("w1:p1".into()),
+        data: encode_base64(b"one\rtwo"),
+        typed_at_unix_ms: 1,
+        paste: true,
+    })
+    .unwrap();
+    node.line(pasted.trim_ascii_end());
+    node.line(key_line("w1:p1", b"k").trim_ascii_end());
+    assert_eq!(pane.next_write(), ("paste", b"one\rtwo".to_vec()));
+    assert_eq!(pane.next_write(), ("input", b"k".to_vec()));
+}
+
 /// The controls, views and redraws waiting for a device's link are capped
 /// (principle 15): with the link stalled, views past the count stop the
 /// queue growing, drop what waited, refuse later keys with a reason, and
@@ -811,7 +887,7 @@ fn a_stalled_link_past_what_may_wait_is_ended_rather_than_grown() {
         lock(&views.shared.state).lines.is_empty(),
         "what waited was dropped"
     );
-    views.key(KeyTarget::Pane("w1:p1".into()), b"late".to_vec(), 1);
+    type_keys(&views, "w1:p1".into(), b"late".to_vec(), 1);
     let refused = |heard: &Heard| {
         heard
             .reports
@@ -843,20 +919,20 @@ fn every_panes_keys_at_their_caps_end_no_link_and_refuse_only_their_pane() {
     stall(&proxy);
     let keys = vec![b'k'; MAX_UNSENT_KEY_BYTES - MAX_PANE_KEY_LINES];
     for pane in 0..MAX_KEY_PANES {
-        proxy.key(KeyTarget::Pane(format!("w1:p{pane}")), keys.clone(), 1);
+        type_keys(&proxy, format!("w1:p{pane}"), keys.clone(), 1);
     }
     let runs = lock(&proxy.shared.state).keys["w1:p0"].lines;
     let enters = MAX_PANE_KEY_LINES - runs;
     for _ in 0..enters {
-        proxy.key(KeyTarget::Pane("w1:p0".into()), b"\r".to_vec(), 1);
+        type_keys(&proxy, "w1:p0".into(), b"\r".to_vec(), 1);
     }
     assert!(
         heard.reports.lock().unwrap().is_empty(),
         "no key was refused"
     );
-    proxy.key(KeyTarget::Pane("w1:p0".into()), b"\r".to_vec(), 1);
-    proxy.key(KeyTarget::Pane("w9:p9".into()), b"x".to_vec(), 1);
-    proxy.key(KeyTarget::Pane("w1:p1".into()), b"\r".to_vec(), 1);
+    type_keys(&proxy, "w1:p0".into(), b"\r".to_vec(), 1);
+    type_keys(&proxy, "w9:p9".into(), b"x".to_vec(), 1);
+    type_keys(&proxy, "w1:p1".into(), b"\r".to_vec(), 1);
     let refused: Vec<String> = heard
         .reports
         .lock()
@@ -913,13 +989,13 @@ fn every_panes_keys_at_their_caps_end_no_link_and_refuse_only_their_pane() {
 fn a_failed_link_refuses_keys_once_per_pane_and_never_keeps_them() {
     let (proxy, link, heard) = proxy();
     *link.fail.lock().unwrap() = Some(LineRefused::Ended("the link closed".into()));
-    proxy.key(KeyTarget::Pane("w1:p1".into()), b"lost".to_vec(), 1);
-    proxy.key(KeyTarget::Pane("w1:p1".into()), b"queued".to_vec(), 1);
+    type_keys(&proxy, "w1:p1".into(), b"lost".to_vec(), 1);
+    type_keys(&proxy, "w1:p1".into(), b"queued".to_vec(), 1);
     link.release();
     wait_for(|| lock(&proxy.shared.state).failed.is_some());
     assert!(lock(&proxy.shared.state).lines.is_empty());
-    proxy.key(KeyTarget::Pane("w1:p1".into()), b"after".to_vec(), 1);
-    proxy.key(KeyTarget::Pane("w1:p1".into()), b"after".to_vec(), 1);
+    type_keys(&proxy, "w1:p1".into(), b"after".to_vec(), 1);
+    type_keys(&proxy, "w1:p1".into(), b"after".to_vec(), 1);
     let errors = heard
         .reports
         .lock()
@@ -940,11 +1016,11 @@ fn a_failed_link_refuses_keys_once_per_pane_and_never_keeps_them() {
 fn a_failed_link_tells_a_bounded_set_of_panes() {
     let (proxy, link, heard) = proxy();
     *link.fail.lock().unwrap() = Some(LineRefused::Ended("the link closed".into()));
-    proxy.key(KeyTarget::Pane("w1:p1".into()), b"lost".to_vec(), 1);
+    type_keys(&proxy, "w1:p1".into(), b"lost".to_vec(), 1);
     link.release();
     wait_for(|| lock(&proxy.shared.state).failed.is_some());
     for pane in 0..REMEMBERED_PANES + 100 {
-        proxy.key(KeyTarget::Pane(format!("w9:p{pane}")), b"k".to_vec(), 1);
+        type_keys(&proxy, format!("w9:p{pane}"), b"k".to_vec(), 1);
     }
     let errors = heard
         .reports
@@ -1216,9 +1292,9 @@ fn output_from_the_device_reaches_the_hub_decoded_and_named_by_device() {
 fn a_busy_link_writes_the_line_again_and_refuses_nothing() {
     let (proxy, link, heard) = proxy();
     *link.busy.lock().unwrap() = 2;
-    proxy.key(KeyTarget::Pane("w1:p1".into()), b"a".to_vec(), 1);
-    proxy.key(KeyTarget::Pane("w1:p1".into()), b"\r".to_vec(), 2);
-    proxy.key(KeyTarget::Pane("w1:p1".into()), b"b".to_vec(), 3);
+    type_keys(&proxy, "w1:p1".into(), b"a".to_vec(), 1);
+    type_keys(&proxy, "w1:p1".into(), b"\r".to_vec(), 2);
+    type_keys(&proxy, "w1:p1".into(), b"b".to_vec(), 3);
     link.release();
     let lines = link.wait_for_lines(|lines| ends_with_key(lines, "w1:p1", b"b"));
     assert_eq!(
@@ -1230,7 +1306,7 @@ fn a_busy_link_writes_the_line_again_and_refuses_nothing() {
         ]
     );
     assert!(heard.reports.lock().unwrap().is_empty(), "nothing refused");
-    proxy.key(KeyTarget::Pane("w1:p1".into()), b"c".to_vec(), 4);
+    type_keys(&proxy, "w1:p1".into(), b"c".to_vec(), 4);
     link.wait_for_lines(|lines| ends_with_key(lines, "w1:p1", b"c"));
 }
 

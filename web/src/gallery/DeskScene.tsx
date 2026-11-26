@@ -6,7 +6,7 @@
 // mission, every chat notice, a thread that cannot be read, Settings ›
 // Desk). The sidebar column is a stand-in built from the shared row parts;
 // the real sidebar is not changed. Nothing leaves the page.
-import { DiamondIcon, FileTextIcon, ImageIcon, MapIcon } from "lucide-react";
+import { DiamondIcon, FileTextIcon, ImageIcon, MapIcon, PlayIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { createActions } from "../actions";
 import { AgentMark } from "../AgentMark";
@@ -16,8 +16,14 @@ import { DeskApprovalCard, DeskChat, DeskEmpty, DeskHandedLine, type DeskChatAct
 import { DeskPaneReturn } from "../components/desk/desk-entry";
 import { DeskJobCard, JobMark, OutputMark } from "../components/desk/desk-job-card";
 import { DeskChatColumn, DeskChatHead, DeskRoom, DeskTabPanel, type PanelTab } from "../components/desk/desk-room";
-import { SessionAskCard, SessionHead } from "../components/desk/desk-session";
+import { SessionAskCard, SessionHead, SessionRecordFoot } from "../components/desk/desk-session";
+import { LineButton } from "../LinkSessions";
 import { OutputShelf } from "../components/desk/output-shelf";
+import { FileDropZone } from "../components/desk/file-drop";
+import { FilePathChip } from "../components/desk/file-path-chip";
+import { PreviewTileView, type TileFile } from "../components/desk/preview-tile";
+import type { Preview } from "../filePreview";
+import { MarkdownText } from "../MarkdownText";
 import { SidebarHeader } from "../components/sidebar-header";
 import { DeskMentionMenu } from "../components/desk/desk-mention-menu";
 import { DeskOutputs } from "../components/desk/desk-outputs";
@@ -28,7 +34,7 @@ import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
 import { Separator } from "../components/ui/separator";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { askingCount, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskPermission, type DeskSelection, type DeskSessionRef, type ThreadReadFailure, type WorkingPhase } from "../desk";
+import { askingCount, outputKindOf, recordCard, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskPermission, type DeskSelection, type DeskSessionRef, type ThreadReadFailure, type WorkingPhase } from "../desk";
 import { keepSent, mentionTree, type ComposerTray, type TrayFile } from "../deskComposer";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -36,10 +42,10 @@ import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { MissionMap } from "../MissionMap";
 import { cn } from "../lib/utils";
 import { useShellStore } from "../store";
-import type { SessionPull, SnapshotRest } from "../snapshot";
+import type { DeskRecord, SessionPull, SnapshotRest } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
-  AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_CARD, PLAN_EXIT_OPTIONS, WAITING_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
+  AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_CARD, PLAN_EXIT_OPTIONS, WAITING_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, endedScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
   mentionItems, missionItems, OUTPUTS, PICTURES, RECORD_THREAD, SESSION_VIEWS, SESSIONS, stateItems, statusItems, storyJobs, switchedItems, WORKER_THREAD,
 } from "./deskSceneData";
 
@@ -70,6 +76,11 @@ export const DESK_SCENES = [
   { state: "chat-states", label: "채팅 상태: 승인 답 (항상 허용, 한 줄과 거절), 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15, B47)" },
   { state: "thread-states", label: "스레드 읽기 실패 · 읽는 중 · 빈 · 연결 안 됨 (B23, B27)" },
   { state: "chips", label: "답 속 칩 전부 · 흐린 칩 · 칩 상세 카드 (B50, D-86)" },
+  { state: "ended", label: "끝난 세션: 기록 칩 · 상세 카드 · 기록 읽기 · 이어서 하기 (frame J, K)" },
+  { state: "drop", label: "파일을 Desk 대화 칸 한가운데로 끌어온 순간: 입력칸 테두리만 (피드백 2, L 가)" },
+  { state: "drop-session", label: "파일을 옆 세션 패널로 끌어온 순간: 그 입력칸 테두리만 (피드백 2, L 나)" },
+  { state: "tiles", label: "종류별 미리보기 타일 · 못 만들 때의 타일 (피드백 2, M [1], 라)" },
+  { state: "file-chips", label: "답 속 파일 칩: 프로젝트 안 · 밖 ↗ · 없는 경로 · 코드 (피드백 2, M [2], 가)" },
   { state: "settings", label: "Settings › Labs › Desk (B4, B19, B21)" },
   { state: "settings-off", label: "Settings › Labs › Desk 꺼짐, 기본값 (D-76, B41)" },
 ] as const;
@@ -183,6 +194,18 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, se
       asks={asks}
       onTerminal={noop} {...PART_ACTIONS}
     />
+  </>;
+}
+
+/** A session whose pane is gone, read from the record Hide keeps (frame K): no composer, no terminal, 이어서 하기 at its foot. */
+function EndedColumn({ record }: { record: DeskRecord }) {
+  const actions = useMemo(() => createActions(() => true), []);
+  const job = useMemo(() => recordCard(record), [record]);
+  const lines = useMemo(() => threadLines(RECORD_THREAD, {}, sceneSession), []);
+  const resume = <LineButton icon={<PlayIcon aria-hidden="true" />} label="이어서 하기" blocked={null} busy={false} onClick={noop} data="resume" id={record.session.session_id} />;
+  return <>
+    <SessionHead paneId={record.pane_id} title={record.title} job={job} row={null} pane={null} machine={null} disconnected={false} sleeping={false} ended={{ pulls: record.pull_requests }} explorerOpen={false} filesChord={null} terminalChord={null} deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />
+    <ThreadView job={job} lines={lines} mentions={MENTIONS} startedByDesk composer={{ value: "", tray: sceneTray([]), onChange: noop, onSend: noop }} foot={<SessionRecordFoot endedAt={record.ended_at_unix_ms} resume={resume} blocked={null} />} {...PART_ACTIONS} />
   </>;
 }
 
@@ -364,6 +387,23 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       );
       break;
     }
+    case "drop": {
+      const items: DeskItem[] = [{ kind: "user", id: 1, text: "Windows 설치가 중간에 멈춰. 로그 붙일게", at_ms: now, mentions: [] }, { kind: "reply", mentions: [], missions: [], agent: "claude", id: 2, text: "로그를 주시면 어느 단계에서 멈췄는지 볼게요.", at_ms: now, state: "done", thought_ms: 8_000, steps: { sessions: 6, files: 0, letters: 0, starts: 0, other: 0 } }];
+      body = <Room chat={<DeskChatColumn head={<ChatHead />} composer={<ChatComposer selection={CLAUDE} />} tray={sceneTray([])} dragging>{<DeskChat items={items} jobs={jobs} agents={AGENTS} selectedJob={null} selectedOutput={null} live={null} working={null} queued={[]} {...CHAT_ACTIONS} />}</DeskChatColumn>} />;
+      break;
+    }
+    case "drop-session": {
+      const thread = galleryThread();
+      body = <Room chat={chat([{ kind: "job", id: 1, job_id: "gallery" }], <ChatComposer selection={CLAUDE} />, { selectedJob: "gallery" })}
+        session={<FileDropZone tray={sceneTray([])} dragging className="flex min-h-0 min-w-0 flex-1 flex-col"><ThreadColumn job={jobs.gallery!} updates={thread.updates} parts={thread.parts} /></FileDropZone>} />;
+      break;
+    }
+    case "tiles":
+      body = <TileStates />;
+      break;
+    case "file-chips":
+      body = <FileChipStates />;
+      break;
     case "chips": {
       // Every session the answer names is a chip, the 17th on too; m349 is no longer listed, so it is dimmed with no status.
       const scene = chipsScene(now);
@@ -375,8 +415,26 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
           <aside className="flex shrink-0 flex-col gap-xs border-l border-border p-lg" data-desk-scene-chip-card="open">
             <h3 className="text-micro text-muted-foreground">칩에 마우스를 올리면</h3>
             <span><SessionChip session={{ name: open.card!.title, mark: open.mark, agent_kind: open.agent_kind, pane_id: scene.open }} onPress={noop} className="ring-1 ring-mention-session" /></span>
-            <div className="w-(--size-pr-popover) max-w-full rounded-sm border border-border bg-popover text-popover-foreground shadow-overlay">
+            <div className="w-(--size-pr-popover) max-w-full rounded-sm bg-popover text-popover-foreground shadow-overlay">
               <SessionCard job={open.card!} since={open.since} parent={open.parent} onOpen={noop} onParent={noop} />
+            </div>
+          </aside>
+        </SessionChipProvider>
+      );
+      break;
+    }
+    case "ended": {
+      // The ended chip opens its record beside Desk with the ring; the dimmed one has no record and no press.
+      const scene = endedScene(now);
+      const ended = scene.facts.get(scene.record.pane_id)!;
+      const source = { facts: (session: DeskSessionRef) => (session.pane_id ? scene.facts.get(session.pane_id) ?? null : null), onOpen: noop, open: scene.record.pane_id };
+      body = (
+        <SessionChipProvider source={source}>
+          <Room chat={chat(scene.items, <ChatComposer selection={CLAUDE} />)} session={<EndedColumn record={scene.record} />} />
+          <aside className="flex shrink-0 flex-col gap-xs border-l border-border p-lg" data-desk-scene-chip-card="ended">
+            <h3 className="text-micro text-muted-foreground">칩에 마우스를 올리면</h3>
+            <div className="w-(--size-pr-popover) max-w-full rounded-sm bg-popover text-popover-foreground shadow-overlay">
+              <SessionCard job={ended.card!} since={ended.since} parent={null} onOpen={noop} onParent={noop} />
             </div>
           </aside>
         </SessionChipProvider>
@@ -459,3 +517,59 @@ function OutputsCriteria() {
     </div>
   );
 }
+
+/** Every tile a file or page shows (feedback 2 frame M [1], 라), each from the preview it would make. */
+function TileStates() {
+  const shot = sampleShot();
+  const file = (label: string): TileFile => ({ id: label, label, path: `/repo/${label}`, url: null, device: null, root: "/repo" });
+  const picture = (pages: number | null, seconds: number | null): Preview => ({ state: "picture", picture: shot, pages, seconds });
+  const made: [TileFile, Preview][] = [
+    [file("settings-devices.png"), picture(null, null)],
+    [file("rc9-검증-보고서.pdf"), picture(12, null)],
+    [{ ...file("withhide.dev/download"), path: null, url: "https://withhide.dev/download" }, picture(null, null)],
+    [file("release-notes.md"), { state: "text", title: "1.3.0 릴리스 노트", lines: ["기기 연결이 끊긴 뒤 다시 붙을 때 로그인이 풀리던 문제를 고쳤어요.", "Windows 설치 중 멈추던 단계를 다시 시도해요.", "Desk에 파일을 어디에나 놓을 수 있어요."] }],
+    [file("pairing-demo.mp4"), picture(null, 42)],
+  ];
+  const missing: [TileFile, Preview][] = [
+    [file("mini-login.log"), { state: "reading" }],
+    [file("rc9-검증-보고서.pdf"), { state: "failed" }],
+    [file("full-run.mov"), { state: "too_large", bytes: 1_288_490_189 }],
+    [{ ...file("settings-devices.png"), device: "deepbox" }, { state: "offline" }],
+    [file("build.ts"), { state: "none" }],
+  ];
+  const row = (tiles: [TileFile, Preview][], key: string) => (
+    <ul className="flex flex-wrap gap-sm" data-desk-scene-tiles={key}>
+      {tiles.map(([one, preview], index) => <li key={index}><PreviewTileView file={one} preview={preview} onRetry={noop} onOpen={noop} unseen={index === 1 && key === "made"} /></li>)}
+    </ul>
+  );
+  return (
+    <div className="flex flex-col gap-lg p-lg">
+      <h3 className="text-caption text-muted-foreground">종류별</h3>
+      {row(made, "made")}
+      <h3 className="text-caption text-muted-foreground">미리보기를 못 만들 때</h3>
+      {row(missing, "missing")}
+      <h3 className="text-caption text-muted-foreground">선반 펼친 목록 (3칸)</h3>
+      <ul className="grid w-(--size-pr-popover) grid-cols-3 gap-sm" data-desk-scene-tiles="shelf">
+        {[...made.slice(0, 4), missing[0]!].map(([one, preview], index) => <li key={index} className="min-w-0"><PreviewTileView file={one} preview={preview} onRetry={noop} onOpen={noop} fill /></li>)}
+      </ul>
+    </div>
+  );
+}
+
+/** A Desk answer naming files (feedback 2 frame M [2], 가): a project's file as a chip, an outside one with ↗, a missing path and code as words. */
+function FileChipStates() {
+  const text = "검증은 다 통과했어요. 보고서는 agents/runs/rc9/rc9-검증-보고서.pdf, 바뀐 점은 release-notes.md 에 정리했고, 문제였던 화면은 `settings-devices.png` 예요. 내려받은 ~/Downloads/crash.log 는 이번 일과 관계없어요. 옛 메모 agents/runs/old/notes.md 는 지웠어요.\n```sh\nopen agents/runs/rc9/rc9-검증-보고서.pdf\n```";
+  const project = (written: string, path: string) => ({ token: written, at: [text.indexOf(written)], node: <TooltipProvider><FilePathChip file={{ kind: "project", path, device: "local", root: "/repo" }} onOpen={noop} /></TooltipProvider> });
+  const chips = [
+    project("agents/runs/rc9/rc9-검증-보고서.pdf", "/repo/agents/runs/rc9/rc9-검증-보고서.pdf"),
+    project("release-notes.md", "/repo/release-notes.md"),
+    project("`settings-devices.png`", "/repo/settings-devices.png"),
+    { token: "~/Downloads/crash.log", at: [text.indexOf("~/Downloads/crash.log")], node: <TooltipProvider><FilePathChip file={{ kind: "outside", path: "/Users/me/Downloads/crash.log" }} onOpen={noop} /></TooltipProvider> },
+  ];
+  return (
+    <div className="flex max-w-(--size-editor-measure) flex-col gap-lg p-lg">
+      <MarkdownText text={text} size="chat" chips={chips} />
+    </div>
+  );
+}
+

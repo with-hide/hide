@@ -22,7 +22,7 @@ import { MissionChip } from "./components/mission-chip";
 import { SidebarMissionRow, useEveryDeviceMissionAsks, useMissionAsks } from "./components/sidebar-mission-row";
 import { LookChip } from "./components/linked-view";
 import { SidebarAutomationLookRow, SidebarAutomationRow, useEveryDeviceAutomationAsks, useEveryDeviceAutomationLooks } from "./components/sidebar-automation-row";
-import { automationOwnAsks, missionOwnAsks, ownAskKey } from "./ownAsks";
+import { automationOwnAsks, automationRests, missionOwnAsks, ownAskKey, type OwnAsk } from "./ownAsks";
 import { DeviceChip } from "./components/device-chip";
 import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
@@ -51,7 +51,7 @@ import { revealRow, sidebarFocusPane } from "./sidebarFocus";
 import { siblingsShown, type SidebarTreeLine } from "./sidebarTree";
 import { catalogWorkspaces, listedCatalog, localDeviceId, SIDEBAR_LENSES, type AgentRow, type TaskView } from "./snapshot";
 import { useShellStore } from "./store";
-import { drawnTasks, elsewhereTasks, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
+import { drawnTasks, elsewhereTasks, restingRows, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type BandRow, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
 import { InToolCell, ToolLabel } from "./components/tool-mark";
 import type { TaskState, ToolCell } from "./agentScope";
@@ -131,8 +131,13 @@ export function TaskLens({ actions }: { actions: Actions }) {
   const everyAutomation = useEveryDeviceAutomationAsks(deviceId);
   const everyLook = useEveryDeviceAutomationLooks(deviceId);
   const asks = useMemo(() => (filter ? missionOwnAsks(ownAsks) : [...missionOwnAsks(everyAsk), ...automationOwnAsks(everyAutomation, everyLook)]), [filter, ownAsks, everyAsk, everyAutomation, everyLook]);
+  // An automation's run looked at after it came to 내 차례 rests in 쉬는 중 on the machine that runs it, whose core keeps
+  // the automations this window reads; it is no project's, so a project filter leaves it out.
+  const section = useShellStore((s) => s.automations);
+  const local = deviceId === localDeviceId(rest);
+  const rests = useMemo(() => (filter || !local ? [] : automationRests(section, deviceId)), [filter, local, section, deviceId]);
   const elsewhere = useMemo(() => (filter ? [] : elsewhereTasks(rest?.navigator?.devices, deviceId, (id) => deviceConnected(rest, id), (id) => machineName(rest?.navigator?.devices, id, t))), [filter, rest, deviceId, t]);
-  const list = useMemo(() => taskList(scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere), [scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere]);
+  const list = useMemo(() => taskList(scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere, rests), [scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere, rests]);
   // A connected machine's own rows are listed with this computer's, so a list with nothing of its own, or a computer with no project yet, still draws them (PRD device-connect-iroh B49).
   // The work another machine started here is not: it is that machine's, in its own list, and stands only in the 프로젝트 tab (B10).
   const otherMachines = useShellStore((s) => (s.rest?.navigator?.peer_work ?? []).some((peer) => (peer.rows?.length ?? 0) > 0));
@@ -151,7 +156,7 @@ export function TaskLens({ actions }: { actions: Actions }) {
           <span className="min-w-0 truncate">{t("taskLens.unresponsive", { device: unresponsive })}</span>
         </p>
       ) : null}
-      {rest === null || !scope ? <TaskSkeleton /> : noProject && !otherMachines ? <NoProject actions={actions} /> : list.total === 0 && list.groups.length === 0 && list.resting.length === 0 && list.cleanup.length === 0 && list.archived.length === 0 && !otherMachines ? <NoTasks actions={actions} /> : (
+      {rest === null || !scope ? <TaskSkeleton /> : noProject && !otherMachines ? <NoProject actions={actions} /> : list.total === 0 && list.groups.length === 0 && list.resting.length === 0 && list.rests.length === 0 && list.cleanup.length === 0 && list.archived.length === 0 && !otherMachines ? <NoTasks actions={actions} /> : (
         <TaskGroups list={list} view={view} showProject={view === "status" && !filter} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={!connected} actions={actions} />
       )}
     </div>
@@ -259,6 +264,9 @@ function NoProject({ actions }: { actions: Actions }) {
   );
 }
 
+/** A row as the list draws it: a task with its tree, or an item with no agent row of its own. */
+type DrawnRow = { kind: "task"; tree: { entry: TaskEntry; lines: SidebarTreeLine[] } } | { kind: "item"; own: OwnAsk };
+
 const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, agents, folds, focusedPane, disabled, actions }: {
   list: ReturnType<typeof taskList>; view: TaskView; showProject: boolean; byPane: ReadonlyMap<string, AgentRow>; agents: readonly AgentRow[]; folds: string[]; focusedPane: string | null; disabled: boolean; actions: Actions;
 }) {
@@ -290,10 +298,12 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   const numbers = numbered ? numberedPanes(drawnTasks(shown).map(({ agent }) => agent.pane_id)) : null;
   const siblings = useShellStore((s) => siblingsShown(s.rest));
   const treesOf = (entries: TaskEntry[]) => entries.map((entry) => ({ entry, lines: sessionTreeLines(entry.agent, byPane, opened, shownAll, siblings) }));
-  const sections = shown.sections.map(({ group, resting, cleanup, archived }) => ({ group, bands: group.bands.map((band) => { const trees = treesOf(band.entries); return { state: band.state, trees, rows: band.rows.map((row) => (row.kind === "ask" ? row : { kind: "task" as const, tree: trees[band.entries.indexOf(row.entry)]! })) }; }), resting: treesOf(resting), cleanup: treesOf(cleanup), archived }));
-  const restingTrees = treesOf(shown.resting);
+  // A band's rows and 쉬는 중's, its tasks with their trees and the items with no agent row among them.
+  const withTrees = (entries: TaskEntry[], rows: BandRow[]) => { const trees = treesOf(entries); return { trees, rows: rows.map((row): DrawnRow => (row.kind === "item" ? row : { kind: "task", tree: trees[entries.indexOf(row.entry)]! })) }; };
+  const sections = shown.sections.map(({ group, resting, rests, cleanup, archived }) => ({ group, bands: group.bands.map((band) => ({ state: band.state, ...withTrees(band.entries, band.rows) })), resting: withTrees(resting, restingRows(resting, rests)), cleanup: treesOf(cleanup), archived }));
+  const restingTrees = withTrees(shown.resting, restingRows(shown.resting, shown.rests));
   const cleanupTrees = treesOf(shown.cleanup);
-  const drawn = new Set([...sections.flatMap(({ bands, resting, cleanup }) => [...bands.flatMap((band) => band.trees), ...resting, ...cleanup]), ...restingTrees, ...cleanupTrees]
+  const drawn = new Set([...sections.flatMap(({ bands, resting, cleanup }) => [...bands.flatMap((band) => band.trees), ...resting.trees, ...cleanup]), ...restingTrees.trees, ...cleanupTrees]
     .flatMap(({ lines }) => lines.flatMap((line) => (line.kind === "agent" ? [line.row.agent.pane_id] : []))));
   const selected = sidebarFocusPane(focusedPane, agents, drawn);
   // The selected row comes into view when the row standing for the focus
@@ -314,6 +324,12 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
     <TaskTree key={entry.card.root} entry={entry} lines={lines} byPane={byPane} opened={opened} selected={selected} number={numbers ? numberOf(numbers, entry.agent.pane_id) : null} showProject={showProject} disabled={disabled} actions={actions} onShowAll={showAll} />
   ));
   const archivedList = (entries: ArchivedEntry[]) => entries.map((entry) => <ArchivedRow key={entry.row.id} entry={entry} showProject={showProject} disabled={disabled} actions={actions} />);
+  const item = (own: OwnAsk) => (own.kind === "mission"
+    ? <SidebarMissionRow key={ownAskKey(own)} ask={own.ask} inset={MISSION_INSET} actions={actions} place={showProject} data-task-focus="row" />
+    : own.kind === "automation"
+      ? <SidebarAutomationRow key={ownAskKey(own)} ask={own.ask} inset={MISSION_INSET} actions={actions} data-task-focus="row" />
+      : <SidebarAutomationLookRow key={ownAskKey(own)} look={own.ask} rest={own.kind === "automation_rest"} inset={MISSION_INSET} actions={actions} data-task-focus="row" />);
+  const drawRows = (drawnRows: DrawnRow[]) => drawnRows.map((row) => (row.kind === "item" ? item(row.own) : rows([row.tree])[0]));
   // In 상태별 a section draws no box of its own, so its head sticks beside the
   // heads of the groups above it rather than leaving with its rows: each head
   // stacks under the ones already passed, and pressing one goes back to its rows.
@@ -324,17 +340,11 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
         <Fragment key={band.state}>
           {view === "project" ? <BandHead state={band.state} /> : null}
           <ul className="flex min-w-0 flex-col" aria-label={view === "project" ? groupLabel(band.state, tool, t) : undefined} data-task-band-list={view === "project" ? band.state : undefined}>
-            {band.rows.map((row) => (row.kind === "ask"
-              ? row.own.kind === "mission"
-                ? <SidebarMissionRow key={ownAskKey(row.own)} ask={row.own.ask} inset={MISSION_INSET} actions={actions} place={showProject} data-task-focus="row" />
-                : row.own.kind === "automation"
-                  ? <SidebarAutomationRow key={ownAskKey(row.own)} ask={row.own.ask} inset={MISSION_INSET} actions={actions} data-task-focus="row" />
-                  : <SidebarAutomationLookRow key={ownAskKey(row.own)} look={row.own.ask} inset={MISSION_INSET} actions={actions} data-task-focus="row" />
-              : rows([row.tree])[0]))}
+            {drawRows(band.rows)}
           </ul>
         </Fragment>
       ))}
-      {view === "project" ? <Folds group={group} resting={resting} cleanup={cleanup} archived={archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
+      {view === "project" ? <Folds group={group} resting={drawRows(resting.rows)} cleanup={rows(cleanup)} archived={archivedList(archived)} open={openFolds} onToggle={toggleFold} /> : null}
       {/* A connected machine's own rows of the same state follow this computer's (PRD device-connect-iroh D-50, B49). */}
       {!tool && view === "status" && (group.state === "needs_you" || group.state === "done") ? <ul className="flex min-w-0 flex-col"><PeerWorkRows group={group.state} actions={actions} treeIndent /></ul> : null}
     </section>
@@ -345,14 +355,14 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   // projects tree's Needs You and Done, and scroll away with the rest. Their heads
   // stay, stacked under the ones already passed, so a scrolled list still says what
   // is above it and pressing a head goes back to its rows.
-  const statusFolds = view === "status" ? [list.resting, list.cleanup, list.archived].filter((entries) => entries.length > 0).length : 0;
+  const statusFolds = view === "status" ? [list.resting.length + list.rests.length, list.cleanup.length, list.archived.length].filter((count) => count > 0).length : 0;
   return (
     <div ref={lists} className={cn("flex min-h-0 flex-1 flex-col", disabled && "opacity-(--opacity-disabled)")} data-task-list="true" onKeyDown={moveFocus}>
       <div className="min-h-0 flex-1 overflow-y-auto px-sm pb-md" style={view === "status" ? stackPadding(sections.length + statusFolds) : undefined} data-task-scroll="list">
         {peerOnly("needs_you")}
         {peerOnly("done")}
         {sections.map(drawSection)}
-        {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} stackFrom={sections.length} /> : null}
+        {view === "status" ? <Folds group={{ key: "", resting: list.resting, rests: list.rests, cleanup: list.cleanup, archived: list.archived }} resting={drawRows(restingTrees.rows)} cleanup={rows(cleanupTrees)} archived={archivedList(shown.archived)} open={openFolds} onToggle={toggleFold} stackFrom={sections.length} /> : null}
       </div>
     </div>
   );
@@ -457,21 +467,22 @@ function GroupHead({ group, stack }: { group: TaskGroup; stack: number }) {
   );
 }
 
-/** `쉬는 중 N ›`, `정리할 것 N ›` and, last, `보관됨 N ›` (B5; PRD session-archive B14, B15): folded, opened in place, closed with `접기`. */
-function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archivedRows: drawArchived, stackFrom = null }: {
-  group: Pick<TaskGroup, "key" | "resting" | "cleanup" | "archived">;
-  resting: { entry: TaskEntry; lines: SidebarTreeLine[] }[];
-  cleanup: { entry: TaskEntry; lines: SidebarTreeLine[] }[];
-  archived: ArchivedEntry[];
+/**
+ * `쉬는 중 N ›`, `정리할 것 N ›` and, last, `보관됨 N ›` (B5; PRD session-archive B14, B15): folded, opened in place, closed with
+ * `접기`. Each fold's rows come drawn, nothing while it is folded (`taskSections`); 쉬는 중 counts its items with its tasks.
+ */
+function Folds({ group, resting, cleanup, archived, open, onToggle, stackFrom = null }: {
+  group: Pick<TaskGroup, "key" | "resting" | "rests" | "cleanup" | "archived">;
+  resting: ReactNode;
+  cleanup: ReactNode;
+  archived: ReactNode;
   open: ReadonlySet<string>;
   onToggle: (key: string) => void;
-  rows: (trees: { entry: TaskEntry; lines: SidebarTreeLine[] }[]) => ReactNode;
-  archivedRows: (entries: ArchivedEntry[]) => ReactNode;
   /** In 상태별, the place in the stack of sticky heads the first fold button takes; null where the folds do not stick. */
   stackFrom?: number | null;
 }) {
   const { t } = useInterfaceTranslation();
-  const counts = [group.resting.length, group.cleanup.length, group.archived.length];
+  const counts = [group.resting.length + group.rests.length, group.cleanup.length, group.archived.length];
   const fold = (kind: "rest" | "cleanup" | "archived", count: number, drawn: ReactNode) => {
     if (count === 0) return null;
     const key = taskFoldKey(kind, group.key);
@@ -491,7 +502,7 @@ function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archiv
       </div>
     );
   };
-  return <>{fold("rest", group.resting.length, rows(resting))}{fold("cleanup", group.cleanup.length, rows(cleanup))}{fold("archived", group.archived.length, drawArchived(archived))}</>;
+  return <>{fold("rest", counts[0]!, resting)}{fold("cleanup", counts[1]!, cleanup)}{fold("archived", counts[2]!, archived)}</>;
 }
 
 /** A task's row and, through every opened row, its descendants (B10). */

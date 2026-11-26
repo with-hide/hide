@@ -15,11 +15,14 @@
 .usage-token-detail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--spacing-xs); padding-top: var(--spacing-xs); }
 .usage-grass-section { display: flex; flex-direction: column; gap: var(--spacing-sm); padding-block: var(--spacing-md); border-block: var(--size-hairline) solid var(--border); }
 .usage-grass { display: grid; flex-shrink: 0; grid-template-columns: repeat(var(--usage-weeks), var(--usage-cell)); grid-template-rows: repeat(7, var(--usage-cell)); gap: var(--size-usage-cell-gap); padding: var(--spacing-xxs); }
-.usage-cell { width: var(--usage-cell); height: var(--usage-cell); border-radius: var(--spacing-xxs); background: var(--secondary); outline-offset: var(--spacing-xxs); outline: none; }
-.usage-cell[data-level="1"] { background: color-mix(in srgb, var(--primary) calc(var(--opacity-usage-level-1) * 100%), var(--secondary)); }
-.usage-cell[data-level="2"] { background: color-mix(in srgb, var(--primary) calc(var(--opacity-usage-level-2) * 100%), var(--secondary)); }
-.usage-cell[data-level="3"] { background: color-mix(in srgb, var(--primary) calc(var(--opacity-usage-level-3) * 100%), var(--secondary)); }
-.usage-cell[data-level="4"] { background: color-mix(in srgb, var(--primary) calc(var(--opacity-usage-level-4) * 100%), var(--secondary)); }
+.usage-cell { position: relative; width: var(--usage-cell); height: var(--usage-cell); border-radius: var(--spacing-xxs); background: var(--secondary); outline-offset: var(--spacing-xxs); outline: none; }
+/* A level is the accent laid over the empty cell at that level's opacity, a layer rather than a color-mix(), which the phone's iOS 15 WebView lacks. */
+.usage-cell[data-level="1"]::before, .usage-cell[data-level="2"]::before, .usage-cell[data-level="3"]::before, .usage-cell[data-level="4"]::before { content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--primary); pointer-events: none; }
+.usage-cell[data-level="1"]::before { opacity: var(--opacity-usage-level-1); }
+.usage-cell[data-level="2"]::before { opacity: var(--opacity-usage-level-2); }
+.usage-cell[data-level="3"]::before { opacity: var(--opacity-usage-level-3); }
+.usage-cell[data-level="4"]::before { opacity: var(--opacity-usage-level-4); }
+.usage-cell[data-pending="true"]::before { content: none; }
 .usage-cell[data-pending="true"] { background: transparent; box-shadow: inset 0 0 0 var(--size-hairline) var(--border); }
 .usage-cell[data-today="true"] { outline: var(--size-hairline) solid var(--muted-foreground); }
 .usage-cell[data-selected="true"], .usage-cell[data-outline="true"], button.usage-cell:hover, button.usage-cell:focus-visible { outline: var(--size-hairline) solid var(--foreground); }

@@ -297,14 +297,19 @@ export function joinFailureKey(failure: JoinFailure | null): MessageKey {
 
 /**
  * The one line a chosen SSH host shows once its own Hide answered (B7):
- * connecting installs nothing there, or what has to happen on that machine
- * before the two can connect as Hides. None for a machine with no Hide of
- * its own or one ssh did not reach without asking: adding it is unchanged.
+ * connecting installs nothing there, what has to happen on that machine
+ * before the two can connect as Hides, or, for a machine with no Hide of its
+ * own, the way that works: add it over SSH here, then its row's
+ * 서버로 연결 puts Hide there (with-hide/hide issue 3007); the look itself installs
+ * nothing (B7, D-45). None for one ssh did not reach without asking: adding
+ * it is unchanged.
  */
-export function sshLookLine(look: SshLook | null | undefined): { key: MessageKey; tone: "ok" | "warn" } | null {
+export function sshLookLine(look: SshLook | null | undefined): { key: MessageKey; tone: "ok" | "warn" | "muted" } | null {
   switch (look?.state) {
     case "ready":
       return { key: "pairing.ssh.ready", tone: "ok" };
+    case "absent":
+      return { key: "pairing.ssh.absentAdd", tone: "muted" };
     case "update_there":
       return { key: "pairing.ssh.updateThere", tone: "warn" };
     case "refused":

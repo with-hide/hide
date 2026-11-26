@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronUpIcon, FolderIcon, HouseIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon, FolderIcon, HouseIcon, RepeatIcon, WaypointsIcon, XIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { Actions } from "./actions";
@@ -28,11 +28,13 @@ import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
 import { closeScope, closeSheet, stopWorkCopy, subtreeTitle, type StopWork, type Subtree } from "./close";
 import { RowMark, SubtreeList } from "./components/subtree-list";
+import { DeskMark } from "./components/desk/desk-entry";
+import { STATE_PILL } from "./missionList";
 import { composingKey } from "./keys";
 
 const CYCLE_TITLE: Record<Cycle["kind"], MessageKey> = {
   area: "shell.recentViewTabs",
-  agents: "shell.recentAgentPanes",
+  places: "shell.recentPlaces",
   panels: "shell.globalRecentPanels",
   projects: "shell.recentProjects",
 };
@@ -52,6 +54,12 @@ function cycleDetail(detail: CycleDetail, t: TFunction<"translation">): string {
       return `${detail.place ?? t("common.home")} · ${t(SURFACE_LABEL[detail.surface])}`;
     case "projects":
       return t("overview.projects", { count: detail.count });
+    case "mission":
+      return `${detail.project} · ${t("kind.mission")} · ${t(STATE_PILL[detail.status])}`;
+    case "automation":
+      return detail.unseen > 0 ? `${t("automationScreen.title")} · ${t("automationScreen.rowHint", { count: detail.unseen })}` : t("automationScreen.title");
+    case "desk":
+      return detail.asking > 0 ? t("desk.lane.threadsCount", { count: detail.asking }) : "";
     case "text":
       return detail.text;
   }
@@ -71,23 +79,23 @@ export function CycleOverlay() {
   if (!cycle) return null;
   const { start, rows } = visibleWindow(cycle.items, cycle.index);
   const title = t(CYCLE_TITLE[cycle.kind]);
-  const chord = commandLabel(cycle.kind === "area" || cycle.kind === "agents" ? "recent_area_tab" : cycle.kind === "panels" ? "recent_panel" : "recent_project", uiState);
+  const chord = commandLabel(cycle.kind === "area" || cycle.kind === "places" ? "recent_area_tab" : cycle.kind === "panels" ? "recent_panel" : "recent_project", uiState);
   return createPortal(
     <div className="fixed inset-x-0 top-[var(--size-tab-strip)] z-30 flex justify-center" data-cycle={cycle.kind}>
-      <div role="listbox" aria-label={title} data-slot="cycle-overlay" className="w-[var(--size-pr-popover)] rounded-md border border-border bg-popover py-xs shadow-overlay">
+      <div role="listbox" aria-label={title} data-slot="cycle-overlay" className="w-[var(--size-pr-popover)] rounded-md bg-popover py-xs shadow-overlay">
         <div className="flex items-center justify-between px-md pb-xxs">
           <span className="text-caption font-semibold uppercase text-muted-foreground">{title}</span>
           {chord ? <Kbd>{chord}</Kbd> : null}
         </div>
         {rows.map((item, offset) => {
           const selected = start + offset === cycle.index;
-          const itemTitle = item.kind === "main" ? t("common.home") : item.title;
+          const itemTitle = item.kind === "main" ? t("common.home") : item.kind === "desk" ? t("desk.name") : item.title;
           const itemDetail = cycleDetail(item.detail, t);
           return (
             <div
               key={item.key}
               role="option"
-              data-cycle-row={item.target.kind === "surface" ? item.target.surface.id : item.target.kind === "pane" ? item.target.paneId : item.key}
+              data-cycle-row={cycleRowId(item)}
               data-cycle-kind={item.kind}
               aria-selected={selected}
               title={item.agent ? agentProductName(item.agent.agent_kind) : undefined}
@@ -97,7 +105,7 @@ export function CycleOverlay() {
               <CycleMarks item={item} title={itemTitle} />
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-body">{itemTitle}</span>
-                <span className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground">
+                <span className="flex min-h-lh min-w-0 items-center gap-xs text-caption text-muted-foreground">
                   <span className="min-w-0 truncate">{itemDetail}</span>
                   {item.chip ? <DeviceChip label={item.chip.label} local={item.chip.local} className="max-w-2/5" /> : null}
                 </span>
@@ -109,6 +117,22 @@ export function CycleOverlay() {
     </div>,
     document.body,
   );
+}
+
+/** What a row's `data-cycle-row` names: the surface, the pane, the mission or the automation it brings forward, else its key. */
+function cycleRowId(item: CycleItem): string {
+  switch (item.target.kind) {
+    case "surface":
+      return item.target.surface.id;
+    case "pane":
+      return item.target.paneId;
+    case "mission":
+      return item.target.missionId;
+    case "automation":
+      return item.target.automationId;
+    default:
+      return item.key;
+  }
 }
 
 /**
@@ -125,12 +149,15 @@ function CycleMarks({ item, title }: { item: CycleItem; title: string }) {
   );
 }
 
-/** The Overview and a Project's Overview wear the marks their sidebar rows wear; an agent's row has its status mark in this slot instead (above). */
+/** The Overview, a Project's Overview, a mission, an automation and Desk wear the marks their sidebar rows wear; an agent's row has its status mark in this slot instead (above). */
 function KindMark({ item, title }: { item: CycleItem; title: string }) {
   // A tab with no single agent keeps the neutral mark the tab strip draws (PRD agent-mark-quiet D-09).
   if (item.kind === "engine") return <AgentMark kind={null} />;
   if (item.kind === "project") return <FolderIcon aria-hidden="true" className="size-(--size-icon) text-muted-foreground" />;
   if (item.kind === "main") return <HouseIcon aria-hidden="true" className="size-(--size-icon) text-muted-foreground" />;
+  if (item.kind === "mission") return <WaypointsIcon aria-hidden="true" className="size-(--size-icon) text-muted-foreground" />;
+  if (item.kind === "automation") return <RepeatIcon aria-hidden="true" className="size-(--size-icon) text-muted-foreground" />;
+  if (item.kind === "desk") return <span className="text-muted-foreground"><DeskMark size="md" /></span>;
   return displayMark({ kind: item.kind, label: title });
 }
 

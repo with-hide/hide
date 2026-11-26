@@ -13,7 +13,7 @@ function Tabs({ className, ...props }: ComponentProps<typeof TabsPrimitive.Root>
 // tabs over a divider: the chosen tab is its primary underline alone, never a
 // fill, and a tab under the pointer shows a faint grey one.
 function TabsList({ className, variant = "segmented", ...props }: ComponentProps<typeof TabsPrimitive.List> & { variant?: "segmented" | "nav" | "underline" }) {
-  return <TabsPrimitive.List data-slot="tabs-list" data-variant={variant} className={cn("group/tabs inline-flex w-fit items-center gap-xxs rounded-sm p-xxs", variant === "segmented" && "bg-foreground/6", className)} {...props} />;
+  return <TabsPrimitive.List data-slot="tabs-list" data-variant={variant} className={cn("group/tabs inline-flex w-fit items-center gap-xxs rounded-sm p-xxs", variant === "segmented" && "bg-secondary", className)} {...props} />;
 }
 
 function TabsTrigger({ className, ...props }: ComponentProps<typeof TabsPrimitive.Trigger>) {
