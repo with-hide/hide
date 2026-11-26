@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
+use hide_host::serve::KitPlace;
 use hide_platform::user_agents::{Linger, UserAgents};
 use serde::Serialize;
 use serde_json::json;
@@ -215,55 +216,62 @@ pub fn agents_for(home: &Path) -> UserAgents {
     UserAgents::of_home(home)
 }
 
-/// The app's package whose core this process is, when it runs from a copy
-/// of a build in the account's install root (`~/.hide/core`, where a paired
-/// machine's login item runs its core) on a state folder the app opened
-/// with its package still there (`hide_kit::app`). That core is the app's
-/// own, run from a copy so the app can be replaced under it: it answers as
-/// the app's installation, so the panes the app's own daemon started keep
-/// reaching it and the ones it starts reach the app's daemon after it, and
-/// it installs the app's kit. Read once, at the core's start
-/// ([`adopt_app`]); `None` for any other program or folder.
-pub fn app_package() -> Option<&'static Path> {
-    APP_PACKAGE.get().and_then(Option::as_deref)
-}
-
-static APP_PACKAGE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
-
-/// Reads [`app_package`] for the core about to start on `state_dir` and, for
-/// the app's, has this process answer as the app's installation
-/// (`hide_host::kit::answer_as`) before anything starts a pane. A core run
-/// from a build in the install root answers the panes that name either of
-/// its two names whichever it starts panes under
-/// (`hide_host::kit::also_answer_for`): the app's package can come or go
-/// between two starts of the same login item, and the panes, which outlive
-/// a start, keep the name they were started under. A note that cannot be
-/// read leaves the core its own installation and is logged.
-pub fn adopt_app(home: &Path, state_dir: &Path) {
-    let Some(program) = std::env::current_exe()
-        .ok()
-        .filter(|program| in_core_root(program, home))
-    else {
-        let _ = APP_PACKAGE.set(None);
-        return;
+/// Decides once, at the core's start on `state_dir`, where its kit comes
+/// from ([`core_kit`]) and so which installation its panes name
+/// (`hide_host::kit::adopt_kit`), before anything starts a pane or reads
+/// that name. A core a login item runs from a copy of the app's build in the
+/// install root, on a folder the app opened with its package still there
+/// (`hide_kit::app`), is the app's own core, run from a copy so the app can
+/// be replaced under it: it installs the app's kit and answers as the app, so
+/// the panes the app's own daemon started keep reaching it and the ones it
+/// starts reach the app's daemon after it. Any other core installs from the
+/// program it runs (`KitPlace::of_program`, for the account's home as the
+/// core reads it), and one that installs nothing names no installation. A core run from a build in the install root answers the
+/// panes that name either of its two names whichever it starts panes under:
+/// the app's package can come or go between two starts of the same login
+/// item, and the panes, which outlive a start, keep the name they were
+/// started under. A note that cannot be read leaves the core its own
+/// installation and is logged.
+pub fn adopt_core_kit(home: &Path, state_dir: &Path) {
+    let program = std::env::current_exe().ok();
+    let in_root = program
+        .as_deref()
+        .is_some_and(|program| in_core_root(program, home));
+    let package = if in_root {
+        noted_package(state_dir)
+    } else {
+        None
     };
-    let package = noted_package(state_dir);
-    if let Some(own) = hide_host::kit::pane_install(&program) {
-        hide_host::kit::also_answer_for(vec![
-            own.id,
-            hide_agent_hooks::route::APP_INSTALL.to_owned(),
-        ]);
+    // A relative HOME names no account folder; the core's node then works
+    // in the home the system names (`core::core_home`).
+    let account = if home.is_absolute() {
+        Some(home.to_path_buf())
+    } else {
+        hide_platform::host::home_dir().ok()
+    };
+    let kit = match (&package, &program) {
+        (Some(package), _) => KitPlace::Bundled(package.clone()),
+        (None, Some(program)) => KitPlace::of_program(program, account.as_deref()),
+        (None, None) => KitPlace::Standalone,
+    };
+    if let Some(program) = &program {
+        let also = if in_root {
+            vec![hide_agent_hooks::route::APP_INSTALL.to_owned()]
+        } else {
+            Vec::new()
+        };
+        hide_host::kit::adopt_kit(&kit, program, &also);
     }
-    if let Some(package) = &package {
-        let cli = package.join(format!("hide{}", std::env::consts::EXE_SUFFIX));
-        hide_host::kit::answer_as(Some(hide_host::kit::PaneInstall {
-            id: hide_agent_hooks::route::APP_INSTALL.to_owned(),
-            cli,
-            path_first: None,
-        }));
-    }
-    let _ = APP_PACKAGE.set(package);
+    let _ = CORE_KIT.set(kit);
 }
+
+/// Where the core's own node installs its kit from, as [`adopt_core_kit`]
+/// decided it at the core's start; nothing for a core that never decided.
+pub fn core_kit() -> KitPlace {
+    CORE_KIT.get().cloned().unwrap_or(KitPlace::Standalone)
+}
+
+static CORE_KIT: std::sync::OnceLock<KitPlace> = std::sync::OnceLock::new();
 
 /// Whether `program` is a build in `home`'s install root, where a paired
 /// machine's login item runs its core from.
