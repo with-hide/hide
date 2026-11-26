@@ -47,7 +47,7 @@ export function ThreadAsks({ asks, onGo }: { asks: readonly AskLine[]; onGo: (as
           ) : null}
         </div>
       </PopoverAnchor>
-      <PopoverContent side="top" align="start" className="flex w-(--radix-popover-trigger-width) min-w-0 flex-col gap-xxs border-open-ask/50 p-xs" data-desk-thread-asks-list={newest.length}>
+      <PopoverContent side="top" align="start" className="flex w-(--radix-popover-trigger-width) min-w-0 flex-col gap-xxs border border-open-ask/50 p-xs" data-desk-thread-asks-list={newest.length}>
         <p className="px-xs text-micro text-muted-foreground">{t("desk.asks.head", { count: newest.length })}</p>
         <ol className="flex min-w-0 flex-col">
           {newest.map((ask, index) => (

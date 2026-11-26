@@ -3,6 +3,7 @@ import { useRef, type ComponentProps } from "react";
 import { cn } from "../../lib/utils";
 import { buttonVariants } from "./button";
 import { useLayerOpen, useReturnFocus } from "./layer";
+import { ModalSurface } from "./floating-surface";
 
 // A confirmation for an irreversible effect (design 6): Escape and Cancel keep
 // things as they are, and the destructive button names its result.
@@ -34,30 +35,32 @@ function AlertDialogContent({
   const surface = useRef<HTMLDivElement>(null);
   const returnFocus = useReturnFocus(true);
   return (
-    <AlertDialogPrimitive.Portal>
-      <AlertDialogPrimitive.Overlay data-slot="alert-dialog-overlay" className="fixed inset-0 z-50 bg-scrim" />
-      <AlertDialogPrimitive.Content
-        ref={surface}
-        tabIndex={-1}
-        data-slot="alert-dialog-content"
-        className={cn(
-          "fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100%-var(--spacing-xxl))] w-(--size-add-device-sheet-w) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 -translate-y-1/2 flex-col gap-md overflow-auto rounded-lg border border-border bg-dialog p-lg text-body text-popover-foreground shadow-modal outline-none",
-          className,
-        )}
-        onOpenAutoFocus={(event) => {
-          onOpenAutoFocus?.(event);
-          if (event.defaultPrevented || initialFocus === "cancel") return;
-          event.preventDefault();
-          const action = initialFocus === "action" ? surface.current?.querySelector<HTMLElement>("[data-initial-focus]") : null;
-          (action ?? surface.current)?.focus();
-        }}
-        onCloseAutoFocus={(event) => {
-          onCloseAutoFocus?.(event);
-          if (!event.defaultPrevented) returnFocus(event);
-        }}
-        {...props}
-      />
-    </AlertDialogPrimitive.Portal>
+    <ModalSurface>
+      <AlertDialogPrimitive.Portal>
+        <AlertDialogPrimitive.Overlay data-slot="alert-dialog-overlay" className="fixed inset-0 z-50 bg-scrim" />
+        <AlertDialogPrimitive.Content
+          ref={surface}
+          tabIndex={-1}
+          data-slot="alert-dialog-content"
+          className={cn(
+            "fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100%-var(--spacing-xxl))] w-(--size-add-device-sheet-w) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 -translate-y-1/2 flex-col gap-md overflow-auto rounded-lg border border-border bg-dialog p-lg text-body text-popover-foreground shadow-modal outline-none",
+            className,
+          )}
+          onOpenAutoFocus={(event) => {
+            onOpenAutoFocus?.(event);
+            if (event.defaultPrevented || initialFocus === "cancel") return;
+            event.preventDefault();
+            const action = initialFocus === "action" ? surface.current?.querySelector<HTMLElement>("[data-initial-focus]") : null;
+            (action ?? surface.current)?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            onCloseAutoFocus?.(event);
+            if (!event.defaultPrevented) returnFocus(event);
+          }}
+          {...props}
+        />
+      </AlertDialogPrimitive.Portal>
+    </ModalSurface>
   );
 }
 

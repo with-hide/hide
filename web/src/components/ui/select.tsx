@@ -4,6 +4,7 @@ import { createContext, useContext, useRef, type ComponentProps, type ReactNode,
 import { cn } from "../../lib/utils";
 import { useLayerOpen, useReturnFocus } from "./layer";
 import { menuContent, menuItem, menuLabel, menuSeparator } from "./menu-styles";
+import { useFloatingSurface } from "./floating-surface";
 
 /** The open state and trigger of one Select, so its content hands the keyboard back through the shell's guard. */
 const SelectLayerContext = createContext<{ open: boolean; trigger: RefObject<HTMLButtonElement | null> } | null>(null);
@@ -63,7 +64,7 @@ function SelectContent({ className, children, position = "popper", onCloseAutoFo
       <SelectPrimitive.Content
         ref={surface}
         data-slot="select-content"
-        className={cn(menuContent, "relative max-h-(--radix-select-content-available-height)", position === "popper" && "w-full min-w-(--radix-select-trigger-width)", className)}
+        className={cn(menuContent, useFloatingSurface(), "relative max-h-(--radix-select-content-available-height)", position === "popper" && "w-full min-w-(--radix-select-trigger-width)", className)}
         position={position}
         sideOffset={position === "popper" ? 4 : undefined}
         onCloseAutoFocus={(event) => {

@@ -57,7 +57,7 @@ export function ProfileBadge({ profile, standalone = false }: { profile: string;
       aria-hidden="true"
       data-profile-badge={profile}
       className={cn(
-        "pointer-events-none flex h-(--size-hide-badge) min-w-(--size-hide-badge) shrink-0 items-center justify-center rounded-xs bg-popover px-(--size-hairline) text-(length:--text-badge) leading-none font-semibold text-foreground ring-1 ring-border",
+        "pointer-events-none flex h-(--size-hide-badge) min-w-(--size-hide-badge) shrink-0 items-center justify-center rounded-xs bg-raised px-(--size-hairline) text-(length:--text-badge) leading-none font-semibold text-foreground ring-1 ring-border",
         !standalone && "absolute -right-(--size-hairline) -bottom-(--size-hairline)",
       )}
     >

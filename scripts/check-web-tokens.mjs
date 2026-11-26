@@ -44,6 +44,8 @@ const DEFAULT_TEXT = /(?<![\w-])text-(?:xs|sm|base|lg|xl|[2-9]xl)(?![\w-])/;
 // multiplies that down to a few percent no one sees (DESIGN_GUIDE.md, Tokens at a glance).
 const FILLS = Object.entries(generated.tokens).filter(([, token]) => token.type === 'fill').map(([name]) => name.slice(2));
 const FILL_OPACITY = FILLS.length ? new RegExp(`(?<![\\w-])(?:bg|from|via|to|border|ring|outline|fill|stroke|text|shadow|divide)-(?:${FILLS.join('|')})/[0-9]+(?![\\w-])`) : null;
+// The same in a stylesheet: a fill mixed toward transparent, or read back with a new alpha.
+const FILL_MIX = FILLS.length ? new RegExp(`(?:color-mix\\([^;{}]*?|rgba?\\(from\\s+)var\\(--(?:${FILLS.join('|')})\\)`) : null;
 
 // A container or media query condition takes a compiled length, never var():
 // Tailwind drops the whole rule, so the class silently never applies.
@@ -66,7 +68,7 @@ for (const file of files) {
   if (scale) failures.push(`${rel}: Tailwind default scale \`${scale[0]}\`; use a --spacing-* or --size-* token`);
   const text = DEFAULT_TEXT.exec(source);
   if (text) failures.push(`${rel}: Tailwind default text size \`${text[0]}\`; use a --text-* token`);
-  const faded = FILL_OPACITY?.exec(source);
+  const faded = FILL_OPACITY?.exec(source) ?? FILL_MIX?.exec(source);
   if (faded) failures.push(`${rel}: opacity on a see-through fill \`${faded[0]}\`; use the fill itself, or another fill token`);
   const breakpoint = VAR_BREAKPOINT.exec(source);
   if (breakpoint) failures.push(`${rel}: query variant on a custom property \`${breakpoint[0]}\` never applies; add a variant to scripts/gen-tokens.mjs, as pane-wide is`);

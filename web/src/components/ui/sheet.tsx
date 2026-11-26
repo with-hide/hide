@@ -2,6 +2,7 @@ import { Dialog as SheetPrimitive } from "radix-ui";
 import { useRef, type ComponentProps } from "react";
 import { cn } from "../../lib/utils";
 import { useLayerOpen, useReturnFocus } from "./layer";
+import { ModalSurface } from "./floating-surface";
 
 // A panel that slides over one edge of the window (shadcn Sheet), on the same
 // Escape layers and focus return as Dialog.
@@ -29,27 +30,29 @@ function SheetContent({
   const surface = useRef<HTMLDivElement>(null);
   const returnFocus = useReturnFocus(true, returnFocusTo ? { target: returnFocusTo, within: () => surface.current } : undefined);
   return (
-    <SheetPrimitive.Portal>
-      <SheetPrimitive.Overlay data-slot="sheet-overlay" className="fixed inset-0 z-50 bg-scrim" />
-      <SheetPrimitive.Content
-        ref={surface}
-        data-slot="sheet-content"
-        data-side={side}
-        className={cn(
-          "fixed z-50 flex flex-col bg-dialog text-body text-popover-foreground shadow-modal outline-none",
-          side === "right" && "inset-y-0 right-0 w-(--size-panel-ideal) max-w-full border-l border-border",
-          side === "left" && "inset-y-0 left-0 w-(--size-panel-ideal) max-w-full border-r border-border",
-          side === "top" && "inset-x-0 top-0 h-auto border-b border-border",
-          side === "bottom" && "inset-x-0 bottom-0 h-auto border-t border-border",
-          className,
-        )}
-        onCloseAutoFocus={(event) => {
-          onCloseAutoFocus?.(event);
-          if (!event.defaultPrevented) returnFocus(event);
-        }}
-        {...props}
-      />
-    </SheetPrimitive.Portal>
+    <ModalSurface>
+      <SheetPrimitive.Portal>
+        <SheetPrimitive.Overlay data-slot="sheet-overlay" className="fixed inset-0 z-50 bg-scrim" />
+        <SheetPrimitive.Content
+          ref={surface}
+          data-slot="sheet-content"
+          data-side={side}
+          className={cn(
+            "fixed z-50 flex flex-col bg-dialog text-body text-popover-foreground shadow-modal outline-none",
+            side === "right" && "inset-y-0 right-0 w-(--size-panel-ideal) max-w-full border-l border-border",
+            side === "left" && "inset-y-0 left-0 w-(--size-panel-ideal) max-w-full border-r border-border",
+            side === "top" && "inset-x-0 top-0 h-auto border-b border-border",
+            side === "bottom" && "inset-x-0 bottom-0 h-auto border-t border-border",
+            className,
+          )}
+          onCloseAutoFocus={(event) => {
+            onCloseAutoFocus?.(event);
+            if (!event.defaultPrevented) returnFocus(event);
+          }}
+          {...props}
+        />
+      </SheetPrimitive.Portal>
+    </ModalSurface>
   );
 }
 

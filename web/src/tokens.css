@@ -42,6 +42,7 @@
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
+  --color-popover-nested: var(--popover-nested);
   --color-popover-foreground: var(--popover-foreground);
   --color-dialog: var(--dialog);
   --shadow-raised: var(--elevation-raised);
@@ -486,6 +487,7 @@
   --gray-23: #1c1d20;
   --gray-26: #232427;
   --gray-29: #2a2b2e;
+  --gray-31: #2f3033;
   --gray-33: #343539;
   --gray-35: #393a3e;
   --gray-38: #414246;
@@ -508,7 +510,6 @@
   --slate-32: #2e3339;
   --slate-34: #33393e;
   --slate-38: #3e4349;
-  --slate-41: #464b51;
   --slate-48: #595e64;
   --slate-52: #646a70;
   --slate-68: #95999d;
@@ -543,6 +544,7 @@
   --card: var(--gray-96-5);
   --card-foreground: var(--foreground);
   --popover: var(--gray-100);
+  --popover-nested: var(--gray-100);
   --popover-foreground: var(--foreground);
   --dialog: var(--gray-100);
   --elevation-raised: 0 1px 2px 0 rgb(16 17 18 / 0.05), 0 2px 8px -2px rgb(16 17 18 / 0.08);
@@ -672,11 +674,12 @@
   --foreground: var(--gray-96-5);
   --card: var(--gray-23);
   --card-foreground: var(--foreground);
-  --popover: var(--gray-38);
+  --popover: var(--gray-26);
+  --popover-nested: var(--gray-31);
   --popover-foreground: var(--foreground);
   --dialog: var(--gray-26);
   --elevation-raised: 0 1px 2px 0 rgb(0 0 0 / 0.5);
-  --elevation-overlay: 0 0 0 1px rgb(255 255 255 / 0.06), 0 8px 24px -4px rgb(0 0 0 / 0.6);
+  --elevation-overlay: 0 0 0 1px rgb(255 255 255 / 0.08), 0 24px 64px -8px rgb(0 0 0 / 0.7);
   --elevation-modal: 0 0 0 1px rgb(255 255 255 / 0.08), 0 24px 64px -8px rgb(0 0 0 / 0.7);
   --scrim: rgb(0 0 0 / 0.6);
   --raised: var(--gray-29);
@@ -805,6 +808,7 @@
   --foreground: var(--slate-20);
   --card: var(--slate-96-5);
   --popover: var(--gray-100);
+  --popover-nested: var(--gray-100);
   --dialog: var(--gray-100);
   --raised: var(--gray-100);
   --muted: var(--slate-96-5);
@@ -829,7 +833,8 @@
   --background: var(--slate-20);
   --foreground: var(--slate-96);
   --card: var(--slate-26);
-  --popover: var(--slate-41);
+  --popover: var(--slate-29);
+  --popover-nested: var(--slate-34);
   --dialog: var(--slate-29);
   --raised: var(--slate-32);
   --muted: var(--slate-26);

@@ -78,7 +78,8 @@ function layered() {
     '--muted': step('#1C1D20', '#F3F3F5'),
     '--raised': step('#2A2B2E', '#FFFFFF'),
     '--input': step('#393A3E', '#D9DBDD'),
-    '--popover': step('#414246', '#FFFFFF'),
+    '--popover': step('#232427', '#FFFFFF'),
+    '--popover-nested': step('#2F3033', '#FFFFFF'),
     '--dialog': step('#232427', '#FFFFFF'),
     '--border': step('#393A3E', '#D9DBDD'),
     '--secondary': fill(0.06, 0.045),
@@ -107,6 +108,15 @@ test('a layer that draws the same step as the one under it fails, named with its
     'neutral light: --card on --background: #FFFFFF on #FFFFFF is 1.00:1, under 1.04:1',
     'hide dark: --card on --background: #0E0F12 on #0E0F12 is 1.00:1, under 1.08:1',
     'hide light: --card on --background: #FFFFFF on #FFFFFF is 1.00:1, under 1.04:1',
+  ]);
+});
+
+test('a menu opened inside a modal has to stand a step above the modal, in Dark; Light tells them apart by shadow', () => {
+  const tokens = layered();
+  tokens['--popover-nested'] = {type: 'alias', value: '--dialog'};
+  assert.deepEqual(layerFailures(tokens), [
+    'neutral dark: --popover-nested on --dialog: #232427 on #232427 is 1.00:1, under 1.15:1',
+    'hide dark: --popover-nested on --dialog: #232427 on #232427 is 1.00:1, under 1.15:1',
   ]);
 });
 

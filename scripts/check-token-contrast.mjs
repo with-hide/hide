@@ -98,12 +98,18 @@ const LAYER_STEPS = [
   ['--border', '--background', 1.2, 1.2],
   ['--border', '--card', 1.2, 1.15],
   ['--border', '--dialog', 1.2, 1.2],
+  // A floating surface on the page, and one opened inside a modal on the modal
+  // (DESIGN_GUIDE.md, Surfaces): a menu stands one step above the surface it
+  // opened on. Light draws both white and tells them apart by --elevation-overlay,
+  // so its minimum is 1.
+  ['--popover', '--background', 1.2, 1],
+  ['--popover-nested', '--dialog', 1.15, 1],
 ];
 
 // A see-through fill (a `fill` token) sits on whatever surface is under it, so
 // it is composited over each surface a control or a row can sit on and has to
 // stand apart from every one of them. [fill, Dark minimum, Light minimum].
-const FILL_SURFACES = ['--background', '--sidebar', '--card', '--muted', '--raised', '--input', '--popover', '--dialog'];
+const FILL_SURFACES = ['--background', '--sidebar', '--card', '--muted', '--raised', '--input', '--popover', '--popover-nested', '--dialog'];
 // A picked row is the chosen accent at --opacity-selected-fill over the sidebar
 // (`--color-selected` in index.css); a fill such as a row's action sits on it,
 // so it is a surface too, once for each accent the operator can choose.
@@ -113,6 +119,7 @@ const FILL_STEPS = [
   ['--accent', 1.1, 1.07],
   ['--code-block', 1.05, 1.04],
   ['--keycap-line', 1.4, 1.3],
+  ['--hairline', 1.15, 1.1],
 ];
 // A fill laid over another fill: a filled control's hover is --accent over its
 // --secondary (`fill-hovered`), and the hairline is the edge of a filled control

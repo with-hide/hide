@@ -55,7 +55,7 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
           aria-label={label}
           data-pane-plan-chip={paneId}
           data-plan-chip-state={proposed ? "review" : finished ? "finished" : "running"}
-          className={cn(planChipLook(proposed, finished), "outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground", proposed && "data-[state=open]:border-mission-hold data-[state=open]:text-mission-hold", finished && "data-[state=open]:text-mission-done")}
+          className={cn(planChipLook(proposed, finished), "outline-none hover:fill-hovered hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground", proposed && "data-[state=open]:border-mission-hold data-[state=open]:text-mission-hold", finished && "data-[state=open]:text-mission-done")}
         >
           <PlanChipFace tones={planCells(plan)} count={planCount(plan)} proposed={proposed} finished={finished} />
         </button>

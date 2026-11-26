@@ -4,6 +4,7 @@ import type { ComponentProps } from "react";
 import { cn } from "../../lib/utils";
 import { useLayerOpen } from "./layer";
 import { menuContent, menuItem, menuLabel, menuSeparator, menuShortcut } from "./menu-styles";
+import { useFloatingSurface } from "./floating-surface";
 
 /** Radix's menu root, with its open state joined to the shell's Escape layers. */
 function DropdownMenu({ open, defaultOpen, onOpenChange, ...props }: ComponentProps<typeof DropdownMenuPrimitive.Root>) {
@@ -18,7 +19,7 @@ function DropdownMenuTrigger(props: ComponentProps<typeof DropdownMenuPrimitive.
 function DropdownMenuContent({ className, sideOffset = 4, ...props }: ComponentProps<typeof DropdownMenuPrimitive.Content>) {
   return (
     <DropdownMenuPrimitive.Portal>
-      <DropdownMenuPrimitive.Content data-slot="dropdown-menu-content" sideOffset={sideOffset} className={cn(menuContent, className)} {...props} />
+      <DropdownMenuPrimitive.Content data-slot="dropdown-menu-content" sideOffset={sideOffset} className={cn(menuContent, useFloatingSurface(), className)} {...props} />
     </DropdownMenuPrimitive.Portal>
   );
 }
@@ -92,7 +93,7 @@ function DropdownMenuSubTrigger({ className, inset, children, ...props }: Compon
 }
 
 function DropdownMenuSubContent({ className, ...props }: ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
-  return <DropdownMenuPrimitive.SubContent data-slot="dropdown-menu-sub-content" className={cn(menuContent, className)} {...props} />;
+  return <DropdownMenuPrimitive.SubContent data-slot="dropdown-menu-sub-content" className={cn(menuContent, useFloatingSurface(), className)} {...props} />;
 }
 
 export {

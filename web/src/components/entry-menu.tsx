@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { useEscapeLayer, useReturnFocus } from "./ui/layer";
+import { useFloatingSurface } from "./ui/floating-surface";
 import { menuContent } from "./ui/menu-styles";
 import { useInterfaceTranslation } from "../i18n/client";
 import { menuGroupSymbols, menuSymbols, type MenuPresentation, type MenuGroup, type MenuSymbol } from "./menu-symbols";
@@ -308,7 +309,7 @@ export function EntryPointMenu<Id extends string>({
         <span aria-hidden="true" className="pointer-events-none fixed size-(--spacing-none)" style={{ left: at?.x ?? 0, top: at?.y ?? 0 }} />
       </MenuPrimitive.Trigger>
       <MenuPrimitive.Portal>
-        <MenuPrimitive.Content aria-label={label} align="start" sideOffset={0} className={cn(menuContent, entryBounds)} onCloseAutoFocus={returnFocus} {...data}>
+        <MenuPrimitive.Content aria-label={label} align="start" sideOffset={0} className={cn(menuContent, useFloatingSurface(), entryBounds)} onCloseAutoFocus={returnFocus} {...data}>
           <MenuTitle title={title} />
           <EntryItems items={items} onSelect={onSelect} parts={{ Item: DropdownMenuItem, Separator: DropdownMenuSeparator }} />
         </MenuPrimitive.Content>
