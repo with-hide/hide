@@ -17,6 +17,9 @@ import { formatElapsed } from "../elapsed";
 import { MentionChip } from "../mention-chip";
 import { MissionChipOf } from "../mission-chip";
 import { useShellStore } from "../../store";
+import { localDeviceId } from "../../snapshot";
+import type { AnswerPlace, FoundAnswerPath } from "../../answerPaths";
+import { useFilePathChips } from "./file-path-chip";
 import { StatusMark } from "../status-mark";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -115,17 +118,22 @@ function DeskMissionMention({ mention, onOpen }: { mention: DeskMissionMention; 
  * session and mission said by its name, on hover and on every code block
  * (Doop E2).
  */
-export function DeskReply({ text, stopped = false, live = false, mentions = [], missions = [], onMention, onMission, copy }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; missions?: readonly DeskMissionMention[]; onMention?: (mention: DeskMention) => void; onMission?: (missionId: string) => void; copy?: CopyText }) {
+export function DeskReply({ text, stopped = false, live = false, mentions = [], missions = [], onMention, onMission, onFile, copy }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; missions?: readonly DeskMissionMention[]; onMention?: (mention: DeskMention) => void; onMission?: (missionId: string) => void; /** A file path the answer names, pressed (feedback 2 frame M [2]); without it paths stay words. */ onFile?: (file: FoundAnswerPath) => void; copy?: CopyText }) {
   const { t } = useInterfaceTranslation();
   // Each chip is drawn in a root of its own inside the Markdown, so the screen's chip source is bridged to it.
   const bridge = useSessionChipBridge();
+  // Desk runs on the core's own machine, in a folder of its own that is no project: its relative paths name nothing to chip.
+  const here = useShellStore((s) => localDeviceId(s.rest));
+  const place = useMemo<AnswerPlace | null>(() => (onFile ? { device: here, cwd: null } : null), [onFile, here]);
+  const files = useFilePathChips(text, place, live, onFile ?? noFile);
   const chips = useMemo<MarkdownChip[]>(() => [
     ...mentions.map((mention) => ({
       token: markedMention(mention),
       node: bridge(<SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id }} onPress={onMention ? () => onMention(mention) : undefined} />),
     })),
     ...missions.map((mission) => ({ token: markedMission(mission), node: bridge(<DeskMissionMention mention={mission} onOpen={onMission} />) })),
-  ], [mentions, missions, onMention, onMission, bridge]);
+    ...files,
+  ], [mentions, missions, onMention, onMission, bridge, files]);
   const words = <MarkdownText text={text} size="chat" chips={chips} copyCode={copy} />;
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-item="reply" data-desk-reply={live ? "live" : stopped ? "stopped" : "done"}>
@@ -428,7 +436,11 @@ export type DeskChatActions = DeskJobCardActions & {
   onCopy: CopyText;
   onMention: (mention: DeskMention) => void;
   onHanded: (paneId: string) => void;
+  /** A file path an answer names, pressed: a project's file opens in the tab panel, an outside one shows in the file manager. */
+  onFile?: (file: FoundAnswerPath) => void;
 };
+
+const noFile = () => undefined;
 
 const replyChips = new WeakMap<object, DeskMention[]>();
 
@@ -492,7 +504,7 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
       {items.map((item, index) => (
         <li key={item.id} className="flex min-w-0 flex-col">
           {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} attachments={item.attachments} onMention={actions.onMention} copy={actions.onCopy} />
-            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} missions={item.missions} onMention={actions.onMention} onMission={actions.onMission} copy={actions.onCopy} /></div>
+            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} missions={item.missions} onMention={actions.onMention} onMission={actions.onMission} onFile={actions.onFile} copy={actions.onCopy} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(option, text) => actions.onApproval(item.id, option, text)} />
