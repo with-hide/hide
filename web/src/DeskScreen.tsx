@@ -34,7 +34,7 @@ import { askIdentity, inputFailure, noticeText } from "./mobile/protocol";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { commandLabel } from "./shortcutLabels";
 import { deskReturn, deskReturnWords, leaveDesk } from "./keyboard";
-import { keepSent, mentionAt, mentionTree, outgoing, pickMention, useComposerTray } from "./deskComposer";
+import { commandAt, commandRows, keepSent, mentionAt, mentionTree, outgoing, pickCommand, pickMention, useComposerTray } from "./deskComposer";
 import { refusalText, stageDeskFiles } from "./attachments";
 import { DeskChat, DeskEmpty, type DeskChatActions, type DeskNoticeAction } from "./components/desk/desk-chat";
 import { DeskAgentBar, DeskComposer, DeskPermissionMenu } from "./components/desk/desk-composer";
@@ -43,6 +43,7 @@ import type { MentionInputHandle } from "./components/desk/mention-input";
 import { DeskPaneReturn } from "./components/desk/desk-entry";
 import { DeskChatColumn, DeskChatHead, DeskRoom, DeskTabPanel, type PanelTab } from "./components/desk/desk-room";
 import { DeskMentionMenu, type MentionProject, type MentionSession } from "./components/desk/desk-mention-menu";
+import { DeskCommandMenu, type DeskCommandPanel } from "./components/desk/desk-command-menu";
 import { DeskSettingsTab } from "./components/desk/desk-settings";
 import { FileMark } from "./components/file-mark";
 import { fileIcon } from "./fileIcons";
@@ -50,7 +51,7 @@ import { useEscapeLayer } from "./components/ui/layer";
 import { useInterfaceTranslation } from "./i18n/client";
 import { composingKey } from "./keys";
 import { machineName } from "./screenMachine";
-import { catalogOf, catalogWorkspaces, checkoutAtRoot, checkoutOfPane, localDeviceId, paneRowOf, type AgentRow, type SleepingSession, type ViewDisplaySnapshot } from "./snapshot";
+import { catalogOf, catalogWorkspaces, checkoutAtRoot, checkoutOfPane, localDeviceId, paneRowOf, type AgentRow, type DeskCommand, type SleepingSession, type ViewDisplaySnapshot } from "./snapshot";
 import { askingSession } from "./sessionWork";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -156,12 +157,15 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const live = useShellStore((s) => s.deskLive);
   const jobs = useShellStore((s) => s.deskJobs?.jobs ?? NO_JOBS);
   const mentions = useShellStore((s) => s.deskMentions);
+  const commandSection = useShellStore((s) => s.deskCommands);
   const draft = useUiStore((s) => s.deskDraft);
   const setDraft = useUiStore((s) => s.setDeskDraft);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [caret, setCaret] = useState(draft.text.length);
   const [menu, setMenu] = useState<MenuPlace>({ dismissed: null, entered: null, active: "", folds: {} });
+  // The `/` menu's highlighted row, and whether Esc closed it for the `/` word the draft starts with now.
+  const [commandMenu, setCommandMenu] = useState<{ active: string; dismissed: boolean }>({ active: "", dismissed: false });
   const box = useRef<MentionInputHandle>(null);
   // The words a send carried, held until the conversation shows them, so a refused send keeps them in the box; its files' request, when it had files.
   const pending = useRef<{ text: string; after: number; request: string | null; tiles: string[]; queued: ReadonlySet<number> } | null>(null);
@@ -263,9 +267,37 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const tree = at && mentions ? mentionTree(mentions, at.query, menu.folds) : null;
   const enteredSessions = entered && mentions ? mentions.sessions.filter((session) => entered.sessions.includes(session.id)) : [];
   const values = entered ? [`new:${entered.id}`, ...enteredSessions.map((session) => `session:${session.id}`)] : tree ? [...tree.rows, ...tree.found].map((row) => `session:${row.session.id}`).concat(tree.projects.map((project) => `project:${project.id}`)) : [];
-  const menuOpen = at !== null && menu.dismissed !== at.start && (values.length > 0 || tree !== null);
-  const menuEmpty = menuOpen && values.length === 0;
+  // The `/` menu: open while the draft starts with a `/` word the caret is in. It lists the selected agent's commands that match;
+  // with none matching it says so, and before the agent's session opened it says the list comes with the first message, or
+  // that it is on its way while the session opens. An agent whose session sent an empty list has no menu; ↵ sends when it lists nothing.
+  const slash = commandAt(draft.text, caret);
+  const commandList = commandSection && commandSection.agent === desk?.selection.agent ? commandSection.commands : null;
+  const commandHits = slash && commandList ? commandRows(commandList, slash.query) : NO_COMMANDS;
+  const opening = desk?.host.state === "starting" || desk?.host.state === "thinking";
+  const commandPanel: DeskCommandPanel | null = !slash || !agent ? null
+    : commandList === null ? { kind: opening ? "waiting" : "first" }
+    : commandList.length === 0 ? null
+    : commandHits.length > 0 ? { kind: "rows", commands: commandHits }
+    : { kind: "none" };
+  const commandOpen = commandPanel !== null && !commandMenu.dismissed;
+  const commandActive = commandHits.some((command) => command.name === commandMenu.active) ? commandMenu.active : (commandHits[0]?.name ?? "");
+  const inSlash = slash !== null;
+  useEffect(() => {
+    if (!inSlash && commandMenu.dismissed) setCommandMenu({ active: "", dismissed: false });
+  }, [inSlash, commandMenu.dismissed]);
+  const menuOpen = commandOpen || (at !== null && menu.dismissed !== at.start && (values.length > 0 || tree !== null));
+  const menuEmpty = commandOpen ? commandHits.length === 0 : menuOpen && values.length === 0;
   const active = values.includes(menu.active) ? menu.active : (values[0] ?? "");
+  const pickCommandRow = (name: string) => {
+    const command = commandHits.find((one) => one.name === name);
+    if (!slash || !command) return;
+    const next = pickCommand(draft, slash, command);
+    setDraft(next.draft);
+    setCommandMenu({ active: "", dismissed: true });
+    setCaret(next.caret);
+    box.current?.place(next.caret);
+    box.current?.focus();
+  };
 
   const pick = (mention: DeskMention) => {
     if (!at) return;
@@ -291,9 +323,30 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   };
   const fold = (session: MentionSession, open: boolean) => setMenu({ ...menu, active: `session:${session.id}`, folds: { ...menu.folds, [session.id]: open } });
 
+  // The `/` menu's keys: ↑ ↓ move, ↵ writes the command into the box, Esc closes it.
+  const onCommandKey = (event: KeyboardEvent<HTMLElement>) => {
+    const key = event.key;
+    // With no rows the panel's only key is Esc; ↵ sends the words.
+    if (commandHits.length === 0 && key !== "Escape") return;
+    if (key === "ArrowDown" || key === "ArrowUp") {
+      event.preventDefault();
+      const names = commandHits.map((command) => command.name);
+      const index = names.indexOf(commandActive);
+      setCommandMenu({ ...commandMenu, active: names[(index + (key === "ArrowDown" ? 1 : names.length - 1)) % names.length]! });
+    } else if ((key === "Enter" && !event.shiftKey) || (key === "Tab" && !event.shiftKey)) {
+      event.preventDefault();
+      pickCommandRow(commandActive);
+    } else if (key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      setCommandMenu({ ...commandMenu, dismissed: true });
+    }
+  };
+
   // The `@` menu's keys; the composer sends on ↵ when the menu is closed.
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (composingKey(event) || !menuOpen) return;
+    if (commandOpen) return onCommandKey(event);
     const key = event.key;
     // With nothing to choose the menu has no keys of its own but Esc, which closes it; ↵ sends the words.
     if (menuEmpty) {
@@ -396,7 +449,16 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       focused={menuOpen}
       menuOpen={menuOpen}
       menuEmpty={menuEmpty}
-      menu={menuOpen && tree ? (
+      menu={commandOpen && commandPanel ? (
+        <DeskCommandMenu
+          agent={agent?.label ?? ""}
+          panel={commandPanel}
+          query={slash?.query ?? ""}
+          active={commandActive}
+          onActive={(name) => setCommandMenu({ ...commandMenu, active: name })}
+          onPick={(command) => pickCommandRow(command.name)}
+        />
+      ) : menuOpen && at && tree ? (
         <DeskMentionMenu
           tree={tree}
           searching={at.query !== ""}
@@ -410,7 +472,9 @@ export function DeskScreen({ actions }: { actions: Actions }) {
         />
       ) : null}
       onMenuOpenChange={(open) => {
-        if (!open && at) setMenu({ ...menu, dismissed: at.start });
+        if (open) return;
+        if (commandOpen) setCommandMenu({ ...commandMenu, dismissed: true });
+        else if (at) setMenu({ ...menu, dismissed: at.start });
       }}
       onChange={(text, next) => {
         setDraft({ ...draft, text });
@@ -614,6 +678,7 @@ function DeskRoomView({ actions, room, chat }: { actions: Actions; room: RoomAct
 }
 
 const NO_QUEUED: readonly DeskQueuedMessage[] = [];
+const NO_COMMANDS: readonly DeskCommand[] = [];
 const NO_OUTPUTS: readonly DeskOutput[] = [];
 const NO_WIDTHS = { view_width: null, session_width: null };
 

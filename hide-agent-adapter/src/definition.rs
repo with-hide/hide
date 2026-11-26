@@ -26,7 +26,7 @@ pub use hide_screen_rules::{Asks, Rules, State};
 
 mod file;
 pub use file::{
-    ACCOUNT_PART, AccountPath, AccountRule, AccountVar, Answer, Base, By, CommandSlot, Hooks,
+    ACCOUNT_PART, AccountPath, AccountRule, AccountVar, Answer, Base, By, CommandSlot, Desk, Hooks,
     KEY_NAMES, LINE_BYTES, LINE_WORDS, LoginRule, MAX_ANSWER_KEYS, MAX_ID_BYTES, McpFormat,
     PathRule, PermissionKeys, PlanKeys, QuestionKeys, ROW_LABEL, ROW_NUMBER, SCHEMA, Template,
     TrustFormat, id_is_valid, is_plain_command, is_typable_word, reserved_variable, valid_variable,
@@ -101,6 +101,9 @@ pub struct Definition {
     /// The keys that answer the agent's own question and approval screens
     /// (`[answer]`); built-in agents alone, and their copies.
     pub answer: Option<Answer>,
+    /// What Desk keeps out of the agent's own commands (`[desk]`); built-in
+    /// agents alone, and their copies.
+    pub desk: Desk,
     pub source: Source,
     /// The built-in agent a user file copied.
     pub based_on: Option<String>,
@@ -332,6 +335,7 @@ fn new_definition(
         screen,
         account: file.account,
         answer: file.answer,
+        desk: file.desk.unwrap_or_default(),
         source,
         based_on: None,
     })
@@ -395,6 +399,7 @@ fn based_on(
         account: builtin.account.clone(),
         // A copy runs the same program, so its screens take the same keys.
         answer: builtin.answer.clone(),
+        desk: builtin.desk.clone(),
         source,
         based_on: Some(base.to_owned()),
     })

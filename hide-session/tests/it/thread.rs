@@ -969,6 +969,34 @@ fn claude_records_marked_as_its_own_are_left_out_whatever_their_text() {
     assert_eq!(page.skipped.get("injected"), Some(&5));
 }
 
+/// A command the operator ran reads as they typed it, `/name words`, one
+/// line, and the wrapper of its own output shows nothing (letter-48507:
+/// Desk's `/compact` showed its record's tags in the side session).
+#[test]
+fn a_command_record_reads_as_the_command_typed_and_its_output_wrapper_as_nothing() {
+    let placed = Placed::new(&SAMPLES[0]);
+    let records = [
+        json!({"type":"user","uuid":"a","message":{"content":"<command-message>compact</command-message>\n<command-name>/compact</command-name>\n<command-args>keep the plan</command-args>"}}),
+        json!({"type":"user","uuid":"b","message":{"content":"<local-command-stdout>Compacted (ctrl+o to see full summary)</local-command-stdout>"}}),
+        json!({"type":"user","uuid":"c","message":{"content":"<command-name>/context</command-name>\n            <command-message>context</command-message>\n            <command-args></command-args>"}}),
+        json!({"type":"user","uuid":"d","message":{"content":"진짜 요청 <command-name>/x</command-name>"}}),
+    ];
+    let contents = records
+        .iter()
+        .map(|record| format!("{record}\n"))
+        .collect::<String>();
+    std::fs::write(&placed.path, contents).unwrap();
+    let page = placed.read(None).unwrap();
+    assert_eq!(
+        texts(&page),
+        [
+            "/compact keep the plan",
+            "/context",
+            "진짜 요청 <command-name>/x</command-name>"
+        ]
+    );
+}
+
 /// Grok's own wake prompts carry no words of an operator: `hideFromScrollback`
 /// and `hostTurn` mark them whatever they say.
 #[test]
