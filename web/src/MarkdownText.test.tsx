@@ -118,3 +118,18 @@ it("swaps no part of Desk's answer while it streams, though each word draws the 
   expect(host.textContent).toContain("곧 끝납니다.");
   expect(vi.mocked(markdownLive).mock.calls.length - built).toBe(1);
 });
+
+it("draws in a drawn table's cells the chips that arrive once the answer ends, in their item form", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted.push(root);
+  const text = "| 미션 | 상태 |\n| --- | --- |\n| @mission(mission-63 결제) | running |\n";
+  const draw = (parts: readonly MarkdownChip[]) => act(async () => root.render(<TooltipProvider><MarkdownText text={text} size="chat" chips={parts} /></TooltipProvider>));
+  await draw([]);
+  await vi.waitFor(() => expect(host.querySelector(".cm-md-table")?.textContent).toContain("@mission(mission-63 결제)"));
+  const table = host.querySelector(".cm-md-table");
+  await draw([{ token: "@mission(mission-63 결제)", node: <b>결제</b>, item: <i data-test-item="mission-63">M63 결제</i> }]);
+  expect(host.querySelector(".cm-md-table")).toBe(table);
+  await vi.waitFor(() => expect(table?.querySelector("[data-test-item='mission-63']")?.textContent).toBe("M63 결제"));
+});

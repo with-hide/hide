@@ -84,10 +84,11 @@ export const CELL_LIMIT = 20;
  * colour; a long list draws each run of one state as one stretch, so the bar
  * keeps its width and its proportions. `edge` lays it along the bottom edge
  * of a chip that is `relative` and clips it, so it takes no width and stays
- * when a narrow pane hides the chip's words. The words beside it carry the
+ * when a narrow pane hides the chip's words; `track` is the one-line mission
+ * chip's fixed track, the same width in every chip of a table's rows. The words beside it carry the
  * numbers, so the bar itself is hidden from a screen reader.
  */
-export function ProgressCells<T extends string = CellTone>({ tones, fill, size, className }: { tones: readonly T[]; fill?: Record<T, string>; size: "chip" | "head" | "edge"; className?: string }) {
+export function ProgressCells<T extends string = CellTone>({ tones, fill, size, className }: { tones: readonly T[]; fill?: Record<T, string>; size: "chip" | "track" | "head" | "edge"; className?: string }) {
   const fills = fill ?? (TONE_FILL as Record<string, string>);
   const runs: { tone: T; count: number }[] = [];
   if (tones.length > CELL_LIMIT) {
@@ -104,7 +105,7 @@ export function ProgressCells<T extends string = CellTone>({ tones, fill, size, 
       data-progress-cells={tones.join(" ")}
       className={cn(
         "flex shrink-0 items-stretch",
-        size === "chip" ? "h-(--size-mission-step-h) w-(--size-chip-bar) gap-px" : size === "edge" ? "pointer-events-none absolute inset-x-0 bottom-0 h-(--size-chip-edge-bar) gap-px" : "h-(--size-flow-bar) min-w-0 flex-1 gap-xxs",
+        size === "chip" ? "h-(--size-mission-step-h) w-(--size-chip-bar) gap-px" : size === "track" ? "h-(--size-chip-track-h) w-(--size-chip-track) gap-px" : size === "edge" ? "pointer-events-none absolute inset-x-0 bottom-0 h-(--size-chip-edge-bar) gap-px" : "h-(--size-flow-bar) min-w-0 flex-1 gap-xxs",
         className,
       )}
     >

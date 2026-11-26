@@ -377,6 +377,8 @@
   --size-device-way-picture: 280px;
   --size-mission-edge: 1.5px;
   --size-chip-bar: 44px;
+  --size-chip-track: 64px;
+  --size-chip-track-h: 5px;
   --size-chip-edge-bar: 2px;
   --size-mission-card-min: 168px;
   --size-mission-card-max: 280px;

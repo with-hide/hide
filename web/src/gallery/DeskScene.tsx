@@ -46,7 +46,7 @@ import type { DeskRecord, SessionPull, SnapshotRest } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
   AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_CARD, PLAN_EXIT_OPTIONS, WAITING_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, endedScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
-  mentionItems, missionItems, OUTPUTS, PICTURES, RECORD_THREAD, SESSION_VIEWS, SESSIONS, stateItems, statusItems, storyJobs, switchedItems, WORKER_THREAD,
+  mentionItems, missionItems, missionLayoutScene, OUTPUTS, PICTURES, RECORD_THREAD, SESSION_VIEWS, SESSIONS, stateItems, statusItems, storyJobs, switchedItems, WORKER_THREAD,
 } from "./deskSceneData";
 
 /** Each scene, with the proposal-v2 scene it pairs with or the PRD behaviors it adds. */
@@ -75,6 +75,7 @@ export const DESK_SCENES = [
   { state: "outputs", label: "결과물 기준 (B30)" },
   { state: "chat-states", label: "채팅 상태: 승인 답 (항상 허용, 한 줄과 거절), 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15, B47)" },
   { state: "thread-states", label: "스레드 읽기 실패 · 읽는 중 · 빈 · 연결 안 됨 (B23, B27)" },
+  { state: "mission-layout", label: "답 속 미션: 표 칸·목록 항목은 그 자리의 한 줄 칩, 칩 행 없음 (피드백 1, Q 가)" },
   { state: "chips", label: "답 속 칩 전부 · 흐린 칩 · 칩 상세 카드 (B50, D-86)" },
   { state: "ended", label: "끝난 세션: 기록 칩 · 상세 카드 · 기록 읽기 · 이어서 하기 (frame J, K)" },
   { state: "drop", label: "파일을 Desk 대화 칸 한가운데로 끌어온 순간: 입력칸 테두리만 (피드백 2, L 가)" },
@@ -234,14 +235,15 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
   const jobs = useMemo(() => storyJobs(now), [now]);
   const actions = useMemo(() => createActions(() => true), []);
   const mission = useMemo(() => missionFixture("running", now), [now]);
+  const layout = useMemo(() => missionLayoutScene(mission.mission, now), [mission, now]);
   useLayoutEffect(() => {
-    // The mission scene's map is Hide's own mission map, drawn from the store as the mission scene draws it.
-    const missions = (mission.rest as { missions: { items: { title: string }[] } }).missions.items.map((one) => ({ ...one, title: "Desk 1차" }));
+    // The mission scene's map is Hide's own mission map, drawn from the store as the mission scene draws it; frame Q's answer names missions of its own.
+    const missions = state === "mission-layout" ? layout.missions : (mission.rest as { missions: { items: { title: string }[] } }).missions.items.map((one) => ({ ...one, title: "Desk 1차" }));
     useShellStore.setState({ rest: { ...mission.rest, missions: { items: missions } } as unknown as SnapshotRest, agents: [], connection: "live" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", params.get("scale") ?? "1");
-  }, [mission, theme, params]);
+  }, [mission, layout, state, theme, params]);
 
   const pick = (...ids: string[]) => ids.map((id) => jobs[id]!);
   const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; working?: WorkingPhase; queued?: DeskQueuedMessage[] } = {}) => (
@@ -404,6 +406,9 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       break;
     case "file-chips":
       body = <FileChipStates />;
+      break;
+    case "mission-layout":
+      body = <Room chat={chat(layout.items, <ChatComposer selection={CLAUDE} />)} />;
       break;
     case "chips": {
       // Every session the answer names is a chip, the 17th on too; m349 is no longer listed, so it is dimmed with no status.

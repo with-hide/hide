@@ -21,7 +21,7 @@ import type { SyntaxNode, Tree } from "@lezer/common";
 import type { Text } from "@codemirror/state";
 import { isMermaidInfo } from "../markdownMermaid";
 
-export type LiveKind = "hide" | "bullet" | "checkbox" | "heading" | "codeHead" | "codeBlock" | "fenceLine" | "quote" | "link" | "codeInline" | "html" | "image" | "mermaid" | "table";
+export type LiveKind = "hide" | "bullet" | "listItem" | "checkbox" | "heading" | "codeHead" | "codeBlock" | "fenceLine" | "quote" | "link" | "codeInline" | "html" | "image" | "mermaid" | "table";
 
 export type LiveRange = {
   from: number;
@@ -29,6 +29,8 @@ export type LiveRange = {
   kind: LiveKind;
   /** Heading level 1-6. */
   level?: number;
+  /** `listItem`: how many lists hold the item's list (0 for a top-level item). */
+  depth?: number;
   /** Task checkbox state. */
   checked?: boolean;
   /** `html`: the source to draw, and whether it takes whole lines (an HTML block) or sits in a line (a tag). */
@@ -38,7 +40,7 @@ export type LiveRange = {
   src?: string;
   alt?: string;
   title?: string;
-  /** `mermaid`: the diagram's source, the text between the fences; `table`: the table's source; `codeHead`: the block's code as it is copied. */
+  /** `mermaid`: the diagram's source, the text between the fences; `table`: the table's source; `codeHead`: the block's code as it is copied; `listItem`: the mark it draws (`•`, or an ordered item's number). */
   source?: string;
   /** `codeHead`: the language the fence names, null when it names none. */
   language?: string | null;
@@ -103,6 +105,17 @@ export function markdownLivePlan(tree: Tree, doc: Text, selection: { from: numbe
         const list = node.parent?.parent?.name;
         if (list === "BulletList" && !lineTouched(node.from)) {
           ranges.push({ from: node.from, to: node.to, kind: "bullet" });
+        }
+        // The item's lead, from the line's start through the mark and the
+        // spaces after it, for a text that hangs an item's wrapped lines under
+        // its words (a read-only text); an item opened after a quote's `>` has none.
+        const line = doc.lineAt(node.from);
+        if (doc.sliceString(line.from, node.from).trim() === "" && !lineTouched(node.from)) {
+          let to = node.to;
+          while (to < line.to && to - node.to < 4 && doc.sliceString(to, to + 1) === " ") to += 1;
+          let depth = -1;
+          for (let up: SyntaxNode | null = node.parent; up; up = up.parent) if (up.name === "BulletList" || up.name === "OrderedList") depth += 1;
+          ranges.push({ from: line.from, to, kind: "listItem", depth, source: list === "BulletList" ? "•" : doc.sliceString(node.from, node.to) });
         }
         return;
       }
