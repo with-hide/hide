@@ -54,21 +54,23 @@ updated_at = "2026-11-26T00:00:00Z"
 # there was taken by it, its Enter picking "Trust" (measured 2026-11-26,
 # tests/fixtures/screens/pi/blocked-trust-folder.txt); read as this
 # question, the start waits for the operator's answer. Only the dialog at
-# the foot of the screen counts, its title, its "Do not trust" choice and its
-# key line each a whole line: a conversation that quotes the dialog sits
-# above Pi's composer and status lines, which fill the foot
-# (tests/fixtures/screens/pi/working-quotes-trust-folder.txt).
+# the foot of the screen counts: its title and its "Do not trust" choice each
+# a whole line, and its key line the last text above its closing rule. A
+# conversation that quotes the dialog has Pi's composer and status lines
+# under it (tests/fixtures/screens/pi/working-quotes-trust-folder.txt), and a
+# narrow pane wraps the dialog over more lines
+# (tests/fixtures/screens/pi/blocked-trust-folder-narrow.txt).
 [[screen.rules]]
 id = "trust_folder"
 state = "blocked"
 asks = "folder_trust"
 priority = 950
-region = "bottom_non_empty_lines(12)"
+region = "bottom_non_empty_lines(24)"
 visible_blocker = true
 all = [
   { line_regex = ['^\s*Trust project folder\?\s*$'] },
   { line_regex = ['^\s*(→\s*)?Do not trust\s*$'] },
-  { line_regex = ['^\s*↑↓ navigate\s+enter select\s+escape/ctrl\+c cancel\s*$'] },
+  { regex = ['↑↓ navigate\s+enter select[^\n]*\n[─\s]*\z'] },
 ]
 
 [[screen.rules]]
