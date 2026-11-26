@@ -89,6 +89,30 @@ pub fn read(adapter: AdapterId, update: &Value) -> Commands {
     read
 }
 
+/// A list as it is saved: ACP's own entries (`{name, description,
+/// input.hint}`), so reading one back is [`read`] and the caps and the
+/// definition's left-outs of the build that reads it apply again.
+pub fn saved(commands: &[Command]) -> Value {
+    Value::Array(
+        commands
+            .iter()
+            .map(|command| {
+                let mut entry = serde_json::json!({"name": command.name, "description": command.description});
+                if let Some(hint) = &command.hint {
+                    entry["input"] = serde_json::json!({"hint": hint});
+                }
+                entry
+            })
+            .collect(),
+    )
+}
+
+/// A saved list (`saved`) read back for `adapter`: an entry that is not a
+/// command is skipped, as in an agent's own list.
+pub fn read_saved(adapter: AdapterId, entries: &Value) -> Commands {
+    read(adapter, &serde_json::json!({"availableCommands": entries}))
+}
+
 /// The first line of `text`, at most `cap` bytes, cut on a character.
 fn cut(text: &str, cap: usize) -> String {
     let line = text.lines().next().unwrap_or_default();

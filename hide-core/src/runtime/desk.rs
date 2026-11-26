@@ -88,13 +88,14 @@ pub(super) struct Desk {
     /// opened: their word reads signed out whatever Hide AI's read of the
     /// login says, since a login file can outlive its sign-in.
     sign_in_refused: BTreeSet<AdapterId>,
-    /// Each agent's commands as its last session listed them, kept while
-    /// hided runs, so a new conversation's first `/` has a list before its
-    /// session opens; empty from a session's open until the agent sends one,
-    /// then replaced whole by each list it sends; none for an agent whose
-    /// session has not opened while hided runs. Never stored: the next
-    /// session sends its own (letter-48308).
-    commands: BTreeMap<AdapterId, Vec<hide_desk::commands::Command>>,
+    /// Each agent's commands as its last session listed them, so a new
+    /// conversation's first `/` has a list before its session opens, after
+    /// a restart too (`commands_store`, letter-48626); empty from a
+    /// session's open until the agent sends one, then replaced whole by each
+    /// list it sends; none for an agent that never sent one.
+    commands: crate::desk::CommandLists,
+    /// The file each list the agents send is saved to, off the lock.
+    commands_store: Option<crate::desk::DeskCommandsStore>,
     /// The session that opened new on a command and has not been told
     /// Desk's guide yet, which goes with its first ordinary message
     /// (`hide_desk::Guide`). It joins `stored.sessions` only once that
@@ -356,6 +357,18 @@ impl Runtime {
         self.desk.store = Some(store);
         self.desk.stored = stored;
         self.compose_desk_sections();
+    }
+
+    /// The command lists the last run kept, read before the lock by the
+    /// caller, and the file the lists sent from now on are saved to.
+    pub(crate) fn install_desk_commands(
+        &mut self,
+        store: crate::desk::DeskCommandsStore,
+        lists: crate::desk::CommandLists,
+    ) {
+        self.desk.commands_store = Some(store);
+        self.desk.commands = lists;
+        self.compose_desk_commands();
     }
 
     /// Starts Desk's worker with what `hided` provides, and looks at the
@@ -1602,6 +1615,14 @@ impl Runtime {
                     }));
                 }
                 self.desk.commands.insert(adapter, commands.commands);
+                // The lists the agents sent, not the empty ones an open
+                // stands in with: an agent never heard from still says the
+                // list comes with the first message.
+                if let Some(store) = &self.desk.commands_store {
+                    let mut sent = self.desk.commands.clone();
+                    sent.retain(|_, list| !list.is_empty());
+                    store.save(sent);
+                }
                 self.compose_desk_commands();
                 return true;
             }
@@ -4071,6 +4092,38 @@ mod tests {
         assert_eq!(slash(&runtime).1, ["/compact", "/context"]);
         // A new list replaces the old one whole.
         listed(&mut runtime, AdapterId::CLAUDE, &["review"]);
+        assert_eq!(slash(&runtime).1, ["/review"]);
+    }
+
+    /// letter-48626: each agent's last list outlives hided, so after a
+    /// restart `/` lists it before any session opens; a list the agent then
+    /// sends replaces it on disk too, and an agent that sent none (or only
+    /// an open's empty stand-in) is saved as none.
+    #[test]
+    fn an_agent_s_last_list_is_listed_again_after_a_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("state/desk/commands.json");
+        let start = |root: &std::path::Path| {
+            let (mut runtime, received) = runtime(root);
+            let store = crate::desk::DeskCommandsStore::new(path.clone());
+            let lists = store.restore();
+            runtime.install_desk_commands(store, lists);
+            event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+            (runtime, received)
+        };
+        let (mut runtime, _received) = start(root.path());
+        assert_eq!(slash(&runtime), (Some(AdapterId::CLAUDE), Vec::new()));
+        opened(&mut runtime, AdapterId::PI);
+        listed(&mut runtime, AdapterId::CLAUDE, &["compact", "context"]);
+        // Dropping the runtime joins its save, as quitting does.
+        drop(runtime);
+        let (mut runtime, _received) = start(root.path());
+        assert_eq!(slash(&runtime).1, ["/compact", "/context"]);
+        let saved = crate::desk::DeskCommandsStore::new(path.clone()).restore();
+        assert_eq!(saved.keys().copied().collect::<Vec<_>>(), [AdapterId::CLAUDE]);
+        listed(&mut runtime, AdapterId::CLAUDE, &["review"]);
+        drop(runtime);
+        let (runtime, _received) = start(root.path());
         assert_eq!(slash(&runtime).1, ["/review"]);
     }
 
