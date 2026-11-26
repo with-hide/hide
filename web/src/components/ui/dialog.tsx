@@ -50,6 +50,7 @@ function DialogContent({
         <DialogPrimitive.Content
           ref={surface}
           data-slot="dialog-content"
+          data-modal-surface="true"
           className={cn(
             "fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100%-var(--spacing-xxl))] w-(--size-worktree-dialog) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-dialog text-body text-popover-foreground shadow-modal outline-none",
             className,

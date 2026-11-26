@@ -36,6 +36,7 @@ function SheetContent({
         <SheetPrimitive.Content
           ref={surface}
           data-slot="sheet-content"
+          data-modal-surface="true"
           data-side={side}
           className={cn(
             "fixed z-50 flex flex-col bg-dialog text-body text-popover-foreground shadow-modal outline-none",

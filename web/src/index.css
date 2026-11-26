@@ -357,6 +357,13 @@ html[data-view-drag="row-resize"] * {
   background-image: linear-gradient(var(--accent), var(--accent));
 }
 
+/* An editor's tooltip renders inside the editor rather than through a portal,
+   so inside a modal it takes the nested step the way a floating part does
+   through useFloatingSurface() (components/ui/floating-surface.tsx). */
+[data-modal-surface] .cm-tooltip {
+  --popover: var(--popover-nested);
+}
+
 /* The chosen item of a segmented control (--segment-on over the --secondary track): lifted white in Light; in Dark a shadow reads as a stroke, so it is a stronger white fill with no shadow. */
 @utility segment-on {
   &, &:hover {

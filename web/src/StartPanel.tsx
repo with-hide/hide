@@ -32,6 +32,7 @@ import { projectBaseBranch } from "./projectSettings";
 import { branchProblem } from "./workspaceManage";
 import { composingKey } from "./keys";
 import { followStartedPane } from "./opening";
+import { ModalSurface } from "./components/ui/floating-surface";
 
 // The start panel (PRD home-device-rail D-17..D-21, B23-B31): ⌘K's position
 // and width, no backdrop, the keyboard in the text box. What is written is the
@@ -403,120 +404,124 @@ function StartPanel({ actions }: { actions: Actions }) {
   };
 
   return (
-    <div
-      ref={surface}
-      role="dialog"
-      aria-label={t("commands.start_agent")}
-      data-start-panel="true"
-      className="fixed left-1/2 top-(--size-settings-sheet-window-inset) z-50 flex w-(--size-search-sheet-w) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border bg-dialog text-body text-popover-foreground shadow-modal"
-    >
-      <div className="flex min-w-0 flex-wrap items-center gap-xxs px-sm pt-sm" data-start-where="true">
-        {target && target.deviceId !== own ? <DeviceChip variant="remote" label={targets.groups.find((group) => group.deviceId === target.deviceId)?.deviceLabel ?? ""} /> : null}
-        <ProjectPicker targets={targets} project={project} target={target} disabled={working || targets.groups.length === 0} onPick={(key) => useStartPanel.getState().setTarget(key)} />
-        {project && target ? <span aria-hidden="true" className="text-caption text-muted-foreground">›</span> : null}
-        {project && target && target.kind !== "worktree" ? (
-          <BranchPicker project={project} target={target} currentKey={targets.currentKey} disabled={working} onPick={(key) => useStartPanel.getState().setTarget(key)} />
-        ) : null}
-        {project && target?.kind === "worktree" ? (
-          <span className="flex min-w-0 items-center gap-xs" data-start-worktree="true">
-            <Input
-              value={worktreeBranch}
-              disabled={working}
-              placeholder={t("startPanel.newBranchName")}
-              onChange={(event) => setWorktreeBranch(event.target.value)}
-              aria-label={t("workspace.branch")}
-              aria-invalid={worktreeBranch !== "" && branchProblem(worktreeBranch) !== null}
-              className="h-(--size-control-sm) w-(--size-start-branch-field) text-caption"
-              data-start-branch-name="true"
-            />
-            <span className="text-caption text-muted-foreground">{t("startPanel.from")}</span>
-            <Select value={base} disabled={working || !worktreeProject} onValueChange={(branch) => setWorktreeBase({ project: target.key, branch })}>
-              <SelectTrigger size="sm" aria-label={t("projectSettings.base")} className="w-auto min-w-0"><SelectValue /></SelectTrigger>
-              <SelectContent>{worktreeProject?.branches?.map((branch) => <SelectItem key={branch} value={branch}>{branch}</SelectItem>)}</SelectContent>
-            </Select>
-            <Hint label={t("startPanel.cancelNewBranch")}>
-              <Button variant="ghost" size="icon-xs" disabled={working} aria-label={t("startPanel.cancelNewBranch")} onClick={() => useStartPanel.getState().setTarget(project.branches[0]!.key)} data-start-cancel-new-branch="true"><XIcon /></Button>
-            </Hint>
-          </span>
-        ) : null}
-      </div>
-      {target?.kind === "worktree" && worktreeBranch && branchProblem(worktreeBranch) ? <p role="alert" className="px-md pt-xs text-caption text-destructive">{t(branchProblem(worktreeBranch)!)}</p> : null}
-      {target?.kind === "worktree" && initialBase?.missing ? <p className="px-md pt-xs text-caption text-warning">{t("projectSettings.branchMissing", { branch: initialBase.missing, fallback: initialBase.branch })}</p> : null}
-      <Textarea
-        ref={field}
-        bare
-        rows={1}
-        value={text}
-        autoComplete="off"
-        spellCheck={false}
-        aria-label={t("shell.firstInstruction")}
-        placeholder={t("shell.instructionPrompt")}
-        data-start-text="true"
-        className="field-sizing-content max-h-(--size-start-text-max) min-h-(--size-control-lg) overflow-y-auto px-md pt-xs pb-sm"
-        onChange={(event) => useStartPanel.getState().setText(event.target.value)}
-        onKeyDown={(event) => {
-          // Enter starts; Shift+Enter is a new line, and an Enter that ends a composition is neither.
-          if (event.key !== "Enter" || event.shiftKey || composingKey(event)) return;
-          event.preventDefault();
-          start();
-        }}
-      />
-      {failure ? (
-        <p role="alert" data-start-failure="true" data-core-error={"code" in failure ? failure.code : undefined} className="whitespace-pre-line break-words px-md pb-xs text-caption text-destructive">
-          {"values" in failure ? t(failure.key, failure.values) : "key" in failure ? t(failure.key) : failure.message}
-          {"line" in failure && failure.line ? <QuotedLine line={failure.line} /> : null}
-        </p>
-      ) : null}
-      {offline ? (
-        <p role="status" data-start-offline={offline.deviceId} className="flex flex-wrap items-center gap-xs px-md pb-xs text-caption text-muted-foreground">
-          {t("startPanel.deviceOffline", { device: offline.deviceLabel })}
-          <Button variant="text" size="inline" onClick={() => actions.retryDevice(offline.deviceId)} data-start-reconnect={offline.deviceId}>{t("sidebar.reconnect")}</Button>
-        </p>
-      ) : null}
-      <div className="flex min-w-0 items-center gap-xs px-sm pt-xs pb-sm" data-start-who="true">
-        <AgentPicker
-          variant="ghost"
-          actions={actions}
-          value={effective}
-          onChange={setSelection}
-          items={
-            menu
-              ? {
-                  list: menu.items,
-                  profile,
-                  showLeft: menu.showLeft,
-                  note: menu.note === "offline" ? t("startPanel.deviceOffline", { device: targets.groups.find((group) => group.deviceId === target?.deviceId)?.deviceLabel ?? "" }) : menu.note === "unsupported" ? t("agentProfiles.unsupported") : null,
-                  onItem: (item) => {
-                    setSelection(selectKind(item.kind, useShellStore.getState().rest?.ui_state?.agent_start));
-                    if (target) shown.current = { key: `${target.deviceId}:${target.workspaceId}:${item.kind}`, profile: item.profile };
-                    rerender();
-                  },
-                }
-              : undefined
-          }
-          disabled={working}
-          kindNote={
-            /* The provider probe describes the core machine, never a remote target's login (B23, B37). */
-            target?.deviceId === localDeviceId(rest) && notSignedIn(selection.kind, rest?.status?.background_ai?.providers) ? (
-              <span className="flex shrink-0 items-center [&>span]:text-caption" data-start-not-signed-in={selection.kind}>
-                <Status tone="warn">{t("firstRun.tile.notSignedIn")}</Status>
-              </span>
-            ) : null
-          }
+    // A modal drawn by hand rather than through Dialog: it marks itself as one, so its pickers stand a step above it.
+    <ModalSurface>
+      <div
+        ref={surface}
+        role="dialog"
+        aria-label={t("commands.start_agent")}
+        data-start-panel="true"
+        data-modal-surface="true"
+        className="fixed left-1/2 top-(--size-settings-sheet-window-inset) z-50 flex w-(--size-search-sheet-w) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border bg-dialog text-body text-popover-foreground shadow-modal"
+      >
+        <div className="flex min-w-0 flex-wrap items-center gap-xxs px-sm pt-sm" data-start-where="true">
+          {target && target.deviceId !== own ? <DeviceChip variant="remote" label={targets.groups.find((group) => group.deviceId === target.deviceId)?.deviceLabel ?? ""} /> : null}
+          <ProjectPicker targets={targets} project={project} target={target} disabled={working || targets.groups.length === 0} onPick={(key) => useStartPanel.getState().setTarget(key)} />
+          {project && target ? <span aria-hidden="true" className="text-caption text-muted-foreground">›</span> : null}
+          {project && target && target.kind !== "worktree" ? (
+            <BranchPicker project={project} target={target} currentKey={targets.currentKey} disabled={working} onPick={(key) => useStartPanel.getState().setTarget(key)} />
+          ) : null}
+          {project && target?.kind === "worktree" ? (
+            <span className="flex min-w-0 items-center gap-xs" data-start-worktree="true">
+              <Input
+                value={worktreeBranch}
+                disabled={working}
+                placeholder={t("startPanel.newBranchName")}
+                onChange={(event) => setWorktreeBranch(event.target.value)}
+                aria-label={t("workspace.branch")}
+                aria-invalid={worktreeBranch !== "" && branchProblem(worktreeBranch) !== null}
+                className="h-(--size-control-sm) w-(--size-start-branch-field) text-caption"
+                data-start-branch-name="true"
+              />
+              <span className="text-caption text-muted-foreground">{t("startPanel.from")}</span>
+              <Select value={base} disabled={working || !worktreeProject} onValueChange={(branch) => setWorktreeBase({ project: target.key, branch })}>
+                <SelectTrigger size="sm" aria-label={t("projectSettings.base")} className="w-auto min-w-0"><SelectValue /></SelectTrigger>
+                <SelectContent>{worktreeProject?.branches?.map((branch) => <SelectItem key={branch} value={branch}>{branch}</SelectItem>)}</SelectContent>
+              </Select>
+              <Hint label={t("startPanel.cancelNewBranch")}>
+                <Button variant="ghost" size="icon-xs" disabled={working} aria-label={t("startPanel.cancelNewBranch")} onClick={() => useStartPanel.getState().setTarget(project.branches[0]!.key)} data-start-cancel-new-branch="true"><XIcon /></Button>
+              </Hint>
+            </span>
+          ) : null}
+        </div>
+        {target?.kind === "worktree" && worktreeBranch && branchProblem(worktreeBranch) ? <p role="alert" className="px-md pt-xs text-caption text-destructive">{t(branchProblem(worktreeBranch)!)}</p> : null}
+        {target?.kind === "worktree" && initialBase?.missing ? <p className="px-md pt-xs text-caption text-warning">{t("projectSettings.branchMissing", { branch: initialBase.missing, fallback: initialBase.branch })}</p> : null}
+        <Textarea
+          ref={field}
+          bare
+          rows={1}
+          value={text}
+          autoComplete="off"
+          spellCheck={false}
+          aria-label={t("shell.firstInstruction")}
+          placeholder={t("shell.instructionPrompt")}
+          data-start-text="true"
+          className="field-sizing-content max-h-(--size-start-text-max) min-h-(--size-control-lg) overflow-y-auto px-md pt-xs pb-sm"
+          onChange={(event) => useStartPanel.getState().setText(event.target.value)}
+          onKeyDown={(event) => {
+            // Enter starts; Shift+Enter is a new line, and an Enter that ends a composition is neither.
+            if (event.key !== "Enter" || event.shiftKey || composingKey(event)) return;
+            event.preventDefault();
+            start();
+          }}
         />
-        <span className="flex-1" />
-        {target === null && !working ? (
-          <Button size="default" onClick={addProject} data-start-add-project="true">
-            <PlusIcon aria-hidden="true" />
-            {t("firstRun.home.addProject")}
-          </Button>
-        ) : (
-          <Button size="default" disabled={!canStart} onClick={start} data-start-submit="true">
-            {working ? t("shell.starting") : t("common.start")}
-            {working ? null : <span aria-hidden="true" className="opacity-(--opacity-dimmed)">⏎</span>}
-          </Button>
-        )}
+        {failure ? (
+          <p role="alert" data-start-failure="true" data-core-error={"code" in failure ? failure.code : undefined} className="whitespace-pre-line break-words px-md pb-xs text-caption text-destructive">
+            {"values" in failure ? t(failure.key, failure.values) : "key" in failure ? t(failure.key) : failure.message}
+            {"line" in failure && failure.line ? <QuotedLine line={failure.line} /> : null}
+          </p>
+        ) : null}
+        {offline ? (
+          <p role="status" data-start-offline={offline.deviceId} className="flex flex-wrap items-center gap-xs px-md pb-xs text-caption text-muted-foreground">
+            {t("startPanel.deviceOffline", { device: offline.deviceLabel })}
+            <Button variant="text" size="inline" onClick={() => actions.retryDevice(offline.deviceId)} data-start-reconnect={offline.deviceId}>{t("sidebar.reconnect")}</Button>
+          </p>
+        ) : null}
+        <div className="flex min-w-0 items-center gap-xs px-sm pt-xs pb-sm" data-start-who="true">
+          <AgentPicker
+            variant="ghost"
+            actions={actions}
+            value={effective}
+            onChange={setSelection}
+            items={
+              menu
+                ? {
+                    list: menu.items,
+                    profile,
+                    showLeft: menu.showLeft,
+                    note: menu.note === "offline" ? t("startPanel.deviceOffline", { device: targets.groups.find((group) => group.deviceId === target?.deviceId)?.deviceLabel ?? "" }) : menu.note === "unsupported" ? t("agentProfiles.unsupported") : null,
+                    onItem: (item) => {
+                      setSelection(selectKind(item.kind, useShellStore.getState().rest?.ui_state?.agent_start));
+                      if (target) shown.current = { key: `${target.deviceId}:${target.workspaceId}:${item.kind}`, profile: item.profile };
+                      rerender();
+                    },
+                  }
+                : undefined
+            }
+            disabled={working}
+            kindNote={
+              /* The provider probe describes the core machine, never a remote target's login (B23, B37). */
+              target?.deviceId === localDeviceId(rest) && notSignedIn(selection.kind, rest?.status?.background_ai?.providers) ? (
+                <span className="flex shrink-0 items-center [&>span]:text-caption" data-start-not-signed-in={selection.kind}>
+                  <Status tone="warn">{t("firstRun.tile.notSignedIn")}</Status>
+                </span>
+              ) : null
+            }
+          />
+          <span className="flex-1" />
+          {target === null && !working ? (
+            <Button size="default" onClick={addProject} data-start-add-project="true">
+              <PlusIcon aria-hidden="true" />
+              {t("firstRun.home.addProject")}
+            </Button>
+          ) : (
+            <Button size="default" disabled={!canStart} onClick={start} data-start-submit="true">
+              {working ? t("shell.starting") : t("common.start")}
+              {working ? null : <span aria-hidden="true" className="opacity-(--opacity-dimmed)">⏎</span>}
+            </Button>
+          )}
+        </div>
       </div>
-    </div>
+    </ModalSurface>
   );
 }
