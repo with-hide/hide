@@ -292,6 +292,25 @@ it("renames an SSH device from its ⋯, which the core keeps (c2)", async () => 
   await unmount();
 });
 
+// with-hide/hide issue 3007: Add device's way for a machine this computer already reaches is that device's own row, where Connect as a server is.
+it("opens the row of a device Add device lists as added, which reads its machine, and closes the dialog", async () => {
+  const added = state([remote("mini")]);
+  const { q, events, unmount } = await mount({
+    ...added,
+    rest: { ...added.rest, status: { ...added.rest.status, ssh_hosts: { state: "ready", truncated: false, hosts: [{ alias: "mini", address: "fixture@mini.example.invalid:22", added_as: "Mac mini", problem: null }] } } },
+  } as never);
+  await act(async () => { q("[data-device-add-open]")?.click(); });
+  const dialog = () => document.body.querySelector("[data-add-device-dialog]");
+  await act(async () => { dialog()?.querySelector<HTMLElement>('[data-add-choice="computer"]')?.click(); });
+  await act(async () => { dialog()?.querySelector<HTMLElement>('[data-add-kind-choice="ssh"]')?.click(); });
+  expect(sent(events, "pairing_look_switch")).toHaveLength(0);
+  await act(async () => { dialog()?.querySelector<HTMLElement>('[data-ssh-host-server="mini"]')?.click(); });
+  expect(dialog()).toBeNull();
+  // The row opened on how the device is connected reads its machine for Connect as a server.
+  expect(sent(events, "pairing_look_switch").map((event) => (event.payload as { device: string }).device)).toEqual(["mini"]);
+  await unmount();
+});
+
 it("opens Add device from one button above the list, and shows the Add dialog only then (B50)", async () => {
   const { q, unmount } = await mount(state([remote("mini")]));
   expect(q("[data-add-device]")).toBeNull();

@@ -366,7 +366,7 @@ pub fn next_action(code: &str) -> &'static str {
             "The two Hides are too far apart to connect: update the older one, then share a new link"
         }
         "ssh_hide_absent" => {
-            "That machine has no Hide of its own: install Hide there and add it by a link it shares"
+            "That machine has no Hide of its own yet: add it over SSH, and once it is connected, hide device switch <device> --install puts Hide there"
         }
         "ssh_update_there" => "Update Hide on that machine, then add it again",
         "ssh_refused_there" => {

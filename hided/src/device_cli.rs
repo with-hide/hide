@@ -757,16 +757,24 @@ fn operators(env: &Env) -> Result<(), Refused> {
 /// over SSH, which installs nothing there; any other is the core's SSH
 /// device, as before, with a line when its Hide could pair once it is
 /// updated or running. A command the daemon refuses to look for (a pane's)
-/// goes to the core unchanged.
+/// goes to the core unchanged. An alias one of this computer's devices is
+/// dialed by is neither looked at nor added again: its look would be
+/// answered by the helper this computer runs there, and what puts Hide there
+/// is that device's switch (with-hide/hide#3007).
 fn add_alias(
     env: &Env,
     command: &DeviceCommand,
     alias: &str,
     wait: bool,
 ) -> Result<Printed, Refused> {
-    let looked = match operators(env) {
-        Ok(()) => pairing(env, json!({"verb":"look_ssh","alias":alias})).ok(),
-        Err(_) => None,
+    let operator = operators(env).is_ok();
+    if let Some(device) = operator.then(|| dialed_by(env, alias)).flatten() {
+        return Ok(already_dialed(alias, device));
+    }
+    let looked = if operator {
+        pairing(env, json!({"verb":"look_ssh","alias":alias})).ok()
+    } else {
+        None
     };
     match looked
         .as_ref()
@@ -805,6 +813,30 @@ fn add_alias(
         )),
         printed => Ok(printed),
     }
+}
+
+/// What `hide device add` answers for an alias one of this computer's
+/// devices already dials: that device, and its switch as the way to Hide of
+/// its own there.
+fn already_dialed(alias: &str, device: Value) -> Printed {
+    let name = device["label"].as_str().unwrap_or(alias).to_owned();
+    let next = format!(
+        "{alias} is already connected over SSH as {name}. To put Hide there, so it works without this computer, run hide device switch {alias} --install."
+    );
+    let lines = format!("{next}\n");
+    Printed::Value(json!({"device": device, "next_action": next}), lines)
+}
+
+/// The device of this computer's that `alias` dials, as `hide device list`
+/// answers it; none when the list could not be read, so the add goes on as
+/// before.
+fn dialed_by(env: &Env, alias: &str) -> Option<Value> {
+    let list = ask(env, &DeviceCommand::List).ok()?;
+    list["devices"]
+        .as_array()?
+        .iter()
+        .find(|device| device["ssh_alias"] == alias)
+        .cloned()
 }
 
 /// One ask of this machine's daemon about pairing.
@@ -1376,6 +1408,24 @@ fn device_line(device: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// with-hide/hide#3007: an alias a device of this computer's already
+    /// dials is answered with that device and the step that puts Hide there,
+    /// its switch, never an install or an update.
+    #[test]
+    fn an_alias_a_device_dials_is_answered_with_its_switch() {
+        let device = json!({"id": "d1", "label": "Mac mini", "ssh_alias": "mini"});
+        let Printed::Value(value, lines) = already_dialed("mini", device.clone()) else {
+            panic!("a value");
+        };
+        assert_eq!(value["device"], device);
+        assert_eq!(
+            lines,
+            "mini is already connected over SSH as Mac mini. To put Hide there, so it works without this computer, run hide device switch mini --install.\n"
+        );
+        assert_eq!(value["next_action"].as_str(), lines.strip_suffix('\n'));
+        assert!(!lines.contains("update") && !lines.contains("link"));
+    }
 
     fn parse_words(words: &[&str]) -> Result<DeviceCli, String> {
         let args: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
