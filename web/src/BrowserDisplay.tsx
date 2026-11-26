@@ -2,7 +2,7 @@ import { ArrowLeftIcon, ArrowRightIcon, ExternalLinkIcon, MinusIcon, MonitorIcon
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AreaEmpty } from "./AreaEmpty";
-import { addressShown, addressUrl, clearBrowserAttachments, defaultBrowserAddress, focusBrowserDisplay, hostKey, mountBrowserAttachments, noteBrowserAttachment, notePageState, parseWorkspaceKey, presentBrowserPage, presentedBrowserPage, registerBrowserSlot, syncBrowserFront, useBrowserStore } from "./browserViews";
+import { addressShown, addressUrl, clearBrowserAttachments, defaultBrowserAddress, focusBrowserDisplay, hostKey, mountBrowserAttachments, noteBrowserAttachment, notePageState, noteShellLayer, parseWorkspaceKey, presentBrowserPage, presentedBrowserPage, registerBrowserSlot, syncBrowserFront, useBrowserStore } from "./browserViews";
 import { NewTabBody } from "./components/new-tab-body";
 import { changedFiles } from "./newTab";
 import { useUiStore } from "./ui";
@@ -85,6 +85,11 @@ export function ExternalPage({ display, workspace, actions }: { display: ViewDis
 export function PresentedPage({ workspace, id, url, label, actions }: { workspace: ViewWorkspace; id: string; url: string; label: string; actions: Actions }) {
   const key = workspaceKey(workspace);
   useLayoutEffect(() => presentBrowserPage({ workspace: key, id }), [key, id]);
+  // Desk's panel moves without changing size when the session beside it
+  // opens, closes or changes width, which no resize of the slot reports: each
+  // render of the room places the page again, at most once a frame, and the
+  // host is sent nothing when its rectangle did not move.
+  useLayoutEffect(() => noteShellLayer());
   const display = { id, url, label };
   return <HostedPage display={display} workspace={key} actions={actions} away={{ navigate: (next) => actions.navigateBrowser(id, next, workspace) }} />;
 }

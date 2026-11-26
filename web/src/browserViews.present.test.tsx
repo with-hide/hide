@@ -56,7 +56,7 @@ const inventory = [
   { ...session, view_id: "d1", area_id: "a9", url: "https://github.com/with-hide/hide/pull/1", load: 2 },
   { ...session, view_id: "d2", area_id: "a9", url: "file:///fixture/session/report.html", load: 3 },
 ];
-const deskRect = { x: 600, y: 80, width: 520, height: 700 };
+let deskRect = { x: 600, y: 80, width: 520, height: 700 };
 
 let root: Root;
 let container: HTMLDivElement;
@@ -100,6 +100,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  deskRect = { x: 600, y: 80, width: 520, height: 700 };
   act(() => root.render(null));
   const rest = { workspace_view: { ...front, layout: frontLayout }, browser_views: inventory, browser_scopes: [] } as unknown as SnapshotRest;
   useShellStore.setState({ connection: "live", rest, revision: 1 });
@@ -136,6 +137,16 @@ describe("a page Desk's tab panel shows", () => {
     expect(last().displays).toEqual([{ id: "d1", area_id: "a1", url: "https://front.test/", load: 1, rect: null, visible: false }]);
     // The move is the window's alone: the core's focus, visible tabs, attached tabs and selection see no event.
     expect(events).toEqual([]);
+  });
+
+  it("follows Desk's panel when it moves without changing size, as when the session beside it changes width", () => {
+    showInDesk();
+    flush();
+    expect(last().displays[0]?.rect).toEqual(deskRect);
+    deskRect = { ...deskRect, x: 420 };
+    showInDesk();
+    flush();
+    expect(last().displays[0]?.rect).toEqual({ x: 420, y: 80, width: 520, height: 700 });
   });
 
   it("places nothing once its checkout no longer keeps it, never the front checkout's page of the same id", () => {
