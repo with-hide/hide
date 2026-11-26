@@ -127,7 +127,7 @@ export type ThreadPartActions = {
    * lists it, else the file on the machine the session runs on (B27). What
    * the thread draws and what `onOutput` opens are both this answer.
    */
-  outputOf: (output: DeskOutput) => DeskOutput;
+  outputOf: (output: DeskOutput, viewId: string | null) => DeskOutput;
   onOutput: (output: DeskOutput) => void;
   /** A session a chip or an `@name` names: its pane when Hide knows it, else its name alone. */
   onSession: (session: DeskSessionRef) => void;
@@ -193,7 +193,7 @@ function HidePartLine({ part, command, actions }: { part: ThreadHidePart; comman
       );
       break;
     case "view":
-      body = <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={[actions.outputOf(part.output)]} onOpen={actions.onOutput} /></div>;
+      body = <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={[actions.outputOf(part.output, part.view_id)]} onOpen={actions.onOutput} /></div>;
       break;
     case "mission":
       body = (
@@ -232,7 +232,7 @@ function WorkLine({ line, words, actions }: { line: ThreadLine; words: Words; ac
 /**
  * The agent's words as Desk's answers read (Doop E2): Markdown in the
  * answer's type, an `@name` as its session's chip, `복사` of the original
- * words on hover and on every code block. `lit` is the sentence of it a
+ * words always under it and on every code block. `lit` is the sentence of it a
  * question Hide found asks, lit for a moment after the question line brought
  * it into view (Doop N3 가).
  */
@@ -282,7 +282,7 @@ function UserLine({ line, handed, copy, actions }: { line: Extract<ThreadLine, {
       {handed ? <span className="text-micro text-muted-foreground" data-desk-thread-handed="true">{t("desk.thread.handedByDesk")}</span> : null}
       <SentAttachments files={sent.files} />
       {sent.words ? (
-        <CopyableMessage text={sent.words} copy={copy} align="end">
+        <CopyableMessage text={sent.words} copy={copy} own>
           <p data-desk-thread-bubble="true" className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]">{sent.words}</p>
         </CopyableMessage>
       ) : null}
@@ -317,7 +317,7 @@ function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; l
           {workRows(turn.work).map((row) =>
             Array.isArray(row) ? (
               <li key={row[0]!.id} className="min-w-0">
-                <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={row.map((line) => actions.outputOf(line.part.output))} onOpen={actions.onOutput} /></div>
+                <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={row.map((line) => actions.outputOf(line.part.output, line.part.view_id))} onOpen={actions.onOutput} /></div>
               </li>
             ) : (
               <li key={row.id} className="min-w-0"><WorkLine line={row} words={words} actions={actions} /></li>
@@ -350,7 +350,7 @@ function isViewLine(line: ThreadLine): line is ViewLine {
 
 /** What a folded turn keeps in view (B26): its lines that lead somewhere, then the outputs it opened as one row of pictures. */
 function FoldedParts({ parts, actions }: { parts: ThreadTurn["parts"]; actions: ThreadPartActions }) {
-  const outputs = parts.flatMap((line) => (line.part.kind === "view" ? [actions.outputOf(line.part.output)] : []));
+  const outputs = parts.flatMap((line) => (line.part.kind === "view" ? [actions.outputOf(line.part.output, line.part.view_id)] : []));
   const rest = parts.filter((line) => line.part.kind !== "view");
   return (
     <div className="flex min-w-0 flex-col gap-xs" data-desk-thread-parts={parts.length}>

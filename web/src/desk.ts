@@ -325,7 +325,7 @@ export type ThreadHidePart =
   | { kind: "spawn"; session: DeskSessionRef }
   /** A letter this session sent or got, with the other session and its first line. */
   | { kind: "letter"; direction: "sent" | "received"; peer: DeskSessionRef; body: string }
-  | { kind: "view"; output: DeskOutput }
+  | { kind: "view"; output: DeskOutput; view_id: string | null }
   | { kind: "mission"; mission: DeskMission }
   | { kind: "pr"; number: number; state: PrState };
 

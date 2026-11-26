@@ -68,7 +68,7 @@ export function DeskUserMessage({ text, mentions, attachments = [], onMention, c
   return (
     <div className="flex min-w-0 flex-col items-end gap-xs" data-desk-item="user">
       <SentAttachments files={files} />
-      {bubble && copy ? <CopyableMessage text={namedText(text, mentions)} copy={copy} align="end">{bubble}</CopyableMessage> : bubble}
+      {bubble && copy ? <CopyableMessage text={namedText(text, mentions)} copy={copy} own>{bubble}</CopyableMessage> : bubble}
     </div>
   );
 }
@@ -119,8 +119,8 @@ const NO_REPLY_MISSIONS: readonly DeskMissionMention[] = [];
  * open it; the core reads both from the finished answer, so a `live` one
  * streams its text alone; a stopped answer keeps what it said and says it
  * stopped (B7). Given `copy`, it offers `복사` of its original words, each
- * session and mission said by its name, on hover and on every code block
- * (Doop E2). A compaction the agent told outside its words (OpenCode's
+ * session and mission said by its name, always under it and on every code
+ * block (Doop E2). A compaction the agent told outside its words (OpenCode's
  * `/compact`) is one line of its own, so that answer is never empty; a
  * finished answer with neither words nor a compaction is a command that
  * ended without a word, which the core keeps only for one, and it says the

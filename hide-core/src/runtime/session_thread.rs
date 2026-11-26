@@ -32,8 +32,8 @@ use crate::terminal_attachments as ingress;
 use hide_node_link::protocol::Call;
 use hide_session::session_activity::{SessionActivity, SessionActivityRequest};
 use hide_session::thread::{
-    HideCall, ThreadCursor, ThreadPage, ThreadRead, ThreadRequest, hide_call, recorded_syntax,
-    spawned_agent,
+    HideCall, ThreadCursor, ThreadPage, ThreadRead, ThreadRequest, hide_call, opened_view,
+    recorded_syntax, spawned_agent,
 };
 use serde_json::Value;
 use std::time::Duration;
@@ -1168,29 +1168,41 @@ fn page_parts(
                 }
             }
             Some("tool_call_update") => {
-                let Some(HideCall::Spawn {
-                    name,
-                    intent,
-                    agent_id: None,
-                }) = parts.get(id).or_else(|| earlier.get(id)).cloned()
-                else {
+                let Some(call) = parts.get(id).or_else(|| earlier.get(id)).cloned() else {
                     continue;
                 };
-                let agent = update["content"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|content| content["content"]["text"].as_str())
-                    .find_map(spawned_agent);
-                if let Some(agent) = agent {
-                    parts.insert(
-                        id.to_owned(),
-                        HideCall::Spawn {
+                let texts = || {
+                    update["content"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|content| content["content"]["text"].as_str())
+                };
+                let answered = match call {
+                    HideCall::Spawn {
+                        name,
+                        intent,
+                        agent_id: None,
+                    } => texts()
+                        .find_map(spawned_agent)
+                        .map(|agent| HideCall::Spawn {
                             name,
                             intent,
                             agent_id: Some(agent),
-                        },
-                    );
+                        }),
+                    HideCall::View {
+                        view,
+                        target,
+                        view_id: None,
+                    } => texts().find_map(opened_view).map(|view_id| HideCall::View {
+                        view,
+                        target,
+                        view_id: Some(view_id),
+                    }),
+                    _ => None,
+                };
+                if let Some(answered) = answered {
+                    parts.insert(id.to_owned(), answered);
                 }
             }
             _ => {}
@@ -2110,6 +2122,7 @@ mod tests {
         let view = |target: &str| HideCall::View {
             view: hide_session::thread::ViewKind::File,
             target: target.to_owned(),
+            view_id: None,
         };
         let parts = page_parts(
             &[
@@ -2164,6 +2177,53 @@ mod tests {
                 intent: Some("m:review".to_owned()),
                 agent_id: Some("agent-42".to_owned()),
             })
+        );
+    }
+
+    /// A View part is found by the id its call's answer named, which may come
+    /// on a later page than the call; a refused open keeps the words alone.
+    #[test]
+    fn an_open_calls_part_takes_the_view_id_its_answer_named() {
+        let call = |id: &str, title: &str| json!({"sessionUpdate": "tool_call", "toolCallId": id, "kind": "execute", "title": title});
+        let answer = |id: &str, text: &str| {
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed",
+                "content": [{"type": "content", "content": {"type": "text", "text": text}}]})
+        };
+        let view = |target: &str, view_id: Option<&str>| HideCall::View {
+            view: hide_session::thread::ViewKind::Browser,
+            target: target.to_owned(),
+            view_id: view_id.map(str::to_owned),
+        };
+        let first = page_parts(
+            &[
+                call("a", "hide browser open agents/runs/copy-pos/index.html"),
+                call(
+                    "b",
+                    "hide browser open github.com/with-hide/hide/pull/2529/files",
+                ),
+            ],
+            &BTreeMap::new(),
+        );
+        let later = page_parts(
+            &[
+                answer(
+                    "a",
+                    "{\"type\":\"workspace_result\",\"ok\":true,\"result\":{\"view_id\":\"v7\"}}",
+                ),
+                answer("b", "{\"ok\":false,\"reason\":\"browser_unsupported\"}"),
+            ],
+            &first,
+        );
+        assert_eq!(
+            later,
+            BTreeMap::from([(
+                "a".to_owned(),
+                view("agents/runs/copy-pos/index.html", Some("v7"))
+            )])
+        );
+        assert_eq!(
+            first.get("b"),
+            Some(&view("github.com/with-hide/hide/pull/2529/files", None))
         );
     }
 }

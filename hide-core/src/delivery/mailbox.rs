@@ -912,10 +912,12 @@ fn rang(ledger: &Ledger, actor: &Actor, digest: &str) -> bool {
 }
 
 /// Whether a bell is still coming for the letter. A letter whose three bells
-/// are spent, or whose recipient is never belled, stays pending for
-/// `hide inbox`; the operator's own prompt promises it nothing.
+/// are spent, whose recipient is never belled, or that no bell rings for
+/// (`Letter::rings`) stays pending for the next handover or `hide inbox`;
+/// the operator's own prompt promises it nothing.
 fn bell_pending(letter: &Letter) -> bool {
     letter.state == State::Pending
+        && letter.rings()
         && !letter.handed
         && letter.attempts() < super::ledger::BELLS
         && super::doorbell::bell_target(&letter.recipient.kind)
@@ -970,6 +972,10 @@ pub(crate) fn tool_pull(
 
 /// At a safe gap, take this session's bell batch immediately, then letters
 /// whose wait during uninterrupted work is over. Both hooks share the caps.
+/// A turn end continues the agent's turn for what it hands over, so it takes
+/// letters only when one of them rings (`Letter::rings`), the rest riding
+/// with it: a `progress` letter alone starts no turn there, as it rings no
+/// bell at rest. A tool gap starts no turn and takes them as before.
 pub(crate) fn gap_pull(
     ledger: &Ledger,
     actor: &Actor,
@@ -1005,6 +1011,9 @@ pub(crate) fn gap_pull(
                         })))
         })
         .collect();
+    if matches!(point, PullPoint::TurnEnd) && !due.iter().any(|letter| letter.rings()) {
+        return Ok(Intake::default());
+    }
     Ok(render(due, language, bundling))
 }
 
@@ -2102,6 +2111,65 @@ mod tests {
         }
     }
 
+    /// A turn end continues the turn for what it hands over, so a progress
+    /// letter alone is not taken there, even sent with `--now`, while a tool
+    /// gap, which starts no turn, takes it; beside a letter that rings it
+    /// rides the same turn end.
+    #[test]
+    fn a_turn_end_takes_a_progress_letter_only_beside_one_that_rings() {
+        let mut ledger = Ledger::default();
+        let mut recipient = actor("recipient");
+        recipient.kind = "grok".into();
+        recipient.session = crate::engine::tokens::session_digest("native-session");
+        let progress = send(
+            &mut ledger,
+            &actor("worker"),
+            &recipient,
+            "plan",
+            "the plan",
+            "progress",
+            None,
+            1,
+        )
+        .unwrap();
+        ledger.letters[0].immediate = true;
+        let take = |ledger: &Ledger, point: PullPoint| {
+            gap_pull(
+                ledger,
+                &recipient,
+                point,
+                Some(1),
+                2,
+                InterfaceLanguage::English,
+                Bundling::PerSender,
+            )
+            .unwrap()
+            .ids
+        };
+        assert!(take(&ledger, PullPoint::TurnEnd).is_empty());
+        assert_eq!(
+            take(&ledger, PullPoint::Tool),
+            std::slice::from_ref(&progress.id)
+        );
+        let request = send(
+            &mut ledger,
+            &actor("worker"),
+            &recipient,
+            "ask",
+            "which way?",
+            "request",
+            None,
+            2,
+        )
+        .unwrap();
+        ledger.letters[1].immediate = true;
+        let mut taken = take(&ledger, PullPoint::TurnEnd);
+        taken.sort();
+        let mut both = vec![progress.id, request.id];
+        both.sort();
+        assert_eq!(taken, both);
+    }
+
     #[test]
     fn an_operator_submission_releases_the_previous_bell_turn_claim() {
         let mut ledger = Ledger::default();
@@ -2512,6 +2580,36 @@ mod tests {
         ledger.letters[2].bell_attempts = Some(3);
         let operator = pull_for(&mut ledger, &recipient, "operator");
         assert!(operator.ids.is_empty() && operator.context.is_empty());
+    }
+
+    /// No bell is coming for a progress letter (`Letter::rings`), so the
+    /// operator's prompt leaves it out of its count; the bell rung for
+    /// another letter hands it over in its bundle.
+    #[test]
+    fn a_progress_letter_is_left_out_of_the_count_and_rides_the_next_bell() {
+        let mut ledger = Ledger::default();
+        let (worker, conductor) = (actor("worker"), actor("conductor"));
+        let progress = letters_from(&mut ledger, &worker, &conductor, &["progress"], 1);
+        let operator = pull_for(&mut ledger, &conductor, "operator");
+        assert!(
+            operator.ids.is_empty() && operator.context.is_empty(),
+            "{operator:?}"
+        );
+        let report = letters_from(&mut ledger, &worker, &conductor, &["report"], 2);
+        let operator = pull_for(&mut ledger, &conductor, "operator");
+        assert_eq!(
+            operator.context.trim(),
+            "Hide 편지 1통 대기 중, 이 턴이 끝난 뒤 전달"
+        );
+        ring(&mut ledger, 1, LINE);
+        let bell = pull_for(&mut ledger, &conductor, &format!("{LINE}\n"));
+        let mut taken = bell.ids.clone();
+        taken.sort();
+        let mut sent = [progress, report].concat();
+        sent.sort();
+        assert_eq!(taken, sent);
+        assert!(bell.context.contains("body of worker at 1"), "{bell:?}");
+        assert!(bell.context.contains("body of worker at 2"), "{bell:?}");
     }
 
     #[test]

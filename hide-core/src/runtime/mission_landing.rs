@@ -88,7 +88,7 @@ pub enum MergeStep {
 
 /// Who merges `node` of `mission` and where it stands; `ready` is whether
 /// every pull request it holds that is not closed is ready to merge as
-/// GitHub last answered (`mission_health::pr_ready`). None for a node that
+/// GitHub last answered (`mission_health::merge_ready`). None for a node that
 /// merges nothing of the mission's: research, verify, an outside node and
 /// a `direct` change.
 pub(super) fn node_merge(mission: &Mission, node: &MissionNode, ready: bool) -> Option<NodeMerge> {
