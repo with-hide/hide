@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createActions } from "./actions";
 import { configureAttachments } from "./attachments";
 import { configureFileBytes } from "./fileBytes";
+import { clearPreviews } from "./filePreview";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { DeskAgent, DeskItem, DeskJob, DeskOption, DeskOutput } from "./desk";
 import { DeskScreen, DeskSettingsPage } from "./DeskScreen";
@@ -76,6 +77,7 @@ describe("Desk's room", () => {
     useShellStore.setState(saved, true);
     useUiStore.setState(savedUi, true);
     vi.unstubAllGlobals();
+    clearPreviews();
   });
 
   let actions = createActions(() => true);
@@ -405,6 +407,7 @@ describe("Desk's room", () => {
           { id: "c-deep", workspace_id: "w-deep", path: "/home/me/repo", label: "main", active_tab_id: "t1", strip: [], tabs: [{ id: "t1", panes: [{ id: "d:p1" }] }] },
         ] }],
       },
+      status: { remote: [{ target_id: "deepbox", state: "connected" }] },
     } as unknown as SnapshotRest;
     const row = { pane_id: "d:p1", identity_label: "remote worker", agent_kind: "claude", mark: "going", device_id: "deepbox" } as never;
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
@@ -431,9 +434,9 @@ describe("Desk's room", () => {
 
   it("draws and opens a file a connected device's session showed from that device, which no card lists (PRD desk-2-ui B27)", async () => {
     const reads = await remoteSessionShowed(["/home/me/repo/new.md", "/home/me/repo/shot.png"], []);
-    // The image it showed is drawn from the file on that device, as the open below reads it.
-    expect(reads).toMatchObject([{ path: "/home/me/repo/shot.png", device_id: "deepbox", root: "/home/me/repo" }]);
-    await press("[data-desk-output='/home/me/repo/new.md']");
+    // Each tile's preview is read from the file on that device, as the open below reads it: the text's head, the image's size first.
+    expect(reads).toMatchObject([{ path: "/home/me/repo/new.md", length: 4096, device_id: "deepbox", root: "/home/me/repo" }, { path: "/home/me/repo/shot.png", length: 1, device_id: "deepbox", root: "/home/me/repo" }]);
+    await press("[data-desk-output='/home/me/repo/new.md'] [data-desk-tile-open]");
     expect(frontOutput()).toMatchObject({ kind: "output", output: { device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" } });
   });
 
@@ -441,8 +444,8 @@ describe("Desk's room", () => {
     const listed: DeskOutput = { id: "view-9", kind: "image", label: "shot.png", thumb: null, seen: true, pr_state: null, device_id: "deepbox", checkout: "/home/me/wt", path: "/home/me/wt/shot.png", url: null };
     const reads = await remoteSessionShowed(["/home/me/wt/shot.png"], [listed]);
     // The shelf and the conversation draw the same file, read once.
-    expect(reads).toMatchObject([{ path: "/home/me/wt/shot.png", device_id: "deepbox", root: "/home/me/wt" }]);
-    await press("[data-desk-hide-part='view'] [data-desk-output='view-9']");
+    expect(reads).toMatchObject([{ path: "/home/me/wt/shot.png", length: 1, device_id: "deepbox", root: "/home/me/wt" }]);
+    await press("[data-desk-hide-part='view'] [data-desk-output='view-9'] [data-desk-tile-open]");
     expect(frontOutput()).toMatchObject({ kind: "output", output: listed });
   });
 

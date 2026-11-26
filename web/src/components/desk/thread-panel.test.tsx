@@ -13,6 +13,11 @@ import type { SessionThreadSection } from "../../snapshot";
 import { useShellStore } from "../../store";
 import { TooltipProvider } from "../ui/tooltip";
 import { ThreadPanel } from "./thread-panel";
+import { clearPreviews } from "../../filePreview";
+import { drawPreview } from "../../previewDraw";
+
+// A test window has no image decoder: a tile's picture is stood in once the file's bytes arrived.
+vi.mock("../../previewDraw", () => ({ drawPreview: vi.fn(async () => ({ state: "picture", picture: "data:image/jpeg;drawn", pages: null, seconds: null })) }));
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 
@@ -44,6 +49,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  clearPreviews();
   for (const root of mounted) await act(async () => root.unmount());
   mounted = [];
   useShellStore.setState(saved, true);
@@ -252,21 +258,29 @@ it("draws the files a sent message typed before its words over its bubble, by th
   expect(container.querySelector('[data-desk-thread-line="user"] p')?.textContent).toBe("이것 좀 봐 줘");
 });
 
-it("draws an image the session showed as its picture, read from the file as the shelf reads it", async () => {
+it("draws an image the session showed as its tile's picture, made from the file's bytes as every tile makes one (feedback 2 frame M 나)", async () => {
   const reads: Record<string, unknown>[] = [];
   configureFileBytes((event) => { reads.push(event.payload as Record<string, unknown>); });
-  vi.stubGlobal("URL", Object.assign(Object.create(URL), { createObjectURL: () => "blob:dark", revokeObjectURL: () => undefined }));
   const { container } = await mount();
   const shown = { sessionUpdate: "tool_call", toolCallId: "f", kind: "execute", title: "hide file open /repo/shots/dark.png", status: "completed" };
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: { updates: [shown], parts: { f: { kind: "view", view: "file", target: "/repo/shots/dark.png" } }, sessions: {} } }) }));
-  expect(reads).toMatchObject([{ path: "/repo/shots/dark.png" }]);
-  const header = new TextEncoder().encode(JSON.stringify({ type: "file_bytes", request_id: reads[0]!.request_id, path: "/repo/shots/dark.png", offset: 0, total: 1, eof: true }));
-  const frame = new Uint8Array(4 + header.length + 1);
-  new DataView(frame.buffer).setUint32(0, header.length, false);
-  frame.set(header, 4);
-  await act(async () => receiveBytes(frame.buffer));
+  const answer = async (read: Record<string, unknown>, bytes: number[], total: number) => {
+    const header = new TextEncoder().encode(JSON.stringify({ type: "file_bytes", request_id: read.request_id, path: "/repo/shots/dark.png", offset: 0, total, eof: true }));
+    const frame = new Uint8Array(4 + header.length + bytes.length);
+    new DataView(frame.buffer).setUint32(0, header.length, false);
+    frame.set(header, 4);
+    frame.set(bytes, 4 + header.length);
+    await act(async () => receiveBytes(frame.buffer));
+  };
+  // Its size first, then the whole file, since it is under the image cap.
+  expect(reads).toMatchObject([{ path: "/repo/shots/dark.png", length: 1 }]);
+  await answer(reads[0]!, [1], 2);
+  await vi.waitFor(() => expect(reads).toHaveLength(2));
+  expect(reads[1]).toMatchObject({ path: "/repo/shots/dark.png", length: null });
+  await answer(reads[1]!, [1, 2], 2);
   const tile = container.querySelector('[data-desk-hide-part="view"] [data-desk-output-thumb="image"]');
-  expect(tile?.querySelector("img")?.getAttribute("src")).toBe("blob:dark");
+  await vi.waitFor(() => expect(tile?.querySelector("[data-desk-tile-picture]")?.getAttribute("src")).toBe("data:image/jpeg;drawn"));
+  expect(drawPreview).toHaveBeenCalledWith("image", new Uint8Array([1, 2]), "/repo/shots/dark.png");
 });
 
 it("draws a turn an agent recorded as interrupted as one quiet line, never as the operator's bubble", async () => {

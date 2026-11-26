@@ -12,7 +12,7 @@ import { Button } from "../ui/button";
 import { RowButton } from "../ui/row-button";
 import { Hint } from "../ui/tooltip";
 import { UnseenMark } from "./desk-job-card";
-import { OutputPicture } from "./output-picture";
+import { PreviewPicture, PreviewTile, tileOf } from "./preview-tile";
 
 /** The shelf's groups in the order they stand when none waits to be seen (Doop B4, shelf 나). */
 const KINDS: readonly DeskOutputKind[] = ["image", "page", "doc", "pr"];
@@ -71,10 +71,10 @@ function unseen(item: ShelfItem): boolean {
   return item.kind !== "pr" && item.unseen;
 }
 
-/** An image's picture, as every part draws an output's (`OutputPicture`); the image mark while there is none to draw. */
+/** An image's picture, as its tile draws it (`PreviewPicture`); the image mark while there is none to draw. */
 function Picture({ item, className }: { item: ShelfItem; className: string }) {
   if (item.kind !== "image") return null;
-  return <OutputPicture output={item.output} className={className} fallback={<ImageIcon aria-hidden="true" className={ICON} />} />;
+  return <PreviewPicture file={tileOf(item.output)} className={className} fallback={<ImageIcon aria-hidden="true" className={ICON} />} />;
 }
 
 /** A picture on a chip, or the image mark while none is drawn yet. */
@@ -108,8 +108,7 @@ function ItemDetails({ item }: { item: ShelfItem }) {
   const { t } = useInterfaceTranslation();
   return (
     <span className="flex max-w-(--size-pr-popover) flex-col gap-xxs" data-desk-shelf-details={item.id}>
-      {item.kind === "image" ? <Picture item={item} className="w-full rounded-xs border border-border object-contain" /> : null}
-      <span className="break-all font-medium">{item.kind === "pr" && item.title ? `${item.label} ${item.title}` : item.label}</span>
+      {item.kind !== "pr" ? <PreviewTile file={tileOf(item.output)} /> : <span className="break-all font-medium">{item.title ? `${item.label} ${item.title}` : item.label}</span>}
       {item.kind === "pr" ? <span className={PR_LOOK[item.state].tone}>{t(PR_LOOK[item.state].word)}</span> : item.where ? <span className="break-all text-muted-foreground">{item.where}</span> : null}
     </span>
   );
@@ -191,40 +190,29 @@ export function OutputShelf({ outputs, pulls, selected = null, onOpen, onPull, r
       </div>
       {shown ? (
         <div className="max-h-(--size-desk-shelf-list) min-w-0 overflow-y-auto px-md pb-sm" data-desk-shelf-list={shown.kind}>
-          {shown.kind === "image" ? (
-            <ul className="grid min-w-0 grid-cols-2 gap-sm">
-              {shown.items.map((item) => (
-                <li key={item.id} className="flex min-w-0 flex-col gap-xxs">
-                  <RowButton className={cn("relative h-(--size-desk-shelf-thumb) overflow-hidden rounded-sm border border-border bg-muted p-0 hover:border-ring", item.output?.id === selected && "border-ring ring-1 ring-ring")} aria-label={unseen(item) ? `${item.label} · ${t("desk.outputs.unseen")}` : item.label} onClick={(event) => press(item, event)} data-desk-shelf-item={item.id}>
-                    <span className="flex size-full items-center justify-center"><Picture item={item} className="size-full object-cover object-top" /></span>
-                    {unseen(item) ? <UnseenMark className="absolute right-xxs top-xxs" /> : null}
-                  </RowButton>
-                  <span className="min-w-0 truncate text-caption text-subtle-foreground" title={item.label}>{item.label}</span>
+          {shown.kind !== "pr" ? (
+            <ul className="grid min-w-0 grid-cols-3 gap-sm">
+              {shown.items.map((item) => item.kind === "pr" ? null : (
+                <li key={item.id} className="min-w-0">
+                  <PreviewTile file={tileOf(item.output)} fill selected={item.output.id === selected} unseen={unseen(item)} onOpen={() => onOpen(item.output)} data-desk-shelf-item={item.id} />
                 </li>
               ))}
             </ul>
           ) : (
             <ul className="flex min-w-0 flex-col">
-              {(shown.kind === "pr" && !allPulls ? shown.items.slice(0, PR_ROWS) : shown.items).map((item) => (
+              {(allPulls ? shown.items : shown.items.slice(0, PR_ROWS)).map((item) => item.kind !== "pr" ? null : (
                 <li key={item.id} className="min-w-0">
                   <RowButton className={cn("h-(--size-control-lg) gap-xs rounded-sm px-xs text-body", item.output?.id === selected && "bg-accent")} onClick={(event) => press(item, event)} data-desk-shelf-item={item.id}>
-                    {item.kind === "pr" && item.pull ? <PrListItem pull={item.pull} />
-                    : item.kind === "pr" ? (
+                    {item.pull ? <PrListItem pull={item.pull} /> : (
                       <>
                         <PrMark state={item.state} label={item.label} className={cn("shrink-0", item.state === "closed" && CLOSED_DIM)} />
                         <span className={cn("min-w-0 flex-1 truncate text-foreground", item.state === "closed" && CLOSED_DIM)} title={item.title}>{item.title}</span>
-                      </>
-                    ) : (
-                      <>
-                        <KindIcon kind={item.kind} />
-                        <span className="min-w-0 flex-1 truncate text-foreground" title={item.where ?? item.label}>{item.label}</span>
-                        {unseen(item) ? <UnseenMark /> : null}
                       </>
                     )}
                   </RowButton>
                 </li>
               ))}
-              {shown.kind === "pr" && !allPulls && shown.items.length > PR_ROWS ? (
+              {!allPulls && shown.items.length > PR_ROWS ? (
                 <li>
                   <Button variant="text" size="inline" className="px-xs text-caption text-muted-foreground" data-desk-shelf-more={shown.items.length - PR_ROWS} onClick={() => setAllPulls(true)}>
                     {t("desk.shelf.more", { count: shown.items.length - PR_ROWS, names: shown.items.slice(PR_ROWS).map((item) => item.label).join(" ") })}
