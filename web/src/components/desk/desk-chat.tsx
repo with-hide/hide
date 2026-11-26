@@ -5,7 +5,7 @@ import type { ApprovalButton, ApprovalWord, DeskAgent, DeskApproval, DeskItem, D
 import { approvalButtons, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, markedMission, mentionParts, namedMention, namedText, refuses } from "../../desk";
 import { sentAttachment } from "../../deskComposer";
 import { useInterfaceTranslation } from "../../i18n/client";
-import type { DeskAttachment } from "../../snapshot";
+import type { DeskAttachment, DeskCompaction } from "../../snapshot";
 import { requireInterfaceLanguage } from "../../i18n/locale";
 import type { MessageKey } from "../../i18n/catalogs";
 import { composingKey } from "../../keys";
@@ -120,9 +120,13 @@ const NO_REPLY_MISSIONS: readonly DeskMissionMention[] = [];
  * streams its text alone; a stopped answer keeps what it said and says it
  * stopped (B7). Given `copy`, it offers `복사` of its original words, each
  * session and mission said by its name, on hover and on every code block
- * (Doop E2).
+ * (Doop E2). A compaction the agent told outside its words (OpenCode's
+ * `/compact`) is one line of its own, so that answer is never empty; a
+ * finished answer with neither words nor a compaction is a command that
+ * ended without a word, which the core keeps only for one, and it says the
+ * command finished.
  */
-export function DeskReply({ text, stopped = false, live = false, mentions = NO_REPLY_MENTIONS, missions = NO_REPLY_MISSIONS, onMention, onMission, onFile, copy }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; missions?: readonly DeskMissionMention[]; onMention?: (mention: DeskMention) => void; onMission?: (missionId: string) => void; /** A file path the answer names, pressed (feedback 2 frame M [2]); without it paths stay words. */ onFile?: (file: FoundAnswerPath) => void; copy?: CopyText }) {
+export function DeskReply({ text, stopped = false, live = false, mentions = NO_REPLY_MENTIONS, missions = NO_REPLY_MISSIONS, compaction = null, onMention, onMission, onFile, copy }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; missions?: readonly DeskMissionMention[]; compaction?: DeskCompaction | null; onMention?: (mention: DeskMention) => void; onMission?: (missionId: string) => void; /** A file path the answer names, pressed (feedback 2 frame M [2]); without it paths stay words. */ onFile?: (file: FoundAnswerPath) => void; copy?: CopyText }) {
   const { t } = useInterfaceTranslation();
   // Each chip is drawn in a root of its own inside the Markdown, so the screen's chip source is bridged to it.
   const bridge = useSessionChipBridge();
@@ -152,7 +156,13 @@ export function DeskReply({ text, stopped = false, live = false, mentions = NO_R
   const words = <MarkdownText text={text} size="chat" chips={chips} copyCode={copy} />;
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-item="reply" data-desk-reply={live ? "live" : stopped ? "stopped" : "done"}>
-      {copy ? <CopyableMessage text={missions.reduce((said, mission) => said.split(markedMission(mission)).join(mission.title), namedText(text, mentions))} copy={copy}>{words}</CopyableMessage> : words}
+      {text === "" ? null : copy ? <CopyableMessage text={missions.reduce((said, mission) => said.split(markedMission(mission)).join(mission.title), namedText(text, mentions))} copy={copy}>{words}</CopyableMessage> : words}
+      {compaction ? (
+        <span className="text-body text-subtle-foreground" data-desk-reply-compaction={compaction.done ? "done" : "failed"}>
+          {compaction.done ? t("desk.reply.compacted") : compaction.reason ? t("desk.reply.notCompactedWhy", { reason: compaction.reason }) : t("desk.reply.notCompacted")}
+        </span>
+      ) : null}
+      {text === "" && !compaction && !live && !stopped ? <span className="text-body text-subtle-foreground" data-desk-reply-command-done="true">{t("desk.reply.commandDone")}</span> : null}
       {stopped ? <span className="text-micro text-muted-foreground">{t("desk.reply.stopped")}</span> : null}
     </div>
   );
@@ -200,6 +210,7 @@ const NOTICE: Record<Extract<DeskItem, { kind: "notice" }>["notice"], MessageKey
   resume_failed: "desk.notice.resume_failed",
   turn_failed: "desk.notice.turn_failed",
   attachments_gone: "desk.notice.attachments_gone",
+  command_left_out: "desk.notice.command_left_out",
 };
 
 export type DeskNoticeAction = "retry" | "restart" | "reinstall";
@@ -525,7 +536,7 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
       {items.map((item, index) => (
         <li key={item.id} className="flex min-w-0 flex-col">
           {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} attachments={item.attachments} onMention={actions.onMention} copy={actions.onCopy} />
-            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} missions={item.missions} onMention={actions.onMention} onMission={actions.onMission} onFile={actions.onFile} copy={actions.onCopy} /></div>
+            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} missions={item.missions} compaction={item.compaction ?? null} onMention={actions.onMention} onMission={actions.onMission} onFile={actions.onFile} copy={actions.onCopy} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(option, text) => actions.onApproval(item.id, option, text)} />

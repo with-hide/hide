@@ -46,3 +46,10 @@ marker = "❯"
 question = { down = "down", pick = "enter", row = "○ {label}" }
 plan_approval = { approve = ["enter"], keep_planning = ["down", "down", "down", "enter"] }
 permission = { allow = ["enter"], deny = ["esc"] }
+
+# The commands Desk keeps out of this agent's own command list
+# (docs/ARCHITECTURE.md, Desk's commands): move, wt and ssh take Desk's session to another
+# folder, tree or machine, plugins and force change what the agent loads or runs,
+# and session delete removes the session Desk resumes.
+[desk]
+left_out = ["move", "wt", "ssh", "plugins", "force", "session delete"]

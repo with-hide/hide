@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { MAX_BATCH_BYTES, MAX_FILE_BYTES, MAX_FILES, safeName, type AttachmentInput } from "./attachments";
 import { markedMention, type DeskMention } from "./desk";
 import { attachedOf } from "./mobile/sentReplies";
-import type { DeskMentions } from "./snapshot";
+import type { DeskCommand, DeskMentions } from "./snapshot";
 import type { DeskDraft } from "./ui";
 
 export type MentionSession = DeskMentions["sessions"][number];
@@ -23,6 +23,31 @@ export function mentionAt(text: string, caret: number): { start: number; query: 
   if (!match) return null;
   const query = match[2]!;
   return { start: caret - query.length - 1, query };
+}
+
+/** The `/` word the draft starts with while the caret is in it: what follows `/`; none once the caret leaves that first word, or when the draft does not start with `/`. */
+export function commandAt(text: string, caret: number): { query: string } | null {
+  const match = /^\/(\S*)$/.exec(text.slice(0, caret));
+  return match ? { query: match[1]! } : null;
+}
+
+/**
+ * The `/` menu's rows for what follows `/`: the agent's commands whose name
+ * holds it, case aside, those that start with it first, each group in the
+ * agent's order. A name is matched without the `/` it is typed with.
+ */
+export function commandRows(commands: readonly DeskCommand[], query: string): DeskCommand[] {
+  const needle = query.toLocaleLowerCase();
+  const bare = (command: DeskCommand) => command.name.replace(/^\//, "").toLocaleLowerCase();
+  const hits = commands.filter((command) => bare(command).includes(needle));
+  return [...hits.filter((command) => bare(command).startsWith(needle)), ...hits.filter((command) => !bare(command).startsWith(needle))];
+}
+
+/** The draft once a command is picked for its `/` word: the word becomes the command as typed and one space, and the caret goes after the space. */
+export function pickCommand(draft: DeskDraft, at: { query: string }, command: DeskCommand): { draft: DeskDraft; caret: number } {
+  const after = draft.text.slice(1 + at.query.length);
+  const word = `${command.name}${/^\s/.test(after) ? "" : " "}`;
+  return { draft: { ...draft, text: word + after }, caret: command.name.length + 1 };
 }
 
 /**

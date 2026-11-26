@@ -60,6 +60,70 @@ struct File {
     /// ([`Answer`]); the built-in files' alone.
     #[serde(default)]
     pub answer: Option<Answer>,
+    /// What Desk keeps out of the agent's own commands ([`Desk`]); the
+    /// built-in files' alone.
+    #[serde(default)]
+    pub desk: Option<Desk>,
+}
+
+/// What Desk, which talks to the agent over ACP, keeps out of the commands
+/// the agent lists (`[desk]`): a command that would sign the agent out of
+/// the login Desk shares with the operator's terminal, move Desk's session
+/// elsewhere or change settings Desk does not show.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Desk {
+    /// Each a command as the operator types it after `/`, its name and, for a
+    /// command that is harmful only with one argument, that argument
+    /// (`session delete`): a one-word entry leaves the command out of Desk's
+    /// list, and a message that starts with any entry's words is never sent.
+    #[serde(default)]
+    pub left_out: Vec<String>,
+    /// Where the agent's ACP adapter tells a compaction's end outside the
+    /// reply: a JSON pointer into a `session_info_update`, to an object
+    /// whose `status` is `completed` or `failed` (with `error.message`).
+    /// None for an adapter that tells it in its reply.
+    #[serde(default)]
+    pub compaction_meta: Option<String>,
+}
+
+/// The most entries a `[desk] left_out` holds, and the most bytes in one.
+pub const MAX_LEFT_OUT: usize = 32;
+pub const MAX_LEFT_OUT_BYTES: usize = 64;
+/// A longer `compaction_meta` pointer is refused with its file.
+pub const MAX_COMPACTION_META_BYTES: usize = 128;
+
+fn check_desk(name: &str, desk: &Desk) -> Result<(), String> {
+    if desk.left_out.len() > MAX_LEFT_OUT {
+        return Err(format!(
+            "{name}: desk.left_out holds more than {MAX_LEFT_OUT} commands"
+        ));
+    }
+    let word = |word: &str| {
+        !word.is_empty()
+            && word
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-_:.".contains(c))
+    };
+    if let Some(bad) = desk.left_out.iter().find(|entry| {
+        entry.len() > MAX_LEFT_OUT_BYTES
+            || entry.split(' ').count() > 2
+            || !entry.split(' ').all(word)
+    }) {
+        return Err(format!(
+            "{name}: desk.left_out {bad:?} is not a command name, and at most one argument, without the slash"
+        ));
+    }
+    if let Some(pointer) = &desk.compaction_meta
+        && (!pointer.starts_with('/')
+            || pointer.len() > MAX_COMPACTION_META_BYTES
+            || pointer.chars().any(|c| c.is_whitespace() || c.is_control()))
+    {
+        return Err(format!(
+            "{name}: desk.compaction_meta {pointer:?} is not a JSON pointer of at most {MAX_COMPACTION_META_BYTES} bytes"
+        ));
+    }
+    Ok(())
 }
 
 /// The keys that answer an agent's own screens from a screen that is not its
@@ -432,6 +496,7 @@ pub struct Fields {
     pub account: Option<AccountRule>,
     pub screen: Option<toml::Table>,
     pub answer: Option<Answer>,
+    pub desk: Option<Desk>,
 }
 
 /// Parse one file and check every field it carries: the one reading of a
@@ -464,6 +529,12 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
     }
     if let Some(answer) = &file.answer {
         check_answer(name, answer)?;
+    }
+    if origin == Origin::User && file.desk.is_some() {
+        return Err(format!("{name}: desk is for the built-in agents' files"));
+    }
+    if let Some(desk) = &file.desk {
+        check_desk(name, desk)?;
     }
     if let Some(display) = &file.name
         && (display.trim().is_empty()
@@ -528,6 +599,7 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
         account,
         screen: file.screen,
         answer: file.answer,
+        desk: file.desk,
     })
 }
 
@@ -1319,5 +1391,56 @@ mod tests {
         .answer
         .unwrap();
         assert_eq!(answer.marker.as_deref(), Some("❯"));
+    }
+
+    /// `[desk] left_out` names commands as typed after `/`, at most a name
+    /// and one argument, and only a built-in file may set it.
+    #[test]
+    fn a_desk_table_names_commands_and_is_the_built_in_files_alone() {
+        let file = |desk: &str| {
+            format!(
+                "schema = 1\nid = \"x\"\nname = \"X\"\nexecutables = [\"x\"]\nhooks = \"none\"\n[desk]\n{desk}"
+            )
+        };
+        let desk = read(
+            "x.toml",
+            &file("left_out = [\"logout\", \"session delete\"]\n"),
+            Origin::Builtin,
+        )
+        .unwrap()
+        .desk
+        .unwrap();
+        assert_eq!(desk.left_out, ["logout", "session delete"]);
+        let meta = read(
+            "x.toml",
+            &file("compaction_meta = \"/_meta/x~1compaction\"\n"),
+            Origin::Builtin,
+        )
+        .unwrap()
+        .desk
+        .unwrap();
+        assert_eq!(
+            meta.compaction_meta.as_deref(),
+            Some("/_meta/x~1compaction")
+        );
+        for refused in [
+            "compaction_meta = \"_meta\"\n",
+            "compaction_meta = \"/a b\"\n",
+            "left_out = [\"/logout\"]\n",
+            "left_out = [\"\"]\n",
+            "left_out = [\"a b c\"]\n",
+            "left_out = [\"Logout\"]\n",
+            "left_out = [\"a  b\"]\n",
+            "ask = true\n",
+        ] {
+            assert!(
+                read("x.toml", &file(refused), Origin::Builtin).is_err(),
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            read("x.toml", &file("left_out = [\"logout\"]\n"), Origin::User).unwrap_err(),
+            "x.toml: desk is for the built-in agents' files"
+        );
     }
 }

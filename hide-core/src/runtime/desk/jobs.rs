@@ -2484,6 +2484,7 @@ mod tests {
                 mark: None,
             }],
             missions: Vec::new(),
+            compaction: None,
         });
         runtime.compose_desk();
         let chips = |runtime: &Runtime| {
@@ -2553,6 +2554,7 @@ mod tests {
             steps: Default::default(),
             mentions,
             missions: Vec::new(),
+            compaction: None,
         });
         runtime.compose_desk_jobs();
 

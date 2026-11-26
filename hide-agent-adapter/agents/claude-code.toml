@@ -298,3 +298,9 @@ question = { down = "down", pick = "enter", row = "{n}." }
 plan_approval = { approve = ["down", "enter"], keep_planning = ["esc"], row = "{n}.", approve_label = "Yes, manually approve edits" }
 # The Bash dialog: its title, a note, then a one-line command between two same separator lines.
 permission = { allow = ["enter"], allow_always = ["down", "enter"], deny = ["esc"], row = "{n}.", command = { title = "Bash command", separator = "╌" } }
+
+# The commands Desk keeps out of this agent's own command list
+# (docs/ARCHITECTURE.md, Desk's commands): remote control hands Desk's session to another client, and
+# config and auto-mode-setup change settings Desk does not show.
+[desk]
+left_out = ["remote-control", "config", "auto-mode-setup"]

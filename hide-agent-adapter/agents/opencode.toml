@@ -22,6 +22,11 @@ ready = "model_line_idle"
 [resume]
 session = ["-s", "{session}"]
 
+# OpenCode 2.0.29's ACP adapter tells /compact's end only in a
+# session_info_update's _meta (docs/ARCHITECTURE.md, Desk's commands).
+[desk]
+compaction_meta = "/_meta/opencode~1compaction"
+
 # Where an account's folders are (docs/ARCHITECTURE.md, Agent profiles and
 # accounts): OpenCode moves only with all three XDG folders.
 [account]
