@@ -1102,10 +1102,14 @@ impl Runtime {
         }
         if chooses_focus {
             self.supersede_start_navigation();
-            // A choice on the device is the operator's look chosen on this
-            // request's screen, whether or not the device needs bringing
-            // forward below (`docs/status-model.md`, Hide owns the read axis).
-            self.choose_look_screen();
+            // A choice on the device in front is the operator's look chosen
+            // on this request's screen, though neither the front nor the
+            // focus moves (`docs/status-model.md`, Hide owns the read axis).
+            // One that brings the device forward records it below; one on a
+            // device behind claims nothing of the look in front.
+            if self.device_in_front(&target_id) {
+                self.choose_look_screen();
+            }
         }
         if let Some(key) = chosen_key {
             if let Some((tab, delegated)) = focused_tab {

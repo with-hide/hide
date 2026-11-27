@@ -6194,12 +6194,10 @@ impl Runtime {
         }
     }
     pub(super) fn persist_current_ui_state(&mut self) {
-        // The store keeps the last front this machine chose: one another
-        // machine's view chose ends with that view, and a restart restores
-        // the front with no view showing (`LookInputs::chosen_here`).
-        if self.look.chosen_here() {
-            self.snapshot.ui_state.focused_device_id = self.look.front().map(str::to_owned);
-        }
+        // A front another machine's view chose ends with that view, and a
+        // restart restores the front with no view showing, so it is kept
+        // only while this machine's window chose it (`front_to_keep`).
+        self.snapshot.ui_state.focused_device_id = self.look.front_to_keep().map(str::to_owned);
         self.snapshot.ui_state.focused_checkout_id =
             self.snapshot.navigator.focused_checkout_id.clone();
         self.persist_ui_state();

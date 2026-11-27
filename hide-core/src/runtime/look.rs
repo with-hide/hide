@@ -137,12 +137,12 @@ impl LookInputs {
         self.sent_from.clone()
     }
 
-    /// The look is chosen on `screen` now; a move to another screen is
-    /// logged, which is what tells a look chosen in a view from this
-    /// machine's own after the fact.
-    fn choose_on(&mut self, screen: LookScreen) {
+    /// The look is chosen on `screen` now; answers whether that moved it to
+    /// another screen. A move is logged, which is what tells a look chosen
+    /// in a view from this machine's own after the fact.
+    fn choose_on(&mut self, screen: LookScreen) -> bool {
         if self.chosen == screen {
-            return;
+            return false;
         }
         let named = match &screen {
             LookScreen::Own => "own",
@@ -152,19 +152,21 @@ impl LookInputs {
             "component": "runtime", "kind": "look.chosen_on", "screen": named,
         }));
         self.chosen = screen;
+        true
     }
 
     pub(super) fn front(&self) -> Option<&str> {
         self.front.as_deref()
     }
 
-    /// Whether the look was last chosen on this machine's own window, so the
-    /// front is this machine's to keep across a restart. A front a view
-    /// chose is that view's and ends with it: it is never saved, so a
-    /// restart, which restores the front with no view showing, never brings
-    /// it back as this machine's own (`Runtime::persist_current_ui_state`).
-    pub(super) fn chosen_here(&self) -> bool {
-        self.chosen == LookScreen::Own
+    /// The front to keep across a restart: the device in front while this
+    /// machine's own window chose it, none while a view did. A front a view
+    /// chose is that view's and ends with it, and a restart restores the
+    /// saved front with no view showing, so saving it would bring it back
+    /// as this machine's own (`Runtime::persist_current_ui_state`); none
+    /// restores this machine in front, as a store that names none does.
+    pub(super) fn front_to_keep(&self) -> Option<&str> {
+        self.front().filter(|_| self.chosen == LookScreen::Own)
     }
 
     pub(super) fn phones(&self) -> &BTreeSet<String> {
@@ -248,11 +250,12 @@ impl Runtime {
         if self.look.focus == pane && self.look.chosen == chosen {
             return false;
         }
-        self.change_look(|runtime| {
+        let (moved, read) = self.change_look(|runtime| {
             runtime.look.focus = pane;
-            runtime.look.choose_on(chosen);
-        })
-        .1
+            runtime.look.choose_on(chosen)
+        });
+        self.keep_chosen_screen(moved);
+        read
     }
 
     /// `device` is in front now. Outside a selection this is one by itself
@@ -262,12 +265,13 @@ impl Runtime {
         if self.look.front == device && self.look.chosen == chosen {
             return false;
         }
-        self.change_look(|runtime| {
+        let (moved, read) = self.change_look(|runtime| {
             runtime.snapshot.navigator.focused_device_id = device.clone();
             runtime.look.front = device;
-            runtime.look.choose_on(chosen);
-        })
-        .1
+            runtime.look.choose_on(chosen)
+        });
+        self.keep_chosen_screen(moved);
+        read
     }
 
     /// The operator chose on the screen the step running now was sent from,
@@ -283,7 +287,20 @@ impl Runtime {
         if self.look.chosen == chosen {
             return false;
         }
-        self.change_look(|runtime| runtime.look.choose_on(chosen)).1
+        let (moved, read) = self.change_look(|runtime| runtime.look.choose_on(chosen));
+        self.keep_chosen_screen(moved);
+        read
+    }
+
+    /// The look moved to another screen with the front where it was: the
+    /// saved front follows, so a front this machine's window chose again
+    /// after a view is kept, and one a view chose after this machine's
+    /// window is not (`LookInputs::front_to_keep`). Rare: it takes the
+    /// operator going between a view and this machine's window.
+    fn keep_chosen_screen(&mut self, moved: bool) {
+        if moved {
+            self.persist_current_ui_state();
+        }
     }
 
     /// Exactly `machines` show their view of this one now (`remote_views`,
