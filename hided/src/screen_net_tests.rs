@@ -1520,3 +1520,57 @@ async fn a_spent_day_carries_again_once_the_day_turns() {
     let ended = within("the tunnel", tunnel).await.unwrap();
     assert_ne!(ended, Piped::Budget);
 }
+
+// R18 at the listener, on the relay: a request that crosses the pair's
+// budget is carried at most one chunk past it, and its answer, never read,
+// is `503` with `relay_budget`; the pair's next request is refused the same
+// way before any stream opens, so it reaches nothing, and the listener's
+// state says why.
+#[tokio::test]
+async fn the_listener_answers_relay_budget_once_the_pair_s_relay_day_is_spent() {
+    let host = Machine::new("windows-pc");
+    let guest = Machine::new("macbook");
+    ScreenNet::new(Unpaired, HashMap::new()).serve(&host.host);
+    let key = paired(&host, &guest).await.key();
+    let limit = 4 * CHUNK as u64;
+    let net = ScreenNet::with_budget(Arc::clone(&guest.host), HashMap::new(), limit);
+    net.relay_for_tests.store(true, Ordering::SeqCst);
+    let pid = i32::try_from(std::process::id()).unwrap();
+    let ensured = net.ensure("windows-pc", key, pid).await.unwrap();
+    assert_eq!(ensured.state, "ready");
+    let (origin, heads) = origin().await;
+    // What is left of the day is less than the request's head.
+    net.budget_of(key).add(limit - 10);
+
+    let refusal = |answer: &str| {
+        answer.lines().next() == Some("HTTP/1.1 503 Service Unavailable")
+            && answer.contains("x-hide-reason: relay_budget")
+    };
+    let request = |path: &str| {
+        format!(
+            "GET http://127.0.0.1:{origin}{path} HTTP/1.1\r\nHost: 127.0.0.1:{origin}\r\nProxy-Authorization: Basic {}\r\n\r\n",
+            basic(&ensured.secret)
+        )
+    };
+    let mut crossing = page(ensured.port).await;
+    crossing
+        .write_all(request("/crossing").as_bytes())
+        .await
+        .unwrap();
+    let answer = answer_of(&mut crossing).await;
+    assert!(refusal(&answer), "{answer}");
+    let used = net.budget_of(key).used();
+    assert!(used > limit && used <= limit + CHUNK as u64, "{used}");
+
+    let carried = lock(&heads).len();
+    let mut next = page(ensured.port).await;
+    next.write_all(request("/next").as_bytes()).await.unwrap();
+    let answer = answer_of(&mut next).await;
+    assert!(refusal(&answer), "{answer}");
+    assert_eq!(net.budget_of(key).used(), used, "nothing of it was carried");
+    assert_eq!(lock(&heads).len(), carried, "it reached nothing");
+    assert_eq!(
+        net.ensure("windows-pc", key, pid).await.unwrap().state,
+        "relay_budget"
+    );
+}

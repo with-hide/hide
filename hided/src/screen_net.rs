@@ -368,6 +368,10 @@ pub struct ScreenNet {
     /// (`HIDE_TEST_SCREEN_NET_HOSTS`).
     hosts: HashMap<String, IpAddr>,
     tunnels: AtomicU64,
+    /// Every link counts as taking the relay, for tests on one machine,
+    /// whose links are always direct.
+    #[cfg(test)]
+    relay_for_tests: std::sync::atomic::AtomicBool,
 }
 
 impl ScreenNet {
@@ -388,7 +392,19 @@ impl ScreenNet {
             budget,
             hosts,
             tunnels: AtomicU64::new(0),
+            #[cfg(test)]
+            relay_for_tests: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// Whether `link` takes the relay now, which the pair's relay budget
+    /// holds to.
+    fn on_relay(&self, link: &Link) -> bool {
+        #[cfg(test)]
+        if self.relay_for_tests.load(Ordering::SeqCst) {
+            return true;
+        }
+        link.path() == PathKind::Relay
     }
 
     /// The pair's places. A pair's record goes once nothing holds it and no
@@ -483,9 +499,7 @@ impl ScreenNet {
         let unsupported = *lock(&listener.unsupported);
         let state = match now {
             Ok(link) if unsupported == Some(link.id()) => "unsupported_there",
-            Ok(link) if link.path() == PathKind::Relay && self.budget_of(key).spent() => {
-                "relay_budget"
-            }
+            Ok(link) if self.on_relay(&link) && self.budget_of(key).spent() => "relay_budget",
             Ok(_) => "ready",
             Err(reason) => reason,
         };
@@ -686,7 +700,7 @@ impl ScreenNet {
             }
         };
         let budget = self.budget_of(listener.owner.key);
-        if link.path() == PathKind::Relay && budget.spent() {
+        if self.on_relay(&link) && budget.spent() {
             listener.refused("relay_budget");
             answer(&mut local, "503 Service Unavailable", Some("relay_budget")).await;
             return;
@@ -700,7 +714,7 @@ impl ScreenNet {
             }
         };
         let link_id = link.id();
-        let relay = move || link.path() == PathKind::Relay;
+        let relay = || self.on_relay(&link);
         let (piped, back) = pipe(
             &mut local,
             &head,
