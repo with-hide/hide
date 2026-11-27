@@ -1028,6 +1028,52 @@ mod tests {
         assert_eq!(std::fs::read(&files[1].path).unwrap(), [9]);
     }
 
+    /// PRD desk-queue D-12, B21: a session input's files held for the
+    /// agent's rest move to the folder for waiting input, which a new run
+    /// keeps, and a hold the waiting files leave no room for is refused
+    /// `input_full` with its staged files let go.
+    #[test]
+    fn waiting_input_files_outlive_a_restart_and_are_never_crowded_out() {
+        let (dir, service) = attachments();
+        let stage = |name: &str| {
+            service.begin(0, name, "shot.png", 3, false).unwrap();
+            assert_eq!(service.write(name, &[1, 2, 3], true), Ok(true));
+            name.to_owned()
+        };
+        let (paths, bytes) = service.commit_held(&[stage("q1-0")], &[]).unwrap();
+        assert_eq!(bytes, 3);
+        let folder = hide_kit::layout::input_attachments(dir.path());
+        assert_eq!(Path::new(&paths[0]).parent(), Some(folder.as_path()));
+        assert!(paths[0].ends_with("q1-0-shot.png"), "{}", paths[0]);
+        drop(service);
+        let service = Attachments::new(dir.path());
+        assert_eq!(std::fs::read(&paths[0]).unwrap(), [1, 2, 3]);
+
+        // The folder holds as many files as its cap, every one still waited on.
+        let mut in_use = paths.clone();
+        for index in 1..INPUT_KEEP {
+            let path = folder.join(format!("held-{index}.txt"));
+            std::fs::write(&path, [7]).unwrap();
+            in_use.push(path.display().to_string());
+        }
+        service.begin(0, "q2-0", "more.png", 1, false).unwrap();
+        assert_eq!(service.write("q2-0", &[9], true), Ok(true));
+        assert_eq!(
+            service.commit_held(&["q2-0".to_owned()], &in_use),
+            Err("input_full")
+        );
+        for path in &in_use {
+            assert!(Path::new(path).exists(), "{path} was removed");
+        }
+        assert_eq!(
+            std::fs::read_dir(hide_kit::layout::screen_attachments(dir.path()))
+                .unwrap()
+                .count(),
+            0,
+            "the refused hold's staged file is let go"
+        );
+    }
+
     /// letter-47595: while Desk answers, nine messages of eight files wait
     /// (72 files, past the folder's 64). The folder never removes a file a
     /// waiting message names: a message only those files would push past the
