@@ -3831,14 +3831,10 @@ mod tests {
 
         // `▶ 이어 보내기` lets the line go again.
         assert!(event(&mut runtime, "desk_queued_resume", json!({})));
-        let two = sent(&received);
-        assert_eq!(two.text, "two");
-        runtime.desk_report(Report::TurnEnded {
-            tag: two.tag,
-            outcome: TurnOutcome::Done,
-        });
+        assert_eq!(sent(&received).text, "two");
         assert!(queued(&runtime).is_empty());
 
+        // While "two" is being answered, the line fills to its cap.
         for index in 0..DESK_QUEUED_MAX {
             assert!(event(
                 &mut runtime,
