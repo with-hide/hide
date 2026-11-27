@@ -28,8 +28,8 @@ pub enum CloseCode {
     /// It says nothing about a grant, which [`CloseCode::NoGrant`] does.
     Busy,
     /// A connection dialed to try a path and not chosen: closed before its
-    /// first exchange, or because it did not beat the path held
-    ///. Nothing was admitted, so nothing is recorded.
+    /// first exchange, or because it did not beat the path held.
+    /// Nothing was admitted, so nothing is recorded.
     Probe,
     Other(u32),
 }

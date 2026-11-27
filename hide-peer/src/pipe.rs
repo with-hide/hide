@@ -14,8 +14,8 @@
 //! [`limits::HELLO_WITHIN`] at most, and one that arrives past the cap is
 //! ended before any of its bytes are read.
 //!
-//! The same transport carries a connection over the system `ssh`
-//!: the daemon's carrier maker signs in to an alias, asking
+//! The same transport carries a connection over the system `ssh`:
+//! the daemon's carrier maker signs in to an alias, asking
 //! nothing, and runs `hide device carry --ssh` there, whose input and output
 //! are the carrier; the far daemon takes it as it takes a distribution's.
 //! A connection says the path its carrier came by: [`PathKind::Ssh`] for
@@ -75,8 +75,8 @@ fn path_to(to: &PeerAddr) -> PathKind {
     }
 }
 
-/// What a machine knows of the SSH routes to the hosts it keeps
-///: the daemon's carrier maker owns them, with their waits
+/// What a machine knows of the SSH routes to the hosts it keeps:
+/// the daemon's carrier maker owns them, with their waits
 /// and what parks one; [`Beside`] and the keeper's climb ask it.
 pub trait Routes: Send + Sync + 'static {
     /// Where the route to `key` through `alias` stands now: [`Route::Ready`],
@@ -772,8 +772,8 @@ impl<T: PeerTransport> Beside<T> {
         taken.map(Either::Pipe).map_err(TransportError::Unreachable)
     }
 
-    /// The first dial of a machine with an SSH alias whose route is ready
-    ///: `main` at once, SSH from [`limits::SSH_AFTER`]
+    /// The first dial of a machine with an SSH alias whose route is ready:
+    /// `main` at once, SSH from [`limits::SSH_AFTER`]
     /// unless `main` showed a direct path by then, and the connection of
     /// the higher rank at [`limits::DIRECT_WITHIN`]. A relay connection
     /// taken then hands a sign-in still running on, for the climb. What is

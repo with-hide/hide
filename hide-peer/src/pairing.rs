@@ -814,8 +814,8 @@ impl<T: PeerTransport> Pairings<T> {
     /// SSH or `wsl.exe`: saved as confirming, then confirmed over the
     /// connection. `first` are addresses to try before the host's own (the
     /// address the SSH login reached, D-25), and `ssh` the alias the
-    /// pairing signed in through, kept as the host's SSH route
-    ///: the host the alias reached answered with the key
+    /// pairing signed in through, kept as the host's SSH route:
+    /// the host the alias reached answered with the key
     /// that will be confirmed over the connection.
     pub fn adopt(
         &self,

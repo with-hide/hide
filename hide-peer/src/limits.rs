@@ -171,9 +171,12 @@ pub const BYE_WITHIN: Duration = Duration::from_secs(2);
 pub const SUPERSEDED_FOR: Duration = Duration::from_secs(2 * HELLO_WITHIN.as_secs());
 
 /// The most names of ended connections remembered per machine, and so the
-/// most a hello carries (`hello::MAX_SUPERSEDES`): a name matters for
-/// [`SUPERSEDED_FOR`], in which one side's redials (1 s doubling) and
-/// moves (the climb's waits) end at most five or six connections.
+/// most a hello carries (`hello::MAX_SUPERSEDES`). Only a connection whose
+/// first exchange is still running can arrive late, and each side has at
+/// most one: its dials and moves share the key's dial turn, and each waits
+/// for the other end's answer (or [`HELLO_WITHIN`]) before the next starts.
+/// So at most two names, one per side, can still matter at once, for at
+/// most [`SUPERSEDED_FOR`]; eight keeps the four newest of each side.
 pub const MAX_SUPERSEDED: usize = hide_peer_protocol::hello::MAX_SUPERSEDES;
 
 /// The most machines whose ended names are remembered at once: every host

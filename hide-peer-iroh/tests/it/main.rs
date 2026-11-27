@@ -66,6 +66,7 @@ impl Machine {
             name: None,
             clock: Clock::system(),
             pacing: Default::default(),
+            capabilities: hide_peer::protocol::hello::CAPABILITIES,
         };
         let (peers, incoming) = Peers::start(transport, config).unwrap();
         let events = peers.events();

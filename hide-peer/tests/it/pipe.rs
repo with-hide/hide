@@ -44,6 +44,7 @@ fn machine(name: &'static str, dir: tempfile::TempDir, transport: Transport) -> 
         name: None,
         clock: Clock::system(),
         pacing: Default::default(),
+        capabilities: hide_peer::protocol::hello::CAPABILITIES,
     };
     let (peers, incoming) = Peers::start(transport, config).unwrap();
     Machine {

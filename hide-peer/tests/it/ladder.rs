@@ -17,8 +17,9 @@ use hide_peer::loopback::{Loopback, Net};
 use hide_peer::mux::Carrier;
 use hide_peer::peers::{Config, Incoming, Keeper, Pacing, PeerEvent, Peers};
 use hide_peer::pipe::{Beside, PipeTransport, Routes};
+use hide_peer::protocol::hello::CAPABILITIES;
 use hide_peer::protocol::{CloseCode, PathKind, PeerAddr, PeerKey};
-use hide_peer::store::{Host, KnownState, SshRoute, Via};
+use hide_peer::store::{Host, KnownState, Login, SshRoute, Via};
 use hide_peer::{Clock, MachineKey, PeerTransport, Route};
 use hide_platform::ipc::LocalStream;
 use tokio::sync::mpsc;
@@ -151,6 +152,7 @@ fn started(
     dir: tempfile::TempDir,
     transport: Transport,
     pacing: Pacing,
+    capabilities: &'static [&'static str],
 ) -> Machine {
     let config = Config {
         state_dir: dir.path(),
@@ -160,6 +162,7 @@ fn started(
         name: None,
         clock: Clock::system(),
         pacing,
+        capabilities,
     };
     let (peers, incoming) = Peers::start(transport, config).unwrap();
     Machine {
@@ -185,6 +188,26 @@ fn pair(pacing: Pacing) -> Pair {
 
 /// A pair whose guest keeps the host by `alias`, or by none.
 fn pair_by(pacing: Pacing, alias: Option<&str>) -> Pair {
+    pair_with(pacing, alias, CAPABILITIES)
+}
+
+/// A pair whose host's build names `capabilities` in its hello.
+fn pair_with(pacing: Pacing, alias: Option<&str>, capabilities: &'static [&'static str]) -> Pair {
+    pair_of(
+        pacing,
+        alias.map(|alias| SshRoute::Alias(alias.to_owned())),
+        None,
+        capabilities,
+    )
+}
+
+/// A pair whose guest's record of the host says `ssh` and `started`.
+fn pair_of(
+    pacing: Pacing,
+    ssh_route: Option<SshRoute>,
+    started_by: Option<Login>,
+    capabilities: &'static [&'static str],
+) -> Pair {
     let net = Net::new();
     let host_dir = tempfile::tempdir().unwrap();
     let (key, twin) = keys(&host_dir, "studio");
@@ -193,6 +216,7 @@ fn pair_by(pacing: Pacing, alias: Option<&str>) -> Pair {
         host_dir,
         Beside::new(net.join(key), PipeTransport::accepting(twin)),
         pacing,
+        capabilities,
     );
     let routes = Arc::new(TestRoutes::default());
     let ssh = Arc::new(TestSsh::default());
@@ -237,6 +261,7 @@ fn pair_by(pacing: Pacing, alias: Option<&str>) -> Pair {
         guest_dir,
         Beside::new(net.join(key), pipe),
         pacing,
+        CAPABILITIES,
     );
     // The host grants the guest, and the guest keeps the host with the
     // alias it signs in to it by.
@@ -256,8 +281,8 @@ fn pair_by(pacing: Pacing, alias: Option<&str>) -> Pair {
                 grant: grant.id,
                 state: KnownState::Active,
                 candidates: Vec::new(),
-                started: None,
-                ssh: alias.map(|alias| SshRoute::Alias(alias.to_owned())),
+                started: started_by,
+                ssh: ssh_route,
             })
         })
         .unwrap();
@@ -508,6 +533,62 @@ async fn an_alias_recorded_on_a_relay_connection_is_climbed_to() {
             "the pair was disconnected on the way: {event:?}"
         );
     }
+}
+
+/// A host whose build does not name `ssh_path` (every release before it)
+/// is never held over SSH: a relay connection to it does not climb however
+/// ready its route is, and an SSH connection to it is refused by both ends
+/// before either installs it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_without_ssh_path_is_never_climbed_to_or_held_over_ssh() {
+    let pair = pair_with(quick(), Some("studio"), &[]);
+    pair.main().dial_on(PathKind::Relay);
+    pair.routes.set(Route::Held);
+    let _keeper = pair.keep();
+    pair.held_on(PathKind::Relay).await;
+    pair.routes.set(Route::Ready);
+    // wait-ok: proves an absence, that no climb signs in over ten of its
+    // graces.
+    tokio::time::sleep(quick().relay_grace * 10).await;
+    assert_eq!(pair.ssh.sign_ins(), 0);
+
+    // Only SSH reaches it.
+    let pair = pair_with(Pacing::default(), Some("studio"), &[]);
+    pair.main().set_unreachable(true);
+    let mut host_told = pair.host.peers.events();
+    let dialed = within("the dial", pair.guest.peers.dial(&pair.to_host())).await;
+    assert!(
+        dialed.is_err(),
+        "an SSH connection to an older build was held"
+    );
+    assert_eq!(pair.ssh.sign_ins(), 1);
+    assert!(pair.guest.peers.link(&pair.host.peers.key()).is_none());
+    assert!(pair.host.peers.link(&pair.guest.peers.key()).is_none());
+    while let Ok(event) = host_told.try_recv() {
+        assert!(
+            !matches!(event, PeerEvent::Connected { .. }),
+            "the older build admitted it: {event:?}"
+        );
+    }
+}
+
+/// A host this machine started over an SSH login before this build, whose
+/// record names no alias of its own, is reached through that login when
+/// nothing else connects.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_started_over_ssh_before_this_build_is_reached_through_that_login() {
+    let pair = pair_of(
+        Pacing::default(),
+        None,
+        Some(Login::Ssh("studio".to_owned())),
+        CAPABILITIES,
+    );
+    pair.main().set_unreachable(true);
+    let link = within("the dial", pair.guest.peers.dial(&pair.to_host()))
+        .await
+        .unwrap();
+    assert_eq!(link.path(), PathKind::Ssh);
+    pair.held_on(PathKind::Ssh).await;
 }
 
 /// A due route is signed in to when the other transport's dial neither

@@ -22,8 +22,8 @@
 //!   and one a move replaced is refused wherever it arrives late
 //!   ([`decide`]).
 //!
-//! A machine that keeps a host climbs while the connection lives
-//!: from the relay to SSH, and from SSH to a direct path
+//! A machine that keeps a host climbs while the connection lives:
+//! from the relay to SSH, and from SSH to a direct path
 //! the other transport finds, each move a new connection that names the one
 //! it replaces.
 
@@ -682,6 +682,10 @@ pub struct Config<'a> {
     pub clock: Clock,
     /// The climb's and the beat's times; [`Pacing::default`] in a daemon.
     pub pacing: Pacing,
+    /// The capabilities this machine's hello names: this build's
+    /// ([`hello::CAPABILITIES`]) in a daemon, fewer in a test that plays an
+    /// older build.
+    pub capabilities: &'a [&'a str],
 }
 
 /// The connections of one machine, over one transport.
@@ -743,6 +747,11 @@ impl<T: PeerTransport> Peers<T> {
             transport,
             hello: Hello {
                 name: config.name.and_then(crate::link::clean_name),
+                capabilities: config
+                    .capabilities
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect(),
                 ..Hello::ours(config.build, config.device, config.release)
             },
             grants: Mutex::new(grants),
@@ -1837,8 +1846,8 @@ impl<T: PeerTransport> Inner<T> {
         self.emit(PeerEvent::Disconnected { key, code });
     }
 
-    /// Dials `to` to move the live connection `held` to a better path
-    ///: in the same turn as a dial, through the same
+    /// Dials `to` to move the live connection `held` to a better path:
+    /// in the same turn as a dial, through the same
     /// first exchange, naming `held` as the connection it replaces. Unlike
     /// a dial it returns no live connection in place of its own and races
     /// no arriving one; and a connection that does not beat `held`'s path,
@@ -2020,10 +2029,14 @@ impl<T: PeerTransport> Inner<T> {
     /// connections that take its place, climbing while one lives. Answers
     /// how long they lived together, and the name of the last one, which
     /// the next dial names as the one it replaces.
-    async fn hold(self: &Arc<Self>, link: Link<T::Conn>, to: &PeerAddr) -> (Duration, u64) {
+    async fn hold(
+        self: &Arc<Self>,
+        link: Link<T::Conn>,
+        to: &PeerAddr,
+        woke: &mut watch::Receiver<u64>,
+    ) -> (Duration, u64) {
         let key = to.key;
         let started = Instant::now();
-        let mut woke = self.woke.subscribe();
         let mut relation = self.relation.subscribe();
         let mut current = link;
         // When the current connection came, and whether a move brought it.
@@ -2040,7 +2053,7 @@ impl<T: PeerTransport> Inner<T> {
                 .map(Host::dial_addr)
                 .unwrap_or_else(|| to.clone());
             let next = {
-                let climbing = self.climb(&current, &to, &mut probe, &mut woke, &mut relation);
+                let climbing = self.climb(&current, &to, &mut probe, woke, &mut relation);
                 tokio::pin!(climbing);
                 let climbed = tokio::select! {
                     biased;
@@ -2116,9 +2129,12 @@ impl<T: PeerTransport> Inner<T> {
             else {
                 return;
             };
+            // A wake from here on, during the dial or just after the
+            // connection is installed, reaches the climb.
+            woke.borrow_and_update();
             let over = async {
                 match self.dial_replacing(&to, ended).await {
-                    Ok(link) => Some(self.hold(link, &to).await),
+                    Ok(link) => Some(self.hold(link, &to, &mut woke).await),
                     Err(_) => None,
                 }
             };
@@ -2249,6 +2265,7 @@ mod tests {
             name: None,
             clock: Clock::system(),
             pacing: Pacing::default(),
+            capabilities: hello::CAPABILITIES,
         }
     }
 

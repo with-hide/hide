@@ -554,8 +554,8 @@ pub struct Host {
     /// until the account has one (PRD device-connect-iroh B23).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started: Option<Login>,
-    /// How this machine reaches the host over SSH when no direct path opens
-    ///: an alias of this account's SSH configuration, recorded
+    /// How this machine reaches the host over SSH when no direct path opens:
+    /// an alias of this account's SSH configuration, recorded
     /// only once a carrier over it proved the host's key, or `Off` once an
     /// alias reached a Hide that proved another key. Absent, the alias of
     /// [`Host::started`] is read ([`Host::ssh_alias`]). A field, not a

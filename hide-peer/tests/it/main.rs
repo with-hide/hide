@@ -94,6 +94,7 @@ impl Machine {
             name: shown,
             clock,
             pacing: Default::default(),
+            capabilities: hide_peer::protocol::hello::CAPABILITIES,
         };
         let (peers, incoming) = Peers::start(net.join(key), config).unwrap();
         let events = peers.events();
