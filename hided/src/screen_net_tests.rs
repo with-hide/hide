@@ -124,12 +124,15 @@ fn flood(mut stream: impl AsyncWrite + Unpin + Send + 'static) -> tokio::task::J
     })
 }
 
-// A long stream on one tunnel is held too: each chunk is reserved before it
-// is written, so a host streaming without end stops at the budget, and the
-// day's counter never passes it.
+// A long stream on one tunnel is held too: a read is made only while the
+// day's bytes are under the budget, so a host streaming without end stops
+// at the budget, at most one chunk past it, and the pair's next tunnel is
+// refused.
 #[tokio::test]
-async fn one_tunnel_streaming_past_the_budget_ends_and_the_counter_never_passes_it() {
-    let budget = RelayBudget::new(3 * CHUNK as u64 + 100);
+async fn one_tunnel_streaming_past_the_budget_ends_at_most_one_chunk_over_and_the_next_is_refused()
+{
+    let limit = 3 * CHUNK as u64 + 100;
+    let budget = RelayBudget::new(limit);
     let Ends {
         page,
         mut local,
@@ -158,13 +161,47 @@ async fn one_tunnel_streaming_past_the_budget_ends_and_the_counter_never_passes_
     .await
     .0;
     assert_eq!(piped, Piped::Budget);
-    assert!(budget.used() <= 3 * CHUNK as u64 + 100);
     assert!(budget.spent());
-    assert!(!budget.reserve(1), "the pair's next tunnel is refused too");
+    assert!(
+        budget.used() <= limit + CHUNK as u64,
+        "{} past {limit}",
+        budget.used()
+    );
+
+    // The next tunnel's head is refused before a byte of it is written.
+    let Ends {
+        page: _page,
+        mut local,
+        host,
+        near,
+    } = ends();
+    let (host_read, _host_write) = tokio::io::split(host);
+    let (near_read, near_write) = tokio::io::split(near);
+    let host_got = drain(host_read);
+    let used = budget.used();
+    let next = within(
+        "the next tunnel",
+        pipe(
+            &mut local,
+            b"GET http://example.test/ HTTP/1.1\r\n\r\n",
+            near_read,
+            near_write,
+            &budget,
+            &relay,
+            &slot(),
+            &|| {},
+        ),
+    )
+    .await;
+    assert_eq!(next, (Piped::Budget, 0));
+    assert_eq!(budget.used(), used);
+    drop(local);
+    assert_eq!(within("the host's end", host_got).await.unwrap(), 0);
 }
 
 // Sixteen tunnels of one pair sending and receiving at once share the one
-// counter, and it ends no higher than the budget.
+// counter, and it ends no further past the budget than one chunk for each
+// of their thirty-two copies.
 #[tokio::test]
 async fn sixteen_tunnels_sending_and_receiving_at_once_end_with_the_counter_at_most_the_budget() {
     let limit = 40 * CHUNK as u64;
@@ -206,11 +243,12 @@ async fn sixteen_tunnels_sending_and_receiving_at_once_end_with_the_counter_at_m
     for tunnel in tunnels {
         assert_eq!(within("a tunnel", tunnel).await.unwrap(), Piped::Budget);
     }
-    assert!(budget.used() <= limit, "{} > {limit}", budget.used());
+    let most = limit + 2 * PLACES as u64 * CHUNK as u64;
+    assert!(budget.used() <= most, "{} > {most}", budget.used());
 }
 
 // A direct path is never counted or ended; a tunnel that moves to the relay
-// reserves from its next chunk and stops at the budget.
+// counts from its next read and stops at the budget.
 #[tokio::test]
 async fn a_direct_tunnel_passes_the_budget_and_one_that_moves_to_the_relay_is_held() {
     let budget = Arc::new(RelayBudget::new(4 * CHUNK as u64));
@@ -254,7 +292,7 @@ async fn a_direct_tunnel_passes_the_budget_and_one_that_moves_to_the_relay_is_he
     let _page = drain(page);
     let _host_out = flood(host_write);
     assert_eq!(within("the tunnel", tunnel).await.unwrap(), Piped::Budget);
-    assert!(budget.used() <= 4 * CHUNK as u64);
+    assert!(budget.used() <= 5 * CHUNK as u64);
 }
 
 // A host whose build has no handler for the kind takes the stream and
@@ -317,13 +355,15 @@ async fn a_stream_the_host_drops_unanswered_is_told_apart() {
 }
 
 // A connection's head, and the body bytes read with it, are the first bytes
-// the guest sends: they are reserved on the relay as every later chunk is,
-// and a head the day's budget cannot hold is not written at all.
+// the guest sends: they are counted on the relay before they are written,
+// as every later read is, and once the day is spent no part of a head is
+// written.
 #[tokio::test]
-async fn a_head_is_reserved_before_it_is_written_and_one_past_the_budget_writes_nothing() {
+async fn a_head_is_counted_before_it_is_written_and_none_is_written_once_the_day_is_spent() {
     let head = vec![b'h'; 3 * 1024];
     let relay = || true;
     let refused = RelayBudget::new(1024);
+    refused.add(1024);
     let Ends {
         page: _page,
         mut local,
@@ -348,7 +388,7 @@ async fn a_head_is_reserved_before_it_is_written_and_one_past_the_budget_writes_
     )
     .await;
     assert_eq!(piped, (Piped::Budget, 0));
-    assert_eq!(refused.used(), 0);
+    assert_eq!(refused.used(), 1024, "nothing of the head was counted");
     drop(local);
     assert_eq!(
         within("the host's end", host_got).await.unwrap(),
@@ -948,7 +988,7 @@ async fn a_pair_s_records_go_with_its_last_listener_and_today_s_bytes_stay() {
     net.release("windows-pc", key, pid);
     assert_eq!(net.kept(), (0, 0), "nothing counted: nothing kept");
     net.ensure("windows-pc", key, pid).await.unwrap();
-    assert!(net.budget_of(key).reserve(10));
+    net.budget_of(key).add(10);
     net.release("windows-pc", key, pid);
     assert_eq!(net.kept().1, 1, "today's bytes stay");
     assert_eq!(net.budget_of(key).used(), 10);
@@ -956,7 +996,7 @@ async fn a_pair_s_records_go_with_its_last_listener_and_today_s_bytes_stay() {
     for n in 0..MAX_BUDGETS + 10 {
         let mut bytes = [1_u8; 32];
         bytes[..8].copy_from_slice(&(n as u64).to_le_bytes());
-        assert!(net.budget_of(PeerKey::from_bytes(bytes)).reserve(1));
+        net.budget_of(PeerKey::from_bytes(bytes)).add(1);
     }
     assert!(net.kept().1 <= MAX_BUDGETS + 1, "{}", net.kept().1);
     assert_eq!(net.budget_of(key).used(), 10, "no allowance was reset");
@@ -1086,9 +1126,9 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for Watched<T> {
 }
 
 // R18 at a path move: sixteen tunnels streaming both ways on a direct path
-// count nothing; once the path is the relay every chunk is reserved before
+// count nothing; once the path is the relay every read is counted before
 // it is written, so what the tunnels write on the relay passes what was
-// reserved by at most the chunk each direction had read before the move:
+// counted by at most the chunk each direction had read before the move:
 // 2 x 16 x 64 KiB = 2 MiB.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tunnels_moving_from_direct_to_relay_mid_stream_overshoot_by_at_most_2_mib() {
@@ -1145,15 +1185,15 @@ async fn tunnels_moving_from_direct_to_relay_mid_stream_overshoot_by_at_most_2_m
     for tunnel in tunnels {
         assert_eq!(within("a tunnel", tunnel).await.unwrap(), Piped::Budget);
     }
-    assert!(budget.used() <= limit);
+    assert!(budget.used() <= limit + 2 * PLACES as u64 * CHUNK as u64);
     let past = relay.load(Ordering::SeqCst).saturating_sub(budget.used());
     assert!(
         past <= 2 * PLACES as u64 * CHUNK as u64,
-        "{past} bytes written on the relay past the reservations"
+        "{past} bytes written on the relay past what was counted"
     );
 }
 
-// A relay tunnel whose path moves to direct stops reserving: it carries on
+// A relay tunnel whose path moves to direct stops counting: it carries on
 // past the budget and is never ended for it.
 #[tokio::test]
 async fn a_relay_tunnel_moving_to_direct_is_not_counted_or_ended() {
@@ -1195,23 +1235,21 @@ async fn a_relay_tunnel_moving_to_direct_is_not_counted_or_ended() {
     }
     // Two chunks read on the relay, and each direction's waiting read
     // holding at most one more.
-    let at_move = budget.used();
-    assert!(
-        (2 * CHUNK as u64..=4 * CHUNK as u64).contains(&at_move),
-        "{at_move}"
-    );
+    assert_eq!(budget.used(), 2 * CHUNK as u64);
     on_relay.store(false, Ordering::SeqCst);
-    for _ in 0..64 {
+    for _ in 0..2 {
         host_write.write_all(&chunk).await.unwrap();
         page.read_exact(&mut back).await.unwrap();
     }
-    // The reads held before the move stay counted as they were; nothing
-    // read since is.
-    assert!(
-        budget.used() <= at_move,
-        "direct bytes are not counted: {}",
-        budget.used()
-    );
+    // A read begun before the move counts what it takes after it, at most
+    // one chunk; nothing read since is counted.
+    let settled = budget.used();
+    assert!(settled <= 3 * CHUNK as u64, "{settled}");
+    for _ in 0..62 {
+        host_write.write_all(&chunk).await.unwrap();
+        page.read_exact(&mut back).await.unwrap();
+    }
+    assert_eq!(budget.used(), settled, "direct bytes are not counted");
     assert!(
         !tunnel.is_finished(),
         "a direct tunnel is not ended for the budget"
@@ -1275,7 +1313,8 @@ impl Streaming {
 
 /// Copies each of `streams` into a page through `pipe` on the relay with
 /// one shared budget of `limit`, all started together, and checks each
-/// ends on the budget; the budget is returned.
+/// ends on the budget, at most one chunk per copy past it; the budget is
+/// returned.
 async fn on_the_relay<R, W>(streams: Vec<(R, W)>, limit: u64) -> Arc<RelayBudget>
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -1307,15 +1346,15 @@ where
     for tunnel in tunnels {
         assert_eq!(within("a tunnel", tunnel).await.unwrap(), Piped::Budget);
     }
-    assert!(budget.used() <= limit);
+    assert!(budget.used() <= limit + 2 * PLACES as u64 * CHUNK as u64);
     budget
 }
 
 // R18 inbound: bytes the host sends cross the transport before the guest
-// reads them, and the guest reserves each read before it makes it, so a
-// host streaming into sixteen tunnels passes the guest's reservations by
-// at most what the transport lets it send ahead: one stream receive window
-// per tunnel. On the real direct transport.
+// reads them, and the guest counts each read, so a host streaming into
+// sixteen tunnels passes what the guest counted by at most what the
+// transport lets it send ahead: one stream receive window per tunnel. On
+// the real direct transport.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_host_streaming_into_sixteen_tunnels_passes_the_budget_by_at_most_sixteen_receive_windows()
  {
@@ -1351,7 +1390,7 @@ async fn a_host_streaming_into_sixteen_tunnels_passes_the_budget_by_at_most_sixt
         .saturating_sub(budget.used());
     assert!(
         past <= PLACES as u64 * DIRECT_STREAM_WINDOW,
-        "the host wrote {past} bytes past the reservations"
+        "the host wrote {past} bytes past what the guest counted"
     );
 }
 
@@ -1405,6 +1444,79 @@ async fn a_host_streaming_into_sixteen_mux_tunnels_passes_the_budget_by_at_most_
         .saturating_sub(budget.used());
     assert!(
         past <= PLACES as u64 * MUX_STREAM_WINDOW,
-        "the far end wrote {past} bytes past the reservations"
+        "the far end wrote {past} bytes past what the guest counted"
     );
+}
+
+// A read that is cancelled (its tunnel ended, its place reclaimed) counts
+// nothing: only bytes a read took are counted.
+#[tokio::test]
+async fn a_cancelled_read_counts_nothing() {
+    let budget = Arc::new(RelayBudget::new(4 * CHUNK as u64));
+    let (_silent, from) = tokio::io::duplex(CHUNK);
+    let (to, _far) = tokio::io::duplex(CHUNK);
+    let waiting = {
+        let budget = Arc::clone(&budget);
+        tokio::spawn(async move {
+            let (slot, moved) = (slot(), AtomicU64::new(0));
+            copy_reserved(from, to, &[], &budget, &|| true, &slot, &moved, &|| {}).await;
+        })
+    };
+    tokio::task::yield_now().await;
+    waiting.abort();
+    let _ = waiting.await;
+    assert_eq!(budget.used(), 0);
+    assert!(!budget.spent());
+}
+
+/// The day a test's budget reads, which the test moves.
+static TEST_DAY: AtomicU64 = AtomicU64::new(20_000);
+
+fn test_day() -> u64 {
+    TEST_DAY.load(Ordering::SeqCst)
+}
+
+// A spent day ends with the UTC day: the next one starts from zero, and its
+// tunnels carry again.
+#[tokio::test]
+async fn a_spent_day_carries_again_once_the_day_turns() {
+    let budget = RelayBudget::with_clock(CHUNK as u64, test_day);
+    budget.add(CHUNK as u64);
+    assert!(budget.spent());
+    TEST_DAY.fetch_add(1, Ordering::SeqCst);
+    assert!(!budget.spent());
+    assert_eq!(budget.used(), 0);
+    let Ends {
+        mut page,
+        mut local,
+        host,
+        near,
+    } = ends();
+    let (mut host_read, host_write) = tokio::io::split(host);
+    let (near_read, near_write) = tokio::io::split(near);
+    let tunnel = tokio::spawn(async move {
+        pipe(
+            &mut local,
+            &[],
+            near_read,
+            near_write,
+            &budget,
+            &|| true,
+            &slot(),
+            &|| {},
+        )
+        .await
+        .0
+    });
+    page.write_all(b"carried").await.unwrap();
+    let mut got = [0_u8; 7];
+    within("the bytes on the new day", host_read.read_exact(&mut got))
+        .await
+        .unwrap();
+    assert_eq!(&got, b"carried");
+    drop((page, host_write, host_read));
+    // Both ends closed at once: which one the tunnel saw first does not
+    // matter, only that the budget did not end it.
+    let ended = within("the tunnel", tunnel).await.unwrap();
+    assert_ne!(ended, Piped::Budget);
 }
