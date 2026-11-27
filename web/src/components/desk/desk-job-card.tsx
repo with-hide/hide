@@ -107,6 +107,20 @@ function jobWords(t: T, job: DeskJob): { verb: string | null; words: string | nu
   }
 }
 
+/**
+ * A 한눈에 row's words (operator decision 2026-11-27): what the session does
+ * or asks, never the state word its group's head already says (작업 중, 끝남).
+ * An ask keeps what it asks for (허락, 질문), a failure and a device that is not
+ * connected keep their word, since no head says those; anything else with
+ * nothing to say has no words.
+ */
+function glanceWords(t: T, job: DeskJob): ReturnType<typeof jobWords> {
+  const all = jobWords(t, job);
+  if (job.disconnected || job.state === "asking" || job.state === "failed") return all;
+  const words = job.state === "working" ? job.now : job.state === "done" ? job.summary : null;
+  return { verb: null, words: words ?? null, tone: null, mono: false };
+}
+
 /** The second line as one string, for a hint or a list that takes text. */
 export function jobLine(t: T, job: DeskJob): string {
   const { verb, words } = jobWords(t, job);
@@ -120,13 +134,14 @@ export function jobLine(t: T, job: DeskJob): string {
  * destructive one. `place` is left out under a Conductor, whose workers share
  * its project.
  */
-export function JobLine({ job, place = true, className }: { job: DeskJob; place?: boolean; className?: string }) {
+export function JobLine({ job, place = true, stateWord = true, className }: { job: DeskJob; place?: boolean; /** False under a head that already says the state (한눈에's groups): the line is what it does or asks, and none when nothing is left. */ stateWord?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
-  const { verb, words, tone, mono } = jobWords(t, job);
+  const { verb, words, tone, mono } = stateWord ? jobWords(t, job) : glanceWords(t, job);
+  if (!stateWord && !verb && !words) return null;
   const toned = tone === "warning" ? "text-warning" : tone === "destructive" ? "text-destructive" : null;
   return (
     // The line takes its row's width, so the place keeps its half of the row and the state's words, not the place, give way first.
-    <span className={cn("flex w-full min-w-0 items-center gap-xxs text-caption text-muted-foreground", className)} title={jobLine(t, job)} data-desk-job-line="true">
+    <span className={cn("flex w-full min-w-0 items-center gap-xxs text-caption text-muted-foreground", className)} title={[verb, words].filter(Boolean).join(" · ")} data-desk-job-line="true">
       {place ? (
         <span className="flex min-w-0 max-w-1/2 shrink-0 items-center gap-xxs">
           {job.location.kind === "worktree" ? <GitBranchIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" /> : null}

@@ -52,7 +52,7 @@ export function openSession(room: DeskRoomWindow, pane: string, options: { answe
 
 /**
  * What stands at Desk's right: the session open beside Desk, else 한눈에
- * unless the operator folded it (`desk.lane.glance_folded`), else nothing
+ * unless the operator folded it (`desk.lane.glance_folded`, `▯|`), else nothing
  * and Desk's chat takes the room's width.
  */
 export type RightSide = "session" | "glance" | null;
@@ -60,6 +60,15 @@ export type RightSide = "session" | "glance" | null;
 export function rightSide(room: DeskRoomWindow, folded: boolean): RightSide {
   if (room.session !== null) return "session";
   return folded ? null : "glance";
+}
+
+/**
+ * The `‹ 뷰 n` tab on the right side's left edge, where Desk's desk opens
+ * (operator decision 2026-11-27, C3): the desk's tab count while it is folded
+ * and holds tabs, else null and no tab stands there.
+ */
+export function deskOpener(room: DeskRoomWindow, tabs: number): number | null {
+  return tabs > 0 && !deskShown(room, tabs) ? tabs : null;
 }
 
 /** Something opened on Desk's desk: the desk shows with every tab it holds (B9-B11, B14). */
