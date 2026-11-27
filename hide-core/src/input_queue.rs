@@ -1148,10 +1148,15 @@ mod tests {
         let mut refused = false;
         'panes: for pane in 0.. {
             let key = format!("remote:{}:pane:{pane}", "d".repeat(400));
-            for _ in 0..LINES_MAX {
-                let paths = (0..FILES_MAX)
-                    .map(|index| format!("/{}/{index}", "f".repeat(200)))
-                    .collect();
+            for line in 0..LINES_MAX {
+                // A pane's lines share one send's files, so its first carries them all.
+                let paths = if line == 0 {
+                    (0..FILES_MAX)
+                        .map(|index| format!("/{}/{index}", "f".repeat(200)))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 match queues.push(
                     &key,
                     "claude",
