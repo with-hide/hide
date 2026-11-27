@@ -169,6 +169,7 @@ fn fork_execution_current(context: &LiveContext, request: &ForkRequest) -> Resul
 /// hands it to the core, which moves the keyboard to it and places its tab.
 /// A pane whose agent never started is closed; registration never turns a
 /// working fork into a failure.
+#[allow(clippy::too_many_arguments)]
 fn run_agent_fork_with_registration(
     engine: &dyn Engine,
     node: &dyn crate::node_access::NodeLink,

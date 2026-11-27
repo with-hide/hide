@@ -138,6 +138,10 @@ pub(super) enum GeometryRequest {
 /// right is refused as the tab being busy.
 const BESIDE_TURN_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Where a worker hears that its turn of a tab's line came (its operation
+/// id), or the refusal that ended it.
+pub(crate) type TurnAnswer = std::sync::mpsc::Receiver<Result<String, String>>;
+
 /// Why a split right a worker makes outside the line did not get its turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BesideRefusal {
@@ -1372,8 +1376,7 @@ impl Runtime {
     pub(crate) fn queue_beside_turn(
         &mut self,
         target: &str,
-    ) -> Result<Option<(String, std::sync::mpsc::Receiver<Result<String, String>>)>, BesideRefusal>
-    {
+    ) -> Result<Option<(String, TurnAnswer)>, BesideRefusal> {
         self.split_right_floor(target)
             .map_err(BesideRefusal::Floor)?;
         // A pane of no local tab has no line of the core's own to wait in.
