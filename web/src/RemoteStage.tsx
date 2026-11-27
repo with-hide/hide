@@ -7,6 +7,7 @@
 // window (a menu, Settings) is drawn over the stage only while the screen
 // stands aside, since a native view covers every page under it.
 
+import { LoaderCircleIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { overlayRects, intersects } from "./browserViews";
@@ -23,6 +24,14 @@ import { useUiStore } from "./ui";
 
 /** How long a page that could not load waits before it is asked again while its machine reads as reachable. */
 const RETRY_MS = 5_000;
+
+/**
+ * How long a screen may take to open before a relay connection is named as
+ * the likely reason: a direct or Tailscale screen shows within a second or
+ * two, a relayed one can take a few seconds more, so past this the operator
+ * is told it is the relay rather than left to think it is stuck.
+ */
+export const SLOW_OPENING_MS = 5_000;
 
 /** The state a failed load stands for, from the reason this computer's daemon gave (`hided/src/remote_screen.rs`). */
 export function failedState(reason: string | undefined): Exclude<ScreenState, "ready"> {
@@ -130,6 +139,15 @@ export function RemoteStage({ actions }: { actions: Actions }) {
   }, [bridge, logoMode, turnRowMode]);
 
   const why = state !== "ready" ? state : failed ? failedState(loaded?.reason) : null;
+  // Opening: the machine can show and its screen has not shown yet.
+  const opening = why === null && loaded?.state !== "shown";
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    setSlow(false);
+    if (!opening) return undefined;
+    const timer = window.setTimeout(() => setSlow(true), SLOW_OPENING_MS);
+    return () => window.clearTimeout(timer);
+  }, [opening, device]);
   return (
     <>
       {rail ? <DeviceRail actions={actions} /> : null}
@@ -146,8 +164,13 @@ export function RemoteStage({ actions }: { actions: Actions }) {
               </Button>
             ) : null}
           </>
-        ) : loaded?.state !== "shown" ? (
-          <span className="text-caption text-muted-foreground">{t("remoteScreen.opening")}</span>
+        ) : opening ? (
+          <>
+            <LoaderCircleIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground motion-safe:animate-spin" />
+            <span className="text-headline font-semibold text-foreground">{peer?.name ?? ""}</span>
+            <span className="text-caption text-muted-foreground">{t("remoteScreen.opening")}</span>
+            {slow && peer?.path === "relay" ? <span className="text-caption text-muted-foreground" data-remote-slow="relay">{t("remoteScreen.slowRelay")}</span> : null}
+          </>
         ) : null}
       </div>
     </>

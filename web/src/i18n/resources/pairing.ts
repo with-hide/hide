@@ -116,6 +116,7 @@ export const pairingEnglish = {
   "remoteScreen.noGrant": "Not allowed",
   "remoteScreen.reconnects": "Opens on its own once it is reached",
   "remoteScreen.opening": "Opening its screen…",
+  "remoteScreen.slowRelay": "It connects through the relay, so this can take a little longer",
   "remoteScreen.openSettings": "Open device settings",
   "pairing.menu.aria": "More actions for {{name}}",
   "pairing.menu.pauseOutgoing": "Stop opening it",
@@ -319,6 +320,7 @@ const ko = {
   "remoteScreen.noGrant": "허가 없음",
   "remoteScreen.reconnects": "다시 닿으면 자동으로 열려요",
   "remoteScreen.opening": "화면을 여는 중…",
+  "remoteScreen.slowRelay": "relay로 이어져 조금 걸릴 수 있어요",
   "remoteScreen.openSettings": "기기 설정 열기",
 } satisfies Catalog<typeof pairingEnglish>;
 
@@ -477,6 +479,7 @@ const zhCN = {
   "remoteScreen.noGrant": "无许可",
   "remoteScreen.reconnects": "连上后会自动打开",
   "remoteScreen.opening": "正在打开画面…",
+  "remoteScreen.slowRelay": "通过 relay 连接，可能要稍等一会儿",
   "remoteScreen.openSettings": "打开设备设置",
 } satisfies Catalog<typeof pairingEnglish>;
 
@@ -635,6 +638,7 @@ const ja = {
   "remoteScreen.noGrant": "許可なし",
   "remoteScreen.reconnects": "つながり次第、自動で開きます",
   "remoteScreen.opening": "画面を開いています…",
+  "remoteScreen.slowRelay": "relay 経由でつながるため、少し時間がかかることがあります",
   "remoteScreen.openSettings": "デバイス設定を開く",
 } satisfies Catalog<typeof pairingEnglish>;
 

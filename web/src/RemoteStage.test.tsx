@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { Peer } from "./pairing";
-import { RemoteStage } from "./RemoteStage";
+import { RemoteStage, SLOW_OPENING_MS } from "./RemoteStage";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -78,6 +78,83 @@ it("carries this window's display choices with the show, and a changed choice to
     useShellStore.setState(shell, true);
     useUiStore.setState(ui, true);
     delete (window as { hideHost?: unknown }).hideHost;
+    vi.unstubAllGlobals();
+  }
+});
+
+// While another computer's screen opens, the stage draws a loading ring, that
+// computer's name and `화면을 여는 중…` (UI_BEHAVIOR.md, Device rail, Another
+// computer's screen; operator decision 2026-11-27, mission-107 option A).
+// Past SLOW_OPENING_MS one more line names the relay, and only on a relayed
+// connection; the loading goes the moment the screen shows.
+it("draws a ring and the computer's name while its screen opens, names the relay only past 5 s on a relayed connection, and goes once the screen shows", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  vi.useFakeTimers();
+  const shell = useShellStore.getState();
+  const ui = useUiStore.getState();
+  let report: ((state: { device: string; state: "opening" | "shown" | "failed"; reason?: string }) => void) | null = null;
+  const show = (row: Peer) => act(async () => useShellStore.setState({ rest: { navigator: { devices: [], peers: [row] } } } as never));
+  const stage = () => document.querySelector("[data-remote-stage]");
+  const ring = () => stage()?.querySelector("svg.lucide-loader-circle") ?? null;
+  const slow = () => stage()?.querySelector("[data-remote-slow]") ?? null;
+  const wait = (ms: number) => act(async () => { vi.advanceTimersByTime(ms); });
+  try {
+    window.hideHost = { kind: "electron", platform: "darwin", onWindowChrome: () => () => undefined, remoteScreens: { show: () => undefined, onState: (listener: typeof report) => { report = listener; return () => { report = null; }; } } } as never;
+    await show(peer({ connected: true, path: "relay" }));
+    await act(async () => useUiStore.setState({ remoteScreen: "mini" }));
+    const root = createRoot(document.body.appendChild(document.createElement("div")));
+    await act(async () => root.render(<TooltipProvider><RemoteStage actions={createActions(() => true)} /></TooltipProvider>));
+
+    // Opening: the ring, which turns only where motion is allowed, the name and the line.
+    expect(stage()?.getAttribute("data-remote-state")).toBe("opening");
+    expect(ring()?.getAttribute("class")).toContain("motion-safe:animate-spin");
+    expect(ring()?.getAttribute("class")).not.toMatch(/(^|\s)animate-spin/);
+    expect(stage()?.textContent).toContain("Mac-mini");
+    expect(stage()?.textContent).toContain("Opening its screen…");
+
+    // A relayed screen says nothing more before SLOW_OPENING_MS, and names the relay after it.
+    await wait(SLOW_OPENING_MS - 1);
+    expect(slow()).toBeNull();
+    await wait(1);
+    expect(slow()?.textContent).toBe("It connects through the relay, so this can take a little longer");
+
+    // The moment the screen shows, the stage draws nothing over it.
+    await act(async () => report?.({ device: "mini", state: "shown" }));
+    expect(ring()).toBeNull();
+    expect(slow()).toBeNull();
+    expect(stage()?.textContent).toBe("");
+
+    // A direct, Tailscale or local connection never names the relay, however long it takes.
+    await act(async () => report?.({ device: "mini", state: "opening" }));
+    for (const path of ["direct", "tailscale", "local", null] as const) {
+      await show(peer({ connected: true, path }));
+      await wait(SLOW_OPENING_MS * 3);
+      expect(ring()).not.toBeNull();
+      expect(slow()).toBeNull();
+    }
+
+    // A state that cannot show keeps its own words, with no ring.
+    await show(peer({ connected: false, path: "relay" }));
+    await wait(SLOW_OPENING_MS * 2);
+    expect(stage()?.getAttribute("data-remote-state")).toBe("not_connected");
+    expect(ring()).toBeNull();
+    expect(slow()).toBeNull();
+    expect(stage()?.textContent).toBe("Mac-miniNot connectedOpens on its own once it is reached");
+
+    // Coming back to opening counts the 5 s again from zero.
+    await show(peer({ connected: true, path: "relay" }));
+    await wait(SLOW_OPENING_MS - 1);
+    expect(ring()).not.toBeNull();
+    expect(slow()).toBeNull();
+    await wait(1);
+    expect(slow()).not.toBeNull();
+    await act(async () => root.unmount());
+  } finally {
+    useShellStore.setState(shell, true);
+    useUiStore.setState(ui, true);
+    delete (window as { hideHost?: unknown }).hideHost;
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   }
 });
