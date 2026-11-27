@@ -1505,8 +1505,8 @@ fn answer_bootstrap(
                 {
                     Ok(peers) => {
                         // A carrier over SSH is answered with its word back:
-                        // what tells `carry --ssh` this build runs here
-                        //. One with none is a distribution's.
+                        // what tells `carry --ssh` this build runs here.
+                        // One with none is a distribution's.
                         let (answer, path) = match over {
                             Some(crate::pairing::CarryOver::Ssh) => (
                                 json!({ "ok": true, "over": "ssh" }),

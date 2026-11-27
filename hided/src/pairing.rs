@@ -206,8 +206,8 @@ pub enum Ask {
     /// The stream this ask came on becomes the carrier of a connection to
     /// this machine's core: what `hide device carry` asks, run by the PC
     /// of the distribution this core runs in (D-27, D-62), or with `over`
-    /// SSH by a paired machine that signed in to this account
-    ///, which this daemon then echoes. Answered by
+    /// SSH by a paired machine that signed in to this account,
+    /// which this daemon then echoes. Answered by
     /// [`Pairing::carrier`], never as a value.
     Carry {
         #[serde(default)]
@@ -2135,8 +2135,8 @@ impl Pairing {
 
     /// Adds the machine `alias` reaches over SSH (B7): its own Hide pairs
     /// over the login, which installs nothing there, and the alias is kept
-    /// as the route the connection takes when no direct path opens
-    ///. A machine already paired gets the alias only once a
+    /// as the route the connection takes when no direct path opens.
+    /// A machine already paired gets the alias only once a
     /// carrier over it proved that machine's key (2.1): the device id the
     /// look answers and the key the accept answers only choose which key is
     /// checked. At most three sessions, one after another, on one of the

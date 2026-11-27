@@ -866,8 +866,8 @@ pub(crate) fn attach(
 
 /// Starts `argv` in place of the script, its first word an absolute path in
 /// the machine's wire spelling; from its answer on, the pipes are that
-/// program's. What carries the connection two Hides keep over SSH
-///: `hide device carry --ssh`. A program that is not there is
+/// program's. What carries the connection two Hides keep over SSH:
+/// `hide device carry --ssh`. A program that is not there is
 /// refused by the script, and the session ends.
 pub(crate) fn carry(pipe: &mut dyn Pipe, argv: &[String]) -> Result<(), StepError> {
     let fits = argv.first().is_some_and(|program| remote_path(program))

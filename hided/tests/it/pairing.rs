@@ -1048,8 +1048,8 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
 }
 
 /// Two Hides with no direct path and no relay between them connect over the
-/// SSH alias the guest paired through, and both say the path is SSH
-///: the guest's first dial runs the ladder, the far account's
+/// SSH alias the guest paired through, and both say the path is SSH:
+/// the guest's first dial runs the ladder, the far account's
 /// `hide device carry --ssh` hands its stdio to the target's daemon, and the
 /// pending grant is confirmed over that connection.
 #[cfg(unix)]

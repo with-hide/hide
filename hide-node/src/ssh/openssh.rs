@@ -52,8 +52,8 @@ pub struct SshProgram {
     private_home: Option<PathBuf>,
     /// The connection forwards nothing of this account's, whatever the
     /// configuration says: no agent, no X11, no GSSAPI credential
-    /// (`-a -x -k`). The carrier of a connection two Hides keep lasts days
-    ///, and a forwarded agent would be the far account's
+    /// (`-a -x -k`). The carrier of a connection two Hides keep lasts days,
+    /// and a forwarded agent would be the far account's
     /// for that long.
     forwards_nothing: bool,
 }

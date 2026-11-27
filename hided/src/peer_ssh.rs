@@ -103,6 +103,8 @@ impl Signer for SystemSsh {
 #[derive(Default)]
 pub struct Stop {
     stopped: AtomicBool,
+    /// Its carrier proved the host's key: it carries a live connection.
+    carrying: AtomicBool,
     end: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
@@ -112,6 +114,10 @@ impl Stop {
         if self.stopped.load(Ordering::SeqCst) {
             self.stop();
         }
+    }
+
+    fn carrying(&self) -> bool {
+        self.carrying.load(Ordering::Acquire)
     }
 
     fn stop(&self) {
@@ -274,6 +280,19 @@ impl Entry {
         }
     }
 
+    /// Stops the attempts still signing in or proving, and hands back the
+    /// ones whose carrier proved: a live connection stays.
+    fn stop_signing_in(&mut self) -> Vec<Weak<Stop>> {
+        let mut carrying = Vec::new();
+        for stop in self.attempts.drain(..).filter_map(|stop| stop.upgrade()) {
+            match stop.carrying() {
+                true => carrying.push(Arc::downgrade(&stop)),
+                false => stop.stop(),
+            }
+        }
+        carrying
+    }
+
     /// The route waits, its wait doubling to [`limits::CLIMB_MOST`]. A
     /// parked route stays parked.
     fn wait(&mut self) {
@@ -384,8 +403,9 @@ impl SshCarriers {
 
     /// Saves `alias` as `key`'s route with `save`, once the add proved the
     /// key on it, and starts the route over under a new epoch, whatever
-    /// alias it had: what still runs for the route before it ends, and an
-    /// outcome it reaches later changes nothing.
+    /// alias it had: a sign-in still running for the route ends, and an
+    /// outcome it reaches later changes nothing; a connection already
+    /// carried stays, and its stop moves to the new route.
     pub fn record<E>(
         &self,
         key: &PeerKey,
@@ -395,10 +415,13 @@ impl SshCarriers {
         let _writing = lock(&self.writes);
         save()?;
         let mut routes = lock(&self.routes);
-        if let Some(mut earlier) = routes.remove(key) {
-            earlier.stop_attempts();
-        }
-        routes.insert(*key, Entry::new(alias, self.epoch()));
+        let carrying = routes
+            .remove(key)
+            .map(|mut earlier| earlier.stop_signing_in())
+            .unwrap_or_default();
+        let mut entry = Entry::new(alias, self.epoch());
+        entry.attempts = carrying;
+        routes.insert(*key, entry);
         drop(routes);
         self.touched();
         Ok(())
@@ -717,6 +740,9 @@ impl Attempt {
     fn settle(&self, outcome: Outcome) {
         if self.settled.swap(true, Ordering::AcqRel) {
             return;
+        }
+        if outcome == Outcome::Proved {
+            self.stop.carrying.store(true, Ordering::Release);
         }
         if let Some(carriers) = self.carriers.upgrade() {
             carriers.settled(&self.key, &self.alias, self.epoch, outcome);

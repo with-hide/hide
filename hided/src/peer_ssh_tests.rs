@@ -45,6 +45,8 @@ struct Stand {
     running: AtomicUsize,
     /// Told once a stalled sign-in was stopped.
     stopped: Mutex<Option<mpsc::Sender<()>>>,
+    /// How many of the attempts it carried were stopped.
+    stops: Arc<AtomicUsize>,
 }
 
 impl Stand {
@@ -55,6 +57,7 @@ impl Stand {
             started: AtomicUsize::new(0),
             running: AtomicUsize::new(0),
             stopped: Mutex::new(None),
+            stops: Arc::default(),
         })
     }
 
@@ -81,7 +84,9 @@ impl Signer for Stand {
         self.running.fetch_add(1, Ordering::AcqRel);
         let _running = Running(&self.running);
         let (ended, end) = mpsc::channel::<()>();
+        let stops = Arc::clone(&self.stops);
         stop.set(move || {
+            stops.fetch_add(1, Ordering::AcqRel);
             let _ = ended.send(());
         });
         let said = Arc::new(Mutex::new(Vec::new()));
@@ -427,6 +432,33 @@ async fn recording_an_alias_again_starts_its_route_over_and_outdates_every_attem
         .record(&to.key, "studio", || Ok::<(), ()>(()))
         .unwrap();
     assert_eq!(near.carriers.blocked(&to.key), None);
+
+    // A connection the route carries now stays through a record of its
+    // alias, and is still the route's to end.
+    stand.next(Next::Carry);
+    let (dialed, accepted) = within("the connection", async {
+        tokio::join!(near.pipe.dial(&to), far.accept())
+    })
+    .await;
+    let (_ours, _theirs) = (dialed.unwrap(), accepted.unwrap());
+    let stopped = stand.stops.load(Ordering::Acquire);
+    near.carriers
+        .record(&to.key, "studio", || Ok::<(), ()>(()))
+        .unwrap();
+    assert_eq!(
+        stand.stops.load(Ordering::Acquire),
+        stopped,
+        "the live carrier stays"
+    );
+    near.carriers.hosts(&[]);
+    assert_eq!(
+        stand.stops.load(Ordering::Acquire),
+        stopped + 1,
+        "forgetting ends it"
+    );
+    near.carriers
+        .record(&to.key, "studio", || Ok::<(), ()>(()))
+        .unwrap();
     assert_eq!(route(&near, &to.key, "studio"), Route::Ready);
     near.carriers
         .settled(&to.key, "studio", parked, Outcome::OtherKey);

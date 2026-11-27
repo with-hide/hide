@@ -40,8 +40,7 @@ use crate::ending::Ending;
 /// every handler and every dialer in this daemon names. A machine's
 /// connections are iroh's, and beside them the pipe a carrier of one byte
 /// stream runs: `wsl.exe` between a WSL distribution and its PC (D-27), and
-/// the system `ssh` to a host's alias when no direct path opens
-///.
+/// the system `ssh` to a host's alias when no direct path opens.
 pub type Transport = Beside<IrohTransport>;
 pub type Conn = Either<IrohConn, PipeConn>;
 pub type HostPeers = Peers<Transport>;
@@ -204,6 +203,7 @@ impl Settings {
                 name: self.name.as_deref(),
                 clock: Clock::system(),
                 pacing: Default::default(),
+                capabilities: hide_peer::protocol::hello::CAPABILITIES,
             },
         )?;
         // A route an alias led to another Hide on is turned off in the
