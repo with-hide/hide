@@ -2176,7 +2176,7 @@ impl Pairing {
                 AddNext::Check(key) => key,
                 AddNext::Look => {
                     let looked = login
-                        .step(|upstream, reach| pairing_ssh::core_on(upstream, reach))
+                        .step(pairing_ssh::core_on)
                         .await
                         .map_err(|code| (code, None))?;
                     let node = looked.ok().flatten().map(|core| core.node);

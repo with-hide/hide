@@ -1303,13 +1303,10 @@ mod tests {
         assert_eq!(checked, Proof::Proved);
         assert_eq!(told.lock().unwrap().len(), 2, "a check tells nothing");
         let accepted = tokio::time::timeout(Duration::from_millis(300), far.accept()).await;
-        match accepted {
-            // A carrier proved and closed at once may still reach the far
-            // queue; it is over there.
-            Ok(Ok(conn)) => {
-                within("its end", conn.closed()).await;
-            }
-            Ok(Err(_)) | Err(_) => {}
+        // A carrier proved and closed at once may still reach the far
+        // queue; it is over there.
+        if let Ok(Ok(conn)) = accepted {
+            within("its end", conn.closed()).await;
         }
     }
 

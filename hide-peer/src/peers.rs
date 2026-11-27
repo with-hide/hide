@@ -1108,7 +1108,20 @@ impl<T: PeerTransport> Inner<T> {
                     let inner = Arc::clone(&self);
                     tokio::spawn(async move {
                         let _permit = permit;
-                        if let Err(error) = inner.establish(conn).await {
+                        let established = inner.establish(conn).await;
+                        // A connection the other side dialed to try a path
+                        // and did not choose is no failure: a probe repeats
+                        // for as long as a pair has no direct path.
+                        let probed = matches!(
+                            established,
+                            Err(
+                                DialError::Transport(TransportError::Ended(CloseCode::Probe))
+                                    | DialError::Refused(CloseCode::Probe)
+                            )
+                        );
+                        if let Err(error) = established.as_ref()
+                            && !probed
+                        {
                             crate::diagnostic!(json!({
                                 "component": "peer",
                                 "event": "connection.not_admitted",
@@ -2542,11 +2555,10 @@ mod tests {
                 dialed_all |= !left.is_empty();
                 // A move of the connection both ends kept, or a move of
                 // that move, is what is left, however the exchanges went.
-                let kept_moved = match conns.iter().map(|conn| conn.made).collect::<Vec<_>>()[..] {
-                    [Made::First, Made::Move(0)] => true,
-                    [Made::First, Made::Move(0), Made::Move(1)] => true,
-                    _ => false,
-                };
+                let kept_moved = matches!(
+                    conns.iter().map(|conn| conn.made).collect::<Vec<_>>()[..],
+                    [Made::First, Made::Move(0)] | [Made::First, Made::Move(0), Made::Move(1)]
+                );
                 if kept_moved {
                     assert!(
                         left.iter().all(|kept| *kept == count - 1),

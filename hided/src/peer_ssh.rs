@@ -698,6 +698,9 @@ impl Attempt {
                     {
                         break last;
                     }
+                    // A production wait, bounded by `SAID_WITHIN`, for the
+                    // line the far command writes as its `ssh` ends.
+                    #[allow(clippy::disallowed_methods)]
                     std::thread::sleep(Duration::from_millis(20));
                 };
                 if let Some(line) = &last {

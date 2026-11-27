@@ -112,7 +112,7 @@ fn copy(mut from: LocalStream, mut to: LocalStream, frozen: Arc<(Mutex<bool>, Co
                 break;
             }
         }
-        let _ = to.shutdown_handle().shutdown();
+        to.shutdown_handle().shutdown();
     });
 }
 
