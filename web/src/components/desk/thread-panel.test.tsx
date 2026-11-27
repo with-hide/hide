@@ -12,7 +12,7 @@ import type { DeskJob } from "../../desk";
 import type { AgentRow, DeskMentions, SessionThreadSection, SnapshotRest, ThreadPage } from "../../snapshot";
 import { useShellStore } from "../../store";
 import { useUiStore } from "../../ui";
-import { NO_SESSION_DRAFTS } from "../../sessionDrafts";
+import { NO_SESSION_DRAFTS, SESSION_DRAFT_BYTES } from "../../sessionDrafts";
 import { TooltipProvider } from "../ui/tooltip";
 import { ThreadPanel } from "./thread-panel";
 import { clearPreviews } from "../../filePreview";
@@ -111,7 +111,7 @@ it("keeps a sleeping session's record above the foot that wakes it once its card
   expect(container.querySelector("textarea")).toBeNull();
 });
 
-it("sends the box's words on Enter, keeps them until the pane took them, and never sends mid-composition", async () => {
+it("sends the box's words on Enter, takes them out of the box at once, and never sends mid-composition", async () => {
   const { box, type, enter } = await mount();
   await act(async () => useShellStore.setState({ sessionThread: section() }));
   await type("다크도 부탁해");
@@ -121,10 +121,43 @@ it("sends the box's words on Enter, keeps them until the pane took them, and nev
   expect(events).toHaveLength(1);
   expect(events[0]).toMatchObject({ kind: "thread_input", payload: { generation: 4, pane_id: "w1:p2", text: "다크도 부탁해", stages: [] } });
   const request = events[0]!.payload.request_id as string;
+  expect(box().value).toBe("");
   await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sending" } }) }));
-  expect(box().value).toBe("다크도 부탁해");
   await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sent" } }) }));
   expect(box().value).toBe("");
+});
+
+// Review round 1 F1 (mission-109): a send the pane took while its panel was closed never comes back as a draft to go twice.
+it("brings no sent words back when the panel closed before the pane took them", async () => {
+  const first = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await first.type("accepted once");
+  await first.enter();
+  const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
+  await act(async () => first.root.unmount());
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sent" } }) }));
+  const back = await mount();
+  expect(back.box().value).toBe("");
+});
+
+// Review round 1 F2: a draft holds at most what one send takes, and the line says the rest was cut.
+it("cuts words past what one send takes and says so", async () => {
+  const { container, box, type } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await type("x".repeat(SESSION_DRAFT_BYTES + 10));
+  expect(box().value).toHaveLength(SESSION_DRAFT_BYTES);
+  expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe("Too long to send in one go");
+});
+
+it("puts refused words back only into a box still empty, leaving words written since", async () => {
+  const { box, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await type("계속");
+  await enter();
+  const request = events[0]!.payload.request_id as string;
+  await type("다른 말");
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "asleep" } }) }));
+  expect(box().value).toBe("다른 말");
 });
 
 it("keeps the words and says why when the pane refused them, and holds send while the pane runs another session", async () => {
@@ -300,10 +333,152 @@ it("draws a turn an agent recorded as interrupted as one quiet line, never as th
   expect(Array.from(container.querySelectorAll('[data-desk-thread-line="user"] [data-desk-thread-bubble]')).map((one) => one.textContent)).toEqual(["다크도 찍어줘"]);
 });
 
+const operator = (text: string) => ({ sessionUpdate: "user_message_chunk", content: { type: "text", text } });
+const shell = (toolCallId: string, command: string, status = "completed") => ({ sessionUpdate: "tool_call", toolCallId, kind: "execute", title: command, status, rawInput: { command } });
+const edit = (toolCallId: string, path: string, oldText: string | null, newText: string, status = "completed") => ({ sessionUpdate: "tool_call", toolCallId, kind: "edit", title: `Edit ${path}`, status, content: [{ type: "diff", path, oldText, newText }] });
+const heldMission = { id: "mission-3", title: "Desk 1차", status: "running", decision: null, conductor: { present: true }, nodes: [{ key: "a", depends_on: [], status: "done", attention: null }, { key: "b", depends_on: [], status: "working", attention: null }] };
+const shown = async (tail: ThreadPage) => act(async () => useShellStore.setState({ rest: { missions: { items: [heldMission] } } as unknown as SnapshotRest, sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
+
+it("draws what one turn leads to once per target, with its newest state, and a mission chip without its title beside it", async () => {
+  const { container } = await mount({ ...job, state: "done" });
+  await shown({
+    updates: [
+      operator("미션 돌려줘"),
+      shell("m1", "hide mission show --mission mission-3"),
+      shell("l1", "hide request send agent-7 --body 첫 편지"),
+      shell("m2", "hide mission node add --mission mission-3"),
+      shell("l2", "hide request send agent-7 --body 둘째 편지"),
+      shell("m3", "hide mission show --mission mission-3"),
+      said("다 했어요"),
+      operator("한 번 더"),
+      shell("m4", "hide mission show --mission mission-3"),
+      said("그대로예요"),
+    ],
+    parts: {
+      m1: { kind: "mission", mission: "mission-3" },
+      l1: { kind: "letter", to: "agent-7", body: "첫 편지" },
+      m2: { kind: "mission", mission: "mission-3" },
+      l2: { kind: "letter", to: "agent-7", body: "둘째 편지" },
+      m3: { kind: "mission", mission: "mission-3" },
+      m4: { kind: "mission", mission: "mission-3" },
+    },
+    sessions: {},
+  });
+  const turns = Array.from(container.querySelectorAll("[data-desk-thread-turn]"));
+  const parts = (turn: Element) => Array.from(turn.querySelectorAll("[data-desk-hide-part]")).map((part) => part.getAttribute("data-desk-hide-part"));
+  // Three mission calls and two letters to one session are one chip and one letter line, where the turn first reached them.
+  expect(parts(turns[0]!)).toEqual(["mission", "letter"]);
+  expect(turns[0]!.querySelector('[data-desk-hide-part="letter"]')?.textContent).toContain("둘째 편지");
+  expect(turns[0]!.textContent).not.toContain("첫 편지");
+  // The chip names the mission once, inside it.
+  expect(turns[0]!.querySelector('[data-desk-hide-part="mission"]')?.textContent?.split("Desk 1차").length).toBe(2);
+  // Another turn that reaches the same mission draws it again: the rule holds within a turn.
+  expect(parts(turns[1]!)).toEqual(["mission"]);
+  // Unfolded, the work draws each target once too.
+  await act(async () => (turns[0]!.querySelector("[data-desk-turn-toggle]") as HTMLElement).click());
+  expect(parts(turns[0]!)).toEqual(["mission", "letter"]);
+});
+
+it("folds a running turn's calls into one line with its newest call under it, never what came out, and unfolds every call", async () => {
+  const { container } = await mount();
+  const tail = (newest: object[]) => ({
+    updates: [
+      operator("칩을 고쳐줘"),
+      said("먼저 칩을 고칠게요."),
+      shell("r0", "rg -n mission web/src"),
+      { sessionUpdate: "tool_call_update", toolCallId: "r0", content: [{ type: "content", content: { type: "text", text: "web/src/threadView.ts:105: mission" } }] },
+      shell("m1", "hide mission show --mission mission-3"),
+      edit("e1", "web/src/desk.ts", "one\ntwo", "one\n2\nthree"),
+      ...newest,
+    ],
+    parts: { m1: { kind: "mission", mission: "mission-3" } },
+    sessions: {},
+  }) as ThreadPage;
+  await shown(tail([edit("e2", "web/src/thread-view.tsx", "a\nb", "a2\nb2", "in_progress")]));
+  const turn = container.querySelector("[data-desk-thread-turn]")!;
+  const toggle = turn.querySelector("[data-desk-turn-toggle]")!;
+  expect(toggle.getAttribute("data-desk-turn-toggle")).toBe("folded");
+  // One command is a command, in the singular; two files are files.
+  expect(toggle.textContent).toBe("Working · 1 command · 2 files");
+  // What it said and the mission it reached stay in view; its calls and their output do not.
+  expect(turn.textContent).toContain("먼저 칩을 고칠게요.");
+  expect(turn.querySelectorAll('[data-desk-hide-part="mission"]')).toHaveLength(1);
+  expect(turn.querySelectorAll('[data-desk-thread-line="tool"]')).toHaveLength(0);
+  expect(turn.textContent).not.toContain("threadView.ts:105");
+  // The newest call is its file and what it changed.
+  expect(turn.querySelector("[data-desk-thread-newest]")?.textContent).toMatch(/^Edit web\/src\/thread-view\.tsx\+2 −2/);
+  // A command that comes next takes its place, as its first line alone.
+  await shown(tail([edit("e2", "web/src/thread-view.tsx", "a\nb", "a2\nb2"), shell("r1", "pnpm --dir web test\n  --run desk", "in_progress")]));
+  expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toMatch(/^pnpm --dir web testRunning/);
+  // An agent whose record carries no change shows the file alone.
+  await shown(tail([{ sessionUpdate: "tool_call", toolCallId: "e3", kind: "edit", title: "Edit web/src/app.ts", status: "completed" }]));
+  expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe("Edit web/src/app.ts");
+  // Unfolded, every call stands as before, with what came out.
+  await act(async () => (container.querySelector("[data-desk-turn-toggle]") as HTMLElement).click());
+  expect(container.querySelectorAll('[data-desk-thread-line="tool"]')).toHaveLength(3);
+  expect(container.textContent).toContain("threadView.ts:105");
+  expect(container.querySelector("[data-desk-thread-newest]")).toBeNull();
+});
+
+it("tells parts apart by what they lead to, not by how they are drawn or typed", async () => {
+  const { container } = await mount({ ...job, state: "done" });
+  await shown({
+    updates: [
+      operator("둘 다 리뷰 맡기고 노트 열어줘"),
+      shell("s1", "hide agent spawn --name review"),
+      shell("s2", "hide agent spawn --name review"),
+      shell("v1", "hide file open notes.md"),
+      shell("v2", "hide file open ./notes.md"),
+      said("맡겼어요"),
+    ],
+    parts: {
+      s1: { kind: "spawn", name: "review", agent_id: "agent-11", intent: null },
+      s2: { kind: "spawn", name: "review", agent_id: "agent-12", intent: null },
+      v1: { kind: "view", view: "file", target: "notes.md", view_id: "v1" },
+      v2: { kind: "view", view: "file", target: "./notes.md", view_id: "v1" },
+    },
+    sessions: {},
+  });
+  // Two sessions that ended under one name are two sessions; one View opened under two spellings is one output.
+  expect(container.querySelectorAll('[data-desk-hide-part="spawn"]')).toHaveLength(2);
+  expect(container.querySelectorAll("[data-desk-output]")).toHaveLength(1);
+});
+
+it("names a running turn's newest call whatever it was: a Hide call by its command, a search by its term", async () => {
+  const { container } = await mount();
+  const running = (calls: object[], parts: ThreadPage["parts"] = {}) => shown({ updates: [operator("찾아줘"), ...calls], parts, sessions: {} } as ThreadPage);
+  // A call drawn as a Hide part is still the newest step, as the command it was.
+  await running([shell("r", "rg old-step"), shell("m", "hide mission show --mission mission-3")], { m: { kind: "mission", mission: "mission-3" } });
+  expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe("hide mission show --mission mission-3");
+  // The same where a reader keeps the command under another input word or none, titling the call by it (Codex, Antigravity).
+  const hide = "hide mission show --mission mission-3";
+  for (const shape of [{ rawInput: { cmd: hide } }, { rawInput: { CommandLine: hide } }, {}]) {
+    await running([shell("r", "rg old-step"), { sessionUpdate: "tool_call", toolCallId: "m", kind: "execute", title: hide, status: "completed", ...shape }], { m: { kind: "mission", mission: "mission-3" } });
+    expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe(hide);
+  }
+  // A search whose reader titles it by the tool alone keeps its term from the input (Pi, OpenCode).
+  await running([{ sessionUpdate: "tool_call", toolCallId: "g", kind: "search", title: "grep", status: "completed", rawInput: { pattern: "needle", path: "src" } }]);
+  expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe("grep needle");
+  // A read that names its file only in its place shows the file.
+  await running([{ sessionUpdate: "tool_call", toolCallId: "rd", kind: "read", title: "read", status: "completed", locations: [{ path: "src/app.ts" }] }]);
+  expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe("read src/app.ts");
+  // A title that already says it is not repeated.
+  await running([{ sessionUpdate: "tool_call", toolCallId: "cg", kind: "search", title: "Grep needle", status: "completed", rawInput: { pattern: "needle" } }]);
+  expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe("Grep needle");
+});
+
+it("folds a finished turn under 작업 · 파일 n · 명령 m with no newest call", async () => {
+  const { container } = await mount({ ...job, state: "done" });
+  await shown({ updates: [operator("고쳐줘"), shell("r0", "rg -n mission"), edit("e1", "web/src/desk.ts", "a", "b"), said("고쳤어요")], parts: {}, sessions: {} });
+  expect(container.querySelector("[data-desk-turn-toggle]")?.textContent).toBe("Work · 1 file · 1 command");
+  expect(container.querySelector("[data-desk-thread-newest]")).toBeNull();
+  expect(container.querySelectorAll('[data-desk-thread-line="tool"]')).toHaveLength(0);
+});
+
 /** Waits until the lazily loaded Markdown language parsed the messages, so a code block carries its copy button. */
 const codeCopyDrawn = (container: HTMLElement) => act(() => vi.waitFor(() => expect(container.querySelector("[data-code-block-action]")).not.toBeNull()));
 
-it("draws the agent's words as Markdown and copies a message's original words and a code block's code (Doop E2)", async () => {
+it("draws the agent's words as Markdown, copies a code block's code, and offers no copy under a message for now (operator decision 2026-11-27)", async () => {
   const copied: [string, string][] = [];
   const { container } = await mount(job, null, { onCopy: async (text, what) => { copied.push([text, what]); return true; } });
   const words = "**라이트**는 끝났어요.\n\n```\nopen https://play.google.com/console\n```";
@@ -312,11 +487,12 @@ it("draws the agent's words as Markdown and copies a message's original words an
   await codeCopyDrawn(container);
   const message = container.querySelector('[data-desk-thread-line="agent"]')!;
   expect(message.querySelector('[data-markdown-text="true"]')).not.toBeNull();
-  await act(async () => message.querySelector<HTMLElement>('[data-message-copy] [data-copy-words="message"]')!.click());
+  // Neither the answer nor the operator's bubble carries a copy row.
+  expect(container.querySelectorAll('[data-copy-words="message"]')).toHaveLength(0);
   await act(async () => message.querySelector<HTMLElement>('[data-code-block-action] [data-copy-words="code block"]')!.click());
-  expect(copied).toEqual([[words, "message"], ["open https://play.google.com/console", "code block"]]);
+  expect(copied).toEqual([["open https://play.google.com/console", "code block"]]);
   // A copy that took says so on the button that made it.
-  expect(message.querySelector('[data-copy-words="message"]')?.getAttribute("data-copied")).toBe("true");
+  expect(message.querySelector('[data-copy-words="code block"]')?.getAttribute("data-copied")).toBe("true");
 });
 
 it("keeps every message's view while the operator types and while the last message streams, so a selection in one stays", async () => {
@@ -568,7 +744,8 @@ it("says why the session's agent has no list yet, the same as Desk's box, and se
   expect(document.body.querySelector('[data-desk-command-unread="sign_in"]')).not.toBeNull();
   await enter();
   expect(events[0]).toMatchObject({ kind: "thread_input", payload: { text: "/compact" } });
-  expect(box().value).toBe("/compact");
+  // Sent, the words leave the box at once.
+  expect(box().value).toBe("");
 });
 
 it("lists the project's files above Desk's sessions on `@`, without the session itself, and writes each as its agent reads it", async () => {

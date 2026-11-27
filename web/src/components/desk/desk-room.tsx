@@ -17,7 +17,7 @@ const EDGE_STEP = 32;
 
 /**
  * The chat column's head: Desk's own mark and name, and 한눈에's unfold while it is folded, the `▯|` 한눈에 folds with. Leaving Desk is the
- * sidebar's Desk row and the recent-tab chord, and a new conversation is the first row of the composer's `/` list
+ * sidebar's Desk row and the recent-tab chord; a new conversation has no entry on screen until one is decided
  * (operator decision 2026-11-27).
  */
 export function DeskChatHead({ onGlance = null }: { /** 한눈에 is folded with no session beside Desk: this unfolds it. */ onGlance?: (() => void) | null }) {

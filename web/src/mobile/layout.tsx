@@ -12,6 +12,7 @@ import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
+import { WorkingOwl } from "../WorkingOwl";
 
 /** The column a row's second line starts in: under the title, after the lead column. */
 export const ROW_INSET = "pl-[calc(var(--size-agent-mark)+var(--spacing-sm))]";
@@ -101,12 +102,14 @@ export function StatusStrip({ lead, word, tone, line, since }: { lead?: ReactNod
 }
 
 /**
- * What the agent does now, at the foot of its conversation, its time counted on the phone: `생각 중 · 4초` (Doop 09), or with
- * `clock` a command's line, the terminal mark and a running clock, `>_ 명령 실행 중 · 0:42` (Doop 02).
+ * What the agent does now, at the foot of its conversation, after Hide's small owl looking about (`WorkingOwl`), its time
+ * counted on the phone: `생각 중 · 4초` (Doop 09), or with `clock` a command's line, the terminal mark and a running clock,
+ * `>_ 명령 실행 중 · 0:42` (Doop 02).
  */
 export function ActivityLine({ word, since, clock = false, time }: { word: string; since: number; clock?: boolean; time?: string }) {
   return (
     <p className="flex items-center gap-xs pt-xs text-body" data-phone-activity={word}>
+      <WorkingOwl />
       {clock ? <TerminalIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-agent-working opacity-(--opacity-secondary)" /> : null}
       <span className="text-agent-working opacity-(--opacity-secondary)">{word}</span>
       <span aria-hidden="true" className="text-muted-foreground">·</span>

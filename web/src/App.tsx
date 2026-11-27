@@ -186,6 +186,11 @@ export function App() {
       const cycle = useUiStore.getState().cycle;
       if (cycle) useUiStore.getState().setCycle(reconcileHeldCycle(cycle, state.rest));
     });
+    // A session's draft beside Desk goes with its pane, once the pane's own machine, connected, no longer lists it.
+    const unsubscribeSessionDrafts = useShellStore.subscribe((state, previous) => {
+      if (state.connection !== "live" || (state.agents === previous.agents && state.rest?.status?.remote === previous.rest?.status?.remote && state.connection === previous.connection)) return;
+      useUiStore.getState().keepSessionDraftsOf(state.agents, state.rest?.status?.remote);
+    });
     // A mission or an automation that leaves while the cycle is held leaves its frozen candidates too; the
     // automations arrive beside the snapshot, so the subscriber above, keyed on `rest`, cannot see them go.
     const unsubscribeHeldPlaces = useShellStore.subscribe((state, previous) => {
@@ -194,6 +199,7 @@ export function App() {
       if (cycle?.kind === "places") useUiStore.getState().setCycle(reconcileHeldCycle(cycle, state.rest));
     });
     return () => {
+      unsubscribeSessionDrafts();
       window.removeEventListener("focusin", observeFocus);
       window.removeEventListener("pointerdown", endCommit, true);
       window.removeEventListener("pointerdown", noteOperatorPointer, true);

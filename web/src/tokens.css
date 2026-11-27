@@ -81,6 +81,8 @@
   --color-accent-choice-violet: var(--accent-choice-violet);
   --color-accent-choice-amber: var(--accent-choice-amber);
   --color-device-remote: var(--device-remote);
+  --color-owl-mask: var(--owl-mask);
+  --color-owl-pupil: var(--owl-pupil);
   --color-bot-slate: var(--bot-slate);
   --color-bot-coral: var(--bot-coral);
   --color-bot-teal: var(--bot-teal);
@@ -456,6 +458,8 @@
   --motion-brand-sweep: 1.8;
   --size-update-ring: 3px;
   --motion-update-pulse: 1.2;
+  --motion-owl-look: 2.4;
+  --size-working-owl: 24px;
   --motion-working-turn: 1.6;
   --motion-subagent-orbit: 9;
   --size-overview-projects-min: 960px;
@@ -590,6 +594,8 @@
   --accent-choice-violet: #a78bfa;
   --accent-choice-amber: #fb923c;
   --device-remote: var(--accent-choice-violet);
+  --owl-mask: #b7f773;
+  --owl-pupil: #111012;
   --bot-slate: #627ca5;
   --bot-coral: #d67067;
   --bot-teal: #185857;
@@ -721,6 +727,8 @@
   --accent-choice-violet: #c4b5fd;
   --accent-choice-amber: #fdba74;
   --device-remote: var(--accent-choice-violet);
+  --owl-mask: #b7f773;
+  --owl-pupil: #111012;
   --bot-slate: #627ca5;
   --bot-coral: #d67067;
   --bot-teal: #185857;

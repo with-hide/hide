@@ -14,7 +14,8 @@ import type { NumberedFamily } from "./shortcuts";
 import type { ViewFocusRequest, ViewWorkspace } from "./viewLayout";
 import type { KeyboardOwner } from "./viewFocus";
 import { DESK_ROOM_CLOSED, leaveRoom, type DeskRoomWindow } from "./deskRoom";
-import { keepSessionDraft, NO_SESSION_DRAFTS, type SessionDrafts } from "./sessionDrafts";
+import { fitSessionDraft, keepSessionDraft, NO_SESSION_DRAFTS, sessionDraftsLeft, type SessionDrafts } from "./sessionDrafts";
+import type { RemoteStatus } from "./snapshot";
 import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
 import { NO_CALLS_SEEN, NO_DRAWN_PAGES, type CallsSeen, type DrawnPages, type LaneMode, type LaneSide, type LaneView } from "./workspace";
@@ -323,7 +324,10 @@ type UiStore = {
   setDeskDraft: (draft: DeskDraft) => void;
   /** What each session's input beside Desk holds, kept across opening another session and leaving Desk (`sessionDrafts.ts`). */
   sessionDrafts: SessionDrafts;
-  setSessionDraft: (pane: string, text: string) => void;
+  /** Keeps `pane`'s words, cut to what one send takes; true when they were cut. */
+  setSessionDraft: (pane: string, device: string | null, text: string) => boolean;
+  /** Lets go of the drafts whose pane its machine says is gone (`sessionDraftsLeft`). */
+  keepSessionDraftsOf: (local: readonly { pane_id: string }[], remote: readonly RemoteStatus[] | undefined) => void;
   /** Desk's room in this window: the session open beside Desk and Desk's desk (`deskRoom.ts`); its desk folds each time the room is left (PRD desk-2-ui B26), the session staying (`leaveRoom`). */
   deskRoom: DeskRoomWindow;
   setDeskRoom: (change: (room: DeskRoomWindow) => DeskRoomWindow) => void;
@@ -585,7 +589,16 @@ export const useUiStore = create<UiStore>((set, get) => ({
   deskDraft: { text: "", mentions: [] },
   setDeskDraft: (deskDraft) => set({ deskDraft }),
   sessionDrafts: NO_SESSION_DRAFTS,
-  setSessionDraft: (pane, text) => set((state) => ({ sessionDrafts: keepSessionDraft(state.sessionDrafts, pane, text) })),
+  setSessionDraft: (pane, device, text) => {
+    const fit = fitSessionDraft(text);
+    set((state) => ({ sessionDrafts: keepSessionDraft(state.sessionDrafts, pane, device, fit.text) }));
+    return fit.cut;
+  },
+  keepSessionDraftsOf: (local, remote) => {
+    const drafts = get().sessionDrafts;
+    const left = sessionDraftsLeft(drafts, local, remote);
+    if (left !== drafts) set({ sessionDrafts: left });
+  },
   deskRoom: DESK_ROOM_CLOSED,
   setDeskRoom: (change) => set((state) => ({ deskRoom: change(state.deskRoom) })),
   deskReturn: null,
