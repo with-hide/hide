@@ -157,6 +157,17 @@ it("says the Tailscale tip only on a row connected through the relay, and keeps 
   await unmount();
 });
 
+it("says on a relayed row why the SSH route waits, naming the machine and never the alias, and Retry sends the machine's retry (mission-107)", async () => {
+  const parked = peer({ key: "cd".repeat(32), device_id: "office", name: "Office Linux", path: "relay", ssh: { blocked: "update_there" } });
+  const { q, press, events, unmount } = await mount(idle, [parked]);
+  const tip = q('[data-peer-relay-tip="office"]');
+  expect(tip?.getAttribute("data-peer-ssh-blocked")).toBe("update_there");
+  expect(tip?.textContent).toContain("Connected through the relay · update Hide on Office Linux and it connects over SSH");
+  await press('[data-peer-ssh-retry="office"]');
+  expect(last(events)).toMatchObject({ kind: "pairing_retry", payload: { device: parked.key } });
+  await unmount();
+});
+
 it("renames a paired machine through its pairing, by its connection id (c2)", async () => {
   const { q, press, events, unmount } = await mount(idle, [peer()]);
   await act(async () => { q('[data-peer-menu="windows-pc"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });

@@ -22,11 +22,26 @@ describe("a paired machine's row (PRD device-connect-iroh B21, B24-B27, B50, B51
     // D-86: a direct path between two Tailscale addresses is named apart.
     expect(peerRouteKey(peer({ path: "tailscale" }))).toBe("pairing.state.tailscale");
     expect(peerRouteKey(peer({ connected: false, path: null }))).toBeNull();
-    expect(relayTip(peer({ path: "relay" }))).toBe(true);
-    expect(relayTip(peer({ path: "direct" }))).toBe(false);
-    expect(relayTip(peer({ path: "tailscale" }))).toBe(false);
+    expect(relayTip(peer({ path: "relay" }))).toEqual({ key: "devices.relayTip", retry: false });
+    expect(relayTip(peer({ path: "direct" }))).toBeNull();
+    expect(relayTip(peer({ path: "tailscale" }))).toBeNull();
+    expect(relayTip(peer({ path: "ssh" }))).toBeNull();
     // A relayed machine whose state needs the operator says that, not the tip.
-    expect(relayTip(peer({ path: "relay", update: "there" }))).toBe(false);
+    expect(relayTip(peer({ path: "relay", update: "there" }))).toBeNull();
+  });
+
+  it("names the SSH path in one word, and says on a relayed row why the SSH route waits, with Retry where a retry helps (mission-107)", () => {
+    expect(peerRouteKey(peer({ path: "ssh" }))).toBe("pairing.state.ssh");
+    const parked = (blocked: NonNullable<Peer["ssh"]>["blocked"]) => relayTip(peer({ path: "relay", ssh: { blocked } }));
+    expect(parked("sign_in")).toEqual({ key: "devices.relayTip.ssh.signIn", retry: true });
+    expect(parked("check_host_key")).toEqual({ key: "devices.relayTip.ssh.checkHostKey", retry: true });
+    expect(parked("update_there")).toEqual({ key: "devices.relayTip.ssh.updateThere", retry: true });
+    expect(parked("retry")).toEqual({ key: "devices.relayTip.ssh.retry", retry: true });
+    expect(parked("not_saved")).toEqual({ key: "devices.relayTip.ssh.notSaved", retry: true });
+    // Only opening Hide again gets past a Hide updated since it started.
+    expect(parked("reopen_hide")).toEqual({ key: "devices.relayTip.ssh.reopenHide", retry: false });
+    // A machine this one does not open has no route of this one's.
+    expect(relayTip(peer({ path: "relay", opens: null, opened_by: "active", ssh: { blocked: "retry" } }))).toEqual({ key: "devices.relayTip", retry: false });
   });
 
   it("offers Retry with the relay's reason for a machine it opens and cannot reach, and nothing for one that only opens it", () => {

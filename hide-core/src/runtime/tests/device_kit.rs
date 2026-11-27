@@ -2940,6 +2940,70 @@ fn device_connect_statistics_count_a_ready_device_once_across_reconnects() {
         [Event::DeviceConnected {
             outcome: DeviceOutcome::Ready,
             platform: DevicePlatform::MacosAarch64,
+            path: None,
+        }]
+    );
+}
+
+/// A paired machine's device says the path its connection came up on, once:
+/// a ready over SSH sends `path` `ssh`, and a later move of that connection
+/// sends nothing, since the outcome is the same (mission-107, 12.1).
+#[test]
+fn a_paired_machine_ready_over_ssh_sends_path_ssh_once() {
+    use crate::peer_machines::{PeerMachine, PeerOpens, PeerPath};
+    use crate::product_analytics::{DeviceOutcome, DevicePath, DevicePlatform, Event};
+    let shared = with_consent(None);
+    let statistics = Arc::new(DeviceStatistics::default());
+    let key = "ab".repeat(32);
+    let machine = |path| PeerMachine {
+        key: key.clone(),
+        device_id: DEVICE.to_owned(),
+        name: "Studio".to_owned(),
+        named: false,
+        opens: Some(PeerOpens::Active),
+        opened_by: None,
+        connected: true,
+        path: Some(path),
+        reason: None,
+        update: None,
+        wsl: None,
+        helper_device: None,
+        ssh: None,
+    };
+    for path in [PeerPath::Ssh, PeerPath::Direct] {
+        let helper = KitDevice::answering(Ok(installed()));
+        let mut runtime = shared.lock().unwrap();
+        runtime.product_analytics = Some(statistics.clone());
+        for registration in &mut runtime.snapshot.ui_state.device_registrations {
+            if registration.id == DEVICE {
+                registration.origin = crate::model::LinkOrigin::Peer {
+                    key: key.clone(),
+                    switched: false,
+                };
+            }
+        }
+        runtime.snapshot.navigator.peers = vec![machine(path)];
+        runtime.close_device_host(DEVICE, "fixture reconnect");
+        runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
+        runtime.begin_device_connect(DEVICE);
+        let generation = runtime.device_host_generation(DEVICE);
+        let mut connected = established(helper.clone(), None);
+        connected.kit = Some(Ok(Box::new(installed())));
+        runtime.ingest_host_established(
+            DEVICE,
+            generation,
+            Ok(hosts::HostReady::Dialed(Box::new(connected))),
+        );
+        runtime.refresh_device_snapshots();
+        drop(runtime);
+        settle(&shared);
+    }
+    assert_eq!(
+        *statistics.0.lock().unwrap(),
+        [Event::DeviceConnected {
+            outcome: DeviceOutcome::Ready,
+            platform: DevicePlatform::MacosAarch64,
+            path: Some(DevicePath::Ssh),
         }]
     );
 }
@@ -2987,6 +3051,7 @@ fn device_connect_statistics_send_only_a_changed_outcome() {
             hide_node_link::device::SshProblem::Unreachable,
         )),
         platform: DevicePlatform::Unknown,
+        path: None,
     };
     assert_eq!(
         *statistics.0.lock().unwrap(),
@@ -2995,6 +3060,7 @@ fn device_connect_statistics_send_only_a_changed_outcome() {
             Event::DeviceConnected {
                 outcome: DeviceOutcome::Ready,
                 platform: DevicePlatform::MacosAarch64,
+                path: None,
             },
             failed,
         ]
@@ -3023,6 +3089,7 @@ fn device_connect_statistics_settle_failure_and_retry_once() {
         [Event::DeviceConnected {
             outcome: DeviceOutcome::Failed(DeviceFailure::KitFailed),
             platform: DevicePlatform::MacosAarch64,
+            path: None,
         }]
     );
     *helper.answer.lock().unwrap() = Ok(installed());
@@ -3055,10 +3122,12 @@ fn device_connect_statistics_settle_failure_and_retry_once() {
             Event::DeviceConnected {
                 outcome: DeviceOutcome::Failed(DeviceFailure::KitFailed),
                 platform: DevicePlatform::MacosAarch64,
+                path: None,
             },
             Event::DeviceConnected {
                 outcome: DeviceOutcome::Ready,
                 platform: DevicePlatform::MacosAarch64,
+                path: None,
             },
         ]
     );
@@ -3085,6 +3154,7 @@ fn device_connect_statistics_include_early_install_failure() {
         [Event::DeviceConnected {
             outcome: DeviceOutcome::Failed(DeviceFailure::NoTransport),
             platform: DevicePlatform::Unknown,
+            path: None,
         }]
     );
 }
