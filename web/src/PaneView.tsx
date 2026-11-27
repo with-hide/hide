@@ -162,6 +162,7 @@ export const PaneView = memo(function PaneView({
   markStatus = null,
   markTone,
   lettersWaiting = 0,
+  lettersUnreadable = false,
   paneCount,
   zoomed,
   local = true,
@@ -182,8 +183,10 @@ export const PaneView = memo(function PaneView({
   /** The agent's status code, whose words the mark says on hover (status-marks B36). */
   markStatus?: AgentStatusCode | null;
   markTone: string;
-  /** Letters the core shows waiting on this pane for a possible draft; 0 draws no pill. */
+  /** Letters the core shows waiting on this pane for a possible draft or an unreadable composer; 0 draws no pill. */
   lettersWaiting?: number;
+  /** They wait because the pane is too narrow, or covered, for its composer to be read: the pill says so and offers no press. */
+  lettersUnreadable?: boolean;
   /** Panes in the tab, a zoomed pane's hidden siblings included. */
   paneCount: number;
   /** The tab is zoomed, so this pane is the only one drawn. */
@@ -479,7 +482,7 @@ export const PaneView = memo(function PaneView({
         <PaneSplit paneId={paneId} name={title} actions={actions} />
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind ? <PaneOpenAsksMark paneId={paneId} header={header} actions={actions} /> : null}
-        {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
+        {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} unreadable={lettersUnreadable} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
         </div>
         {/* The zoom shows only on the pane that holds the keyboard or is pointed at, so it leads the right side: the controls

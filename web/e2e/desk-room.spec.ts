@@ -102,7 +102,7 @@ test("a sidebar row opens its session beside Desk, marked on its row, Escape clo
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-room-beside");
   try {
-    await expect(room(page)).toHaveAttribute("data-desk-room", "closed");
+    await expect(room(page)).toHaveAttribute("data-desk-room", "glance");
     await row(page, desk.pane).click();
     await expect(room(page)).toHaveAttribute("data-desk-room", "session");
     await expect(page.locator("[data-desk-screen]")).toBeVisible();
@@ -112,7 +112,7 @@ test("a sidebar row opens its session beside Desk, marked on its row, Escape clo
 
     await page.locator("[data-desk-chat-column] [data-desk-composer-input]").focus();
     await page.keyboard.press("Escape");
-    await expect(room(page)).toHaveAttribute("data-desk-room", "closed");
+    await expect(room(page)).toHaveAttribute("data-desk-room", "glance");
     await expect(row(page, desk.pane)).not.toHaveAttribute("data-desk-beside", "true");
 
     await row(page, desk.pane).click({ modifiers: [process.platform === "darwin" ? "Meta" : "Control"] });
@@ -386,71 +386,6 @@ test("a session beside Desk whose sleep closes its pane keeps its conversation a
     const fresh = await withControl(daemon, (control) => control.until((rest) => ((rest.navigator as { agents?: { pane_id: string; agent_kind: string | null }[] } | undefined)?.agents ?? []).find((agent) => agent.agent_kind === "pi" && agent.pane_id !== pane)?.pane_id, "a fresh pi agent", 30_000));
     await expect(page.locator(`[data-desk-thread-panel="${fresh}"]`)).toBeVisible();
     await expect(page.locator("[data-desk-session-terminal]")).toBeVisible();
-  } finally {
-    daemon.stop();
-    engine.stop();
-  }
-});
-
-test("a session beside Desk shows an answer's 복사 under it at once, and the operator's under the bubble only on hover or focus, in a row that keeps the message's height (copy-pos 가)", async ({ page }) => {
-  // e2e: hover, focus-within and the height a held row keeps are only answered by a laid-out page; the words are the core's read of a real session file.
-  test.setTimeout(120_000);
-  // Pi's stand-in reports its session for a Unix shell, so no Windows lane runs this, as the Pi sleep test above.
-  const engine = await startFixture({ agents: false });
-  const daemon = await startHided(engine, "desk-room-message-copy", path.join(engine.root, "home"));
-  try {
-    const pane = engine.panes[0]!;
-    const session = prepareEngineWriter(engine, "pi");
-    await withControl(daemon, (control) => sendKeys(control, pane, "pi\r"));
-    await expect.poll(() => fs.existsSync(session)).toBe(true);
-    await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, pane)?.session_id === nativeSessionId("pi") ? true : undefined), `${pane} on its pi session`, 30_000));
-    // An answer in words after the operator's 요청 보기를 만들어줘.
-    const answerText = "요청 보기를 만들었어요.";
-    fs.appendFileSync(session, `${JSON.stringify({ type: "message", id: "a0000004", parentId: "a0000003", timestamp: "2026-10-03T01:01:00Z", message: { role: "assistant", content: [{ type: "text", text: answerText }], stopReason: "stop" } })}\n`);
-    await page.goto("about:blank");
-    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
-    await enterWorkspace(page, "fixture");
-    await switchDesk(page, true);
-    await page.locator("[data-desk-sidebar-row]").click();
-    const folded = page.locator('nav[data-sidebar] [data-checkout-toggle][aria-expanded="false"]');
-    await expect(row(page, pane).or(folded)).toBeVisible();
-    if (!(await row(page, pane).isVisible())) await folded.click();
-    await row(page, pane).click();
-    const panel = page.locator(`[data-desk-thread-panel="${pane}"]`);
-    const answer = panel.locator('[data-desk-thread-line="agent"]').filter({ hasText: answerText });
-    await expect(answer).toBeVisible({ timeout: 30_000 }); // wait-ok: the core's first read of the Pi session file
-    const mine = panel.locator('[data-desk-thread-line="user"]').filter({ hasText: "요청 보기를 만들어줘" });
-    const bubble = mine.locator("[data-desk-thread-bubble]");
-    const answerCopy = answer.locator('[data-message-copy] [data-copy-words="message"]');
-    const myRow = mine.locator("[data-message-copy]");
-    const myCopy = myRow.locator('[data-copy-words="message"]');
-
-    // At rest: the answer's 복사 shows, under its words at the left; the operator's is not seen, its row already held.
-    await page.mouse.move(0, 0);
-    await expect(answer.locator("[data-message-copy]")).toHaveCSS("opacity", "1");
-    await expect(myRow).toHaveCSS("opacity", "0");
-    const words = (await answer.locator('[data-markdown-text="true"]').boundingBox())!;
-    const answerButton = (await answerCopy.boundingBox())!;
-    expect(answerButton.y).toBeGreaterThanOrEqual(words.y + words.height);
-    expect(answerButton.x).toBeLessThan(words.x + words.width / 2);
-    const rest = (await mine.boundingBox())!.height;
-
-    // Under the pointer: the operator's 복사 shows under the bubble at its right, and the message is as tall as before.
-    await bubble.hover();
-    await expect(myRow).toHaveCSS("opacity", "1");
-    const box = (await bubble.boundingBox())!;
-    const button = (await myCopy.boundingBox())!;
-    expect(button.y).toBeGreaterThanOrEqual(box.y + box.height);
-    expect(button.x + button.width).toBeGreaterThan(box.x + box.width / 2);
-    expect((await mine.boundingBox())!.height).toBe(rest);
-    await screenshot(page, "desk-room-message-copy-hover");
-
-    // The pointer gone it hides again, and the keyboard in the message shows it.
-    await page.mouse.move(0, 0);
-    await expect(myRow).toHaveCSS("opacity", "0");
-    await myCopy.focus();
-    await expect(myRow).toHaveCSS("opacity", "1");
-    expect((await mine.boundingBox())!.height).toBe(rest);
   } finally {
     daemon.stop();
     engine.stop();

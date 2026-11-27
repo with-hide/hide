@@ -2,7 +2,7 @@ import { ArrowLeftRightIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, CornerDow
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { ApprovalButton, ApprovalWord, DeskAgent, DeskApproval, DeskItem, DeskJob, DeskMention, DeskMissionMention, DeskNoticeKind, WorkingPhase, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
-import { approvalButtons, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, markedMission, mentionParts, namedMention, namedText, refuses } from "../../desk";
+import { approvalButtons, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, markedMission, mentionParts, namedMention, refuses } from "../../desk";
 import { sentAttachment } from "../../deskComposer";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { DeskAttachment, DeskCompaction, DeskSessionChip } from "../../snapshot";
@@ -11,7 +11,6 @@ import type { MessageKey } from "../../i18n/catalogs";
 import { composingKey } from "../../keys";
 import { cn } from "../../lib/utils";
 import { MarkdownText, type MarkdownChip } from "../../MarkdownText";
-import { CopyableMessage } from "../copy-words";
 import type { CopyText } from "../human-turn-copy";
 import { formatElapsed } from "../elapsed";
 import { MentionChip } from "../mention-chip";
@@ -57,8 +56,8 @@ export function DeskMentionChip({ mention, onPress }: { mention: DeskMention; on
     : <MentionChip kind="project" name={mention.name} lead={lead} />;
 }
 
-/** The operator's own words, the one thing drawn as a bubble (B7, D-75), its files above it, with `복사` on hover when `copy` is given (Doop E2). */
-export function DeskUserMessage({ text, mentions, attachments = [], onMention, copy }: { text: string; mentions: readonly DeskMention[]; attachments?: readonly DeskAttachment[]; onMention?: (mention: DeskMention) => void; copy?: CopyText }) {
+/** The operator's own words, the one thing drawn as a bubble (B7, D-75), its files above it; a message offers no `복사` for now (operator decision 2026-11-27). */
+export function DeskUserMessage({ text, mentions, attachments = [], onMention }: { text: string; mentions: readonly DeskMention[]; attachments?: readonly DeskAttachment[]; onMention?: (mention: DeskMention) => void }) {
   const files = useMemo(() => attachments.map((file) => ({ ...sentAttachment(file.path, file.bytes), name: file.name })), [attachments]);
   const bubble = text ? (
     <p className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]">
@@ -68,7 +67,7 @@ export function DeskUserMessage({ text, mentions, attachments = [], onMention, c
   return (
     <div className="flex min-w-0 flex-col items-end gap-xs" data-desk-item="user">
       <SentAttachments files={files} />
-      {bubble && copy ? <CopyableMessage text={namedText(text, mentions)} copy={copy} own>{bubble}</CopyableMessage> : bubble}
+      {bubble}
     </div>
   );
 }
@@ -163,7 +162,7 @@ export function DeskReply({ text, stopped = false, live = false, mentions = NO_R
   const words = <MarkdownText text={text} size="chat" chips={chips} copyCode={copy} />;
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-item="reply" data-desk-reply={live ? "live" : stopped ? "stopped" : "done"}>
-      {text === "" ? null : copy ? <CopyableMessage text={missions.reduce((said, mission) => said.split(markedMission(mission)).join(mission.title), namedText(text, mentions))} copy={copy}>{words}</CopyableMessage> : words}
+      {text === "" ? null : words}
       {compaction ? (
         <span className="text-body text-subtle-foreground" data-desk-reply-compaction={compaction.done ? "done" : "failed"}>
           {compaction.done ? t("desk.reply.compacted") : compaction.reason ? t("desk.reply.notCompactedWhy", { reason: compaction.reason }) : t("desk.reply.notCompacted")}
@@ -549,7 +548,7 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
     <ol className="mx-auto flex w-full max-w-(--size-editor-measure) min-w-0 flex-col gap-md px-lg py-lg text-subhead" aria-label={t("desk.name")} data-desk-chat={items.length}>
       {items.map((item, index) => (
         <li key={item.id} className="flex min-w-0 flex-col" data-scroll-anchor={item.id}>
-          {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} attachments={item.attachments} onMention={actions.onMention} copy={actions.onCopy} />
+          {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} attachments={item.attachments} onMention={actions.onMention} />
             : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} missions={item.missions} compaction={item.compaction ?? null} onMention={actions.onMention} onMission={actions.onMission} onFile={actions.onFile} copy={actions.onCopy} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>

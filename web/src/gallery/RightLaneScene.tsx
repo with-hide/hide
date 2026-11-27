@@ -12,7 +12,7 @@ import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { Sidebar } from "../sidebar";
-import type { EditorDocumentSnapshot, EditorTabSnapshot, ViewDisplaySnapshot } from "../snapshot";
+import type { EditorDocumentSnapshot, EditorTabSnapshot, LayoutNode, ViewDisplaySnapshot } from "../snapshot";
 import { useShellStore, type DirectoryList, type Documents } from "../store";
 import { TitleRow } from "../TitleRow";
 import { useUiStore } from "../ui";
@@ -24,7 +24,7 @@ import { memorySceneProject } from "./MemoryScene";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
 
-const STATES = ["closed", "overlay", "explorer-overlay", "explorer-only", "expanded", "project", "project-partial", "project-empty", "memory", "changes", "narrow", "outside", "focus-outside"] as const;
+const STATES = ["closed", "overlay", "explorer-overlay", "explorer-only", "expanded", "project", "project-partial", "project-empty", "memory", "changes", "narrow", "outside", "focus-outside", "seven-panes"] as const;
 type LaneState = (typeof STATES)[number];
 /** `documents`: the checkout has views and the viewing column shows them; `tool`: the tool column. */
 type Lane = { tool: Tool | null; documents: boolean; expanded: boolean };
@@ -43,6 +43,8 @@ const LANES: Record<LaneState, Lane> = {
   narrow: { tool: "explorer", documents: true, expanded: false },
   outside: { tool: null, documents: true, expanded: false },
   "focus-outside": { tool: null, documents: true, expanded: false },
+  // docs/UI_BEHAVIOR.md, The pane floor: the desk floats over a tab whose seven panes keep the floor.
+  "seven-panes": { tool: null, documents: true, expanded: false },
 };
 
 /** A home folder and a clipboard image the core names as pasted (`pasted`, `home_relative`). */
@@ -109,6 +111,14 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
       [`${root}/web`]: listing(`${root}/web`, [["src", true], ["tsconfig.json", false], ["vite.config.ts", false]]),
       [`${root}/web/src`]: listing(`${root}/web/src`, [["components", true], ["SettingsPanel.tsx", false], ["SettingsPanel.test.tsx", false], ["lane.css", false]]),
     };
+    if (state === "seven-panes" && checkout.tabs[0]) {
+      const tab = checkout.tabs[0];
+      const first = tab.panes[0]!;
+      tab.panes = Array.from({ length: 7 }, (_, index) => ({ ...first, id: index === 0 ? first.id : `${first.id}-${index + 1}` }));
+      const row = (from: number): LayoutNode => from === tab.panes.length - 1 ? { type: "pane", pane_id: tab.panes[from]!.id } : { type: "split", direction: "right", ratio: 1 / (tab.panes.length - from), first: { type: "pane", pane_id: tab.panes[from]!.id }, second: row(from + 1) };
+      scene.rest.pane_layouts = [{ workspace_id: workspace.id, tab_id: tab.id!, focused_pane_id: first.id, zoomed: false, root: row(0) }];
+      checkout.active_tab_id = tab.id!;
+    }
     scene.rest.navigator!.focused_workspace_id = workspace.id;
     scene.rest.navigator!.focused_checkout_id = checkout.id;
     scene.rest.ui_state = { ...scene.rest.ui_state!, expanded_paths: Object.keys(listings), selected_path: lane.documents ? tabs[0]!.path : null };

@@ -225,6 +225,66 @@ pub(crate) struct Stored {
         deserialize_with = "views_leniently"
     )]
     pub views: crate::view_layout::Layout,
+    /// The sessions 한눈에 lists at Desk's right: the
+    /// ones Desk started and the ones the operator opened beside Desk, by
+    /// pane, the oldest first, at most [`MAX_GLANCE_SESSIONS`]. Each entry is
+    /// read on its own (`glance_leniently`), and an older Hide reads past the
+    /// key.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "glance_leniently"
+    )]
+    pub glance: Vec<GlanceSession>,
+}
+
+/// The sessions [`Stored::glance`] keeps; past it the oldest goes
+/// (engineering principle 15).
+pub(crate) const MAX_GLANCE_SESSIONS: usize = 32;
+
+/// A session 한눈에 lists: its pane, and when Desk started it or the operator
+/// last opened it beside Desk.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct GlanceSession {
+    pub pane_id: String,
+    pub at_ms: u64,
+}
+
+/// Reads each kept 한눈에 session on its own, as [`named_leniently`] does,
+/// then holds the list to its order, one entry a pane, and its cap.
+fn glance_leniently<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<GlanceSession>, D::Error> {
+    let entries = match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Array(entries) => entries,
+        _ => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "desk", "kind": "desk_store.glance_unreadable",
+            }));
+            return Ok(Vec::new());
+        }
+    };
+    let total = entries.len();
+    let mut glance: Vec<GlanceSession> = entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value::<GlanceSession>(entry).ok())
+        .filter(|entry| !entry.pane_id.is_empty() && entry.pane_id.len() <= 1024)
+        .collect();
+    if glance.len() < total {
+        crate::diagnostic!(serde_json::json!({
+            "component": "desk", "kind": "desk_store.glance_dropped",
+            "dropped": total - glance.len(),
+        }));
+    }
+    let mut settled = Vec::with_capacity(glance.len());
+    glance.sort_by_key(|entry| entry.at_ms);
+    for entry in glance {
+        settled.retain(|kept: &GlanceSession| kept.pane_id != entry.pane_id);
+        settled.push(entry);
+    }
+    let excess = settled.len().saturating_sub(MAX_GLANCE_SESSIONS);
+    settled.drain(..excess);
+    Ok(settled)
 }
 
 fn desk_views_empty(layout: &crate::view_layout::Layout) -> bool {
@@ -380,6 +440,64 @@ impl Stored {
         self.named.drain(..excess);
         changed
     }
+
+    /// Keeps `pane` among 한눈에's sessions as of `at_ms`: one kept already
+    /// moves to a later `at_ms` and stays at an earlier one, the list stays
+    /// oldest first, and past [`MAX_GLANCE_SESSIONS`] the oldest goes, so a
+    /// session older than every one of a full list is not taken and the same
+    /// sessions asked again never churn the store. Whether it changed.
+    pub(crate) fn keep_glance(&mut self, pane: &str, at_ms: u64) -> bool {
+        if let Some(at) = self.glance.iter().position(|kept| kept.pane_id == pane) {
+            if self.glance[at].at_ms >= at_ms {
+                return false;
+            }
+            self.glance.remove(at);
+        } else if self.glance.len() >= MAX_GLANCE_SESSIONS
+            && self
+                .glance
+                .first()
+                .is_some_and(|oldest| oldest.at_ms >= at_ms)
+        {
+            return false;
+        }
+        let index = self.glance.partition_point(|kept| kept.at_ms <= at_ms);
+        self.glance.insert(
+            index,
+            GlanceSession {
+                pane_id: pane.to_owned(),
+                at_ms,
+            },
+        );
+        let excess = self.glance.len().saturating_sub(MAX_GLANCE_SESSIONS);
+        for dropped in self.glance.drain(..excess) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "desk_store",
+                "kind": "desk_store.glance_oldest_dropped",
+                "pane": dropped.pane_id,
+            }));
+        }
+        true
+    }
+
+    /// With 한눈에's list full, the oldest kept session that `ended` says has
+    /// ended goes, so the next one kept never pushes out a session at work
+    /// while an ended one keeps its place (engineering principle 15).
+    /// Whether one went.
+    pub(crate) fn glance_room(&mut self, ended: impl Fn(&str) -> bool) -> bool {
+        if self.glance.len() < MAX_GLANCE_SESSIONS {
+            return false;
+        }
+        let Some(at) = self.glance.iter().position(|kept| ended(&kept.pane_id)) else {
+            return false;
+        };
+        let dropped = self.glance.remove(at);
+        crate::diagnostic!(serde_json::json!({
+            "component": "desk_store",
+            "kind": "desk_store.glance_ended_dropped",
+            "pane": dropped.pane_id,
+        }));
+        true
+    }
 }
 
 /// Spawns the queue holds; one past it is refused `desk_queue_full`.
@@ -481,6 +599,10 @@ pub(crate) struct JobMark {
     pub watched: bool,
     /// The operator saw it since it ended.
     pub read: bool,
+    /// It was put among 한눈에's sessions once, when a refresh first found
+    /// its pane; one pushed out of that list after it is not put back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub glanced: bool,
     pub changed_at_ms: u64,
 }
 
@@ -581,13 +703,50 @@ pub(crate) fn decode_for_test(bytes: &[u8]) -> Result<Stored, String> {
 pub(crate) type CommandLists =
     std::collections::BTreeMap<AdapterId, Vec<hide_desk::commands::Command>>;
 
+/// When Hide last read an agent's list ahead of the operator
+/// (`hide_desk::read_ahead`), and the digest of what that list depended on
+/// then ([`hide_desk::read_ahead::mark`]): a list is read again when the
+/// digest moves or the read is a day old.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ReadMark {
+    pub mark: String,
+    pub at_ms: u64,
+}
+
+impl ReadMark {
+    /// The mark of a read made now of a list that depended on `facts`.
+    pub(crate) fn of(facts: &str, at_ms: u64) -> Self {
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(facts.as_bytes());
+        Self {
+            mark: digest[..16]
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+            at_ms,
+        }
+    }
+}
+
+/// Each agent's last read ahead, by agent.
+pub(crate) type ReadMarks = std::collections::BTreeMap<AdapterId, ReadMark>;
+
+/// What `desk/commands.json` keeps: each agent's last list, and when each
+/// list read ahead was read.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SavedCommands {
+    pub lists: CommandLists,
+    pub read: ReadMarks,
+}
+
 const COMMANDS_SCHEMA_VERSION: u32 = 1;
 /// Every agent at `MAX_COMMANDS` of the longest commands is under 1 MiB;
 /// twice that leaves room for the framing.
 const COMMANDS_READ_CAP: u64 = 2 * 1024 * 1024;
 
-fn encode_commands(lists: &CommandLists) -> Result<Vec<u8>, String> {
-    let agents: serde_json::Map<String, serde_json::Value> = lists
+fn encode_commands(saved: &SavedCommands) -> Result<Vec<u8>, String> {
+    let agents: serde_json::Map<String, serde_json::Value> = saved
+        .lists
         .iter()
         .map(|(adapter, list)| {
             (
@@ -596,16 +755,30 @@ fn encode_commands(lists: &CommandLists) -> Result<Vec<u8>, String> {
             )
         })
         .collect();
-    serde_json::to_vec(
-        &serde_json::json!({"schema_version": COMMANDS_SCHEMA_VERSION, "agents": agents}),
-    )
+    let read: serde_json::Map<String, serde_json::Value> = saved
+        .read
+        .iter()
+        .filter_map(|(adapter, read)| {
+            Some((
+                adapter.as_str().to_owned(),
+                serde_json::to_value(read).ok()?,
+            ))
+        })
+        .collect();
+    // `read` is a key a build before it reads past.
+    serde_json::to_vec(&serde_json::json!({
+        "schema_version": COMMANDS_SCHEMA_VERSION,
+        "agents": agents,
+        "read": read,
+    }))
     .map_err(|error| format!("could not be encoded: {error}"))
 }
 
 /// The lists in `bytes`, read leniently: an agent this build does not know
 /// or a list that is no list is left out with a diagnostic, an entry that is
-/// no command is skipped, and the rest is kept.
-fn decode_commands(bytes: &[u8]) -> Result<CommandLists, String> {
+/// no command is skipped, and the rest is kept; a read mark that cannot be
+/// read is dropped, so that agent is read again.
+fn decode_commands(bytes: &[u8]) -> Result<SavedCommands, String> {
     let file: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|error| format!("could not be decoded: {error}"))?;
     let version = file
@@ -616,7 +789,7 @@ fn decode_commands(bytes: &[u8]) -> Result<CommandLists, String> {
             "has schema version {version:?}, expected {COMMANDS_SCHEMA_VERSION}"
         ));
     }
-    let mut lists = CommandLists::new();
+    let mut saved = SavedCommands::default();
     for (name, entries) in file
         .get("agents")
         .and_then(serde_json::Value::as_object)
@@ -633,17 +806,31 @@ fn decode_commands(bytes: &[u8]) -> Result<CommandLists, String> {
         };
         let read = hide_desk::commands::read_saved(adapter, entries);
         if !read.commands.is_empty() {
-            lists.insert(adapter, read.commands);
+            saved.lists.insert(adapter, read.commands);
         }
     }
-    Ok(lists)
+    for (name, read) in file
+        .get("read")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        if let (Some(adapter), Ok(read)) = (
+            AdapterId::parse(name),
+            serde_json::from_value::<ReadMark>(read.clone()),
+        ) && read.mark.len() <= 64
+        {
+            saved.read.insert(adapter, read);
+        }
+    }
+    Ok(saved)
 }
 
 /// Each agent's last command list (`hide_kit::layout::desk_commands`), so a
 /// restart lists them before a session opens; written off the lock.
 pub(crate) struct DeskCommandsStore {
     path: PathBuf,
-    file: LatestFile<CommandLists>,
+    file: LatestFile<SavedCommands>,
 }
 
 impl DeskCommandsStore {
@@ -663,26 +850,26 @@ impl DeskCommandsStore {
     /// The lists the last run kept, read before the runtime lock is taken.
     /// A missing file is none; a file that cannot be read is none too, and
     /// the log says why.
-    pub(crate) fn restore(&self) -> CommandLists {
+    pub(crate) fn restore(&self) -> SavedCommands {
         match read_capped(&self.path, COMMANDS_READ_CAP)
             .and_then(|bytes| bytes.map(|bytes| decode_commands(&bytes)).transpose())
         {
-            Ok(lists) => lists.unwrap_or_default(),
+            Ok(saved) => saved.unwrap_or_default(),
             Err(message) => {
                 crate::diagnostic!(serde_json::json!({
                     "component": "desk",
                     "kind": "desk_commands.restore_failed",
                     "message": message,
                 }));
-                CommandLists::new()
+                SavedCommands::default()
             }
         }
     }
 
-    /// Queues `lists` to replace the file; only the newest of a burst is
+    /// Queues `saved` to replace the file; only the newest of a burst is
     /// written.
-    pub(crate) fn save(&self, lists: CommandLists) {
-        self.file.save(lists);
+    pub(crate) fn save(&self, saved: SavedCommands) {
+        self.file.save(saved);
     }
 }
 
@@ -851,12 +1038,17 @@ mod tests {
 
     /// The fields of Desk's store that name a machine, which the node-id
     /// migration does not map yet (with-hide/hide issue 3044): a View's
-    /// checkout's machine, a named session's machine and a queued spawn's
-    /// machine. A new field that names a machine fails here, so it reaches
-    /// that issue's list instead of a renamed device unnoticed.
+    /// checkout's machine and the machine of the agent that opened it (Desk's
+    /// own agent's is the core's node), a 한눈에 session on a connected device
+    /// (its pane id spells the device), a named session's machine and a
+    /// queued spawn's machine. A new field that names a machine fails here,
+    /// so it reaches that issue's list instead of a renamed device unnoticed.
     const DESK_MACHINE_FIELDS: &[&str] = &[
+        "/glance/*/pane_id",
         "/named/*/session/device_id",
         "/queue/*/command/machine",
+        "/views/root/area/displays/*/opener/device_id",
+        "/views/root/area/displays/*/openers/*/device_id",
         "/views/root/area/displays/*/origin/device_id",
     ];
 
@@ -873,7 +1065,21 @@ mod tests {
             .views
             .new_display("/p/a.md", DisplayKind::File, None, false);
         file.origin = Some(origin.clone());
+        file.opened_by(
+            crate::view_feedback::Opener {
+                device_id: "d".into(),
+                terminal_id: crate::workspace_control::DESK_CALLER.into(),
+                session: None,
+                resume: None,
+                resume_path: None,
+                provider: "codex".into(),
+                name: "Desk".into(),
+                profile: None,
+            },
+            1,
+        );
         stored.views.append(&area, file).unwrap();
+        stored.keep_glance("remote:d:pane:p2", 1);
         let mut page = stored
             .views
             .new_browser_display("http://localhost:5173/", 1);
@@ -937,6 +1143,10 @@ mod tests {
                         walk(item, format!("{at}/*"), found);
                     }
                 }
+                // A connected device's pane id spells its machine.
+                serde_json::Value::String(text) if text.starts_with("remote:") => {
+                    found.insert(at);
+                }
                 _ => {}
             }
         }
@@ -976,7 +1186,7 @@ mod tests {
                 "pi": "not a list",
             },
         })).unwrap()).unwrap();
-        let lists = store.restore();
+        let lists = store.restore().lists;
         assert_eq!(
             lists.keys().copied().collect::<Vec<_>>(),
             [AdapterId::CLAUDE]
@@ -990,9 +1200,47 @@ mod tests {
             }]
         );
         std::fs::write(&path, b"{ not json").unwrap();
-        assert!(store.restore().is_empty());
+        assert_eq!(store.restore(), SavedCommands::default());
         std::fs::write(&path, br#"{"schema_version": 9, "agents": {}}"#).unwrap();
-        assert!(store.restore().is_empty());
+        assert_eq!(store.restore(), SavedCommands::default());
+    }
+
+    /// A list read ahead keeps when it was read and what it depended on, so a
+    /// restart reads it again only when that moved; a file from before the
+    /// mark, or a mark this build cannot read, reads the list again.
+    #[test]
+    fn a_read_mark_is_kept_beside_its_list_and_a_file_without_one_still_reads() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("commands.json");
+        let saved = SavedCommands {
+            lists: [(
+                AdapterId::GROK,
+                vec![hide_desk::commands::Command {
+                    name: "/compact".into(),
+                    description: "c".into(),
+                    hint: None,
+                }],
+            )]
+            .into(),
+            read: [(AdapterId::GROK, ReadMark::of("cli /opt/grok 1 2\n", 7))].into(),
+        };
+        std::fs::write(&path, encode_commands(&saved).unwrap()).unwrap();
+        assert_eq!(DeskCommandsStore::new(path.clone()).restore(), saved);
+        assert_eq!(saved.read[&AdapterId::GROK].mark.len(), 32);
+        assert_ne!(
+            ReadMark::of("cli /opt/grok 1 3\n", 7).mark,
+            saved.read[&AdapterId::GROK].mark
+        );
+
+        std::fs::write(
+            &path,
+            br#"{"schema_version": 1, "agents": {"grok": [{"name": "/x", "description": "x"}]},
+            "read": {"grok": {"mark": 5}}}"#,
+        )
+        .unwrap();
+        let read = DeskCommandsStore::new(path).restore();
+        assert_eq!(read.lists.len(), 1);
+        assert!(read.read.is_empty());
     }
 
     #[test]
@@ -1263,6 +1511,7 @@ mod tests {
             lane: crate::model::DeskLane {
                 view_width: Some(720),
                 session_width: Some(480),
+                ..Default::default()
             },
             ..Stored::default()
         };
@@ -1500,9 +1749,120 @@ mod restart_tests {
         );
     }
 
+    /// A full list makes room by its oldest ended session, not by its
+    /// oldest one; with room left, or none ended, nothing goes.
+    #[test]
+    fn a_full_glance_lets_its_oldest_ended_session_go_first() {
+        let mut stored = Stored::default();
+        for at in 1..MAX_GLANCE_SESSIONS as u64 {
+            stored.keep_glance(&format!("p{at}"), at);
+        }
+        assert!(!stored.glance_room(|_| true), "room is left");
+        stored.keep_glance("p32", 32);
+        assert!(!stored.glance_room(|_| false), "none ended");
+        assert!(stored.glance_room(|pane| pane == "p7" || pane == "p20"));
+        assert_eq!(stored.glance.len(), MAX_GLANCE_SESSIONS - 1);
+        assert!(!stored.glance.iter().any(|kept| kept.pane_id == "p7"));
+        assert!(stored.glance.iter().any(|kept| kept.pane_id == "p20"));
+        assert_eq!(stored.glance[0].pane_id, "p1", "the oldest shown stays");
+    }
+
     /// A later Hide may keep a session with an agent or a field this build
     /// does not know: that entry goes alone, and the conversation, the
     /// queue and the settings a downgrade keeps are read (B29).
+    /// 한눈에's sessions: a session asked again moves to its newest time, the
+    /// list keeps the newest 32 in order, one older than a full list is not
+    /// taken, and the same sessions asked again change nothing to save.
+    #[test]
+    fn glance_keeps_the_newest_thirty_two_sessions_in_order_without_churn() {
+        let mut stored = Stored::default();
+        let panes = |stored: &Stored| -> Vec<String> {
+            stored
+                .glance
+                .iter()
+                .map(|kept| kept.pane_id.clone())
+                .collect()
+        };
+        for at in 1..=40u64 {
+            assert!(stored.keep_glance(&format!("p{at}"), at * 10));
+        }
+        assert_eq!(stored.glance.len(), MAX_GLANCE_SESSIONS);
+        assert_eq!(stored.glance[0].pane_id, "p9", "the oldest eight went");
+        assert_eq!(stored.glance.last().unwrap().pane_id, "p40");
+        let before = panes(&stored);
+        // A session older than every kept one, as Desk's oldest jobs are on
+        // each refresh, is not taken and drops nothing.
+        assert!(!stored.keep_glance("p1", 10));
+        assert_eq!(panes(&stored), before);
+        // Asked again at the same or an earlier time, nothing moves.
+        assert!(!stored.keep_glance("p20", 200));
+        assert!(!stored.keep_glance("p20", 5));
+        // Opened beside Desk again later, it is the newest.
+        assert!(stored.keep_glance("p20", 1_000));
+        assert_eq!(stored.glance.last().unwrap().pane_id, "p20");
+        assert_eq!(stored.glance.len(), MAX_GLANCE_SESSIONS);
+        // A session started between two kept ones stands between them.
+        assert!(stored.keep_glance("between", 155));
+        let at = panes(&stored);
+        let between = at.iter().position(|pane| pane == "between").unwrap();
+        assert_eq!(
+            (at[between - 1].as_str(), at[between + 1].as_str()),
+            ("p15", "p16")
+        );
+        assert_eq!(
+            decode(&encode(&stored).unwrap()).unwrap().glance,
+            stored.glance
+        );
+    }
+
+    /// A restart reads each 한눈에 entry on its own: one a later build wrote
+    /// in a shape this one cannot read goes alone, a pane twice is kept once
+    /// at its newest, and past the cap the oldest go; a list that does not
+    /// read at all leaves the rest of Desk's store as it was.
+    #[test]
+    fn glance_is_read_back_entry_by_entry_in_order_and_within_its_cap() {
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&encode(&Stored::default()).unwrap()).unwrap();
+        let mut entries: Vec<serde_json::Value> = (0..40u64)
+            .map(|at| serde_json::json!({"pane_id": format!("p{at}"), "at_ms": at}))
+            .collect();
+        entries.push(serde_json::json!({"pane_id": "p5", "at_ms": 100}));
+        entries.push(serde_json::json!({"pane": "later shape"}));
+        entries.push(serde_json::json!({"pane_id": "", "at_ms": 101}));
+        entries.reverse();
+        file["glance"] = serde_json::Value::Array(entries);
+        let read = decode(&serde_json::to_vec(&file).unwrap()).unwrap();
+        assert_eq!(read.glance.len(), MAX_GLANCE_SESSIONS);
+        assert_eq!(read.glance.last().unwrap().pane_id, "p5");
+        assert_eq!(read.glance[0].pane_id, "p9");
+        assert!(
+            read.glance
+                .windows(2)
+                .all(|pair| pair[0].at_ms <= pair[1].at_ms)
+        );
+        assert_eq!(
+            read.glance
+                .iter()
+                .filter(|kept| kept.pane_id == "p5")
+                .count(),
+            1
+        );
+
+        file["glance"] = "a shape a later Hide chose".into();
+        let mut kept = Stored::default();
+        kept.conversation.push(DeskItem::User {
+            id: 1,
+            text: "kept".into(),
+            at_ms: 0,
+            mentions: Vec::new(),
+            attachments: Vec::new(),
+        });
+        file["conversation"] = serde_json::to_value(&kept.conversation).unwrap();
+        let read = decode(&serde_json::to_vec(&file).unwrap()).unwrap();
+        assert!(read.glance.is_empty());
+        assert_eq!(read.conversation.items.len(), 1);
+    }
+
     #[test]
     fn a_named_session_this_build_cannot_read_is_dropped_and_the_rest_of_desk_is_restored() {
         let mut stored = Stored::default();

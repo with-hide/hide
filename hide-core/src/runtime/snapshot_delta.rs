@@ -198,6 +198,9 @@ impl Runtime {
         self.refresh_plans();
         // The 제안 tab follows Hide AI's readiness and GitHub's answer.
         self.refresh_suggestions();
+        // The pane floor's answers follow the layouts, the text scales and
+        // the tabs on screen (`pane_floor`).
+        self.refresh_pane_floor();
         // Every published row names its machine and its own pane id.
         self.stamp_row_addresses();
         self.note_snapshot_sent();

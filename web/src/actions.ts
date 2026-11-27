@@ -1643,11 +1643,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     observeAgents(observing: boolean) {
       dispatch({ schema_version: 2, kind: "ai_settings", payload: { observing } });
     },
-    /** Whether this window holds the keyboard on the Workspace screen, so the View in front of it is seen (PRD unseen-agent-views D-07). */
-    noteWindowFocus(focused: boolean) {
+    /** Whether this window holds the keyboard, on the Workspace screen or with Desk's desk drawn, so the View in front of it is seen (PRD unseen-agent-views D-07; 한눈에). */
+    noteWindowFocus(screen: "workspace" | "desk" | null) {
       // Another machine's view is no one in front of this machine (D-60, D-67).
       if (remote) return;
-      dispatch({ schema_version: 2, kind: "window_focus", payload: { focused } });
+      dispatch({ schema_version: 2, kind: "window_focus", payload: screen ? { focused: true, screen } : { focused: false } });
     },
     /** Whether this page shows the request view; while one does, the core re-reads running checks (PRD overview-request-view D-32). */
     observeRequestView(observing: boolean) {
@@ -2823,7 +2823,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     deskOpen(open: DeskOpen, options: { preview?: boolean; beside?: boolean } = {}) {
       if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
-      const listed = (output: import("./snapshot").DeskOutput) => laneCards(useShellStore.getState().deskJobs).some((job) => job.outputs.some((one) => one.id === output.id && one.device_id === output.device_id && one.checkout === output.checkout));
+      const jobs = useShellStore.getState().deskJobs;
+      const same = (output: import("./snapshot").DeskOutput) => (one: import("./snapshot").DeskOutput) => one.id === output.id && one.device_id === output.device_id && one.checkout === output.checkout;
+      // A View a session's card lists, or one 한눈에 lists (a file Desk's own agent opened is on Desk's desk already).
+      const listed = (output: import("./snapshot").DeskOutput) => laneCards(jobs).some((job) => job.outputs.some(same(output))) || (jobs?.glance.files.some(same(output)) ?? false);
       const sent = deskOpenSend(rest(), open, listed, options);
       if ("refused" in sent) return diagnostic(sent.refused);
       if ("link" in sent) return this.openLink(sent.link, true);
@@ -2864,9 +2867,20 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().setDeskRoom((now) => toggleDeskExplorer(now, tabs));
     },
 
-    /** The session beside Desk's `✕`, or Escape with no layer open; Desk's desk stays (B13). */
+    /** `‹ 한눈에` above the session beside Desk, or Escape with no layer open: 한눈에 stands there again; Desk's desk stays (B13). */
     deskCloseSession() {
       ui().setDeskRoom(closeDeskSession);
+    },
+
+    /** `⟩` on 한눈에, or its button in Desk's head: 한눈에 folds or unfolds, which the core keeps with the panels' widths. */
+    deskGlanceFold(folded: boolean) {
+      dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_folded: folded } });
+    },
+
+    /** `‹ 한눈에` above the session beside Desk: the session closes, kept for ⌘E, and 한눈에 stands there again, unfolded. */
+    deskGlanceBack() {
+      ui().setDeskRoom(closeDeskSession);
+      if (useShellStore.getState().desk?.lane.glance_folded) dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_folded: false } });
     },
 
     /** The desk's `✕`, Escape or a press on the dimmed outside (B18): the desk hides and its tabs stay. */
@@ -2929,6 +2943,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** `다시 시작` after Desk's agent stopped (B13). */
     deskRestart() {
       dispatch({ schema_version: 2, kind: "desk_restart", payload: {} });
+    },
+
+    /** The `/` menu opened on `agent`, in Desk's box or a session's: Hide reads its list again in the background only when its program, skills or sign-in moved (`desk_commands_check`). */
+    deskCommandsCheck(agent: DeskAgentId) {
+      dispatch({ schema_version: 2, kind: "desk_commands_check", payload: { agent } });
     },
 
     /** The agent, model or effort under the composer (B4, B8, B9); a model or effort left null keeps the current one. */
@@ -4070,7 +4089,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * ⌘E in Desk's room (B6; operator decision 2026-11-25, replacing PRD desk-2-ui D-13's nothing): the session
-     * panel closes as its `✕` does, and pressed again opens the session just closed, as a
+     * panel closes as `‹ 한눈에` does, and pressed again opens the session just closed, as a
      * sidebar row's press does, with the keyboard in its input box as a work tab's ⌘E gives it back to the pane. A
      * session whose pane is gone since (closed, archived, woken in another pane) is not reopened as an empty
      * panel: the memory is cleared and only the log says so.

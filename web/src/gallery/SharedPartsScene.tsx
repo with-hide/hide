@@ -136,6 +136,7 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
           <State name="To a mention"><span className="flex min-w-0 items-baseline gap-xs text-muted-foreground"><LetterTag who={<MentionChip kind="session" name="1a-desk-room" />} label="Letter to 1a-desk-room" /><span className="truncate">리뷰 지적 2개 반영해서 다시 올려줘</span></span></State>
           <State name="Sidebar row"><span className="flex items-center gap-xs text-caption text-muted-foreground"><RowLetterMark />{time("4m")}</span></State>
           <State name="Pane header"><span className="flex items-center gap-xs"><PaneLetterButton paneId="w1:p1" letters={1} onDeliver={open} /><PaneLetterButton paneId="w1:p2" letters={3} onDeliver={open} /></span></State>
+          <State name="Pane header, input unreadable"><span className="flex items-center gap-xs"><PaneLetterButton paneId="w1:p3" letters={2} unreadable onDeliver={open} /></span></State>
         </Part>
         <Part name="PR mark · PrMark">
           <State name="States"><span className="flex flex-wrap items-center gap-sm">{PR_STATES.map((state, index) => <PrMark key={state} state={state} label={`#${1900 + index}`} />)}</span></State>

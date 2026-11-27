@@ -315,6 +315,397 @@ fn a_view_reporting_the_size_its_pane_runs_at_sends_no_resize() {
     assert_eq!(resizes(&terminals, LEFT), [(30, 40)]);
 }
 
+/// The window drew `pane` with cells of 8 px, 8 px in from either side of
+/// its pane, in a canvas `canvas` px wide: what the pane floor judges the tab
+/// by (`runtime::pane_floor`). A pane needs 18 * 8 + 2 * 8 = 160 px.
+fn measured(runtime: &mut Runtime, pane: &str, canvas: f64) {
+    measured_at(runtime, pane, canvas, 8.0);
+}
+
+/// The same, the pane's own cell `cell` px wide, measured at the pane's
+/// text scale and the terminal font the core has now.
+fn measured_at(runtime: &mut Runtime, pane: &str, canvas: f64, cell: f64) {
+    let scale = runtime
+        .snapshot
+        .ui_state
+        .pane_text_scales
+        .get(pane)
+        .copied()
+        .unwrap_or(crate::model::DEFAULT_PANE_TEXT_SCALE);
+    measured_at_scale(runtime, pane, canvas, cell, f64::from(scale));
+}
+
+/// The same, measured at the text scale `scale`.
+fn measured_at_scale(runtime: &mut Runtime, pane: &str, canvas: f64, cell: f64, scale: f64) {
+    runtime.ui_attached = true;
+    let font_size = runtime.snapshot.ui_state.terminal_font_size;
+    let font_family = runtime.snapshot.ui_state.terminal_font_family.clone();
+    assert!(
+        runtime.shown_agent_tabs().contains(&TAB.to_owned()),
+        "the fixture's tab is on screen"
+    );
+    dispatch(
+        runtime,
+        "terminal_resize",
+        serde_json::json!({"pane_id": pane, "rows": 24, "cols": 40, "floor": {
+            "cell_px": cell, "canvas_px": canvas, "inset_px": 8.0, "base_cell_px": 8.0,
+            "scale": scale, "font_size": font_size, "font_family": font_family,
+        }}),
+    );
+}
+
+/// Splits `LEFT`, the tab's focused pane, toward `direction`: the error the
+/// request ended with, if any.
+fn split_of(runtime: &mut Runtime, direction: &str) -> Option<String> {
+    runtime.snapshot.status.last_error = None;
+    dispatch(
+        runtime,
+        "create_pane",
+        serde_json::json!({"tab_id": TAB, "cwd": CHECKOUT, "command": null, "direction": direction}),
+    );
+    runtime
+        .snapshot()
+        .status
+        .last_error
+        .as_ref()
+        .map(|error| error.kind.clone())
+}
+
+/// A split right that would leave a half under the pane floor, inset and
+/// whole cells counted, is refused with its reason before the engine is
+/// asked; a split down of the same pane goes on (`docs/UI_BEHAVIOR.md`, The
+/// pane floor). The terminal menu reads the same answer from the snapshot.
+#[test]
+fn a_split_right_under_the_pane_floor_is_refused_and_a_split_down_is_not() {
+    let fake = fake_engine();
+    let (mut runtime, _terminals) = runtime_on(&fake, session(None, false));
+    // Two halves of 159.5 px hold 17 columns each.
+    measured(&mut runtime, LEFT, 319.0);
+    runtime.snapshot_delta_payload(0);
+    assert_eq!(
+        runtime.snapshot.pane_floor.split_right.get(LEFT),
+        Some(&crate::model::PaneFloorRefusal::TooNarrow)
+    );
+    assert_eq!(
+        split_of(&mut runtime, "right").as_deref(),
+        Some("pane.too_narrow")
+    );
+    assert!(runtime.pane_operations.is_empty(), "nothing was queued");
+    assert_ne!(
+        split_of(&mut runtime, "down").as_deref(),
+        Some("pane.too_narrow")
+    );
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    assert_eq!(sent(&fake, "split_pane"), 1, "the split down went");
+}
+
+/// The least pane that splits right holds two floors and two insets.
+#[test]
+fn a_pane_wide_enough_for_two_floors_splits_right() {
+    let fake = fake_engine();
+    let (mut runtime, _terminals) = runtime_on(&fake, session(None, false));
+    measured(&mut runtime, LEFT, 320.0);
+    runtime.snapshot_delta_payload(0);
+    assert!(runtime.snapshot.pane_floor.split_right.is_empty());
+    assert_eq!(
+        runtime.snapshot.pane_floor.min_width_px.get(TAB),
+        Some(&160.0),
+        "one pane needs one floor beside the desk"
+    );
+    assert_eq!(split_of(&mut runtime, "right"), None);
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    assert_eq!(sent(&fake, "split_pane"), 1);
+}
+
+/// R8: a cell measured at another text scale or terminal font than the
+/// core's now is stale: a split right waits for the window to measure again,
+/// a measure of the old scale arriving after the change (a fit before the
+/// page took the new scale, or hided handing a pane to another screen) is not
+/// taken, and the measure at the new scale is judged at its own cell.
+#[test]
+fn a_split_after_a_text_scale_change_waits_for_a_measure_at_the_new_scale() {
+    let fake = fake_engine();
+    let (mut runtime, _terminals) = runtime_on(&fake, session(None, false));
+    measured(&mut runtime, LEFT, 320.0);
+    assert_eq!(runtime.split_right_floor(LEFT), Ok(()));
+    dispatch(
+        &mut runtime,
+        "pane_text_scale",
+        serde_json::json!({"pane_id": LEFT, "direction": "in"}),
+    );
+    let stale = Err(crate::model::PaneFloorRefusal::Unmeasured);
+    assert_eq!(runtime.split_right_floor(LEFT), stale, "measured at 1.0");
+    measured_at_scale(&mut runtime, LEFT, 320.0, 8.0, 1.0);
+    assert_eq!(
+        runtime.split_right_floor(LEFT),
+        stale,
+        "an old scale's measure arriving late is not taken"
+    );
+    // The window fits the larger text and reports its cell at the new scale.
+    measured_at(&mut runtime, LEFT, 320.0, 9.0);
+    assert_eq!(
+        runtime.split_right_floor(LEFT),
+        Err(crate::model::PaneFloorRefusal::TooNarrow),
+        "a half of 160 px holds 16 cells of 9 px"
+    );
+    // Back at the default scale, the 1.0 measure is current again, as is the
+    // tab's cell for a pane with no measure of its own.
+    dispatch(
+        &mut runtime,
+        "pane_text_scale",
+        serde_json::json!({"pane_id": LEFT, "direction": "reset"}),
+    );
+    measured_at_scale(&mut runtime, LEFT, 320.0, 8.0, 1.0);
+    assert_eq!(runtime.split_right_floor(LEFT), Ok(()));
+    // A new terminal font makes every measure stale.
+    let larger = super::appearance::ui_state_update(
+        &runtime,
+        serde_json::json!({"terminal_font_size": 15.0}),
+    );
+    assert!(runtime.dispatch_json(&larger));
+    assert_eq!(runtime.split_right_floor(LEFT), stale);
+    // R9: the window's measure at the new size, sent though the pane's own
+    // size rounds the same (`applyTerminalFontSize`), judges the split again.
+    measured(&mut runtime, LEFT, 320.0);
+    assert_eq!(runtime.split_right_floor(LEFT), Ok(()));
+}
+
+/// A tab a window draws but has not measured is not judged as wide: its
+/// split right waits for the window's report, refused as `unmeasured`, as
+/// is one whose pane has a text scale of its own and no cell reported. A
+/// core no window draws judges nothing, since nothing is drawn under the
+/// floor there (`docs/INSTALL.md`, What each system supports).
+#[test]
+fn a_drawn_tab_not_measured_yet_refuses_a_split_right_and_a_windowless_core_splits() {
+    let fake = fake_engine();
+    let (mut runtime, _terminals) = runtime_on(&fake, session(Some(0.5), false));
+    runtime.ui_attached = true;
+    assert_eq!(
+        split_of(&mut runtime, "right").as_deref(),
+        Some("pane.unmeasured")
+    );
+    // The window measured LEFT only; RIGHT draws at a scale of its own.
+    measured(&mut runtime, LEFT, 1000.0);
+    runtime
+        .snapshot
+        .ui_state
+        .pane_text_scales
+        .insert(RIGHT.to_owned(), 1.5);
+    assert_eq!(
+        split_of(&mut runtime, "right").as_deref(),
+        Some("pane.unmeasured"),
+        "a scaled pane's cell is not the tab's"
+    );
+    // At no scale of its own RIGHT draws at the tab's cell, and LEFT splits.
+    runtime.snapshot.ui_state.pane_text_scales.clear();
+    assert_eq!(runtime.split_right_floor(LEFT), Ok(()));
+    // A core no window draws splits as it always did.
+    runtime.ui_attached = false;
+    assert_eq!(split_of(&mut runtime, "right"), None);
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    assert_eq!(sent(&fake, "split_pane"), 1);
+}
+
+/// R4: a second split right asked while the first is in flight is judged
+/// again when its turn comes, on the tab the first left: at the request the
+/// pane splits, after the first it would be a quarter of the tab.
+#[test]
+fn a_split_right_queued_behind_another_is_judged_on_the_tab_the_first_left() {
+    let fake = fake_engine();
+    let (mut runtime, _terminals) = runtime_on(&fake, session(None, false));
+    measured(&mut runtime, LEFT, 600.0);
+    assert_eq!(split_of(&mut runtime, "right"), None);
+    assert_eq!(split_of(&mut runtime, "right"), None, "queued");
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    assert_eq!(runtime.pane_operations.len(), 2);
+    let split = PaneControlAction::Split {
+        pane_id: LEFT.to_owned(),
+        direction: PaneSplitDirection::Right,
+        cwd: Some(CHECKOUT.to_owned()),
+    };
+    answer(
+        &mut runtime,
+        split,
+        Ok(PaneControlOutcome::Acknowledged {
+            created_pane_id: Some(CREATED.to_owned()),
+        }),
+    );
+    runtime.snapshot.status.last_error = None;
+    runtime.ingest_session(Ok(split_by_engine(0.5)));
+    assert_eq!(
+        runtime
+            .snapshot
+            .status
+            .last_error
+            .as_ref()
+            .map(|error| error.kind.as_str()),
+        Some("pane.too_narrow"),
+        "a quarter of 600 px holds 16 columns"
+    );
+    assert!(runtime.pane_operations.is_empty());
+    assert_eq!(sent(&fake, "split_pane"), 1, "the second was never sent");
+}
+
+/// R4 for a split made outside the line: a turn whose split the engine has
+/// answered but whose layout has not arrived still holds the line, so the
+/// split behind it is judged on the tab with the new pane.
+#[test]
+fn a_split_beside_holds_the_line_until_its_layout_arrives() {
+    let fake = fake_engine();
+    let (mut runtime, _terminals) = runtime_on(&fake, session(None, false));
+    measured(&mut runtime, LEFT, 600.0);
+    let (turn, ready) = runtime
+        .queue_beside_turn(LEFT)
+        .expect("the pane splits")
+        .expect("a pane of a local tab waits in its line");
+    assert_eq!(ready.try_recv(), Ok(Ok(turn.clone())), "the line was free");
+    assert_eq!(
+        split_of(&mut runtime, "right"),
+        None,
+        "queued behind the turn"
+    );
+    runtime.end_beside_turn(&turn, Some((LEFT, CREATED)));
+    let phases = |runtime: &Runtime| {
+        let mut phases = runtime
+            .pane_operations
+            .values()
+            .map(|operation| operation.phase.clone())
+            .collect::<Vec<_>>();
+        phases.sort();
+        phases
+    };
+    assert_eq!(
+        phases(&runtime),
+        ["awaiting_topology", "queued"],
+        "the answered split holds the line until the engine lays it out"
+    );
+    runtime.snapshot.status.last_error = None;
+    runtime.ingest_session(Ok(split_by_engine(0.5)));
+    assert_eq!(
+        runtime
+            .snapshot
+            .status
+            .last_error
+            .as_ref()
+            .map(|error| error.kind.as_str()),
+        Some("pane.too_narrow")
+    );
+    assert!(runtime.pane_operations.is_empty());
+    assert_eq!(sent(&fake, "split_pane"), 0);
+}
+
+/// Every way out of a worker lets its turn go: a turn dropped without a
+/// split, as a failed split drops it, sends the zoom waiting behind it.
+#[test]
+fn a_split_beside_that_fails_lets_the_line_go() {
+    let fake = fake_engine();
+    let (mut runtime, _terminals) = runtime_on(&fake, session(Some(0.5), false));
+    runtime.ui_attached = false;
+    let shared = Arc::new(Mutex::new(runtime));
+    let turn = crate::runtime::BesideTurn::take(&Arc::downgrade(&shared), LEFT)
+        .expect("the line is free and no window draws the tab");
+    zoom(&mut shared.lock().unwrap(), LEFT);
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .pane_operations
+            .values()
+            .filter(|operation| operation.phase == "queued")
+            .count(),
+        1,
+        "the zoom waits behind the turn"
+    );
+    drop(turn);
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    assert_eq!(sent(&fake, "toggle_zoom"), 1);
+}
+
+/// R4: a turn its worker holds past the deadline is not taken as ended. It
+/// becomes unknown and still holds the line, what waited behind it is
+/// dropped, a split asked after it waits too, a worker that has not split
+/// yet finds its turn gone, and only the worker letting it go frees the tab.
+#[test]
+fn a_split_beside_past_its_deadline_holds_the_line_until_its_worker_ends() {
+    let fake = fake_engine();
+    let (mut runtime, _terminals) = runtime_on(&fake, session(None, false));
+    runtime.ui_attached = false;
+    let shared = Arc::new(Mutex::new(runtime));
+    let turn = crate::runtime::BesideTurn::take(&Arc::downgrade(&shared), LEFT)
+        .expect("the line is free and no window draws the tab");
+    let queued = |runtime: &Runtime| {
+        runtime
+            .pane_operations
+            .values()
+            .filter(|operation| operation.phase == "queued")
+            .count()
+    };
+    {
+        let mut runtime = shared.lock().unwrap();
+        assert_eq!(split_of(&mut runtime, "right"), None);
+        assert_eq!(queued(&runtime), 1, "the split waits behind the turn");
+        runtime.expire_pane_operations(crate::runtime::unix_milliseconds() + 31_000);
+        assert_eq!(queued(&runtime), 0, "what waited behind it was dropped");
+        assert_eq!(runtime.pane_operations.len(), 1, "the turn is kept");
+        assert_eq!(split_of(&mut runtime, "right"), None);
+        assert_eq!(queued(&runtime), 1, "a split asked after it waits too");
+    }
+    assert_eq!(
+        turn.confirm(),
+        Err(crate::runtime::BesideRefusal::Busy),
+        "a worker that has not split yet does not split"
+    );
+    assert_eq!(sent(&fake, "split_pane"), 0);
+    drop(turn);
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    assert_eq!(sent(&fake, "split_pane"), 1, "the worker let it go");
+}
+
+/// A split beside a pane whose tab already has eight operations waiting is
+/// refused as busy, the way every operation past the line's limit is.
+#[test]
+fn a_split_beside_a_full_line_is_refused_as_busy() {
+    let fake = fake_engine();
+    let (mut runtime, _terminals) = runtime_on(&fake, session(Some(0.5), false));
+    runtime.ui_attached = false;
+    for _ in 0..9 {
+        zoom(&mut runtime, LEFT);
+    }
+    assert!(matches!(
+        runtime.queue_beside_turn(LEFT),
+        Err(crate::runtime::BesideRefusal::Busy)
+    ));
+}
+
+/// R5: a sideways resize moves the divider only as far as every pane keeps
+/// the floor, at the request and again at its turn, and a resize with nothing
+/// left goes nowhere; a resize up or down is never judged.
+#[test]
+fn a_sideways_resize_stops_at_the_pane_floor() {
+    let fake = fake_engine();
+    let (mut runtime, _terminals) = runtime_on(&fake, session(Some(0.5), false));
+    measured(&mut runtime, LEFT, 1000.0);
+    let resize = |runtime: &mut Runtime, direction: &str, amount: f32| {
+        dispatch(
+            runtime,
+            "resize_pane",
+            serde_json::json!({"pane_id": LEFT, "direction": direction, "amount": amount}),
+        );
+    };
+    resize(&mut runtime, "left", 0.4);
+    runtime.ingest_session(Ok(session(Some(0.5), false)));
+    let PaneLayoutNodeSnapshot::Split { ratio, .. } = drawn(&runtime).root else {
+        panic!("the tab is split");
+    };
+    // LEFT keeps 160 px of 1000: the drawn ratio stops at 0.16.
+    let columns = ((f64::from(ratio) * 1000.0 - 16.0) / 8.0).floor();
+    assert!(columns >= 18.0 && ratio < 0.17, "{ratio}");
+    // A drag further left while the first is in flight has nothing left.
+    resize(&mut runtime, "left", 0.2);
+    assert_eq!(runtime.pane_operations.len(), 1, "nothing more was queued");
+    assert!(diagnostic_messages(&runtime, "pane.operation.queue_full").is_empty());
+}
+
 /// B11, grid-ahead-of-herdr B3: a split is drawn when the engine names the new
 /// pane: the pane split in half with the new one second, a row the canvas
 /// can draw it from, a terminal entry that attaches at its own view's size,
@@ -323,6 +714,7 @@ fn a_view_reporting_the_size_its_pane_runs_at_sends_no_resize() {
 fn a_split_is_drawn_with_the_pane_the_engine_named_before_its_layout_arrives() {
     let fake = fake_engine();
     let (mut runtime, terminals) = runtime_on(&fake, session(None, false));
+    measured(&mut runtime, LEFT, 1280.0);
     let split = PaneControlAction::Split {
         pane_id: LEFT.to_owned(),
         direction: PaneSplitDirection::Right,
@@ -419,6 +811,7 @@ fn split_by_engine(ratio: f32) -> SessionSnapshotPayload {
 fn split_confirmed_by_the_first_publish(ratio: f32) -> Vec<serde_json::Value> {
     let fake = fake_engine();
     let (mut runtime, _) = runtime_on(&fake, session(None, false));
+    measured(&mut runtime, LEFT, 1280.0);
     dispatch(
         &mut runtime,
         "create_pane",
@@ -670,6 +1063,7 @@ fn an_operation_past_its_deadline_draws_what_the_engine_confirmed_and_frees_the_
 fn a_pane_close_waits_behind_a_resize_and_is_drawn_gone_at_once() {
     let fake = fake_engine();
     let (mut runtime, _) = runtime_on(&fake, session(Some(0.5), false));
+    measured(&mut runtime, LEFT, 1280.0);
     dispatch(
         &mut runtime,
         "resize_pane",
@@ -735,6 +1129,7 @@ fn a_pane_close_waits_behind_a_resize_and_is_drawn_gone_at_once() {
 fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
     let fake = fake_engine();
     let (mut runtime, _) = runtime_on(&fake, session(Some(0.5), false));
+    measured(&mut runtime, LEFT, 1280.0);
     dispatch(
         &mut runtime,
         "resize_pane",

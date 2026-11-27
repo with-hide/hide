@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use hide_agent_adapter::composer::{Miss, Verdict};
+use hide_agent_adapter::composer::{Miss, PANE_FLOOR_COLUMNS, Verdict};
 use hide_agent_adapter::{ADAPTERS, AgentId};
 
 fn screen(name: &str) -> String {
@@ -83,6 +83,71 @@ fn every_supported_agent_reads_typed_pasted_and_erased_composers() {
             );
         }
     }
+}
+
+/// Every declared composer at the pane floor's width, captured on 2026-11-27
+/// from the installed agents (Claude Code 2.1.332, Codex 0.172.0, Grok
+/// 1.0.92, OpenCode 2.0.29, Pi 1.0.4, omp 18.7.0 and Antigravity 1.5.18)
+/// in a private 40-row terminal with a Hide pane's `TERM` and `COLORTERM`:
+/// the composer at rest, then `hello 안녕하세요` typed into it. The account
+/// and folder names are replaced.
+#[test]
+fn every_declared_composer_reads_empty_and_typed_at_the_pane_floor() {
+    let cases = [
+        (AgentId::ClaudeCode, "claude"),
+        (AgentId::Codex, "codex"),
+        (AgentId::Grok, "grok"),
+        (AgentId::OpenCode, "opencode"),
+        (AgentId::Pi, "pi"),
+        (AgentId::Omp, "omp"),
+        (AgentId::Antigravity, "agy"),
+    ];
+    assert_eq!(
+        cases.len(),
+        ADAPTERS.len(),
+        "every supported agent has captures"
+    );
+    for (agent, prefix) in cases {
+        let composer = agent.adapter().composer.supported().unwrap();
+        let name = |step: &str| format!("{prefix}-{PANE_FLOOR_COLUMNS}-columns-{step}");
+        assert_eq!(
+            composer.judge(&screen(&name("0-empty"))),
+            Verdict::Empty,
+            "{}",
+            name("0-empty")
+        );
+        assert_eq!(
+            composer.judge(&screen(&name("1-typed"))),
+            Verdict::Holds,
+            "{}",
+            name("1-typed")
+        );
+    }
+}
+
+/// Under 27 columns Codex 0.172.0 cuts its dim placeholder at the pane's
+/// edge, at a word at 18 columns (`Ask Codex to do`) and inside one at 24
+/// and 26 (`… anyth`, `… anythin`): each reads empty. The same words typed
+/// are drawn in the default pen and hold text, and so does typed text
+/// followed by a dim rest of the placeholder.
+#[test]
+fn codex_reads_its_cut_placeholder_as_empty_and_typed_words_as_text() {
+    let codex = AgentId::Codex.adapter().composer.supported().unwrap();
+    for name in [
+        "codex-18-columns-0-empty",
+        "codex-24-columns-0-empty",
+        "codex-26-columns-0-empty",
+    ] {
+        assert_eq!(codex.explain(&screen(name)), Ok(()), "{name}");
+    }
+    assert_eq!(
+        codex.explain(&screen("codex-18-columns-2-typed-placeholder")),
+        Err(Miss::PlaceholderStyle)
+    );
+    let typed_then_dim = "\x1b[1m›\x1b[0m Ask\x1b[2m Codex to do\x1b[0m\n";
+    assert_eq!(codex.explain(typed_then_dim), Err(Miss::PlaceholderStyle));
+    let other_then_dim = "\x1b[1m›\x1b[0m hello\x1b[2m Ask Codex\x1b[0m\n";
+    assert_eq!(codex.explain(other_then_dim), Err(Miss::NotPlaceholder));
 }
 
 /// Grok 1.0.52 under Herdr 0.9.5 at 119 columns on 2026-10-22, after a turn

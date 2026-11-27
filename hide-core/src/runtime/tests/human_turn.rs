@@ -432,7 +432,11 @@ fn done_sends_one_letter_that_waits_for_no_answer_and_takes_the_turn_down() {
     assert!(letter.sender.operator_owned());
     assert_eq!(letter.kind, "report");
     assert!(!letter.waiting_answer, "the agent owes no answer");
-    assert_eq!(letter.body.lines().next(), Some("운영자가 처리함: 인증"));
+    assert_eq!(
+        letter.body.lines().next(),
+        Some("Done by the operator: Sign-in"),
+        "with no choice and no system language, the operator's language is English"
+    );
     // B4, B18: the letter stays after the turn goes, so it never names the
     // place.
     assert!(!letter.body.contains("WDJB-MJHT"), "{}", letter.body);

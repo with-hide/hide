@@ -318,6 +318,7 @@ impl Runtime {
         self.reconcile_attachment_target();
         self.wheel_before_attach.retain(|pane_id, _| keep(pane_id));
         self.terminal_sizes.retain(|pane_id, _| keep(pane_id));
+        self.floor_reports.retain(&keep);
         let close_held_panes = self
             .close_operations
             .values()

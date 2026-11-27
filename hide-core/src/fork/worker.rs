@@ -30,27 +30,44 @@ pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<()
                     context.engine.as_ref(),
                     context.node.as_ref(),
                     &request,
-                    // The fork holds its profile while it starts
-                    // (`launch::holds`), on this machine.
-                    &|start| {
-                        let runtime = context.runtime.upgrade().ok_or("runtime stopped")?;
-                        let mut runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
-                        let machine = runtime.node().to_string();
-                        runtime
-                            .hold_profile_start(&machine, start)
-                            .map_err(String::from)
+                    ForkGrants {
+                        // The fork holds its profile while it starts
+                        // (`launch::holds`), on this machine.
+                        profile: &|start| {
+                            let runtime = context.runtime.upgrade().ok_or("runtime stopped")?;
+                            let mut runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
+                            let machine = runtime.node().to_string();
+                            runtime
+                                .hold_profile_start(&machine, start)
+                                .map_err(String::from)
+                        },
+                        turn: &|| {
+                            crate::runtime::BesideTurn::take(&context.runtime, &request.parent_pane_id)
+                                .map_err(|refusal| match refusal {
+                                    crate::runtime::BesideRefusal::Floor(refusal) => {
+                                        refusal.message().to_owned()
+                                    }
+                                    crate::runtime::BesideRefusal::Busy => {
+                                        "The tab is still busy with the splits ahead of this fork; fork again in a moment".to_owned()
+                                    }
+                                })
+                        },
                     },
                     &|| fork_execution_current(&context, &request),
-                    |tab_id, pane_id| {
+                    |tab_id, pane_id, turn| {
                         let Some(runtime) = context.runtime.upgrade() else {
                             return;
                         };
-                        let changed = match runtime.lock() {
-                            Ok(mut guard) => {
-                                guard.ingest_fork_pane(&request.parent_pane_id, tab_id, pane_id)
-                            }
-                            Err(_) => return,
-                        };
+                        // The fork's pane is drawn and the tab's turn let go in
+                        // one step, so what waits behind it is judged with it.
+                        let mut guard = runtime.lock().unwrap_or_else(|poison| poison.into_inner());
+                        let mut changed =
+                            guard.ingest_fork_pane(&request.parent_pane_id, tab_id, pane_id);
+                        if let Some(turn) = turn {
+                            turn.end(&mut guard, None);
+                            changed = true;
+                        }
+                        drop(guard);
                         drop(runtime);
                         if changed {
                             context.notifier.notify();
@@ -154,13 +171,21 @@ fn fork_execution_current(context: &LiveContext, request: &ForkRequest) -> Resul
 /// hands it to the core, which moves the keyboard to it and places its tab.
 /// A pane whose agent never started is closed; registration never turns a
 /// working fork into a failure.
+/// What the runtime grants a fork before it starts: the hold on its agent's
+/// profile (`launch::holds`), and, for a fork to the side, the tab's turn for
+/// its split (`BesideTurn`).
+struct ForkGrants<'a> {
+    profile: &'a dyn Fn(crate::launch::Request) -> Result<crate::launch::Request, String>,
+    turn: &'a dyn Fn() -> Result<crate::runtime::BesideTurn, String>,
+}
+
 fn run_agent_fork_with_registration(
     engine: &dyn Engine,
     node: &dyn crate::node_access::NodeLink,
     request: &ForkRequest,
-    hold: &dyn Fn(crate::launch::Request) -> Result<crate::launch::Request, String>,
+    grants: ForkGrants<'_>,
     current: &(dyn Fn() -> Result<(), String> + Sync),
-    created: impl FnOnce(Option<&str>, &str),
+    created: impl FnOnce(Option<&str>, &str, Option<crate::runtime::BesideTurn>),
     register: impl FnOnce(&str, &str) -> Result<(), String>,
 ) -> Result<String, String> {
     let checked = current_session(engine, current);
@@ -196,7 +221,7 @@ fn run_agent_fork_with_registration(
     // D-26, D-27).
     let agent = crate::launch::resolve(
         Some(node),
-        &hold(
+        &(grants.profile)(
             crate::launch::Request::recorded(request.agent.kind(), request.profile.as_ref())
                 .with_choice(&request.launch),
         )?,
@@ -263,11 +288,18 @@ fn run_agent_fork_with_registration(
                 )
                 .map_err(|error| error.message().to_owned())?;
                 made_pane = Some(tab.pane_id.clone());
-                created(Some(&tab.tab_id), &tab.pane_id);
+                created(Some(&tab.tab_id), &tab.pane_id, None);
                 tab.pane_id
             }
-            // `Fork agent to the side`: a split right of the source, in its tab.
+            // `Fork agent to the side`: a split right of the source, in its
+            // tab, made in its turn of the tab's line; `created` lets the
+            // turn go as it draws the split, and a failed split drops it.
             ForkPlacement::Side => {
+                let turn = (grants.turn)()?;
+                turn.confirm().map_err(|_| {
+                    "The tab took too long to give this fork its turn; fork again in a moment"
+                        .to_owned()
+                })?;
                 let pane_id = mutation_engine
                     .split_beside(
                         CONTROL_WAIT,
@@ -277,7 +309,7 @@ fn run_agent_fork_with_registration(
                     )
                     .map_err(failed("pane.split"))?;
                 made_pane = Some(pane_id.clone());
-                created(None, &pane_id);
+                created(None, &pane_id, Some(turn));
                 pane_id
             }
         };
@@ -793,7 +825,10 @@ mod tests {
                 fake.engine().as_ref(),
                 &node,
                 &request,
-                &Ok,
+                ForkGrants {
+                    profile: &Ok,
+                    turn: &|| Ok(crate::runtime::BesideTurn::detached()),
+                },
                 &|| {
                     if changed.load(std::sync::atomic::Ordering::SeqCst) {
                         Err("session_fork_execution_changed".into())
@@ -801,7 +836,7 @@ mod tests {
                         Ok(())
                     }
                 },
-                |tab, pane| {
+                |tab, pane, _| {
                     created
                         .borrow_mut()
                         .push((tab.map(str::to_owned), pane.to_owned()));
@@ -984,7 +1019,10 @@ mod tests {
                 fake.engine().as_ref(),
                 &node,
                 &request,
-                &Ok,
+                ForkGrants {
+                    profile: &Ok,
+                    turn: &|| Ok(crate::runtime::BesideTurn::detached()),
+                },
                 &|| {
                     if changed.load(std::sync::atomic::Ordering::SeqCst) {
                         Err("session_fork_execution_changed".into())
@@ -992,7 +1030,7 @@ mod tests {
                         Ok(())
                     }
                 },
-                |_, _| {},
+                |_, _, _| {},
                 |_, _| Ok(()),
             );
             assert_eq!(result.is_err(), case != "success", "{case}");
@@ -1166,9 +1204,12 @@ mod tests {
                 fake.engine().as_ref(),
                 &node,
                 &request,
-                &Ok,
+                ForkGrants {
+                    profile: &Ok,
+                    turn: &|| Ok(crate::runtime::BesideTurn::detached()),
+                },
                 &|| Ok(()),
-                |_, _| {},
+                |_, _, _| {},
                 |_, _| Ok(()),
             );
             let fork = format!("opencode_fork ses_root {checkout}");
@@ -1292,9 +1333,12 @@ mod tests {
                 fake.engine().as_ref(),
                 &node,
                 &request,
-                &Ok,
+                ForkGrants {
+                    profile: &Ok,
+                    turn: &|| Ok(crate::runtime::BesideTurn::detached()),
+                },
                 &|| Ok(()),
-                |_, _| {},
+                |_, _, _| {},
                 |_, _| Ok(()),
             );
             if gone {
@@ -1405,7 +1449,10 @@ mod tests {
                 fake.engine().as_ref(),
                 &node,
                 &request,
-                &Ok,
+                ForkGrants {
+                    profile: &Ok,
+                    turn: &|| Ok(crate::runtime::BesideTurn::detached()),
+                },
                 &|| {
                     if changed.load(std::sync::atomic::Ordering::SeqCst) {
                         Err("session_fork_execution_changed".into())
@@ -1413,7 +1460,7 @@ mod tests {
                         Ok(())
                     }
                 },
-                |_, _| {},
+                |_, _, _| {},
                 |_, _| Ok(()),
             );
             assert_eq!(result.is_err(), case != "success", "{case}: {result:?}");
@@ -1881,9 +1928,12 @@ mod tests {
             fake.engine().as_ref(),
             &hide_node::Local::new(None),
             &request,
-            &Ok,
+            ForkGrants {
+                profile: &Ok,
+                turn: &|| Ok(crate::runtime::BesideTurn::detached()),
+            },
             &|| Ok(()),
-            |_, _| {},
+            |_, _, _| {},
             |_, _| Err("ledger_unavailable".into()),
         )
         .expect("registration cannot close a started fork");

@@ -412,6 +412,40 @@ html[data-view-drag="row-resize"] * {
 }
 
 /*
+ * The working line's owl (`WorkingOwl`): its eyes look left, then right, and
+ * come back, a step of about a tenth of their width (the mark's 22 units);
+ * reduced motion keeps them looking ahead.
+ */
+.working-owl-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: owl-look calc(var(--motion-owl-look) * 1s) ease-in-out infinite;
+}
+@keyframes owl-look {
+  0%,
+  18% {
+    transform: translateX(0);
+  }
+  30%,
+  48% {
+    transform: translateX(-8.6%);
+  }
+  60%,
+  78% {
+    transform: translateX(8.6%);
+  }
+  90%,
+  100% {
+    transform: translateX(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .working-owl-eyes {
+    animation: none;
+  }
+}
+
+/*
  * The working line's word (`WorkingLine`, feedback 1 c3): a light band
  * crosses it about every 3 s; the time beside it stays still, and reduced
  * motion shows the plain muted word.

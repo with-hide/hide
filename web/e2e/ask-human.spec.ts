@@ -73,7 +73,8 @@ test("a child's person's turn raises its root with the key, and Done sends the c
     await expect(page.locator("[data-human-turn-done]")).toHaveCount(0);
     await expect.poll(async () => {
       const inbox = await asChild(["inbox"]);
-      return (inbox.out.match(/운영자가 처리함: 인증/g) ?? []).length;
+      // The first line follows the core's language, which the machine running the test decides; the instruction under it is English everywhere.
+      return (inbox.out.match(/The operator finished the sign-in you asked for/g) ?? []).length;
     }, { timeout: 20_000 }).toBe(1);
     // The letter stays after the turn, so it never carries the place (B4, B18).
     expect((await asChild(["inbox"])).out).not.toContain("WDJB-MJHT");

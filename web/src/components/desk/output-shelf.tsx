@@ -53,7 +53,7 @@ export function viewWhere(output: DeskOutput): string | null {
 }
 
 /** A row's kind mark (B23): an image's small picture, a page's globe, a document's file type. */
-function ViewMark({ output }: { output: DeskOutput }) {
+export function ViewMark({ output }: { output: DeskOutput }) {
   if (output.kind === "image") {
     return (
       <span className="flex h-(--size-icon) w-(--size-control-sm) shrink-0 items-center justify-center overflow-hidden rounded-xs border border-border bg-muted" aria-hidden="true">

@@ -697,7 +697,13 @@ mod tests {
                 node("fix", NodeKind::Change, &["research"]),
                 node("docs", NodeKind::Change, &["fix"]),
             ];
-            let mut planned = apply_plan(&mission(), &plan(nodes), n).unwrap();
+            let mut planned = apply_plan(
+                &mission(),
+                &plan(nodes),
+                n,
+                crate::model::InterfaceLanguage::Korean,
+            )
+            .unwrap();
             planned.id = format!("mission-{n}");
             planned.title = format!("mission {n}");
             planned.created_at_unix_ms = n * 1_000;

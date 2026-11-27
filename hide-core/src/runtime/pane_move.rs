@@ -114,6 +114,10 @@ pub(super) struct Operation {
     /// When a page last asked about this settled move: it is listed again for
     /// a minute from then, so a page that missed the answer reads it now.
     checked_at: u64,
+    /// The screen the move was pressed on (`LookInputs::pressed_on`): the
+    /// moved pane takes the keyboard there when the move lands, none for a
+    /// move checked again after a restart.
+    screen: Option<super::look::LookScreen>,
 }
 pub(super) struct SaveWaiter {
     key: (String, String),
@@ -619,6 +623,7 @@ impl Runtime {
                 worker,
                 publication_barrier: None,
                 checked_at: 0,
+                screen: self.look.pressed_on(),
             },
         );
         self.sync_async_operations();
@@ -696,6 +701,7 @@ impl Runtime {
                     worker: false,
                     publication_barrier: None,
                     checked_at: 0,
+                    screen: None,
                 })
                 .checked_at = unix_milliseconds();
             self.sync_async_operations();
@@ -740,6 +746,7 @@ impl Runtime {
                 worker: true,
                 publication_barrier: None,
                 checked_at: 0,
+                screen: None,
             },
         );
         if let Err(error) = thread::Builder::new()
@@ -765,6 +772,7 @@ impl Runtime {
             worker: false,
             publication_barrier: None,
             checked_at: 0,
+            screen: None,
         });
         self.finish_unchecked_pane_move(&id);
     }
@@ -872,6 +880,7 @@ impl Runtime {
                 op.intent.result_tab = Some(tab);
             }
             let intent = op.intent.clone();
+            let screen = op.screen.clone();
             if let Some(store) = self.workspace_views.as_mut() {
                 let view = store.views.entry(
                     &intent.request.workspace.device_id,
@@ -880,7 +889,7 @@ impl Runtime {
                 view.pane_moves.insert(id.into(), intent.clone());
             }
             if matches!(phase, "completed" | "unknown") && intent.result_pane.is_some() {
-                self.place_moved_pane(&intent);
+                self.on_screen(screen, |runtime| runtime.place_moved_pane(&intent));
             }
             self.persist_workspace_views();
         }

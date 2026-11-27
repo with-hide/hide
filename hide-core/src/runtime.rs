@@ -68,7 +68,7 @@ mod kit;
 mod kit_store;
 mod ledger_walk;
 pub(crate) mod links;
-mod look;
+pub(crate) mod look;
 mod machine_profiles;
 pub(crate) mod memory;
 pub(crate) mod memory_analysis;
@@ -95,6 +95,7 @@ mod overview_graph;
 mod own_devices;
 mod pair_view;
 mod pane_command;
+mod pane_floor;
 pub(crate) mod pane_move;
 mod pane_move_preview;
 mod pane_prediction;
@@ -171,6 +172,7 @@ use control_lane::ControlLane;
 pub(crate) use control_lane::LaneStart;
 use events::*;
 use operations::*;
+pub(crate) use operations::{BesideRefusal, BesideTurn};
 #[cfg(test)]
 pub(crate) use terminal::NoTerminals;
 use view_areas::{
@@ -1326,8 +1328,9 @@ pub struct Runtime {
     pending_revisit: BTreeMap<String, Option<crate::agent_state::sessions::RevisitMark>>,
     delivery_holds: BTreeMap<String, crate::delivery::doorbell::Hold>,
     /// The panes whose letters the operator is shown waiting on a possible
-    /// draft, with how many (`doorbell::letters_waiting`).
-    letters_waiting: BTreeMap<String, u32>,
+    /// draft or an input no read finds, with how many and why
+    /// (`doorbell::letters_waiting`).
+    letters_waiting: BTreeMap<String, crate::delivery::held::Waiting>,
     /// When the session projection is next due on the clock: the oldest
     /// Resolved row leaves the 24-hour window, or a blocked child's grace ends.
     session_window_deadline_unix_ms: u64,
@@ -1494,6 +1497,9 @@ pub struct Runtime {
     attachment_rejection: Option<crate::model::AsyncOperationSnapshot>,
     attachment_worker: Option<thread::JoinHandle<()>>,
     terminal_sizes: HashMap<String, (u16, u16)>,
+    /// What the window drawing each pane measured with its grid, which the
+    /// pane floor judges by (`pane_floor`).
+    floor_reports: pane_floor::FloorReports,
     /// Wheel lines that arrived before the pane had a session to take them
     /// (no size reported yet, or its attach still starting after a tab
     /// switch), summed per pane and sent at the pane's first frame through
@@ -1864,11 +1870,11 @@ pub struct Runtime {
     /// Whether a window draws the snapshot (`ui_attached`); a core no daemon
     /// told otherwise is drawn.
     ui_attached: bool,
-    /// Whether a window holding the keyboard draws the Workspace screen, as
-    /// the daemon summed every window's report (`window_focus`); no window
-    /// told it, nothing is in front of the operator (PRD unseen-agent-views
-    /// D-07).
-    window_focused: bool,
+    /// The screen the window holding the keyboard draws, the Workspace or
+    /// Desk's desk, as the daemon summed every window's report
+    /// (`window_focus`); with none, nothing is in front of the operator (PRD
+    /// unseen-agent-views D-07).
+    window_focus: Option<unseen_views::FocusScreen>,
     /// The View store's generation the rows' unseen Views were last laid
     /// against (`settle_unseen_views`).
     unseen_laid_generation: u64,
@@ -2602,6 +2608,7 @@ impl Runtime {
             attachment_rejection: None,
             attachment_worker: None,
             terminal_sizes: pane_terminal_sizes.into_iter().collect(),
+            floor_reports: pane_floor::FloorReports::default(),
             wheel_before_attach: HashMap::new(),
             pane_relocations_in_flight: BTreeMap::new(),
             pane_hook_tokens: BTreeMap::new(),
@@ -2747,7 +2754,7 @@ impl Runtime {
             restore_hint_pending: true,
             last_session_spaces: Vec::new(),
             ui_attached: true,
-            window_focused: false,
+            window_focus: None,
             unseen_laid_generation: 0,
             label_overlay: Default::default(),
             hook_facts: Default::default(),

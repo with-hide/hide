@@ -147,8 +147,10 @@ export type AgentRow = {
   /** The operator's ★ or a read, unanswered ask, and since when it waits (PRD revisit-group). */
   revisit?: { starred: boolean; read_ask: boolean; since_unix_ms: number } | null;
   escalation?: { cause: "parent_blocked" | "draft" | "child_blocked" | "observer_unconfirmed" | "input_unconfirmed" | "human_turn"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
-  /** How many letters wait on this pane for a possible draft, once it has rested; absent while none waits (docs/delivery.md). */
+  /** How many letters wait on this pane for a possible draft or a composer no read finds, once it has rested; absent while none waits (docs/delivery.md). */
   letters_waiting?: number;
+  /** Why they wait: `draft`, which Deliver now lets through, or `unreadable`, a pane too narrow or covered for its composer to be read. */
+  letters_reason?: MissionLettersHeldFor;
   /** On a lineage root: every raised descendant, lead first. */
   raised?: RaisedAsk[];
   /** The one mark a folded parent wears for its descendants: raised, else working, else none. */
@@ -1222,6 +1224,15 @@ export type LayoutNode =
   | { type: "pane"; pane_id: string }
   | { type: "split"; direction: "right" | "down"; ratio: number; first: LayoutNode; second: LayoutNode };
 
+/** Why a split right is refused: a pane would be under the floor, or the window has not measured the tab yet. */
+export type PaneFloorRefusal = "too_narrow" | "unmeasured";
+
+/** The pane floor's answers (`hide-core` `PaneFloorSnapshot`): each pane whose split right is refused, and each tab's least width in CSS pixels. */
+export type PaneFloor = {
+  split_right: Record<string, PaneFloorRefusal>;
+  min_width_px: Record<string, number>;
+};
+
 export type PaneLayout = {
   workspace_id: string;
   tab_id: string;
@@ -1838,7 +1849,7 @@ export type MissionNodeWork =
 export type MissionStopCause = { kind: "limit"; line: string } | { kind: "error"; line: string };
 
 /** What the operator does to let a Conductor's held letters through (`delivery::held::HeldFor`, `contracts/snapshot-wire-enums.json`: `mission_letters_held_for`). */
-export type MissionLettersHeldFor = "approval" | "draft";
+export type MissionLettersHeldFor = "approval" | "draft" | "unreadable";
 /** The letters to a running mission's Conductor only the operator can let through (`HeldLetters`, hide-private issue 678). */
 export type MissionHeldLetters = { count: number; reason: MissionLettersHeldFor; since_unix_ms: number };
 
@@ -3483,7 +3494,7 @@ export type DeskOutputKind = "image" | "page" | "doc" | "pr";
  */
 export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thumb: string | null; seen: boolean; pr_state: PrState | null; device_id: string | null; checkout: string | null; path: string | null; url: string | null };
 /** The widths of Desk's two panels as the operator last dragged them, in CSS pixels; null until dragged (PRD desk-2-ui B22, B23). */
-export type DeskLane = { view_width: number | null; session_width: number | null };
+export type DeskLane = { view_width: number | null; session_width: number | null; /** 한눈에 folded (`⟩`); absent while unfolded. */ glance_folded?: boolean };
 /** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
 /** What of an open mission waits on the operator, as every mission chip marks it: its decision, or a node raised to the operator (a stall among them). */
 export type MissionTurn = "decision" | "attention";
@@ -3531,13 +3542,22 @@ export type DeskCompaction = { done: boolean; reason: string | null };
 export type DeskCommand = { name: string; description: string; hint?: string };
 
 /**
- * The `desk_commands` section, the `/` menus: each agent's commands as its
- * last session listed them, saved across a restart, with what Desk keeps from
- * the agent already gone. Desk's composer reads its selected agent's, and a
- * session's input its session's agent's. An agent is absent until it has ever
- * sent a list, and its list empty while its open session has sent none.
+ * Why one of Desk's agents has no command list yet: Hide is reading it (or will once the agent is in place), the agent
+ * wants its sign-in, it is not installed on this computer, it is switched off in Settings › Agents (Hide starts it for
+ * nothing), it sent none, the read failed (why is in the log), or Desk is off.
  */
-export type DeskCommands = { lists: Partial<Record<DeskAgentId, DeskCommand[]>> };
+export type DeskCommandsUnread = "reading" | "sign_in" | "not_installed" | "agent_off" | "no_list" | "failed" | "desk_off";
+
+/**
+ * The `desk_commands` section, the `/` menus: each agent's commands as it
+ * last listed them, read by Hide ahead of the operator or sent by its Desk
+ * session, saved across a restart, with what Desk keeps from the agent already
+ * gone. Desk's composer reads its selected agent's, and a session's input its
+ * session's agent's. An agent is absent from `lists` until it has ever sent
+ * one, with why in `unread`, and its list empty while its open session has
+ * sent none.
+ */
+export type DeskCommands = { lists: Partial<Record<DeskAgentId, DeskCommand[]>>; unread: Partial<Record<DeskAgentId, DeskCommandsUnread>> };
 
 /**
  * The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes.
@@ -3710,7 +3730,20 @@ export type DeskJobsSection = {
   records: DeskRecord[];
   /** The sessions the newest lines name whose pane is gone and that run now in another pane, the same session on the same machine (one `이어서 하기` resumed): a chip naming the gone pane is the live session's, drawn from its row and opening it, with no record. */
   moved: DeskMoved[];
+  /** 한눈에 at Desk's right: the sessions Desk started or the operator opened beside it, and the Views they and Desk's agent opened. */
+  glance: DeskGlance;
 };
+/** 한눈에's section (`desk_jobs.glance`). */
+export type DeskGlance = {
+  /** The sessions by pane, newest first, at most 32; each has its card among `jobs`, `workers` and `named`. */
+  sessions: string[];
+  /** The Views those sessions and Desk's agent opened: not looked at first, then newest first, at most 32. */
+  files: DeskGlanceFile[];
+  /** How many more such Views there are than `files` holds. */
+  files_more: number;
+};
+/** One View 한눈에 lists, with the pane of the session that opened it, null for Desk's own agent. */
+export type DeskGlanceFile = DeskOutput & { pane_id: string | null };
 /** A chip's gone pane and the pane its session runs in now (`desk_jobs.moved`). */
 export type DeskMoved = { pane_id: string; live_pane_id: string };
 /**
@@ -4114,6 +4147,8 @@ export type SnapshotRest = {
     operator_focus?: { client_id: string; sequence: number }[];
   };
   pane_layouts?: PaneLayout[];
+  /** What the core's pane floor says of the tabs on screen (docs/UI_BEHAVIOR.md, The pane floor); the shell only draws it. */
+  pane_floor?: PaneFloor;
   terminal?: { headers?: Record<string, PaneHeader>; pane_id?: string | null; panes?: TerminalPane[]; input_requests?: InputRequest[] };
   ui_state?: {
     left_sidebar_visible?: boolean;

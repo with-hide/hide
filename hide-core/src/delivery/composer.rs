@@ -7,12 +7,15 @@
 //! erasing held letters for up to the hour. Once input is quiet, the
 //! doorbell asks the engine once for its visible screen with styling and judges it
 //! by the agent's composer declaration (`hide_agent_adapter::composer`). Only
-//! a positive "empty" releases the draft; anything else keeps the hold as
-//! before and is logged without the screen's text.
+//! a positive "empty" releases the draft; a screen with no composer where the
+//! declaration puts it (a pane too narrow, or covered) holds the letters for
+//! that instead of a draft, and anything else keeps the hold as before; each
+//! read is logged without the screen's text.
 //!
-//! The read runs on the doorbell's thread, off the runtime lock, at most
-//! once per observed draft and state generation and within
-//! the doorbell's per-pass budget of the engine calls. The same read checks each
+//! The read runs on the doorbell's thread, off the runtime lock, once per
+//! observed draft, state generation and pane size, again on the bell's
+//! backoff only while the screen shows no composer, and within the
+//! doorbell's per-pass budget of the engine calls. The same read checks each
 //! agent version at moments its composer is known empty, and only a version
 //! seen read empty there is released, so a screen that changed under the
 //! declaration keeps holding rather than ringing over the operator's words.
@@ -49,6 +52,37 @@ pub(crate) struct Read {
     /// The input time of the draft episode a release is read for, or the
     /// prompt hook time of the moment a check is read at.
     pub input_at_unix_ms: u64,
+    /// The pane's grid as its view last reported it (`Runtime::delivery_pane_size`),
+    /// which the screen is drawn at: a screen read at one size says nothing
+    /// of the same screen at another.
+    pub size: Option<(u16, u16)>,
+}
+
+/// The draft episode a pane's composer was read for: the agent, the input
+/// and state generations, and the grid the screen was drawn at.
+type Episode = (Actor, u64, Option<u64>, Option<(u16, u16)>);
+
+/// What a release found for a pane's draft this pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Release {
+    /// An engine call was made, which counts against the doorbell's
+    /// per-pass budget.
+    pub read: bool,
+    /// The screen of this episode showed no composer where its declaration
+    /// puts it: the pane is too narrow for the agent to draw one, or a menu
+    /// or a dialog covers it. The letters are held for that, not for a
+    /// draft, until a read finds the composer.
+    pub unreadable: bool,
+}
+
+/// When a screen read with no composer on it is read again in the same
+/// episode: on the doorbell's bell backoff, 5 seconds doubling to two
+/// minutes, since the screen can change with nothing Hide observes (an
+/// agent redrawing after a resize, a menu closing on its own).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Again {
+    at: u64,
+    delay: u64,
 }
 
 /// What the reader keeps between doorbell passes. Each map is keyed by a pane
@@ -56,8 +90,9 @@ pub(crate) struct Read {
 /// it is bounded by the open letters and answers and the observation limit.
 #[derive(Default)]
 pub(crate) struct Reader {
-    /// The draft episode each pane's composer was read for.
-    read: HashMap<String, (Actor, u64, Option<u64>)>,
+    /// The draft episode each pane's composer was read for and, when that
+    /// read could not find the composer, when it is read again.
+    read: HashMap<String, (Episode, Option<Again>)>,
     /// Why a pane's draft episode is not read, logged once per change.
     skipped: HashMap<String, (u64, &'static str)>,
     /// The prompt hook moment each pane was tried at for a version check.
@@ -74,15 +109,23 @@ impl Reader {
 
     /// Reads the composer of `recipient`, a letter's or an answer's, held
     /// on a possible draft, once per draft episode, and releases the draft
-    /// when the screen shows the composer empty. Returns whether an engine call was made, which counts
-    /// against the doorbell's per-pass budget.
-    pub(crate) fn release(&mut self, owner: &Mutex<Runtime>, recipient: &Actor, now: u64) -> bool {
+    /// when the screen shows the composer empty. The episode includes the
+    /// pane's size, so a resized pane is read at once; a screen that showed
+    /// no composer is read again on the bell's backoff within its episode,
+    /// so a redraw Hide cannot observe, such as the agent's own after a
+    /// resize, is read too.
+    pub(crate) fn release(
+        &mut self,
+        owner: &Mutex<Runtime>,
+        recipient: &Actor,
+        now: u64,
+    ) -> Release {
         let Some((episode, read)) = owner
             .lock()
             .ok()
             .and_then(|guard| guard.composer_release_due(recipient, now))
         else {
-            return false;
+            return Release::default();
         };
         let pane = &recipient.pane_id;
         let read = match read {
@@ -92,28 +135,60 @@ impl Reader {
                     crate::diagnostic!(json!({"component":"delivery","kind":"composer.not_read",
                         "pane_id":pane,"agent":recipient.kind,"reason":reason}));
                 }
-                return false;
+                return Release::default();
             }
         };
         let key = (
             read.observed.actor.clone(),
             read.observed.input_generation,
             read.observed.state_change_seq,
+            read.size,
         );
-        if self.read.get(pane) == Some(&key) {
-            return false;
+        let last = self
+            .read
+            .get(pane)
+            .filter(|(read, _)| *read == key)
+            .map(|(_, again)| *again);
+        match last {
+            Some(None) => return Release::default(),
+            Some(Some(again)) if now < again.at => {
+                return Release {
+                    read: false,
+                    unreadable: true,
+                };
+            }
+            _ => {}
         }
-        self.read.insert(pane.clone(), key);
         let reading = screen(owner, &read);
+        let unreadable = matches!(reading, Ok(Err(miss)) if miss.verdict() == Verdict::NotFound);
+        let again = unreadable.then(|| {
+            let delay = last
+                .flatten()
+                .map_or(super::doorbell::RETRY_FIRST_MS, |again| {
+                    again
+                        .delay
+                        .saturating_mul(2)
+                        .min(super::doorbell::RETRY_LIMIT_MS)
+                });
+            Again {
+                at: now.saturating_add(delay),
+                delay,
+            }
+        });
+        self.read.insert(pane.clone(), (key, again));
         crate::diagnostic!(json!({"component":"delivery","kind":"composer.read",
             "pane_id":pane,"agent":read.agent,"version":read.version,
-            "verdict":verdict_code(reading),"reason":miss_code(reading)}));
+            "verdict":verdict_code(reading),"reason":miss_code(reading),
+            "size":read.size.map(|(rows, cols)| json!({"rows":rows,"cols":cols}))}));
         if reading == Ok(Ok(()))
             && let Ok(mut guard) = owner.lock()
         {
             guard.release_empty_composer(&read.observed, now);
         }
-        true
+        Release {
+            read: true,
+            unreadable,
+        }
     }
 
     /// Checks one agent version's composer declaration, at most every
@@ -188,17 +263,36 @@ pub(crate) const NOT_EMPTY: &str = "composer_not_empty";
 /// empty: no declaration for its kind, no composer where it is declared (a
 /// menu or a dialog over it), or a failed or cut read.
 pub(crate) const UNCONFIRMED: &str = "composer_unconfirmed";
+/// What the doorbell holds a bell for when the screen was read and shows no
+/// composer where the declaration puts it ([`clear`]): the pane is too
+/// narrow for the agent to draw it, or a menu or a dialog covers it.
+pub(crate) const UNREADABLE: &str = "composer_unreadable";
 
 /// Whether a letter may be typed into `pane`, whose agent is of
 /// `kind`, now: its visible screen read with
 /// styling and judged by the kind's composer declaration. Any version is
 /// judged, since a screen not read empty is never typed into. Runs off the
-/// runtime lock.
+/// runtime lock. A screen with no composer is [`UNCONFIRMED`], as every
+/// refusal a sender is told about names it.
 pub(crate) fn forced_clear(
     engine: &dyn Engine,
     pane: &str,
     kind: &str,
 ) -> Result<(), &'static str> {
+    clear(engine, pane, kind).map_err(|code| {
+        if code == UNREADABLE {
+            UNCONFIRMED
+        } else {
+            code
+        }
+    })
+}
+
+/// [`forced_clear`] for the doorbell, which tells a screen read with no
+/// composer on it ([`UNREADABLE`]) from one it could not read or judge
+/// ([`UNCONFIRMED`]): only the first is the operator's to clear, by
+/// widening the pane or closing what covers its composer.
+pub(crate) fn clear(engine: &dyn Engine, pane: &str, kind: &str) -> Result<(), &'static str> {
     let composer = hide_agent_adapter::adapter(kind)
         .and_then(|row| row.composer.supported())
         .ok_or(UNCONFIRMED)?;
@@ -211,7 +305,7 @@ pub(crate) fn forced_clear(
     match composer.explain(&screen.text) {
         Ok(()) => Ok(()),
         Err(miss) if miss.verdict() == Verdict::Holds => Err(NOT_EMPTY),
-        Err(_) => Err(UNCONFIRMED),
+        Err(_) => Err(UNREADABLE),
     }
 }
 

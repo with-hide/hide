@@ -28,6 +28,19 @@ export async function withControl<T>(daemon: Pick<Daemon, "origin" | "token">, u
   return useControl(await connectControl(daemon), use);
 }
 
+/**
+ * Makes `language` the core's explicit interface language, for a spec that reads a line the core writes in the
+ * operator's language (docs/LOCALIZATION.md): with no choice the core takes the language of the machine running the
+ * spec, so the line would differ from one machine to the next.
+ */
+export async function chooseCoreLanguage(control: HidedControl, language: "en" | "ko" | "ja" | "zh-CN"): Promise<void> {
+  control.send("interface_language_set", { language });
+  await control.until(
+    (rest) => (rest.ui_state as { interface_language?: string | null } | undefined)?.interface_language === language || undefined,
+    `the core's interface language ${language}`,
+  );
+}
+
 /** The core's log of `daemon`, every file of it, as text. */
 export function coreLog(daemon: Pick<Daemon, "stateDir">): string {
   const dir = path.join(daemon.stateDir, "Logs");

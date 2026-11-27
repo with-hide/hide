@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, approvalButtons, askPlace, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, livePane, ENDED_JOB_STATES, jobDimmed, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
+import { glanceSessions, agentPickable, approvalButtons, askPlace, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, outputKindOf, threadPhase, type ThreadHidePart, type ThreadTurn, sessionFacts, livePane, ENDED_JOB_STATES, jobDimmed, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
 import type { AgentRow, DeskRecord } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -52,9 +52,9 @@ describe("a thread's lines (B25, B26)", () => {
     const peer = { name: "worker", mark: "going" as const, agent_kind: "codex" };
     const lines = threadLines(
       [{ sessionUpdate: "tool_call", toolCallId: "h", title: "Bash", kind: "execute", rawInput: { command: "hide request send worker --intent retry" } }, { sessionUpdate: "tool_call_update", toolCallId: "h", status: "completed" }],
-      { h: { kind: "letter", direction: "sent", peer, body: "다시 올려줘" } },
+      { h: { kind: "letter", direction: "sent", peer, body: "다시 올려줘", target: "letter:worker" } },
     );
-    expect(lines).toEqual([{ kind: "hide", id: "h", part: { kind: "letter", direction: "sent", peer, body: "다시 올려줘" }, command: "hide request send worker --intent retry" }]);
+    expect(lines).toEqual([{ kind: "hide", id: "h", part: { kind: "letter", direction: "sent", peer, body: "다시 올려줘", target: "letter:worker" }, command: "hide request send worker --intent retry" }]);
   });
 
   it("starts a new line where one speaker's message ends and the next begins", () => {
@@ -82,14 +82,20 @@ describe("what the working line says (feedback 1 c3)", () => {
   });
 
   it("says a session's newest line: its words, its call's kind, a Hide part, or thinking", () => {
-    const turn = (work: ThreadTurn["work"], answer: ThreadTurn["answer"] = []): ThreadTurn => ({ key: "t", user: null, work, answer, parts: [], files: 0, commands: 0 });
-    const tool = (toolKind: "read" | "edit" | "execute" | "think") => ({ kind: "tool" as const, id: toolKind, title: toolKind, toolKind, status: "in_progress" as const, input: null, output: null, diffs: [], images: [], startedAtMs: null });
+    const turn = (work: ThreadTurn["work"], answer: ThreadTurn["answer"] = []): ThreadTurn => ({ key: "t", user: null, work, last: work.at(-1) ?? null, call: null, answer, parts: [], files: 0, commands: 0 });
+    const tool = (toolKind: "read" | "edit" | "execute" | "think") => ({ kind: "tool" as const, id: toolKind, title: toolKind, toolKind, status: "in_progress" as const, input: null, subject: null, output: null, diffs: [], images: [], startedAtMs: null });
     expect(threadPhase(undefined)).toBe("thinking");
     expect(threadPhase(turn([tool("read")]))).toBe("files");
     expect(threadPhase(turn([tool("edit")]))).toBe("editing");
     expect(threadPhase(turn([tool("execute")]))).toBe("other");
     expect(threadPhase(turn([tool("think")]))).toBe("thinking");
     expect(threadPhase(turn([tool("read")], [{ kind: "agent", id: "a", message: null, text: "다 읽었어요", atMs: null }]))).toBe("answering");
+    // A part drawn once for its target still says what the newest call did.
+    const mission = { id: "mission-3", title: "Desk", status: "running", done: 0, total: 1, turn: null, delay: null } as Extract<ThreadHidePart, { kind: "mission" }>["mission"];
+    const looked = (id: string) => ({ kind: "hide" as const, id, part: { kind: "mission" as const, mission, target: "mission:mission-3" }, command: null });
+    const [read] = threadTurns([looked("m1"), tool("read"), looked("m2")]);
+    expect(read!.work.map((line) => line.id)).toEqual(["m1", "read"]);
+    expect(threadPhase(read)).toBe("sessions");
   });
 });
 
@@ -116,7 +122,7 @@ describe("a thread's turns (B25, B26)", () => {
         text("agent_message_chunk", "고쳤어요"),
         text("user_message_chunk", "고마워"),
       ],
-      { p: { kind: "plan", plan: {} as never }, l: { kind: "letter", direction: "sent", peer, body: "봐줘" } },
+      { p: { kind: "plan", plan: {} as never, target: "plan" }, l: { kind: "letter", direction: "sent", peer, body: "봐줘", target: "letter:peer" } },
     );
     const turns = threadTurns(lines);
     expect(turns.map((turn) => turn.user?.text)).toEqual(["고쳐줘", "고마워"]);
@@ -288,15 +294,6 @@ describe("a chip's session (D-86, B50)", () => {
   });
 });
 
-describe("namedText", () => {
-  it("says each held mention by its name, as the operator reads the message", () => {
-    const fixer = { kind: "session" as const, id: "w1:p3", name: "fixer" };
-    const repo = { kind: "project" as const, id: "/Users/me/repo", name: "repo name" };
-    const text = `${markedMention(fixer)} 결과를 ${markedMention(repo)}에 정리해 줘, ${markedMention(fixer)}`;
-    expect(namedText(text, [fixer, repo])).toBe("@fixer 결과를 @repo name에 정리해 줘, @fixer");
-  });
-});
-
 describe("holdsFoot", () => {
   it("keeps the foot when the browser nudges the view down while the content grows below it", () => {
     // Scroll anchoring moved 3065 to 3066 as a reply grew by 314 px; the resize that pins the foot comes after.
@@ -320,5 +317,14 @@ describe("an ended job", () => {
     expect([...ENDED_JOB_STATES].sort()).toEqual(["archived", "cancelled", "closed", "failed", "moved_out"]);
     const states = ["queued", "starting", "working", "asking", "done", "sleeping", "failed", "cancelled", "closed", "moved_out", "archived"] as const;
     expect(states.filter(jobDimmed)).toEqual(["cancelled", "closed", "moved_out", "archived"]);
+  });
+});
+
+describe("glanceSessions", () => {
+  // 한눈에: 내 차례 first, then at work, then ended, each newest first as the core lists them; a pane with no card is left out.
+  it("orders 한눈에's sessions by whose turn it is, keeping the core's newest-first order inside each group", () => {
+    const cards = [job("a", "done", { pane_id: "p1" }), job("b", "working", { pane_id: "p2" }), job("c", "asking", { pane_id: "p3" }), job("d", "starting", { pane_id: "p4" }), job("e", "sleeping", { pane_id: "p5" })];
+    const order = glanceSessions(["p5", "p4", "p3", "gone", "p2", "p1"], cards).map((card) => card.pane_id);
+    expect(order).toEqual(["p3", "p4", "p2", "p5", "p1"]);
   });
 });

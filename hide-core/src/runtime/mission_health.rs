@@ -25,6 +25,7 @@ use crate::missions::{
     MissionStatus, NodePatch, NodeStatus, NodeWarning, OperatorAction, Owed, PendingWake,
     RoundWake, WOKEN_LIMIT, WakeEvent, Woken,
 };
+use crate::model::InterfaceLanguage;
 
 /// Raises one mission holds at once; a new one past it is refused and
 /// logged, the ones already raised kept (B28).
@@ -343,18 +344,28 @@ pub(super) fn settle_refused_close(mission: &mut Mission, by: &str) {
 
 /// The words a gate is passed with when the operator's `끝으로` goes past
 /// it with the node's other open lines, as each skipped line's reason is.
-const OPERATOR_DECISION: &str = "운영자 판단";
+/// They are recorded as the operator's, so in the operator's language, in
+/// the words the mission screen names that decision by
+/// (`mission.work.on.decision`).
+fn operator_decision(language: InterfaceLanguage) -> &'static str {
+    match language {
+        InterfaceLanguage::English => "your decision",
+        InterfaceLanguage::Korean => "운영자 판단",
+        InterfaceLanguage::Japanese => "あなたの判断",
+        InterfaceLanguage::SimplifiedChinese => "你的决定",
+    }
+}
 
 /// Goes past each of `node`'s lines named in `keys`, as the operator's own
 /// decision, with the time it was made (D-15). A gate among them is left
 /// to its one entry (`settle_gate`, PRD mission-human-gate D-21), which the
 /// caller goes through once the node is in the book.
-fn skip_lines(node: &mut MissionNode, keys: &[String], now: u64) {
+fn skip_lines(node: &mut MissionNode, keys: &[String], decision: &str, now: u64) {
     for line in node.criteria.iter_mut().filter(|line| {
         keys.contains(&line.key) && line.kind != crate::mission_criteria::CriterionKind::Human
     }) {
         line.skip(
-            OPERATOR_DECISION.to_owned(),
+            decision.to_owned(),
             None,
             crate::mission_criteria::Recorded {
                 role: crate::mission_criteria::Role::Operator,
@@ -1922,6 +1933,7 @@ impl Runtime {
         payload: &MissionAttentionPayload,
         now: u64,
     ) -> Result<bool, String> {
+        let decision = operator_decision(self.interface_language());
         let mission = self
             .missions
             .book
@@ -1992,7 +2004,7 @@ impl Runtime {
                 if unmet.iter().any(|line| line == GATE_KEY) {
                     gated.push(next.key.clone());
                 }
-                skip_lines(&mut next, &unmet, now);
+                skip_lines(&mut next, &unmet, decision, now);
                 next.status = NodeStatus::Done;
                 next.finished_at_unix_ms = Some(now);
                 let skipped = unmet.join(", ");
@@ -2065,7 +2077,7 @@ impl Runtime {
             if unmet.iter().any(|line| line == GATE_KEY) {
                 gated.push(other.key.clone());
             }
-            skip_lines(other, unmet, now);
+            skip_lines(other, unmet, decision, now);
             let skipped = unmet.join(", ");
             let mut event = MissionEvent::new(now, EventKind::Resolved)
                 .node(&other.key)
@@ -2112,7 +2124,7 @@ impl Runtime {
                 &key,
                 super::mission_gates::GateAnswer::Past,
                 crate::mission_criteria::GateVia::Card,
-                OPERATOR_DECISION,
+                decision,
                 now,
             ) {
                 crate::diagnostic!(json!({

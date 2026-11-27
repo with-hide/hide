@@ -143,7 +143,7 @@ pub struct AppState {
     /// Which windows hold the keyboard and draw the Workspace screen: the
     /// core counts a View in front of the operator as seen only while one
     /// does (PRD unseen-agent-views D-07, B6, B8).
-    pub window_focus_demand: Arc<crate::demand::ObservationDemand>,
+    pub window_focus_demand: Arc<crate::demand::FocusDemand>,
     /// Which connections show which backlog item's origin: the core keeps
     /// an origin until the last of them closes it or leaves.
     pub origin_holds: Arc<crate::demand::OriginHolds>,
@@ -1125,6 +1125,10 @@ async fn screen_loop(
     // A linked node's screen and another machine's view are both a screen
     // another machine shows of this one (D-53, D-70).
     let own_screen = relay.is_none() && !remote;
+    // Where this screen's choices of the operator's look are made: a view's
+    // count only while its machine shows it (`remote_screen`, the core's
+    // `remote_views`), and a tool's are no choice.
+    let look_screen = client.look_screen(seat.as_ref().map(|seat| seat.viewer.key.to_hex()));
     if renderer {
         let frame = mobile_frame(&mobile_frames.borrow_and_update(), own_screen);
         if socket
@@ -1379,7 +1383,7 @@ async fn screen_loop(
                         {
                             terminals.keyed(&pane);
                         }
-                        match handle_client_text(&state, &text, connection, client, own_screen) {
+                        match handle_client_text(&state, &text, connection, client, own_screen, &look_screen) {
                             // A view's file bytes go on its bulk stream, from
                             // their own task (D-67).
                             Ok(ClientAction::FileBytes(event)) if remote => {
@@ -1496,7 +1500,7 @@ async fn screen_loop(
                                 file_search.ask(&state, device_frames_tx.clone(), |waiting| { *waiting = Some(event); Ok(()) }, file_index_all);
                             }
                             Ok(ClientAction::Automation(event)) => {
-                                crate::automation_screen::spawn(&state.core, event, device_frames_tx.clone());
+                                crate::automation_screen::spawn(&state.core, event, look_screen.clone(), device_frames_tx.clone());
                             }
                             Ok(ClientAction::Access(event)) => {
                                 crate::access_screen::spawn(&state.core, event, device_frames_tx.clone());
@@ -1752,6 +1756,15 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         }
         "beside_other_machine" => {
             "--beside opens an agent only on your own machine; leave out --machine, or run the command again without --beside to open it in a new tab"
+        }
+        "beside_too_narrow" => {
+            "Your pane is too narrow to split: the agent's input box would not be readable beside you, so nothing was opened; run the command again without --beside to open the agent in a new tab"
+        }
+        "beside_unmeasured" => {
+            "The panes of your tab are not drawn yet, so nothing was opened; run the command again without --beside to open the agent in a new tab"
+        }
+        "beside_tab_busy" => {
+            "Your tab is still busy with the splits and moves ahead of this one, so nothing was opened; run the command again without --beside to open the agent in a new tab"
         }
         "beside_needs_agent_pane" => {
             "--beside opens the agent beside the pane that calls it; run the command from an agent pane Hide knows, or without --beside to open it in a new tab"
@@ -2888,6 +2901,7 @@ fn handle_client_text(
     connection: u64,
     client: Client,
     own_screen: bool,
+    look_screen: &Option<hide_core::LookScreen>,
 ) -> Result<ClientAction, String> {
     let value: Value =
         serde_json::from_str(text).map_err(|error| format!("client json: {error}"))?;
@@ -3000,7 +3014,12 @@ fn handle_client_text(
         // that screen (`pane_sizes`).
         Some("terminal_resize") => {
             let (pane, size) = terminal_grid(&event)?;
-            if state.pane_sizes.resized(connection, &pane, size).is_none() {
+            let floor = event.pointer("/payload/floor").cloned();
+            if state
+                .pane_sizes
+                .resized_measured(connection, &pane, size, floor)
+                .is_none()
+            {
                 return Ok(ClientAction::Replies(Vec::new()));
             }
         }
@@ -3061,21 +3080,30 @@ fn handle_client_text(
             });
             return Ok(ClientAction::Replies(Vec::new()));
         }
-        // A window that has the keyboard and draws the Workspace screen; the
-        // core hears whether any window does, and a window that leaves
-        // without saying so lets go of its focus with its connection.
+        // A window that has the keyboard, and the screen it draws: the
+        // Workspace or Desk's desk (a window that names none draws the
+        // Workspace); the core hears the screen of the window that took the
+        // keyboard last, and a window that leaves without saying so lets go
+        // of its focus with its connection.
         Some("window_focus") => {
-            let Some(focused) = event
-                .get("payload")
+            let payload = event.get("payload");
+            let Some(focused) = payload
                 .and_then(|payload| payload.get("focused"))
                 .and_then(Value::as_bool)
             else {
                 return Err("window_focus.focused must be a boolean".to_owned());
             };
-            Demand::WindowFocus
-                .of(state)
-                .set(connection, focused, |aggregate| {
-                    dispatch_observation(&state.core, Demand::WindowFocus, connection, aggregate)
+            let screen = match payload.and_then(|payload| payload.get("screen")) {
+                None => crate::demand::FocusScreen::Workspace,
+                Some(screen) => screen
+                    .as_str()
+                    .and_then(crate::demand::FocusScreen::parse)
+                    .ok_or_else(|| "window_focus.screen must be workspace or desk".to_owned())?,
+            };
+            state
+                .window_focus_demand
+                .set(connection, focused.then_some(screen), |now| {
+                    dispatch_window_focus(&state.core, connection, now)
                 });
             return Ok(ClientAction::Replies(Vec::new()));
         }
@@ -3166,7 +3194,7 @@ fn handle_client_text(
         let bytes = serde_json::to_vec(&event).map_err(|error| format!("event encode: {error}"))?;
         return state
             .core
-            .dispatch(bytes)
+            .dispatch_from(bytes, look_screen.clone())
             .map(|()| ClientAction::Replies(Vec::new()));
     }
     if let Some(reply) = admit_event(&state.boundary, &mut event, || roots_current(&state.roots)) {
@@ -3177,7 +3205,7 @@ fn handle_client_text(
     let bytes = serde_json::to_vec(&event).map_err(|error| format!("event encode: {error}"))?;
     state
         .core
-        .dispatch(bytes)
+        .dispatch_from(bytes, look_screen.clone())
         .map(|()| ClientAction::Replies(Vec::new()))
 }
 
@@ -3670,9 +3698,6 @@ pub(crate) enum Demand {
     Start,
     /// The Overview's request view: the running checks' re-read.
     RequestView,
-    /// A window with the keyboard on the Workspace screen: what is in
-    /// front of it is seen.
-    WindowFocus,
 }
 
 impl Demand {
@@ -3681,7 +3706,6 @@ impl Demand {
             Self::Settings => "observing",
             Self::Start => "start_observing",
             Self::RequestView => "request_view",
-            Self::WindowFocus => "window_focus",
         }
     }
 
@@ -3690,7 +3714,6 @@ impl Demand {
             Self::Settings => &state.demand,
             Self::Start => &state.start_demand,
             Self::RequestView => &state.request_view_demand,
-            Self::WindowFocus => &state.window_focus_demand,
         }
     }
 }
@@ -3748,11 +3771,6 @@ pub(crate) fn dispatch_observation(
             "kind": "request_view",
             "payload": {"observing": observing},
         }),
-        Demand::WindowFocus => json!({
-            "schema_version": SCHEMA_VERSION,
-            "kind": "window_focus",
-            "payload": {"focused": observing},
-        }),
         Demand::Settings | Demand::Start => json!({
             "schema_version": SCHEMA_VERSION,
             "kind": "ai_settings",
@@ -3763,6 +3781,36 @@ pub(crate) fn dispatch_observation(
         hide_core::diagnostic!(json!({
             "component": "hided",
             "kind": "settings.observation_failed",
+            "connection": connection,
+            "message": error,
+        }));
+    }
+}
+
+/// Tells the core which screen the window holding the keyboard draws, or
+/// that none does (`window_focus`). Runs under the focus demand's lock, so it
+/// only logs and hands the event to the core's channel.
+fn dispatch_window_focus(
+    core: &CoreHandle,
+    connection: u64,
+    screen: Option<crate::demand::FocusScreen>,
+) {
+    let screen = screen.map(crate::demand::FocusScreen::as_str);
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "window_focus.observation",
+        "connection": connection,
+        "screen": screen,
+    }));
+    let event = json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "window_focus",
+        "payload": {"focused": screen.is_some(), "screen": screen.unwrap_or("workspace")},
+    });
+    if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
+        hide_core::diagnostic!(json!({
+            "component": "hided",
+            "kind": "window_focus.observation_failed",
             "connection": connection,
             "message": error,
         }));
@@ -5366,10 +5414,15 @@ fn screen_input(state: &AppState, connection: u64, pane: &str) {
 /// them.
 fn send_grid(state: &AppState, pane: &str, size: GridSize) {
     state.core.terminals.view(pane, size, false);
+    let mut payload = json!({"pane_id": pane, "cols": size.cols, "rows": size.rows});
+    // The measure the new screen took to fit this grid goes on with it.
+    if let Some(floor) = state.pane_sizes.applied_floor(pane) {
+        payload["floor"] = floor;
+    }
     let event = json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "terminal_resize",
-        "payload": {"pane_id": pane, "cols": size.cols, "rows": size.rows},
+        "payload": payload,
     });
     if let Err(error) = state.core.dispatch(event.to_string().into_bytes()) {
         hide_core::diagnostic!(json!({
@@ -6029,16 +6082,14 @@ pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, des
     for (pane, size) in state.pane_sizes.left(connection) {
         send_grid(state, &pane, size);
     }
-    for demand in [
-        Demand::Settings,
-        Demand::Start,
-        Demand::RequestView,
-        Demand::WindowFocus,
-    ] {
+    for demand in [Demand::Settings, Demand::Start, Demand::RequestView] {
         demand.of(state).release(connection, |observing| {
             dispatch_observation(&state.core, demand, connection, observing)
         });
     }
+    state.window_focus_demand.release(connection, |now| {
+        dispatch_window_focus(&state.core, connection, now)
+    });
     state.origin_holds.release(connection, |key| {
         close_backlog_origin(&state.core, connection, key)
     });
@@ -6819,6 +6870,9 @@ mod tests {
             "beside_other_checkout",
             "beside_other_machine",
             "beside_needs_agent_pane",
+            "beside_too_narrow",
+            "beside_unmeasured",
+            "beside_tab_busy",
             "beside_with_parent",
             "beside_pane_unavailable",
         ] {

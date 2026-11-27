@@ -52,7 +52,12 @@ pub struct DeskLane {
     /// Desk's desk's width: its left edge.
     pub view_width: Option<u32>,
     /// The session panel's width: the edge between it and Desk's desk.
+    /// 한눈에 takes the same width, standing where the session panel does.
     pub session_width: Option<u32>,
+    /// 한눈에 is folded (`⟩`), so Desk's chat takes the room's width while
+    /// no session is open beside it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub glance_folded: bool,
 }
 
 /// The widest a stored panel width may be; a wider one is refused
@@ -70,7 +75,8 @@ pub struct DeskJobsSnapshot {
     /// is drawn in the chat.
     pub workers: Vec<DeskJobSnapshot>,
     /// The other sessions the newest lines of the conversation name (a
-    /// reply's chips, a letter's line), as cards of their own read from
+    /// reply's chips, a letter's line), the one open beside Desk and
+    /// 한눈에's, as cards of their own read from
     /// their sidebar rows, so a chip's hover card and its thread show what
     /// the row shows (D-86); none is drawn in the chat or listed in Threads.
     pub named: Vec<DeskJobSnapshot>,
@@ -84,6 +90,34 @@ pub struct DeskJobsSnapshot {
     /// `이어서 하기` resumed): a chip naming the gone pane is the live
     /// session's, drawn from its row and opening it, and has no record.
     pub moved: Vec<DeskMovedSnapshot>,
+    /// 한눈에 at Desk's right.
+    pub glance: DeskGlanceSnapshot,
+}
+
+/// 한눈에: the sessions Desk started and the ones the operator opened beside
+/// Desk, and the Views they and Desk's own agent opened.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DeskGlanceSnapshot {
+    /// The sessions by pane, the newest first, at most 32 (Desk's store
+    /// keeps them, `Stored::glance`); each has its card in `jobs`, `workers`
+    /// or `named`, and one with none (its pane gone, no job of Desk's) is
+    /// left out.
+    pub sessions: Vec<String>,
+    /// The Views those sessions and Desk's agent opened, read from each
+    /// View's own record (its openers and whether it was looked at): those
+    /// not looked at first, then the newest first, at most 32.
+    pub files: Vec<DeskGlanceFile>,
+    /// How many more such Views there are than `files` holds.
+    pub files_more: usize,
+}
+
+/// One View 한눈에 lists, with the session that opened it last.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DeskGlanceFile {
+    #[serde(flatten)]
+    pub output: DeskJobOutput,
+    /// The pane of the session that opened it; none for Desk's own agent.
+    pub pane_id: Option<String>,
 }
 
 /// A chip's gone pane and the pane its session runs in now.
@@ -386,11 +420,39 @@ impl DeskJobFailure {
 /// a session's input its session's agent's (docs/ARCHITECTURE.md, Desk's
 /// commands). A list is the agent's last session's, saved in
 /// `desk/commands.json` across a restart, so a new conversation's first `/`
-/// has it before its session opens. An agent is absent until it has ever
-/// sent a list, and its list empty while its open session has sent none.
+/// has it before its session opens, and Hide reads each agent's list ahead
+/// of the operator, so an agent Desk never talked to has one too. An agent
+/// is absent until it has ever sent a list, with why in `unread`, and its
+/// list empty while its open session has sent none.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct DeskCommandsSnapshot {
     pub lists: std::collections::BTreeMap<AdapterId, Vec<hide_desk::commands::Command>>,
+    /// Why each of Desk's agents absent from `lists` has no list yet, which
+    /// the `/` menu says in its one line; Hide reads every agent's list
+    /// ahead of the operator (`runtime/desk/lists.rs`).
+    pub unread: std::collections::BTreeMap<AdapterId, DeskCommandsUnread>,
+}
+
+/// Why an agent has no command list yet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeskCommandsUnread {
+    /// Hide is reading it, or will once the agent is in place.
+    Reading,
+    /// The agent refused to open a session until the operator signs in.
+    SignIn,
+    /// The agent's program is not on this machine.
+    NotInstalled,
+    /// The agent is switched off in Settings › Agents, so Hide starts it
+    /// for nothing.
+    AgentOff,
+    /// The agent opened a session and sent no list.
+    NoList,
+    /// Its adapter could not be prepared, or its process did not answer;
+    /// why is in the diagnostic log.
+    Failed,
+    /// Desk is switched off, and Hide reads lists only while it is on.
+    DeskOff,
 }
 
 /// A compaction the agent told outside its reply (OpenCode's), shown as the

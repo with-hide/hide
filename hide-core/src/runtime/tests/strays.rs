@@ -151,8 +151,8 @@ fn a_pull_request_stands_only_for_its_failed_checks() {
         [("ship", Some(1815))]
     );
     assert_eq!(
-        crate::runtime::strays::hand_off_words(&rows[0]),
-        "#1815 CI 실패 원인 고쳐줘"
+        crate::runtime::strays::hand_off_words(&rows[0], runtime.interface_language()),
+        "Fix the CI failure on #1815"
     );
 }
 
