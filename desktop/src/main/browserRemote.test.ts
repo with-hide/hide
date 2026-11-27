@@ -93,7 +93,7 @@ function screen() {
   });
   subject.attach(window as never);
   const screenContents = Object.assign(new EventEmitter(), { id: 1, isDestroyed: () => false, isFocused: () => false, send: vi.fn(), focus: vi.fn() });
-  const state = { ready: false, area: { bounds: TILE, zoom: 1 } as { bounds: typeof TILE; zoom: number } | null, storage: "live" as "live" | "clearing" | "full" | "waiting", partition: PARTITION as string | null };
+  const state = { ready: false, area: { bounds: TILE, zoom: 1 } as { bounds: typeof TILE; zoom: number } | null, storage: "live" as "live" | "clearing" | "full" | "waiting" | "unrecorded", partition: PARTITION as string | null };
   const addresses = new Map<string, string>();
   const route = vi.fn(async (_workspace: string, id: string, load: number): Promise<RemoteRoute> => {
     const url = addresses.get(id) ?? "";
@@ -257,6 +257,31 @@ describe("a remote screen's pages", () => {
     await settle();
     expect(theirs.contents.close).toHaveBeenCalled();
     expect(mine.contents.close).not.toHaveBeenCalled();
+  });
+
+  // A clear of an earlier pairing's storage closes that pairing's pages
+  // alone: the machine's pages on its new pairing stay.
+  it("make no page while their storage's row could not be written, and say so", async () => {
+    const { state, sync, display, views, events, settle } = screen();
+    state.storage = "unrecorded";
+    sync([display("d1")]);
+    await settle();
+    expect(views).toHaveLength(0);
+    expect(events().filter((event) => event.kind === "state").at(-1)?.state?.failure).toBe(english("native.browser.remoteStorageUnrecorded"));
+  });
+
+  it("close for a storage clear only the pages on that partition", async () => {
+    const { subject, state, sync, display, views, settle } = screen();
+    const retained = ["d1", "d2"].map((id) => ({ workspace, id, area_id: "a1", url: `https://${id}.example/`, load: 3 }));
+    sync([display("d1")], retained);
+    await settle();
+    state.partition = remotePagePartition(DEVICE, KEY, "22".repeat(16));
+    sync([display("d2")], retained);
+    await settle();
+    expect(views).toHaveLength(2);
+    subject.closeRemotePartition(PARTITION);
+    expect(views[0]!.contents.close).toHaveBeenCalled();
+    expect(views[1]!.contents.close).not.toHaveBeenCalled();
   });
 
   it("are no CDP target", async () => {

@@ -386,8 +386,21 @@ impl ScreenNet {
         })
     }
 
+    /// The pair's places. A pair's record goes once nothing holds it and no
+    /// listener of it is left; `retire` does that when the last listener
+    /// goes, and every ask here sweeps a record whose last tunnel ended
+    /// after that, so the records kept are those of pairs with a listener
+    /// or a tunnel, at most `MAX_LISTENERS` and their tunnels' pairs.
     fn places_of(&self, key: PeerKey) -> Arc<Places> {
-        Arc::clone(lock(&self.places).entry(key).or_default())
+        let listening: HashSet<PeerKey> = lock(&self.listeners)
+            .keys()
+            .map(|owner| owner.key)
+            .collect();
+        let mut places = lock(&self.places);
+        places.retain(|held, kept| {
+            *held == key || listening.contains(held) || Arc::strong_count(kept) > 1
+        });
+        Arc::clone(places.entry(key).or_default())
     }
 
     /// The pair's relay budget of the day. At most `MAX_BUDGETS` are kept:

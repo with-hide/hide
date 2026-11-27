@@ -94,6 +94,40 @@ describe("a remote screen's proxy", () => {
     expect(repaired).toEqual(["mini"]);
   });
 
+  // An ask that reached the daemon may have opened a listener whatever came
+  // of it: a proxy that could not be set, an answer that never arrived.
+  it("lets go of a listener after an ask whose proxy could not be set, or whose answer was lost", async () => {
+    for (const failure of ["proxy", "answer"] as const) {
+      const methods: string[] = [];
+      const subject = new RemoteEgress({
+        daemon: () => ({ origin: "http://127.0.0.1:7", token: "t" }), log: { event: vi.fn() } as unknown as HostLog, owner: 4242,
+        session: () => ({
+          setProxy: vi.fn(async () => { if (failure === "proxy") throw new Error("refused"); }),
+          closeAllConnections: vi.fn(async () => undefined),
+        }),
+        fetch: (async (_url: string, init: RequestInit) => {
+          methods.push(init.method ?? "GET");
+          if (init.method === "POST" && failure === "answer") throw new Error("connection reset");
+          return answer(200, { port: 54321, secret: "0123456789abcdef0123456789abcdef", pairing: P1, state: "ready" });
+        }) as unknown as typeof fetch,
+      });
+      expect(await subject.ensure("mini", KEY)).toBe("not_connected");
+      subject.release("mini", KEY);
+      await vi.waitFor(() => expect(methods, failure).toEqual(["POST", "DELETE"]));
+    }
+  });
+
+  it("asks nothing of the daemon on releasing a pair whose ask never reached it", async () => {
+    const fetch = vi.fn();
+    let daemon: { origin: string; token: string } | null = null;
+    const subject = new RemoteEgress({ daemon: () => daemon, log: { event: vi.fn() } as unknown as HostLog, owner: 4242, fetch: fetch as unknown as typeof globalThis.fetch });
+    expect(await subject.ensure("mini", KEY)).toBe("not_connected");
+    daemon = { origin: "http://127.0.0.1:7", token: "t" };
+    subject.release("mini", KEY);
+    await vi.waitFor(() => Promise.resolve());
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("lets go of a listener its ask was opening when released, and asks again only after that", async () => {
     const events: string[] = [];
     let answerFirst: () => void = () => undefined;
@@ -153,7 +187,7 @@ function sessions(fail = false) {
 function storageAt(file: string, cleared = sessions(), extra: Partial<ConstructorParameters<typeof RemoteStorage>[0]> = {}) {
   const closed: string[] = [];
   const log = { event: vi.fn() };
-  const storage = new RemoteStorage({ file, log: log as unknown as HostLog, session: cleared.of, closePages: (device) => closed.push(device), ...extra });
+  const storage = new RemoteStorage({ file, log: log as unknown as HostLog, session: cleared.of, closePages: (partition) => closed.push(partition), ...extra });
   return { storage, closed, cleared, log };
 }
 
@@ -178,7 +212,7 @@ describe("a remote screen's login storage", () => {
     storage.keep(CORE, PAIRED);
     expect(storage.admit("mini", KEY, P1)).toBe("live");
     storage.keep(CORE, new Set());
-    expect(closed).toEqual(["mini"]);
+    expect(closed).toEqual([remotePagePartition("mini", KEY, P1)]);
     expect(JSON.parse(fs.readFileSync(file, "utf8")).entries[0]).toMatchObject({ device: "mini", key: KEY, pairing: P1, core: CORE, state: "clearing" });
     expect(storage.admit("mini", KEY, P1)).toBe("clearing");
     await vi.waitFor(() => expect(cleared.steps).toHaveLength(3));
@@ -237,7 +271,7 @@ describe("a remote screen's login storage", () => {
     expect(remotePagePartition("mini", KEY, P2)).not.toBe(old);
     await launched.storage.settled();
     expect(next.steps).toEqual([`close ${old}`, `auth ${old}`, `storage ${old}`, `cache ${old}`]);
-    expect(launched.closed).toEqual(["mini"]);
+    expect(launched.closed).toEqual([old]);
     expect(launched.storage.state("mini", KEY, P1)).toBeNull();
     expect(JSON.parse(fs.readFileSync(file, "utf8")).entries.map((entry: { pairing: string }) => entry.pairing)).toEqual([P2]);
   });
@@ -288,6 +322,54 @@ describe("a remote screen's login storage", () => {
     fs.writeFileSync(file, "{ not json");
     storageAt(file, sessions(), { partitions });
     expect(fs.readdirSync(partitions).sort()).toEqual(["hide-browser-web", "hide-remote-page-not-ours"]);
+  });
+
+  // A session the index does not name is deleted at the next launch, so
+  // none is made before its row is on disk: the pair's pages wait, and a
+  // later admission whose row is written is kept through a restart.
+  it("admits no pairing whose row could not be written, and keeps one written later across a restart", () => {
+    const dir = folder();
+    const file = path.join(dir, "remote-partitions.json");
+    const partitions = path.join(dir, "Partitions");
+    const first = storageAt(file, sessions(), { partitions });
+    first.storage.keep(CORE, PAIRED);
+    fs.mkdirSync(`${file}.${process.pid}.tmp`);
+    expect(first.storage.admit("mini", KEY, P1)).toBe("unrecorded");
+    expect(first.storage.state("mini", KEY, P1)).toBeNull();
+    expect(first.log.event).toHaveBeenCalledWith("remote.storage_index_failed", expect.anything());
+    fs.rmdirSync(`${file}.${process.pid}.tmp`);
+    expect(first.storage.admit("mini", KEY, P1)).toBe("live");
+    const named = remotePagePartition("mini", KEY, P1).slice("persist:".length);
+    fs.mkdirSync(path.join(partitions, named), { recursive: true });
+    const launched = storageAt(file, sessions(), { partitions });
+    launched.storage.keep(CORE, PAIRED);
+    expect(launched.storage.admit("mini", KEY, P1)).toBe("live");
+    expect(fs.readdirSync(partitions)).toEqual([named]);
+  });
+
+  // An earlier pairing of the same machine and key whose clear keeps
+  // failing closes only its own pages, and is cleared again at a launch or
+  // a paired set, never at each sync of the new pairing's screen.
+  it("never closes a new pairing's pages while an old pairing's clear keeps failing", async () => {
+    const file = path.join(folder(), "remote-partitions.json");
+    const failing = sessions(true);
+    const { storage, closed } = storageAt(file, failing);
+    storage.keep(CORE, PAIRED);
+    expect(storage.admit("mini", KEY, P1)).toBe("live");
+    expect(storage.admit("mini", KEY, P2)).toBe("live");
+    await storage.settled();
+    const old = remotePagePartition("mini", KEY, P1);
+    expect(storage.state("mini", KEY, P1)).toBe("failed");
+    expect(closed).toEqual([old]);
+    const clears = failing.steps.length;
+    for (let sync = 0; sync < 5; sync++) expect(storage.admit("mini", KEY, P2)).toBe("live");
+    await storage.settled();
+    expect(failing.steps).toHaveLength(clears);
+    storage.keep(CORE, PAIRED);
+    await storage.settled();
+    expect(failing.steps.length).toBeGreaterThan(clears);
+    expect(closed).toEqual([old, old]);
+    expect(storage.state("mini", KEY, P2)).toBe("live");
   });
 
   it("refuses a new pair's storage when the index is full rather than drop one that still needs clearing, and says so once", () => {

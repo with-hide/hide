@@ -224,8 +224,8 @@ export type RemoteSource = {
   ensure(): Promise<string>;
   /** The partition its pages keep their logins in now (`remotePagePartition`); null before its proxy's first answer. */
   partition(): string | null;
-  /** Whether its login storage may hold pages now; `waiting` until it can be judged. */
-  storage(): "live" | "clearing" | "full" | "waiting";
+  /** Whether its login storage may hold pages now; `waiting` until it can be judged, `unrecorded` when its row could not be written. */
+  storage(): "live" | "clearing" | "full" | "waiting" | "unrecorded";
   route(workspace: string, id: string, load: number): Promise<RemoteRoute>;
 };
 
@@ -585,6 +585,15 @@ export class BrowserViews {
     for (const page of [...this.pages.values()]) if (page.source === source) this.destroy(page, "closed");
   }
 
+  /**
+   * Every page of a remote screen on `partition` closes, its popups with it:
+   * that partition's storage is about to be cleared. A page of the same
+   * machine on another pairing's partition stays.
+   */
+  closeRemotePartition(partition: string): void {
+    for (const page of [...this.pages.values()]) if (page.source.remote && page.partition === partition) this.destroy(page, "closed");
+  }
+
   /** The machine's storage was cleared: its screen places its pages again, empty. */
   remoteRetry(device: string, key: string): void {
     const source = this.sources.get(remoteId({ device, key }));
@@ -736,7 +745,7 @@ export class BrowserViews {
     // The storage is the pairing's, which the proxy's answer named.
     const storage = remote.storage();
     if (storage === "waiting") return;
-    if (storage !== "live") return this.failSlots(source, sync, storage === "full" ? "remoteStorageFull" : "remoteStorageClearing");
+    if (storage !== "live") return this.failSlots(source, sync, storage === "full" ? "remoteStorageFull" : storage === "unrecorded" ? "remoteStorageUnrecorded" : "remoteStorageClearing");
     source.created = recent(source.created, now, REMOTE_BOUNDS.creationWindowMs);
     for (const display of sync.displays) {
       if (!display.rect) continue;

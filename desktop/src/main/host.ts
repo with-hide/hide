@@ -404,7 +404,7 @@ export class DesktopHost {
         this.browsers?.remoteRetry(device, key);
       },
     });
-    const storage = RemoteStorage.at(app.getPath("userData"), this.log, (device, key) => this.browsers?.closeRemotePages(device, key), (device, key) => this.browsers?.remoteRetry(device, key));
+    const storage = RemoteStorage.at(app.getPath("userData"), this.log, (partition) => this.browsers?.closeRemotePartition(partition), (device, key) => this.browsers?.remoteRetry(device, key));
     const remote = new RemoteScreens({
       window: () => this.window, daemon: () => this.remoteDaemon(), registry: () => this.registry, background: __HIDE_BACKGROUND__, language: () => this.language.language, log: this.log,
       browsers: () => this.browsers, egress, storage, openExternal: (url) => this.openExternal(url),

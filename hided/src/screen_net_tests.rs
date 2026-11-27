@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
@@ -960,4 +960,331 @@ async fn a_pair_s_records_go_with_its_last_listener_and_today_s_bytes_stay() {
     }
     assert!(net.kept().1 <= MAX_BUDGETS + 1, "{}", net.kept().1);
     assert_eq!(net.budget_of(key).used(), 10, "no allowance was reset");
+}
+
+// A pair's places outlive its listener while a tunnel or a waiting
+// connection still holds them, and go at the next ask once those end, so
+// releasing a listener with work in flight and churning through pairs
+// keeps no record of a finished pair.
+#[tokio::test]
+async fn a_pair_s_places_go_once_its_last_tunnel_ends_after_its_listener() {
+    let (_host, _guest, net, key) = pair().await;
+    let pid = i32::try_from(std::process::id()).unwrap();
+    let ensured = net.ensure("windows-pc", key, pid).await.unwrap();
+    let places = net.places_of(key);
+    let mut held = Vec::new();
+    for _ in 0..PLACES {
+        held.push(places.take().await.unwrap());
+    }
+    drop(places);
+    // A page's connection, past its secret, waits for a place.
+    let mut waiting = page(ensured.port).await;
+    waiting
+        .write_all(
+            format!(
+                "GET http://127.0.0.1:9/ HTTP/1.1\r\nHost: 127.0.0.1:9\r\nProxy-Authorization: Basic {}\r\n\r\n",
+                basic(&ensured.secret)
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let record = || Arc::clone(lock(&net.places).get(&key).expect("the pair's places"));
+    within("the connection to wait for a place", async {
+        while lock(&record().inner).waiting == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await; // wait-ok: the guest reads the head and starts waiting on its own task
+        }
+    })
+    .await;
+
+    assert!(net.release("windows-pc", key, pid));
+    assert_eq!(
+        net.kept().0,
+        1,
+        "held by its tunnels and the waiting connection"
+    );
+    drop(held);
+    within("the pair's last holder to go", async {
+        while Arc::strong_count(&record()) > 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await; // wait-ok: the released listener's tasks end when next polled
+        }
+    })
+    .await;
+    for n in 0..64_u8 {
+        let _ = net.places_of(PeerKey::from_bytes([n.wrapping_add(1); 32]));
+    }
+    assert_eq!(net.kept().0, 1, "only the pair asked last is kept");
+    assert!(!lock(&net.places).contains_key(&key));
+}
+
+/// A stream whose bytes written while `on_relay` is set are counted in
+/// `relay`, and every byte written in `all`.
+struct Watched<T> {
+    inner: T,
+    on_relay: Arc<AtomicBool>,
+    relay: Arc<AtomicU64>,
+    all: Arc<AtomicU64>,
+}
+
+impl<T> Watched<T> {
+    fn new(
+        inner: T,
+        on_relay: &Arc<AtomicBool>,
+        relay: &Arc<AtomicU64>,
+        all: &Arc<AtomicU64>,
+    ) -> Self {
+        Self {
+            inner,
+            on_relay: Arc::clone(on_relay),
+            relay: Arc::clone(relay),
+            all: Arc::clone(all),
+        }
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for Watched<T> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for Watched<T> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        let relay = this.on_relay.load(Ordering::SeqCst);
+        let written = std::pin::Pin::new(&mut this.inner).poll_write(cx, buf);
+        if let std::task::Poll::Ready(Ok(count)) = written {
+            this.all.fetch_add(count as u64, Ordering::SeqCst);
+            if relay {
+                this.relay.fetch_add(count as u64, Ordering::SeqCst);
+            }
+        }
+        written
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+// R18 at a path move: sixteen tunnels streaming both ways on a direct path
+// count nothing; once the path is the relay every chunk is reserved before
+// it is written, so what the tunnels write on the relay passes what was
+// reserved by at most the chunk each direction had read before the move:
+// 2 x 16 x 64 KiB = 2 MiB.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tunnels_moving_from_direct_to_relay_mid_stream_overshoot_by_at_most_2_mib() {
+    let limit = 8 * CHUNK as u64;
+    let budget = Arc::new(RelayBudget::new(limit));
+    let on_relay = Arc::new(AtomicBool::new(false));
+    let relay = Arc::new(AtomicU64::new(0));
+    let all = Arc::new(AtomicU64::new(0));
+    let mut tunnels = Vec::new();
+    let mut ends_kept = Vec::new();
+    for _ in 0..PLACES {
+        let Ends {
+            page,
+            local,
+            host,
+            near,
+        } = ends();
+        let (host_read, host_write) = tokio::io::split(host);
+        let (page_read, page_write) = tokio::io::split(page);
+        ends_kept.push((
+            drain(host_read),
+            drain(page_read),
+            flood(host_write),
+            flood(page_write),
+        ));
+        let near = Watched::new(near, &on_relay, &relay, &all);
+        let mut local = Watched::new(local, &on_relay, &relay, &all);
+        let (near_read, near_write) = tokio::io::split(near);
+        let (budget, on_relay) = (Arc::clone(&budget), Arc::clone(&on_relay));
+        tunnels.push(tokio::spawn(async move {
+            let path = move || on_relay.load(Ordering::SeqCst);
+            pipe(
+                &mut local,
+                &[],
+                near_read,
+                near_write,
+                &budget,
+                &path,
+                &slot(),
+                &|| {},
+            )
+            .await
+            .0
+        }));
+    }
+    within("the direct bytes", async {
+        while all.load(Ordering::SeqCst) < PLACES as u64 * 32 * CHUNK as u64 {
+            tokio::time::sleep(Duration::from_millis(5)).await; // wait-ok: each tunnel moves its first direct megabytes
+        }
+    })
+    .await;
+    assert_eq!(budget.used(), 0, "direct bytes are not counted");
+    on_relay.store(true, Ordering::SeqCst);
+    for tunnel in tunnels {
+        assert_eq!(within("a tunnel", tunnel).await.unwrap(), Piped::Budget);
+    }
+    assert!(budget.used() <= limit);
+    let past = relay.load(Ordering::SeqCst).saturating_sub(budget.used());
+    assert!(
+        past <= 2 * PLACES as u64 * CHUNK as u64,
+        "{past} bytes written on the relay past the reservations"
+    );
+}
+
+// A relay tunnel whose path moves to direct stops reserving: it carries on
+// past the budget and is never ended for it.
+#[tokio::test]
+async fn a_relay_tunnel_moving_to_direct_is_not_counted_or_ended() {
+    let budget = Arc::new(RelayBudget::new(4 * CHUNK as u64));
+    let Ends {
+        mut page,
+        local,
+        host,
+        near,
+    } = ends();
+    let (host_read, mut host_write) = tokio::io::split(host);
+    let (near_read, near_write) = tokio::io::split(near);
+    let on_relay = Arc::new(AtomicBool::new(true));
+    let tunnel = {
+        let (budget, on_relay) = (Arc::clone(&budget), Arc::clone(&on_relay));
+        tokio::spawn(async move {
+            let mut local = local;
+            let path = move || on_relay.load(Ordering::SeqCst);
+            pipe(
+                &mut local,
+                &[],
+                near_read,
+                near_write,
+                &budget,
+                &path,
+                &slot(),
+                &|| {},
+            )
+            .await
+            .0
+        })
+    };
+    let _host_in = drain(host_read);
+    let chunk = vec![1_u8; CHUNK];
+    let mut back = vec![0_u8; CHUNK];
+    for _ in 0..2 {
+        host_write.write_all(&chunk).await.unwrap();
+        page.read_exact(&mut back).await.unwrap();
+    }
+    assert_eq!(budget.used(), 2 * CHUNK as u64);
+    on_relay.store(false, Ordering::SeqCst);
+    for _ in 0..64 {
+        host_write.write_all(&chunk).await.unwrap();
+        page.read_exact(&mut back).await.unwrap();
+    }
+    assert_eq!(
+        budget.used(),
+        2 * CHUNK as u64,
+        "direct bytes are not counted"
+    );
+    assert!(
+        !tunnel.is_finished(),
+        "a direct tunnel is not ended for the budget"
+    );
+    drop(host_write);
+    drop(page);
+    assert_eq!(within("the tunnel", tunnel).await.unwrap(), Piped::Closed);
+}
+
+/// The direct transport's stream receive window: noq's default
+/// (`TransportConfig::stream_receive_window`, `STREAM_RWND`, 12,500,000 /
+/// 1000 x 100 bytes), which `hide-peer-iroh` keeps. A link's mux grants 16
+/// frames of at most 16 KiB (`hide_peer::mux`), less than this.
+const DIRECT_STREAM_WINDOW: u64 = 1_250_000;
+
+// R18 inbound: bytes the host sends cross the transport before the guest
+// reserves them, so a host streaming into sixteen tunnels on the real
+// direct transport passes the guest's reservations by at most what that
+// transport lets it send ahead, one stream receive window per tunnel, and
+// the chunk each tunnel read before its reservation failed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_host_streaming_into_sixteen_tunnels_passes_the_budget_by_at_most_sixteen_receive_windows()
+ {
+    let host = Machine::new("windows-pc");
+    let guest = Machine::new("macbook");
+    let written = Arc::new(AtomicU64::new(0));
+    let ended = Arc::new(AtomicUsize::new(0));
+    {
+        let (written, ended) = (Arc::clone(&written), Arc::clone(&ended));
+        host.host.handle(StreamKind::Page, move |incoming| {
+            let (written, ended) = (Arc::clone(&written), Arc::clone(&ended));
+            async move {
+                let _recv = incoming.stream.recv;
+                let mut send = incoming.stream.send;
+                let chunk = vec![3_u8; 16 * 1024];
+                while send.write_all(&chunk).await.is_ok() {
+                    written.fetch_add(chunk.len() as u64, Ordering::SeqCst);
+                }
+                ended.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+    }
+    let link = paired(&host, &guest).await;
+    let limit = 32 * CHUNK as u64;
+    let budget = Arc::new(RelayBudget::new(limit));
+    let mut tunnels = Vec::new();
+    let mut pages = Vec::new();
+    for _ in 0..PLACES {
+        let stream = open_page(&link).await.unwrap();
+        let (page, local) = tokio::io::duplex(4 * CHUNK);
+        pages.push(drain(page));
+        let budget = Arc::clone(&budget);
+        tunnels.push(tokio::spawn(async move {
+            let mut local = local;
+            pipe(
+                &mut local,
+                &[],
+                stream.recv,
+                stream.send,
+                &budget,
+                &|| true,
+                &slot(),
+                &|| {},
+            )
+            .await
+            .0
+        }));
+    }
+    for tunnel in tunnels {
+        assert_eq!(within("a tunnel", tunnel).await.unwrap(), Piped::Budget);
+    }
+    within("the host's writes to end", async {
+        while ended.load(Ordering::SeqCst) < PLACES {
+            tokio::time::sleep(Duration::from_millis(10)).await; // wait-ok: the host's writes fail once the guest's ends are dropped
+        }
+    })
+    .await;
+    assert!(budget.used() <= limit);
+    let past = written.load(Ordering::SeqCst).saturating_sub(budget.used());
+    assert!(
+        past <= PLACES as u64 * (DIRECT_STREAM_WINDOW + CHUNK as u64),
+        "the host wrote {past} bytes past the reservations"
+    );
 }

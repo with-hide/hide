@@ -68,6 +68,8 @@ type Pair = {
   pairing: string | null;
   /** The partition whose proxy is the listener now. */
   proxied: string | null;
+  /** Whether an ask reached the daemon, which may hold a listener for it whatever came of the answer. */
+  asked: boolean;
   asking: Promise<EgressState> | null;
 };
 
@@ -133,7 +135,7 @@ export class RemoteEgress {
     const name = pairName(device, key);
     let pair = this.pairs.get(name);
     if (!pair) {
-      pair = { device, key, listener: null, pairing: null, proxied: null, asking: null };
+      pair = { device, key, listener: null, pairing: null, proxied: null, asked: false, asking: null };
       this.pairs.set(name, pair);
     }
     const asked = pair;
@@ -152,6 +154,9 @@ export class RemoteEgress {
     const name = pairName(pair.device, pair.key);
     if (this.pairs.get(name) !== pair) return "not_connected";
     let answer: Response;
+    // From here the daemon may hold a listener for the pair, whether or not
+    // the answer arrives or the proxy is set: `release` lets it go.
+    pair.asked = true;
     try {
       answer = await (this.deps.fetch ?? fetch)(this.address(daemon, pair.device, pair.key), { method: "POST", headers: { authorization: `Bearer ${daemon.token}` }, signal: AbortSignal.timeout(10_000) });
     } catch {
@@ -210,15 +215,16 @@ export class RemoteEgress {
 
   /**
    * The pair's pages are gone: its pages may make no request until asked
-   * again, and the daemon lets its listener go, once an ask still on its way
-   * has its answer, so a listener that answer opened goes too.
+   * again, and the daemon lets go of any listener an ask of the pair may
+   * have opened (one answered, one whose proxy could not be set, one whose
+   * answer was lost), once an ask still on its way has its answer.
    */
   release(device: string, key: string): void {
     const name = pairName(device, key);
     const pair = this.pairs.get(name);
     if (!pair) return;
     this.pairs.delete(name);
-    if (!pair.listener && !pair.asking) return;
+    if (!pair.asked && !pair.asking) return;
     const asked = pair.asking ?? Promise.resolve("");
     const done: Promise<void> = asked
       .catch(() => "")
@@ -256,7 +262,7 @@ type Stored = { device: string; key: string; pairing: string; core: string; stat
 export type Clearable = Pick<Session, "closeAllConnections" | "clearAuthCache" | "clearStorageData" | "clearCache">;
 
 /** Whether a pair's pages may be made now (`RemoteStorage.admit`). */
-export type Admitted = "live" | "clearing" | "full" | "waiting";
+export type Admitted = "live" | "clearing" | "full" | "waiting" | "unrecorded";
 
 export type StorageDeps = {
   /** The index file. */
@@ -265,8 +271,8 @@ export type StorageDeps = {
   partitions?: string;
   log: HostLog;
   session?: (partition: string) => Clearable;
-  /** Closes every page of the pair before its storage is cleared. */
-  closePages: (device: string, key: string) => void;
+  /** Closes every page on `partition` before its storage is cleared, and no page of another pairing. */
+  closePages: (partition: string) => void;
   /** The pair's storage was cleared, or may be admitted now: a screen of it may make its pages again. */
   cleared?: (device: string, key: string) => void;
 };
@@ -339,16 +345,20 @@ export class RemoteStorage {
    * Whether the pair's pages may be made now, on the partition of
    * `pairing`: `live` once it is in the index, `clearing` while an earlier
    * clear of it runs or failed, `full` when the index holds as many as it
-   * may, `waiting` until the shell has named its core's paired set. An entry
-   * of the same machine and key under another pairing of this core is
-   * cleared, its pages closed first.
+   * may, `waiting` until the shell has named its core's paired set, and
+   * `unrecorded` when its row could not be written: a session the index does
+   * not name is deleted at the next launch, so none is made before its row
+   * is on disk, and the next sync asks again. A live entry of the same
+   * machine and key under another pairing of this core is cleared, its own
+   * pages closed first; one whose clear failed is cleared again at the next
+   * launch and paired set, never at each sync.
    */
   admit(device: string, key: string, pairing: string): Admitted {
     const core = this.core;
     if (core === null) return "waiting";
     const partition = remotePagePartition(device, key, pairing);
     for (const [held, entry] of this.entries) {
-      if (held !== partition && entry.core === core && entry.device === device && entry.key === key) void this.clear(held);
+      if (held !== partition && entry.state === "live" && entry.core === core && entry.device === device && entry.key === key) void this.clear(held);
     }
     const entry = this.entries.get(partition);
     if (entry) return entry.state === "live" ? "live" : "clearing";
@@ -358,9 +368,11 @@ export class RemoteStorage {
       return "full";
     }
     this.fullLogged = false;
-    this.entries.set(partition, { device, key, pairing, core, state: "live" });
-    this.save();
-    return "live";
+    const admitted: Stored = { device, key, pairing, core, state: "live" };
+    this.entries.set(partition, admitted);
+    if (this.save()) return "live";
+    if (this.entries.get(partition) === admitted) this.entries.delete(partition);
+    return "unrecorded";
   }
 
   /**
@@ -392,7 +404,7 @@ export class RemoteStorage {
     if (!entry) return Promise.resolve();
     entry.state = "clearing";
     this.save();
-    this.deps.closePages(entry.device, entry.key);
+    this.deps.closePages(partition);
     const pages = this.deps.session ? this.deps.session(partition) : electronSession.fromPartition(partition);
     const done = (async () => {
       try {
@@ -424,11 +436,14 @@ export class RemoteStorage {
     return this.entries.get(remotePagePartition(device, key, pairing))?.state ?? null;
   }
 
-  private save(): void {
+  /** Writes the index; false, and logged, when it could not be written. */
+  private save(): boolean {
     try {
       writeJsonFile(this.deps.file, { entries: [...this.entries.values()] });
+      return true;
     } catch (error) {
       this.deps.log.event("remote.storage_index_failed", { detail: String(error) });
+      return false;
     }
   }
 }
