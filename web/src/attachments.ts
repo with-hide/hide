@@ -56,11 +56,12 @@ export function rememberDrop(batch: string, folder: string): void {
 /** Uploads one dropped file to hided's staging under `stage`; false when there is no connection to send on. */
 export function stageFile(stage: string, file: AttachmentInput): boolean {
   if (!sender) return false;
-  sender.dispatch({
+  const sent = sender.dispatch({
     schema_version: 2,
     kind: "attachment_stage",
     payload: { request_id: stage, name: file.name, size: file.bytes.byteLength, clipboard: false },
   });
+  if (sent === false) return false;
   sendChunks(stage, file.bytes);
   return true;
 }
@@ -120,12 +121,16 @@ export function submitThreadInput(generation: number, paneId: string, text: stri
     if (reason) return { refused: reason };
   }
   rememberComposer(requestId);
-  const stages = files.map((file, index) => {
+  const stages: string[] = [];
+  for (const [index, file] of files.entries()) {
     const stage = `${requestId}-${index}`;
-    stageFile(stage, file);
-    return stage;
-  });
-  sender.dispatch({ schema_version: 2, kind: "thread_input", payload: { generation, pane_id: paneId, request_id: requestId, text, stages } });
+    if (!stageFile(stage, file)) { composerRequests.delete(requestId); return null; }
+    stages.push(stage);
+  }
+  if (sender.dispatch({ schema_version: 2, kind: "thread_input", payload: { generation, pane_id: paneId, request_id: requestId, text, stages } }) === false) {
+    composerRequests.delete(requestId);
+    return null;
+  }
   return requestId;
 }
 

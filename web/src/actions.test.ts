@@ -423,7 +423,7 @@ describe("input after a confirmed View close", () => {
       { pane_id: "w1:p1", thread_capability: "ready", thread_identity: "one" },
       { pane_id: "w1:p2", thread_capability: "ready", thread_identity: "two" },
     ] as never });
-    noteKeyboardOwner({ kind: "pane", workspace, paneId: "w1:p1" });
+    noteKeyboardOwner({ kind: "pane", workspace: workspace.path, paneId: "w1:p1" });
     try {
       actions.deskTerminal();
       expect(useUiStore.getState().paneConversation).toEqual({ paneId: "w1:p1", session: "one" });

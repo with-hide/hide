@@ -125,9 +125,15 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
   }, [uncertain]);
 
   const held = taken ? "closed" : threadInputHeld(thread);
+  const canSend = () => {
+    if (useShellStore.getState().connection === "live") return true;
+    setNotice(words("forward_failed"));
+    return false;
+  };
   const send = () => {
     const files = tray.outgoing();
     if (!thread?.pane_id || !paneId || held !== null || sent || waiting || uncertain || !files) return;
+    if (!canSend()) return;
     const request = submitThreadInput(thread.generation, thread.pane_id, text, files.map(({ name, bytes }) => ({ name, bytes })));
     if (request && typeof request === "object") {
       setNotice(words(request.refused));
@@ -193,6 +199,7 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
   const slots = adapter ? sessionBarSlots(adapter.agent_cli, choice, catalog, t) : null;
   const change = (to: { model: string } | { effort: string }) => {
     if (!thread?.pane_id || !paneId || held !== null || sent || waiting || uncertain || ask !== null) return;
+    if (!canSend()) return;
     const request = actions.switchThread(thread.generation, thread.pane_id, to);
     if (request) {
       holdSent({ request, tiles: [] });

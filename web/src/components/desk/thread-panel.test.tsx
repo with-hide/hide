@@ -966,12 +966,33 @@ it("ignores display outcomes and settles each direct outcome even when React bat
   expect(events).toHaveLength(2);
 });
 
+it("keeps new words while reconnecting, before a snapshot, or when the live socket declines them", async () => {
+  const panel = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section(), agents: [claudeRow] }));
+  await panel.type("not sent yet");
+  for (const connection of ["reconnecting", "connecting"] as const) {
+    await act(async () => useShellStore.setState({ connection }));
+    await panel.enter();
+    expect(panel.box().value).toBe("not sent yet");
+    expect(useUiStore.getState().sessionDrafts.find((draft) => draft.pane === "w1:p2")?.sending).toBeUndefined();
+  }
+  expect(events).toEqual([]);
+  await act(async () => useShellStore.setState({ connection: "live" }));
+  configureAttachments({ dispatch: () => false, sendBinary: () => undefined });
+  await panel.enter();
+  expect(panel.box().value).toBe("not sent yet");
+  expect(useUiStore.getState().sessionDrafts.find((draft) => draft.pane === "w1:p2")?.sending).toBeUndefined();
+  configureAttachments({ dispatch: (event) => events.push({ kind: event.kind, payload: event.payload }), sendBinary: () => undefined });
+  await panel.enter();
+  expect(events).toHaveLength(1);
+});
+
 it("keeps an unanswered send uncertain across reconnect and remount until its terminal is visited", async () => {
   const first = await mount();
   await act(async () => useShellStore.setState({ sessionThread: section(), agents: [claudeRow] }));
   await first.type("check the terminal first");
   await first.enter();
-  await act(async () => useShellStore.setState({ connection: "disconnected" }));
+  await act(async () => useShellStore.setState({ connection: "reconnecting" }));
   await act(async () => first.root.unmount());
   await act(async () => useShellStore.setState({ connection: "live" }));
   const back = await mount();

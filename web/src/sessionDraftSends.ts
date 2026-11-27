@@ -14,6 +14,11 @@ export function receiveThreadInputResult(input: NonNullable<SessionThreadSection
   useShellStore.setState({ threadInputResult: input });
 }
 
+/** A socket can close before its first snapshot made the connection live. */
+export function loseThreadInputConnection(): void {
+  useUiStore.setState((local) => ({ sessionDrafts: uncertainSessionSends(local.sessionDrafts) }));
+}
+
 useShellStore.subscribe((state, previous) => {
   const input = state.threadInputResult;
   if (input && input !== previous.threadInputResult && input.state !== "sending") {
@@ -25,7 +30,7 @@ useShellStore.subscribe((state, previous) => {
   const refusal = state.composerRefusal;
   if (refusal && refusal !== previous.composerRefusal) useUiStore.getState().settleSessionSend(refusal.request_id, false);
   if (state.connection !== "live" && previous.connection === "live") {
-    useUiStore.setState((local) => ({ sessionDrafts: uncertainSessionSends(local.sessionDrafts) }));
+    loseThreadInputConnection();
   }
   // A pane's words go once the pane's own machine, connected, no longer lists it (`sessionDraftsLeft`).
   if (state.connection === "live" && (state.agents !== previous.agents || state.rest?.status?.remote !== previous.rest?.status?.remote || state.connection !== previous.connection)) {

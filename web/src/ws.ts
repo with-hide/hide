@@ -16,7 +16,7 @@ import type { ViewCommentAnchor } from "./snapshot";
 import { browserCommentKey, closeBrowserNote, noteBrowserComment, openBrowserNote, resetBrowserComments, type PagePlace } from "./viewFeedback";
 import { BridgeSocket, HIDDEN_CLOSE, remoteBridge } from "./remoteView";
 import { refuseCallsOf } from "./windowCall";
-import { receiveThreadInputResult } from "./sessionDraftSends";
+import { loseThreadInputConnection, receiveThreadInputResult } from "./sessionDraftSends";
 
 export type DispatchFn = (event: {
   schema_version: number;
@@ -136,6 +136,7 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
   };
 
   const clearSocketState = () => {
+    loseThreadInputConnection();
     clearPending("socket_closed");
     refuseWaitingAutomationCalls();
     refuseWaitingAccessCalls();
