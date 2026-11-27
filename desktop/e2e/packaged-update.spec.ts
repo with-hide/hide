@@ -81,16 +81,22 @@ function sudoShim(): string {
   return dir;
 }
 
-/** Ends the app the installer reopened, which no test handle owns. */
+/**
+ * Ends the app the installer reopened, which no test handle owns, and throws
+ * only when it is still running: an app that did not reopen, or ended between
+ * the lookup and the stop, is not a failure.
+ */
 function endReopenedApp(app: string): void {
   if (process.platform === "win32") {
-    const script = `Get-Process hide -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${app.replace(/'/g, "''")}' } | Stop-Process -Force`;
+    const reopened = `Get-Process hide -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${app.replace(/'/g, "''")}' }`;
+    const script = `${reopened} | Stop-Process -Force -ErrorAction SilentlyContinue; ${reopened} | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue; if (${reopened}) { throw 'the reopened app is still running' }`;
     execFileSync("pwsh", ["-NoProfile", "-Command", script], { stdio: "inherit" });
   } else {
     try {
       execFileSync("pkill", ["-f", `^${app}( |$)`], { stdio: "inherit" });
-    } catch {
+    } catch (error) {
       // pkill exits 1 when nothing matched: the app did not reopen.
+      if ((error as { status?: number }).status !== 1) throw error;
     }
   }
 }
@@ -105,6 +111,10 @@ test("the installed app updates to the next version and the panes and daemon kee
   const run = isolate(engine, "update");
   const shim = process.platform === "linux" ? sudoShim() : null;
   let app: ElectronApplication | null = null;
+  // An app left running fails a test that passed; after a failure it is
+  // logged, so the test's own error is the one reported.
+  let failed = false;
+  let leftRunning: unknown = null;
   try {
     if (process.platform === "win32") delete run.env.HIDE_CLI_PATH;
     else run.env.HIDE_CLI_PATH = path.join(path.dirname(file), "resources", fixtureExecutable("hide"));
@@ -175,14 +185,19 @@ test("the installed app updates to the next version and the panes and daemon kee
     expect(await panesNow()).toBe(panes);
     expect(hostLog(run.env).map((line) => line.event)).toContain("update.install");
   } catch (error) {
+    failed = true;
     console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
     throw error;
   } finally {
     await app?.close().catch(() => undefined);
-    endReopenedApp(file);
+    try { endReopenedApp(file); } catch (error) {
+      if (failed) console.log(`ending the reopened app failed: ${error instanceof Error ? error.message : String(error)}`);
+      else leftRunning = error;
+    }
     if (shim) fs.rmSync(shim, { recursive: true, force: true });
     await served.close();
     run.cleanup();
     engine.stop();
   }
+  if (leftRunning) throw leftRunning;
 });
