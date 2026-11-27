@@ -38,8 +38,10 @@ use crate::ending::Ending;
 
 /// The transport, its connection, and `hide_peer`'s types over them: what
 /// every handler and every dialer in this daemon names. A machine's
-/// connections are iroh's, and beside them the one pipe between a WSL
-/// distribution and its PC (D-27).
+/// connections are iroh's, and beside them the pipe a carrier of one byte
+/// stream runs: `wsl.exe` between a WSL distribution and its PC (D-27), and
+/// the system `ssh` to a host's alias when no direct path opens
+/// (mission-107).
 pub type Transport = Beside<IrohTransport>;
 pub type Conn = Either<IrohConn, PipeConn>;
 pub type HostPeers = Peers<Transport>;
@@ -77,6 +79,10 @@ pub struct Settings {
     /// machine that reaches no WSL, which then only takes the carriers its
     /// own PC makes.
     pub wsl: Option<Arc<crate::pairing_wsl::Carriers>>,
+    /// What makes the SSH carriers to the hosts this machine keeps, and
+    /// keeps their routes; none where nothing dials over SSH (a node that
+    /// only meets its core).
+    pub ssh: Option<Arc<crate::peer_ssh::SshCarriers>>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -93,6 +99,7 @@ impl std::fmt::Debug for Settings {
             .field("relay", &self.relay)
             .field("relay_only", &self.relay_only)
             .field("wsl", &self.wsl.is_some())
+            .field("ssh", &self.ssh.is_some())
             .finish()
     }
 }
@@ -106,6 +113,7 @@ impl Settings {
         device: &str,
         name: Option<String>,
         wsl: Option<Arc<crate::pairing_wsl::Carriers>>,
+        ssh: Option<Arc<crate::peer_ssh::SshCarriers>>,
     ) -> Self {
         let release = crate::build_order::Release::of_this_build();
         Self {
@@ -118,6 +126,7 @@ impl Settings {
             relay: env.peer_relay.clone(),
             relay_only: env.peer_relay_only,
             wsl,
+            ssh,
         }
     }
 
@@ -172,29 +181,18 @@ impl Settings {
         };
         // The same machine key on both: one machine, whatever carries it.
         let pipe_key = MachineKey::from_secret(&key.secret());
-        let pipe = match &self.wsl {
-            Some(carriers) => {
-                let carriers = Arc::clone(carriers);
-                PipeTransport::dialing(pipe_key, move |to| {
-                    let carriers = Arc::clone(&carriers);
-                    let distro = hide_peer::pipe::distribution(to).map(str::to_owned);
-                    async move {
-                        let distro = distro.ok_or_else(|| {
-                            io::Error::new(
-                                io::ErrorKind::InvalidInput,
-                                "the address names no distribution",
-                            )
-                        })?;
-                        // `wsl.exe` is asked and started off the runtime; a
-                        // dial given up meanwhile drops the carrier it gets,
-                        // which ends its child.
-                        tokio::task::spawn_blocking(move || carriers.carrier(&distro))
-                            .await
-                            .map_err(io::Error::other)?
-                    }
-                })
+        let pipe = match (&self.wsl, &self.ssh) {
+            (None, None) => PipeTransport::accepting(pipe_key),
+            (wsl, ssh) => {
+                let (wsl, carriers) = (wsl.clone(), ssh.clone());
+                let pipe = PipeTransport::dialing(pipe_key, move |to| {
+                    carrier_to(wsl.as_ref(), carriers.as_ref(), to)
+                });
+                match ssh {
+                    Some(routes) => pipe.with_routes(Arc::clone(routes) as _),
+                    None => pipe,
+                }
             }
-            None => PipeTransport::accepting(pipe_key),
         };
         let (peers, incoming) = Peers::start(
             Beside::new(transport, pipe),
@@ -207,6 +205,15 @@ impl Settings {
                 clock: Clock::system(),
             },
         )?;
+        // A route an alias led to another Hide on is turned off in the
+        // records these connections keep, by compare-and-set on its alias.
+        if let Some(carriers) = &self.ssh {
+            let records = peers.downgrade();
+            carriers.store_in(move |key, alias| match records.upgrade() {
+                Some(peers) => peers.known(|known| known.refuse_ssh(key, alias)),
+                None => Ok(false),
+            });
+        }
         Ok((peers, incoming, format!("{loaded:?}")))
     }
 
@@ -233,6 +240,34 @@ impl Settings {
                 relay_only: self.relay_only && self.relay.is_some(),
             },
         }
+    }
+}
+
+/// The carrier to the machine `to` names: a distribution's through
+/// `wsl.exe`, an alias's through the system `ssh`. Either is started off
+/// the runtime; a dial given up meanwhile drops what it gets, which ends its
+/// child.
+fn carrier_to(
+    wsl: Option<&Arc<crate::pairing_wsl::Carriers>>,
+    ssh: Option<&Arc<crate::peer_ssh::SshCarriers>>,
+    to: &PeerAddr,
+) -> Pin<Box<dyn Future<Output = io::Result<hide_peer::mux::Carrier>> + Send>> {
+    let no = |what: &str| io::Error::new(io::ErrorKind::InvalidInput, what.to_owned());
+    if let Some(distro) = hide_peer::pipe::distribution(to).map(str::to_owned) {
+        let Some(carriers) = wsl.cloned() else {
+            return Box::pin(std::future::ready(Err(no("this machine reaches no WSL"))));
+        };
+        return Box::pin(async move {
+            tokio::task::spawn_blocking(move || carriers.carrier(&distro))
+                .await
+                .map_err(io::Error::other)?
+        });
+    }
+    match (hide_peer::protocol::addr::ssh_alias(to), ssh) {
+        (Some(alias), Some(carriers)) => Box::pin(carriers.carrier(to.key, alias.to_owned())),
+        _ => Box::pin(std::future::ready(Err(no(
+            "the address names no carrier this machine makes",
+        )))),
     }
 }
 
@@ -453,6 +488,12 @@ impl PeerHost {
         self.settings.wsl.as_ref()
     }
 
+    /// What makes the SSH carriers and keeps the routes, on a machine that
+    /// dials over SSH.
+    pub fn ssh(&self) -> Option<&Arc<crate::peer_ssh::SshCarriers>> {
+        self.settings.ssh.as_ref()
+    }
+
     /// The open endpoint's connections; `None` while it is not open.
     pub fn peers(&self) -> Option<HostPeers> {
         self.opened.get().cloned()
@@ -573,6 +614,7 @@ pub(crate) mod fixture {
                     relay: None,
                     relay_only: false,
                     wsl: None,
+                    ssh: None,
                 },
                 shutdown.clone(),
             );
@@ -641,6 +683,7 @@ pub(crate) mod fixture {
                     state: KnownState::Active,
                     candidates: host.addr().candidates,
                     started: None,
+                    ssh: None,
                 })
             })
             .unwrap();
@@ -724,6 +767,7 @@ mod tests {
             state,
             candidates: Vec::new(),
             started: None,
+            ssh: None,
         };
         for (state_now, finished) in [
             (KnownState::Confirming, false),
@@ -754,6 +798,7 @@ mod tests {
             relay: None,
             relay_only: false,
             wsl: None,
+            ssh: None,
         };
         let machine = hide_platform::host::machine_id().unwrap();
         let (key, _) = MachineKey::load_or_create(&layout::machine_key(dir), &machine).unwrap();
@@ -854,6 +899,7 @@ mod tests {
                 state,
                 candidates: Vec::new(),
                 started: None,
+                ssh: None,
             })
             .unwrap();
     }

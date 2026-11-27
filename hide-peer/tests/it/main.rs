@@ -170,6 +170,7 @@ pub fn pair(host: &Machine, guest: &Machine) {
                 state: KnownState::Active,
                 candidates: Vec::new(),
                 started: None,
+                ssh: None,
             })
         })
         .unwrap();

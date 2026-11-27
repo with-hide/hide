@@ -528,6 +528,19 @@ impl SshTarget {
         self
     }
 
+    /// This target, its `ssh` forwarding nothing of the account's
+    /// ([`SshProgram::forwarding_nothing`]): the carrier of a connection two
+    /// Hides keep (mission-107).
+    pub fn forwarding_nothing(mut self) -> Self {
+        self.program = self.program.forwarding_nothing();
+        self
+    }
+
+    /// Whether its `ssh` forwards nothing of the account's.
+    pub fn forwards_nothing(&self) -> bool {
+        self.program.forwards_nothing()
+    }
+
     pub fn alias(&self) -> &str {
         &self.alias
     }
@@ -710,6 +723,31 @@ impl Session {
             "kind": "session.attached",
             "target": self.target,
         }));
+        Ok(AttachChannel { stream, stderr })
+    }
+}
+
+impl Session {
+    /// Starts `argv` on the machine in place of the start script, its first
+    /// word made by `program` from the account's home and system, and
+    /// answers its standard input and output as one local stream: the
+    /// carrier of the connection two Hides keep over SSH (mission-107). Its
+    /// standard error, and ssh's, go to the stream's `stderr`. The stream's
+    /// end ends `ssh`.
+    pub fn carry(
+        mut self,
+        program: impl FnOnce(&str, &str) -> Vec<String>,
+    ) -> Result<AttachChannel, SessionError> {
+        self.usable()?;
+        let argv = program(&self.facts.home, &self.facts.os);
+        let started = bootstrap::carry(&mut self.pipe, &argv);
+        self.checked(started)?;
+        let stderr = Arc::new(Mutex::new(Vec::new()));
+        let stream = self
+            .pipe
+            .link
+            .into_stream(Arc::clone(&stderr))
+            .map_err(|error| SessionError::Local(format!("the carrier stream: {error}")))?;
         Ok(AttachChannel { stream, stderr })
     }
 }

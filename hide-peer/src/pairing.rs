@@ -551,13 +551,13 @@ impl<T: PeerTransport> Pairings<T> {
             device: inner.me.device.clone(),
             relay: candidates.iter().find_map(|candidate| match candidate {
                 Candidate::Relay(url) => Some(url.clone()),
-                Candidate::Ip(_) | Candidate::Wsl(_) => None,
+                Candidate::Ip(_) | Candidate::Wsl(_) | Candidate::Ssh(_) => None,
             }),
             addrs: candidates
                 .iter()
                 .filter_map(|candidate| match candidate {
                     Candidate::Ip(addr) => Some(*addr),
-                    Candidate::Relay(_) | Candidate::Wsl(_) => None,
+                    Candidate::Relay(_) | Candidate::Wsl(_) | Candidate::Ssh(_) => None,
                 })
                 .collect(),
             secret: secret.clone(),
@@ -813,8 +813,16 @@ impl<T: PeerTransport> Pairings<T> {
     /// Makes this machine a guest of a host that answered a pairing over
     /// SSH or `wsl.exe`: saved as confirming, then confirmed over the
     /// connection. `first` are addresses to try before the host's own (the
-    /// address the SSH login reached, D-25).
-    pub fn adopt(&self, accepted: Accepted, first: Vec<Candidate>) -> Result<(), AcceptError> {
+    /// address the SSH login reached, D-25), and `ssh` the alias the
+    /// pairing signed in through, kept as the host's SSH route
+    /// (mission-107): the host the alias reached answered with the key
+    /// that will be confirmed over the connection.
+    pub fn adopt(
+        &self,
+        accepted: Accepted,
+        first: Vec<Candidate>,
+        ssh: Option<String>,
+    ) -> Result<(), AcceptError> {
         let inner = &self.inner;
         if accepted.key == inner.peers.key()
             || accepted.device == inner.me.device
@@ -834,9 +842,10 @@ impl<T: PeerTransport> Pairings<T> {
         if !again {
             let mut candidates = first;
             for candidate in accepted.candidates {
-                // Which distribution a machine is, only this machine says
-                // (`first`): a host's answer never picks a program to run.
-                if matches!(candidate, Candidate::Wsl(_)) {
+                // Which distribution a machine is, and the alias it is
+                // signed in to by, only this machine says: a host's answer
+                // never picks a program to run.
+                if matches!(candidate, Candidate::Wsl(_) | Candidate::Ssh(_)) {
                     continue;
                 }
                 if !candidates.contains(&candidate) {
@@ -852,6 +861,9 @@ impl<T: PeerTransport> Pairings<T> {
                 state: KnownState::Confirming,
                 candidates,
                 started: None,
+                ssh: ssh
+                    .filter(|alias| crate::store::valid_alias(alias))
+                    .map(crate::store::SshRoute::Alias),
             })?;
         }
         inner.settle(accepted.key);
@@ -1645,6 +1657,7 @@ impl<T: PeerTransport> Inner<T> {
             state: KnownState::Confirming,
             candidates: link.candidates(),
             started: None,
+            ssh: None,
         };
         if let Err(error) = self.adopt_host(record) {
             self.revoke_once(conn, grant);
@@ -1904,6 +1917,7 @@ impl<T: PeerTransport> Inner<T> {
             state: KnownState::Confirming,
             candidates,
             started: None,
+            ssh: None,
         };
         if self.adopt_host(record).is_err() {
             self.revoke_once(link, grant);

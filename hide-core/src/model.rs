@@ -12327,7 +12327,9 @@ mod wire_enum_tests {
         checked.insert("automation_weekday");
 
         {
-            use crate::peer_machines::{PeerOpenedBy, PeerOpens, PeerPath, PeerReason, PeerUpdate};
+            use crate::peer_machines::{
+                PeerOpenedBy, PeerOpens, PeerPath, PeerReason, PeerSshBlocked, PeerUpdate,
+            };
             let opens = [
                 PeerOpens::Confirming,
                 PeerOpens::Active,
@@ -12363,14 +12365,40 @@ mod wire_enum_tests {
                 PeerPath::Tailscale,
                 PeerPath::Relay,
                 PeerPath::Local,
+                PeerPath::Ssh,
             ];
             for variant in paths {
                 match variant {
-                    PeerPath::Direct | PeerPath::Tailscale | PeerPath::Relay | PeerPath::Local => {}
+                    PeerPath::Direct
+                    | PeerPath::Tailscale
+                    | PeerPath::Relay
+                    | PeerPath::Local
+                    | PeerPath::Ssh => {}
                 }
             }
             assert_wire(&contract, "peer_path", &paths);
             checked.insert("peer_path");
+
+            let blocked = [
+                PeerSshBlocked::SignIn,
+                PeerSshBlocked::CheckHostKey,
+                PeerSshBlocked::ReopenHide,
+                PeerSshBlocked::UpdateThere,
+                PeerSshBlocked::Retry,
+                PeerSshBlocked::NotSaved,
+            ];
+            for variant in blocked {
+                match variant {
+                    PeerSshBlocked::SignIn
+                    | PeerSshBlocked::CheckHostKey
+                    | PeerSshBlocked::ReopenHide
+                    | PeerSshBlocked::UpdateThere
+                    | PeerSshBlocked::Retry
+                    | PeerSshBlocked::NotSaved => {}
+                }
+            }
+            assert_wire(&contract, "peer_ssh_blocked", &blocked);
+            checked.insert("peer_ssh_blocked");
 
             let reasons = [PeerReason::RelayUnreachable, PeerReason::RelayMonthlyLimit];
             for variant in reasons {

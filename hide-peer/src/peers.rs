@@ -16,7 +16,16 @@
 //!   stays ([`decide`]);
 //! - a connection from the side that dialed the one held replaces it: the
 //!   peer restarted or lost its end, and closing the new one as a duplicate
-//!   would leave the pair with a dead connection.
+//!   would leave the pair with a dead connection;
+//! - a connection that names the held one as the one it replaces (a move
+//!   to a better path, mission-107) replaces it whichever side dialed it,
+//!   and one a move replaced is refused wherever it arrives late
+//!   ([`decide`]).
+//!
+//! A machine that keeps a host climbs while the connection lives
+//! (mission-107, 4.3): from the relay to SSH, and from SSH to a direct path
+//! the other transport finds, each move a new connection that names the one
+//! it replaces.
 
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
@@ -30,10 +39,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::Instant;
 
 use hide_kit::layout;
+use hide_peer_protocol::addr::{ssh_alias, without_ssh};
 use hide_peer_protocol::hello::{self, Agreed, Behind, GrantState, Hello, HelloFrame};
 use hide_peer_protocol::pairing::ConfirmState;
 use hide_peer_protocol::stream::{self, Status};
-use hide_peer_protocol::{CloseCode, PathKind, PeerAddr, PeerKey, StreamKind};
+use hide_peer_protocol::{Candidate, CloseCode, PathKind, PeerAddr, PeerKey, StreamKind};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Semaphore, broadcast, mpsc, watch};
@@ -41,6 +51,7 @@ use tokio::sync::{Semaphore, broadcast, mpsc, watch};
 use crate::gate::{CLOSED, Gate, Guarded};
 use crate::limits;
 use crate::store::{Change, Grant, GrantStatus, Grants, Host, Known, KnownState, StoreError, Via};
+use crate::transport::Route;
 use crate::transport::{PeerConn, PeerTransport, TransportError};
 use crate::wire;
 
@@ -240,24 +251,48 @@ pub enum Standing {
     Refuse(CloseCode),
 }
 
+/// One connection as [`decide`] reads it: who dialed it, and the names its
+/// dialer's hello gave it (`Hello::dial`, `Hello::replaces`), which both
+/// ends read alike.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Named {
+    pub dialed_by_us: bool,
+    pub dial: u64,
+    pub replaces: u64,
+}
+
 /// Decides between the connection held to `peer` and a new one. Both sides
-/// decide the same from the same facts, so exactly one connection is left.
+/// decide the same from the same facts, so exactly one connection is left:
+/// a connection a successor replaced (`superseded`, what this end installed
+/// says it replaces) is refused wherever it arrives, a successor of the held
+/// one replaces it (the new one names it, as the one it replaces or among
+/// those its dialer knew were, `supersedes`), and otherwise the same side's
+/// newer dial replaces its older one and of two sides' dials the smaller
+/// key's stays.
 pub fn decide(
     ours: &PeerKey,
     peer: &PeerKey,
-    held_dialed_by_us: Option<bool>,
-    new_dialed_by_us: bool,
+    held: Option<Named>,
+    new: Named,
+    supersedes: &[u64],
+    superseded: &[u64],
 ) -> Standing {
-    let Some(held_dialed_by_us) = held_dialed_by_us else {
+    if new.dial != 0 && superseded.contains(&new.dial) {
+        return Standing::Refuse(CloseCode::Replaced);
+    }
+    let Some(held) = held else {
         return Standing::Install;
     };
-    if held_dialed_by_us == new_dialed_by_us {
+    if held.dial != 0 && (new.replaces == held.dial || supersedes.contains(&held.dial)) {
+        return Standing::Replace(CloseCode::Replaced);
+    }
+    if held.dialed_by_us == new.dialed_by_us {
         // The same side dialed again: its earlier connection is gone on its
         // end, whatever this end still believes.
         return Standing::Replace(CloseCode::Replaced);
     }
     let dialer = |by_us: bool| if by_us { ours } else { peer };
-    if dialer(new_dialed_by_us) < dialer(held_dialed_by_us) {
+    if dialer(new.dialed_by_us) < dialer(held.dialed_by_us) {
         Standing::Replace(CloseCode::Duplicate)
     } else {
         Standing::Refuse(CloseCode::Duplicate)
@@ -332,6 +367,9 @@ struct LinkInner<C: PeerConn> {
     conn: C,
     theirs: Hello,
     agreed: Agreed,
+    /// The connection's name and the one it replaces, read from its
+    /// dialer's hello: the same on both ends for its whole life.
+    named: Named,
     /// The grant this machine gives the peer: gates what the peer opens.
     inbound: Arc<Gate>,
     /// The grant the peer gives this machine: gates what is opened there.
@@ -378,6 +416,18 @@ impl<C: PeerConn> Link<C> {
 
     pub fn path(&self) -> PathKind {
         self.inner.conn.path()
+    }
+
+    /// The dialer's name for this connection (`Hello::dial`); `0` from a
+    /// build that names none.
+    pub fn dial_name(&self) -> u64 {
+        self.inner.named.dial
+    }
+
+    /// Whether the two builds agreed that a connection may run over SSH
+    /// and move between paths (mission-107).
+    pub fn can_move(&self) -> bool {
+        self.inner.agreed.has(hello::SSH_PATH)
     }
 
     /// What the two builds agreed to speak. A caller acts on a capability
@@ -504,6 +554,41 @@ struct Table<C: PeerConn> {
     /// Connections closed here whose end has not been seen yet. A machine
     /// is dialed again only when it has none.
     draining: HashMap<PeerKey, Vec<C>>,
+    /// The names of connections that were ended for another, per machine:
+    /// ones this end refused or replaced, and ones the connections it
+    /// installed say they replace. Each kept [`limits::SUPERSEDED_FOR`], at
+    /// most [`limits::MAX_SUPERSEDED`]: one that arrives late is refused
+    /// ([`decide`]), and each hello this end dials carries them.
+    superseded: HashMap<PeerKey, Vec<(u64, Instant)>>,
+}
+
+impl<C: PeerConn> Table<C> {
+    /// The names of `key`'s connections a move replaced that are still
+    /// remembered.
+    fn superseded(&mut self, key: &PeerKey) -> Vec<u64> {
+        let now = Instant::now();
+        let Some(kept) = self.superseded.get_mut(key) else {
+            return Vec::new();
+        };
+        kept.retain(|(_, at)| now.duration_since(*at) < limits::SUPERSEDED_FOR);
+        let names = kept.iter().map(|(name, _)| *name).collect();
+        if kept.is_empty() {
+            self.superseded.remove(key);
+        }
+        names
+    }
+
+    fn supersede(&mut self, key: PeerKey, name: u64) {
+        let kept = self.superseded.entry(key).or_default();
+        if let Some(known) = kept.iter_mut().find(|(known, _)| *known == name) {
+            known.1 = Instant::now();
+            return;
+        }
+        kept.push((name, Instant::now()));
+        if kept.len() > limits::MAX_SUPERSEDED {
+            kept.remove(0);
+        }
+    }
 }
 
 struct Inner<T: PeerTransport> {
@@ -572,7 +657,26 @@ fn lock<V>(mutex: &Mutex<V>) -> MutexGuard<'_, V> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// A [`Peers`] that does not keep it open: what a carrier maker inside the
+/// transport holds to reach the records it was opened with.
+pub struct WeakPeers<T: PeerTransport> {
+    inner: std::sync::Weak<Inner<T>>,
+}
+
+impl<T: PeerTransport> WeakPeers<T> {
+    pub fn upgrade(&self) -> Option<Peers<T>> {
+        self.inner.upgrade().map(|inner| Peers { inner })
+    }
+}
+
 impl<T: PeerTransport> Peers<T> {
+    /// A handle that does not keep these connections and records open.
+    pub fn downgrade(&self) -> WeakPeers<T> {
+        WeakPeers {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
     /// Opens the two records and starts accepting. Call it on the runtime
     /// the connections run on. The receiver yields every stream a peer
     /// opens and this machine accepts; [`Peers::close`] ends everything
@@ -598,6 +702,7 @@ impl<T: PeerTransport> Peers<T> {
             table: Mutex::new(Table {
                 live: HashMap::new(),
                 draining: HashMap::new(),
+                superseded: HashMap::new(),
             }),
             clock: config.clock,
             relation: watch::channel(0).0,
@@ -662,6 +767,7 @@ impl<T: PeerTransport> Peers<T> {
     /// Tells every redial wait that the machine woke or its network
     /// changed: the next dial is not held back by an earlier failure (B15).
     pub fn network_changed(&self) {
+        self.inner.transport.network_changed();
         self.inner.woke.send_modify(|count| *count += 1);
         // A timer does not run while the machine sleeps: what a connection
         // may stay for is read again against the clock.
@@ -1030,10 +1136,21 @@ impl<T: PeerTransport> Inner<T> {
     }
 
     async fn dial(self: &Arc<Self>, to: &PeerAddr) -> Result<Link<T::Conn>, DialError> {
+        self.dial_replacing(to, 0).await
+    }
+
+    /// A dial that names `replaces`, the connection to `to` that ended on
+    /// this end before it, so a late first exchange of that one is refused
+    /// on the other ([`decide`]); `0` names none.
+    async fn dial_replacing(
+        self: &Arc<Self>,
+        to: &PeerAddr,
+        replaces: u64,
+    ) -> Result<Link<T::Conn>, DialError> {
         let turn = Arc::clone(lock(&self.dialing).entry(to.key).or_default());
         let dialed = {
             let _turn = turn.lock().await;
-            self.dial_in_turn(to).await
+            self.dial_in_turn(to, replaces).await
         };
         drop(turn);
         // The entry goes with its last caller.
@@ -1047,7 +1164,11 @@ impl<T: PeerTransport> Inner<T> {
         dialed
     }
 
-    async fn dial_in_turn(self: &Arc<Self>, to: &PeerAddr) -> Result<Link<T::Conn>, DialError> {
+    async fn dial_in_turn(
+        self: &Arc<Self>,
+        to: &PeerAddr,
+        replaces: u64,
+    ) -> Result<Link<T::Conn>, DialError> {
         let mut admitted = self.admitted.subscribe();
         if let Some(link) = self.link(&to.key) {
             return Ok(link);
@@ -1062,7 +1183,7 @@ impl<T: PeerTransport> Inner<T> {
                 conn.map_err(|_| DialError::TimedOut)??
             }
         };
-        let failed = match self.establish(conn.clone()).await {
+        let failed = match self.establish_replacing(conn.clone(), replaces).await {
             Ok(link) => return Ok(link),
             Err(failed) => failed,
         };
@@ -1100,6 +1221,9 @@ impl<T: PeerTransport> Inner<T> {
         &self,
         conn: &T::Conn,
         asks_update: bool,
+        dial: u64,
+        replaces: u64,
+        supersedes: Vec<u64>,
     ) -> Result<
         (
             Hello,
@@ -1110,6 +1234,9 @@ impl<T: PeerTransport> Inner<T> {
     > {
         let ours = Hello {
             update: asks_update,
+            dial,
+            replaces,
+            supersedes,
             ..self.hello.clone()
         }
         .encode()
@@ -1152,11 +1279,31 @@ impl<T: PeerTransport> Inner<T> {
 
     /// The first exchange and admission of a connection either side dialed.
     async fn establish(self: &Arc<Self>, conn: T::Conn) -> Result<Link<T::Conn>, DialError> {
+        self.establish_replacing(conn, 0).await
+    }
+
+    /// [`Inner::establish`] of a connection this side dialed to replace the
+    /// one named `replaces` (a move), or `0`.
+    async fn establish_replacing(
+        self: &Arc<Self>,
+        conn: T::Conn,
+        replaces: u64,
+    ) -> Result<Link<T::Conn>, DialError> {
         let key = conn.peer();
         let asks_update = lock(&self.update_asks).contains(&key);
+        // The dialer names each connection, and says which ones it knows
+        // were replaced; the accepting side says none.
+        let (dial, replaces, supersedes) = match conn.dialed() {
+            true => (
+                crate::key::dial_name()?,
+                replaces,
+                lock(&self.table).superseded(&key),
+            ),
+            false => (0, 0, Vec::new()),
+        };
         let exchanged = tokio::time::timeout(
             limits::HELLO_WITHIN,
-            self.first_exchange(&conn, asks_update),
+            self.first_exchange(&conn, asks_update, dial, replaces, supersedes.clone()),
         )
         .await;
         let (theirs, send, recv) = match exchanged {
@@ -1220,6 +1367,49 @@ impl<T: PeerTransport> Inner<T> {
                 return Err(DialError::UpdateNeeded(behind));
             }
         };
+        let moves = agreed.has(hello::SSH_PATH);
+        // An SSH connection exists only between builds that both name it:
+        // the far `carry --ssh` refuses any other first, so this holds as a
+        // second wall.
+        if conn.path() == PathKind::Ssh && !moves {
+            conn.close(CloseCode::Probe);
+            return Err(DialError::Refused(CloseCode::Probe));
+        }
+        // Both ends read the names from the dialer's hello. With a build
+        // that names none, every connection names nothing and the rule is
+        // the one both builds share.
+        let (named, supersedes) = match (moves, conn.dialed()) {
+            (false, by_us) => (
+                Named {
+                    dialed_by_us: by_us,
+                    dial: 0,
+                    replaces: 0,
+                },
+                Vec::new(),
+            ),
+            (true, true) => (
+                Named {
+                    dialed_by_us: true,
+                    dial,
+                    replaces,
+                },
+                supersedes,
+            ),
+            (true, false) => (
+                Named {
+                    dialed_by_us: false,
+                    dial: theirs.dial,
+                    replaces: theirs.replaces,
+                },
+                theirs
+                    .supersedes
+                    .iter()
+                    .copied()
+                    .filter(|name| *name != 0)
+                    .take(hello::MAX_SUPERSEDES)
+                    .collect(),
+            ),
+        };
         let (frames, queued) = mpsc::channel(limits::MAX_EVENTS);
         let counts = Arc::new(Counts::default());
         // The hello stream holds its kind's one place for the connection's
@@ -1237,9 +1427,22 @@ impl<T: PeerTransport> Inner<T> {
                 .live
                 .get(&key)
                 .filter(|link| link.inner.conn.ended().is_none())
-                .map(Link::dialed);
-            let standing = decide(&self.transport.key(), &key, held, conn.dialed());
+                .map(|link| link.inner.named);
+            let superseded = table.superseded(&key);
+            let standing = decide(
+                &self.transport.key(),
+                &key,
+                held,
+                named,
+                &supersedes,
+                &superseded,
+            );
             if let Standing::Refuse(code) = standing {
+                // Ended here for another: dead on both ends, whenever the
+                // other hears it.
+                if named.dial != 0 {
+                    table.supersede(key, named.dial);
+                }
                 conn.close(code);
                 return Err(DialError::Refused(code));
             }
@@ -1260,6 +1463,7 @@ impl<T: PeerTransport> Inner<T> {
                     conn: conn.clone(),
                     theirs,
                     agreed,
+                    named,
                     inbound: Gate::new(granting.generation),
                     outbound: Gate::new(CLOSED),
                     heard: AtomicU64::new(CLOSED),
@@ -1269,9 +1473,19 @@ impl<T: PeerTransport> Inner<T> {
                     frames,
                 }),
             };
+            // Read under the same lock as the install, so a predecessor
+            // that arrives later always finds it.
+            for name in std::iter::once(named.replaces).chain(supersedes) {
+                if name != 0 {
+                    table.supersede(key, name);
+                }
+            }
             if let Some(old) = table.live.insert(key, link.clone())
                 && let Standing::Replace(code) = standing
             {
+                if old.inner.named.dial != 0 {
+                    table.supersede(key, old.inner.named.dial);
+                }
                 old.close(code);
                 table
                     .draining
@@ -1305,9 +1519,15 @@ impl<T: PeerTransport> Inner<T> {
         mut queued: mpsc::Receiver<HelloFrame>,
         _place: Option<Place>,
     ) {
+        // An SSH connection beats, so a carrier that went silent is closed
+        // on both ends (mission-107, 4.6).
+        let beats = link.path() == PathKind::Ssh && link.can_move();
+        let mut beat =
+            tokio::time::interval_at(Instant::now() + limits::BEAT_EVERY, limits::BEAT_EVERY);
         loop {
             let frame = tokio::select! {
                 frame = queued.recv() => frame,
+                _ = beat.tick(), if beats => Some(HelloFrame::Beat),
                 _ = link.closed() => None,
             };
             let Some(frame) = frame else {
@@ -1328,8 +1548,21 @@ impl<T: PeerTransport> Inner<T> {
         mut recv: <T::Conn as PeerConn>::Recv,
     ) {
         let key = link.key();
+        let beats = link.path() == PathKind::Ssh && link.can_move();
         loop {
-            let body = match wire::read_message(&mut recv, hello::MAX_HELLO).await {
+            let read = wire::read_message(&mut recv, hello::MAX_HELLO);
+            let read = match beats {
+                true => match tokio::time::timeout(limits::BEAT_DEAD, read).await {
+                    Ok(read) => read,
+                    // Nothing for three beats: the carrier went silent.
+                    Err(_) => {
+                        link.close(CloseCode::Lost);
+                        return;
+                    }
+                },
+                false => read.await,
+            };
+            let body = match read {
                 Ok(Some(body)) => body,
                 Ok(None) | Err(_) => break,
             };
@@ -1376,6 +1609,8 @@ impl<T: PeerTransport> Inner<T> {
                         reason,
                     });
                 }
+                // Read is heard: the wait above starts over.
+                Ok(Some(HelloFrame::Beat)) => {}
                 // A frame of a later build.
                 Ok(None) => {}
                 Err(_) => break,
@@ -1525,34 +1760,237 @@ impl<T: PeerTransport> Inner<T> {
         self.emit(PeerEvent::Disconnected { key, code });
     }
 
+    /// Dials `to` to move the live connection `held` to a better path
+    /// (mission-107, 4.3): in the same turn as a dial, through the same
+    /// first exchange, naming `held` as the connection it replaces. Unlike
+    /// a dial it returns no live connection in place of its own and races
+    /// no arriving one; and a connection that does not beat `held`'s path,
+    /// read again before its hello (a hole punch may have landed during an
+    /// SSH sign-in) or within [`limits::DIRECT_WITHIN`] for a probe, is
+    /// closed [`CloseCode::Probe`] unadmitted.
+    async fn dial_move(
+        self: &Arc<Self>,
+        to: &PeerAddr,
+        held: &Link<T::Conn>,
+    ) -> Result<Link<T::Conn>, DialError> {
+        let turn = Arc::clone(lock(&self.dialing).entry(to.key).or_default());
+        let moved = {
+            let _turn = turn.lock().await;
+            self.move_in_turn(to, held).await
+        };
+        drop(turn);
+        let mut dialing = lock(&self.dialing);
+        if dialing
+            .get(&to.key)
+            .is_some_and(|turn| Arc::strong_count(turn) == 1)
+        {
+            dialing.remove(&to.key);
+        }
+        moved
+    }
+
+    async fn move_in_turn(
+        self: &Arc<Self>,
+        to: &PeerAddr,
+        held: &Link<T::Conn>,
+    ) -> Result<Link<T::Conn>, DialError> {
+        self.drained(&to.key).await;
+        let start = Instant::now();
+        let conn = tokio::time::timeout(limits::DIAL_WITHIN, self.transport.dial(to))
+            .await
+            .map_err(|_| DialError::TimedOut)??;
+        let beats = |conn: &T::Conn| {
+            conn.chosen_path()
+                .is_some_and(|path| path.rank() > held.path().rank())
+        };
+        while !beats(&conn) {
+            if start.elapsed() >= limits::DIRECT_WITHIN || conn.ended().is_some() {
+                conn.close(CloseCode::Probe);
+                return Err(DialError::Refused(CloseCode::Probe));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let from = held.path();
+        let link = self.establish_replacing(conn, held.dial_name()).await?;
+        crate::diagnostic!(json!({
+            "component": "peer",
+            "event": "peer.moved",
+            "peer": to.key.short(),
+            "from": format!("{from:?}"),
+            "to": format!("{:?}", link.path()),
+        }));
+        Ok(link)
+    }
+
+    /// One step of the climb on the live connection `link` (mission-107,
+    /// 4.3): what it waits for, and the move it makes, if any. A connection
+    /// between builds that cannot move, or to a machine with no SSH alias,
+    /// never climbs.
+    async fn climb(
+        self: &Arc<Self>,
+        link: &Link<T::Conn>,
+        to: &PeerAddr,
+        probe: &mut Probe,
+        woke: &mut watch::Receiver<u64>,
+    ) -> Option<Link<T::Conn>> {
+        let Some(alias) = ssh_alias(to).filter(|_| link.can_move()) else {
+            return std::future::pending().await;
+        };
+        let path = link.path();
+        let over_ssh = PeerAddr::new(to.key, vec![Candidate::Ssh(alias.to_owned())]);
+        if path.rank() < PathKind::Ssh.rank() {
+            let to_ssh = || async {
+                let moved = self.dial_move(&over_ssh, link).await;
+                // A move that did not take waits as a fall does, so a route
+                // that keeps failing is not signed in to every grace.
+                if moved.is_err() {
+                    self.transport.route_fell(&to.key);
+                }
+                moved.ok()
+            };
+            match self.transport.route(to) {
+                Route::Handed => return to_ssh().await,
+                Route::Ready | Route::Due => {
+                    // The other transport's hole punch gets its time first.
+                    tokio::select! {
+                        () = tokio::time::sleep(limits::RELAY_GRACE) => {}
+                        _ = link.inner.conn.path_changed(path) => return None,
+                    }
+                    if link.path().rank() >= PathKind::Ssh.rank() {
+                        return None;
+                    }
+                    return to_ssh().await;
+                }
+                // A wait runs out, or the network changes: read again.
+                Route::Held | Route::None => {
+                    tokio::select! {
+                        () = tokio::time::sleep(limits::RELAY_GRACE) => {}
+                        _ = link.inner.conn.path_changed(path) => {}
+                        _ = woke.changed() => {}
+                    }
+                    return None;
+                }
+            }
+        }
+        if path == PathKind::Ssh && link.dialed() {
+            // The side that dialed SSH looks for a direct path beside it.
+            tokio::select! {
+                () = tokio::time::sleep_until(probe.at) => {}
+                changed = woke.changed() => {
+                    if changed.is_err() {
+                        return std::future::pending().await;
+                    }
+                    probe.wait = limits::CLIMB_FIRST;
+                }
+            }
+            let moved = self.dial_move(&without_ssh(to), link).await.ok();
+            if moved.is_none() {
+                probe.wait = (probe.wait * 2).min(limits::CLIMB_MOST);
+                probe.at = Instant::now() + probe.wait;
+            }
+            return moved;
+        }
+        // A direct path moves inside its own connection; SSH the other side
+        // dialed is that side's to probe.
+        link.inner.conn.path_changed(path).await;
+        None
+    }
+
+    /// Holds the connection `link` to the host this machine keeps, and the
+    /// connections that take its place, climbing while one lives. Answers
+    /// how long they lived together, and the name of the last one, which
+    /// the next dial names as the one it replaces.
+    async fn hold(self: &Arc<Self>, link: Link<T::Conn>, to: &PeerAddr) -> (Duration, u64) {
+        let key = to.key;
+        let started = Instant::now();
+        let mut woke = self.woke.subscribe();
+        let mut current = link;
+        // When the current connection came, and whether a move brought it.
+        let (mut since, mut moved) = (Instant::now(), false);
+        let mut probe = Probe::after(since);
+        loop {
+            // The host's address as the records say it now: an alias the
+            // operator added since the dial is climbed to.
+            let to = lock(&self.known)
+                .of(&key)
+                .map(Host::dial_addr)
+                .unwrap_or_else(|| to.clone());
+            let climbed = tokio::select! {
+                biased;
+                moved_to = self.climb(&current, &to, &mut probe, &mut woke) => match moved_to {
+                    Some(link) => Ok(link),
+                    None => continue,
+                },
+                code = current.closed() => Err(code),
+            };
+            let next = match climbed {
+                Ok(link) => link,
+                Err(code) => {
+                    let replaced = matches!(code, CloseCode::Replaced | CloseCode::Duplicate);
+                    // A path that keeps falling is signed in to at most once
+                    // per the route's wait.
+                    if !replaced
+                        && (moved || current.path() == PathKind::Ssh)
+                        && since.elapsed() < limits::STAYED_AFTER
+                    {
+                        self.transport.route_fell(&key);
+                    }
+                    let successor = match self.link(&key) {
+                        Some(link) => Some(link),
+                        // The other side installed its move first: its
+                        // connection is on its way here.
+                        None if replaced => {
+                            let mut admitted = self.admitted.subscribe();
+                            tokio::time::timeout(
+                                limits::HELLO_WITHIN,
+                                self.arrived(&key, &mut admitted),
+                            )
+                            .await
+                            .ok()
+                        }
+                        None => None,
+                    };
+                    match successor.filter(|link| link.id() != current.id()) {
+                        Some(link) => link,
+                        None => return (started.elapsed(), current.dial_name()),
+                    }
+                }
+            };
+            current = next;
+            (since, moved) = (Instant::now(), true);
+            probe = Probe::after(since);
+        }
+    }
+
     /// The guest's redial: one connection at a time, a short wait after a
     /// drop, a longer one after each failure.
     async fn keep(self: Arc<Self>, key: PeerKey, mut stopped: watch::Receiver<bool>) {
         let mut shutdown = self.shutdown.subscribe();
         let mut woke = self.woke.subscribe();
         let mut wait = limits::REDIAL_FIRST;
+        // The connection that ended before this dial, named by it.
+        let mut ended = 0;
         loop {
             // A host this machine forgot or paused, or one that dropped the
             // pairing, is not dialed.
             let Some(to) = lock(&self.known)
                 .of(&key)
                 .filter(|host| host.state.dialed())
-                .map(|host| PeerAddr::new(key, host.candidates.clone()))
+                .map(Host::dial_addr)
             else {
                 return;
             };
             let over = async {
-                match self.dial(&to).await {
-                    Ok(link) => {
-                        let since = Instant::now();
-                        link.closed().await;
-                        Some(since.elapsed())
-                    }
+                match self.dial_replacing(&to, ended).await {
+                    Ok(link) => Some(self.hold(link, &to).await),
                     Err(_) => None,
                 }
             };
             let lived = tokio::select! {
-                lived = over => lived,
+                held = over => held.map(|(lived, last)| {
+                    ended = last;
+                    lived
+                }),
                 _ = stopped.changed() => return,
                 _ = shutdown.wait_for(|stop| *stop) => return,
             };
@@ -1568,6 +2006,22 @@ impl<T: PeerTransport> Inner<T> {
                 _ = stopped.changed() => return,
                 _ = shutdown.wait_for(|stop| *stop) => return,
             }
+        }
+    }
+}
+
+/// When the side that dialed an SSH connection next looks for a direct path
+/// beside it, and how long it waits after one it did not find.
+struct Probe {
+    at: Instant,
+    wait: Duration,
+}
+
+impl Probe {
+    fn after(since: Instant) -> Self {
+        Self {
+            at: since + limits::CLIMB_FIRST,
+            wait: limits::CLIMB_FIRST,
         }
     }
 }
@@ -1746,28 +2200,40 @@ mod tests {
         );
     }
 
+    fn named(dialed_by_us: bool) -> Named {
+        Named {
+            dialed_by_us,
+            dial: 0,
+            replaces: 0,
+        }
+    }
+
     #[test]
     fn exactly_one_of_two_connections_stays_and_both_sides_agree() {
         let (small, large) = (key(1), key(2));
+        let none: &[u64] = &[];
         // The first connection to a machine.
-        assert_eq!(decide(&small, &large, None, true), Standing::Install);
+        assert_eq!(
+            decide(&small, &large, None, named(true), none, none),
+            Standing::Install
+        );
 
         // Both dialed and both established: the smaller key's dial stays,
         // whichever arrived second, seen from either side.
         assert_eq!(
-            decide(&small, &large, Some(false), true),
+            decide(&small, &large, Some(named(false)), named(true), none, none),
             Standing::Replace(CloseCode::Duplicate)
         );
         assert_eq!(
-            decide(&small, &large, Some(true), false),
+            decide(&small, &large, Some(named(true)), named(false), none, none),
             Standing::Refuse(CloseCode::Duplicate)
         );
         assert_eq!(
-            decide(&large, &small, Some(true), false),
+            decide(&large, &small, Some(named(true)), named(false), none, none),
             Standing::Replace(CloseCode::Duplicate)
         );
         assert_eq!(
-            decide(&large, &small, Some(false), true),
+            decide(&large, &small, Some(named(false)), named(true), none, none),
             Standing::Refuse(CloseCode::Duplicate)
         );
 
@@ -1777,10 +2243,279 @@ mod tests {
             let peer = if ours == small { large } else { small };
             for by_us in [true, false] {
                 assert_eq!(
-                    decide(&ours, &peer, Some(by_us), by_us),
+                    decide(&ours, &peer, Some(named(by_us)), named(by_us), none, none),
                     Standing::Replace(CloseCode::Replaced)
                 );
             }
+        }
+        exactly_one_stays_whatever_the_order();
+    }
+
+    /// How a connection of the model below came to be dialed, as the dial
+    /// rule allows: a first dial at the start (both sides may), a redial by
+    /// a side whose own connection ended there, or a move by a side while it
+    /// held the connection the move names.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Made {
+        First,
+        Redial,
+        Move(usize),
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct Modeled {
+        /// 0 or 1: which end dialed it.
+        dialer: usize,
+        dial: u64,
+        made: Made,
+    }
+
+    /// The name a connection's hello gives as the one it replaces: a
+    /// move's, the one it moves; a redial's, the one that ended on its
+    /// dialer's end before it (`Pair::redialed`).
+    fn replaces(conns: &[Modeled], pair: &Pair, conn: usize) -> u64 {
+        match conns[conn].made {
+            Made::Move(of) => conns[of].dial,
+            Made::Redial => pair.redialed[conn],
+            Made::First => 0,
+        }
+    }
+
+    /// Both ends of a pair, each with its table and its list of what a move
+    /// replaced, and where each connection stands.
+    #[derive(Clone, Debug, Default)]
+    struct Pair {
+        held: [Option<usize>; 2],
+        superseded: [Vec<u64>; 2],
+        launched: Vec<bool>,
+        /// What each redial names as replaced.
+        redialed: Vec<u64>,
+        /// What each connection's dialer knew was replaced when it dialed.
+        supersedes: Vec<Vec<u64>>,
+        /// What happened, in order, for a failure to say.
+        trace: Vec<String>,
+        arrived: Vec<[bool; 2]>,
+        closed: Vec<bool>,
+        seen: Vec<[bool; 2]>,
+    }
+
+    fn close(pair: &mut Pair, conn: usize, by: usize) {
+        if !pair.closed[conn] {
+            pair.closed[conn] = true;
+            pair.seen[conn][by] = true;
+        }
+        if pair.held[by] == Some(conn) {
+            pair.held[by] = None;
+        }
+    }
+
+    fn see_close(pair: &mut Pair, conn: usize, end: usize) {
+        pair.seen[conn][end] = true;
+        if pair.held[end] == Some(conn) {
+            pair.held[end] = None;
+        }
+    }
+
+    fn launch(pair: &mut Pair, conns: &[Modeled], conn: usize) {
+        let dialer = conns[conn].dialer;
+        // A side redials only once its own connection ended there, and
+        // names it.
+        if conns[conn].made == Made::Redial
+            && let Some(held) = pair.held[dialer]
+        {
+            pair.redialed[conn] = conns[held].dial;
+            close(pair, held, dialer);
+        }
+        pair.supersedes[conn] = pair.superseded[dialer].clone();
+        pair.launched[conn] = true;
+    }
+
+    fn may_launch(pair: &Pair, conns: &[Modeled], conn: usize) -> bool {
+        let dialer = conns[conn].dialer;
+        // A redial and a move take the one dial turn a machine has: every
+        // earlier dial of this side finished its first exchange here.
+        let turn = || {
+            (0..conn)
+                .filter(|earlier| conns[*earlier].dialer == dialer)
+                .all(|earlier| pair.arrived[earlier][dialer])
+        };
+        !pair.launched[conn]
+            && match conns[conn].made {
+                // A dial never starts beside a live connection.
+                Made::First => turn() && pair.held[dialer].is_none(),
+                Made::Redial => turn(),
+                Made::Move(of) => turn() && pair.held[dialer] == Some(of),
+            }
+    }
+
+    fn arrive(pair: &mut Pair, conns: &[Modeled], keys: [PeerKey; 2], conn: usize, end: usize) {
+        pair.arrived[conn][end] = true;
+        // A connection this end saw closed never finishes its first
+        // exchange here.
+        if pair.seen[conn][end] {
+            return;
+        }
+        let view = |at: usize| Named {
+            dialed_by_us: conns[at].dialer == end,
+            dial: conns[at].dial,
+            replaces: replaces(conns, pair, at),
+        };
+        let held = pair.held[end];
+        let standing = decide(
+            &keys[end],
+            &keys[1 - end],
+            held.map(view),
+            view(conn),
+            &pair.supersedes[conn],
+            &pair.superseded[end],
+        );
+        match standing {
+            Standing::Refuse(_) => {
+                pair.superseded[end].push(conns[conn].dial);
+                close(pair, conn, end);
+            }
+            Standing::Install | Standing::Replace(_) => {
+                let named = std::iter::once(replaces(conns, pair, conn))
+                    .chain(pair.supersedes[conn].clone())
+                    .filter(|name| *name != 0)
+                    .collect::<Vec<_>>();
+                pair.superseded[end].extend(named);
+                if let Some(held) = held {
+                    pair.superseded[end].push(conns[held].dial);
+                    close(pair, held, end);
+                }
+                pair.held[end] = Some(conn);
+            }
+        }
+    }
+
+    /// Runs every order the events of `conns` can take, and answers, per
+    /// order in which every connection was dialed, the one the pair kept.
+    fn every_order(conns: &[Modeled], keys: [PeerKey; 2], pair: &Pair, left: &mut Vec<usize>) {
+        let mut moved = false;
+        let mut next = |what: String, change: &dyn Fn(&mut Pair)| {
+            moved = true;
+            let mut next = pair.clone();
+            change(&mut next);
+            next.trace.push(format!("{what} -> held {:?}", next.held));
+            every_order(conns, keys, &next, left);
+        };
+        for conn in 0..conns.len() {
+            if may_launch(pair, conns, conn) {
+                next(format!("dial {conn}"), &|pair| launch(pair, conns, conn));
+            }
+            for end in 0..2 {
+                if pair.launched[conn] && !pair.arrived[conn][end] {
+                    next(format!("{conn} at {end}"), &|pair| {
+                        arrive(pair, conns, keys, conn, end)
+                    });
+                }
+                if pair.closed[conn] && !pair.seen[conn][end] {
+                    next(format!("{end} sees {conn} closed"), &|pair| {
+                        see_close(pair, conn, end)
+                    });
+                }
+            }
+        }
+        if !moved {
+            assert_eq!(
+                pair.held[0], pair.held[1],
+                "the two ends hold different connections: {conns:?} {pair:?}"
+            );
+            let kept =
+                pair.held[0].unwrap_or_else(|| panic!("no connection left: {conns:?} {pair:?}"));
+            if pair.launched.iter().all(|launched| *launched) {
+                left.push(kept);
+            }
+        }
+    }
+
+    /// Every set of connections from a first dial, a fresh redial, a move
+    /// naming the held connection and a move naming an older one, from
+    /// either side, under either key order and in every order their first
+    /// exchanges finish and their closes are seen on the two ends, leaves
+    /// one connection, the same on both ends (mission-107, 4.4).
+    fn exactly_one_stays_whatever_the_order() {
+        let conn = |dialer, dial, made| Modeled { dialer, dial, made };
+        let mut scenarios: Vec<Vec<Modeled>> = Vec::new();
+        for first in 0..2 {
+            let other = 1 - first;
+            // Both sides dialed at once.
+            scenarios.push(vec![
+                conn(first, 1, Made::First),
+                conn(other, 2, Made::First),
+            ]);
+            for side in 0..2 {
+                // A redial, and a move naming the held connection.
+                scenarios.push(vec![
+                    conn(first, 1, Made::First),
+                    conn(side, 2, Made::Redial),
+                ]);
+                scenarios.push(vec![
+                    conn(first, 1, Made::First),
+                    conn(side, 2, Made::Move(0)),
+                ]);
+                // A move naming an older connection than the one kept.
+                scenarios.push(vec![
+                    conn(first, 1, Made::First),
+                    conn(other, 2, Made::First),
+                    conn(side, 3, Made::Move(0)),
+                ]);
+                // A move, and a redial against it.
+                for redial in 0..2 {
+                    scenarios.push(vec![
+                        conn(first, 1, Made::First),
+                        conn(side, 2, Made::Move(0)),
+                        conn(redial, 3, Made::Redial),
+                    ]);
+                }
+                // A move of the held connection from each side at once.
+                scenarios.push(vec![
+                    conn(first, 1, Made::First),
+                    conn(side, 2, Made::Move(0)),
+                    conn(1 - side, 3, Made::Move(0)),
+                ]);
+                // A chain: a move, then a move of the move from either side.
+                for then in 0..2 {
+                    scenarios.push(vec![
+                        conn(first, 1, Made::First),
+                        conn(side, 2, Made::Move(0)),
+                        conn(then, 3, Made::Move(1)),
+                    ]);
+                }
+            }
+        }
+        for conns in &scenarios {
+            let count = conns.len();
+            let mut dialed_all = false;
+            for keys in [[key(1), key(2)], [key(2), key(1)]] {
+                let pair = Pair {
+                    launched: vec![false; count],
+                    redialed: vec![0; count],
+                    supersedes: vec![Vec::new(); count],
+                    arrived: vec![[false; 2]; count],
+                    closed: vec![false; count],
+                    seen: vec![[false; 2]; count],
+                    ..Pair::default()
+                };
+                let mut left = Vec::new();
+                every_order(conns, keys, &pair, &mut left);
+                dialed_all |= !left.is_empty();
+                // A move of the connection both ends kept, or a move of
+                // that move, is what is left, however the exchanges went.
+                let kept_moved = match conns.iter().map(|conn| conn.made).collect::<Vec<_>>()[..] {
+                    [Made::First, Made::Move(0)] => true,
+                    [Made::First, Made::Move(0), Made::Move(1)] => true,
+                    _ => false,
+                };
+                if kept_moved {
+                    assert!(
+                        left.iter().all(|kept| *kept == count - 1),
+                        "{conns:?} under {keys:?} left {left:?}"
+                    );
+                }
+            }
+            assert!(dialed_all, "{conns:?}: no order dialed them all");
         }
     }
 

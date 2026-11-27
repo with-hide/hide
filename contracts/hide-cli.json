@@ -7080,12 +7080,21 @@
             "arguments": [],
             "command": "device carry",
             "hidden": true,
-            "options": [],
+            "options": [
+                {
+                    "name": "--ssh",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
             "refusals": [
                 "device_from_pane",
                 "hide_unavailable",
                 "request_timeout",
-                "peer_unavailable"
+                "peer_unavailable",
+                "hide_not_running",
+                "ssh_update_there"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -9806,7 +9815,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:b91d796896fde54d487e23389683aaeec71991874f4a71876ca58cda8037095f",
+    "digest": "sha256:30b2f241246d4cf5d5a13081afdf04d2e1c14ca69fe95a08894a8f09e6a27fce",
     "envelopes": {
         "access": {
             "answer": "value",

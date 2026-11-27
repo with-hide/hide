@@ -186,6 +186,20 @@ impl Upstream {
         session.attach(program, state_dir)
     }
 
+    /// Starts the program `program` names from the account's home and
+    /// system in place of the start script, on the session the last step
+    /// left or a new one; see [`Session::carry`].
+    pub fn carry(
+        &self,
+        program: impl FnOnce(&str, &str) -> Vec<String>,
+    ) -> Result<AttachChannel, SessionError> {
+        let session = match lock_recover(&self.held).take() {
+            Some(session) => session,
+            None => self.open()?,
+        };
+        session.carry(program)
+    }
+
     /// The machine's system (`macos`, `linux` or `windows`), read at the
     /// sign-in of the session the last step left or of a new one.
     pub fn system(&self) -> Result<String, SessionError> {

@@ -147,8 +147,12 @@ pub enum Verb {
     /// What the PC of a WSL distribution runs in it through `wsl.exe` to
     /// reach its core (D-27): this command's input and output become the
     /// carrier of the connection between the two; not a command a person
-    /// types.
-    Carry,
+    /// types. With `--ssh`, what a paired machine runs here over its SSH
+    /// login (mission-107): it never starts a core, and carries only to a
+    /// daemon that answers it carries over SSH.
+    Carry {
+        ssh: bool,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -166,6 +170,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
     let directed = matches!(verb, Some("pause" | "resume" | "remove"));
     let mut json = false;
     let mut wait = false;
+    let mut ssh = false;
     let mut wsl = false;
     let mut install = false;
     let mut helper = None;
@@ -186,6 +191,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
             }
             "--install" if verb == Some("switch") && !install => {
                 install = true;
+                continue;
+            }
+            "--ssh" if verb == Some("carry") && !ssh => {
+                ssh = true;
                 continue;
             }
             "--wsl" if accept && !wsl => {
@@ -291,7 +300,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
             install,
         },
         (Some("look-ssh"), []) if name.is_none() => Verb::LookSsh,
-        (Some("carry"), []) if name.is_none() && !json => Verb::Carry,
+        (Some("carry"), []) if name.is_none() && !json => Verb::Carry { ssh },
         (Some("accept-ssh"), []) => match (request, key, device, name) {
             (Some(request), Some(key), Some(device), Some(name)) => Verb::AcceptSsh {
                 request,
@@ -320,8 +329,8 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
 pub fn run(env: &Env, cli: &DeviceCli) -> Result<(), String> {
     // A carrier's output is the connection's bytes: nothing else is ever
     // printed there, and a refusal is the code this command ends with.
-    if cli.verb == Verb::Carry {
-        return carry(env);
+    if let Verb::Carry { ssh } = cli.verb {
+        return carry(env, ssh);
     }
     let (code, message, device) = match answer(env, cli) {
         Ok(Printed::Done) => return Ok(()),
@@ -526,7 +535,7 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             };
             Ok(Printed::Value(answer, lines))
         }
-        Verb::Carry => unreachable!("run answers it before anything is printed"),
+        Verb::Carry { .. } => unreachable!("run answers it before anything is printed"),
         Verb::LookSsh => {
             // Read by the machine that ran it, never by a person.
             let look = |core: bool, runs: bool| {
@@ -662,19 +671,38 @@ fn add_projects(env: &Env, projects: &[String], over: Instant) -> usize {
 /// first, as a login starts it: a distribution with no systemd has nothing
 /// else that does, so its core lives while the distribution runs. An
 /// account that never ran a core is left as it is.
-fn carry(env: &Env) -> Result<(), String> {
+///
+/// Over SSH (`ssh`, mission-107) it starts nothing: a background dial never
+/// starts Hide on another machine (R8), so a core that does not run ends it
+/// with `hide_not_running`. It carries only to a daemon that answers it
+/// carries over SSH, so every SSH connection's two ends are of a build that
+/// knows the SSH path; any other answer ends it with `ssh_update_there`
+/// before a byte is carried. A refusal is one JSON line on the error output,
+/// which the dialing machine reads.
+fn carry(env: &Env, ssh: bool) -> Result<(), String> {
+    match carried(env, ssh) {
+        Err(code) if ssh => {
+            eprintln!("{}", json!({ "ok": false, "reason": code }));
+            std::process::exit(3);
+        }
+        carried => carried,
+    }
+}
+
+fn carried(env: &Env, ssh: bool) -> Result<(), String> {
     use std::io::Read as _;
     if env.pane_id.is_some() || env.access.is_some() {
         return Err("device_from_pane".to_owned());
     }
     use crate::workspace_cli::NoCarrier;
-    let stream = match crate::workspace_cli::carrier(env) {
+    let stream = match crate::workspace_cli::carrier(env, ssh) {
         Ok(stream) => stream,
+        Err(NoCarrier::NoDaemon(_)) if ssh => return Err("hide_not_running".to_owned()),
         Err(NoCarrier::NoDaemon(_))
             if hide_kit::layout::daemon_lock(&env.state_dir).exists()
                 && crate::cli::core_started(env) =>
         {
-            crate::workspace_cli::carrier(env).map_err(NoCarrier::code)?
+            crate::workspace_cli::carrier(env, false).map_err(NoCarrier::code)?
         }
         Err(refused) => return Err(refused.code()),
     };
@@ -1504,10 +1532,27 @@ mod tests {
     /// takes no word, and no `--json` that would promise an answer line.
     #[test]
     fn carry_takes_nothing_and_answers_no_json() {
-        assert_eq!(parse_words(&["carry"]).unwrap().verb, Verb::Carry);
+        assert_eq!(
+            parse_words(&["carry"]).unwrap().verb,
+            Verb::Carry { ssh: false }
+        );
         assert!(parse_words(&["carry", "Ubuntu"]).is_err());
         assert!(parse_words(&["carry", "--json"]).is_err());
         assert!(parse_words(&["carry", "--wait"]).is_err());
+    }
+
+    /// `carry --ssh` takes its one flag once and nothing else, and no other
+    /// verb takes it (mission-107).
+    #[test]
+    fn carry_over_ssh_takes_one_flag() {
+        assert_eq!(
+            parse_words(&["carry", "--ssh"]).unwrap().verb,
+            Verb::Carry { ssh: true }
+        );
+        assert!(parse_words(&["carry", "--ssh", "--ssh"]).is_err());
+        assert!(parse_words(&["carry", "--ssh", "--json"]).is_err());
+        assert!(parse_words(&["carry", "--ssh", "studio"]).is_err());
+        assert!(parse_words(&["list", "--ssh"]).is_err());
     }
 
     #[test]

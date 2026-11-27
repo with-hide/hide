@@ -129,12 +129,7 @@ pub enum Looked {
 /// Whether `alias` is a name `ssh` reads as a destination and never as an
 /// option.
 pub fn valid_alias(alias: &str) -> bool {
-    !alias.is_empty()
-        && alias.len() <= 255
-        && !alias.starts_with('-')
-        && !alias
-            .chars()
-            .any(|character| character.is_whitespace() || character.is_control())
+    hide_peer::store::valid_alias(alias)
 }
 
 /// The channel a target's account is reached on.
@@ -279,6 +274,31 @@ fn program(reach: &Reach, system: &str) -> Vec<String> {
         ],
         None => vec![format!("{folder}/hide")],
     }
+}
+
+/// The words that start the target's `hide device carry --ssh` in the start
+/// script's place (mission-107): the same `hide` [`program`] runs, made
+/// absolute from the account's `home` (wire spelling), since the script
+/// execs it rather than running it through a shell.
+pub(crate) fn carry_argv(reach: &Reach, home: &str, system: &str) -> Vec<String> {
+    let mut argv = match reach.hide.as_deref() {
+        Some([hide, ..]) if hide_platform::path::is_wire_absolute(hide) => vec![hide.clone()],
+        _ => {
+            let folder = reach.command_folder.as_deref().unwrap_or(COMMAND_FOLDER);
+            let folder = match folder.strip_prefix("~/") {
+                Some(under) => format!("{}/{under}", home.trim_end_matches('/')),
+                None => folder.trim_end_matches('/').to_owned(),
+            };
+            let name = if system == "windows" {
+                "hide.cmd"
+            } else {
+                "hide"
+            };
+            vec![format!("{folder}/{name}")]
+        }
+    };
+    argv.extend(["device", "carry", "--ssh"].map(str::to_owned));
+    argv
 }
 
 /// How one command on the target ended.
@@ -1025,7 +1045,7 @@ fn hand_projects(login: &dyn Login, switch: &Switch<'_>) {
 fn login_addresses(host: &str, own: &[Candidate]) -> Vec<Candidate> {
     let Some(port) = own.iter().find_map(|candidate| match candidate {
         Candidate::Ip(address) => Some(address.port()),
-        Candidate::Relay(_) | Candidate::Wsl(_) => None,
+        Candidate::Relay(_) | Candidate::Wsl(_) | Candidate::Ssh(_) => None,
     }) else {
         return Vec::new();
     };

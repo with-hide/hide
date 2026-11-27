@@ -50,6 +50,12 @@ pub struct SshProgram {
     /// it as `HOME`. `None` reads exactly what a terminal's `ssh` reads,
     /// `/etc/ssh/ssh_config` included.
     private_home: Option<PathBuf>,
+    /// The connection forwards nothing of this account's, whatever the
+    /// configuration says: no agent, no X11, no GSSAPI credential
+    /// (`-a -x -k`). The carrier of a connection two Hides keep lasts days
+    /// (mission-107, R7), and a forwarded agent would be the far account's
+    /// for that long.
+    forwards_nothing: bool,
 }
 
 /// The release of OpenSSH a program reported.
@@ -253,7 +259,18 @@ impl SshProgram {
         Self {
             path,
             private_home: (!own).then(|| home.to_owned()),
+            forwards_nothing: false,
         }
+    }
+
+    /// This `ssh`, forwarding nothing of the account's (`-a -x -k`).
+    pub fn forwarding_nothing(mut self) -> Self {
+        self.forwards_nothing = true;
+        self
+    }
+
+    pub fn forwards_nothing(&self) -> bool {
+        self.forwards_nothing
     }
 
     pub fn path(&self) -> &Path {
@@ -345,6 +362,9 @@ impl SshProgram {
         remote_command: &str,
     ) -> Vec<OsString> {
         let mut args: Vec<OsString> = vec!["-T".into()];
+        if self.forwards_nothing {
+            args.extend(["-a".into(), "-x".into(), "-k".into()]);
+        }
         for option in resolved.link_options(version) {
             args.push("-o".into());
             args.push(option.into());
@@ -739,6 +759,31 @@ mod tests {
                 "ControlPath=none",
             ]
         );
+    }
+
+    /// A carrier's `ssh` forwards nothing of the account's whatever the
+    /// configuration says; every other connection's leaves it to the
+    /// configuration.
+    #[test]
+    fn a_carrier_forwards_no_agent_no_x11_and_no_credential() {
+        let home = tempfile::tempdir().unwrap();
+        let program = SshProgram::new(PathBuf::from("ssh"), home.path());
+        let words = |program: &SshProgram| -> Vec<String> {
+            program
+                .link_args("studio", &resolved(""), CURRENT, "cmd")
+                .iter()
+                .map(|word| word.to_string_lossy().into_owned())
+                .collect()
+        };
+        let plain = words(&program);
+        assert!(
+            !plain
+                .iter()
+                .any(|word| ["-a", "-x", "-k"].contains(&word.as_str()))
+        );
+        let carrier = words(&program.forwarding_nothing());
+        assert_eq!(carrier[..4], ["-T", "-a", "-x", "-k"]);
+        assert_eq!(carrier[carrier.len() - 3..], ["--", "studio", "cmd"]);
     }
 
     #[test]

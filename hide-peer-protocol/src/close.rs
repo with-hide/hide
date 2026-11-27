@@ -27,11 +27,15 @@ pub enum CloseCode {
     /// exchange, or without a grant, as it takes: the peer may dial again.
     /// It says nothing about a grant, which [`CloseCode::NoGrant`] does.
     Busy,
+    /// A connection dialed to try a path and not chosen: closed before its
+    /// first exchange, or because it did not beat the path held
+    /// (mission-107). Nothing was admitted, so nothing is recorded.
+    Probe,
     Other(u32),
 }
 
 impl CloseCode {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Shutdown,
         Self::Replaced,
         Self::Duplicate,
@@ -41,6 +45,7 @@ impl CloseCode {
         Self::NoRelayPath,
         Self::Lost,
         Self::Busy,
+        Self::Probe,
     ];
 
     pub const fn number(self) -> u32 {
@@ -54,6 +59,7 @@ impl CloseCode {
             Self::NoRelayPath => 6,
             Self::Lost => 7,
             Self::Busy => 8,
+            Self::Probe => 9,
             Self::Other(number) => number,
         }
     }
@@ -76,6 +82,7 @@ impl CloseCode {
             Self::NoRelayPath => "no_relay_path",
             Self::Lost => "lost",
             Self::Busy => "busy",
+            Self::Probe => "probe",
             Self::Other(_) => "other",
         }
     }

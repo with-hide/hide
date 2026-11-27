@@ -67,7 +67,10 @@ fn pc_and_distribution() -> (Machine, Machine) {
     let arrives_at = distro.peers.clone();
     let pipe = PipeTransport::dialing(twin, move |_| {
         let (near, far) = LocalStream::pair().unwrap();
-        arrives_at.transport().pipe().arrived(far.into());
+        arrives_at
+            .transport()
+            .pipe()
+            .arrived(far.into(), hide_peer::protocol::PathKind::Local);
         async move { Ok(Carrier::from(near)) }
     });
     let pc = machine(
@@ -105,6 +108,7 @@ fn pair(pc: &Machine, distro: &Machine) {
                 state: KnownState::Active,
                 candidates: in_wsl(distro).candidates,
                 started: None,
+                ssh: None,
             })
         })
         .unwrap();

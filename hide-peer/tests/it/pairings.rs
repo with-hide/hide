@@ -610,7 +610,9 @@ async fn a_pairing_over_ssh_settles_over_the_connection() {
     ));
 
     // The guest saves what it was told, connects and confirms on its own.
-    mac.pairings.adopt(accepted.clone(), Vec::new()).unwrap();
+    mac.pairings
+        .adopt(accepted.clone(), Vec::new(), None)
+        .unwrap();
     mac.saves("the confirmed pairing", |peers| {
         peers
             .host(&accepted.key)
@@ -626,13 +628,13 @@ async fn a_pairing_over_ssh_settles_over_the_connection() {
 
     // The same answer adopted again changes nothing; another pairing with
     // a machine already connected is refused, and there is one grant.
-    mac.pairings.adopt(accepted, Vec::new()).unwrap();
+    mac.pairings.adopt(accepted, Vec::new(), None).unwrap();
     let second = pc
         .pairings
         .accept_ssh("req-3", mac.key(), "macbook", "MacBook", Via::Ssh)
         .unwrap();
     assert!(matches!(
-        mac.pairings.adopt(second, Vec::new()),
+        mac.pairings.adopt(second, Vec::new(), None),
         Err(AcceptError::Already)
     ));
     assert_eq!(pc.grants(&mac.key()), GrantState::Active);
@@ -650,7 +652,7 @@ async fn a_grant_the_host_no_longer_holds_shows_as_pair_again_and_a_new_link_tak
         .accept_ssh("req-1", mac.key(), "macbook", "MacBook", Via::Ssh)
         .unwrap();
     pc.pairings.remove_guest(&mac.key()).unwrap();
-    mac.pairings.adopt(accepted, Vec::new()).unwrap();
+    mac.pairings.adopt(accepted, Vec::new(), None).unwrap();
     let host = pc.key();
     mac.saves("the dropped pairing", |peers| {
         peers

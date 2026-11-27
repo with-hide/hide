@@ -36,6 +36,10 @@
     {
       "name": "busy",
       "number": 8
+    },
+    {
+      "name": "probe",
+      "number": 9
     }
   ],
   "core": {
@@ -340,18 +344,27 @@
     }
   },
   "hello": {
-    "capabilities": [],
+    "capabilities": [
+      "ssh_path"
+    ],
     "fields": [
       "build",
       "capabilities",
       "contract",
       "device",
+      "dial",
       "framing",
       "link",
       "name",
+      "replaces",
+      "supersedes",
       "update"
     ],
     "frames": {
+      "beat": {
+        "fields": [],
+        "since": 1
+      },
       "grant": {
         "fields": [
           "generation",

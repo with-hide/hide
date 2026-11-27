@@ -294,6 +294,7 @@ async fn an_update_request_is_said_once_to_a_host_this_machine_is_an_active_gues
                 state: KnownState::Active,
                 candidates: Vec::new(),
                 started: None,
+                ssh: None,
             })
         })
         .unwrap();

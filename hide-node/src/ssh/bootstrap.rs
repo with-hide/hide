@@ -21,7 +21,10 @@
 //! system-ssh-device-link B33, `super::super::session`), with steps of its
 //! own between the probe and the end: a command whose output comes back
 //! counted ([`run`]), and the attach role's start in place of the script
-//! ([`attach`]).
+//! ([`attach`]). The carrier of the connection two Hides keep over SSH
+//! (mission-107) runs a command in the script's place the same way
+//! ([`carry`]): `hide device carry --ssh`, whose input and output are then
+//! the carrier's.
 //!
 //! The steps go in lock step on purpose. A file's bytes are read with
 //! `head -c <size>`, and macOS's `head` reads through a buffer that would
@@ -241,6 +244,10 @@ rm -f -- "$o" "$e" "$x"; o= e= x=;;
 attach) [ -x "$a" ] || { say fail "$a is missing"; exit 65; };
 cd -- "${HOME:-/}" 2>/dev/null || :;
 say attach; case $b in -) exec "$a" attach;; *) exec "$a" attach --state-dir "$b";; esac;;
+carry) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
+[ "$#" -gt 0 ] && [ -x "$1" ] || { say fail "${1:-the program} is missing"; exit 65; };
+cd -- "${HOME:-/}" 2>/dev/null || :;
+say carry; exec "$@";;
 *) say fail "unknown step $cmd"; exit 64;;
 esac;
 done
@@ -846,6 +853,30 @@ pub(crate) fn attach(
     .as_slice()
     {
         [kind] if kind == "attach" => Ok(()),
+        other => Err(StepError::Refused(refusal(other))),
+    }
+}
+
+/// Starts `argv` in place of the script, its first word an absolute path in
+/// the machine's wire spelling; from its answer on, the pipes are that
+/// program's. What carries the connection two Hides keep over SSH
+/// (mission-107): `hide device carry --ssh`. A program that is not there is
+/// refused by the script, and the session ends.
+pub(crate) fn carry(pipe: &mut dyn Pipe, argv: &[String]) -> Result<(), StepError> {
+    let fits = argv.first().is_some_and(|program| remote_path(program))
+        && argv.iter().all(|word| plain(word));
+    if !fits {
+        return Err(StepError::Refused(
+            "The carrier's program is not a plain absolute path".to_owned(),
+        ));
+    }
+    let mut asked = format!("carry\t{}\n", argv.len());
+    for word in argv {
+        asked.push_str(word);
+        asked.push('\n');
+    }
+    match ask(pipe, &asked, Instant::now() + STEP_TIMEOUT)?.as_slice() {
+        [kind] if kind == "carry" => Ok(()),
         other => Err(StepError::Refused(refusal(other))),
     }
 }

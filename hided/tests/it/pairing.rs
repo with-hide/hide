@@ -1112,6 +1112,7 @@ async fn a_split_that_stops_before_its_commit_leaves_the_node_its_core_takes() {
         relay: None,
         relay_only: false,
         wsl: None,
+        ssh: None,
     };
     // The split runs where the node role runs it: on a thread no runtime
     // drives.

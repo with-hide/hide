@@ -203,9 +203,10 @@ impl PeerTransport for Loopback {
             .map_err(|_| unreachable("that machine left the wire"))?;
         self.net.dials.fetch_add(1, Ordering::AcqRel);
         let (mut recv, mut send) = tokio::io::split(proof);
-        if !proof::dialer(&self.key, &to.key, &mut send, &mut recv)
+        if proof::dialer(&self.key, &to.key, &mut send, &mut recv)
             .await
             .map_err(proof_failed)?
+            != proof::Proof::Proved
         {
             return Err(unreachable(
                 "the machine did not prove the key that was dialed",

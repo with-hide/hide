@@ -307,6 +307,7 @@ fn save_host(state: &Path, accepted: &Accepted) -> Result<(), SplitFailure> {
             // The core there was put by the move, not started by a switch
             // of this machine's: nothing here raises it with this build.
             started: None,
+            ssh: None,
         })
         .map_err(|error| SplitFailure::not_saved("the core's machine", error))
 }
