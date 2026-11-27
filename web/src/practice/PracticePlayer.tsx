@@ -143,6 +143,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       sessionWorkSearch: frames?.sessionWorkSearch ?? null, sessionRecord: frames?.sessionRecord ?? null, linkPanel: frames?.linkPanel ?? null,
       listings: frames?.listings ?? NO_LISTINGS, changes: frames?.changes ?? null, memory: frames?.memory ?? null, suggestions: frames?.suggestions ?? null,
       access: frames?.access ?? null,
+      sessionThread: frames?.sessionThread ?? null, sessionThreadHistory: frames?.sessionThreadHistory ?? null,
       // The practice screen is this computer's own window, which hided sends its `pairing` frame (B52): nothing under way unless the world pairs.
       pairing: frames?.pairing ?? NOTHING_UNDER_WAY, pairingResult: frames?.pairingResult ?? null,
       automations: automations ?? null,
@@ -150,7 +151,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   }, [chapter, model, operator]);
 
   useLayoutEffect(() => {
-    useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneExpanded: false, stackFront: "view", automations: AUTOMATION_ENTRY });
+    useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneExpanded: false, stackFront: "view", automations: AUTOMATION_ENTRY, paneConversation: null, threadLease: null });
   }, [chapter]);
 
   // A pane keeps no scrollback, so a terminal a layout change re-created or

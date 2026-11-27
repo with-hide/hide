@@ -4,6 +4,8 @@ import { createRoot } from "react-dom/client";
 import { afterAll, expect, it, vi } from "vitest";
 import { createActions, type Actions } from "./actions";
 import { useSessionThread } from "./sessionThread";
+import type { SessionThreadSection } from "./snapshot";
+import { useUiStore } from "./ui";
 import { useShellStore } from "./store";
 import type { DispatchFn } from "./ws";
 
@@ -42,4 +44,45 @@ it("opens a shown thread again after a reconnect, whose new connection holds not
   }
   expect(calls.at(-1)).toEqual({ schema_version: 2, kind: "session_thread_close", payload: {} });
   expect(calls.filter((call) => call.kind === "session_thread_close")).toHaveLength(1);
+});
+
+function ObservedPanel({ actions }: { actions: Actions }) {
+  const { thread, taken, reclaim } = useSessionThread(actions, "w1:p1");
+  return <div data-taken={String(taken)}><span>{thread?.generation}</span><button onClick={reclaim}>Reclaim</button></div>;
+}
+
+it("keeps the last thread after another pane takes it, including reconnect and remount, until explicit reclaim", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const saved = useShellStore.getState(), local = useUiStore.getState();
+  const calls: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { calls.push(event); return true; });
+  const section = (pane: string, generation: number): SessionThreadSection => ({ generation, pane_id: pane, machine: "local", state: "ready", failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: null, choice: {}, input: null });
+  const container = document.createElement("div"), root = createRoot(container);
+  try {
+    useUiStore.setState({ threadLease: null });
+    useShellStore.setState({ connection: "live", sessionThread: null });
+    await act(async () => root.render(<ObservedPanel actions={actions} />));
+    await act(async () => useShellStore.setState({ sessionThread: section("w1:p1", 1) }));
+    // Another window showing this same pane remains a shared hold, even with a new generation.
+    await act(async () => useShellStore.setState({ sessionThread: section("w1:p1", 2) }));
+    expect(container.querySelector("[data-taken]")?.getAttribute("data-taken")).toBe("false");
+    await act(async () => useShellStore.setState({ sessionThread: section("w1:p2", 3) }));
+    expect(container.querySelector("span")?.textContent).toBe("2");
+    expect(container.querySelector("[data-taken]")?.getAttribute("data-taken")).toBe("true");
+    await act(async () => useShellStore.setState({ connection: "reconnecting" }));
+    await act(async () => useShellStore.setState({ connection: "live" }));
+    await act(async () => root.render(null));
+    await act(async () => root.render(<ObservedPanel actions={actions} />));
+    expect(calls.filter((call) => call.kind === "session_thread_open")).toHaveLength(1);
+    await act(async () => container.querySelector("button")!.click());
+    expect(calls.filter((call) => call.kind === "session_thread_open")).toHaveLength(2);
+    await act(async () => useShellStore.setState({ sessionThread: section("w1:p1", 4) }));
+    expect(container.querySelector("[data-taken]")?.getAttribute("data-taken")).toBe("false");
+    expect(container.querySelector("span")?.textContent).toBe("4");
+  } finally {
+    await act(async () => root.unmount());
+    useUiStore.setState(local, true);
+    useShellStore.setState(saved, true);
+    vi.unstubAllGlobals();
+  }
 });

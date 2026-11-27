@@ -2,6 +2,36 @@
   "schema": 1,
   "versions": [
     {
+      "version": "1.2.13",
+      "date": "2026-11-27",
+      "highlights": [
+        {
+          "drawing": "conversation",
+          "chapter": "conversation",
+          "measure": "hide_feature_used:pane_conversation",
+          "text": {
+            "en": {
+              "title": "Read and reply in the pane",
+              "line": "Open Conversation above an agent to read and reply, then return to its live terminal."
+            },
+            "ko": {
+              "title": "pane에서 대화 읽고 답하기",
+              "line": "에이전트 머리의 대화를 눌러 읽고 답한 뒤, 살아 있는 터미널로 돌아와요."
+            },
+            "zh-CN": {
+              "title": "在窗格中阅读和回复",
+              "line": "在智能体上方打开对话，阅读和回复后返回正在运行的终端。"
+            },
+            "ja": {
+              "title": "ペインで会話を読んで返信",
+              "line": "エージェントの見出しの会話を開いて読み、返信してから動いているターミナルに戻ります。"
+            }
+          }
+        }
+      ],
+      "changes": []
+    },
+    {
       "version": "1.2.12",
       "date": "2026-11-25",
       "highlights": [],

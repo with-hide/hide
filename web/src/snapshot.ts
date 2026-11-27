@@ -134,7 +134,13 @@ export type ToolWork = { connection: string; name: string; owns: boolean };
 /** A checkout Hide made for Hide AI's agent, or for an external tool's while the tool keeps its work (`tool`, its name). */
 export type HideAiCheckout = { device_id: string; path: string; task?: HideAiTask; tool?: string };
 
+export type ThreadCapability = "none" | "pending" | "ready";
+
 export type AgentRow = {
+  /** Absent on older cores; the shell offers no conversation toggle then. */
+  thread_capability?: ThreadCapability;
+  /** Opaque identity, also for readers whose reference is a path. */
+  thread_identity?: string;
   /** Set by the core from the coordination record of the spawn, never from a branch name. */
   hide_ai?: HideAi;
   /** An external tool started this agent, or an agent of the tool started it under itself; set by the core from the same record. */

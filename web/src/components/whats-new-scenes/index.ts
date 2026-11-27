@@ -2,6 +2,7 @@
 // `drawing`. A main feature's pull request adds its scene here
 // (CONTRIBUTING.md, A main feature brings its practice, its scene and its measure).
 
+import { CONVERSATION_LOOP_MS, CONVERSATION_STILL_MS, ConversationScene } from "./conversation";
 import { ANSWER_LOOP_MS, ANSWER_STILL_MS, AnswerScene } from "./answer";
 import { ATTACHMENTS_LOOP_MS, ATTACHMENTS_STILL_MS, AttachmentsScene } from "./attachments";
 import { AUTOMATION_LOOP_MS, AutomationScene } from "./automation";
@@ -13,6 +14,7 @@ import { SKILLS_LOOP_MS, SkillsScene } from "./skills";
 import type { Scene } from "./scene";
 
 export const SCENES = {
+  conversation: { Draw: ConversationScene, loopMs: CONVERSATION_LOOP_MS, stillAt: CONVERSATION_STILL_MS },
   answer: { Draw: AnswerScene, loopMs: ANSWER_LOOP_MS, stillAt: ANSWER_STILL_MS },
   attachments: { Draw: AttachmentsScene, loopMs: ATTACHMENTS_LOOP_MS, stillAt: ATTACHMENTS_STILL_MS },
   automation: { Draw: AutomationScene, loopMs: AUTOMATION_LOOP_MS, stillAt: 9_000 },

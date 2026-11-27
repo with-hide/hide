@@ -20,6 +20,9 @@ import { SessionAgentBar } from "./desk-composer";
 import { FileDropZone } from "./file-drop";
 import { NO_MENTIONS, ThreadView, type ThreadPartActions } from "./thread-view";
 
+import { Button } from "../ui/button";
+import { Hint } from "../ui/tooltip";
+
 const NO_CHOICE: { model?: string; effort?: string } = {};
 
 /** The refusals a thread's input words itself; any other is an attachment's, worded as a terminal attachment's is. */
@@ -36,9 +39,10 @@ const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "u
  * the outputs shelf under it), the agent's choice card, the questions Hide
  * found and what stands in the box's place while it sleeps are the caller's.
  */
-export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = 0, head = null, ask = null, asks, onAsk, foot = null, onTerminal, ...parts }: {
+export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = 0, head = null, ask = null, asks, onAsk, foot = null, onTerminal, ...parts }: {
   /** The session's card; a session that is no job of Desk's opens before its card arrives, by its pane (D-87). */
   job: DeskJob | null;
+  paneConversation?: boolean;
   /** The pane whose thread this is; its card's when not given. */
   paneId?: string | null;
   actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread" | "switchThread" | "observeCatalog" | "requestFileIndex">;
@@ -58,11 +62,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   onTerminal?: () => void;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
-  useSessionThread(actions, paneId);
-
-  // The core holds one thread; until it holds this pane's, this one is still being read.
-  const thread = useShellStore((s) => (paneId && s.sessionThread?.pane_id === paneId ? s.sessionThread : null));
-  const history = useShellStore((s) => s.sessionThreadHistory);
+  const { thread, history, taken, reclaim } = useSessionThread(actions, paneId, paneConversation);
   const plans = useShellStore((s) => s.rest?.plans);
   const missions = useShellStore((s) => s.rest?.missions);
   const rows = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
@@ -101,7 +101,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
     setNotice(words(refusal.reason));
   }, [refusal, sent]);
 
-  const held = threadInputHeld(thread);
+  const held = taken ? "closed" : threadInputHeld(thread);
   const send = () => {
     const files = tray.outgoing();
     if (!thread?.pane_id || held !== null || sent || !files) return;
@@ -197,17 +197,17 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
     askedOlder.current = false;
   }, [thread?.generation, thread?.older]);
   const reachTop = () => {
-    if (askedOlder.current || !thread?.has_older || (thread.older !== "idle" && thread.older !== "failed")) return;
+    if (taken || askedOlder.current || !thread?.has_older || (thread.older !== "idle" && thread.older !== "failed")) return;
     askedOlder.current = true;
     actions.readOlderThread(thread.generation);
   };
 
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (answer > 0) root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]")?.focus();
-  }, [answer]);
+    if (answer > 0 && !taken) root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]")?.focus();
+  }, [answer, taken]);
 
-  if (!job && !foot) {
+  if (!paneId && !foot) {
     // The thread opened from the first frame and its card is on its way, or the session has no card any more (its
     // pane closed): the head and its `✕` stand either way (B6).
     return (
@@ -219,8 +219,9 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   }
   return (
     // The whole panel, its head, conversation and box, takes a dropped file into the box while the box stands (Doop L 나).
-    <FileDropZone ref={root} tray={foot ? null : tray} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""}>
+    <FileDropZone ref={root} tray={foot || taken ? null : tray} className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""}>
       {head}
+      <div inert={taken} className={`flex min-h-0 min-w-0 flex-1 flex-col ${taken || thread?.connected === false ? "opacity-(--opacity-disabled)" : ""}`} data-thread-taken={taken ? "true" : "false"}>
       <ThreadView
         key={paneId ?? ""}
         scrollKey={paneId ? `thread:${paneId}` : null}
@@ -256,6 +257,12 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
         olderLeft={thread?.has_older ?? false}
         {...parts}
       />
+      </div>
+      {taken ? <div className="absolute inset-0 flex items-center justify-center p-md">
+        <Hint label={t("panes.conversation.onePlace")}>
+          <Button variant="secondary" size="sm" onClick={reclaim} data-thread-reclaim="true">{t("panes.conversation.reclaim")}</Button>
+        </Hint>
+      </div> : null}
     </FileDropZone>
   );
 }

@@ -20,6 +20,10 @@ import { NO_CALLS_SEEN, NO_DRAWN_PAGES, type CallsSeen, type DrawnPages, type La
 import type { Tool } from "./laneTools";
 import type { AutomationExample } from "./automationDraft";
 
+import type { SessionThreadSection, SessionThreadHistorySection } from "./snapshot";
+
+export type ThreadLease = { paneId: string; taken: boolean; acquired: boolean; thread: SessionThreadSection | null; history: SessionThreadHistorySection | null };
+
 export type { ViewFocusRequest } from "./viewLayout";
 
 /**
@@ -324,6 +328,8 @@ type UiStore = {
   deskRoom: DeskRoomWindow;
   setDeskRoom: (change: (room: DeskRoomWindow) => DeskRoomWindow) => void;
   /** The pane `터미널 ⌘J` left Desk for, which ⌘J on it brings back beside Desk (B7). */
+  paneConversation: { paneId: string; session: string } | null;
+  threadLease: ThreadLease | null;
   deskReturn: string | null;
   setDeskReturn: (pane: string | null) => void;
   /** How far above the window's foot the corner's notices stand: the top of the input boxes drawn there (`noticeFloor.ts`). */
@@ -582,6 +588,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setDeskDraft: (deskDraft) => set({ deskDraft }),
   deskRoom: DESK_ROOM_CLOSED,
   setDeskRoom: (change) => set((state) => ({ deskRoom: change(state.deskRoom) })),
+  paneConversation: null,
+  threadLease: null,
   deskReturn: null,
   setDeskReturn: (deskReturn) => set({ deskReturn }),
   noticeFloor: 0,

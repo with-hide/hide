@@ -4,6 +4,12 @@ import type { Catalog, Catalogs } from "../schema";
 // Attachment caps come from the existing attachment constants at the call site.
 
 export const panesEnglish = {
+  "panes.conversation.label": "Conversation",
+  "panes.conversation.show": "View conversation",
+  "panes.conversation.pending": "Finding the session",
+  "panes.conversation.reclaim": "View here again",
+  "panes.conversation.onePlace": "Conversation is shown in one place at a time",
+
   "panes.restore.failed": "Could not restore this terminal",
   "panes.restore.explanation": "The terminal could not start after restoration. Check its folder, then close this pane and open a new terminal.",
   "panes.restore.close": "Close pane",
@@ -249,6 +255,12 @@ export const panesEnglish = {
 } as const;
 
 const ko = {
+  "panes.conversation.label": "대화",
+  "panes.conversation.show": "대화로 보기",
+  "panes.conversation.pending": "세션을 찾는 중",
+  "panes.conversation.reclaim": "여기서 다시 보기",
+  "panes.conversation.onePlace": "대화는 한 곳에서만 보여요",
+
   "panes.transport.disconnected": "연결 안 됨",
   "panes.transport.released": "연결 해제됨 · 클릭하여 연결",
   "panes.transport.ended": "종료됨 · 클릭하여 다시 시작",
@@ -494,6 +506,12 @@ const ko = {
 } satisfies Catalog<typeof panesEnglish>;
 
 const zhCN = {
+  "panes.conversation.label": "对话",
+  "panes.conversation.show": "查看对话",
+  "panes.conversation.pending": "正在查找会话",
+  "panes.conversation.reclaim": "在这里重新查看",
+  "panes.conversation.onePlace": "对话一次只能在一处显示",
+
   "panes.transport.disconnected": "已断开连接",
   "panes.transport.released": "已释放连接 · 点击连接",
   "panes.transport.ended": "已结束 · 点击重启",
@@ -739,6 +757,12 @@ const zhCN = {
 } satisfies Catalog<typeof panesEnglish>;
 
 const ja = {
+  "panes.conversation.label": "会話",
+  "panes.conversation.show": "会話を表示",
+  "panes.conversation.pending": "セッションを検索中",
+  "panes.conversation.reclaim": "ここでもう一度表示",
+  "panes.conversation.onePlace": "会話は一か所に表示されます",
+
   "panes.transport.disconnected": "切断されています",
   "panes.transport.released": "接続解除済み · クリックして接続",
   "panes.transport.ended": "終了済み · クリックして再起動",

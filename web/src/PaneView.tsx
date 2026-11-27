@@ -4,7 +4,7 @@ import { usePaneMove } from "./PaneMoveControls";
 import { keyboardCommandOwner, keyboardInputRevision, useKeyboardOwner } from "./viewFocus";
 import type { TFunction } from "i18next";
 import { agentWithProfile, markWords } from "./agentRow";
-import { CircleAlertIcon, Columns2Icon, EllipsisIcon, GripVerticalIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
+import { CircleAlertIcon, Columns2Icon, EllipsisIcon, GripVerticalIcon, Maximize2Icon, MessageSquareIcon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useOutsidePressSurface } from "./components/ui/layer";
 import type { Actions } from "./actions";
@@ -21,6 +21,8 @@ import { LookButton, StatusMark } from "./components/status-mark";
 import { Separator } from "./components/ui/separator";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
+import { PaneConversation } from "./PaneConversation";
+import { useUiStore } from "./ui";
 import { PaneDeskReturn } from "./DeskScreen";
 import { PaneAskMark, PaneForkMark, PaneOpenAsksMark, PaneHeadChildren, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
 import { PaneWorkChip } from "./PaneMissionChip";
@@ -223,6 +225,14 @@ export const PaneView = memo(function PaneView({
   const dispatch = actions.dispatch;
   const title = paneTitle(pane);
   const recordAgent = agentsByPane(usePaneAgents()).get(paneId);
+  const selected = useUiStore((s) => s.paneConversation?.paneId === paneId);
+  const onScreen = useUiStore((s) => s.screen?.kind === "workspace" && !s.overviewOpen);
+  const conversation = selected && onScreen;
+  const conversationChord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state));
+  const focusBody = () => {
+    if (conversation) document.querySelector<HTMLTextAreaElement>("[data-pane-conversation] [data-desk-composer-input]")?.focus();
+    else focusTerminal(paneId);
+  };
   // The logo's name, with the profile its badge marks (PRD agent-profiles B17).
   const agentName = agentKind ? agentWithProfile(t, { agent_kind: agentKind, profile: recordAgent?.profile, tool: recordAgent?.tool }) : "";
   const look = markSymbol === "look" ? recordAgent?.look ?? null : null;
@@ -239,6 +249,7 @@ export const PaneView = memo(function PaneView({
   // A dropped file or a pasted image stages through hided and reaches the
   // terminal as the core's own `terminal_attachment` (B14).
   const drop = (event: React.DragEvent) => {
+    if (conversation) { event.preventDefault(); event.stopPropagation(); return; }
     // A sidebar agent row types its reference, for this agent to address it.
     const agent = agentDrag.current;
     if (agent) {
@@ -338,8 +349,8 @@ export const PaneView = memo(function PaneView({
     if (entryInput !== null && keyboardInputRevision() !== entryInput) return;
     // A View's chip asked for focus mode on that View, which takes the keys itself (`viewFocusRequest`).
     if (entryKeys === "desk") return;
-    focusTerminal(paneId);
-  }, [paneId, focused, snapshotIncludesLastClick, keysStayOnDesk, entryInput, entryKeys]);
+    focusBody();
+  }, [paneId, focused, snapshotIncludesLastClick, keysStayOnDesk, entryInput, entryKeys, conversation]);
 
   // Every paste into the pane is the shell's, before xterm's textarea sees it
   // (the listener runs in the capture phase): an image as an attachment, and
@@ -414,7 +425,7 @@ export const PaneView = memo(function PaneView({
         onClick={(event) => {
           if (!paneHeadPicksPane(event.currentTarget, event.target)) return;
           actions.focusPane(paneId);
-          focusTerminal(paneId);
+          focusBody();
         }}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -488,6 +499,13 @@ export const PaneView = memo(function PaneView({
         {/* The zoom shows only on the pane that holds the keyboard or is pointed at, so it leads the right side: the controls
             always drawn stay at its end, and the place it keeps while hidden reads as the title's own margin (B20). */}
         {!zoomed && paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-accent ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
+        {recordAgent?.thread_capability && recordAgent.thread_capability !== "none" ? (
+          <Hint label={t(recordAgent.thread_capability === "pending" ? "panes.conversation.pending" : "panes.conversation.show")} shortcut={conversationChord || undefined}>
+            <Button variant={selected ? "tint" : "ghost"} size="sm" className="shrink-0 px-xs text-caption" aria-label={t("panes.conversation.show")} aria-pressed={selected} disabled={moving || recordAgent.thread_capability !== "ready"} data-pane-conversation-toggle={paneId} onClick={() => actions.togglePaneConversation(paneId)}>
+              <MessageSquareIcon aria-hidden="true" /><span className="pane-head-narrow:hidden">{t("panes.conversation.label")}</span>
+            </Button>
+          </Hint>
+        ) : null}
         <PaneDeskReturn paneId={paneId} actions={actions} />
         {agentKind ? <PaneHeadChildren paneId={paneId} actions={actions} /> : null}
         <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
@@ -581,6 +599,7 @@ export const PaneView = memo(function PaneView({
             {caption.text}
           </button>
         ) : null}
+        {conversation ? <div className="absolute inset-0 z-10 flex min-h-0 min-w-0 bg-card" data-pane-conversation={paneId}><PaneConversation paneId={paneId} actions={actions} /></div> : null}
       </div>
       {input ? (
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-10 border-2 border-primary" data-pane-focus-outline="true" />
