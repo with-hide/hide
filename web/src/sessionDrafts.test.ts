@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { keepSessionDraft, NO_SESSION_DRAFTS, sendSessionDraft, SESSION_DRAFT_BYTES, SESSION_DRAFTS_KEPT, sessionDraft, sessionDraftsLeft, sessionDraftTakes, settleSessionSend } from "./sessionDrafts";
+import { keepSessionDraft, NO_SESSION_DRAFTS, sendSessionDraft, SESSION_DRAFT_BYTES, SESSION_DRAFTS_KEPT, sessionDraft, sessionDraftsLeft, sessionDraftTakes, settleSessionSend, uncertainSessionSends, visitSessionTerminal } from "./sessionDrafts";
 import type { RemoteStatus } from "./snapshot";
 
 // Operator request 2026-11-27 (mission-109): a session's input keeps its words per pane, capped, the pane written in
@@ -64,4 +64,14 @@ describe("the words kept per session's input", () => {
     const written = keepSessionDraft(sendSessionDraft(NO_SESSION_DRAFTS, "w1:p2", null, "r1", full), "w1:p2", null, "new words");
     expect(sessionDraft(settleSessionSend(written, "r1", false), "w1:p2")).toBe(`${full}\nnew words`);
   });
+});
+
+it("preserves words and marks lost completions uncertain, including a model change with an existing draft", () => {
+  const waiting = sendSessionDraft(NO_SESSION_DRAFTS, "p", null, "r", "reply");
+  const uncertain = uncertainSessionSends(keepSessionDraft(waiting, "p", null, "next"));
+  expect(uncertain).toEqual([{ pane: "p", device: null, text: "reply\nnext", uncertain: true }]);
+  expect(visitSessionTerminal(uncertain, "p")).toEqual([{ pane: "p", device: null, text: "reply\nnext" }]);
+  const model = sendSessionDraft(keepSessionDraft(NO_SESSION_DRAFTS, "p", null, "unsent"), "p", null, "model", "", true);
+  expect(sessionDraft(settleSessionSend(model, "model", false), "p")).toBe("unsent");
+  expect(uncertainSessionSends(model)).toEqual([{ pane: "p", device: null, text: "unsent", uncertain: true }]);
 });

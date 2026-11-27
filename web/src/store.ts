@@ -247,6 +247,8 @@ type Store = {
   sessionThread: import("./snapshot").SessionThreadSection | null;
   /** Its kept pages (`session_thread_history`). */
   sessionThreadHistory: import("./snapshot").SessionThreadHistorySection | null;
+  /** Request-specific completion; unlike a snapshot, every frame is observed. */
+  threadInputResult: import("./snapshot").SessionThreadSection["input"];
   /** hided refused a composer's send (a thread's input, a Desk message) before the core saw it: its request and why. */
   composerRefusal: { request_id: string; reason: string } | null;
   agents: AgentRow[];
@@ -449,6 +451,7 @@ export const useShellStore = create<Store>((set, get) => ({
   sessionWorkSearch: null,
   sessionThread: null,
   sessionThreadHistory: null,
+  threadInputResult: null,
   composerRefusal: null,
   agents: [],
   focusedPaneId: null,

@@ -4,6 +4,7 @@ import { BACKOFF_START_MS, nextBackoff, type ConnectionState } from "./connectio
 import { configureFileBytes, requestFileBytes } from "./fileBytes";
 import { useShellStore } from "./store";
 import { connectShell } from "./ws";
+import { useUiStore } from "./ui";
 
 type Listener = (event: unknown) => void;
 
@@ -70,9 +71,23 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  useUiStore.setState({ sessionDrafts: [] });
   useShellStore.setState(saved, true);
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+it("restores an unanswered input when its socket closes before a first snapshot", () => {
+  const shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
+  const socket = made(0);
+  socket.open();
+  expect(useShellStore.getState().connection).not.toBe("live");
+  // An accepted input's completion belongs to this actual socket, even if
+  // the display connection has not reached its live state yet.
+  useUiStore.getState().sendSessionDraft("w1:p1", null, "accepted", "check first");
+  socket.closeWith(1013, "screen_fell_behind");
+  expect(useUiStore.getState().sessionDrafts).toEqual([{ pane: "w1:p1", device: null, text: "check first", uncertain: true }]);
+  shell.close();
 });
 
 // R3, B17: a node closes a screen that fell behind with 1013

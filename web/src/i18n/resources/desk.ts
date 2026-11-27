@@ -524,7 +524,7 @@ const ko: Catalog<typeof deskEnglish> = {
   "desk.thread.thought": "생각",
   "desk.thread.path": "스레드 경로",
   "desk.thread.reading": "기록을 읽는 중…",
-  "desk.thread.empty": "아직 기록이 없어요",
+  "desk.thread.empty": "아직 대화가 없어요",
   "desk.thread.image": "이미지",
   "desk.mention.open": "{{name}} 열기",
   "desk.chip.card": "{{name}} 자세히",

@@ -111,6 +111,8 @@ pub enum AutomationTrigger {
 /// an event of its own ([`MEASURES`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Feature {
+    /// A pane conversation opened in place.
+    PaneConversation,
     /// Focus mode turned on.
     Focus,
     /// A skill or MCP server added, changed, switched or removed, from
@@ -129,7 +131,8 @@ pub enum Feature {
 }
 
 impl Feature {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
+        Self::PaneConversation,
         Self::Focus,
         Self::SkillsMcp,
         Self::HidesPaired,
@@ -140,6 +143,7 @@ impl Feature {
 
     fn name(self) -> &'static str {
         match self {
+            Self::PaneConversation => "pane_conversation",
             Self::Focus => "focus",
             Self::SkillsMcp => "skills_mcp",
             Self::HidesPaired => "hides_paired",
@@ -215,6 +219,8 @@ pub struct ActiveDays {
     phone_answer: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     phone_attachments: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pane_conversation: Option<u64>,
 }
 
 impl ActiveDays {
@@ -232,6 +238,7 @@ impl ActiveDays {
             Daily::Feature(Feature::Gitlab) => &mut self.gitlab,
             Daily::Feature(Feature::PhoneAnswer) => &mut self.phone_answer,
             Daily::Feature(Feature::PhoneAttachments) => &mut self.phone_attachments,
+            Daily::Feature(Feature::PaneConversation) => &mut self.pane_conversation,
         };
         if *recorded == Some(day) {
             return false;
@@ -295,6 +302,7 @@ pub enum PracticeChapter {
     Gitlab,
     Answer,
     Attachments,
+    Conversation,
 }
 
 impl PracticeChapter {
@@ -312,6 +320,7 @@ impl PracticeChapter {
             "gitlab" => Self::Gitlab,
             "answer" => Self::Answer,
             "attachments" => Self::Attachments,
+            "conversation" => Self::Conversation,
             _ => return None,
         })
     }
@@ -536,6 +545,7 @@ impl Event {
                         PracticeChapter::Gitlab => "gitlab",
                         PracticeChapter::Answer => "answer",
                         PracticeChapter::Attachments => "attachments",
+                        PracticeChapter::Conversation => "conversation",
                     },
                 ),
                 (

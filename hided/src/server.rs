@@ -1118,6 +1118,12 @@ async fn screen_loop(
     // each one at a time, off the socket loop.
     let file_search = OneAtATime::<Option<Value>>::default();
     let screen_asks = OneAtATime::<ScreenAsks>::default();
+    // One outstanding thread input per connection. A one-shot keeps every
+    // completion apart from display snapshots and ends with this socket.
+    let mut thread_input: Option<(
+        String,
+        tokio::sync::oneshot::Receiver<Result<hide_core::ThreadInputState, &'static str>>,
+    )> = None;
     let mut device_reads: std::collections::VecDeque<DeviceRead> =
         std::collections::VecDeque::new();
     let daemon = json!({"type": "daemon", "payload": state.daemon_info.as_ref()});
@@ -1208,6 +1214,28 @@ async fn screen_loop(
     let mut ended_with_role = false;
     loop {
         tokio::select! {
+            answer = async {
+                match thread_input.as_mut() {
+                    Some((_, answer)) => answer.await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                let (request_id, _) = thread_input.take().expect("a waiting thread input");
+                let Ok(answer) = answer else {
+                    // Losing a completion must close the connection: the
+                    // caller then keeps its words as delivery-uncertain.
+                    log_snapshot_failure("thread_input_completion", "completion dropped");
+                    break;
+                };
+                let (outcome, reason) = match answer {
+                    Ok(outcome) => (outcome, None),
+                    Err(reason) => (hide_core::ThreadInputState::Refused, Some(reason)),
+                };
+                let frame = json!({"type":"thread_input_result", "payload":{
+                    "request_id":request_id, "state":outcome, "reason":reason
+                }});
+                if socket.send(Message::Text(frame.to_string().into())).await.is_err() { break; }
+            }
             () = async { let _ = role_ended.wait_for(|ended| *ended).await; } => {
                 ended_with_role = true;
                 break;
@@ -1506,6 +1534,27 @@ async fn screen_loop(
                                     continue;
                                 }
                                 spawn_node_ask(&state, event, device_frames_tx.clone(), slot.flatten());
+                            }
+                            Ok(ClientAction::ThreadInput(event)) => {
+                                let request_id = payload_str(&event, "request_id");
+                                let replies = if thread_input.is_some() {
+                                    vec![Message::Text(attachment_refused(&request_id, "in_flight").to_string().into())]
+                                } else {
+                                    let (reply, answer) = tokio::sync::oneshot::channel();
+                                    let reply = std::sync::Mutex::new(Some(reply));
+                                    let replies = handle_thread_input(&state, &event, move |outcome| {
+                                        if let Some(reply) = reply.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+                                            let _ = reply.send(outcome);
+                                        }
+                                    });
+                                    if replies.is_empty() { thread_input = Some((request_id, answer)); }
+                                    replies
+                                };
+                                let mut failed = false;
+                                for frame in replies {
+                                    if socket.send(frame).await.is_err() { failed = true; break; }
+                                }
+                                if failed { break; }
                             }
                             Ok(ClientAction::ScreenAsk(event)) => {
                                 screen_asks.ask(&state, device_frames_tx.clone(), |asks| asks.add(event), screen_ask);
@@ -2848,6 +2897,7 @@ pub(crate) fn token_matches(offered: &str, expected: &str) -> bool {
 /// frames for this client alone: a directory listing, a path refusal, or the
 /// binary frames of a `file_bytes` read.
 enum ClientAction {
+    ThreadInput(Value),
     FileBytes(Value),
     /// Something the operator does about pairing (`pairing_*`), which the
     /// daemon's pairing answers for this client alone.
@@ -2992,8 +3042,8 @@ fn handle_client_text(
                 state, &event,
             )));
         }
-        Some("thread_input") => {
-            return Ok(ClientAction::Replies(handle_thread_input(state, &event)));
+        Some("thread_input" | "session_thread_switch" | "session_thread_interrupt") => {
+            return Ok(ClientAction::ThreadInput(event));
         }
         Some("desk_send") => {
             return Ok(ClientAction::Replies(handle_desk_send(state, &event)));
@@ -4101,8 +4151,12 @@ fn attachment_refused(request_id: &str, reason: &str) -> Value {
 /// files it staged are committed here, where they were staged, and the core
 /// is told their paths with the words, which it types into the thread's
 /// pane. A refusal before the core is answered as an attachment's is, by
-/// the input's request id; the core's own answer is in the thread section.
-fn handle_thread_input(state: &AppState, event: &Value) -> Vec<Message> {
+/// the input's request id; the core completes directly to this connection.
+fn handle_thread_input(
+    state: &AppState,
+    event: &Value,
+    reply: impl Fn(Result<hide_core::ThreadInputState, &'static str>) + Send + Sync + 'static,
+) -> Vec<Message> {
     let request_id = payload_str(event, "request_id");
     let refuse = |reason: &str| {
         vec![Message::Text(
@@ -4111,6 +4165,19 @@ fn handle_thread_input(state: &AppState, event: &Value) -> Vec<Message> {
     };
     if !attachments::valid_request_id(&request_id) {
         return refuse("invalid_request_id");
+    }
+    if let Some(kind @ ("session_thread_switch" | "session_thread_interrupt")) =
+        event.get("kind").and_then(Value::as_str)
+    {
+        if let Err(error) =
+            state
+                .core
+                .send_thread_input(kind.to_owned(), event["payload"].clone(), reply)
+        {
+            log_snapshot_failure(kind, &error);
+            return refuse("forward_failed");
+        }
+        return Vec::new();
     }
     let (Some(generation), Some(text)) = (
         event.pointer("/payload/generation").and_then(Value::as_u64),
@@ -4147,20 +4214,17 @@ fn handle_thread_input(state: &AppState, event: &Value) -> Vec<Message> {
         }
     };
     let input = json!({
-        "schema_version": 2,
-        "kind": "session_thread_input",
-        "payload": {
             "generation": generation,
             "pane_id": payload_str(event, "pane_id"),
             "request_id": request_id,
             "text": text,
             "paths": paths,
             "bytes": bytes,
-        },
     });
-    if let Err(error) = state
-        .core
-        .dispatch(serde_json::to_vec(&input).unwrap_or_default())
+    if let Err(error) =
+        state
+            .core
+            .send_thread_input("session_thread_input".to_owned(), input, reply)
     {
         log_snapshot_failure("thread_input", &error);
         return refuse("forward_failed");

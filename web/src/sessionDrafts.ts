@@ -10,7 +10,7 @@ import type { RemoteStatus } from "./snapshot";
  * the pane has not answered yet (`sending`), kept here rather than in the panel so they outlive it.
  */
 export type SessionDrafts = readonly SessionDraft[];
-export type SessionDraft = { pane: string; device: string | null; text: string; sending?: { request: string; words: string } };
+export type SessionDraft = { pane: string; device: string | null; text: string; sending?: { request: string; words: string }; uncertain?: true };
 
 /** At most this many panes keep their words; a new one past it lets the one written in longest ago go. */
 export const SESSION_DRAFTS_KEPT = 32;
@@ -49,8 +49,8 @@ export function keepSessionDraft(drafts: SessionDrafts, pane: string, device: st
 }
 
 /** `pane`'s input sent `words` as `request`: the box empties, and the words wait here for the pane's answer. */
-export function sendSessionDraft(drafts: SessionDrafts, pane: string, device: string | null, request: string, words: string): SessionDrafts {
-  return put(drafts, { pane, device, text: "", sending: { request, words } });
+export function sendSessionDraft(drafts: SessionDrafts, pane: string, device: string | null, request: string, words: string, preserveDraft = false): SessionDrafts {
+  return put(drafts, { pane, device, text: preserveDraft ? sessionDraft(drafts, pane) : "", sending: { request, words } });
 }
 
 /**
@@ -62,13 +62,27 @@ export function settleSessionSend(drafts: SessionDrafts, request: string, taken:
   const draft = drafts.find((one) => one.sending?.request === request);
   if (!draft?.sending) return drafts;
   const { words } = draft.sending;
-  const text = taken ? draft.text : draft.text === "" ? words : `${words}\n${draft.text}`;
+  const text = taken || words === "" ? draft.text : draft.text === "" ? words : `${words}\n${draft.text}`;
   return drafts.map((one) => (one === draft ? { pane: one.pane, device: one.device, text } : one)).filter((one) => one.text !== "" || one.sending);
+}
+
+/** A lost connection cannot say whether Enter landed. Keep the words and
+ * block another send until the operator goes to this pane's terminal. */
+export function uncertainSessionSends(drafts: SessionDrafts, request?: string): SessionDrafts {
+  return drafts.map((draft) => draft.sending && (request === undefined || draft.sending.request === request) ? {
+    pane: draft.pane, device: draft.device,
+    text: draft.sending.words === "" ? draft.text : draft.text === "" ? draft.sending.words : `${draft.sending.words}\n${draft.text}`,
+    uncertain: true,
+  } : draft);
+}
+
+export function visitSessionTerminal(drafts: SessionDrafts, pane: string): SessionDrafts {
+  return drafts.map((draft) => draft.pane === pane && draft.uncertain ? { pane: draft.pane, device: draft.device, text: draft.text } : draft);
 }
 
 function put(drafts: SessionDrafts, draft: SessionDraft): SessionDrafts {
   const others = drafts.filter((one) => one.pane !== draft.pane);
-  if (draft.text === "" && !draft.sending) return others.length === drafts.length ? drafts : others;
+  if (draft.text === "" && !draft.sending && !draft.uncertain) return others.length === drafts.length ? drafts : others;
   const next = [...others, draft];
   return next.length > SESSION_DRAFTS_KEPT ? next.slice(next.length - SESSION_DRAFTS_KEPT) : next;
 }

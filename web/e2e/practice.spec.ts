@@ -192,6 +192,19 @@ test("the practice window plays every chapter by the guide's button as it does w
   });
 });
 
+// B23: a fresh practice page has no daemon socket; replies stay in its world.
+test("the pane conversation practice accepts a reply through the production composer", async ({ page }) => {
+  await withPractice(page, async (practice) => {
+    await playFromList(practice, "conversation");
+    await pressTo(practice, "conversation", 2);
+    const composer = practice.locator("[data-pane-conversation] [data-desk-composer-input]");
+    await composer.fill("로그인 흐름을 확인해 주세요");
+    await composer.press("Enter");
+    await expect(practice.locator("[data-pane-conversation]")).toContainText("로그인 흐름을 확인해 주세요");
+    await expect(composer).toHaveValue("");
+  });
+});
+
 /**
  * Presses Enter in chapter `id` until its step `at` shows, each press waiting for the practice to move; null presses on until the chapter is left.
  * A step that waits on the world's own beat takes no Enter; `hurry`, given by a journey that faked the page's clock, runs it ahead there so the beat comes at once.

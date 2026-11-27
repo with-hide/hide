@@ -467,7 +467,23 @@ describe("input after a confirmed View close", () => {
     } finally { stopKeyboard(); noteDrawnViews(null); window.hideHost = previousHost; remove(); }
   });
 
-  it("leaves Desk's menu command and room shut while Desk is off, and tells the host when it turns on (D-76)", async () => {
+  it("toggles the pane owning the composer while the last core focus still names another pane", async () => {
+    const { remove, actions } = await setup();
+    useUiStore.setState({ screen: { kind: "workspace" } });
+    useShellStore.setState({ focusedPaneId: "w1:p2", agents: [
+      { pane_id: "w1:p1", thread_capability: "ready", thread_identity: "one" },
+      { pane_id: "w1:p2", thread_capability: "ready", thread_identity: "two" },
+    ] as never });
+    noteKeyboardOwner({ kind: "pane", workspace: workspace.path, paneId: "w1:p1" });
+    try {
+      actions.deskTerminal();
+      expect(useUiStore.getState().paneConversation).toEqual({ paneId: "w1:p1", session: "one" });
+      actions.deskTerminal();
+      expect(useUiStore.getState().paneConversation).toBeNull();
+    } finally { noteKeyboardOwner({ kind: "none" }); remove(); }
+  });
+
+  it("toggles a ready pane with Desk off or on, without returning it to Desk", async () => {
     const { remove, actions } = await setup();
     const { installKeyboard } = await import("./keyboard");
     let command: (id: string) => void = () => {};
@@ -476,19 +492,27 @@ describe("input after a confirmed View close", () => {
     Object.assign(window, { hideHost: { kind: "electron", platform: "darwin", onCommand: (listener: typeof command) => { command = listener; return () => {}; }, reportBindings: vi.fn(), reportLanguage: vi.fn(), reportDesk } });
     const desk = (enabled: boolean) => ({ settings: { enabled, default_agent: null, location: "desk", cap: 8 } }) as never;
     useUiStore.setState({ screen: { kind: "workspace" } });
-    // The pane in front is a Desk thread, so ⌘J would open Desk were it on.
-    useShellStore.setState({ desk: desk(false), deskJobs: { jobs: [{ id: "job-1", pane_id: "w1:p1" }], workers: [] } as never, focusedPaneId: "w1:p1" });
+    // Even a pane opened from Desk uses the general in-place conversation command.
+    useShellStore.setState({ agents: [{ pane_id: "w1:p1", thread_capability: "ready", thread_identity: "session-one" }] as never, desk: desk(false), deskJobs: { jobs: [{ id: "job-1", pane_id: "w1:p1" }], workers: [] } as never, focusedPaneId: "w1:p1" });
     const stopKeyboard = installKeyboard(actions);
     try {
       expect(reportDesk).toHaveBeenLastCalledWith(false);
       command("desk_terminal");
+      expect(useUiStore.getState().paneConversation).toEqual({ paneId: "w1:p1", session: "session-one" });
       actions.openDesk();
       expect(useUiStore.getState().screen).toEqual({ kind: "workspace" });
 
       useShellStore.setState({ desk: desk(true) });
       expect(reportDesk).toHaveBeenLastCalledWith(true);
       command("desk_terminal");
-      expect(useUiStore.getState().screen).toEqual({ kind: "desk" });
+      expect(useUiStore.getState().paneConversation).toBeNull();
+      expect(useUiStore.getState().screen).toEqual({ kind: "workspace" });
+      useShellStore.setState({ agents: [{ pane_id: "w1:p1", thread_capability: "pending" }] as never });
+      command("desk_terminal");
+      expect(useUiStore.getState().paneConversation).toBeNull();
+      useShellStore.setState({ agents: [] });
+      command("desk_terminal");
+      expect(useUiStore.getState().paneConversation).toBeNull();
     } finally { stopKeyboard(); window.hideHost = previousHost; remove(); }
   });
 

@@ -11,6 +11,7 @@ mod agent_asks;
 mod agent_catalog;
 pub(crate) mod agent_choice;
 mod agent_close;
+mod agent_commands;
 mod agent_definitions;
 mod agent_profiles;
 pub(crate) mod automations;
@@ -34,7 +35,10 @@ mod clone;
 mod closed_registrations;
 pub(crate) use closed_registrations::settle_reopen;
 pub(crate) use core_calls::SENDER_NOT_REGISTERED;
-pub(crate) use session_thread::ThreadReference;
+pub(crate) use input_queue::ThreadInterruptPayload;
+pub(crate) use session_thread::{
+    ThreadInputPayload, ThreadInputReply, ThreadReference, ThreadSwitchPayload,
+};
 mod control_lane;
 mod core_calls;
 pub(crate) mod delivery;
@@ -1549,6 +1553,7 @@ pub struct Runtime {
     herdr_import: herdr_import::Import,
     /// The Desk room and its one Desk process (`runtime/desk.rs`).
     desk: desk::Desk,
+    agent_commands: crate::agent_commands::AgentCommands,
     /// External tools' connections (PRD hide-external-control).
     access: access::AccessRuntime,
     automations: automations::AutomationsRuntime,
@@ -2625,6 +2630,7 @@ impl Runtime {
             first_run_apply: None,
             herdr_import: herdr_import::Import::default(),
             desk: desk::Desk::default(),
+            agent_commands: Default::default(),
             access: access::AccessRuntime::default(),
             automations: automations::AutomationsRuntime::default(),
             local_kit_next_status: None,

@@ -308,10 +308,14 @@ pub fn desk_store(state_dir: &Path) -> PathBuf {
     desk_dir(state_dir).join("desk.json")
 }
 
-/// Each Desk agent's last command list, so `/` lists it before a session
-/// opens after a restart; its owner is the core's Desk.
+/// Legacy command lists, read only when the agent-owned file is missing.
 pub fn desk_commands(state_dir: &Path) -> PathBuf {
     desk_dir(state_dir).join("commands.json")
+}
+
+/// Each agent's saved commands, shared by every conversation input.
+pub fn agent_commands(state_dir: &Path) -> PathBuf {
+    state_dir.join("agent-commands.json")
 }
 
 /// The ACP adapters Desk installs from their pinned locks, one folder per

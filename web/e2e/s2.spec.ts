@@ -506,18 +506,17 @@ test("the shortcut sheet marks the moved chords and ⌘F reaches the agent's own
     // The two Explorer path copies and its Cut, Copy and Paste are rows too,
     // and so is the sidebar's Projects | Tasks switch (sidebar-task-lens D-19, D-32),
     // the pane's Show task steps (hide-plan B7), the Memory tool's toggle, Next and Previous tab,
-    // Desk's thread ⇄ terminal (session-docs-and-assistant B35) is listed only
-    // while Desk is on, and Desk is off by default (D-76, B41).
+    // Conversation ⇄ terminal is available with Desk off too (pane-conversation-toggle B10).
     // The four directional terminal focus commands are listed too.
-    await expect(page.locator("[data-shortcut]")).toHaveCount(65);
+    await expect(page.locator("[data-shortcut]")).toHaveCount(66);
     // Pair view's ⌘. (PRD lane-desk-pair-view B18) is a row of its own.
     await expect(page.locator('[data-shortcut="pair_view"]')).toHaveCount(1);
-    await expect(page.locator('[data-shortcut="desk_terminal"]')).toHaveCount(0);
+    await expect(page.locator('[data-shortcut="desk_terminal"]')).toHaveCount(1);
     for (const title of ["Overview", "Focus sidebar", "Add to backlog"]) await expect(page.locator("[data-shortcut-sheet]")).toContainText(title);
     // Add to backlog moves in a macOS browser, where Chrome keeps ⌘⇧M for its profiles; Alt+Shift+M is free on Windows and Linux.
     // Assert the exact moved commands, including the unchanged platform exceptions.
     const movedCommands = [
-      "new_tab", "close_tab", "reopen_closed_tab", "recent_area_tab", "previous_recent_area_tab", "toggle_sidebar_lens",
+      "new_tab", "close_tab", "reopen_closed_tab", "recent_area_tab", "previous_recent_area_tab", "toggle_sidebar_lens", "desk_terminal",
       ...(SYSTEM === "mac" ? ["close_pane", "settings", "add_backlog", "open_sidebar_prs"] : []),
     ];
     const movedRows = page.locator("[data-shortcut]").filter({ hasText: "moved for Chrome" });

@@ -21,6 +21,7 @@ mod code_host;
 pub use code_host::{
     ChangeRequestPlace, WrittenChangeRequest, change_request_name, written_change_request,
 };
+mod agent_commands;
 mod codex_launch;
 mod composer_checks;
 mod composer_store;
@@ -129,7 +130,7 @@ pub use handle::{Core, ExecAsk, PreparedChanges};
 pub use model::{
     ChangedFileStatus, LookChange, LookView, LookViews, RemoteFileListSnapshot,
     RemoteSessionSnapshot, RemoteStatusSnapshot, RestSections, RightPanelSection,
-    SnapshotDeltaWire,
+    SnapshotDeltaWire, ThreadInputState,
 };
 pub use model::{
     CoreOptions, DeviceProblem, DeviceRegistration, HerdrImportSnapshot, InterfaceLanguage,

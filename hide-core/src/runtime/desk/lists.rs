@@ -42,7 +42,8 @@ use hide_desk::AdapterId;
 use hide_desk::read_ahead::{self, Bounds, Unread};
 
 use super::worker::{Order, launch_for};
-use crate::desk::{DeskPlaces, ReadMark, ReadMarks};
+use crate::agent_commands::{ReadMark, ReadMarks};
+use crate::desk::DeskPlaces;
 
 /// What the worker hands the thread.
 pub(super) enum Wanted {
