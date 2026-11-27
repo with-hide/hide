@@ -28,6 +28,24 @@ pub(crate) enum Client {
     Tool,
 }
 
+impl Client {
+    /// Where a choice of the operator's look this connection sends is made
+    /// (`docs/status-model.md`, Hide owns the read axis): a window of this
+    /// machine chooses here; another machine's view, `viewer` by its key,
+    /// chooses in that view, which counts only while that machine shows it;
+    /// and a tool chooses nowhere, so what it moves stays where the operator
+    /// last chose. A focus an agent's command on this machine sends after the
+    /// operator chose in a view, and left it, so never makes that choice
+    /// count again.
+    pub(crate) fn look_screen(self, viewer: Option<String>) -> Option<hide_core::LookScreen> {
+        match self {
+            Self::Window { .. } => Some(hide_core::LookScreen::Own),
+            Self::Remote => viewer.map(hide_core::LookScreen::View),
+            Self::Tool => None,
+        }
+    }
+}
+
 /// Which connections may send a kind.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Class {
@@ -375,6 +393,8 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("register_device", Local),
     ("remote_control", Local),
     ("remote_file_list", Screen),
+    // Which machines show their view of this one now (`remote_screen`).
+    ("remote_views", Daemon),
     ("remove_device", Local),
     ("remove_workspace", Screen),
     ("remove_worktree", Screen),
@@ -633,6 +653,24 @@ mod tests {
     }
 
     #[test]
+    fn a_window_chooses_here_a_view_in_its_machine_s_view_and_a_tool_nowhere() {
+        let key = "ab".repeat(32);
+        assert_eq!(
+            Client::Window { desktop: true }.look_screen(None),
+            Some(hide_core::LookScreen::Own)
+        );
+        assert_eq!(
+            Client::Window { desktop: false }.look_screen(None),
+            Some(hide_core::LookScreen::Own)
+        );
+        assert_eq!(
+            Client::Remote.look_screen(Some(key.clone())),
+            Some(hide_core::LookScreen::View(key))
+        );
+        assert_eq!(Client::Tool.look_screen(None), None);
+    }
+
+    #[test]
     fn what_the_daemon_sends_no_client_may() {
         for client in [
             Client::Window { desktop: true },
@@ -645,6 +683,9 @@ mod tests {
                 "device_switch",
                 "guest_panes",
                 "peer_work",
+                // A view never says which machines show this one: a page
+                // that did could keep its own look counting after it closed.
+                "remote_views",
             ] {
                 assert_eq!(admit(kind, client), Err(Refused::NotHere), "{kind}");
             }

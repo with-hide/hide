@@ -171,6 +171,8 @@ mod recent_checkouts;
 mod recent_places;
 #[path = "tests/remote_spawn.rs"]
 mod remote_spawn;
+#[path = "tests/remote_views.rs"]
+mod remote_views;
 #[path = "tests/repository_clone.rs"]
 mod repository_clone;
 #[path = "tests/session_archive.rs"]

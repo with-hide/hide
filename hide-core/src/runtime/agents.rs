@@ -7,7 +7,9 @@ const MAX_PHONE_VIEWED_PANES: usize = 16;
 /// The panes the operator looks at, per machine, as the read axis reads them
 /// (`Runtime::looked_at`): this machine's focus pane as the operator chose
 /// it, each device's own focus while that device is in front and its window
-/// shows the pane's tab (`remote_read_focus`), and every agent a phone has
+/// shows the pane's tab (`remote_read_focus`), both only while the screen
+/// they were chosen on shows (`LookInputs::chosen_shows`: another machine's
+/// view counts while that machine shows it), and every agent a phone has
 /// open. One value, so a move of any of its parts is one comparison
 /// (`Runtime::follow_operator_look`).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -1467,9 +1469,10 @@ impl Runtime {
             .collect()
     }
 
-    /// This machine's look: the focus pane the operator chose and a phone's.
+    /// This machine's look: the focus pane the operator chose, while the
+    /// screen they chose it on shows, and a phone's.
     fn local_look(&self) -> Vec<String> {
-        self.looked_at(self.look.focus())
+        self.looked_at(self.look.looking_focus())
     }
 
     /// A device's look: its own focus, as `remote_read_focus` filters it,
@@ -1542,8 +1545,9 @@ impl Runtime {
     }
 
     /// The focus a device's own server reports, counted as the operator's
-    /// look only while that device is in front and the pane is in a tab its
-    /// window shows. Hide never focuses a remote pane itself.
+    /// look only while that device is in front, brought there on a screen
+    /// that still shows (`LookInputs::chosen_shows`), and the pane is in a
+    /// tab its window shows. Hide never focuses a remote pane itself.
     fn remote_read_focus(
         &self,
         target_id: &str,
@@ -1553,7 +1557,7 @@ impl Runtime {
             if self.workspace_views.is_none() {
                 return true;
             }
-            if !self.device_in_front(target_id) {
+            if !self.device_in_front(target_id) || !self.look.chosen_shows() {
                 return false;
             }
             self.node_shown_agent_tabs(target_id).is_none_or(|shown| {

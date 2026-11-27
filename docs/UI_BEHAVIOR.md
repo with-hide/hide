@@ -2662,6 +2662,7 @@ While this window's rail is hidden, that computer's screen, opened by ⌥⌘1-9,
 Either side on an older build keeps the screen on its own choices and its own View menu: a desktop app here that sends no choices, or a Hide there whose page does not read them.
 While the other computer's screen drops for a moment, it shows its own `다시 연결하는 중` and sends no keys.
 Its connection lives only while its tile shows: another tile closes it, and coming back opens it at once, drawn from where it was.
+What is chosen on that screen is looked at only while it shows: a pane picked there is read while its tile shows, and once another tile, a closed window or a lost connection ends the screen, that pane's next finished turn there stays 읽을 것 and notifies as any unseen turn does, until the tile shows it again ([status-model.md](status-model.md#hide-owns-the-read-axis-at-pane-level); operator report 2026-11-27).
 Anything this window draws over the screen's place (a menu, Settings, a dialog) moves the screen aside until it closes, since the screen is a view of its own over the window.
 On that screen the other computer offers nothing that lets a machine or a tool into it: no sharing, no allowing a pairing, no pausing or removing a computer, no approving an external tool and no pairing a phone, and a request for one is refused to that screen alone; removing a phone works.
 A browser tab has no way to draw another computer's screen, so a paired computer's tile there opens its row in Settings › Devices.

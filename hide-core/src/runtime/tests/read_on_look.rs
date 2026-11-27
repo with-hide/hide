@@ -12,19 +12,19 @@ use super::*;
 use crate::model::LinkOrigin;
 use serde_json::json;
 
-const DEVICE: &str = "look-device";
+pub(super) const DEVICE: &str = "look-device";
 
 fn tab(id: &str) -> String {
     format!("remote:{DEVICE}:tab:{id}")
 }
 
-fn pane_id(id: &str) -> String {
+pub(super) fn pane_id(id: &str) -> String {
     format!("remote:{DEVICE}:pane:{id}")
 }
 
 /// A node that dialed this core arranges several Agent areas; a device this
 /// core dials keeps one area per group. The read must not depend on which.
-fn origins() -> [LinkOrigin; 2] {
+pub(super) fn origins() -> [LinkOrigin; 2] {
     [
         LinkOrigin::Inbound,
         LinkOrigin::Dialed {
@@ -35,7 +35,7 @@ fn origins() -> [LinkOrigin; 2] {
 }
 
 /// A connected device with Agent areas, `in_front` or behind this machine.
-fn device(origin: LinkOrigin, in_front: bool) -> (Runtime, tempfile::TempDir) {
+pub(super) fn device(origin: LinkOrigin, in_front: bool) -> (Runtime, tempfile::TempDir) {
     let mut runtime = runtime();
     runtime
         .snapshot
@@ -71,7 +71,7 @@ fn device(origin: LinkOrigin, in_front: bool) -> (Runtime, tempfile::TempDir) {
 
 /// The device's engine with one tab per `(tab, status, seq)`, an agent in
 /// each tab's pane, and its own keyboard on `focused`'s pane.
-fn device_session(
+pub(super) fn device_session(
     path: &str,
     agents: &[(&str, &str, u64)],
     focused: &str,
@@ -108,7 +108,7 @@ fn publish(runtime: &mut Runtime) {
 }
 
 /// Whether the device row of `id`'s pane is in 읽을 것.
-fn unread(runtime: &Runtime, id: &str) -> bool {
+pub(super) fn unread(runtime: &Runtime, id: &str) -> bool {
     runtime
         .snapshot
         .status
@@ -420,7 +420,7 @@ fn reads_follow_the_look_with_no_window_pulling_snapshots() {
 
 /// This machine with two tabs, a finished turn in each at `turns`, its
 /// engine's keyboard on `t1`'s pane.
-fn local_two_tabs(path: &str, turns: [u64; 2]) -> SessionSnapshotPayload {
+pub(super) fn local_two_tabs(path: &str, turns: [u64; 2]) -> SessionSnapshotPayload {
     let tab = |tab_id: &str| {
         json!({
             "workspace_id": "w-look", "tab_id": tab_id, "zoomed": false,
@@ -455,11 +455,11 @@ fn local_two_tabs(path: &str, turns: [u64; 2]) -> SessionSnapshotPayload {
     .expect("two tabs with a finished turn each")
 }
 
-const T1: &str = "w-look:t1:p";
-const T2: &str = "w-look:t2:p";
+pub(super) const T1: &str = "w-look:t1:p";
+pub(super) const T2: &str = "w-look:t2:p";
 
 /// This machine's two finished tabs, both 읽을 것: nobody has looked yet.
-fn two_finished_tabs(path: &str) -> Runtime {
+pub(super) fn two_finished_tabs(path: &str) -> Runtime {
     let (mut runtime, _checkout) = live_tab_order_runtime(path);
     runtime.ingest_session(Ok(local_two_tabs(path, [1, 1])));
     assert_eq!(unread_panes(&runtime), vec![T1, T2], "nobody has looked");

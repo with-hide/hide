@@ -229,6 +229,9 @@ enum Command {
     },
     Dispatch {
         event: Vec<u8>,
+        /// The screen a client's event was sent from; none for the
+        /// daemon's own (`hide_core::Core::dispatch_bytes_from`).
+        screen: Option<hide_core::LookScreen>,
         reply: Sender<Result<(), String>>,
     },
     DeviceChannel {
@@ -1228,10 +1231,29 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped the input gate reply".to_owned())
     }
 
+    /// Dispatches an event that is no screen's choice: the daemon's own, or
+    /// a client's that moves no part of the operator's look.
     pub fn dispatch(&self, event: Vec<u8>) -> Result<(), String> {
+        self.dispatch_from(event, None)
+    }
+
+    /// Dispatches a client's event sent from `screen`: whatever it chooses
+    /// of the operator's look is chosen there, so a choice made in another
+    /// machine's view counts only while that machine shows it; with none (a
+    /// tool's), what it moves stays where the operator last chose
+    /// (`event_class::Client::look_screen`).
+    pub fn dispatch_from(
+        &self,
+        event: Vec<u8>,
+        screen: Option<hide_core::LookScreen>,
+    ) -> Result<(), String> {
         let (reply, rx) = mpsc::channel();
         self.commands
-            .send(Command::Dispatch { event, reply })
+            .send(Command::Dispatch {
+                event,
+                screen,
+                reply,
+            })
             .map_err(|_| "core owner thread is gone".to_owned())?;
         rx.recv()
             .map_err(|_| "core owner thread dropped dispatch reply".to_owned())?
@@ -2126,8 +2148,15 @@ fn owner_loop(
                 _held_roots = held;
                 let _ = reply.send(Ok(()));
             }
-            Command::Dispatch { event, reply } => {
-                let _ = core.dispatch_bytes(&event);
+            Command::Dispatch {
+                event,
+                screen,
+                reply,
+            } => {
+                let _ = match screen {
+                    Some(screen) => core.dispatch_bytes_from(&event, screen),
+                    None => core.dispatch_bytes(&event),
+                };
                 let _ = reply.send(Ok(()));
             }
             Command::DeviceChannel { device_id, reply } => {

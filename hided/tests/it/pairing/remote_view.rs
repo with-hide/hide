@@ -425,3 +425,87 @@ async fn a_view_asked_under_a_device_s_earlier_key_is_refused_once_another_host_
         "{daemon}"
     );
 }
+
+/// What the host's core was told of the machines showing their view of it,
+/// in order (`look.remote_views` in the host's log, each machine by the start
+/// of its key).
+fn views_told(state: &std::path::Path) -> Vec<Vec<String>> {
+    std::fs::read_to_string(state.join("Logs/core.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| record["kind"] == "look.remote_views")
+        .map(|record| {
+            record["machines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|key| key.as_str().unwrap().to_owned())
+                .collect()
+        })
+        .collect()
+}
+
+/// Waits until the host's core has been told `wanted` last, and answers
+/// everything it was told.
+async fn told_last(state: &std::path::Path, wanted: &[String]) -> Vec<Vec<String>> {
+    let deadline = Instant::now() + WITHIN;
+    loop {
+        let told = views_told(state);
+        if told.last().is_some_and(|last| last == wanted) {
+            return told;
+        }
+        assert!(Instant::now() < deadline, "never told {wanted:?}: {told:?}");
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the view's seat and its end cross the connection; the record is the host core's own
+    }
+}
+
+/// A look the operator chooses in the view counts only while the guest shows
+/// it (operator report 2026-11-27, `docs/status-model.md`, Hide owns the read
+/// axis): the host's core is told which machines show their view as each one
+/// is seated and as it ends, so leaving the tile, which closes the view's
+/// socket, ends the guest's look there, and showing the tile again starts
+/// it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_host_s_core_hears_which_machines_show_their_view() {
+    let root = crate::fixtures::fixture_root("hw");
+    let running = hided::start_daemon(host_env(root.path())).await.unwrap();
+    let host_state = root.path().join("host-state");
+    let host = Terminal::new(root.path().join("host-home"), host_state.clone(), None);
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
+    let _stop = StopOnDrop(&guest);
+    let connected = guest.run(&["connect"]);
+    assert!(connected.ok, "the guest daemon: {}", connected.text());
+    let (window, host_id, _) = pair_by_link(&running, &host, &guest).await;
+    drop(window);
+    let (port, token) = daemon_of(&guest);
+    let key = host_key(&guest);
+    let guest_key = host_key(&host);
+    let showing = vec![guest_key[..16].to_owned()];
+    assert!(views_told(&host_state).is_empty(), "no view yet");
+
+    let mut view = open_view(port, &token, &host_id, &key).await;
+    until(&mut view, "the host's snapshot", |frame| {
+        frame["type"] == "snapshot"
+    })
+    .await;
+    told_last(&host_state, &showing).await;
+
+    // The tile hidden: the desktop closes the socket.
+    drop(view);
+    let told = told_last(&host_state, &[]).await;
+    assert_eq!(told, vec![showing.clone(), Vec::new()]);
+
+    // The tile shown again.
+    let mut shown = open_view(port, &token, &host_id, &key).await;
+    until(&mut shown, "the host's snapshot again", |frame| {
+        frame["type"] == "snapshot"
+    })
+    .await;
+    let told = told_last(&host_state, &showing).await;
+    assert_eq!(told, vec![showing.clone(), Vec::new(), showing.clone()]);
+}
