@@ -95,6 +95,13 @@ export type ComputerWorkDeps = {
   subscribe: (listener: () => void) => () => void;
   /** Whether the page is connected to its core now; a start is made only then, and one made is read only then. */
   connected: () => boolean;
+  /**
+   * Whether the page's socket is open now, so what it makes is sent. A page
+   * whose tile the desktop hid keeps its core as `live` with its socket
+   * closed, and the click that shows the tile again hands the ask before the
+   * socket reopens: the ask waits for the socket, else it would be dropped.
+   */
+  open: () => boolean;
   note: (message: string) => void;
 };
 
@@ -174,7 +181,7 @@ export function takeComputerWork(bridge: Pick<RemoteBridge, "onWork" | "workResu
       else deps.note(`show from another computer: ${work.pane} came too late; nothing opened`);
       return;
     }
-    if (!rest || !deps.connected()) return;
+    if (!rest || !deps.connected() || !deps.open()) return;
     if (work.op === "show") {
       pending = null;
       deps.actions.openListedAgent(work.pane);

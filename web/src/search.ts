@@ -19,6 +19,7 @@ import { workKey } from "./sessionWork";
 import { missionCounts } from "./missions";
 import { askSubjectText } from "./askSubject";
 import { pullLabel } from "./codeHost";
+import { peerReasonKey, type PeerRow } from "./guestWork";
 
 /** The header an entry is drawn under: one per kind of thing; `label` is the catalog key the palette translates where it draws the header. */
 export type SearchGroup = { id: string; label: MessageKey };
@@ -81,6 +82,8 @@ export type SearchEntry = {
   repository?: string;
   /** The rows the snapshot carried, which the detail reads facts from. */
   agent?: AgentRow;
+  /** Another computer's own agent, as that computer told it (D-50): no pane of this core, so it opens on that computer's screen. */
+  peer?: PeerRow;
   checkout?: Checkout;
   workspace?: Workspace;
   pr?: PullRequest;
@@ -221,6 +224,33 @@ export function agentEntry(scope: SearchDevice, agent: AgentRow, place: string |
     chip: deviceChip(scope, front),
     agent,
     status: agentStatus(agent, t),
+  };
+}
+
+/**
+ * Another computer's agent as that computer told it, a row of its Needs You
+ * or Done (D-50, B49): found by its title, place and why it waits, as an SSH
+ * device's agent is, and named by its machine's chip; it is no pane of this
+ * core, so choosing it opens that computer's screen on it
+ * (`openComputerAgent`).
+ */
+export function peerAgentEntry(peer: PeerRow, t: TFunction<"translation">): SearchEntry {
+  const { row, deviceId, machine } = peer;
+  const reasonKey = peerReasonKey(row);
+  const reason = row.detail ?? (reasonKey ? t(reasonKey) : null);
+  return {
+    id: `peer-agent:${deviceId}:${row.id}`,
+    title: row.title,
+    subtitle: [row.place, reason].filter(Boolean).join(" · "),
+    place: row.place ?? undefined,
+    kind: "agent",
+    group: AGENTS_GROUP,
+    agentKind: row.agent_kind,
+    // The id that computer knows the pane by, so the id copied there finds it here too.
+    devicePaneId: row.id,
+    deviceId,
+    chip: { label: machine, local: false },
+    peer,
   };
 }
 
@@ -388,7 +418,7 @@ export function githubEntries(results: readonly GithubSearchResult[], held: read
  * issues and pull requests the core already holds (PRD cmdk-navigation D-12,
  * D-14). A row not on the device in front carries that device's chip.
  */
-export function searchEntries(rest: SnapshotRest | null, t: TFunction<"translation">): SearchEntry[] {
+export function searchEntries(rest: SnapshotRest | null, t: TFunction<"translation">, peers: readonly PeerRow[] = []): SearchEntry[] {
   if (!rest) return [];
   const entries: SearchEntry[] = [startAgentEntry(t)];
   const front = frontDeviceId(rest);
@@ -409,6 +439,7 @@ export function searchEntries(rest: SnapshotRest | null, t: TFunction<"translati
       for (const task of workspace.tasks?.tasks ?? []) entries.push(issueEntry(scope, workspace, task, front, t));
     }
   }
+  for (const peer of peers) entries.push(peerAgentEntry(peer, t));
   // With this Mac alone there is no device to move to, so no device rows.
   for (const { device, name, own } of devices.length > 1 ? devices : []) {
     entries.push({

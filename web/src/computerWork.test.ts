@@ -27,6 +27,7 @@ function page(initial: SnapshotRest | null) {
   let deliver: ((work: RemoteWork) => void) | null = null;
   let rest = initial;
   let live = true;
+  let open = true;
   const listeners = new Set<() => void>();
   const actions = { openListedAgent: vi.fn(), startAgent: vi.fn(), createWorktree: vi.fn(), createWorkspace: vi.fn() };
   const results: RemoteWorkResult[] = [];
@@ -41,6 +42,7 @@ function page(initial: SnapshotRest | null) {
         return () => listeners.delete(listener);
       },
       connected: () => live,
+      open: () => open,
       note,
     },
   );
@@ -62,6 +64,16 @@ function page(initial: SnapshotRest | null) {
     },
     back: (next: SnapshotRest) => {
       live = true;
+      rest = next;
+      for (const listener of [...listeners]) listener();
+    },
+    /** The desktop hid the page's tile: its socket closes and its core still reads `live`, with the snapshot it had. */
+    hide: () => {
+      open = false;
+    },
+    /** The tile shows again: the socket reopens and the core's next snapshot arrives. */
+    show: (next: SnapshotRest) => {
+      open = true;
       rest = next;
       for (const listener of [...listeners]) listener();
     },
@@ -130,6 +142,17 @@ describe("work asked of another computer's screen", () => {
     view.snapshot(snapshot([]));
     expect(view.actions.openListedAgent).toHaveBeenCalledWith("w1:p2");
     view.snapshot(snapshot([]));
+    expect(view.actions.openListedAgent).toHaveBeenCalledTimes(1);
+  });
+
+  // The click that shows a hidden tile hands its ask before the page's socket reopens; made then, the event would be dropped.
+  it("waits for its socket to reopen before it shows a pane asked as its hidden tile shows again", () => {
+    const view = page(snapshot([]));
+    view.hide();
+    view.ask({ op: "show", pane: "w1:p2" });
+    expect(view.actions.openListedAgent).not.toHaveBeenCalled();
+    view.show(snapshot([]));
+    expect(view.actions.openListedAgent).toHaveBeenCalledWith("w1:p2");
     expect(view.actions.openListedAgent).toHaveBeenCalledTimes(1);
   });
 
