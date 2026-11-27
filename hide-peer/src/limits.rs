@@ -120,6 +120,74 @@ pub const STAYED_AFTER: Duration = REDIAL_MOST;
 /// How long one dial may take before it counts as failed.
 pub const DIAL_WITHIN: Duration = Duration::from_secs(30);
 
+/// The SSH path. The head start a direct path gets
+/// before an SSH sign-in starts, so a pair on one network or on Tailscale,
+/// direct well inside it, makes no SSH login.
+pub const SSH_AFTER: Duration = Duration::from_secs(1);
+
+/// The most a first dial waits before it takes a connection: a direct path
+/// the other transport showed, else a proved SSH connection, else its relay
+/// connection. Also how long a probe has to show a direct path.
+pub const DIRECT_WITHIN: Duration = Duration::from_secs(4);
+
+/// The whole of one SSH carrier attempt from its start, wherever it is
+/// (the ladder, handed on, the climb): the wait for a carrier place, the
+/// sign-in, the `carry` step and the outgoing proof.
+pub const CARRIER_WITHIN: Duration = DIAL_WITHIN;
+
+/// The key check an alias's add runs before it records the alias, from the
+/// `carry` step to the proof's answer, after the operator's sign-in.
+pub const CHECK_WITHIN: Duration = HELLO_WITHIN;
+
+/// How long a sign-in handed from a first dial to the climb is kept once it
+/// proved, for the climb to take.
+pub const TAKE_WITHIN: Duration = Duration::from_secs(5);
+
+/// How long a live connection reads the relay before the climb starts an
+/// SSH dial: the other transport's own hole punch gets this long.
+pub const RELAY_GRACE: Duration = Duration::from_secs(5);
+
+/// The route's wait after a transient failure, a probe that found no direct
+/// path, or an SSH connection that ended within [`STAYED_AFTER`]: it starts
+/// at the first and doubles to the second, and a network change ends it.
+pub const CLIMB_FIRST: Duration = Duration::from_secs(30);
+pub const CLIMB_MOST: Duration = Duration::from_secs(10 * 60);
+
+/// The beat on an SSH connection: sent this often by each side, and a
+/// connection whose hello stream read nothing this long is closed. As
+/// `ServerAliveInterval=15` three times, the dialer's own `ssh` bound.
+pub const BEAT_EVERY: Duration = Duration::from_secs(15);
+pub const BEAT_DEAD: Duration = Duration::from_secs(45);
+
+/// SSH carrier sign-ins this machine runs at once in the background, in
+/// places of their own beside the operator's.
+pub const MAX_CARRIER_SIGN_INS: usize = 2;
+
+/// How long a connection that was closed waits for its `BYE` to be read.
+pub const BYE_WITHIN: Duration = Duration::from_secs(2);
+
+/// How long the name of a connection ended for another is remembered
+/// ([`crate::peers`]). A connection reaches the other end's first exchange
+/// before anything can replace it (its dial returns only after that end
+/// accepted it, and a move or redial names only a connection it saw), and
+/// that exchange ends within [`HELLO_WITHIN`]; twice that leaves no
+/// first exchange of it still running when its name goes.
+pub const SUPERSEDED_FOR: Duration = Duration::from_secs(2 * HELLO_WITHIN.as_secs());
+
+/// The most names of ended connections remembered per machine, and so the
+/// most a hello carries (`hello::MAX_SUPERSEDES`). No name is forgotten
+/// before [`SUPERSEDED_FOR`]: an install whose names would not fit is
+/// refused instead (`Table::fits`), so the rule never rests on this count.
+/// A pair that ends more connections than this within that time only waits
+/// to move until the oldest names age; two Hides that dial each other at the
+/// redial and climb pace end fewer.
+pub const MAX_SUPERSEDED: usize = hide_peer_protocol::hello::MAX_SUPERSEDES;
+
+/// The most machines whose ended names are remembered at once: every host
+/// and every guest this machine may have, and the ones in the middle of
+/// pairing.
+pub const MAX_SUPERSEDED_PEERS: usize = MAX_KNOWN + MAX_GRANTS + MAX_UNGRANTED;
+
 /// How long a blocking write waits on a peer that reads nothing before the
 /// stream is given up ([`crate::blocking`]).
 pub const WRITE_WITHIN: Duration = Duration::from_secs(30);
@@ -176,4 +244,12 @@ const _: () = {
     // An event arrives in one message, so one always fits an empty inbox:
     // the byte cap never refuses an event for good.
     assert!(MAX_UNAPPLIED_BYTES >= 2 * hide_peer_protocol::frame::MAX_MESSAGE);
+    // A first dial chooses inside its own bound, the far side has most of
+    // its first exchange left, and SSH starts inside the window.
+    assert!(SSH_AFTER.as_millis() < DIRECT_WITHIN.as_millis());
+    assert!(DIRECT_WITHIN.as_secs() < DIAL_WITHIN.as_secs());
+    assert!(DIRECT_WITHIN.as_secs() < HELLO_WITHIN.as_secs());
+    assert!(TAKE_WITHIN.as_secs() < CARRIER_WITHIN.as_secs());
+    assert!(CLIMB_FIRST.as_secs() < CLIMB_MOST.as_secs());
+    assert!(BEAT_EVERY.as_secs() * 3 == BEAT_DEAD.as_secs());
 };

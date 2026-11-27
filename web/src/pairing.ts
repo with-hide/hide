@@ -99,7 +99,7 @@ export type Peer = {
   /** It opens this machine. */
   opened_by?: "active" | "paused" | null;
   connected: boolean;
-  path?: "direct" | "tailscale" | "relay" | "local" | null;
+  path?: "direct" | "tailscale" | "relay" | "local" | "ssh" | null;
   reason?: "relay_unreachable" | "relay_monthly_limit" | null;
   /**
    * Which side must update before the two connect, or where this machine's
@@ -112,7 +112,16 @@ export type Peer = {
    * row and tile are the machine's only ones.
    */
   helper_device?: string | null;
+  /**
+   * This computer's SSH route to it, while the route waits for the operator
+   * (hide-core `PeerMachine::ssh`): why it did not connect over SSH. Never
+   * the alias, which is this computer's own.
+   */
+  ssh?: { blocked: PeerSshBlocked } | null;
 };
+
+/** Why an SSH route waits for the operator (`contracts/snapshot-wire-enums.json`: `peer_ssh_blocked`). */
+export type PeerSshBlocked = "sign_in" | "check_host_key" | "reopen_hide" | "update_there" | "retry" | "not_saved";
 
 /** Why this machine's update of the Hide it started on `peer` did not happen; none when it did not fail. */
 function updateFailure(update: Peer["update"]): MessageKey | null {
@@ -250,12 +259,43 @@ export function peerState(peer: Peer): { key: MessageKey; tone: "ok" | "muted" |
 /** The path a connected machine's connection takes now, in one word (D-86); null while it is not connected. */
 export function peerRouteKey(peer: Peer): MessageKey | null {
   if (!peer.connected) return null;
-  return peer.path === "relay" ? "pairing.state.relay" : peer.path === "tailscale" ? "pairing.state.tailscale" : "pairing.state.direct";
+  switch (peer.path) {
+    case "relay":
+      return "pairing.state.relay";
+    case "tailscale":
+      return "pairing.state.tailscale";
+    case "ssh":
+      return "pairing.state.ssh";
+    default:
+      return "pairing.state.direct";
+  }
 }
 
-/** Whether the row says that Tailscale on both computers would connect them directly: only while the connection goes through the relay. */
-export function relayTip(peer: Peer): boolean {
-  return peer.connected && peer.path === "relay" && peerState(peer).key === "pairing.state.connected";
+/** The line a relay row says under its name, its key and whether it offers 다시 시도. */
+export type RelayTip = { key: MessageKey; retry: boolean };
+
+const PARKED_TIP: Record<PeerSshBlocked, MessageKey> = {
+  sign_in: "devices.relayTip.ssh.signIn",
+  check_host_key: "devices.relayTip.ssh.checkHostKey",
+  reopen_hide: "devices.relayTip.ssh.reopenHide",
+  update_there: "devices.relayTip.ssh.updateThere",
+  retry: "devices.relayTip.ssh.retry",
+  not_saved: "devices.relayTip.ssh.notSaved",
+};
+
+/**
+ * What a row whose connection goes through the relay says under its name:
+ * that Tailscale on both computers would connect them directly, or, while
+ * this computer's SSH route to it waits for the operator, why it did not
+ * connect over SSH, with 다시 시도 where a retry can change it (reopening Hide
+ * is the only way past a Hide updated since it started). None on any other
+ * path.
+ */
+export function relayTip(peer: Peer): RelayTip | null {
+  if (!peer.connected || peer.path !== "relay" || peerState(peer).key !== "pairing.state.connected") return null;
+  const blocked = peer.opens != null ? peer.ssh?.blocked : undefined;
+  if (!blocked) return { key: "devices.relayTip", retry: false };
+  return { key: PARKED_TIP[blocked], retry: blocked !== "reopen_hide" };
 }
 
 /** Whether this machine may ask `peer` to be let in the other way (B50): it is opened by a machine it does not open. */

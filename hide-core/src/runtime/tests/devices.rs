@@ -1107,7 +1107,7 @@ fn the_paired_machines_hided_tells_of_are_listed_with_both_directions() {
         serde_json::json!([{
             "id": "windows-pc", "name": "Windows PC", "connection_id": "ab".repeat(32),
             "opens": "active", "opened_by": "paused", "connected": true, "path": "relay",
-            "reason": null, "update": null, "helper_device": null,
+            "reason": null, "update": null, "helper_device": null, "ssh": null,
         }])
     );
     // The machine this one opens is a device too, under the same id: one

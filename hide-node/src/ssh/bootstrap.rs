@@ -21,7 +21,10 @@
 //! system-ssh-device-link B33, `super::super::session`), with steps of its
 //! own between the probe and the end: a command whose output comes back
 //! counted ([`run`]), and the attach role's start in place of the script
-//! ([`attach`]).
+//! ([`attach`]). The carrier of the connection two Hides keep over SSH
+//! runs a command in the script's place the same way
+//! ([`carry`]): `hide device carry --ssh`, whose input and output are then
+//! the carrier's.
 //!
 //! The steps go in lock step on purpose. A file's bytes are read with
 //! `head -c <size>`, and macOS's `head` reads through a buffer that would
@@ -173,6 +176,7 @@ fn powershell_text() -> String {
         .replace("@HOME_FOLDER_VARIABLES@", &variables)
         .replace("@AGENT_HOMES@", &agents)
         .replace("@SSH_SESSION_VARIABLES@", &session)
+        .replace("@CARRY_ABSENT@", CARRY_ABSENT)
 }
 
 /// The PowerShell script as the wrapper reads it: its size in bytes on a
@@ -181,6 +185,11 @@ fn powershell_script() -> String {
     let text = powershell_text();
     format!("{}\n{text}", text.len())
 }
+
+/// The `carry` step's refusal when the program it names is not there, in
+/// both scripts' words: read by `SessionError::carried_program_absent`,
+/// never by its text elsewhere.
+pub(crate) const CARRY_ABSENT: &str = "the program to carry is not there";
 
 /// The script, one statement per line; [`script_line`] joins it into the
 /// single line [`WRAPPER`] reads. Every line ends where a space may follow.
@@ -241,6 +250,10 @@ rm -f -- "$o" "$e" "$x"; o= e= x=;;
 attach) [ -x "$a" ] || { say fail "$a is missing"; exit 65; };
 cd -- "${HOME:-/}" 2>/dev/null || :;
 say attach; case $b in -) exec "$a" attach;; *) exec "$a" attach --state-dir "$b";; esac;;
+carry) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
+[ "$#" -gt 0 ] && [ -x "$1" ] || { say fail "@CARRY_ABSENT@"; exit 65; };
+cd -- "${HOME:-/}" 2>/dev/null || :;
+say carry; exec "$@";;
 *) say fail "unknown step $cmd"; exit 64;;
 esac;
 done
@@ -274,7 +287,8 @@ pub(crate) fn script_line() -> String {
         .replace("@WRAPPER@", &powershell_wrapper())
         .replace("@HOME_FOLDER_VARIABLES@", &HOME_FOLDER_VARIABLES.join(" "))
         .replace("@AGENT_HOMES@", &posix_agent_homes())
-        .replace("@SSH_SESSION_VARIABLES@", &SSH_SESSION_VARIABLES.join(" "));
+        .replace("@SSH_SESSION_VARIABLES@", &SSH_SESSION_VARIABLES.join(" "))
+        .replace("@CARRY_ABSENT@", CARRY_ABSENT);
     line.push('\n');
     line
 }
@@ -846,6 +860,30 @@ pub(crate) fn attach(
     .as_slice()
     {
         [kind] if kind == "attach" => Ok(()),
+        other => Err(StepError::Refused(refusal(other))),
+    }
+}
+
+/// Starts `argv` in place of the script, its first word an absolute path in
+/// the machine's wire spelling; from its answer on, the pipes are that
+/// program's. What carries the connection two Hides keep over SSH:
+/// `hide device carry --ssh`. A program that is not there is
+/// refused by the script, and the session ends.
+pub(crate) fn carry(pipe: &mut dyn Pipe, argv: &[String]) -> Result<(), StepError> {
+    let fits = argv.first().is_some_and(|program| remote_path(program))
+        && argv.iter().all(|word| plain(word));
+    if !fits {
+        return Err(StepError::Refused(
+            "The carrier's program is not a plain absolute path".to_owned(),
+        ));
+    }
+    let mut asked = format!("carry\t{}\n", argv.len());
+    for word in argv {
+        asked.push_str(word);
+        asked.push('\n');
+    }
+    match ask(pipe, &asked, Instant::now() + STEP_TIMEOUT)?.as_slice() {
+        [kind] if kind == "carry" => Ok(()),
         other => Err(StepError::Refused(refusal(other))),
     }
 }

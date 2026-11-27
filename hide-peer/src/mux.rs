@@ -132,7 +132,13 @@ pub struct Carrier {
     read: Box<dyn Read + Send>,
     write: Box<dyn Write + Send>,
     end: Box<dyn Fn() + Send + Sync>,
+    told: Option<Told>,
 }
+
+/// Who hears what the key proof on a dialed carrier found: once, before the
+/// dial returns (`crate::pipe`). `None`: the carrier ended or failed before
+/// the proof found anything. A dial given up before then tells nothing.
+pub type Told = Box<dyn FnOnce(Option<crate::proof::Proof>) + Send>;
 
 impl Carrier {
     /// `end` must make a read blocked on `read` return and a write blocked
@@ -146,7 +152,22 @@ impl Carrier {
             read: Box::new(read),
             write: Box::new(write),
             end: Box::new(end),
+            told: None,
         }
+    }
+
+    /// Has `told` hear what the key proof on this carrier found, when it is
+    /// dialed: the owner of an SSH route learns from it whether the alias
+    /// still reaches the host. A carrier made without it
+    /// tells nobody.
+    pub fn told(mut self, told: impl FnOnce(Option<crate::proof::Proof>) + Send + 'static) -> Self {
+        self.told = Some(Box::new(told));
+        self
+    }
+
+    /// The one who hears the proof's outcome, taken out of the carrier.
+    pub(crate) fn take_told(&mut self) -> Option<Told> {
+        self.told.take()
     }
 }
 
@@ -683,10 +704,13 @@ fn start_with(
     peer: streams::State,
     spawn: Spawn<'_>,
 ) -> io::Result<Arc<Shared>> {
+    // A carrier's `told` is its dialer's to call; one still here was not
+    // dialed, and is dropped unheard.
     let Carrier {
         read: carrier_read,
         write: mut out,
         end: carrier_end,
+        told: _,
     } = carrier;
     let shared = Arc::new(Shared {
         side,

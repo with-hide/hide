@@ -95,6 +95,7 @@ async fn a_guest_runs_nothing_until_both_sides_settled() {
                 state: KnownState::Confirming,
                 candidates: Vec::new(),
                 started: None,
+                ssh: None,
             })
         })
         .unwrap();

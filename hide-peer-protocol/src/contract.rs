@@ -100,7 +100,10 @@ fn messages<T: Serialize>(types: &[&str], samples: &[T]) -> Value {
 fn hello_frames() -> Vec<HelloFrame> {
     fn exhaustive(frame: &HelloFrame) {
         match frame {
-            HelloFrame::Grant { .. } | HelloFrame::Update | HelloFrame::UpdateAnswer { .. } => {}
+            HelloFrame::Grant { .. }
+            | HelloFrame::Update
+            | HelloFrame::UpdateAnswer { .. }
+            | HelloFrame::Beat => {}
         }
     }
     let _ = exhaustive;
@@ -114,6 +117,7 @@ fn hello_frames() -> Vec<HelloFrame> {
             started: false,
             reason: Some(String::new()),
         },
+        HelloFrame::Beat,
     ]
 }
 
@@ -465,6 +469,9 @@ pub fn shape() -> Value {
         contract: Some(String::new()),
         update: true,
         name: Some(String::new()),
+        dial: 1,
+        replaces: 1,
+        supersedes: vec![1],
     };
     let ready = Ready {
         guest_node: launch::GUEST_NODE,
