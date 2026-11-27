@@ -425,3 +425,262 @@ async fn a_view_asked_under_a_device_s_earlier_key_is_refused_once_another_host_
         "{daemon}"
     );
 }
+
+/// A POST on the guest daemon, with its token.
+async fn post(port: u16, path: &str, token: &str) -> (u16, Value) {
+    use http_body_util::{BodyExt, Empty};
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::TokioExecutor;
+    let client = Client::builder(TokioExecutor::new()).build_http::<Empty<hyper::body::Bytes>>();
+    let request = hyper::Request::post(format!("http://127.0.0.1:{port}{path}"))
+        .header("authorization", format!("Bearer {token}"))
+        .body(Empty::new())
+        .unwrap();
+    let response = client.request(request).await.unwrap();
+    let status = response.status().as_u16();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+
+/// An origin on this machine's loopback that answers `ok` and keeps, for
+/// each request, its path and the local port it came from.
+async fn origin() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<(String, u16)>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = std::sync::Arc::clone(&seen);
+    tokio::spawn(async move {
+        while let Ok((mut stream, from)) = listener.accept().await {
+            let kept = std::sync::Arc::clone(&kept);
+            tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                loop {
+                    let Ok(read) = stream.read(&mut buffer).await else {
+                        return;
+                    };
+                    if read == 0 {
+                        return;
+                    }
+                    head.extend_from_slice(&buffer[..read]);
+                    while let Some(end) = head.windows(4).position(|window| window == b"\r\n\r\n") {
+                        let text = String::from_utf8_lossy(&head[..end]).into_owned();
+                        head.drain(..end + 4);
+                        let path = text.split(' ').nth(1).unwrap_or_default().to_owned();
+                        kept.lock().unwrap().push((path, from.port()));
+                        if stream
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    (port, seen)
+}
+
+/// One request a page's browser sends through the guest's listener, and the
+/// status line of its answer; `secret` is None for a request on a connection
+/// that already carried it.
+async fn through(
+    stream: &mut tokio::net::TcpStream,
+    origin: u16,
+    path: &str,
+    secret: Option<&str>,
+) -> String {
+    use base64::Engine as _;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let auth = secret.map_or_else(String::new, |secret| {
+        format!(
+            "Proxy-Authorization: Basic {}\r\n",
+            base64::engine::general_purpose::STANDARD.encode(format!("hide:{secret}"))
+        )
+    });
+    stream
+        .write_all(format!("GET http://127.0.0.1:{origin}{path} HTTP/1.1\r\nHost: 127.0.0.1:{origin}\r\n{auth}\r\n").as_bytes())
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    let mut byte = [0_u8; 1];
+    let deadline = Instant::now() + WITHIN;
+    while !answer.ends_with(b"\r\n\r\n") {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let read = tokio::time::timeout(left, stream.read(&mut byte))
+            .await
+            .expect("an answer")
+            .unwrap();
+        assert_eq!(
+            read,
+            1,
+            "the connection closed: {}",
+            String::from_utf8_lossy(&answer)
+        );
+        answer.push(byte[0]);
+    }
+    let text = String::from_utf8_lossy(&answer).into_owned();
+    if text.to_ascii_lowercase().contains("content-length: 2") {
+        let mut body = [0_u8; 2];
+        stream.read_exact(&mut body).await.unwrap();
+    }
+    text.lines().next().unwrap_or_default().to_owned()
+}
+
+/// The local ports the host's proxy logged dialing from.
+async fn dialed(state: &std::path::Path, wanted: usize) -> Vec<u16> {
+    let deadline = Instant::now() + WITHIN;
+    loop {
+        let log = std::fs::read_to_string(state.join("Logs/core.jsonl")).unwrap_or_default();
+        let ports: Vec<u16> = log
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|row| row["kind"] == "screen_net.dialed")
+            .filter_map(|row| {
+                row["local_port"]
+                    .as_u64()
+                    .and_then(|port| u16::try_from(port).ok())
+            })
+            .collect();
+        if ports.len() >= wanted || Instant::now() > deadline {
+            return ports;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await; // wait-ok: the host's log has a dialed row for each request
+    }
+}
+
+// docs/BROWSER_DISPLAYS.md, A page in another computer's screen: a page the
+// guest draws of its host's screen reaches the host's network through the
+// host. Two daemons on one machine share a loopback, so the proof is the
+// connection: every request the origin records came from a local port the
+// host's proxy logged dialing, the second of a kept-alive connection too,
+// whose credentials only its first request carried. A pause refuses the
+// next request with no stream and nothing reaching the origin, and the same
+// listener carries again once the host resumes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_screen_page_request_comes_from_a_port_the_host_dialed() {
+    let root = crate::fixtures::fixture_root("hn");
+    let running = hided::start_daemon(host_env(root.path())).await.unwrap();
+    let host = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
+    let _stop = StopOnDrop(&guest);
+    let connected = guest.run(&["connect"]);
+    assert!(connected.ok, "the guest daemon: {}", connected.text());
+    let (window, host_id, _) = pair_by_link(&running, &host, &guest).await;
+    drop(window);
+    let (port, token) = daemon_of(&guest);
+    let key = host_key(&guest);
+    let net = format!(
+        "/peer-screen/{host_id}/net?key={key}&owner={}",
+        std::process::id()
+    );
+    let (status, listener) = post(port, &net, &token).await;
+    assert_eq!(status, 200, "{listener}");
+    assert_eq!(listener["state"], "ready", "{listener}");
+    let listen = u16::try_from(listener["port"].as_u64().unwrap()).unwrap();
+    let secret = listener["secret"].as_str().unwrap().to_owned();
+    let (status, _) = post(
+        port,
+        &format!("/peer-screen/{host_id}/net?key={key}&owner=0"),
+        &token,
+    )
+    .await;
+    assert_eq!(status, 400, "no owner is no listener");
+    let (status, refused) = post(
+        port,
+        &format!(
+            "/peer-screen/no-such-machine/net?key={key}&owner={}",
+            std::process::id()
+        ),
+        &token,
+    )
+    .await;
+    assert_eq!(
+        (status, refused["reason"].as_str()),
+        (503, Some("not_paired"))
+    );
+
+    let (origin_port, seen) = origin().await;
+    let mut page = tokio::net::TcpStream::connect(("127.0.0.1", listen))
+        .await
+        .unwrap();
+    assert_eq!(
+        through(&mut page, origin_port, "/one", Some(&secret)).await,
+        "HTTP/1.1 200 OK"
+    );
+    assert_eq!(
+        through(&mut page, origin_port, "/two", None).await,
+        "HTTP/1.1 200 OK"
+    );
+    let arrived = seen.lock().unwrap().clone();
+    assert_eq!(
+        arrived
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>(),
+        ["/one", "/two"]
+    );
+    let ports = dialed(&root.path().join("host-state"), arrived.len()).await;
+    for (path, from) in &arrived {
+        assert!(
+            ports.contains(from),
+            "{path} came from port {from}, which the host's proxy never dialed: {ports:?}"
+        );
+    }
+
+    let paused = host.run(&["device", "pause", GUEST, "--incoming"]);
+    assert!(paused.ok, "{}", paused.text());
+    let (_, during) = post(port, &net, &token).await;
+    assert_eq!(during["state"], "paused_there", "{during}");
+    assert_eq!(
+        during["port"], listener["port"],
+        "a pause keeps the listener"
+    );
+    let mut later = tokio::net::TcpStream::connect(("127.0.0.1", listen))
+        .await
+        .unwrap();
+    assert_eq!(
+        through(&mut later, origin_port, "/paused", Some(&secret)).await,
+        "HTTP/1.1 503 Service Unavailable"
+    );
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        2,
+        "nothing reached the origin while paused"
+    );
+
+    let resumed = host.run(&["device", "resume", GUEST, "--incoming"]);
+    assert!(resumed.ok, "{}", resumed.text());
+    let deadline = Instant::now() + WITHIN;
+    loop {
+        let (_, now) = post(port, &net, &token).await;
+        if now["state"] == "ready" {
+            assert_eq!(
+                (now["port"].clone(), now["secret"].clone()),
+                (listener["port"].clone(), listener["secret"].clone())
+            );
+            break;
+        }
+        assert!(Instant::now() < deadline, "the grant came back: {now}");
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the guest's listener reads ready once the resumed grant reaches it
+    }
+    let mut again = tokio::net::TcpStream::connect(("127.0.0.1", listen))
+        .await
+        .unwrap();
+    assert_eq!(
+        through(&mut again, origin_port, "/resumed", Some(&secret)).await,
+        "HTTP/1.1 200 OK"
+    );
+    drop(running);
+}

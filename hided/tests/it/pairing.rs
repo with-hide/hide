@@ -66,6 +66,7 @@ fn host_env(root: &Path) -> Env {
         peer_direct: Some("127.0.0.1:0".parse().unwrap()),
         peer_relay: None,
         peer_relay_only: false,
+        screen_net_hosts: Default::default(),
         search_path: None,
     }
 }

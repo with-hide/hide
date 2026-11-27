@@ -2632,6 +2632,7 @@ mod tests {
             peer_relay: None,
             peer_relay_only: false,
             search_path: None,
+            screen_net_hosts: std::collections::HashMap::new(),
         }
     }
 

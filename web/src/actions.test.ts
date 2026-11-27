@@ -140,6 +140,37 @@ describe("which pages the keyboard follows", () => {
   });
 });
 
+// In another computer's screen a ⌘-click or Open in default browser on that
+// computer's loopback, LAN or local name would reach nothing: the showing
+// window's default browser opens only public addresses. Such a link opens
+// as a page in the Workspace in front, which reaches it through that
+// computer (docs/BROWSER_DISPLAYS.md, A page in another computer's screen).
+describe("a link of another computer's screen", () => {
+  it("opens that computer's local address as a page in front, and a public one in the default browser", () => {
+    const saved = useShellStore.getState();
+    const savedUi = useUiStore.getState();
+    const opened = vi.fn();
+    vi.stubGlobal("hideRemote", { bridge: 1, socket: {}, clipboardWrite: async () => true, onMenuCommand: () => {}, onVisible: () => {} });
+    vi.spyOn(window, "open").mockImplementation((...args) => { opened(...args); return null; });
+    try {
+      useShellStore.setState({ rest: { workspace_view: { device_id: "mini", path: "/web", layout: null } } as never });
+      useUiStore.setState({ screen: { kind: "workspace" } as never });
+      const sent: Parameters<DispatchFn>[0][] = [];
+      const actions = createActions((event) => { sent.push(event); return true; });
+      for (const url of ["http://localhost:5173/", "http://192.168.0.4:8080/", "http://printer.local/"]) actions.openLink(url, true);
+      expect(sent.filter((event) => event.kind === "browser_open").map((event) => (event.payload as { url: string; workspace: unknown }).url)).toEqual(["http://localhost:5173/", "http://192.168.0.4:8080/", "http://printer.local/"]);
+      expect(opened).not.toHaveBeenCalled();
+      actions.openLink("https://github.com/with-hide/hide", true);
+      expect(opened).toHaveBeenCalledExactlyOnceWith("https://github.com/with-hide/hide", "_blank", "noopener,noreferrer");
+    } finally {
+      useShellStore.setState(saved, true);
+      useUiStore.setState(savedUi, true);
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("Find while an agent answers its own search request", () => {
   it.each([false, true])("follows the answer only while the keyboard stays at its origin (moved: %s)", async (moved) => {
     const { act, createElement } = await import("react");

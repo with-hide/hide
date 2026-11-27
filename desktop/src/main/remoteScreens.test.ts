@@ -2,7 +2,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
-import { REMOTE_VIEWER_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
+import { REMOTE_BROWSER_SYNC_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
 import type { HostLog } from "./log";
 import { MAX_SEND_BYTES, pageAddress } from "./remotePage";
 import { HAND_WITHIN_MS } from "../../../web/src/remoteView";
@@ -10,7 +10,7 @@ import { RemoteScreens } from "./remoteScreens";
 
 const ipc = vi.hoisted(() => new Map<string, (event: unknown, value?: unknown) => void>());
 /** What each `new WebContentsView()` gave the host, newest last. */
-const views = vi.hoisted(() => [] as { webContents: { send: (channel: string, value: unknown) => void; loaded: string[]; closed: boolean; handlers: Map<string, (...args: unknown[]) => void> } }[]);
+const views = vi.hoisted(() => [] as { webContents: { send: (channel: string, value: unknown) => void; loaded: string[]; closed: boolean; focused: boolean; handlers: Map<string, (...args: unknown[]) => void>; openHandler: null | ((details: { url: string }) => { action: string }) } }[]);
 /** Each session partition the host asked for, in order. */
 const partitions = vi.hoisted(() => [] as string[]);
 /** What the host sent the shell's own window, in order. */
@@ -58,13 +58,20 @@ vi.mock("electron", () => {
           isDestroyed() {
             return this.closed;
           },
-          isFocused: () => false,
+          focused: false,
+          isFocused() {
+            return this.focused;
+          },
           focus: () => undefined,
+          getZoomFactor: () => 1,
           handlers: new Map<string, (...args: unknown[]) => void>(),
           on(event: string, handler: (...args: unknown[]) => void) {
             this.handlers.set(event, handler);
           },
-          setWindowOpenHandler: () => undefined,
+          openHandler: null as null | ((details: { url: string }) => { action: string }),
+          setWindowOpenHandler(handler: (details: { url: string }) => { action: string }) {
+            this.openHandler = handler;
+          },
         },
       };
       views.push(view);
@@ -367,5 +374,106 @@ describe("an ask of a remote screen", () => {
     await loaded(1);
     for (let n = 0; n <= 16; n += 1) screens.go({ device: DEVICE, key: KEY, work: start(`r-${n}`) });
     expect(answers()).toEqual([{ device: DEVICE, request: "r-0", outcome: "unconfirmed" }]);
+  });
+});
+
+/** A host whose window holds the keyboard, with the page manager, proxy and storage it hands the screens. */
+function screensWith(now: () => number) {
+  const window = {
+    isDestroyed: () => false,
+    isFocused: () => true,
+    webContents: { getZoomFactor: () => 1, focus: () => undefined, send: (channel: string, value: unknown) => shellSent.push({ channel, value }) },
+    contentView: { addChildView: () => undefined, removeChildView: () => undefined },
+  };
+  const browsers = { addRemote: vi.fn(), removeRemote: vi.fn(), closeRemotePages: vi.fn(), viewAdded: vi.fn(), remoteSync: vi.fn(), remoteShown: vi.fn(), remoteHidden: vi.fn(), remoteReset: vi.fn(), remoteInput: vi.fn(), viewFocused: vi.fn() };
+  const egress = { release: vi.fn(), ready: vi.fn(() => false), ensure: vi.fn() };
+  const storage = { keep: vi.fn(), admit: vi.fn(() => "live") };
+  const opened: string[] = [];
+  const log = { event: vi.fn() };
+  const screens = new RemoteScreens({
+    window: () => window as never,
+    daemon: () => ({ origin: "http://127.0.0.1:9", token: "t" }),
+    registry: () => [],
+    background: "#000000",
+    language: () => "ko",
+    log: log as unknown as HostLog,
+    now,
+    browsers: () => browsers as never,
+    egress: egress as never,
+    storage: storage as never,
+    openExternal: (url) => opened.push(url),
+  });
+  screens.listen();
+  return { screens, browsers, egress, storage, opened, log };
+}
+
+describe("a remote screen's pages and links", () => {
+  // The screen's page hands this computer's default browser only a public
+  // web address, right after the operator pressed in the screen while it
+  // shows and holds the keyboard, and one a second; that computer's
+  // loopback, LAN and local names are not this one's.
+  it("opens a public address once after a click or an Enter, and refuses one with no press, a loopback, a private and a .local one, and a second within a second", async () => {
+    let now = 10_000;
+    const { screens, opened, log } = screensWith(() => now);
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null, display: null });
+    const view = views.at(-1)!;
+    loads.shift()!();
+    await until("the page shown", () => shellSent.some((sent) => (sent.value as { state?: string }).state === "shown"));
+    view.webContents.focused = true;
+    const open = (url: string) => view.webContents.openHandler!({ url }).action;
+    const click = () => view.webContents.handlers.get("input-event")!({}, { type: "mouseDown" });
+    const enter = () => view.webContents.handlers.get("before-input-event")!({ preventDefault: () => undefined }, { type: "keyDown", key: "Enter", code: "Enter", isAutoRepeat: false, isComposing: false });
+
+    expect(open("https://example.com/")).toBe("deny");
+    click();
+    expect(open("http://127.0.0.1:3000/")).toBe("deny");
+    expect(open("http://192.168.1.20/")).toBe("deny");
+    expect(open("http://printer.local/")).toBe("deny");
+    expect(open("https://example.com/a")).toBe("deny");
+    expect(opened).toEqual(["https://example.com/a"]);
+    now += 500;
+    click();
+    expect(open("https://example.com/b")).toBe("deny");
+    expect(opened).toHaveLength(1);
+    now += 600;
+    enter();
+    open("https://example.com/c");
+    expect(opened).toEqual(["https://example.com/a", "https://example.com/c"]);
+    now += 2_000;
+    open("https://example.com/d");
+    expect(opened).toHaveLength(2);
+    const reasons = log.event.mock.calls.filter(([name]) => name === "remote.window_refused").map(([, fields]) => (fields as { reason: string }).reason);
+    expect(reasons).toEqual(["no_press", "local_network", "local_network", "local_network", "too_soon", "no_press"]);
+  });
+
+  // Only the screen's own top frame on its own origin places pages.
+  it("hands the page manager a sync from the screen's top frame alone", () => {
+    const { screens, browsers } = screensWith(() => 0);
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null, display: null });
+    const view = views.at(-1)!;
+    const sync = ipc.get(REMOTE_BROWSER_SYNC_CHANNEL)!;
+    sync({ sender: view.webContents, senderFrame: { parent: {}, url: pageAddress(DEVICE) } }, {});
+    sync({ sender: view.webContents, senderFrame: { parent: null, url: "https://elsewhere.example/" } }, {});
+    expect(browsers.remoteSync).not.toHaveBeenCalled();
+    sync(fromPage(view), { displays: [] });
+    expect(browsers.remoteSync).toHaveBeenCalledOnce();
+    expect(browsers.remoteSync.mock.calls[0]![0]).toBe(browsers.addRemote.mock.calls[0]![0]);
+  });
+
+  // A pair that leaves the paired set loses its pages and its proxy, and
+  // its storage is cleared; a key change destroys the earlier key's source.
+  it("closes an unpaired machine's pages and lets go of its proxy, and a key change ends the earlier key's source", () => {
+    const { screens, browsers, egress, storage } = screensWith(() => 0);
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null, display: null });
+    screens.keepPaired(new Set([`${DEVICE}\u0000${KEY}`]));
+    expect(browsers.closeRemotePages).not.toHaveBeenCalled();
+    screens.keepPaired(new Set());
+    expect(browsers.closeRemotePages).toHaveBeenCalledWith(DEVICE, KEY);
+    expect(egress.release).toHaveBeenCalledWith(DEVICE, KEY);
+    expect(storage.keep).toHaveBeenLastCalledWith(new Set());
+    screens.show({ device: DEVICE, key: REPLACEMENT, rect: RECT, name: null, display: null });
+    expect(browsers.removeRemote).toHaveBeenCalledWith(browsers.addRemote.mock.calls[0]![0]);
+    expect(egress.release).toHaveBeenLastCalledWith(DEVICE, KEY);
+    expect(browsers.addRemote).toHaveBeenCalledTimes(2);
   });
 });

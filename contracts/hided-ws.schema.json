@@ -34,7 +34,8 @@
           "pattern": "^[0-9a-f]{16}$"
         },
         "have_terminal_sequence": { "description": "The `terminal_sequence` of the last terminal frame a reconnecting client applied. With a delta and the `have_terminal_epoch` of the hub that gave it, it resumes every pane from there (a pane the hub's ring no longer reaches is drawn again from a full frame); a client that kept its terminals and names none, or names it without this hub's epoch, has every pane drawn again; a client given a whole snapshot ignores it.", "type": "integer", "minimum": 0 },
-        "have_terminal_epoch": { "description": "The `terminal_epoch` of the terminal frame `have_terminal_sequence` came from. Each daemon's hub draws its own, so a page that outlived its daemon names an epoch the new hub does not have and is drawn again whole.", "type": "string", "pattern": "^[0-9a-f]{16}$" }
+        "have_terminal_epoch": { "description": "The `terminal_epoch` of the terminal frame `have_terminal_sequence` came from. Each daemon's hub draws its own, so a page that outlived its daemon names an epoch the new hub does not have and is drawn again whole.", "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "draws_pages": { "description": "Sent by another computer's view of this one whose desktop app draws this computer's browser displays in it (docs/BROWSER_DISPLAYS.md, A page in another computer's screen): the daemon counts it among what draws pages, so an agent here may open one with no desktop window of this computer. A window of this computer, and an older guest's view, send none.", "type": "boolean" }
       }
     },
     "workspaceQuery": {

@@ -660,6 +660,12 @@ async fn wait_for_route(mut result: watch::Receiver<Option<RouteResult>>) -> Rou
     }
 }
 
+/// Whether `raw` is a page on its machine's loopback, as a device's page
+/// route reads one: a remote screen's route answer refuses another device's.
+pub(crate) fn loopback_page(raw: &str) -> bool {
+    loopback_target(raw).is_some()
+}
+
 fn loopback_target(raw: &str) -> Option<(String, u16, String, String)> {
     let (without_fragment, fragment) = raw
         .split_once('#')

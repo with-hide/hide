@@ -35,7 +35,7 @@ describe("native browser load generations", () => {
       const canonical = "file:///private/var/checkout/manual.html";
       const loadURL = vi.fn().mockResolvedValue(undefined);
       const page = {
-        key: "manual", workspace, id: "manual", applied: 1,
+        key: "manual", source: Reflect.get(subject, "local"), workspace, id: "manual", applied: 1,
         partition: browserPartition(workspace, requested, null), route: null,
         state: { url: requested, loading: true, failure: null }, report: null, settled: new Set(),
         view: { webContents: { loadURL } },
@@ -81,7 +81,7 @@ describe("a local file page's own files", () => {
       const loadURL = vi.fn().mockResolvedValue(undefined);
       // A root the page had resolved before its route named one is dropped.
       const page = {
-        key: "page", workspace, id: "page", applied: 1, partition: browserPartition(workspace, address, null), route: null, checkoutRoot: null,
+        key: "page", source: Reflect.get(subject, "local"), workspace, id: "page", applied: 1, partition: browserPartition(workspace, address, null), route: null, checkoutRoot: null,
         state: { url: address, loading: true, failure: null }, report: null, settled: new Set(), view: { webContents: { loadURL } },
       };
       (Reflect.get(subject, "pages") as Map<string, unknown>).set(page.key, page);
@@ -110,7 +110,7 @@ describe("native browser load stages", () => {
     const routes: { workspace: string; load: number; answer: (route: ResolvedPage) => void; refuse: (error: Error) => void }[] = [];
     const resolve = vi.fn((workspace: string, _id: string, load: number) => new Promise<ResolvedPage>((answer, refuse) => { routes.push({ workspace, load, answer, refuse }); }));
     const subject = new BrowserViews(log as unknown as HostLog, () => true, resolve, vi.fn(), vi.fn(), () => english, new ExternalFiles(vi.fn()), { bound: 600_000, every: 60_000, now: () => now });
-    Reflect.set(subject, "node", "local");
+    (Reflect.get(subject, "local") as { node: string | null }).node = "local";
     const url = "https://example.test/";
     let nextContents = 7;
     const page = (workspace: string) => {
@@ -122,7 +122,7 @@ describe("native browser load stages", () => {
         setVisualZoomLevelLimits: vi.fn().mockResolvedValue(undefined), navigationHistory: { canGoBack: () => false, canGoForward: () => false },
       });
       const value = {
-        key: `${workspace}/d1`, workspace, id: "d1", applied: 3, partition: browserPartition(workspace, url, "local"), route: null, loading: null,
+        key: `${workspace}/d1`, source: Reflect.get(subject, "local"), workspace, id: "d1", applied: 3, partition: browserPartition(workspace, url, "local"), route: null, loading: null,
         state: { url, loading: true, failure: null }, report: null, settled: new Set(), device: null, bounds: null, emulated: null, view: { webContents: contents }, contentsId: contents.id,
       };
       (Reflect.get(subject, "pages") as Map<string, unknown>).set(value.key, value);
@@ -302,7 +302,7 @@ function candidate() {
     let focused = true;
     const pageFocus = vi.fn();
     const contents = Object.assign(new EventEmitter(), { isFocused: () => focused, isDestroyed: () => false, setWindowOpenHandler: vi.fn(), focus: pageFocus, navigationHistory: { canGoBack: () => false, canGoForward: () => false } });
-    const value = { key: id, workspace: "fixture", id, visible: true, view: { webContents: contents, setVisible: vi.fn() }, state: {}, report: null, route: null, applied: 1, partition: "fixture", shownAt: 0, settled: new Set() };
+    const value = { key: id, source: Reflect.get(subject, "local"), workspace: "fixture", id, visible: true, view: { webContents: contents, setVisible: vi.fn() }, state: {}, report: null, route: null, applied: 1, partition: "fixture", shownAt: 0, settled: new Set() };
     const watch = Reflect.get(subject, "watch") as (page: unknown) => void;
     watch.call(subject, value);
     (Reflect.get(subject, "pages") as Map<string, unknown>).set(id, value);
@@ -562,7 +562,7 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
     const page = (id: string, extra: Record<string, unknown> = {}) => {
       const contents = Object.assign(new EventEmitter(), { id: ++contentsId, isFocused: () => false, isDestroyed: () => false, isCurrentlyAudible: () => false, close: vi.fn(), setWindowOpenHandler: vi.fn(), getURL: () => `https://${id}.example/`, getTitle: () => id, getZoomFactor: () => 1, enableDeviceEmulation: vi.fn(), disableDeviceEmulation: vi.fn() });
       const value = {
-        key: `${workspace}\u0001${id}`, workspace, id, visible: false, placed: false, shownAt: 0, idleSince: 0, playing: false, downloads: 0, settled: new Set(),
+        key: `${workspace}\u0001${id}`, source: Reflect.get(subject, "local"), workspace, id, visible: false, placed: false, shownAt: 0, idleSince: 0, playing: false, downloads: 0, settled: new Set(),
         view: { webContents: contents, setVisible: vi.fn(), setBounds: vi.fn() }, contentsId: contents.id, state: { url: `https://${id}.example/`, loading: false, failure: null },
         report: null, route: null, applied: 3, partition: "persist:hide-browser-web", fileRestricted: true, device: null, emulated: null, bounds: { x: 0, y: 0, width: 640, height: 480 }, ...extra,
       };
@@ -650,7 +650,7 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       expect(pages.size).toBe(0);
       const created: Record<string, unknown>[] = [];
       let revived!: ReturnType<typeof page>;
-      Reflect.set(subject, "create", (_window: unknown, owner: string, display: Record<string, unknown>) => {
+      Reflect.set(subject, "create", (_source: unknown, _window: unknown, owner: string, display: Record<string, unknown>) => {
         created.push({ owner, ...display });
         revived = page(display.id as string, { state: { url: display.url, loading: true, failure: null } });
         return revived;
@@ -697,7 +697,7 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       page("slow");
       await pass(BOUND);
       let revived!: ReturnType<typeof page>;
-      Reflect.set(subject, "create", (_window: unknown, _owner: string, display: Record<string, unknown>) => {
+      Reflect.set(subject, "create", (_source: unknown, _window: unknown, _owner: string, display: Record<string, unknown>) => {
         revived = page(display.id as string, { state: { url: display.url, loading: true, failure: null } });
         return revived;
       });

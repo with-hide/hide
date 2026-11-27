@@ -67,6 +67,26 @@ export function parseShow(value: unknown): ShowRequest | undefined {
   return { device, key, rect: { x: x as number, y: y as number, width: width as number, height: height as number }, name: named, display: readDisplayPreferences(display) };
 }
 
+/** The most machines the paired set names; a window holds far fewer. */
+const MAX_PAIRED = 256;
+
+/**
+ * The machines this window's operator has paired with, each `pairName`d by
+ * its device and the key it was paired under, or null when the shell's list
+ * is out of shape: nothing is cleared on a list that could not be read.
+ */
+export function parsePaired(value: unknown): Set<string> | null {
+  if (!Array.isArray(value) || value.length > MAX_PAIRED) return null;
+  const pairs = new Set<string>();
+  for (const row of value) {
+    if (typeof row !== "object" || row === null) return null;
+    const { device, key } = row as Record<string, unknown>;
+    if (typeof device !== "string" || !DEVICE.test(device) || typeof key !== "string" || !KEY.test(key)) return null;
+    pairs.add(`${device}\u0000${key}`);
+  }
+  return pairs;
+}
+
 /** The longest path, pane, model or profile name an ask carries. */
 const MAX_NAME = 4096;
 

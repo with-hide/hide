@@ -49,6 +49,15 @@ describe("open in default browser", () => {
     expect(defaultBrowserAddress("http://localhost.example.com/", "devbox", "mac")).toBe("http://localhost.example.com/");
     expect(defaultBrowserAddress("http://[::ffff:10.0.0.1]/", "devbox", "mac")).toBe("http://[::ffff:a00:1]/");
   });
+
+  // In another computer's screen the default browser is the showing
+  // window's machine's, whose network is not the page's.
+  it("offers none for that computer's loopback, LAN or local name in its screen, and a public address still", () => {
+    for (const address of ["http://localhost:3000/", "http://127.0.0.1:3000/", "http://192.168.1.20/", "http://10.0.0.2:8080/", "http://printer.local/", "http://nas/"]) {
+      expect(defaultBrowserAddress(address, "mini", "mini", true), address).toBeNull();
+    }
+    expect(defaultBrowserAddress("https://github.com/with-hide/hide/pulls", "mini", "mini", true)).toBe("https://github.com/with-hide/hide/pulls");
+  });
 });
 
 describe("placing pages", () => {

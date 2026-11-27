@@ -12,7 +12,8 @@ There is no Herdr browser pane and no chromux profile behind it, and nothing is 
 | The core | Browser View layout, requested address and load stamp, and the native page's reported loading state | `hide-core/src/view_layout.rs`, `hide-core/src/runtime/view_areas.rs`, `hide-core/src/runtime/workspace_control.rs` |
 | hided | The local `file:` event boundary, checkout-scoped Browser commands and gateway discovery, and native routes into connected devices over their node links and, on a node whose core runs on another machine, into the core's machine and the node's own window's gateway | `hided/src/server.rs`, `hided/src/workspace_cli.rs`, `hided/src/browser_control.rs`, `hided/src/browser_relay.rs`, `hided/src/browser_routes.rs`, `hided/src/page_forward.rs`, `hided/src/node_pages.rs`, `hided/src/node_browser.rs`, `hided/src/browser_assets.rs` |
 | The web shell | Where each page sits, since only it has the geometry, the toolbar, the overlay freeze, and the notice in a plain browser tab | `web/src/BrowserDisplay.tsx`, `web/src/browserViews.ts`, `web/src/host.ts` |
-| The desktop app | The pages: one `WebContentsView` per display it was asked to show, their navigation, route requests, and their lifetime, including when a hidden one is unloaded | `desktop/src/main/browser.ts`, `desktop/src/main/browserSync.ts`, `desktop/src/main/host.ts`, `desktop/src/preload/index.ts` |
+| The desktop app | The pages: one `WebContentsView` per display it was asked to show, their navigation, route requests, and their lifetime, including when a hidden one is unloaded; kept apart by who placed them, this window's shell or one paired machine's screen in it, each its own source | `desktop/src/main/browser.ts`, `desktop/src/main/browserSync.ts`, `desktop/src/main/host.ts`, `desktop/src/preload/index.ts`, `desktop/src/preload/remote.ts`, `desktop/src/main/remoteScreens.ts`, `desktop/src/main/remoteEgress.ts` |
+| hided, between two paired machines | A screen page's way out through the machine whose screen it is: the guest's listener and the host's forward proxy on the `page` stream, and where a screen's page loads from | `hided/src/screen_net.rs`, `hided/src/remote_screen.rs` |
 
 The core never loads a page and the desktop app never decides which displays exist.
 The core's Browser View inventory is sent as an empty array when the last page closes, so the native host removes that page even when no other Browser View remains.
@@ -405,10 +406,84 @@ Each relay logs one `relay.ended` row with where its CDP ran (`core`, `link` or 
 A page the operator loaded can still follow its own links.
 A `file:` page that moves to a file outside the checkouts keeps showing it in its view, but its report is refused at the boundary, so the core keeps the last address it accepted and a relaunch opens that one.
 
+## A page in another computer's screen
+
+A paired machine's own Hide screen, shown in this window's rail tile ([ARCHITECTURE.md](ARCHITECTURE.md#another-machines-screen)), draws that machine's browser displays.
+That machine's page places them, as this window's shell places its own; this window's desktop app draws them, inside the screen's tile; and every request they make leaves through that machine, its loopback, its LAN and its resolver, never this one's.
+An agent there that runs `hide browser open http://localhost:5173` while the operator watches its pane in the tile sees the page that machine's dev server answers, whether or not that machine's own app is open.
+
+**The bridge.**
+The screen's preload adds a `browser` member beside `bridge: 1`, the same five calls this window's shell makes of its pages (`sync`, `capture`, `command`, `endCycle`, `onEvent`), on channels of their own (`REMOTE_BROWSER_*` in `desktop/src/channel.ts`); `bridge` stays 1, which every page checks, so an older page ignores the member.
+The main process takes each call only from the screen's own top frame on its own origin (`RemoteScreens.screenOf`), and the page finds the member through `browserBridge()` (`web/src/host.ts`), so `BrowserDisplay` runs there as it does here.
+`BrowserViews` keeps one source per screen beside this window's: a page's key carries its source, and every sync, still, command, held cycle and event belongs to that source alone, so a screen never reaches this window's pages, nor this window's shell a screen's, even for the same Workspace and display id.
+A screen's sync is checked as this window's with that screen's own bounds (`parseRemoteSync`): it names no CDP scope, attachment epoch or outside grant, and one that names an outside file's grant is dropped whole.
+
+**Where a page draws.**
+A display's rectangle in the screen's page is scaled by the screen's zoom, moved to the tile and cut to it (`placeIn`); one with nothing inside the tile is hidden, so no page of that machine covers this window's rail.
+A page is raised above the screen's view only when a view was added after it.
+A hidden screen hides its pages and popups and keeps them; its syncs wait and the latest is applied when it shows; a failed screen does the same, and a screen whose page starts a new document hides its pages until that page places them again.
+Closing a screen (trimmed past three, another key, every screen closed) closes its pages and popups.
+
+| What a screen could repeat | Bound | Past it |
+| --- | --- | --- |
+| Live pages | 4 | a placement gets no page and its slot says `Too many pages are open in this screen` |
+| Pages made | 8 in 10 s | the display waits and loads once the window has room |
+| Syncs | 64 placements, 1024 retained rows, one applied per 16 ms | the latest waiting wins |
+| Stills | one at a time, 10 a second, and only of a page drawn now | null, as a refused still |
+| Toolbar commands | 20 a second | dropped and logged once |
+| Popups | 2 of the screen's within `MAX_POPUPS` | refused and logged |
+
+No page of a screen loads off screen, enters CDP, or reads an outside file.
+
+**Where a page loads from.**
+Before each load the core asks for, the desktop asks that machine's core through this machine's daemon (`POST /peer-screen/<device>/page-route?key=`), which carries the question over one `screen_bulk` stream to the host's `POST /page-route`, naming the view open now; the host answers only while that view lives and is this guest's, from the same decision its own window's routes use (`browser_route_source`).
+A web page of that machine, or a public page of one of its devices, loads its address; a loopback or `file:` page of one of its devices is refused `remote_device_page_unavailable` (`This page is on another device of that computer. Open it on that computer.`), since only that device reaches it; a `file:` page of that machine itself is not served to a screen yet and is refused with `Open this file on that computer.` before anything is asked; no current display is `view_unavailable`.
+The answer says whether the page is that machine's own: one that is not cannot move to or request that machine's loopback.
+The answer's address must be the display's; nothing loads before the answer or after a refusal, and an older host that answers 404 is `remote_update_there`.
+
+**Every request leaves through that machine.**
+A screen's pages keep one persistent session per machine and the key it was paired under (`remotePagePartition`, `persist:hide-remote-page-<hash>`), whose proxy is set before its first page is made: `fixed_servers` to a listener this machine's daemon keeps on `127.0.0.1` for that machine and key, with `<-loopback>`, so `localhost` goes to the proxy too, and no `direct` entry; until it is set every request of the session is cancelled.
+Each connection Chromium makes to the listener needs the listener's secret (`Proxy-Authorization: Basic hide:<secret>`, compared in constant time; `407` without it and no stream), which `app.on("login")` answers by the listener's port, so a service worker's request is answered too and another account of this computer cannot use that machine's network.
+The listener then judges the grant and the connection at that moment and opens one `page` stream (priority -100) of the connection between the two machines under the current generation, writes the request head as received and copies both ways; the host's daemon answers that stream as an HTTP/1.1 forward proxy (`CONNECT` dials and joins the two, an absolute-form `http` request goes to its origin without the proxy's headers) that dials on its own network with its own resolver.
+No address is refused there: a grant is that machine's account's whole authority, and the page is the guest's view of it.
+A request of a document on a public address to a loopback, private or local name (`isLocalNetworkHost`) is refused before the proxy unless the document itself is on one (`localNetworkReach`); a request with no document, a service worker's, counts as a public page's; a public name that machine resolves to a private address passes, since only it resolves.
+Chromium sends names to the proxy, so this machine's resolver is not asked; WebRTC in those sessions uses no UDP outside the proxy (`disable_non_proxied_udp`), and QUIC has no path without `direct`.
+
+The listener is kept for its owner, the desktop process that asked, while it lives and the machine stays paired under the key; a drop, a pause or a moved generation ends tunnels, never the listener, so a page loaded before a sleep loads its next request after it with no reload.
+A daemon holds at most 8 (`503 net_limit` for a ninth owner, never by closing one a page points at), checks each one's owner and pairing on every connection and every 5 s, and the desktop lets go of one with its screen (`DELETE`).
+A pair has 16 tunnels at once (the `page` stream's cap on the host); a seventeenth connection takes the place of the tunnel quiet longest once it moved no byte for 60 s, or waits up to 30 s with at most 64 waiting, else `503`.
+A host whose build has no handler for the kind takes the stream and closes it with nothing written back; the listener then answers `unsupported_there`, which the page words `Update Hide on that computer to open this page here.`
+On the relay, a pair's page bytes are held to 2 GiB a UTC day, both ways counted together and reserved before each chunk of at most 64 KiB is written; once a reservation fails every relay tunnel of the pair ends at its next one and new ones answer `relay_budget` until the day turns or the path is direct; a direct path is never counted, and a daemon that restarts counts from zero.
+The desktop asks `POST /peer-screen/<device>/net?key=&owner=<pid>` before a screen's first page is made and at each load, and the answer's `state` gives a failure its words: `not_connected`, `paused`, `paused_there`, `no_grant`, `unsupported_there`, `relay_budget`, `net_limit`, or `remote_update_here` when this machine's daemon is older than its app.
+`HIDE_TEST_SCREEN_NET_HOSTS=<name>=<ip>,...` makes the host's half answer those names itself, for tests on one computer.
+
+**Login storage.**
+A screen's logins stay in its machine and key's session on this computer, across restarts, shared with no page of this window, another machine, or the same machine under another key.
+The local shell names the paired machines to its desktop app (`REMOTE_PAIRED_CHANNEL`) once it holds a snapshot, read from the device rows of paired machines (`peer_key`), which the core keeps from its start until a list of pairings it is told ends one; a shell with no snapshot names nothing, so neither a reload nor a restart clears anything.
+A pair that leaves that list, and an earlier key of a machine paired again, are cleared: their pages close, then the session's connections, HTTP auth cache, storage and cache are cleared in that order (`RemoteStorage` in `desktop/src/main/remoteEgress.ts`).
+Each session is a row of `remote-partitions.json` in the app's profile, `live`, `clearing` or `failed`, written before the step it names; a clear a quit cut short, or one that failed, runs again at the next launch before any page; a screen whose storage is being cleared makes no page (`That computer's sign-ins here are being cleared.`) and starts empty once it is; the file holds 32 rows, and a new pair past them keeps no storage rather than drop a row that still needs clearing.
+What the operator signs in to in such a page is as open to that machine as a login made on it, since that machine chooses the addresses and sees what the page draws.
+
+**Leaving the screen.**
+A screen's page opens no window of this computer: a public `http` or `https` address it hands out (a page's Open in default browser, a help link) goes to this computer's default browser only right after the operator pressed in the screen (a click, Enter or Space within a second) while it shows and holds the keyboard, one a second; a loopback, private or local-name address, and one with no press, are refused and logged with the reason and scheme only (`remote.window_refused`).
+That screen's toolbar offers no Open in default browser for such an address, and a link to one that the operator ⌘-clicks (Ctrl-clicks off macOS) there opens as a page in that screen's Workspace in front, which reaches it through that machine (`openLink`), rather than a dead click.
+A popup opens only right after a press in its page while the page holds the keyboard, one a second, at most two of the screen's, sized and placed inside the tile (`popupBounds` held to the tile; none in a tile under 320 x 240), and its page cannot move or resize it; only the operator's own drag takes it out of the tile.
+A screen's page shows no `alert`, `confirm`, `prompt` or leave-page sheet, checks no spelling, downloads nothing (`browser.download_refused` once per page, reason `remote_screen`), and has no Comment button; a file the operator picks or drops into it goes where the page sends it, through that machine.
+
+**A machine with no window of its own.**
+A screen's page whose app draws its pages says `draws_pages` in its handshake, and that machine's daemon counts it beside its own desktop windows (`page_renderers`): `hide browser open` there needs one of them, a pane's query keeps `browser.open` and `browser.status` and the pages' states while one draws them, and the page commands and `hide browser connect` still need that machine's own desktop window, since a screen gives no page control.
+With none, the open is refused `browser_unsupported` (`Open the Hide desktop app here, or show this computer's screen in Hide on another computer, and retry`); a page on no desk is not loaded by a screen, so `--wait` from an agent the operator is not watching waits until it shows.
+
+**Version mix.**
+An older desktop app showing a newer page gives no `browser`, and the page's notice asks to update this computer's Hide with no button, since that app opens no window; a newer app showing an older page draws the older notice, whose Open in browser goes through the default-browser rule above; an older daemon here answers `/net` 404, and an older host drops the `page` stream or answers `/page-route` 404, each worded as the update it needs.
+
+Logs: `remote.egress_ready`, `remote.storage_cleared`, `remote.storage_clear_failed`, `remote.storage_full`, `remote.window_refused`, `browser.request_refused` with `remote_*` reasons, `browser.popup_refused` (`no_press`, `cap`, `no_room`) and `browser.popup_move_refused` on the guest; `screen_net.listening`, `screen_net.refused` and `screen_net.closed` on the guest's daemon and `screen_net.dialed {tunnel, local_port}` and `screen_net.ended {tunnel, bytes_in, bytes_out, path}` on the host's, none with an address.
+What this leaves out is in [INSTALL.md](INSTALL.md#what-each-system-supports).
+
 ## The page and its limits
 
 Web pages in every Workspace share one persistent session for logins, cookies, origin storage and zoom.
-Remote loopback pages use a persistent session per device, and HTML file previews keep a separate session per Workspace; none uses the shell's session.
+Remote loopback pages use a persistent session per device, and HTML file previews keep a separate session per Workspace; a paired machine's screen keeps one per machine and key ([A page in another computer's screen](#a-page-in-another-computers-screen)); none uses the shell's session.
 This keeps localhost cookies of this Mac, each device, and remote HTML previews apart even when their host names are equal.
 Pages run in a sandboxed renderer with context isolation, no Node and no preload, so nothing in a page reaches the `hideHost` bridge or the daemon's token.
 Existing Workspace-specific web sessions are not copied into the shared session, so an upgrade may require one new login per site.
@@ -506,6 +581,7 @@ It takes the keyboard only when the page that opened it held the keyboard; other
 It shares its page's session and request rules, holds no bridge, follows the same navigation rules as its page, and its own popups belong to the same page.
 Electron closes it with its opener, so it ends when its page's display closes, is evicted, or the window closes.
 At most 4 are open at once (`MAX_POPUPS`); a hidden page asking for one, or any page asking for a fifth, is refused and logged.
+A page of another computer's screen has its own popup rules ([A page in another computer's screen](#a-page-in-another-computers-screen)).
 While a popup holds the keyboard, Close (⌘W) and Close pane close the popup and the text-size commands zoom it; no other app command reaches the shell behind it.
 
 ## Zoom
@@ -570,6 +646,7 @@ Open in default browser (issue 2293) hands the address the page shows now to the
 The shell offers it only for an `http` or `https` address (`defaultBrowserAddress` in `web/src/browserViews.ts`), so a `file:` page, an outside page and a blank one show no button, and the host refuses any other scheme on its own as `link.refused`.
 A connected device's page keeps the address the core holds, the device's own: a web address there opens the same page in the default browser, while a loopback one (`localhost`, `127/8`, `[::1]`, IPv4-mapped loopback; `isLoopbackHost` in `web/src/loopbackHost.ts`, the rule the host routes a device's page by) offers none, because this machine's browser would load this machine's loopback and the page forward that reaches the device's is this window's private route ([INSTALL.md](INSTALL.md#what-each-system-supports)).
 In a plain browser tab the page's existing Open in browser is the same way out.
+In another computer's screen it is offered only for a public address ([A page in another computer's screen](#a-page-in-another-computers-screen)).
 A page that cannot load says so in its slot with the address and Chromium's reason, and Reload loads its address again.
 A page whose renderer stopped says the same with the reason.
 In a plain browser tab a browser display shows its address on the toolbar row and reads `Pages open in the Hide desktop app.` below it, and a web address gets Open in browser, which opens it in a new tab.
@@ -626,6 +703,7 @@ Playwright dismisses a dialog no listener handles, so that test listens and answ
 `desktop/e2e/remote-browser-agent.spec.ts` runs the same snapshot and click from a device pane over the isolated SSH server, after that pane's `workspace info` lists the page commands, and the Workspace commands' `renderer_unavailable` once the desktop is gone.
 `hided/tests/it/remote_core.rs` opens a page on the core's machine from its checkout with no window and with the node's desktop window attached, resolves its route on the node's daemon, reads the core machine's loopback page through the routed address, and sees the route close on release.
 `hided/tests/it/node_contract.rs` (`a_device_page_rides_its_node_link_and_ends_with_it`) reaches a device's loopback server through the page forward over the isolated SSH device's node link, sees dropping the forward close that server's connection on the device, and sees a forward whose link ended reach nothing.
+`desktop/src/main/browserRemote.test.ts` tests a screen's pages: no contents before their proxy, the screen's own storage, the tile, no dialogs, spellcheck or UDP of their own, no load before or after a refused route answer, a file display refused before asking, events to the screen alone and no close by this window's sync, no CDP target, the page, creation and sync bounds, a hidden screen's sync, the storage clear, stills, downloads, the request rules, and popups inside the tile after a press and unmoved by their page; `desktop/src/main/remoteEgress.test.ts` the exact proxy, the login by port, the failure words, and the storage index's order of clearing, its failure, a clear a quit cut short and the full index; `desktop/src/main/remoteScreens.test.ts` the default-browser rule, the top-frame gate and the release on unpairing and key change; `web/src/actions.test.ts` a screen's local link opening as a page; `web/src/BrowserDisplay.test.tsx` the update notice with no button; `hided/src/screen_net_tests.rs` the places, the waiting bound, the relay budget on one and sixteen tunnels and on a path that moves, a stream the host drops unanswered, the secret, the head bound, the host proxy and listener lifetime; `hided/tests/it/pairing/remote_view.rs` (`a_screen_page_request_comes_from_a_port_the_host_dialed`) two daemons on one machine, where every request an origin on the shared loopback records, the second of a kept-alive connection too, came from a port the host's proxy logged dialing, a pause refuses the next request with nothing reaching the origin, and the same listener carries again once resumed; `hided/src/server.rs` the query a screen that draws pages leaves a pane; `hide-core` the paired machine rows a restarted core keeps.
 `desktop/e2e/remote-workspace.spec.ts` additionally uses an isolated SSH server, whose sessions get the private HOME `desktop/e2e/device-home.ts` proves because connecting installs Hide's kit there, and two private engines to prove remote CLI origin, HTTP and WebSocket forwarding, absolute loopback subrequests, local and remote cookie separation, remote popup address ownership, relative HTML assets, refusal of undeclared files and external requests, a device agent's open staying behind until the operator is on the device, background View cleanup, route cleanup on close and forced candidate exit, and a return route that comes back after the device's helper connection ends and reconnects, with every remote command run through the `hide` Hide installed and linked on the device.
 
 ## Running Workspace servers

@@ -1607,6 +1607,41 @@ fn a_folded_head_of_another_machines_work_over_a_released_state_folder_is_kept_a
     }
 }
 
+/// A core started again keeps each paired machine's device row until a list
+/// it is told ends that pairing: a daemon that has not told its core its
+/// paired machines yet ends none. The desktop app keeps a machine's login
+/// storage while this row names its pairing, so a restart clears none
+/// (docs/BROWSER_DISPLAYS.md, A page in another computer's screen).
+#[test]
+fn a_core_not_yet_told_its_paired_machines_keeps_its_peer_devices() {
+    let folder = scratch_dir("hide-core-peer-devices-");
+    let path = folder.path().join("state.json");
+    let mut runtime = super::appearance::runtime_at(&path);
+    let event = serde_json::to_vec(&serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "peer_machines",
+        "payload": { "machines": [{
+            "key": "ab".repeat(32), "device_id": "windows-pc", "name": "Windows PC",
+            "opens": "active", "opened_by": null, "connected": false, "path": null,
+            "reason": null, "update": null,
+        }] }
+    }))
+    .expect("peer machines event");
+    runtime.dispatch_json(&event);
+    assert_eq!(
+        device(&runtime, "windows-pc").peer_key,
+        Some("ab".repeat(32))
+    );
+    drop(runtime);
+
+    let restarted = super::appearance::runtime_at(&path);
+    assert_eq!(
+        device(&restarted, "windows-pc").peer_key,
+        Some("ab".repeat(32)),
+        "a core not yet told its machines keeps their rows"
+    );
+}
+
 /// A machine this one opens is a device for as long as the pairing holds
 /// (PRD device-connect-iroh D-61, B3): registered when its grant is active,
 /// kept through a pause, and removed with what Hide recorded for it when

@@ -46,6 +46,7 @@ fn daemon_env(root: &Path) -> Env {
         peer_direct: None,
         peer_relay: None,
         peer_relay_only: false,
+        screen_net_hosts: Default::default(),
     }
 }
 
