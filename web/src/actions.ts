@@ -1642,16 +1642,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     observeAgents(observing: boolean) {
       dispatch({ schema_version: 2, kind: "ai_settings", payload: { observing } });
     },
-    /** Whether this window holds the keyboard on the Workspace screen, so the View in front of it is seen (PRD unseen-agent-views D-07). */
-    noteWindowFocus(focused: boolean) {
+    /** Whether this window holds the keyboard, on the Workspace screen or with Desk's desk drawn, so the View in front of it is seen (PRD unseen-agent-views D-07; 한눈에). */
+    noteWindowFocus(screen: "workspace" | "desk" | null) {
       // Another machine's view is no one in front of this machine (D-60, D-67).
       if (remote) return;
-      dispatch({ schema_version: 2, kind: "window_focus", payload: { focused } });
-    },
-    /** Whether this window holds the keyboard with Desk's desk drawn, so the tab in front of that desk is seen (한눈에). */
-    noteDeskFocus(focused: boolean) {
-      if (remote) return;
-      dispatch({ schema_version: 2, kind: "desk_focus", payload: { focused } });
+      dispatch({ schema_version: 2, kind: "window_focus", payload: screen ? { focused: true, screen } : { focused: false } });
     },
     /** Whether this page shows the request view; while one does, the core re-reads running checks (PRD overview-request-view D-32). */
     observeRequestView(observing: boolean) {

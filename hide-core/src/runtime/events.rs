@@ -127,13 +127,16 @@ pub(super) struct RequestViewPayload {
     pub(super) observing: bool,
 }
 
-/// Whether any window holding the keyboard draws the Workspace screen, as
-/// the daemon sums every window's report; sent only when that changes (PRD
-/// unseen-agent-views D-07).
+/// Whether a window holds the keyboard, and the screen it draws, as the
+/// daemon sums every window's report (the window that took the keyboard
+/// last); sent only when that changes (PRD unseen-agent-views D-07; 한눈에
+/// for Desk's desk). A report that names no screen is the Workspace's.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WindowFocusPayload {
     pub(super) focused: bool,
+    #[serde(default)]
+    pub(super) screen: super::unseen_views::FocusScreen,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2007,9 +2010,6 @@ pub(super) enum Event {
     PhoneViewing(PhoneViewingPayload),
     RequestView(RequestViewPayload),
     WindowFocus(WindowFocusPayload),
-    /// Whether any window holding the keyboard draws Desk's desk, summed
-    /// as `window_focus` is (한눈에).
-    DeskFocus(WindowFocusPayload),
     /// The card's refresh button, opening the delete confirmation, and a
     /// completed worktree removal. All three say "read again now" about a
     /// different set of readers, and none needs a target: the card is always
@@ -2415,7 +2415,6 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "phone_viewing" => decode!(PhoneViewingPayload, PhoneViewing),
         "request_view" => decode!(RequestViewPayload, RequestView),
         "window_focus" => decode!(WindowFocusPayload, WindowFocus),
-        "desk_focus" => decode!(WindowFocusPayload, DeskFocus),
         "cleanup_review" => decode!(CleanupReviewPayload, CleanupReview),
         "cleanup_confirm" => decode!(CleanupConfirmPayload, CleanupConfirm),
         "cleanup_dismiss" => Ok(Event::CleanupDismiss),
@@ -4349,8 +4348,9 @@ impl Runtime {
                 self.observe_request_view(payload.observing, std::time::Instant::now());
                 false
             }
-            Event::WindowFocus(payload) => self.set_window_focused(payload.focused),
-            Event::DeskFocus(payload) => self.set_desk_focused(payload.focused),
+            Event::WindowFocus(payload) => {
+                self.set_window_focus(payload.focused.then_some(payload.screen))
+            }
             Event::OverviewRefresh(payload) => {
                 let project = self
                     .snapshot

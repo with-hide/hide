@@ -54,6 +54,84 @@ impl ObservationDemand {
     }
 }
 
+/// What a window holding the keyboard shows, whose View in front of it is
+/// then seen (PRD unseen-agent-views D-07; 한눈에 for Desk's desk).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FocusScreen {
+    Workspace,
+    Desk,
+}
+
+impl FocusScreen {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Workspace => "workspace",
+            Self::Desk => "desk",
+        }
+    }
+
+    pub fn parse(screen: &str) -> Option<Self> {
+        match screen {
+            "workspace" => Some(Self::Workspace),
+            "desk" => Some(Self::Desk),
+            _ => None,
+        }
+    }
+}
+
+/// Which window holds the keyboard and on what screen (`window_focus`): each
+/// connection reports its own, and the core hears the screen of the window
+/// that took the keyboard last, which is the one the operator is in, or none
+/// once no window holds it. A connection that closes lets go of its report.
+#[derive(Default)]
+pub struct FocusDemand {
+    /// Focused connections, the one that took the keyboard last at the end.
+    focused: Mutex<Vec<(u64, FocusScreen)>>,
+}
+
+impl FocusDemand {
+    /// Records one connection's report. When that changes what the core
+    /// should hold, `announce` receives it, called while the demand is still
+    /// locked, so two changes reach the core in the order they happened.
+    pub fn set(
+        &self,
+        connection: u64,
+        screen: Option<FocusScreen>,
+        announce: impl FnOnce(Option<FocusScreen>),
+    ) -> Option<Option<FocusScreen>> {
+        let mut focused = self.focused.lock().expect("focus demand");
+        let before = focused.last().map(|(_, screen)| *screen);
+        let kept = focused.iter().position(|(held, _)| *held == connection);
+        match (kept, screen) {
+            // The same window on the same screen keeps its place.
+            (Some(at), Some(screen)) if focused[at].1 == screen => {}
+            (kept, screen) => {
+                if let Some(at) = kept {
+                    focused.remove(at);
+                }
+                if let Some(screen) = screen {
+                    focused.push((connection, screen));
+                }
+            }
+        }
+        let after = focused.last().map(|(_, screen)| *screen);
+        let changed = (before != after).then_some(after);
+        if let Some(now) = changed {
+            announce(now);
+        }
+        changed
+    }
+
+    /// Drops whatever report a closed connection held.
+    pub fn release(
+        &self,
+        connection: u64,
+        announce: impl FnOnce(Option<FocusScreen>),
+    ) -> Option<Option<FocusScreen>> {
+        self.set(connection, None, announce)
+    }
+}
+
 /// Items a single window may hold the origin of at once: its panel and its
 /// Start dialog, with room for a few left open.
 pub const ORIGIN_HOLDS_PER_CONNECTION: usize = 8;
@@ -225,6 +303,29 @@ impl ThreadHolds {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_core_hears_the_screen_of_the_window_that_took_the_keyboard_last() {
+        let demand = FocusDemand::default();
+        let heard = std::cell::RefCell::new(Vec::new());
+        let say = |now| heard.borrow_mut().push(now);
+        demand.set(1, Some(FocusScreen::Workspace), say);
+        demand.set(1, Some(FocusScreen::Workspace), say);
+        demand.set(2, Some(FocusScreen::Desk), say);
+        demand.set(2, None, say);
+        demand.set(1, Some(FocusScreen::Desk), say);
+        demand.release(1, say);
+        assert_eq!(
+            heard.into_inner(),
+            [
+                Some(FocusScreen::Workspace),
+                Some(FocusScreen::Desk),
+                Some(FocusScreen::Workspace),
+                Some(FocusScreen::Desk),
+                None,
+            ]
+        );
+    }
 
     fn owner(key: &str) -> BacklogOriginIdentity {
         BacklogOriginIdentity {

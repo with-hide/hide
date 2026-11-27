@@ -137,10 +137,7 @@ pub struct AppState {
     /// Which windows hold the keyboard and draw the Workspace screen: the
     /// core counts a View in front of the operator as seen only while one
     /// does (PRD unseen-agent-views D-07, B6, B8).
-    pub window_focus_demand: Arc<crate::demand::ObservationDemand>,
-    /// Which windows hold the keyboard and draw Desk's desk: the core counts
-    /// the View in front of that desk as seen only while one does (한눈에).
-    pub desk_focus_demand: Arc<crate::demand::ObservationDemand>,
+    pub window_focus_demand: Arc<crate::demand::FocusDemand>,
     /// Which connections show which backlog item's origin: the core keeps
     /// an origin until the last of them closes it or leaves.
     pub origin_holds: Arc<crate::demand::OriginHolds>,
@@ -3047,26 +3044,31 @@ fn handle_client_text(
             });
             return Ok(ClientAction::Replies(Vec::new()));
         }
-        // A window that has the keyboard and draws the Workspace screen, or
-        // Desk's desk; the core hears whether any window does, and a window
-        // that leaves without saying so lets go of its focus with its
-        // connection.
-        Some(kind @ ("window_focus" | "desk_focus")) => {
-            let demand = if kind == "window_focus" {
-                Demand::WindowFocus
-            } else {
-                Demand::DeskFocus
-            };
-            let Some(focused) = event
-                .get("payload")
+        // A window that has the keyboard, and the screen it draws: the
+        // Workspace or Desk's desk (a window that names none draws the
+        // Workspace); the core hears the screen of the window that took the
+        // keyboard last, and a window that leaves without saying so lets go
+        // of its focus with its connection.
+        Some("window_focus") => {
+            let payload = event.get("payload");
+            let Some(focused) = payload
                 .and_then(|payload| payload.get("focused"))
                 .and_then(Value::as_bool)
             else {
-                return Err(format!("{kind}.focused must be a boolean"));
+                return Err("window_focus.focused must be a boolean".to_owned());
             };
-            demand.of(state).set(connection, focused, |aggregate| {
-                dispatch_observation(&state.core, demand, connection, aggregate)
-            });
+            let screen = match payload.and_then(|payload| payload.get("screen")) {
+                None => crate::demand::FocusScreen::Workspace,
+                Some(screen) => screen
+                    .as_str()
+                    .and_then(crate::demand::FocusScreen::parse)
+                    .ok_or_else(|| "window_focus.screen must be workspace or desk".to_owned())?,
+            };
+            state
+                .window_focus_demand
+                .set(connection, focused.then_some(screen), |now| {
+                    dispatch_window_focus(&state.core, connection, now)
+                });
             return Ok(ClientAction::Replies(Vec::new()));
         }
         Some("request_view") => {
@@ -3669,12 +3671,6 @@ pub(crate) enum Demand {
     Start,
     /// The Overview's request view: the running checks' re-read.
     RequestView,
-    /// A window with the keyboard on the Workspace screen: what is in
-    /// front of it is seen.
-    WindowFocus,
-    /// A window with the keyboard drawing Desk's desk: the View in front of
-    /// that desk is seen.
-    DeskFocus,
 }
 
 impl Demand {
@@ -3683,8 +3679,6 @@ impl Demand {
             Self::Settings => "observing",
             Self::Start => "start_observing",
             Self::RequestView => "request_view",
-            Self::WindowFocus => "window_focus",
-            Self::DeskFocus => "desk_focus",
         }
     }
 
@@ -3693,8 +3687,6 @@ impl Demand {
             Self::Settings => &state.demand,
             Self::Start => &state.start_demand,
             Self::RequestView => &state.request_view_demand,
-            Self::WindowFocus => &state.window_focus_demand,
-            Self::DeskFocus => &state.desk_focus_demand,
         }
     }
 }
@@ -3756,11 +3748,6 @@ pub(crate) fn dispatch_observation(
             "kind": "request_view",
             "payload": {"observing": observing},
         }),
-        Demand::WindowFocus | Demand::DeskFocus => json!({
-            "schema_version": SCHEMA_VERSION,
-            "kind": demand.field(),
-            "payload": {"focused": observing},
-        }),
         Demand::Settings | Demand::Start => json!({
             "schema_version": SCHEMA_VERSION,
             "kind": "ai_settings",
@@ -3773,6 +3760,42 @@ pub(crate) fn dispatch_observation(
             json!({
                 "component": "hided",
                 "kind": "settings.observation_failed",
+                "connection": connection,
+                "message": error,
+            })
+        );
+    }
+}
+
+/// Tells the core which screen the window holding the keyboard draws, or
+/// that none does (`window_focus`). Runs under the focus demand's lock, so it
+/// only logs and hands the event to the core's channel.
+fn dispatch_window_focus(
+    core: &CoreHandle,
+    connection: u64,
+    screen: Option<crate::demand::FocusScreen>,
+) {
+    let screen = screen.map(crate::demand::FocusScreen::as_str);
+    eprintln!(
+        "{}",
+        json!({
+            "component": "hided",
+            "kind": "window_focus.observation",
+            "connection": connection,
+            "screen": screen,
+        })
+    );
+    let event = json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "window_focus",
+        "payload": {"focused": screen.is_some(), "screen": screen.unwrap_or("workspace")},
+    });
+    if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
+        eprintln!(
+            "{}",
+            json!({
+                "component": "hided",
+                "kind": "window_focus.observation_failed",
                 "connection": connection,
                 "message": error,
             })
@@ -6017,17 +6040,14 @@ pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, des
     for (pane, size) in state.pane_sizes.left(connection) {
         send_grid(state, &pane, size);
     }
-    for demand in [
-        Demand::Settings,
-        Demand::Start,
-        Demand::RequestView,
-        Demand::WindowFocus,
-        Demand::DeskFocus,
-    ] {
+    for demand in [Demand::Settings, Demand::Start, Demand::RequestView] {
         demand.of(state).release(connection, |observing| {
             dispatch_observation(&state.core, demand, connection, observing)
         });
     }
+    state.window_focus_demand.release(connection, |now| {
+        dispatch_window_focus(&state.core, connection, now)
+    });
     state.origin_holds.release(connection, |key| {
         close_backlog_origin(&state.core, connection, key)
     });

@@ -259,7 +259,7 @@ export function installKeyboard(actions: Actions): () => void {
   const host = hostKind();
   const system = keySystem();
   const removeKeyboardOwner = installKeyboardOwner();
-  const removeWindowFocus = installWindowFocus({ workspace: (focused) => actions.noteWindowFocus(focused), desk: (focused) => actions.noteDeskFocus(focused) });
+  const removeWindowFocus = installWindowFocus((screen) => actions.noteWindowFocus(screen));
   const unsubscribeOwner = subscribeKeyboardOwner(() => {
     const rest = useShellStore.getState().rest;
     const owner = keyboardCommandOwner();

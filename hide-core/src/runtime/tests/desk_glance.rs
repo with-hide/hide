@@ -157,7 +157,10 @@ fn a_file_desks_agent_opens_is_listed_as_desks_to_look_at_until_seen_on_its_desk
     );
     // A window holding the keyboard with Desk's desk drawn has it in
     // front of the operator, as a Workspace window has its tray's tab.
-    runtime.dispatch_json(&explorer_event("desk_focus", json!({"focused": true})));
+    runtime.dispatch_json(&explorer_event(
+        "window_focus",
+        json!({"focused": true, "screen": "desk"}),
+    ));
     assert_eq!(
         files(&glance(&mut runtime)),
         [("plan.md".into(), None, true)]

@@ -3,6 +3,7 @@
 //! delegated child's open does to its ancestors. Each test drives the
 //! runtime's own opens, events and reads, and reads the rows it publishes.
 
+use super::super::unseen_views::FocusScreen;
 use super::*;
 use crate::agent_state::RowMark;
 use crate::view_layout::DisplayKind;
@@ -62,7 +63,7 @@ pub(super) fn fixture(child: bool) -> (tempfile::TempDir, Arc<Mutex<Runtime>>) {
         let entry = store.views.entry(crate::node::TEST_NODE, CHECKOUT);
         entry.open = true;
         entry.tray_entry(TAB).shown = true;
-        guard.set_window_focused(true);
+        guard.set_window_focus(Some(FocusScreen::Workspace));
         guard.refresh_agent_lineage();
         guard.refresh_pane_read_state();
     }
@@ -231,7 +232,7 @@ fn a_view_stays_unseen_while_no_window_holds_the_keyboard_or_the_lane_shows_some
     let mut guard = runtime.lock().unwrap();
     keyboard(&mut guard, Some("recipient"));
     // B6: the window lost the keyboard; the View is in front all the same.
-    guard.set_window_focused(false);
+    guard.set_window_focus(None);
     let view = open(&mut guard, "recipient", "src/login.ts");
     assert!(unseen(&guard, &view));
     // The operator is at its pane, so the row is read and the View waits as
@@ -246,7 +247,7 @@ fn a_view_stays_unseen_while_no_window_holds_the_keyboard_or_the_lane_shows_some
             tray.shown = false;
         }
     }
-    guard.set_window_focused(true);
+    guard.set_window_focus(Some(FocusScreen::Workspace));
     guard.sync_workspace_view();
     assert!(unseen(&guard, &view));
     // Back on the documents, with a window holding the keyboard, it is seen.
@@ -264,7 +265,7 @@ fn a_view_stays_unseen_while_no_window_holds_the_keyboard_or_the_lane_shows_some
 fn a_view_in_an_area_that_is_not_active_stays_unseen() {
     let (_root, runtime) = fixture(false);
     let mut guard = runtime.lock().unwrap();
-    guard.set_window_focused(false);
+    guard.set_window_focus(None);
     keyboard(&mut guard, Some("recipient"));
     let first = open(&mut guard, "recipient", "src/a.ts");
     let second = open(&mut guard, "recipient", "src/b.ts");
@@ -283,7 +284,7 @@ fn a_view_in_an_area_that_is_not_active_stays_unseen() {
             layout.focus_area(&area, stamp).map(|changed| ((), changed))
         })
         .unwrap();
-    guard.set_window_focused(true);
+    guard.set_window_focus(Some(FocusScreen::Workspace));
     keyboard(&mut guard, Some("recipient"));
     // B7: shown in an area that is not the active one is not looked at.
     assert!(unseen(&guard, &first));
@@ -303,10 +304,10 @@ fn several_unseen_views_name_the_newest_and_count_down_as_each_is_seen() {
     assert_eq!((look.count, look.view_id.as_str()), (3, c.as_str()));
     // The keyboard reaches their pane while the window is away, so only
     // the View brought forward below is looked at.
-    guard.set_window_focused(false);
+    guard.set_window_focus(None);
     keyboard(&mut guard, Some("recipient"));
     look_at(&mut guard, &a);
-    guard.set_window_focused(true);
+    guard.set_window_focus(Some(FocusScreen::Workspace));
     let look = row(&guard, "recipient").look.clone().unwrap();
     assert_eq!((look.count, look.view_id.as_str()), (2, c.as_str()));
     look_at(&mut guard, &c);
@@ -774,10 +775,10 @@ fn a_restart_keeps_an_unseen_view_unseen_and_a_seen_one_seen() {
     keyboard(&mut guard, Some("sender"));
     let unread = open(&mut guard, "recipient", "src/a.ts");
     let read = open(&mut guard, "recipient", "src/b.ts");
-    guard.set_window_focused(false);
+    guard.set_window_focus(None);
     keyboard(&mut guard, Some("recipient"));
     look_at(&mut guard, &read);
-    guard.set_window_focused(true);
+    guard.set_window_focus(Some(FocusScreen::Workspace));
     assert!(unseen(&guard, &unread) && !unseen(&guard, &read));
     keyboard(&mut guard, Some("sender"));
 
