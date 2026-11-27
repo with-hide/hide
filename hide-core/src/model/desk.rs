@@ -104,16 +104,46 @@ pub enum GlanceGroup {
 }
 
 /// Whether each of 한눈에's session groups is folded. Each is read on its
-/// own, so one a later Hide wrote in another shape starts as it would.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+/// own (`Deserialize` below), so one a later Hide wrote in another shape
+/// starts as it would.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct GlanceFolds {
-    #[serde(deserialize_with = "lane_field_leniently")]
     pub turn: bool,
-    #[serde(deserialize_with = "lane_field_leniently")]
     pub working: bool,
-    #[serde(deserialize_with = "lane_field_leniently")]
     pub ended: bool,
+}
+
+impl<'de> Deserialize<'de> for GlanceFolds {
+    /// Each group's fold is read on its own: one that is missing or is no
+    /// bool keeps that group's start ([`GlanceFolds::default`], 끝남 folded),
+    /// never `bool`'s false, and the groups written as bools keep their
+    /// values; an unreadable one is one diagnostic line.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let mut folds = Self::default();
+        let Some(written) = value.as_object() else {
+            crate::diagnostic!(serde_json::json!({
+                "component": "desk", "kind": "desk_store.lane_field_unreadable",
+                "field": "glance_groups",
+            }));
+            return Ok(folds);
+        };
+        for (key, slot) in [
+            ("turn", &mut folds.turn),
+            ("working", &mut folds.working),
+            ("ended", &mut folds.ended),
+        ] {
+            match written.get(key) {
+                None => {}
+                Some(serde_json::Value::Bool(folded)) => *slot = *folded,
+                Some(_) => crate::diagnostic!(serde_json::json!({
+                    "component": "desk", "kind": "desk_store.lane_field_unreadable",
+                    "field": format!("glance_groups.{key}"),
+                })),
+            }
+        }
+        Ok(folds)
+    }
 }
 
 impl Default for GlanceFolds {

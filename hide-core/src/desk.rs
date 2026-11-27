@@ -1575,6 +1575,48 @@ mod tests {
         );
     }
 
+    /// An 끝남 fold that is missing or unreadable starts folded, as 끝남
+    /// does, never `bool`'s false, while the folds written as bools and the
+    /// rest of the lane and the store read as they were.
+    #[test]
+    fn a_missing_or_unreadable_ended_fold_starts_folded_and_the_written_folds_stay() {
+        let mut stored = Stored::default();
+        stored.conversation.push(user(1, "kept"));
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+        for ended in [
+            None,
+            Some(serde_json::json!("later")),
+            Some(serde_json::Value::Null),
+        ] {
+            let mut groups = serde_json::json!({"turn": true, "working": true});
+            if let Some(ended) = ended.clone() {
+                groups["ended"] = ended;
+            }
+            file["panel_widths"] = serde_json::json!({
+                "view_width": 640, "session_width": null,
+                "glance_tab": "files", "glance_groups": groups,
+            });
+            let restored = decode(&serde_json::to_vec(&file).unwrap()).expect("the store reads");
+            assert_eq!(
+                restored.lane,
+                crate::model::DeskLane {
+                    view_width: Some(640),
+                    session_width: None,
+                    glance_folded: false,
+                    glance_tab: crate::model::GlanceTab::Files,
+                    glance_groups: crate::model::GlanceFolds {
+                        turn: true,
+                        working: true,
+                        ended: true,
+                    },
+                },
+                "ended {ended:?}"
+            );
+            assert_eq!(restored.conversation.items.len(), 1, "ended {ended:?}");
+        }
+    }
+
     /// B29: a store Desk 1차 wrote, its lane pinned with sixteen kept tabs,
     /// opens as it was but for two unset widths, its conversation, queue,
     /// marks and settings kept, and the next save writes no tab.

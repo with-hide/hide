@@ -145,7 +145,16 @@ function FileRows({ glance, cards, query, onFile }: { glance: DeskGlance; cards:
   if (totalFiles === 0) return <Quiet data-desk-glance-empty="true">{t("desk.glance.emptyFiles")}</Quiet>;
   const searching = query.trim() !== "";
   const found = glance.files.filter((file) => glanceMatches(file.label, query));
-  if (found.length === 0) return <Quiet data-desk-glance-none="files">{t("desk.glance.noFiles")}</Quiet>;
+  // A search looks only through the files the core lists; past its cap it says so, matches or not.
+  const older = glance.files_more > 0 ? <p className="px-xs py-xs text-caption text-muted-foreground" data-desk-glance-older="true">{t("desk.views.older")}</p> : null;
+  if (found.length === 0) {
+    return (
+      <>
+        <Quiet data-desk-glance-none="files">{t("desk.glance.noFiles")}</Quiet>
+        {older}
+      </>
+    );
+  }
   const toLook = found.filter((file) => !file.seen).length;
   // A search looks through every file the core lists, not only the first rows.
   const shown = allFiles || searching ? found : found.slice(0, GLANCE_FILE_ROWS);
@@ -170,7 +179,7 @@ function FileRows({ glance, cards, query, onFile }: { glance: DeskGlance; cards:
           {t("desk.glance.more", { count: more })}
         </RowButton>
       ) : null}
-      {(allFiles || searching) && glance.files_more > 0 ? <p className="px-xs py-xs text-caption text-muted-foreground" data-desk-glance-older="true">{t("desk.views.older")}</p> : null}
+      {allFiles || searching ? older : null}
     </section>
   );
 }

@@ -143,6 +143,18 @@ it("lists the files 볼 것 first on the 파일 tab, each naming its session or 
   expect([opened, tabs]).toEqual([["roadmap"], ["sessions"]]);
 });
 
+it("still says older files are not listed when a search past the core's cap finds nothing", async () => {
+  const files = Array.from({ length: 32 }, (_, at) => file(`f${at}`, "p1", true));
+  await render(<GlancePanel glance={{ sessions: ["p1"], files, files_more: 1 }} cards={[card("p1", "one", "working")]} tab="files" onTab={noop} onGroup={noop} onSession={noop} onFile={noop} onFold={noop} />);
+  const search = document.querySelector<HTMLInputElement>('[data-desk-glance-search="files"]')!;
+  await act(async () => type(search, "f33"));
+  expect(document.querySelector('[data-desk-glance-none="files"]')).not.toBeNull();
+  expect(document.querySelector("[data-desk-glance-older]")).not.toBeNull();
+  await act(async () => type(search, "f31"));
+  expect(all("[data-desk-glance-file]").map((row) => row.dataset.deskGlanceFile)).toEqual(["f31"]);
+  expect(document.querySelector("[data-desk-glance-older]")).not.toBeNull();
+});
+
 it("folds the whole panel with ▯|", async () => {
   const fold = vi.fn();
   await render(<GlancePanel glance={{ sessions: [], files: [], files_more: 0 }} cards={[]} onTab={noop} onGroup={noop} onSession={noop} onFile={noop} onFold={fold} />);
