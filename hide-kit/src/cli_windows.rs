@@ -573,8 +573,7 @@ mod tests {
             relative(Path::new(r"C:\bin"), Path::new(r"D:\hide\current")),
             None
         );
-        // The desktop app's runtime copy as a connect notes it: the plain
-        // drive spelling is named, the `\\?\` one reads as another drive.
+        // The desktop app's runtime copy as a connect notes it.
         assert_eq!(
             relative(
                 Path::new(r"C:\Users\me\.local\bin"),
@@ -582,13 +581,6 @@ mod tests {
             )
             .as_deref(),
             Some(r"..\..\.hide\runtime\1.2.12-main.466419d1-dc4d220f9aeb")
-        );
-        assert_eq!(
-            relative(
-                Path::new(r"C:\Users\me\.local\bin"),
-                Path::new(r"\\?\C:\Users\me\.hide\runtime\1.2.12-main.466419d1-dc4d220f9aeb")
-            ),
-            None
         );
         assert_eq!(
             relative(

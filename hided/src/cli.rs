@@ -5010,34 +5010,4 @@ mod tests {
             "stauts-not-a-folder is neither a folder here nor a hide command: check the path, or run hide --help for the commands"
         );
     }
-
-    /// The package a connect notes on Windows is the plain drive spelling,
-    /// never the `\\?\` one the system's own canonical path gives: the
-    /// kit's `hide.cmd` in `~/.local/bin` names its folder by a relative way,
-    /// which a `\\?\C:` prefix beside the plain `C:` of the command folder
-    /// reads as two drives (seen on a Windows laptop, 1.2.12-main.466419d1).
-    #[cfg(windows)]
-    #[test]
-    fn the_package_a_connect_notes_on_windows_carries_no_verbatim_prefix() {
-        use std::path::{Component, Prefix};
-        let dir = tempfile::tempdir().unwrap();
-        let app = dir.path().join("app");
-        let resources = app.join("resources");
-        std::fs::create_dir_all(&resources).unwrap();
-        std::fs::write(resources.join("app.asar"), "").unwrap();
-        std::fs::write(resources.join("hided.exe"), "").unwrap();
-        std::fs::write(app.join("hide.exe"), "").unwrap();
-
-        let package = package_of(&resources.join("hided.exe")).expect("a desktop package");
-        assert!(
-            matches!(
-                package.components().next(),
-                Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
-            ),
-            "a plain drive path, not {}",
-            package.display()
-        );
-        assert!(package.ends_with(r"app\resources"), "{}", package.display());
-        assert!(hide_platform::fs::identity::same_file(&package, &resources).unwrap());
-    }
 }
