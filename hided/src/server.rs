@@ -1474,7 +1474,7 @@ async fn screen_loop(
                                 file_search.ask(&state, device_frames_tx.clone(), |waiting| { *waiting = Some(event); Ok(()) }, file_index_all);
                             }
                             Ok(ClientAction::Automation(event)) => {
-                                crate::automation_screen::spawn(&state.core, event, device_frames_tx.clone());
+                                crate::automation_screen::spawn(&state.core, event, look_screen.clone(), device_frames_tx.clone());
                             }
                             Ok(ClientAction::Access(event)) => {
                                 crate::access_screen::spawn(&state.core, event, device_frames_tx.clone());

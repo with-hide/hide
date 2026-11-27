@@ -426,15 +426,21 @@ async fn a_view_asked_under_a_device_s_earlier_key_is_refused_once_another_host_
     );
 }
 
-/// What the host's core was told of the machines showing their view of it,
-/// in order (`look.remote_views` in the host's log, each machine by the start
-/// of its key).
-fn views_told(state: &std::path::Path) -> Vec<Vec<String>> {
+/// The host core's log records of `kind`, in order.
+fn logged(state: &std::path::Path, kind: &str) -> Vec<Value> {
     std::fs::read_to_string(state.join("Logs/core.jsonl"))
         .unwrap_or_default()
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|record| record["kind"] == "look.remote_views")
+        .filter(|record| record["kind"] == kind)
+        .collect()
+}
+
+/// What the host's core was told of the machines showing their view of it,
+/// in order (`look.remote_views`, each machine by the start of its key).
+fn views_told(state: &std::path::Path) -> Vec<Vec<String>> {
+    logged(state, "look.remote_views")
+        .iter()
         .map(|record| {
             record["machines"]
                 .as_array()
@@ -446,17 +452,31 @@ fn views_told(state: &std::path::Path) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// Waits until the host's core has been told `wanted` last, and answers
-/// everything it was told.
-async fn told_last(state: &std::path::Path, wanted: &[String]) -> Vec<Vec<String>> {
+/// The screens the host's core recorded the operator's look chosen on, in
+/// order (`look.chosen_on`: `own`, or a viewing machine by the start of its
+/// key).
+fn chosen_on(state: &std::path::Path) -> Vec<String> {
+    logged(state, "look.chosen_on")
+        .iter()
+        .map(|record| record["screen"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Waits until `read` of the host's log ends with `wanted`, and answers all
+/// of it.
+async fn ends_with<T: PartialEq + std::fmt::Debug>(
+    state: &std::path::Path,
+    read: fn(&std::path::Path) -> Vec<T>,
+    wanted: &T,
+) -> Vec<T> {
     let deadline = Instant::now() + WITHIN;
     loop {
-        let told = views_told(state);
-        if told.last().is_some_and(|last| last == wanted) {
+        let told = read(state);
+        if told.last() == Some(wanted) {
             return told;
         }
-        assert!(Instant::now() < deadline, "never told {wanted:?}: {told:?}");
-        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the view's seat and its end cross the connection; the record is the host core's own
+        assert!(Instant::now() < deadline, "never {wanted:?}: {told:?}");
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the view's seat, its end and its events cross the connection; the record is the host core's own
     }
 }
 
@@ -493,11 +513,25 @@ async fn the_host_s_core_hears_which_machines_show_their_view() {
         frame["type"] == "snapshot"
     })
     .await;
-    told_last(&host_state, &showing).await;
+    ends_with(&host_state, views_told, &showing).await;
+
+    // A choice made in the view is the guest's: the daemon dispatches the
+    // view's event as sent from its machine, so it is chosen there.
+    send(&mut view, "focus_device", json!({"device_id": &host_id})).await;
+    ends_with(&host_state, chosen_on, &showing[0]).await;
+    // ... and one made on the host's own window is the host's.
+    let mut own = Window::open(&running, "web").await;
+    own.frame("the host's snapshot", |frame| frame["type"] == "snapshot")
+        .await;
+    own.send("focus_device", json!({"device_id": &host_id}))
+        .await;
+    let chosen = ends_with(&host_state, chosen_on, &"own".to_owned()).await;
+    assert_eq!(chosen, vec![showing[0].clone(), "own".to_owned()]);
+    drop(own);
 
     // The tile hidden: the desktop closes the socket.
     drop(view);
-    let told = told_last(&host_state, &[]).await;
+    let told = ends_with(&host_state, views_told, &Vec::new()).await;
     assert_eq!(told, vec![showing.clone(), Vec::new()]);
 
     // The tile shown again.
@@ -506,6 +540,6 @@ async fn the_host_s_core_hears_which_machines_show_their_view() {
         frame["type"] == "snapshot"
     })
     .await;
-    let told = told_last(&host_state, &showing).await;
+    let told = ends_with(&host_state, views_told, &showing).await;
     assert_eq!(told, vec![showing.clone(), Vec::new(), showing.clone()]);
 }

@@ -18,15 +18,19 @@
 use super::*;
 
 /// The paired machines a view can come from at once: a host grants 32
-/// machines at most (`hide_peer::store`), and each holds one view.
+/// machines at most (`hide_peer::store`), and each holds one view; hided
+/// seats four at most (`remote_screen::MAX_VIEWS`). A longer list is refused
+/// whole and the one before stays, so it is a bound on a wrong caller, never
+/// reached by hided.
 const MAX_VIEWING_MACHINES: usize = 32;
 
 /// The screen a window's or a view's event was sent from, as the operator's
 /// look reads it (`Core::dispatch_bytes_from`); a tool's event names none.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum LookScreen {
-    /// This machine's own windows and tools: a look chosen there counts as
-    /// long as it stands.
+    /// This machine's own windows (a linked node's window it relays
+    /// included): a look chosen there counts as long as it stands. A tool's
+    /// event names no screen.
     #[default]
     Own,
     /// Another machine's view of this one (`hided/src/remote_screen.rs`), by
@@ -56,12 +60,14 @@ pub(super) struct LookInputs {
     front: Option<String>,
     /// The screen `focus` and `front` were last chosen on. A window's or a
     /// view's event that writes either sets it, to the same value too, since
-    /// choosing the pane again on another screen moves where it is looked at;
-    /// a tool's command (an agent's `hide` call), a daemon's event and a move
-    /// Hide makes on its own (a start it follows, a pane that closed) keep
-    /// the screen the look was chosen on, since none is the operator choosing
-    /// somewhere: an agent's command after the operator left a view never
-    /// makes the view's choice count again. Memory only.
+    /// choosing the pane again on another screen moves where it is looked at,
+    /// and so does a press of one whose landing comes after the event (a
+    /// fork's pane, a moved pane), on the screen it was pressed on. A tool's
+    /// command (an agent's `hide` call), a daemon's event and a move Hide
+    /// makes on its own (a pane that closed, the engine moving the focus off
+    /// a pane) keep the screen the look was chosen on, since none is the
+    /// operator choosing somewhere: an agent's command after the operator
+    /// left a view never makes the view's choice count again. Memory only.
     chosen: LookScreen,
     /// The machines whose view of this one shows now, by key: hided names
     /// every one whenever a view is seated or ends (`remote_views`). Memory
@@ -72,8 +78,9 @@ pub(super) struct LookInputs {
     /// or closes an agent's detail or disconnects (`phone_viewing`). Memory
     /// only; a launch starts with no phone looking.
     phones: BTreeSet<String>,
-    /// The screen of the client event being dispatched now, none outside
-    /// one (`Runtime::dispatch_json_from`).
+    /// The screen the step running now was sent from: a window's or a
+    /// view's event being dispatched, or the landing of a press it made
+    /// (`Runtime::on_screen`); none otherwise.
     sent_from: Option<LookScreen>,
     /// Selections under way (`Runtime::change_look`), nested.
     open: u32,
@@ -123,6 +130,30 @@ impl LookInputs {
             .unwrap_or_else(|| self.chosen.clone())
     }
 
+    /// The screen the event being dispatched now was sent from, for a press
+    /// whose landing comes after its event (a fork's pane, a moved pane) to
+    /// keep and land with (`Runtime::on_screen`); none outside one.
+    pub(super) fn pressed_on(&self) -> Option<LookScreen> {
+        self.sent_from.clone()
+    }
+
+    /// The look is chosen on `screen` now; a move to another screen is
+    /// logged, which is what tells a look chosen in a view from this
+    /// machine's own after the fact.
+    fn choose_on(&mut self, screen: LookScreen) {
+        if self.chosen == screen {
+            return;
+        }
+        let named = match &screen {
+            LookScreen::Own => "own",
+            LookScreen::View(machine) => machine.get(..16).unwrap_or(machine),
+        };
+        crate::diagnostic!(serde_json::json!({
+            "component": "runtime", "kind": "look.chosen_on", "screen": named,
+        }));
+        self.chosen = screen;
+    }
+
     pub(super) fn front(&self) -> Option<&str> {
         self.front.as_deref()
     }
@@ -142,12 +173,29 @@ impl Runtime {
     /// of the focus and the front is chosen on that screen (`LookInputs`).
     /// Otherwise as `dispatch_json`.
     pub fn dispatch_json_from(&mut self, bytes: &[u8], screen: LookScreen) -> bool {
+        self.on_screen(Some(screen), |runtime| runtime.dispatch_json(bytes))
+    }
+
+    /// Runs `step` as sent from `screen`, so whatever it chooses of the focus
+    /// and the front is chosen there: a window's or a view's event, or the
+    /// landing of a press that came after its event (a fork's pane, a moved
+    /// pane, an automation screen's call), which keeps the screen it was
+    /// pressed on (`LookInputs::pressed_on`) rather than counting on the one
+    /// chosen before it. With none, `step` chooses on the screen the look was
+    /// last chosen on, as a tool's command or a move Hide makes does.
+    pub(crate) fn on_screen<R>(
+        &mut self,
+        screen: Option<LookScreen>,
+        step: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let Some(screen) = screen else {
+            return step(self);
+        };
         let before = self.look.sent_from.replace(screen);
-        let answer =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch_json(bytes)));
+        let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| step(self)));
         self.look.sent_from = before;
         match answer {
-            Ok(changed) => changed,
+            Ok(answer) => answer,
             Err(panic) => std::panic::resume_unwind(panic),
         }
     }
@@ -193,7 +241,7 @@ impl Runtime {
         }
         self.change_look(|runtime| {
             runtime.look.focus = pane;
-            runtime.look.chosen = chosen;
+            runtime.look.choose_on(chosen);
         })
         .1
     }
@@ -208,7 +256,7 @@ impl Runtime {
         self.change_look(|runtime| {
             runtime.snapshot.navigator.focused_device_id = device.clone();
             runtime.look.front = device;
-            runtime.look.chosen = chosen;
+            runtime.look.choose_on(chosen);
         })
         .1
     }

@@ -18,20 +18,26 @@ pub const KIND: &str = "automation_call";
 /// Asks the core on a blocking task, since the call waits on the core's
 /// owner thread, and hands the answer frame to the window's socket loop; a
 /// window gone by then drops it.
-pub fn spawn(core: &Arc<CoreHandle>, event: Value, frames: tokio::sync::mpsc::Sender<String>) {
+pub fn spawn(
+    core: &Arc<CoreHandle>,
+    event: Value,
+    screen: Option<hide_core::LookScreen>,
+    frames: tokio::sync::mpsc::Sender<String>,
+) {
     let core = Arc::clone(core);
     tokio::spawn(async move {
         let request_id = request_id(&event);
-        let frame =
-            tokio::task::spawn_blocking(move || answer(&event, |call| core.automation(call)))
-                .await
-                .unwrap_or_else(|error| {
-                    hide_core::diagnostic!(json!({
-                        "component": "automations", "kind": "automation.window_call_failed",
-                        "request_id": request_id, "reason": error.to_string(),
-                    }));
-                    result(&request_id, Err("automations_unavailable".to_owned()))
-                });
+        let frame = tokio::task::spawn_blocking(move || {
+            answer(&event, |call| core.automation_from(call, screen))
+        })
+        .await
+        .unwrap_or_else(|error| {
+            hide_core::diagnostic!(json!({
+                "component": "automations", "kind": "automation.window_call_failed",
+                "request_id": request_id, "reason": error.to_string(),
+            }));
+            result(&request_id, Err("automations_unavailable".to_owned()))
+        });
         let _ = frames.send(frame.to_string()).await;
     });
 }

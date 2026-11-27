@@ -177,6 +177,9 @@ enum Command {
     },
     Automation {
         call: hide_core::automations::Call,
+        /// The screen a window's or a view's call was sent from; none for a
+        /// tool's or a phone's (`hide_core::Core::automation_from`).
+        screen: Option<hide_core::LookScreen>,
         reply: Sender<Result<serde_json::Value, String>>,
     },
     AutomationsOn {
@@ -963,9 +966,24 @@ impl CoreHandle {
         &self,
         call: hide_core::automations::Call,
     ) -> Result<serde_json::Value, String> {
+        self.automation_from(call, None)
+    }
+
+    /// The automation screen's call, sent from `screen`: a focus it moves,
+    /// such as giving the run's pane back, is chosen there, so one made in
+    /// another machine's view counts only while that view shows.
+    pub fn automation_from(
+        &self,
+        call: hide_core::automations::Call,
+        screen: Option<hide_core::LookScreen>,
+    ) -> Result<serde_json::Value, String> {
         let (reply, result) = mpsc::channel();
         self.commands
-            .send(Command::Automation { call, reply })
+            .send(Command::Automation {
+                call,
+                screen,
+                reply,
+            })
             .map_err(|_| "automations_unavailable".to_owned())?;
         result
             .recv()
@@ -2043,8 +2061,12 @@ fn owner_loop(
             Command::Access { call, reply } => {
                 let _ = reply.send(core.access(call));
             }
-            Command::Automation { call, reply } => {
-                let _ = reply.send(core.automation(call));
+            Command::Automation {
+                call,
+                screen,
+                reply,
+            } => {
+                let _ = reply.send(core.automation_from(call, screen));
             }
             Command::AutomationsOn { reply } => {
                 let _ = reply.send(core.automations_on());

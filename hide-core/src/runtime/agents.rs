@@ -3427,11 +3427,12 @@ impl Runtime {
         }
         pending.tab_id = tab_id.map(str::to_owned);
         pending.pane_id = Some(pane_id.to_owned());
-        let (issued_serial, press, tab_label, fork_origin) = (
+        let (issued_serial, press, tab_label, fork_origin, screen) = (
             pending.issued_serial,
             pending.press,
             pending.tab_label.clone(),
             pending.origin,
+            pending.screen.clone(),
         );
         // Another fork's own focus is not the operator choosing a view: it
         // supersedes this one only when it was pressed later, or when the
@@ -3493,7 +3494,9 @@ impl Runtime {
             return true;
         }
         let prior_intent_serial = self.last_view_intent_serial;
-        self.focus_pane(pane_id.to_owned(), PaneFocusOrigin::Operator, None);
+        self.on_screen(screen, |runtime| {
+            runtime.focus_pane(pane_id.to_owned(), PaneFocusOrigin::Operator, None);
+        });
         // A focus the core refused (a waiting tab, a closing pane) moved
         // nothing: the fork does not hold the keys or count as a move.
         if self.snapshot.focused.pane_id.as_deref() != Some(pane_id) {
@@ -3668,13 +3671,14 @@ impl Runtime {
             }
             Err(message) => {
                 self.discard_input_request(&origin, "failed");
-                let (tab_id, pane_id, focused, generation) = pending
+                let (tab_id, pane_id, focused, generation, screen) = pending
                     .map(|pending| {
                         (
                             pending.tab_id,
                             pending.pane_id,
                             pending.focused,
                             Some(pending.generation),
+                            pending.screen,
                         )
                     })
                     .unwrap_or_default();
@@ -3697,7 +3701,13 @@ impl Runtime {
                     && generation == Some(self.live_generation)
                     && self.snapshot.focused.pane_id.as_deref() == Some(pane.as_str())
                 {
-                    self.focus_pane(parent_pane_id.to_owned(), PaneFocusOrigin::Operator, None);
+                    self.on_screen(screen, |runtime| {
+                        runtime.focus_pane(
+                            parent_pane_id.to_owned(),
+                            PaneFocusOrigin::Operator,
+                            None,
+                        );
+                    });
                 }
                 self.set_error(
                     "pane.fork_failed",
@@ -4640,6 +4650,11 @@ pub(super) struct PendingFork {
     pub(super) issued_serial: u64,
     /// Who asked for it: only the operator's press takes the keyboard.
     pub(super) origin: super::events::ForkOrigin,
+    /// The screen the press was sent from (`LookInputs::pressed_on`): the
+    /// fork's landing takes the keyboard on that screen, so a fork pressed in
+    /// another machine's view counts only while that view shows
+    /// (`docs/status-model.md`, Hide owns the read axis).
+    pub(super) screen: Option<super::look::LookScreen>,
     /// The fork's tab once the engine named it, so a fork that fails leaves no
     /// placement or drawing waiting for a tab that was closed.
     pub(super) tab_id: Option<String>,

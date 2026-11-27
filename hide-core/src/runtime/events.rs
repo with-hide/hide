@@ -3752,6 +3752,7 @@ impl Runtime {
                         // where they are now, and the fork does not take it.
                         issued_serial: self.control_lane.issued_serial(),
                         origin: payload.origin,
+                        screen: self.look.pressed_on(),
                         tab_id: None,
                         pane_id: None,
                         tab_label: tab_label.clone(),

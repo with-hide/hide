@@ -872,10 +872,22 @@ impl Core {
     /// One change under one short lock; the book is saved by its own thread
     /// and the screens are told when the section moved.
     pub fn automation(&self, call: crate::automations::Call) -> Result<serde_json::Value, String> {
+        self.automation_from(call, None)
+    }
+
+    /// The automation screen's call sent from `screen`, where whatever it
+    /// chooses of the operator's look is chosen (`Runtime::on_screen`); none
+    /// for a tool's or a phone's.
+    pub fn automation_from(
+        &self,
+        call: crate::automations::Call,
+        screen: Option<crate::LookScreen>,
+    ) -> Result<serde_json::Value, String> {
         if !check_owner_thread(self, "automation.call") {
             return Err("automations_unavailable".into());
         }
-        let (answer, changed) = lock_recover(&self.runtime).automation_call(call);
+        let (answer, changed) =
+            lock_recover(&self.runtime).on_screen(screen, |runtime| runtime.automation_call(call));
         if changed {
             notify_change(self);
         }

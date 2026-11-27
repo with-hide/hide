@@ -151,17 +151,39 @@ fn this_machine_s_own_choice_counts_whatever_the_views_do() {
     );
 }
 
-/// A move Hide makes on its own after the view's choice, such as a start it
-/// follows to its new pane, is no choice of this machine's window: it stays
-/// on the view's screen and ends with the view. A daemon's event that names
-/// the views is no choice either.
+/// A press whose landing comes after its event keeps the screen it was
+/// pressed on (reviewer finding F1): the operator, whose look was last chosen
+/// on this machine's own window, forks an agent in the view with the mouse
+/// alone; the fork's pane takes the keyboard when the engine answers, outside
+/// the view's event, and that is the view's choice, so the fork's next turn
+/// after the view ended is news. Counted on the screen chosen before, it was
+/// read at once with no notification.
 #[test]
-fn a_move_hide_makes_after_a_view_s_choice_stays_on_that_view() {
-    let path = "/private/tmp/hide-remote-view-follow";
+fn a_fork_pressed_in_a_view_lands_on_that_view_whatever_was_chosen_before() {
+    let path = "/private/tmp/hide-remote-view-fork";
     let mut runtime = two_finished_tabs(path);
+    choose(&mut runtime, T1, LookScreen::Own);
     views(&mut runtime, &[guest()]);
-    choose(&mut runtime, T1, LookScreen::View(guest()));
-    runtime.focus_pane(T2.into(), PaneFocusOrigin::Operator, None);
+    runtime.forks_in_flight.insert(
+        T1.into(),
+        super::agents::PendingFork {
+            press: 1,
+            generation: runtime.live_generation,
+            issued_serial: runtime.control_lane.issued_serial(),
+            origin: super::events::ForkOrigin::Operator,
+            screen: Some(LookScreen::View(guest())),
+            tab_id: None,
+            pane_id: None,
+            tab_label: None,
+            focused: None,
+            kind: "codex".into(),
+            name: "fork".into(),
+            launch: Default::default(),
+            profile: None,
+        },
+    );
+    runtime.ingest_fork_pane(T1, None, T2);
+    assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some(T2));
     assert_eq!(
         row(&runtime, T2),
         (false, "seen".to_owned()),
@@ -169,7 +191,11 @@ fn a_move_hide_makes_after_a_view_s_choice_stays_on_that_view() {
     );
     views(&mut runtime, &[]);
     runtime.ingest_session(Ok(local_two_tabs(path, [1, 2])));
-    assert_eq!(row(&runtime, T2), (true, "done".to_owned()));
+    assert_eq!(
+        row(&runtime, T2),
+        (true, "done".to_owned()),
+        "the fork's turn after the view left is news"
+    );
 }
 
 /// A tool's command, such as an agent on this machine running `hide pane
