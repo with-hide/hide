@@ -119,6 +119,12 @@ impl Upstream {
         *lock_recover(&self.press) = press;
     }
 
+    /// Whether the next dial may ask the operator: only after a press
+    /// handed it a sign-in.
+    pub fn asks(&self) -> bool {
+        lock_recover(&self.press).is_some()
+    }
+
     /// The alias this connection dials.
     pub fn alias(&self) -> &str {
         self.target.alias()

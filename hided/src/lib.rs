@@ -624,7 +624,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             hide_node::ssh::host::wsl::WslAccess::of_this_pc()
                 .map(|access| pairing_wsl::Carriers::new(access, reach.clone())),
             // A host this machine keeps is reached over SSH when no direct
-            // path opens, on every system (mission-107).
+            // path opens, on every system.
             Some(peer_ssh::SshCarriers::new(reach.clone())),
         ),
         shutdown.clone(),

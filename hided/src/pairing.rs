@@ -207,7 +207,7 @@ pub enum Ask {
     /// this machine's core: what `hide device carry` asks, run by the PC
     /// of the distribution this core runs in (D-27, D-62), or with `over`
     /// SSH by a paired machine that signed in to this account
-    /// (mission-107), which this daemon then echoes. Answered by
+    ///, which this daemon then echoes. Answered by
     /// [`Pairing::carrier`], never as a value.
     Carry {
         #[serde(default)]
@@ -549,7 +549,7 @@ fn wsl_request_key(distro: &str) -> String {
     format!("wsl {distro}")
 }
 
-/// The most sessions one add of an alias makes (mission-107, 2.1).
+/// The most sessions one add of an alias makes.
 const ADD_SESSIONS: usize = 3;
 
 /// What the next session of an add does.
@@ -585,9 +585,7 @@ impl Checked {
     fn of_session(error: &hide_node::ssh::session::SessionError) -> Self {
         use hide_node::ssh::session::SessionError;
         match error {
-            SessionError::Refused(reason) if reason.ends_with("is missing") => {
-                Self::Said("hide_absent")
-            }
+            error if error.carried_program_absent() => Self::Said("hide_absent"),
             SessionError::Ssh(_) | SessionError::Lost(_) => Self::NotReached("ssh_not_reached"),
             SessionError::Refused(_) | SessionError::Local(_) => Self::Said("not_proved"),
         }
@@ -635,24 +633,15 @@ impl Drop for AddLogin {
 }
 
 /// What a far `hide device carry` said as it refused, read from its last
-/// line once it wrote one, briefly.
+/// line as a carrier's is (`peer_ssh::far_line`).
 async fn far_said(said: &Arc<Mutex<Vec<u8>>>) -> Option<&'static str> {
-    let over = Instant::now() + Duration::from_millis(500);
-    loop {
-        let line = {
-            let said = lock(said);
-            String::from_utf8_lossy(&said)
-                .lines()
-                .rev()
-                .find(|line| !line.trim().is_empty())
-                .map(|line| line.trim().to_owned())
-        };
-        let reason = line.as_deref().and_then(crate::peer_ssh::far_refusal);
-        if reason.is_some() || Instant::now() >= over {
-            return reason;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    let said = Arc::clone(said);
+    tokio::task::spawn_blocking(move || crate::peer_ssh::far_line(&said, || false))
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        .and_then(crate::peer_ssh::far_refusal)
 }
 
 /// The code a pairing answers for a record that could not be saved.
@@ -1218,7 +1207,7 @@ impl Pairing {
             }
         }
         // Adding an alias a paired machine is reached by answers its outcome
-        // beside a refusal (mission-107, 2.1).
+        // beside a refusal.
         let answered = match ask {
             Ask::PairSsh { alias } => self.pair_ssh(&alias).await,
             ask => self.run(ask, caller).await.map_err(|code| (code, None)),
@@ -2147,7 +2136,7 @@ impl Pairing {
     /// Adds the machine `alias` reaches over SSH (B7): its own Hide pairs
     /// over the login, which installs nothing there, and the alias is kept
     /// as the route the connection takes when no direct path opens
-    /// (mission-107). A machine already paired gets the alias only once a
+    ///. A machine already paired gets the alias only once a
     /// carrier over it proved that machine's key (2.1): the device id the
     /// look answers and the key the accept answers only choose which key is
     /// checked. At most three sessions, one after another, on one of the
@@ -2202,7 +2191,11 @@ impl Pairing {
             };
             match self.check_alias(&peers, &login, key).await {
                 Checked::Proved => {
-                    let recorded = peers.known(|known| known.record_ssh(&key, alias));
+                    let save = || peers.known(|known| known.record_ssh(&key, alias)).map(drop);
+                    let recorded = match self.host.ssh() {
+                        Some(routes) => routes.record(&key, alias, save),
+                        None => save(),
+                    };
                     recorded.map_err(|error| (store_code(error), None))?;
                     self.look.send_modify(|count| *count += 1);
                     return already("recorded");
@@ -2246,7 +2239,13 @@ impl Pairing {
             "name": paired.accepted.name,
         });
         let known = paired.accepted.key;
-        match service.adopt(paired.accepted, paired.first, Some(alias.to_owned())) {
+        // A route recorded with the pairing starts over, as a re-add's does.
+        let adopt = || service.adopt(paired.accepted, paired.first, Some(alias.to_owned()));
+        let adopted = match self.host.ssh() {
+            Some(routes) => routes.record(&known, alias, adopt),
+            None => adopt(),
+        };
+        match adopted {
             Ok(()) => {
                 // Adopted: a later pairing of this alias is a new request.
                 lock(&self.ssh_requests).retain(|kept| kept.alias != alias);

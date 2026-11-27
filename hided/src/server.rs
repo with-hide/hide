@@ -63,7 +63,7 @@ pub fn embedded_file(path: &str) -> Option<(&'static str, &'static [u8])> {
 pub struct AppState {
     pub core: Arc<CoreHandle>,
     pub boundary: Arc<Boundary>,
-    /// The SSH routes of the hosts this machine keeps (mission-107).
+    /// The SSH routes of the hosts this machine keeps.
     pub ssh_routes: Option<Arc<crate::peer_ssh::SshCarriers>>,
     /// Follows the core's checkout roots into `boundary`; a refused event
     /// catches it up before it is answered.
@@ -388,7 +388,7 @@ async fn hide_ai_wake(
         return StatusCode::BAD_REQUEST.into_response();
     }
     // The app opening is when a sign-in may ask: an SSH route parked for
-    // one is tried again (mission-107), as a device's sign-in is.
+    // one is tried again, as a device's sign-in is.
     if request.cause == "app_open"
         && let Some(routes) = &state.ssh_routes
     {

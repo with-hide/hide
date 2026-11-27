@@ -41,7 +41,7 @@ use crate::ending::Ending;
 /// connections are iroh's, and beside them the pipe a carrier of one byte
 /// stream runs: `wsl.exe` between a WSL distribution and its PC (D-27), and
 /// the system `ssh` to a host's alias when no direct path opens
-/// (mission-107).
+///.
 pub type Transport = Beside<IrohTransport>;
 pub type Conn = Either<IrohConn, PipeConn>;
 pub type HostPeers = Peers<Transport>;

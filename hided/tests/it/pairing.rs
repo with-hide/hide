@@ -1049,75 +1049,182 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
 
 /// Two Hides with no direct path and no relay between them connect over the
 /// SSH alias the guest paired through, and both say the path is SSH
-/// (mission-107): the guest's first dial runs the ladder, the far account's
+///: the guest's first dial runs the ladder, the far account's
 /// `hide device carry --ssh` hands its stdio to the target's daemon, and the
 /// pending grant is confirmed over that connection.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "the system's sshd; the remote mailbox lane runs it"]
 async fn two_hides_with_no_other_way_connect_over_ssh() {
-    use crate::support::sshd::Sshd;
-
-    let root = crate::fixtures::fixture_root("hq");
-    let mut env = host_env(root.path());
-    env.peer_direct = None;
-    env.peer_relay = Some(NO_RELAY.to_owned());
-    env.peer_relay_only = true;
-    let _running = hided::start_daemon(env).await.unwrap();
-    let target = Terminal::new(
-        root.path().join("host-home"),
-        root.path().join("host-state"),
-        None,
-    )
-    .with_no_direct_path();
-    let guest = Terminal::new(
-        root.path().join("guest-home"),
-        root.path().join("guest-state"),
-        Some(GUEST),
-    )
-    .with_no_direct_path();
-    let ssh = Sshd::start(
-        &root.path().join("sshd"),
-        &[
-            (hided::env::HOME.into(), target.home.clone().into()),
-            ("HIDE_STATE_DIR".into(), target.state.clone().into()),
-        ],
-    )
-    .unwrap();
-    std::fs::create_dir_all(guest.home.join(".ssh")).unwrap();
-    std::fs::write(guest.home.join(".ssh/config"), ssh.client_config("studio")).unwrap();
-    let _stop = StopOnDrop(&guest);
-    let connected = guest.run(&["connect"]);
-    assert!(connected.ok, "the guest daemon: {}", connected.text());
-    let commands = target.home.join(".local/bin");
-    std::fs::create_dir_all(&commands).unwrap();
-    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_hide"), commands.join("hide")).unwrap();
-
-    let added = guest.run(&["device", "add", "studio", "--json"]);
-    assert!(added.ok, "{}", added.text());
-    assert_eq!(added.json()["value"]["paired"], "ssh", "{}", added.text());
-    let opened = guest
-        .peer_becomes("the guest opens the target over SSH", |peer| {
-            peer["opens"] == "active" && peer["connected"] == true
-        })
-        .await;
-    assert_eq!(opened["path"], "ssh", "{opened}");
-    let opener = target
-        .peer_becomes("the target is opened by the guest over SSH", |peer| {
-            peer["opened_by"] == "active" && peer["connected"] == true
-        })
-        .await;
-    assert_eq!(opener["path"], "ssh", "{opener}");
-    let listed = guest.run(&["device", "list"]);
+    let pair = SshOnly::connected().await;
+    let listed = pair.guest.run(&["device", "list"]);
     assert!(
         listed.text().contains("connected · SSH"),
         "{}",
         listed.text()
     );
     // The alias is the guest's own: the target's records never name it.
-    let records = std::fs::read_to_string(hide_kit::layout::peer_grants(&target.state)).unwrap();
+    let records =
+        std::fs::read_to_string(hide_kit::layout::peer_grants(&pair.target.state)).unwrap();
     assert!(!records.contains("studio"), "{records}");
-    ssh.stop().unwrap();
+}
+
+/// A cut SSH carrier is dialed again: ending only the carrier's `ssh` on
+/// the guest ends the connection, and with no press the pair is back on
+/// SSH on both machines, after the route's wait, since the connection that
+/// fell was short.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
+async fn a_cut_ssh_carrier_is_dialed_again() {
+    let pair = SshOnly::connected().await;
+    let carriers = pair.carrier_ssh();
+    assert_eq!(carriers.len(), 1, "one carrier ssh: {carriers:?}");
+    let killed = Command::new("kill")
+        .args(["-TERM", &carriers[0].to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    pair.guest
+        .peer_becomes("the guest sees the cut", |peer| peer["connected"] == false)
+        .await;
+    // A connection that ended within `STAYED_AFTER` puts the route into
+    // its first wait (`CLIMB_FIRST`, 30 s); the keeper's redials, doubling
+    // from 1 s, reach the due route at about 31 s, and a due route gives the
+    // other transport `DIRECT_WITHIN` (4 s) before it signs in: 31-35 s,
+    // and 12 s more for the sign-in and both lists reading it on a loaded
+    // runner.
+    let deadline = Instant::now()
+        + hide_peer::limits::CLIMB_FIRST
+        + hide_peer::limits::DIRECT_WITHIN
+        + Duration::from_secs(12);
+    for (side, terminal) in [("guest", &pair.guest), ("target", &pair.target)] {
+        loop {
+            let peers = terminal.peers();
+            if let [peer] = peers.as_slice()
+                && peer["connected"] == true
+                && peer["path"] == "ssh"
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the {side} is not back on SSH: {peers:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await; // wait-ok: the other machine's answer crosses the connection; the list is the daemon's own account of it
+        }
+    }
+    assert_eq!(pair.carrier_ssh().len(), 1, "one carrier again");
+}
+
+/// Two Hides with no IP path and an unreachable relay, connected over SSH:
+/// the target's daemon behind a real `sshd`, the guest's started by its
+/// `hide connect`, paired by `hide device add studio`. Its drop stops the
+/// guest's daemon and the `sshd`.
+#[cfg(unix)]
+struct SshOnly {
+    target: Terminal,
+    guest: Terminal,
+    ssh: crate::support::sshd::Sshd,
+    _running: hided::RunningDaemon,
+    _root: tempfile::TempDir,
+}
+
+#[cfg(unix)]
+impl SshOnly {
+    async fn connected() -> Self {
+        use crate::support::sshd::Sshd;
+
+        let root = crate::fixtures::fixture_root("hq");
+        let mut env = host_env(root.path());
+        env.peer_direct = None;
+        env.peer_relay = Some(NO_RELAY.to_owned());
+        env.peer_relay_only = true;
+        let running = hided::start_daemon(env).await.unwrap();
+        let target = Terminal::new(
+            root.path().join("host-home"),
+            root.path().join("host-state"),
+            None,
+        )
+        .with_no_direct_path();
+        let guest = Terminal::new(
+            root.path().join("guest-home"),
+            root.path().join("guest-state"),
+            Some(GUEST),
+        )
+        .with_no_direct_path();
+        let ssh = Sshd::start(
+            &root.path().join("sshd"),
+            &[
+                (hided::env::HOME.into(), target.home.clone().into()),
+                ("HIDE_STATE_DIR".into(), target.state.clone().into()),
+            ],
+        )
+        .unwrap();
+        std::fs::create_dir_all(guest.home.join(".ssh")).unwrap();
+        std::fs::write(guest.home.join(".ssh/config"), ssh.client_config("studio")).unwrap();
+        let pair = Self {
+            target,
+            guest,
+            ssh,
+            _running: running,
+            _root: root,
+        };
+        let connected = pair.guest.run(&["connect"]);
+        assert!(connected.ok, "the guest daemon: {}", connected.text());
+        let commands = pair.target.home.join(".local/bin");
+        std::fs::create_dir_all(&commands).unwrap();
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_hide"), commands.join("hide")).unwrap();
+
+        let added = pair.guest.run(&["device", "add", "studio", "--json"]);
+        assert!(added.ok, "{}", added.text());
+        assert_eq!(added.json()["value"]["paired"], "ssh", "{}", added.text());
+        let opened = pair
+            .guest
+            .peer_becomes("the guest opens the target over SSH", |peer| {
+                peer["opens"] == "active" && peer["connected"] == true
+            })
+            .await;
+        assert_eq!(opened["path"], "ssh", "{opened}");
+        let opener = pair
+            .target
+            .peer_becomes("the target is opened by the guest over SSH", |peer| {
+                peer["opened_by"] == "active" && peer["connected"] == true
+            })
+            .await;
+        assert_eq!(opener["path"], "ssh", "{opener}");
+        pair
+    }
+
+    /// The `ssh` processes the guest's daemon runs to the target: the ones
+    /// that read the guest's own SSH configuration.
+    fn carrier_ssh(&self) -> Vec<u32> {
+        let config = self.guest.home.join(".ssh/config");
+        let config = config.to_string_lossy();
+        let listed = Command::new("ps")
+            .args(["-A", "-o", "pid=,command="])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&listed.stdout)
+            .lines()
+            .filter_map(|line| {
+                let (pid, command) = line.trim().split_once(' ')?;
+                let program = command.split_whitespace().next()?;
+                (program.ends_with("/ssh") || program == "ssh")
+                    .then_some(())
+                    .filter(|()| command.contains(config.as_ref()))?;
+                pid.parse().ok()
+            })
+            .collect()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SshOnly {
+    fn drop(&mut self) {
+        let _ = self.guest.command(&["stop"]).status();
+        let _ = self.ssh.stop();
+    }
 }
 
 /// A node is split from its core only once the two have met on the

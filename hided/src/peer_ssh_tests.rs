@@ -409,8 +409,122 @@ async fn an_unproved_key_parks_and_never_turns_off() {
     assert!(lock(&near.turned_off).is_empty());
 }
 
+/// Recording an alias, the same one included, starts its route over under a
+/// new epoch: a parked route is ready again, an attempt in flight is
+/// stopped, and an outcome of an older attempt, another key included,
+/// changes nothing, even one reached while the record was being saved.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recording_an_alias_again_starts_its_route_over_and_outdates_every_attempt() {
+    let far = Arc::new(PipeTransport::accepting(key()));
+    let stand = Stand::new(&far);
+    let near = this_machine(&stand);
+    let to = over(far.key(), "studio");
+    stand.next(Next::Fails(SshProblem::SignInNeeded));
+    assert!(within("the failure", near.pipe.dial(&to)).await.is_err());
+    assert_eq!(near.carriers.blocked(&to.key), Some(PeerSshBlocked::SignIn));
+    let parked = lock(&near.carriers.routes).get(&to.key).unwrap().epoch;
+    near.carriers
+        .record(&to.key, "studio", || Ok::<(), ()>(()))
+        .unwrap();
+    assert_eq!(near.carriers.blocked(&to.key), None);
+    assert_eq!(route(&near, &to.key, "studio"), Route::Ready);
+    near.carriers
+        .settled(&to.key, "studio", parked, Outcome::OtherKey);
+    assert!(lock(&near.turned_off).is_empty());
+
+    // An attempt in flight is stopped by the record.
+    stand.next(Next::Stalls);
+    let (told, stopped) = mpsc::channel();
+    *lock(&stand.stopped) = Some(told);
+    let dialing = {
+        let carriers = Arc::clone(&near.carriers);
+        let key = to.key;
+        tokio::spawn(async move { carriers.carrier(key, "studio".to_owned()).await })
+    };
+    within("the sign-in", async {
+        while stand.running.load(Ordering::Acquire) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    near.carriers
+        .record(&to.key, "studio", || Ok::<(), ()>(()))
+        .unwrap();
+    within("the stopped attempt", async {
+        while stopped.try_recv().is_err() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(within("its end", dialing).await.unwrap().is_err());
+
+    // Another key, of the attempt current when the save began, waits for
+    // the save and then finds its epoch gone.
+    let current = lock(&near.carriers.routes).get(&to.key).unwrap().epoch;
+    let carriers = Arc::clone(&near.carriers);
+    let key = to.key;
+    near.carriers
+        .record(&to.key, "studio", move || {
+            let (done, finished) = mpsc::channel();
+            std::thread::spawn(move || {
+                carriers.settled(&key, "studio", current, Outcome::OtherKey);
+                let _ = done.send(());
+            });
+            // wait-ok: proves an absence, that the outcome cannot finish
+            // while the record is saved.
+            let early = finished.recv_timeout(Duration::from_millis(200));
+            assert!(early.is_err(), "another key wrote while the record saved");
+            Ok::<(), ()>(())
+        })
+        .unwrap();
+    assert!(lock(&near.turned_off).is_empty());
+    assert_eq!(route(&near, &to.key, "studio"), Route::Ready);
+}
+
+/// A path that proves and falls again waits longer each time: a proof
+/// keeps the wait the route has, and only a connection that stayed starts
+/// it over.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_path_that_proves_and_falls_waits_longer_each_time() {
+    let far = Arc::new(PipeTransport::accepting(key()));
+    let stand = Stand::new(&far);
+    let near = this_machine(&stand);
+    let to = over(far.key(), "studio");
+    let wait = |near: &Near| lock(&near.carriers.routes).get(&to.key).unwrap().wait;
+    for doubled in [2, 4, 8] {
+        let (dialed, accepted) = within("the connection", async {
+            tokio::join!(near.pipe.dial(&to), far.accept())
+        })
+        .await;
+        let (_ours, _theirs) = (dialed.unwrap(), accepted.unwrap());
+        Routes::fell(near.carriers.as_ref(), &to.key);
+        assert_eq!(wait(&near), limits::CLIMB_FIRST * doubled);
+        // Its wait ran out.
+        lock(&near.carriers.routes).get_mut(&to.key).unwrap().state = State::Due;
+    }
+    Routes::stayed(near.carriers.as_ref(), &to.key);
+    assert_eq!(wait(&near), limits::CLIMB_FIRST);
+}
+
+/// A carrier the far end closes before the proof, saying no refusal, makes
+/// the route wait, so the keeper's redials do not sign in at their pace.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_carrier_closed_before_its_proof_makes_the_route_wait() {
+    let far = Arc::new(PipeTransport::accepting(key()));
+    let stand = Stand::new(&far);
+    let near = this_machine(&stand);
+    let to = over(far.key(), "studio");
+    stand.next(Next::Says("Connection to studio closed."));
+    assert!(within("the end", near.pipe.dial(&to)).await.is_err());
+    assert!(matches!(
+        settled(&near, &to.key).await,
+        State::Waiting { .. }
+    ));
+    assert_eq!(near.carriers.blocked(&to.key), None);
+}
+
 /// An SSH connection that ends at once puts its route into its wait, so a
-/// path that keeps falling is signed in to at most once per wait (T9).
+/// path that keeps falling is signed in to at most once per wait.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_connection_that_ends_at_once_puts_the_route_into_its_wait() {
     let far = Arc::new(PipeTransport::accepting(key()));
@@ -425,7 +539,7 @@ async fn a_connection_that_ends_at_once_puts_the_route_into_its_wait() {
 /// A sign-in that never answers holds one of the carriers' own places for
 /// its bound, never the operator's, and its stop ends it; one dropped
 /// before its bound changes nothing, one its bound ended makes the route
-/// wait (T10).
+/// wait.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stalled_sign_in_holds_a_carrier_place_only_for_its_bound_and_never_an_operator_place() {
     let far = Arc::new(PipeTransport::accepting(key()));
@@ -486,6 +600,8 @@ async fn an_attempt_its_deadline_ends_puts_the_route_into_its_wait() {
         started: Instant::now() - limits::CARRIER_WITHIN,
         settled: AtomicBool::new(false),
         said: AtomicBool::new(false),
+        unproved: AtomicBool::new(false),
+        read: AtomicBool::new(false),
         stop: Arc::default(),
     });
     assert_eq!(route(&near, &to.key, "studio"), Route::Held);
@@ -509,6 +625,8 @@ async fn an_attempt_dropped_early_leaves_the_route_as_it_was() {
         started: Instant::now(),
         settled: AtomicBool::new(false),
         said: AtomicBool::new(false),
+        unproved: AtomicBool::new(false),
+        read: AtomicBool::new(false),
         stop: Arc::default(),
     });
     assert_eq!(route(&near, &to.key, "studio"), Route::Ready);
@@ -551,6 +669,7 @@ fn the_carrier_forwards_nothing_and_asks_nothing() {
         hide: None,
     };
     assert!(carrier_target(&reach, "studio").forwards_nothing());
+    assert!(!carrier_upstream(&reach, "studio").asks());
     // The words that run the far command, absolute from the account's home.
     assert_eq!(
         pairing_ssh::carry_argv(&reach, "/home/me", "linux"),

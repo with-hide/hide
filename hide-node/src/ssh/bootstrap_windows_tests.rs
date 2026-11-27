@@ -1030,7 +1030,7 @@ fn attach_hands_the_pipes_to_the_core_program() {
 
 /// The carry step starts the `hide.cmd` it names in the script's place,
 /// with fixed words, under every login shell a Windows sshd may have: from
-/// its answer on the connection's pipes are that program's (mission-107).
+/// its answer on the connection's pipes are that program's.
 #[test]
 fn the_carry_step_hands_its_stdio_to_the_program() {
     for shell in SHELLS {

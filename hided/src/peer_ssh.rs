@@ -1,4 +1,4 @@
-//! The SSH path of the connection two Hides keep (mission-107; security
+//! The SSH path of the connection two Hides keep (security
 //! spec, carriers): when no direct path opens, a host this machine keeps is
 //! reached through the system `ssh` to an alias that signs in asking
 //! nothing, and `hide device carry --ssh` there, whose input and output are
@@ -12,7 +12,7 @@
 //! out, or parked until the operator acts. Which failures are retried and
 //! what the operator does about the rest are `SshProblem::retried` and
 //! `SshProblem::action`, the one rule a device's row reads too. The state
-//! lives in memory, so a daemon's start tries each route once (D6).
+//! lives in memory, so a daemon's start tries each route once.
 //!
 //! Every sign-in it makes runs in one of [`limits::MAX_CARRIER_SIGN_INS`]
 //! places of its own, never one of the operator's, and asks nobody (R1);
@@ -78,12 +78,18 @@ struct SystemSsh {
     reach: Reach,
 }
 
+/// The connection a carrier signs in on: forwarding nothing, and asking
+/// nobody (R1), since nobody pressed for it, so a question, an unknown
+/// server key or a browser check ends it as a sign-in needed.
+fn carrier_upstream(reach: &Reach, alias: &str) -> Upstream {
+    let upstream = Upstream::new(carrier_target(reach, alias));
+    upstream.may_ask(None);
+    upstream
+}
+
 impl Signer for SystemSsh {
     fn carry(&self, alias: &str, stop: &Stop) -> Result<AttachChannel, SessionError> {
-        let upstream = Arc::new(Upstream::new(carrier_target(&self.reach, alias)));
-        // R1: nobody pressed for it, so a question, an unknown server key or
-        // a browser check ends it as a sign-in needed.
-        upstream.may_ask(None);
+        let upstream = Arc::new(carrier_upstream(&self.reach, alias));
         let ends = Arc::clone(&upstream);
         // Before the step, the sign-in's cancel; after it, the same cancel
         // still ends the `ssh` the carrier runs on.
@@ -145,7 +151,7 @@ enum Outcome {
     NotProved,
     /// `ssh` did not sign in, as `openssh::classify` read it.
     Problem(SshProblem),
-    /// The far account's Hide does not run, and is never started (R8).
+    /// The far account's Hide does not run, and is never started.
     NotRunning,
     /// The far `hide` is too old to carry, or there is none.
     UpdateThere,
@@ -161,7 +167,7 @@ impl Outcome {
             SessionError::Ssh(failure) => Self::Problem(failure.problem),
             // The carry step's own refusal: the program it names is not
             // there.
-            SessionError::Refused(reason) if reason.ends_with("is missing") => Self::UpdateThere,
+            error if error.carried_program_absent() => Self::UpdateThere,
             SessionError::Refused(_) => Self::Problem(SshProblem::Unsupported),
             SessionError::Lost(_) | SessionError::Local(_) => Self::Lost,
         }
@@ -311,6 +317,9 @@ pub struct SshCarriers {
     /// Saves a host's route as off, by compare-and-set on its alias: the
     /// peer records', handed in once they are open.
     turn_off: OnceLock<TurnOff>,
+    /// Held across a route's save and its new epoch, and across turning a
+    /// route off: an attempt older than a proof can never write over it.
+    writes: Mutex<()>,
     /// Counts changes a row shows.
     changed: watch::Sender<u64>,
 }
@@ -328,6 +337,7 @@ impl SshCarriers {
             routes: Mutex::default(),
             epochs: AtomicU64::new(0),
             turn_off: OnceLock::new(),
+            writes: Mutex::new(()),
             changed: watch::channel(0).0,
         })
     }
@@ -370,6 +380,28 @@ impl SshCarriers {
             routes.insert(*key, Entry::new(alias, self.epoch()));
         }
         routes.get_mut(key).expect("inserted above")
+    }
+
+    /// Saves `alias` as `key`'s route with `save`, once the add proved the
+    /// key on it, and starts the route over under a new epoch, whatever
+    /// alias it had: what still runs for the route before it ends, and an
+    /// outcome it reaches later changes nothing.
+    pub fn record<E>(
+        &self,
+        key: &PeerKey,
+        alias: &str,
+        save: impl FnOnce() -> Result<(), E>,
+    ) -> Result<(), E> {
+        let _writing = lock(&self.writes);
+        save()?;
+        let mut routes = lock(&self.routes);
+        if let Some(mut earlier) = routes.remove(key) {
+            earlier.stop_attempts();
+        }
+        routes.insert(*key, Entry::new(alias, self.epoch()));
+        drop(routes);
+        self.touched();
+        Ok(())
     }
 
     /// What `key`'s row says of its route: why it waits for the operator,
@@ -497,6 +529,8 @@ impl SshCarriers {
                 started: Instant::now(),
                 settled: AtomicBool::new(false),
                 said: AtomicBool::new(false),
+                unproved: AtomicBool::new(false),
+                read: AtomicBool::new(false),
                 stop: Arc::clone(&stop),
             });
             // Ends the sign-in when this future is dropped, wherever it is.
@@ -544,10 +578,10 @@ impl SshCarriers {
         };
         let before = entry.state;
         match outcome {
-            Outcome::Proved => {
-                entry.state = State::Ready;
-                entry.wait = limits::CLIMB_FIRST;
-            }
+            // A proof alone keeps the wait the route has: a path that
+            // proves and falls again waits longer each time, and one that
+            // stays starts it over (`Routes::stayed`).
+            Outcome::Proved => entry.state = State::Ready,
             Outcome::OtherKey => unreachable!("answered above"),
             Outcome::NotProved => entry.park(PeerSshBlocked::Retry),
             Outcome::Problem(problem) if problem.retried() => entry.wait(),
@@ -582,6 +616,8 @@ impl SshCarriers {
     /// fails parks the route, so the row says it and nothing is dialed until
     /// a retry or a restart tries the save again.
     fn refused_key(&self, key: &PeerKey, alias: &str, epoch: u64) {
+        // From the check to the save, no route is recorded.
+        let _writing = lock(&self.writes);
         let current = lock(&self.routes)
             .get(key)
             .is_some_and(|entry| entry.epoch == epoch);
@@ -642,6 +678,12 @@ impl Routes for SshCarriers {
         }
     }
 
+    fn stayed(&self, key: &PeerKey) {
+        if let Some(entry) = lock(&self.routes).get_mut(key) {
+            entry.wait = limits::CLIMB_FIRST;
+        }
+    }
+
     fn network_changed(&self) {
         for entry in lock(&self.routes).values_mut() {
             if matches!(entry.state, State::Waiting { .. } | State::Due) {
@@ -664,6 +706,10 @@ struct Attempt {
     settled: AtomicBool,
     /// The far command's last line was read once.
     said: AtomicBool,
+    /// The carrier ended before the proof found anything, and the read of
+    /// the far line is done: whichever comes second settles a wait.
+    unproved: AtomicBool,
+    read: AtomicBool,
     stop: Arc<Stop>,
 }
 
@@ -688,21 +734,7 @@ impl Attempt {
         let _ = std::thread::Builder::new()
             .name("peer-ssh-said".to_owned())
             .spawn(move || {
-                let over = std::time::Instant::now() + SAID_WITHIN;
-                let last = loop {
-                    let last = last_line(&lock(&said));
-                    let refusal = last.as_deref().and_then(Outcome::of_far_line);
-                    if refusal.is_some()
-                        || attempt.settled.load(Ordering::Acquire)
-                        || std::time::Instant::now() >= over
-                    {
-                        break last;
-                    }
-                    // A production wait, bounded by `SAID_WITHIN`, for the
-                    // line the far command writes as its `ssh` ends.
-                    #[allow(clippy::disallowed_methods)]
-                    std::thread::sleep(Duration::from_millis(20));
-                };
+                let last = far_line(&said, || attempt.settled.load(Ordering::Acquire));
                 if let Some(line) = &last {
                     let line = hide_node::ssh::openssh::kept_line(line);
                     hide_core::diagnostic!(json!({
@@ -715,7 +747,41 @@ impl Attempt {
                 if let Some(refusal) = last.as_deref().and_then(Outcome::of_far_line) {
                     attempt.settle(refusal);
                 }
+                attempt.read.store(true, Ordering::SeqCst);
+                if attempt.unproved.load(Ordering::SeqCst) {
+                    attempt.settle(Outcome::Lost);
+                }
             });
+    }
+
+    /// The carrier ended or failed before the proof found anything, and
+    /// not because its dial was given up: once the far line was read, and
+    /// said no refusal, the route waits, so a carrier the far end closes
+    /// unread is not signed in to again at the keeper's pace.
+    fn unproved(self: &Arc<Self>, said: &Arc<Mutex<Vec<u8>>>) {
+        self.unproved.store(true, Ordering::SeqCst);
+        self.carrier_ended(said);
+        if self.read.load(Ordering::SeqCst) {
+            self.settle(Outcome::Lost);
+        }
+    }
+}
+
+/// The last line a far command wrote on `said`, read as it ends: at once
+/// when it is a refusal or `done` says the attempt needs it no more, else
+/// once [`SAID_WITHIN`] ran out. Blocking.
+pub(crate) fn far_line(said: &Mutex<Vec<u8>>, done: impl Fn() -> bool) -> Option<String> {
+    let over = std::time::Instant::now() + SAID_WITHIN;
+    loop {
+        let last = last_line(&lock(said));
+        let refusal = last.as_deref().and_then(Outcome::of_far_line);
+        if refusal.is_some() || done() || std::time::Instant::now() >= over {
+            return last;
+        }
+        // A production wait, bounded by `SAID_WITHIN`, for the line the far
+        // command writes as its `ssh` ends.
+        #[allow(clippy::disallowed_methods)]
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -747,13 +813,16 @@ fn carrier_of(channel: AttachChannel, attempt: Arc<Attempt>) -> Carrier {
     let AttachChannel { stream, stderr } = channel;
     let read = stream.duplicate();
     let end = stream.shutdown_handle();
-    let told = Arc::clone(&attempt);
+    let (told, heard) = (Arc::clone(&attempt), Arc::clone(&stderr));
     Carrier::new(read, stream, move || {
         end.shutdown();
         attempt.stop.stop();
         attempt.carrier_ended(&stderr);
     })
-    .told(move |proof| told.settle(Outcome::of_proof(proof)))
+    .told(move |proof| match proof {
+        Some(proof) => told.settle(Outcome::of_proof(proof)),
+        None => told.unproved(&heard),
+    })
 }
 
 #[cfg(test)]

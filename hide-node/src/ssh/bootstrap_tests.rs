@@ -894,7 +894,7 @@ fn attach_hands_the_pipes_to_the_core_program() {
 
 /// The carry step starts the program it names in the script's place, with
 /// its words, from the account's home: from its answer on the connection's
-/// pipes are that program's (mission-107). A program that is not there, or
+/// pipes are that program's. A program that is not there, or
 /// a path that is not absolute, carries nothing.
 #[test]
 fn the_carry_step_hands_its_stdio_to_the_program() {

@@ -596,9 +596,9 @@ function Step-Attach([string]$program, [string]$stateDir) {
 function Step-Carry([string]$count) {
     $words = New-Object Collections.Generic.List[string]
     for ($n = 0; $n -lt [int]$count; $n++) { $words.Add((Read-Line)) }
-    if ($words.Count -lt 1) { Say fail 'the program is missing'; exit 65 }
+    if ($words.Count -lt 1) { Say fail '@CARRY_ABSENT@'; exit 65 }
     $program = $words[0]
-    if (-not (Absolute $program) -or -not [IO.File]::Exists((Native $program))) { Say fail "$program is missing"; exit 65 }
+    if (-not (Absolute $program) -or -not [IO.File]::Exists((Native $program))) { Say fail '@CARRY_ABSENT@'; exit 65 }
     $rest = @()
     if ($words.Count -gt 1) { $rest = $words.GetRange(1, $words.Count - 1).ToArray() }
     Hand-Over (Native $program) $rest 'carry'

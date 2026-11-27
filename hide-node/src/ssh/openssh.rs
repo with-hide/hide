@@ -53,7 +53,7 @@ pub struct SshProgram {
     /// The connection forwards nothing of this account's, whatever the
     /// configuration says: no agent, no X11, no GSSAPI credential
     /// (`-a -x -k`). The carrier of a connection two Hides keep lasts days
-    /// (mission-107, R7), and a forwarded agent would be the far account's
+    ///, and a forwarded agent would be the far account's
     /// for that long.
     forwards_nothing: bool,
 }

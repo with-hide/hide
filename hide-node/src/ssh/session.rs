@@ -423,6 +423,12 @@ pub enum SessionError {
 }
 
 impl SessionError {
+    /// Whether the `carry` step refused because the program it names is
+    /// not there: the far machine has no `hide` that carries.
+    pub fn carried_program_absent(&self) -> bool {
+        matches!(self, Self::Refused(reason) if reason == bootstrap::CARRY_ABSENT)
+    }
+
     /// Whether the connection never reached the machine's SSH server: its
     /// name did not resolve, or nothing answered there.
     pub fn never_reached_server(&self) -> bool {
@@ -530,7 +536,7 @@ impl SshTarget {
 
     /// This target, its `ssh` forwarding nothing of the account's
     /// ([`SshProgram::forwarding_nothing`]): the carrier of a connection two
-    /// Hides keep (mission-107).
+    /// Hides keep.
     pub fn forwarding_nothing(mut self) -> Self {
         self.program = self.program.forwarding_nothing();
         self
@@ -731,7 +737,7 @@ impl Session {
     /// Starts `argv` on the machine in place of the start script, its first
     /// word made by `program` from the account's home and system, and
     /// answers its standard input and output as one local stream: the
-    /// carrier of the connection two Hides keep over SSH (mission-107). Its
+    /// carrier of the connection two Hides keep over SSH. Its
     /// standard error, and ssh's, go to the stream's `stderr`. The stream's
     /// end ends `ssh`.
     pub fn carry(

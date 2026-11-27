@@ -148,7 +148,7 @@ pub enum Verb {
     /// reach its core (D-27): this command's input and output become the
     /// carrier of the connection between the two; not a command a person
     /// types. With `--ssh`, what a paired machine runs here over its SSH
-    /// login (mission-107): it never starts a core, and carries only to a
+    /// login: it never starts a core, and carries only to a
     /// daemon that answers it carries over SSH.
     Carry {
         ssh: bool,
@@ -672,8 +672,8 @@ fn add_projects(env: &Env, projects: &[String], over: Instant) -> usize {
 /// else that does, so its core lives while the distribution runs. An
 /// account that never ran a core is left as it is.
 ///
-/// Over SSH (`ssh`, mission-107) it starts nothing: a background dial never
-/// starts Hide on another machine (R8), so a core that does not run ends it
+/// Over SSH (`ssh`) it starts nothing: a background dial never
+/// starts Hide on another machine, so a core that does not run ends it
 /// with `hide_not_running`. It carries only to a daemon that answers it
 /// carries over SSH, so every SSH connection's two ends are of a build that
 /// knows the SSH path; any other answer ends it with `ssh_update_there`
@@ -813,7 +813,7 @@ fn add_alias(
                 crate::workspace_cli::pairing_ask(env, json!({"verb":"pair_ssh","alias":alias}))
                     .map_err(Refused::Unreachable)?;
             // A machine paired already: the refusal says what became of the
-            // alias (mission-107).
+            // alias.
             if answer["reason"] == "device_already_connected"
                 && let Some(ssh) = answer["ssh"].as_str()
             {
@@ -902,7 +902,7 @@ fn answered(mut answer: Value) -> Result<Value, Refused> {
 }
 
 /// What adding `alias` to a machine this computer is paired with already did
-/// with the alias (mission-107): recorded once a carrier over it proved that
+/// with the alias: recorded once a carrier over it proved that
 /// machine's key, and otherwise why not.
 fn alias_line(alias: &str, ssh: &str) -> String {
     match ssh {
@@ -1376,7 +1376,7 @@ fn held_line(device: &str, answer: &Value) -> String {
 
 /// A paired machine: who opens whom, whether the two are connected, and the
 /// path the connection takes now in one word (D-86). A relayed one whose SSH
-/// route waits for the operator says why, as its row does (mission-107).
+/// route waits for the operator says why, as its row does.
 fn peer_line(peer: &Value) -> String {
     let text = |key: &str| peer[key].as_str().unwrap_or_default();
     let name = text("name");
@@ -1541,7 +1541,7 @@ mod tests {
     }
 
     /// A relayed machine whose SSH route waits for the operator says why,
-    /// naming the machine and never the alias (mission-107).
+    /// naming the machine and never the alias.
     #[test]
     fn a_relayed_machine_says_why_its_ssh_route_waits() {
         let first = |blocked: &str| {
@@ -1626,7 +1626,7 @@ mod tests {
     }
 
     /// `carry --ssh` takes its one flag once and nothing else, and no other
-    /// verb takes it (mission-107).
+    /// verb takes it.
     #[test]
     fn carry_over_ssh_takes_one_flag() {
         assert_eq!(
