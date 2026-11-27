@@ -1117,6 +1117,89 @@ async fn a_cut_ssh_carrier_is_dialed_again() {
     assert_eq!(pair.carrier_ssh().len(), 1, "one carrier again");
 }
 
+/// An SSH attempt given up while it runs leaves no process on either
+/// machine: a carrier whose far command is held before it carries is
+/// signing in when the guest forgets the target, and both the guest's `ssh`
+/// and the target's far command end.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
+async fn a_cancelled_ssh_attempt_leaves_no_process_on_either_machine() {
+    let pair = SshOnly::connected().await;
+    let bound = Duration::from_secs(10);
+    // The far command now reads its input and carries nothing.
+    pair.far_hide_is("#!/bin/sh\ncat > /dev/null\n");
+    pair.cut_and_retry().await;
+    pair.until("the attempt reaches the held far command", WITHIN, || {
+        pair.carrier_ssh().len() == 1 && !pair.far_carriers().is_empty()
+    })
+    .await;
+    let removed = pair
+        .guest
+        .run(&["device", "remove", &pair.host_id(), "--json"]);
+    assert!(removed.ok, "{}", removed.text());
+    pair.until("no ssh left on the guest", bound, || {
+        pair.carrier_ssh().is_empty()
+    })
+    .await;
+    pair.until("no far command left on the target", bound, || {
+        pair.far_carriers().is_empty()
+    })
+    .await;
+}
+
+/// An alias that now leads to another Hide carries nothing: the carrier
+/// reaches a Hide that proves another key, the guest turns the route off in
+/// its records, that Hide admits no connection and lists no machine, and
+/// no process stays on either side.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
+async fn an_ssh_alias_that_leads_to_another_hide_carries_nothing() {
+    let pair = SshOnly::connected().await;
+    let other = Terminal::new(
+        pair.root.path().join("other-home"),
+        pair.root.path().join("other-state"),
+        Some("other-machine"),
+    )
+    .with_no_direct_path();
+    let _stop = StopOnDrop(&other);
+    let started = other.run(&["connect"]);
+    assert!(started.ok, "the other Hide: {}", started.text());
+    // The target's account now runs the other Hide's `hide`.
+    pair.far_hide_is(&format!(
+        "#!/bin/sh\nHOME='{}' HIDE_STATE_DIR='{}' {}='other-machine' '{}' \"$@\"\n",
+        other.home.display(),
+        other.state.display(),
+        hided::env::HIDE_MACHINE_ID,
+        env!("CARGO_BIN_EXE_hide"),
+    ));
+    pair.cut_and_retry().await;
+    let known = hide_kit::layout::peer_known(&pair.guest.state);
+    pair.until("the guest turns the route off", WITHIN, || {
+        std::fs::read_to_string(&known).is_ok_and(|records| {
+            serde_json::from_str::<Value>(&records)
+                .is_ok_and(|records| records.to_string().contains(r#""ssh":"off""#))
+        })
+    })
+    .await;
+    assert!(
+        other.peers().is_empty(),
+        "the other Hide admitted the guest"
+    );
+    let bound = Duration::from_secs(10);
+    pair.until("no ssh left on the guest", bound, || {
+        pair.carrier_ssh().is_empty()
+    })
+    .await;
+    pair.until("no far command left on the target", bound, || {
+        pair.far_carriers().is_empty()
+    })
+    .await;
+    let listed = pair.guest.peers();
+    assert_eq!(listed[0]["connected"], false, "{listed:?}");
+}
+
 /// Two Hides with no IP path and an unreachable relay, connected over SSH:
 /// the target's daemon behind a real `sshd`, the guest's started by its
 /// `hide connect`, paired by `hide device add studio`. Its drop stops the
@@ -1127,7 +1210,7 @@ struct SshOnly {
     guest: Terminal,
     ssh: crate::support::sshd::Sshd,
     _running: hided::RunningDaemon,
-    _root: tempfile::TempDir,
+    root: tempfile::TempDir,
 }
 
 #[cfg(unix)]
@@ -1168,7 +1251,7 @@ impl SshOnly {
             guest,
             ssh,
             _running: running,
-            _root: root,
+            root,
         };
         let connected = pair.guest.run(&["connect"]);
         assert!(connected.ok, "the guest daemon: {}", connected.text());
@@ -1196,11 +1279,53 @@ impl SshOnly {
         pair
     }
 
-    /// The `ssh` processes the guest's daemon runs to the target: the ones
-    /// that read the guest's own SSH configuration.
-    fn carrier_ssh(&self) -> Vec<u32> {
-        let config = self.guest.home.join(".ssh/config");
-        let config = config.to_string_lossy();
+    /// The target as the guest names it.
+    fn host_id(&self) -> String {
+        let peers = self.guest.peers();
+        peers[0]["id"].as_str().unwrap().to_owned()
+    }
+
+    /// The processes the target's account runs for a carrier: its
+    /// `hide device carry --ssh`, started by the path the carry step names.
+    fn far_carriers(&self) -> Vec<u32> {
+        let hide = self.target.home.join(".local/bin/hide");
+        self.processes(|command| command.contains(hide.to_string_lossy().as_ref()))
+    }
+
+    /// Puts `script` where the carry step finds the target's `hide`.
+    fn far_hide_is(&self, script: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let hide = self.target.home.join(".local/bin/hide");
+        std::fs::remove_file(&hide).unwrap();
+        std::fs::write(&hide, script).unwrap();
+        std::fs::set_permissions(&hide, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Ends the carrier the pair runs on now, by its `ssh` here, and has
+    /// the guest dial again at once.
+    async fn cut_and_retry(&self) {
+        let carriers = self.carrier_ssh();
+        assert_eq!(carriers.len(), 1, "one carrier ssh: {carriers:?}");
+        let killed = Command::new("kill")
+            .args(["-TERM", &carriers[0].to_string()])
+            .status()
+            .unwrap();
+        assert!(killed.success());
+        self.guest
+            .peer_becomes("the guest sees the cut", |peer| peer["connected"] == false)
+            .await;
+        self.until("the cut carrier's far command ends", WITHIN, || {
+            self.far_carriers().is_empty()
+        })
+        .await;
+        let retried = self
+            .guest
+            .run(&["device", "retry", &self.host_id(), "--json"]);
+        assert!(retried.ok, "{}", retried.text());
+    }
+
+    /// The pids of the processes whose command line `wanted` takes.
+    fn processes(&self, wanted: impl Fn(&str) -> bool) -> Vec<u32> {
         let listed = Command::new("ps")
             .args(["-A", "-o", "pid=,command="])
             .output()
@@ -1209,13 +1334,29 @@ impl SshOnly {
             .lines()
             .filter_map(|line| {
                 let (pid, command) = line.trim().split_once(' ')?;
-                let program = command.split_whitespace().next()?;
-                (program.ends_with("/ssh") || program == "ssh")
-                    .then_some(())
-                    .filter(|()| command.contains(config.as_ref()))?;
-                pid.parse().ok()
+                wanted(command).then(|| pid.parse().ok()).flatten()
             })
             .collect()
+    }
+
+    /// Waits until `done` holds, within `bound`.
+    async fn until(&self, what: &str, bound: Duration, done: impl Fn() -> bool) {
+        let deadline = Instant::now() + bound;
+        while !done() {
+            assert!(Instant::now() < deadline, "{what}");
+            tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: processes and the records are read from outside the daemons, which announce neither
+        }
+    }
+
+    /// The `ssh` processes the guest's daemon runs to the target: the ones
+    /// that read the guest's own SSH configuration.
+    fn carrier_ssh(&self) -> Vec<u32> {
+        let config = self.guest.home.join(".ssh/config");
+        let config = config.to_string_lossy();
+        self.processes(|command| {
+            let program = command.split_whitespace().next().unwrap_or_default();
+            (program.ends_with("/ssh") || program == "ssh") && command.contains(config.as_ref())
+        })
     }
 }
 
