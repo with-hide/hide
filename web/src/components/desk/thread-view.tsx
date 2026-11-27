@@ -3,7 +3,7 @@ import { pullLabel } from "../../codeHost";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithRef, type ReactNode, type Ref } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
-import { askPlace, namedMention, threadPhase, threadTurns } from "../../desk";
+import { askPlace, callName, namedMention, threadPhase, threadTurns } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { MarkdownText, type MarkdownChip, type MarkdownMark } from "../../MarkdownText";
@@ -75,12 +75,12 @@ function DiffBlock({ path, lines }: { path: string; lines: readonly DiffLine[] }
   );
 }
 
-/** A tool call's head (B25): its kind's icon, its title (a command as the command itself, its first line when `firstLine`), `+n −m` after an edit, `실행 중` in words while it runs (a ring is a session's state, D-75) and `실패` after it failed. */
+/** A tool call's head (B25): its kind's icon, its one-line name (`callName`: a command as the command itself, a search with its term; its first line when `firstLine`), `+n −m` after an edit, `실행 중` in words while it runs (a ring is a session's state, D-75) and `실패` after it failed. */
 function ToolHead({ line, firstLine = false }: { line: Extract<ThreadLine, { kind: "tool" }>; firstLine?: boolean }) {
   const { t } = useInterfaceTranslation();
   const Icon = TOOL_ICON[line.toolKind] ?? WrenchIcon;
   const { added, removed } = diffCounts(line.diffs);
-  const title = line.toolKind === "execute" && line.input ? line.input : line.title;
+  const title = callName(line);
   const shown = firstLine ? (title.trim().split("\n", 1)[0] ?? "") : title;
   const running = line.status === "in_progress" || line.status === "pending";
   const clock = useRunningClock(running && line.toolKind === "execute" ? line.startedAtMs : null);
@@ -100,6 +100,16 @@ function ToolHead({ line, firstLine = false }: { line: Extract<ThreadLine, { kin
 function diffCounts(diffs: Extract<ThreadLine, { kind: "tool" }>["diffs"]): { added: number; removed: number } {
   const lines = diffs.flatMap((diff) => diffLines(diff.oldText, diff.newText));
   return { added: lines.filter((one) => one.sign === "+").length, removed: lines.filter((one) => one.sign === "-").length };
+}
+
+/** A `hide` call as the newest step of a running turn: the command the session typed, its first line, as a shell call's head reads. */
+function HideCallHead({ command }: { command: string }) {
+  return (
+    <p className="flex min-w-0 items-center gap-xs text-caption">
+      <SquareTerminalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate font-mono text-subtle-foreground" title={command}>{command.trim().split("\n", 1)[0]}</span>
+    </p>
+  );
 }
 
 /** A tool call (B25): its head, then its diff and what came out, cut at four lines. */
@@ -329,7 +339,7 @@ function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; l
   ) : null;
   const work = open && turn.work.length ? <WorkList work={turn.work} words={words} actions={actions} /> : null;
   const answer = turn.answer.map((line) => <AgentWords key={line.id} line={line} words={words} lit={lit?.id === line.id ? lit.sentence : null} live={live} />);
-  const newest = live && !open ? turn.work.findLast((line): line is Extract<ThreadLine, { kind: "tool" }> => line.kind === "tool") : undefined;
+  const newest = live && !open ? turn.call : null;
   return (
     <li className="flex min-w-0 flex-col gap-sm" data-desk-thread-turn={open ? "open" : "folded"} data-scroll-anchor={turnAnchor(turn)}>
       {turn.user ? <UserLine line={turn.user} handed={handed} actions={actions} /> : null}
@@ -338,7 +348,7 @@ function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; l
           {work ?? <ShownWork work={turn.work} words={words} actions={actions} />}
           {answer}
           {toggle}
-          {newest ? <div className="ml-xxs min-w-0 border-l border-border pl-sm" data-desk-thread-newest={newest.id}><ToolHead line={newest} firstLine /></div> : null}
+          {newest ? <div className="ml-xxs min-w-0 border-l border-border pl-sm" data-desk-thread-newest={newest.id}>{newest.kind === "tool" ? <ToolHead line={newest} firstLine /> : <HideCallHead command={newest.command ?? ""} />}</div> : null}
         </>
       ) : (
         <>

@@ -382,6 +382,47 @@ it("folds a running turn's calls into one line with its newest call under it, ne
   expect(container.querySelector("[data-desk-thread-newest]")).toBeNull();
 });
 
+it("tells parts apart by what they lead to, not by how they are drawn or typed", async () => {
+  const { container } = await mount({ ...job, state: "done" });
+  await shown({
+    updates: [
+      operator("둘 다 리뷰 맡기고 노트 열어줘"),
+      shell("s1", "hide agent spawn --name review"),
+      shell("s2", "hide agent spawn --name review"),
+      shell("v1", "hide file open notes.md"),
+      shell("v2", "hide file open ./notes.md"),
+      said("맡겼어요"),
+    ],
+    parts: {
+      s1: { kind: "spawn", name: "review", agent_id: "agent-11", intent: null },
+      s2: { kind: "spawn", name: "review", agent_id: "agent-12", intent: null },
+      v1: { kind: "view", view: "file", target: "notes.md", view_id: "v1" },
+      v2: { kind: "view", view: "file", target: "./notes.md", view_id: "v1" },
+    },
+    sessions: {},
+  });
+  // Two sessions that ended under one name are two sessions; one View opened under two spellings is one output.
+  expect(container.querySelectorAll('[data-desk-hide-part="spawn"]')).toHaveLength(2);
+  expect(container.querySelectorAll("[data-desk-output]")).toHaveLength(1);
+});
+
+it("names a running turn's newest call whatever it was: a Hide call by its command, a search by its term", async () => {
+  const { container } = await mount();
+  const running = (calls: object[], parts: ThreadPage["parts"] = {}) => shown({ updates: [operator("찾아줘"), ...calls], parts, sessions: {} } as ThreadPage);
+  // A call drawn as a Hide part is still the newest step, as the command it was.
+  await running([shell("r", "rg old-step"), shell("m", "hide mission show --mission mission-3")], { m: { kind: "mission", mission: "mission-3" } });
+  expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe("hide mission show --mission mission-3");
+  // A search whose reader titles it by the tool alone keeps its term from the input (Pi, OpenCode).
+  await running([{ sessionUpdate: "tool_call", toolCallId: "g", kind: "search", title: "grep", status: "completed", rawInput: { pattern: "needle", path: "src" } }]);
+  expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe("grep needle");
+  // A read that names its file only in its place shows the file.
+  await running([{ sessionUpdate: "tool_call", toolCallId: "rd", kind: "read", title: "read", status: "completed", locations: [{ path: "src/app.ts" }] }]);
+  expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe("read src/app.ts");
+  // A title that already says it is not repeated.
+  await running([{ sessionUpdate: "tool_call", toolCallId: "cg", kind: "search", title: "Grep needle", status: "completed", rawInput: { pattern: "needle" } }]);
+  expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe("Grep needle");
+});
+
 it("folds a finished turn under 작업 · 파일 n · 명령 m with no newest call", async () => {
   const { container } = await mount({ ...job, state: "done" });
   await shown({ updates: [operator("고쳐줘"), shell("r0", "rg -n mission"), edit("e1", "web/src/desk.ts", "a", "b"), said("고쳤어요")], parts: {}, sessions: {} });
