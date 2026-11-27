@@ -250,7 +250,9 @@ impl BrowserRoutes {
         .await
         .map_err(|_| "core_unavailable")??
         .ok_or("view_unavailable")?;
-        if self.pages.own_node() == key.device {
+        // The page loads on the machine its source names, which for a page
+        // of Desk's desk is the session's that opened it, not the desk's.
+        if self.pages.own_node() == source.device_id {
             return Ok(Resolved::of(&source, source.url.clone()));
         }
         let mut routes = self.routes.lock().await;
@@ -308,7 +310,7 @@ impl BrowserRoutes {
         owner_started: u64,
     ) -> Result<Option<Route>, &'static str> {
         let pages = Arc::clone(&self.pages);
-        let device = key.device.clone();
+        let device = source.device_id.clone();
         let way = tokio::task::spawn_blocking(move || pages.way(&device))
             .await
             .map_err(|_| "core_unavailable")??;
@@ -353,8 +355,7 @@ impl BrowserRoutes {
                     })
                     .await;
                 if let Err(error) = result {
-                    eprintln!(
-                        "{}",
+                    hide_core::diagnostic!(
                         serde_json::json!({"component":"browser_routes","kind":"file_server.failed","reason":error.to_string()})
                     );
                 }
@@ -386,10 +387,7 @@ impl BrowserRoutes {
                 .map(|forward| (forward.local_addr(), RouteKind::Page(forward)))
                 .map_err(|error| error.to_string());
             let (local_addr, kind) = forwarded.map_err(|reason| {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"component":"browser_routes","kind":"forward.failed","reason":reason})
-                );
+                hide_core::diagnostic!(serde_json::json!({"component":"browser_routes","kind":"forward.failed","reason":reason}));
                 "route_failed"
             })?;
             let url = forwarded_url(&scheme, &host, local_addr, &tail);
@@ -438,8 +436,7 @@ impl BrowserRoutes {
             if let Ok(Some(route)) = built {
                 route.close();
             }
-            eprintln!(
-                "{}",
+            hide_core::diagnostic!(
                 serde_json::json!({"component":"browser_routes","kind":"route.discarded","reason":"reservation_superseded","device_id":source.device_id,"load":source.load})
             );
             return;
@@ -448,8 +445,7 @@ impl BrowserRoutes {
             (true, Ok(Some(route))) => {
                 let resolved = Resolved::of(&source, route.url.clone());
                 routes.insert(key, RouteEntry::Ready(route));
-                eprintln!(
-                    "{}",
+                hide_core::diagnostic!(
                     serde_json::json!({"component":"browser_routes","kind":"route.ready","device_id":source.device_id,"load":source.load})
                 );
                 Ok(resolved)
@@ -580,6 +576,13 @@ impl BrowserRoutes {
     }
 }
 
+/// Whether `path` names a place a page of a View can stand: a checkout's
+/// absolute path, or Desk's own desk, the one View tree no checkout holds,
+/// keyed by Desk's caller name (PRD desk-own-desk D-01).
+pub(crate) fn is_page_checkout(path: &str) -> bool {
+    hide_platform::path::is_wire_absolute(path) || path == hide_core::workspace_control::DESK_CALLER
+}
+
 /// What the desktop host sends to resolve or release a View's route.
 #[derive(Deserialize)]
 pub(crate) struct RouteRequest {
@@ -594,7 +597,7 @@ impl RouteRequest {
     fn valid(&self) -> bool {
         !self.device_id.is_empty()
             && self.device_id.len() <= 256
-            && hide_platform::path::is_wire_absolute(&self.checkout_path)
+            && is_page_checkout(&self.checkout_path)
             && self.checkout_path.len() <= 8192
             && !self.id.is_empty()
             && self.id.len() <= 256
@@ -619,8 +622,7 @@ pub(crate) async fn resolve_answer(routes: &Arc<BrowserRoutes>, request: RouteRe
     {
         Ok(route) => axum::Json(route).into_response(),
         Err(reason) => {
-            eprintln!(
-                "{}",
+            hide_core::diagnostic!(
                 serde_json::json!({"component":"browser_routes","kind":"resolve.refused","reason":reason})
             );
             (
@@ -831,8 +833,7 @@ async fn serve_file(State(route): State<FileRoute>, uri: Uri) -> Response {
             .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         Ok(Err(reason)) => {
-            eprintln!(
-                "{}",
+            hide_core::diagnostic!(
                 serde_json::json!({"component":"browser_routes","kind":"file.refused","reason":reason})
             );
             match reason {
@@ -854,6 +855,25 @@ fn decoded_path_for_mime(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn route_request(checkout_path: &str) -> RouteRequest {
+        RouteRequest {
+            device_id: "node-1".to_owned(),
+            checkout_path: checkout_path.to_owned(),
+            id: "view-1".to_owned(),
+            load: 1,
+            owner_pid: 42,
+        }
+    }
+
+    #[test]
+    fn a_page_of_desks_own_desk_is_a_route_the_host_may_ask_for() {
+        assert!(is_page_checkout("hide:desk"));
+        assert!(route_request("hide:desk").valid());
+        assert!(route_request("/work/repo").valid());
+        assert!(!route_request("hide:other").valid());
+        assert!(!route_request("relative/repo").valid());
+    }
 
     #[test]
     fn every_admitted_loopback_address_has_a_loopback_target() {

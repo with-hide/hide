@@ -35,7 +35,7 @@ use crate::model::{
 };
 use crate::view_layout::{
     Display, DisplayKind, Edge, ExternalFile, ExternalKind, Layout, LayoutError, MAX_SPLIT_DEPTH,
-    MAX_VIEW_AREAS, MAX_VIEW_DISPLAYS, Node, browser_address, browser_title,
+    MAX_VIEW_AREAS, MAX_VIEW_DISPLAYS, Node, ViewOrigin, browser_address, browser_title,
 };
 use crate::workspace_views::Place;
 
@@ -265,6 +265,8 @@ pub(super) struct Reconciled {
     /// the editor follows without moving the store's generation.
     desk: Option<Place>,
     generation: u64,
+    /// Desk's desk's own count of changes (`Runtime::desk_views_generation`).
+    desk_generation: u64,
 }
 
 /// What a display needs to know about an editor tab.
@@ -330,7 +332,10 @@ impl ShownByViews {
                         .or_default()
                         .push(key.clone());
                 } else if display.kind == DisplayKind::File {
-                    let source = source_key(&key, &display.path, roots);
+                    let source = display
+                        .origin
+                        .as_ref()
+                        .map_or_else(|| source_key(&key, &display.path, roots), ViewOrigin::key);
                     if source != key {
                         let views = shown.files.entry((source, display.path.clone()));
                         views.or_default().push(key.clone());
@@ -356,13 +361,14 @@ impl ShownByViews {
 /// The display that shows a document and was focused last.
 fn last_focused_showing(
     displays: &[&Display],
+    origin: Option<&ViewOrigin>,
     path: &str,
     kind: DisplayKind,
     committed: Option<bool>,
 ) -> Option<String> {
     displays
         .iter()
-        .filter(|display| display.shows(path, kind, committed))
+        .filter(|display| display.shows_from(origin, path, kind, committed))
         .max_by_key(|display| display.last_focused_unix_ms)
         .map(|display| display.id.clone())
 }
@@ -521,6 +527,62 @@ fn reconcile_layout<'t>(
     (stored, unshown)
 }
 
+/// Brings Desk's desk in line with the editor's tabs (PRD desk-own-desk
+/// D-11): a file's View binds to the document of its own checkout once it is
+/// read, follows a rename, stops being a preview once it holds work, and goes
+/// when its document closed by any path, as a Workspace's View does. Desk's
+/// desk never takes in a document no View shows. Returns whether anything
+/// changed and whether the change is one the store keeps.
+fn reconcile_desk_layout(layout: &mut Layout, tabs: &[TabFacts]) -> (bool, bool) {
+    let gone: Vec<String> = layout
+        .displays()
+        .filter(|display| {
+            display
+                .tab_id
+                .as_ref()
+                .is_some_and(|id| !tabs.iter().any(|tab| &tab.id == id))
+        })
+        .map(|display| display.id.clone())
+        .collect();
+    let mut stored = !gone.is_empty();
+    for id in &gone {
+        layout.remove(id);
+    }
+    let mut changed = stored;
+    for display in layout.displays_mut() {
+        let Some(origin) = display.origin.as_ref().map(ViewOrigin::key) else {
+            continue;
+        };
+        let tab = match display
+            .tab_id
+            .as_ref()
+            .and_then(|id| tabs.iter().find(|tab| &tab.id == id))
+        {
+            Some(tab) => tab,
+            None => {
+                let Some(tab) = tabs.iter().find(|tab| {
+                    tab.key.as_ref() == Some(&origin)
+                        && display.shows(&tab.path, tab.kind, tab.committed)
+                }) else {
+                    continue;
+                };
+                display.tab_id = Some(tab.id.clone());
+                changed = true;
+                tab
+            }
+        };
+        if display.path != tab.path {
+            display.path = tab.path.clone();
+            stored = true;
+        }
+        if tab.kept && display.preview {
+            display.preview = false;
+            stored = true;
+        }
+    }
+    (changed || stored, stored)
+}
+
 impl Runtime {
     /// The desk the Workspace `key` shows: its Agent tab in front's, or the
     /// pending desk while it shows no tab (PRD lane-desk-pair-view D-06). An
@@ -529,6 +591,9 @@ impl Runtime {
     /// checkout, which a tab or pane choice moves on its own event, before
     /// the engine confirms it.
     pub(super) fn front_place(&self, key: &WorkspaceKey) -> Place {
+        if self.is_desk_key(key) {
+            return Place::Desk;
+        }
         let shown = (key.0 == self.node.as_str())
             .then(|| self.agent_workspace_ids(key))
             .flatten()
@@ -554,12 +619,17 @@ impl Runtime {
     pub(super) fn front_tab(&self, key: &WorkspaceKey) -> String {
         match self.front_place(key) {
             Place::Tray(tab) => tab,
-            Place::Shelf => unreachable!("the front is always a desk"),
+            Place::Shelf | Place::Desk => unreachable!("a Workspace's front is its tab's desk"),
         }
     }
 
     /// The tree at `place` of the Workspace `key`.
     pub(super) fn view_layout_at(&self, key: &WorkspaceKey, place: &Place) -> Option<&Layout> {
+        if *place == Place::Desk || self.is_desk_key(key) {
+            return (*place == Place::Desk && self.is_desk_key(key))
+                .then(|| self.desk_views())
+                .flatten();
+        }
         self.workspace_views
             .as_ref()?
             .views
@@ -574,6 +644,9 @@ impl Runtime {
 
     /// Where the View `id` of the Workspace `key` sits.
     pub(super) fn view_place(&self, key: &WorkspaceKey, id: &str) -> Option<Place> {
+        if self.is_desk_key(key) {
+            return self.desk_views()?.display(id).map(|_| Place::Desk);
+        }
         self.workspace_views
             .as_ref()?
             .views
@@ -583,6 +656,9 @@ impl Runtime {
 
     /// The View `id` of the Workspace `key`, on a desk or not.
     pub(super) fn view_display(&self, key: &WorkspaceKey, id: &str) -> Option<&Display> {
+        if self.is_desk_key(key) {
+            return self.desk_views()?.display(id);
+        }
         self.workspace_views
             .as_ref()?
             .views
@@ -592,33 +668,51 @@ impl Runtime {
 
     /// Every View of the Workspace, on each desk and then on the shelf.
     pub(super) fn view_displays(&self, key: &WorkspaceKey) -> impl Iterator<Item = &Display> {
-        self.workspace_views
+        let desk = self.is_desk_key(key).then(|| self.desk_views()).flatten();
+        let workspace = self
+            .workspace_views
             .as_ref()
-            .and_then(|store| store.views.get(&key.0, &key.1))
-            .into_iter()
-            .flat_map(|view| view.views())
+            .filter(|_| !self.is_desk_key(key))
+            .and_then(|store| store.views.get(&key.0, &key.1));
+        desk.into_iter()
+            .flat_map(Layout::displays)
+            .chain(workspace.into_iter().flat_map(|view| view.views()))
     }
 
     /// Every tree of every Workspace, each with the Workspace and the place
     /// it is.
+    /// Desk's desk is one of them, under its own key, while Desk is on.
     pub(super) fn every_view_layout(&self) -> impl Iterator<Item = (WorkspaceKey, Place, &Layout)> {
-        self.workspace_views.iter().flat_map(|store| {
-            store.views.workspaces.iter().flat_map(|view| {
-                view.layouts().map(|(place, layout)| {
-                    ((view.device_id.clone(), view.path.clone()), place, layout)
+        let desk = self
+            .desk_views()
+            .map(|layout| (self.desk_key(), Place::Desk, layout));
+        self.workspace_views
+            .iter()
+            .flat_map(|store| {
+                store.views.workspaces.iter().flat_map(|view| {
+                    view.layouts().map(|(place, layout)| {
+                        ((view.device_id.clone(), view.path.clone()), place, layout)
+                    })
                 })
             })
-        })
+            .chain(desk)
     }
 
-    /// Every View of every Workspace.
+    /// Every View of every Workspace, and of Desk's desk while Desk is on.
     pub(super) fn every_view(&self) -> impl Iterator<Item = (WorkspaceKey, &Display)> {
-        self.workspace_views.iter().flat_map(|store| {
-            store.views.workspaces.iter().flat_map(|view| {
-                view.views()
-                    .map(|display| ((view.device_id.clone(), view.path.clone()), display))
+        let desk = self
+            .desk_views()
+            .into_iter()
+            .flat_map(|layout| layout.displays().map(|display| (self.desk_key(), display)));
+        self.workspace_views
+            .iter()
+            .flat_map(|store| {
+                store.views.workspaces.iter().flat_map(|view| {
+                    view.views()
+                        .map(|display| ((view.device_id.clone(), view.path.clone()), display))
+                })
             })
-        })
+            .chain(desk)
     }
 
     /// Whether the Workspace of a checkout holds `display_id`, before a
@@ -731,6 +825,9 @@ impl Runtime {
         if let Some(layout) = self.view_layout_at(key, place) {
             return layout.active_area().id.clone();
         }
+        if *place == Place::Desk {
+            return Layout::default().active_area;
+        }
         let Some(store) = self.workspace_views.as_mut() else {
             return Layout::default().active_area;
         };
@@ -778,6 +875,12 @@ impl Runtime {
         place: &Place,
         change: impl FnOnce(&mut Layout, u64) -> Result<(T, bool), LayoutError>,
     ) -> Result<T, LayoutError> {
+        if *place == Place::Desk || self.is_desk_key(key) {
+            if *place != Place::Desk || !self.is_desk_key(key) {
+                return Err(LayoutError::UnknownArea(key.1.clone()));
+            }
+            return self.change_desk_views(change);
+        }
         let now = unix_milliseconds();
         let Some(store) = self.workspace_views.as_mut() else {
             return Err(LayoutError::UnknownArea(key.1.clone()));
@@ -834,12 +937,29 @@ impl Runtime {
         preview: bool,
         beside: bool,
     ) -> bool {
+        self.admit_view_open_from(key, place, None, path, kind, committed, preview, beside)
+    }
+
+    /// `admit_view_open` of a document of the checkout `origin`, which a
+    /// View of Desk's desk names (`Display::origin`).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn admit_view_open_from(
+        &mut self,
+        key: &WorkspaceKey,
+        place: &Place,
+        origin: Option<&ViewOrigin>,
+        path: &str,
+        kind: DisplayKind,
+        committed: Option<bool>,
+        preview: bool,
+        beside: bool,
+    ) -> bool {
         let empty = Layout::default();
         let layout = self.view_layout_at(key, place).unwrap_or(&empty);
         let shown = layout.display_count() + self.pending_view_placements(key, place);
         let held = self
             .view_displays(key)
-            .any(|display| display.shows(path, kind, committed));
+            .any(|display| display.shows_from(origin, path, kind, committed));
         let base = layout.active_area();
         let refusal = if beside {
             match BESIDE_ORDER
@@ -850,7 +970,7 @@ impl Runtime {
                     if layout.area(&target).is_some_and(|area| {
                         area.displays
                             .iter()
-                            .any(|display| display.shows(path, kind, committed))
+                            .any(|display| display.shows_from(origin, path, kind, committed))
                     }) =>
                 {
                     None
@@ -865,7 +985,7 @@ impl Runtime {
         } else if self.new_tab_target(key, place, false).is_some()
             || layout
                 .displays()
-                .any(|display| display.shows(path, kind, committed))
+                .any(|display| display.shows_from(origin, path, kind, committed))
             || (held && *place == Place::Shelf)
         {
             None
@@ -1043,8 +1163,9 @@ impl Runtime {
             "display": oldest.display_id,
             "display_kind": oldest.kind,
         }));
+        // Every View, Desk's desk's among them, still showing the document
+        // keeps it.
         if let Some(document) = oldest.document
-            && !self.desk_holds_tab(&document)
             && !self
                 .every_view()
                 .any(|(_, display)| display.tab_id.as_ref() == Some(&document))
@@ -1111,7 +1232,7 @@ impl Runtime {
         path: &str,
         preview: bool,
         beside: bool,
-    ) {
+    ) -> bool {
         match self.prepare_file_tab(workspace_id, checkout_id, path) {
             Ok(prepared) => self.show_file_in_view(
                 prepared,
@@ -1124,14 +1245,18 @@ impl Runtime {
             ),
             // The read failed before anything moved, so every display keeps
             // what it shows (B15).
-            Err(message) => self.set_error("file.open_failed", message, true),
+            Err(message) => {
+                self.set_error("file.open_failed", message, true);
+                false
+            }
         }
     }
 
     /// Opens a file of the checkout `workspace_id`/`checkout_id` into the
     /// View areas of the Workspace `key`, the front one (contract 4.2). A
     /// file being read shows when the read lands, where it was asked for; a
-    /// failed read moves nothing.
+    /// failed read moves nothing. Returns whether the file was placed or its
+    /// read began, false when the open was refused.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn show_file_in_view(
         &mut self,
@@ -1142,12 +1267,22 @@ impl Runtime {
         path: &str,
         preview: bool,
         beside: bool,
-    ) {
+    ) -> bool {
         self.reconcile_view_displays();
         let key = key.clone();
         let place = self.front_place(&key);
-        if !self.admit_view_open(&key, &place, path, DisplayKind::File, None, preview, beside) {
-            return;
+        let origin = self.desk_origin(&key, workspace_id, checkout_id);
+        if !self.admit_view_open_from(
+            &key,
+            &place,
+            origin.as_ref(),
+            path,
+            DisplayKind::File,
+            None,
+            preview,
+            beside,
+        ) {
+            return false;
         }
         // The Explorer shows the Workspace's own tree, which holds no file of
         // another checkout to select.
@@ -1166,21 +1301,24 @@ impl Runtime {
                     None,
                     replace.as_deref(),
                 );
+                true
             }
             read @ super::editor::PreparedFileTab::Read { .. } => {
-                if let Some(tab_id) =
+                let Some(tab_id) =
                     self.insert_file_tab(read, workspace_id, checkout_id, path, preview)
-                {
-                    self.place_document(
-                        &key,
-                        &place,
-                        &tab_id,
-                        preview,
-                        beside,
-                        None,
-                        replace.as_deref(),
-                    );
-                }
+                else {
+                    return false;
+                };
+                self.place_document(
+                    &key,
+                    &place,
+                    &tab_id,
+                    preview,
+                    beside,
+                    None,
+                    replace.as_deref(),
+                );
+                true
             }
             super::editor::PreparedFileTab::Reading { root, channel } => {
                 // A display that shows the file but could not read it is
@@ -1189,6 +1327,7 @@ impl Runtime {
                     match self.focus_view_document(
                         &key,
                         &place,
+                        origin.as_ref(),
                         path,
                         DisplayKind::File,
                         None,
@@ -1197,7 +1336,7 @@ impl Runtime {
                         Ok(shown) => shown,
                         Err(error) => {
                             self.set_error(error.kind(), error.message(), false);
-                            return;
+                            return false;
                         }
                     }
                 } else {
@@ -1226,6 +1365,7 @@ impl Runtime {
                         placement,
                     },
                 );
+                true
             }
         }
     }
@@ -1409,10 +1549,12 @@ impl Runtime {
     /// the checkout holds elsewhere first (D-20: one View, one desk); the
     /// shelf leaves a View the checkout holds anywhere where it is. Returns
     /// whether the checkout shows the document at all.
+    #[allow(clippy::too_many_arguments)]
     fn focus_view_document(
         &mut self,
         key: &WorkspaceKey,
         place: &Place,
+        origin: Option<&ViewOrigin>,
         path: &str,
         kind: DisplayKind,
         committed: Option<bool>,
@@ -1421,6 +1563,7 @@ impl Runtime {
         let here = self.view_layout_at(key, place).and_then(|layout| {
             last_focused_showing(
                 &layout.displays().collect::<Vec<_>>(),
+                origin,
                 path,
                 kind,
                 committed,
@@ -1429,8 +1572,13 @@ impl Runtime {
         let display_id = match here {
             Some(display_id) => display_id,
             None => {
+                // Desk's desk has no other place a View of it could be.
+                if *place == Place::Desk {
+                    return Ok(false);
+                }
                 let Some(elsewhere) = last_focused_showing(
                     &self.view_displays(key).collect::<Vec<_>>(),
+                    origin,
                     path,
                     kind,
                     committed,
@@ -1550,6 +1698,10 @@ impl Runtime {
         else {
             return Err(LayoutError::UnknownDisplay(tab_id.to_owned()));
         };
+        // A View of Desk's desk names the checkout its document is of.
+        let origin = (*place == Place::Desk)
+            .then(|| self.tab_origin(tab_id))
+            .flatten();
         let base = match (self.view_layout_at(key, place), area) {
             (Some(layout), Some(area)) if layout.area(area).is_some() => area.to_owned(),
             (Some(layout), asked) => {
@@ -1567,7 +1719,16 @@ impl Runtime {
             (None, _) => self.tree_area(key, place),
         };
         if beside {
-            return self.place_beside(key, place, &base, tab_id, &path, kind, committed);
+            return self.place_beside(
+                key,
+                place,
+                &base,
+                tab_id,
+                origin.as_ref(),
+                &path,
+                kind,
+                committed,
+            );
         }
         if let Some(id) = replace {
             // The read belongs to the empty tab captured at open. A close or
@@ -1587,7 +1748,7 @@ impl Runtime {
                     .unwrap()
                     .displays
                     .iter()
-                    .filter(|d| d.id != id && d.shows(&path, kind, committed))
+                    .filter(|d| d.id != id && d.shows_from(origin.as_ref(), &path, kind, committed))
                     .map(|d| d.id.clone())
                     .collect();
                 for twin in twins {
@@ -1596,6 +1757,7 @@ impl Runtime {
                 let display = layout.display_mut(id).unwrap();
                 display.kind = kind;
                 display.path = path.clone();
+                display.origin = origin.clone();
                 display.tab_id = Some(tab_id.to_owned());
                 display.committed =
                     (kind == DisplayKind::Diff).then_some(committed.unwrap_or(false));
@@ -1610,7 +1772,15 @@ impl Runtime {
             placed?;
             return Ok(true);
         }
-        if self.focus_view_document(key, place, &path, kind, committed, !preview)? {
+        if self.focus_view_document(
+            key,
+            place,
+            origin.as_ref(),
+            &path,
+            kind,
+            committed,
+            !preview,
+        )? {
             return Ok(true);
         }
         // The preview display the open takes, with the document it showed.
@@ -1642,6 +1812,7 @@ impl Runtime {
                         .ok_or_else(|| LayoutError::UnknownDisplay(slot_id.clone()))?;
                     display.tab_id = Some(tab_id.to_owned());
                     display.path = path.clone();
+                    display.origin = origin.clone();
                     display.kind = kind;
                     display.committed =
                         (kind == DisplayKind::Diff).then_some(committed.unwrap_or(false));
@@ -1660,6 +1831,7 @@ impl Runtime {
                     }
                     let mut display = layout.new_display(&path, kind, committed, preview);
                     display.tab_id = Some(tab_id.to_owned());
+                    display.origin = origin.clone();
                     layout.insert(&base, display, stamp)?;
                 }
             }
@@ -1684,6 +1856,7 @@ impl Runtime {
         place: &Place,
         base: &str,
         tab_id: &str,
+        origin: Option<&ViewOrigin>,
         path: &str,
         kind: DisplayKind,
         committed: Option<bool>,
@@ -1695,6 +1868,7 @@ impl Runtime {
             let Some(target) = neighbour else {
                 let mut display = layout.new_display(path, kind, committed, false);
                 display.tab_id = Some(tab_id.to_owned());
+                display.origin = origin.cloned();
                 // An empty area is only ever the root of a Workspace with no
                 // view yet: there is nothing to stand beside, and a split
                 // would leave that empty area on screen next to the new one.
@@ -1712,6 +1886,7 @@ impl Runtime {
                     // area it was asked from.
                     let Some(shown) = last_focused_showing(
                         &layout.displays().collect::<Vec<_>>(),
+                        origin,
                         path,
                         kind,
                         committed,
@@ -1731,6 +1906,7 @@ impl Runtime {
             let shown = layout.area(&target).and_then(|area| {
                 last_focused_showing(
                     &area.displays.iter().collect::<Vec<_>>(),
+                    origin,
                     path,
                     kind,
                     committed,
@@ -1746,6 +1922,7 @@ impl Runtime {
                 None => {
                     let mut display = layout.new_display(path, kind, committed, false);
                     display.tab_id = Some(tab_id.to_owned());
+                    display.origin = origin.cloned();
                     layout.insert(&target, display, stamp)?;
                 }
             }
@@ -1917,7 +2094,14 @@ impl Runtime {
         }
         let ViewLayoutPayload { workspace, action } = payload;
         let key = (workspace.device_id, workspace.path);
-        if !self.area_workspace_is_current(&key, "view") {
+        // Desk's desk is in front wherever the window drew it; a Workspace's
+        // only while it is the one in front.
+        if self.is_desk_key(&key) {
+            if self.desk_views().is_none() {
+                self.set_error("view_layout.desk_off", "Desk is switched off", false);
+                return true;
+            }
+        } else if !self.area_workspace_is_current(&key, "view") {
             return true;
         }
         // The action names displays by what the last frame showed; bring
@@ -2067,6 +2251,7 @@ impl Runtime {
             beside_display.as_deref(),
             reveal,
             opener,
+            None,
         );
         if let Err(refusal) = &outcome {
             self.set_error(refusal.kind, refusal.message.clone(), false);
@@ -2091,9 +2276,51 @@ impl Runtime {
             device_id: key.0,
             path: key.1,
         };
-        self.place_browser(url, Some(workspace), None, None, None, true, opener.into())
-            .map(|(_, display_id)| display_id)
-            .map_err(|refusal| refusal.kind)
+        self.place_browser(
+            url,
+            Some(workspace),
+            None,
+            None,
+            None,
+            true,
+            opener.into(),
+            None,
+        )
+        .map(|(_, display_id)| display_id)
+        .map_err(|refusal| refusal.kind)
+    }
+
+    /// Opens `url` on the desk of `key` as the operator's page, nothing
+    /// brought forward: Desk's desk opening a session's page (PRD
+    /// desk-own-desk D-12). The page keeps the machine and checkout it came
+    /// from (`origin`, D-10), whose loopback and files it loads from as the
+    /// session's own page does. A refusal is the window's error to show.
+    pub(super) fn open_browser_at(
+        &mut self,
+        url: &str,
+        key: WorkspaceKey,
+        origin: Option<ViewOrigin>,
+    ) -> Result<String, &'static str> {
+        let workspace = ViewWorkspace {
+            device_id: key.0,
+            path: key.1,
+        };
+        match self.place_browser(
+            url,
+            Some(workspace),
+            None,
+            None,
+            None,
+            false,
+            crate::view_feedback::OpenedBy::Operator,
+            origin,
+        ) {
+            Ok((_, display_id)) => Ok(display_id),
+            Err(refusal) => {
+                self.set_error(refusal.kind, refusal.message, false);
+                Err(refusal.kind)
+            }
+        }
     }
 
     /// The receipt a sender that named its open waits for.
@@ -2378,6 +2605,7 @@ impl Runtime {
         beside_display: Option<&str>,
         reveal: bool,
         opener: crate::view_feedback::OpenedBy,
+        origin: Option<ViewOrigin>,
     ) -> Result<(WorkspaceKey, String), LayoutRefusal> {
         if !self.separate_view_areas() {
             return Err(browser_refusal("This shell does not draw View areas"));
@@ -2388,7 +2616,11 @@ impl Runtime {
         let key = match (workspace, pane_id) {
             (Some(workspace), _) => {
                 let key = (workspace.device_id, workspace.path);
-                if !self.catalog_has_workspace(&key) {
+                if self.is_desk_key(&key) {
+                    if self.desk_views().is_none() {
+                        return Err(browser_refusal("Desk is switched off"));
+                    }
+                } else if !self.catalog_has_workspace(&key) {
                     return Err(browser_refusal(format!(
                         "{} is not a Workspace hide shows",
                         key.1
@@ -2449,7 +2681,9 @@ impl Runtime {
         let existing = (!url.is_empty())
             .then(|| {
                 self.claim_existing_view(&key, &place, |display| {
-                    display.kind == DisplayKind::Browser && display.url.as_deref() == Some(url)
+                    display.kind == DisplayKind::Browser
+                        && display.url.as_deref() == Some(url)
+                        && display.origin == origin
                 })
             })
             .flatten();
@@ -2500,6 +2734,7 @@ impl Runtime {
                 }
                 let mut display = layout.new_browser_display(url, load);
                 own(&mut display);
+                display.origin = origin.clone();
                 let display_id = display.id.clone();
                 // A page's own new tab stands beside that page (Open to the
                 // side's order): in the area next to it, else, its area being
@@ -2668,6 +2903,11 @@ impl Runtime {
                                 )
                             })
                     })
+                    .chain(
+                        self.desk_browser_inventory()
+                            .into_iter()
+                            .map(|row| (row.device_id, row.path, row.view_id)),
+                    )
                     .collect();
                 self.browser_pages.retain(|key, _| active.contains(key));
                 if self.browser_pages.len() >= BROWSER_PAGE_REPORTS_KEPT {
@@ -2689,6 +2929,18 @@ impl Runtime {
         }
         if same_address_and_title {
             return false;
+        }
+        if self.is_desk_key(&key) {
+            return self
+                .change_desk_views(|layout, _| {
+                    let display = layout
+                        .display_mut(&display_id)
+                        .ok_or_else(|| LayoutError::UnknownDisplay(display_id.clone()))?;
+                    display.url = Some(url);
+                    display.title = title;
+                    Ok(((), true))
+                })
+                .is_ok();
         }
         let Some(store) = self.workspace_views.as_mut() else {
             return false;
@@ -2796,21 +3048,19 @@ impl Runtime {
             return false;
         }
         let (path, kind, committed) = (display.path.clone(), display.kind, display.committed);
+        let origin = display.origin.clone();
+        let source = self.display_source_of(key, display);
         let tab = display.tab_id.clone();
         // A document can show in another Workspace too, a file a terminal
-        // link opened where the operator was, and stays open for it.
-        // So does a file Desk's tab panel holds (PRD desk-2-ui D-22).
+        // link opened where the operator was, or on Desk's desk, and stays
+        // open for it (PRD desk-own-desk D-11).
         let shared = match &tab {
-            Some(tab) => {
-                self.desk_holds_tab(tab)
-                    || self.every_view().any(|(view, other)| {
-                        other.tab_id.as_ref() == Some(tab)
-                            && (&view != key || other.id != display_id)
-                    })
-            }
-            None => self
-                .view_displays(key)
-                .any(|other| other.id != display_id && other.shows(&path, kind, committed)),
+            Some(tab) => self.every_view().any(|(view, other)| {
+                other.tab_id.as_ref() == Some(tab) && (&view != key || other.id != display_id)
+            }),
+            None => self.view_displays(key).any(|other| {
+                other.id != display_id && other.shows_from(origin.as_ref(), &path, kind, committed)
+            }),
         };
         if let Some(tab_id) = tab.as_ref()
             && !shared
@@ -2843,7 +3093,7 @@ impl Runtime {
         if tab.is_none()
             && !shared
             && kind == DisplayKind::File
-            && let Some((workspace_id, checkout_id)) = self.display_source(key, &path)
+            && let Some((workspace_id, checkout_id)) = source
         {
             self.cancel_document_read(&workspace_id, &checkout_id, &path);
         }
@@ -2872,6 +3122,10 @@ impl Runtime {
             return true;
         };
         let front = self.front_checkout_owned();
+        let source = self.display_source_of(key, &display);
+        // A View of Desk's desk waits on its own checkout's device; once
+        // that device is back it reads again (`restore_desk_views`), and
+        // Retry while it waits says so (PRD desk-own-desk B41).
         let (state, reason) = self.display_state(&self.display_facts(key), &display);
         match state {
             ViewDisplayState::Waiting => {
@@ -2884,7 +3138,7 @@ impl Runtime {
             }
             ViewDisplayState::Open | ViewDisplayState::Opening => false,
             ViewDisplayState::Unavailable => {
-                let Some((workspace_id, checkout_id)) = front else {
+                let Some((workspace_id, checkout_id)) = source.clone().or(front) else {
                     return false;
                 };
                 // A diff is taken by the Changes read; its view needs only
@@ -2899,9 +3153,7 @@ impl Runtime {
                     );
                     return true;
                 }
-                let (workspace_id, checkout_id) = self
-                    .display_source(key, &display.path)
-                    .unwrap_or((workspace_id, checkout_id));
+                let (workspace_id, checkout_id) = source.unwrap_or((workspace_id, checkout_id));
                 match self.document_source(&workspace_id, &checkout_id) {
                     Ok((root, channel)) => self.start_document_open(
                         root,
@@ -2918,13 +3170,15 @@ impl Runtime {
                             placement: None,
                         },
                     ),
-                    Err(message) => self.insert_unavailable_file_tab(
-                        &workspace_id,
-                        &checkout_id,
-                        &display.path,
-                        display.preview,
-                        message,
-                    ),
+                    Err(message) => {
+                        self.insert_unavailable_file_tab(
+                            &workspace_id,
+                            &checkout_id,
+                            &display.path,
+                            display.preview,
+                            message,
+                        );
+                    }
                 }
                 true
             }
@@ -3011,13 +3265,15 @@ impl Runtime {
                                 placement: None,
                             },
                         ),
-                        Err(message) => self.insert_unavailable_file_tab(
-                            &workspace_id,
-                            &checkout_id,
-                            path,
-                            false,
-                            message,
-                        ),
+                        Err(message) => {
+                            self.insert_unavailable_file_tab(
+                                &workspace_id,
+                                &checkout_id,
+                                path,
+                                false,
+                                message,
+                            );
+                        }
                     }
                 }
             }
@@ -3042,8 +3298,10 @@ impl Runtime {
             return;
         };
         let desk = store.front.as_ref().map(|key| self.front_place(key));
+        let desk_generation = self.desk_views_generation();
         if store.reconciled.as_ref().is_some_and(|seen| {
             seen.generation == store.generation
+                && seen.desk_generation == desk_generation
                 && seen.front == store.front
                 && seen.desk == desk
                 && seen.active == self.snapshot.editor.active_tab_id
@@ -3079,6 +3337,15 @@ impl Runtime {
             })
             .collect();
         let roots = self.checkout_roots();
+        // Desk's desk binds its files first, so no Workspace takes in a
+        // document it shows (PRD desk-own-desk D-11).
+        if let Some(layout) = self.desk_views_mut() {
+            let (changed, stored) = reconcile_desk_layout(layout, &tabs);
+            if changed {
+                self.desk_views_changed(stored);
+            }
+        }
+        let store = self.workspace_views.as_ref().expect("checked above");
         let shown = ShownByViews::of(
             self.every_view_layout()
                 .map(|(key, _, layout)| (key, layout)),
@@ -3121,7 +3388,7 @@ impl Runtime {
                 {
                     view.tray_entry(match front {
                         Place::Tray(tab) => tab,
-                        Place::Shelf => unreachable!("a desk is in front"),
+                        Place::Shelf | Place::Desk => unreachable!("a tab's desk is in front"),
                     });
                     stored |= view.move_view(&id, front).is_some();
                 }
@@ -3155,7 +3422,7 @@ impl Runtime {
                 .views()
                 .filter_map(|display| display.tab_id.clone())
                 .collect();
-            // Nor is a file Desk holds: its tab panel shows it (PRD desk-2-ui D-22).
+            // Nor is a file Desk's desk shows (PRD desk-own-desk D-11).
             let owned: HashSet<String> = tabs
                 .iter()
                 .filter(|tab| {
@@ -3205,6 +3472,13 @@ impl Runtime {
                 );
             }
         }
+        if let Some(layout) = self.desk_views() {
+            for display in layout.displays() {
+                if let Some(tab_id) = &display.tab_id {
+                    *every_preview.entry(tab_id.clone()).or_insert(true) &= display.preview;
+                }
+            }
+        }
         // The tab's own flag says what its displays say.
         let mut strips = false;
         for tab in &mut self.snapshot.editor.tabs {
@@ -3234,9 +3508,12 @@ impl Runtime {
             .as_ref()
             .and_then(|store| store.front.as_ref())
             .map(|key| self.front_place(key));
+        // Counted after this pass's own binding of Desk's desk.
+        let desk_generation = self.desk_views_generation();
         let store = self.workspace_views.as_mut().expect("checked above");
         store.derived_active = self.snapshot.editor.active_tab_id.clone();
         store.reconciled = Some(Reconciled {
+            desk_generation,
             tabs: self.snapshot.editor.tabs.clone(),
             active: self.snapshot.editor.active_tab_id.clone(),
             front: store.front.clone(),
@@ -3432,6 +3709,13 @@ impl Runtime {
     /// draws: the one card whose data is read (PRD lane-desk-pair-view,
     /// conductor decision 3).
     pub(super) fn shown_card(&self) -> Option<&crate::model::DetailItem> {
+        // While Desk's room is the place in front, the card in front of
+        // Desk's desk is the one read (PRD desk-own-desk B4).
+        if self.snapshot.ui_state.recent_places.first() == Some(&crate::model::RecentPlace::Desk)
+            && let Some(card) = self.desk_front_card()
+        {
+            return Some(card);
+        }
         let key = self.workspace_views.as_ref()?.front.as_ref()?;
         let layout = self.drawn_tray_layout(key)?;
         let area = layout.active_area();
@@ -3454,9 +3738,9 @@ impl Runtime {
                 visible.push(tab_id.clone());
             }
         }
-        // The files Desk's tab panel holds, at most `MAX_DESK_FILES`: which
-        // of them is in front is the window's.
-        for tab_id in self.desk_file_tabs() {
+        // The files in front of Desk's desk's areas: whether the desk is
+        // drawn is the window's (PRD desk-own-desk D-11).
+        for tab_id in self.desk_front_documents() {
             if self.editor_documents.contains_key(&tab_id) && !visible.contains(&tab_id) {
                 visible.push(tab_id);
             }
@@ -3576,6 +3860,32 @@ impl Runtime {
             })
     }
 
+    /// The checkout a display reads its file from: the one a View of Desk's
+    /// desk names, else `display_source` of its Workspace.
+    pub(super) fn display_source_of(
+        &self,
+        key: &WorkspaceKey,
+        display: &Display,
+    ) -> Option<(String, String)> {
+        match &display.origin {
+            Some(origin) => self.checkout_ids(&origin.device_id, &origin.path),
+            None => self.display_source(key, &display.path),
+        }
+    }
+
+    /// The catalog's ids of the checkout at `path` on `device`.
+    pub(super) fn checkout_ids(&self, device: &str, path: &str) -> Option<(String, String)> {
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == device)
+            .find_map(|workspace| {
+                workspace
+                    .checkouts
+                    .iter()
+                    .find(|checkout| checkout.path == path)
+                    .map(|checkout| (workspace.id.clone(), checkout.id.clone()))
+            })
+    }
+
     /// What a display's state reads that is the same for every display of
     /// the Workspace `key`, taken once per tree rather than per display.
     fn display_facts(&self, key: &WorkspaceKey) -> DisplayFacts<'_> {
@@ -3649,11 +3959,15 @@ impl Runtime {
                 ),
             };
         }
-        if let Some(reason) = &facts.wait {
-            return (ViewDisplayState::Waiting, Some(reason.clone()));
+        let wait = match &display.origin {
+            Some(origin) => self.view_root_wait(&origin.key()),
+            None => facts.wait.clone(),
+        };
+        if let Some(reason) = wait {
+            return (ViewDisplayState::Waiting, Some(reason));
         }
         if display.kind == DisplayKind::File
-            && self.display_source(&facts.key, &display.path).is_some_and(
+            && self.display_source_of(&facts.key, display).is_some_and(
                 |(workspace_id, checkout_id)| {
                     self.document_opens_path(&workspace_id, &checkout_id, &display.path)
                 },
@@ -3755,9 +4069,14 @@ impl Runtime {
         };
         let owner_pane = self.owner_pane_of(display, opener.as_ref(), sessions);
         let file = display.kind == DisplayKind::File;
+        let origin_homes = display
+            .origin
+            .as_ref()
+            .map(|origin| self.machine_homes(&origin.device_id));
+        let homes = origin_homes.as_ref().unwrap_or(&facts.homes);
         let home_relative = file
             .then(|| {
-                facts.homes.iter().find_map(|home| {
+                homes.iter().find_map(|home| {
                     hide_platform::path::wire_relative(home, &display.path)
                         .ok()
                         .filter(|below| !below.is_root())
@@ -3799,6 +4118,7 @@ impl Runtime {
             owner_pane,
             pasted: file && hide_node_link::attachments::is_clipboard_wire_path(&display.path),
             home_relative,
+            origin: display.origin.clone(),
         }
     }
 

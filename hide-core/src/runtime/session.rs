@@ -5035,8 +5035,8 @@ impl Runtime {
                 // cannot serve the file it still exists there, so
                 // `explorer.created_not_opened` rides the finished slot and the
                 // tree keeps the created file (B10 pattern).
-                // Desk's Explorer opens its created file in the window's room,
-                // which then holds it (`desk_files`), so the core opens none.
+                // Desk's Explorer opens its created file on Desk's own desk with
+                // its own `desk_view_open`, so the core opens none here.
                 if operation.kind == files::ExplorerOperationKind::FileCreate && !target.desk {
                     match self.prepare_file_tab(
                         &target.workspace_id,

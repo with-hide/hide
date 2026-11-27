@@ -442,8 +442,7 @@ impl Boundary {
         }
         let count = accepted.len();
         *self.roots_for_write() = accepted;
-        eprintln!(
-            "{}",
+        hide_core::diagnostic!(
             serde_json::json!({"component": "hided", "kind": "boundary.roots", "roots": count})
         );
     }

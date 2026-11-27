@@ -822,7 +822,7 @@ export const useShellStore = create<Store>((set, get) => ({
                 ...(payload.rest?.terminal ? { terminal: { ...previous?.terminal, ...payload.rest.terminal } } : {}),
                 ...(payload.rest?.status ? { status: { ...previous?.status, ...payload.rest.status } } : {}),
               }
-            : { ...previous, ...payload.rest, workspace_view: payload.rest?.workspace_view };
+            : { ...previous, ...payload.rest, workspace_view: payload.rest?.workspace_view, desk_view: payload.rest?.desk_view };
       const rest = share(previous, incoming);
       const diagnostics: string[] = [];
       const agents =

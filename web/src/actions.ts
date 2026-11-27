@@ -57,7 +57,6 @@ import {
   explorerContext,
   focusedCheckout,
   frontCheckout,
-  checkoutAtRoot,
   checkoutOfPane,
   nextSidebarLens,
   sameDetailItem,
@@ -95,9 +94,9 @@ import { automationOpening, homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
-import { deskOn } from "./desk";
-import { closePanel as closeDeskPanel, closeSession as closeDeskSession, openSession as openDeskSession, openTab as openDeskTab, toggleExplorer as toggleDeskExplorer, type DeskTab } from "./deskRoom";
-import type { DeskFileRef } from "./deskFiles";
+import { deskOn, laneCards } from "./desk";
+import { closeSession as closeDeskSession, hideDesk, openSession as openDeskSession, showDesk, toggleExpanded as toggleDeskExpanded, toggleExplorer as toggleDeskExplorer } from "./deskRoom";
+import { deskOpenSend, deskTabCount, deskViewOf, deskWorkspaceOf, DESK_SCREEN, isDeskWorkspace, type DeskOpen } from "./deskDesk";
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type ExplorerTarget, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
@@ -895,8 +894,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     return view?.layout ? { workspace: { device_id: view.device_id, path: view.path }, layout: view.layout } : null;
   };
 
-  /** The Workspace in front, whose View areas an open lands in. */
+  /** The Workspace in front, whose View areas an open lands in; in Desk's room, Desk's own desk (PRD desk-own-desk D-03). */
   const frontViewWorkspace = (): ViewWorkspace | null => {
+    const desk = deskWorkspaceOf(rest());
+    if (ui().screen?.kind === "desk" && desk) return desk;
     const view = workspaceViewOf(rest());
     return view ? { device_id: view.device_id, path: view.path } : null;
   };
@@ -2803,8 +2804,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * A session opened beside Desk (PRD desk-2-ui B2, B3, B7, B13, B47): Desk
      * comes to the front with that session's conversation at its right;
-     * `answer` gives the keyboard to its input box. Another session's tab
-     * panel closes (D-14).
+     * `answer` gives the keyboard to its input box. Desk's desk stays as it
+     * was (PRD desk-own-desk D-03, B13, B36).
      */
     openDeskSession(paneId: string, options: { answer?: boolean } = {}) {
       if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
@@ -2813,28 +2814,29 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * The tab panel's open contract (PRD desk-2-ui D-05, D-08, D-22-D-24,
-     * B16, B19, B20, B36-B39): `tab` opens in the tab panel, which floats
-     * beside the session open beside Desk, or at the window's right edge when
-     * none is (`deskRoom.ts`, `panelPlace`). A file is the app's own file
-     * view: its checkout comes in front in the core, which places the file in
-     * its preview slot or keeps it (`preview`), and the panel draws that
-     * display, so editing and ⌘S are the app's.
+     * Every open in Desk's room (PRD desk-own-desk D-12, D-15, B10, B11, B14,
+     * B37-B39): one `desk_view_open`, which puts the file, the output or the
+     * card in front of Desk's own desk, and the desk shows; the keyboard
+     * follows a file or a card there once the core shows it (`ViewAreas.tsx`).
+     * A pull request no project lists opens its page outside Hide.
      */
-    deskOpen(tab: DeskTab, options: { preview?: boolean; beside?: boolean } = {}) {
+    deskOpen(open: DeskOpen, options: { preview?: boolean; beside?: boolean } = {}) {
       if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
-      if (tab.kind === "file" && !checkoutAtRoot(rest(), tab.device_id, tab.root)) return diagnostic("desk file: its checkout is not registered");
+      const listed = (output: import("./snapshot").DeskOutput) => laneCards(useShellStore.getState().deskJobs).some((job) => job.outputs.some((one) => one.id === output.id && one.device_id === output.device_id && one.checkout === output.checkout));
+      const sent = deskOpenSend(rest(), open, listed, options);
+      if ("refused" in sent) return diagnostic(sent.refused);
+      if ("link" in sent) return this.openLink(sent.link, true);
       if (ui().screen?.kind !== "desk") this.openDesk();
-      // The room's file tabs reach hided as one `desk_files` set (`deskFiles.ts`).
-      ui().setDeskRoom((room) => openDeskTab(room, tab, options));
+      ui().setDeskRoom(showDesk);
+      const desk = deskWorkspaceOf(rest());
+      if (sent.focus && desk) ui().setViewFocusRequest("card" in sent.focus ? sent.focus : { workspace: workspaceKey(desk), opened: sent.focus.opened });
+      dispatch({ schema_version: 2, kind: "desk_view_open", payload: sent.send });
     },
 
     /**
-     * A ⌘P pick on Desk (PRD desk-2-ui D-23, B37, B38): the file opens in the
-     * tab panel, as the checkout's preview tab as the app's ⌘P opens it, or
-     * to the side (`beside`, ⌘↵): a second view of the file in the panel, the
-     * window's own, which leaves nothing in any Workspace's layout. The
-     * Explorer column stays as it was.
+     * A ⌘P pick on Desk (PRD desk-own-desk D-15, B38, B39): the file opens on
+     * Desk's desk, as the area's preview tab as the app's ⌘P opens it, or in
+     * the area to the right (`beside`, ⌘↵). The Explorer column stays as it was.
      */
     openDeskIndexEntry(hit: { device_id: string; root_path: string; path: string }, beside = false) {
       ui().closeOverlay();
@@ -2849,39 +2851,31 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * The whole set of files Desk's room shows (PRD desk-2-ui B19, B36, B37,
-     * `deskFiles.ts`): hided holds them for this window and lets them go
-     * when it leaves. The room's watcher calls it.
-     */
-    deskFiles(files: DeskFileRef[]) {
-      dispatch({ schema_version: 2, kind: "desk_files", payload: { files } });
-    },
-
-    /** A Desk file the core could not open, read again (B28). */
-    deskFileRetry(file: { workspace_id: string; checkout_id: string; device_id: string; path: string }) {
-      dispatch({ schema_version: 2, kind: "desk_file_retry", payload: file });
-    },
-
-    /** A window opened one of Desk's waiting opens in its room (`deskOpens.ts`): the core takes it off the list. */
-    deskOpenTaken(id: number) {
-      dispatch({ schema_version: 2, kind: "desk_open_taken", payload: { id } });
-    },
-
-    /**
-     * `파일 ⇧⌘E` beside Desk (PRD desk-2-ui D-22, B35): the Explorer of the
-     * open session's checkout in the tab panel's tool column, or that column
-     * closed. The Explorer lists that checkout whatever is in front.
+     * `파일 ⇧⌘E` beside Desk (PRD desk-own-desk B37): the Explorer of the open
+     * session's checkout in the desk's tool column, or that column closed.
+     * The Explorer lists that checkout whatever is in front.
      */
     deskToggleExplorer() {
       const room = ui().deskRoom;
       if (ui().screen?.kind !== "desk" || !room.session) return diagnostic("desk explorer: no session open beside Desk");
-      if (!room.panel?.explorer && !checkoutOfPane(rest(), room.session)) return diagnostic("desk explorer: the session's checkout is not listed");
-      ui().setDeskRoom(toggleDeskExplorer);
+      if (!room.explorer && !checkoutOfPane(rest(), room.session)) return diagnostic("desk explorer: the session's checkout is not listed");
+      const tabs = deskTabCount(deskViewOf(rest()));
+      ui().setDeskRoom((now) => toggleDeskExplorer(now, tabs));
     },
 
-    /** The session beside Desk's `✕`, or Escape with no layer open: the tab panel closes with it (B6). */
+    /** The session beside Desk's `✕`, or Escape with no layer open; Desk's desk stays (B13). */
     deskCloseSession() {
       ui().setDeskRoom(closeDeskSession);
+    },
+
+    /** The desk's `✕`, Escape or a press on the dimmed outside (B18): the desk hides and its tabs stay. */
+    deskHideDesk() {
+      ui().setDeskRoom(hideDesk);
+    },
+
+    /** The desk's `⤢` (B40). */
+    deskToggleExpanded() {
+      ui().setDeskRoom(toggleDeskExpanded);
     },
 
     /**
@@ -2899,11 +2893,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** Whether a sidebar row's press opens its session beside Desk: Desk in front and no ⌘-click (PRD desk-2-ui B3, B5, B44). */
     rowOpensBesideDesk(how?: { tab: boolean }): boolean {
       return ui().screen?.kind === "desk" && deskOn(useShellStore.getState().desk) && how?.tab !== true;
-    },
-
-    /** The tab panel's `✕`, Escape or a press on the dimmed outside (B21). */
-    deskClosePanel() {
-      ui().setDeskRoom(closeDeskPanel);
     },
 
     /**
@@ -2979,12 +2968,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** The operator saw a job's card, which reads its row as the sidebar does. */
     deskJobRead(id: string) {
       dispatch({ schema_version: 2, kind: "desk_job_read", payload: { id } });
-    },
-
-    /** The operator looked at a job's output in the lane's 보기 column (B31): its View is seen where it was opened. */
-    deskOutputSeen(output: import("./snapshot").DeskOutput) {
-      if (output.seen || !output.device_id || !output.checkout) return;
-      dispatch({ schema_version: 2, kind: "desk_output_seen", payload: { device_id: output.device_id, checkout: output.checkout, id: output.id } });
     },
 
     /**
@@ -3418,10 +3401,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const area = owner.kind === "view" && frame ? findArea(frame.layout.root, owner.areaId) : null;
       const checkout = frontCheckout(rest());
       const tab = remoteContext(rest()) ? remoteView(remoteContext(rest())?.session ?? null, rest()?.workspace_view)?.tab : current()?.tab;
+      // In Desk's room the View areas are Desk's own desk, drawn only while it shows (PRD desk-own-desk B6).
+      const onDesk = ui().screen?.kind === "desk";
       const target = closeShortcutPolicy({
         owner,
-        workspace: ui().screen?.kind === "workspace" ? checkout?.id ?? null : null,
-        displayId: viewUp("documents") ? area?.active ?? null : null,
+        workspace: onDesk ? DESK_SCREEN : ui().screen?.kind === "workspace" ? checkout?.id ?? null : null,
+        displayId: (onDesk ? drawnViews() !== null : viewUp("documents")) ? area?.active ?? null : null,
         fixed: area?.displays.some((display) => display.id === area.active && isFixedDisplay(display)) ?? false,
         paneIds: tab?.panes.map((pane) => pane.id) ?? [],
       });
@@ -3446,7 +3431,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       }
       const target = newTabPolicy({
         owner: keyboardCommandOwner(),
-        workspace: ui().screen?.kind === "workspace" ? frontCheckout(rest())?.id ?? null : null,
+        workspace: ui().screen?.kind === "desk" ? DESK_SCREEN : ui().screen?.kind === "workspace" ? frontCheckout(rest())?.id ?? null : null,
         viewAreaIds: drawn ? areasOf(drawn.layout.root).map((area) => area.id) : [],
         paneAreas,
       });
@@ -4089,7 +4074,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * ⌘E in Desk's room (B6; operator decision 2026-11-25, replacing PRD desk-2-ui D-13's nothing): the session
-     * panel closes, with its tab panel, as its `✕` does, and pressed again opens the session just closed, as a
+     * panel closes as its `✕` does, and pressed again opens the session just closed, as a
      * sidebar row's press does, with the keyboard in its input box as a work tab's ⌘E gives it back to the pane. A
      * session whose pane is gone since (closed, archived, woken in another pane) is not reopened as an empty
      * panel: the memory is cleared and only the log says so.
@@ -4304,6 +4289,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     openBrowser(url: string, workspace?: ViewWorkspace, areaId?: string, besideDisplay?: string, openerPane?: string) {
       const target = workspace ?? frontViewWorkspace();
       if (!target) return diagnostic("browser_open: no Workspace in front");
+      if (isDeskWorkspace(target)) ui().setDeskRoom(showDesk);
       // The keyboard goes with a page the operator opened, as with a file;
       // a page's own new tab leaves it with the page that asked, and a New
       // tab's address field takes it as it mounts.

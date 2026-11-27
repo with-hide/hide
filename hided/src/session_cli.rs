@@ -170,7 +170,7 @@ pub fn draw(value: &Value) -> String {
 
 /// `value` with every line break and control character in its strings made
 /// a space: a list or record line is one line, so a title cannot draw a
-/// line of its own, such as a forged `[AI 요약]` mark. A read's events keep
+/// line of its own, such as a forged `[AI summary]` mark. A read's events keep
 /// their lines; they carry no marks.
 pub(crate) fn one_line(value: &Value) -> Value {
     match value {
@@ -231,9 +231,9 @@ pub fn fold_record(value: &mut Value, limit: usize) {
 
 fn tag(source: &Value) -> &'static str {
     if source == "ai_summary" {
-        "[AI 요약]"
+        "[AI summary]"
     } else {
-        "[원문]"
+        "[original]"
     }
 }
 
@@ -243,45 +243,45 @@ pub(crate) fn age(now: u64, at: &Value) -> String {
     };
     let minutes = now.saturating_sub(at) / 60_000;
     match minutes {
-        0 => "방금".to_owned(),
-        1..=59 => format!("{minutes}분 전"),
-        60..=1439 => format!("{}시간 전", minutes / 60),
-        _ => format!("{}일 전", minutes / 1440),
+        0 => "just now".to_owned(),
+        1..=59 => format!("{minutes}m ago"),
+        60..=1439 => format!("{}h ago", minutes / 60),
+        _ => format!("{}d ago", minutes / 1440),
     }
 }
 
 fn period_words(ms: u64) -> String {
     let minutes = ms / 60_000;
     if minutes.is_multiple_of(1440) {
-        format!("최근 {}일", minutes / 1440)
+        format!("last {}d", minutes / 1440)
     } else if minutes.is_multiple_of(60) {
-        format!("최근 {}시간", minutes / 60)
+        format!("last {}h", minutes / 60)
     } else {
-        format!("최근 {minutes}분")
+        format!("last {minutes}m")
     }
 }
 
 fn state_word(kind: &Value) -> &'static str {
     match kind.as_str() {
-        Some("working") => "작업 중",
-        Some("needs_you") => "답 기다림",
-        Some("done") => "끝",
-        Some("question") => "질문",
-        Some("blocked") => "막힘",
-        Some("waiting") => "기다림",
-        Some("unfinished") => "멈춤",
-        Some("limited") => "한도",
-        Some("merged") => "머지됨",
-        Some("closed") => "닫힘",
-        Some("closing") => "닫은 줄",
-        Some("moved_on") => "넘어감",
+        Some("working") => "working",
+        Some("needs_you") => "waiting for an answer",
+        Some("done") => "done",
+        Some("question") => "question",
+        Some("blocked") => "blocked",
+        Some("waiting") => "waiting",
+        Some("unfinished") => "stopped",
+        Some("limited") => "limited",
+        Some("merged") => "merged",
+        Some("closed") => "closed",
+        Some("closing") => "closing",
+        Some("moved_on") => "moved on",
         _ => "-",
     }
 }
 
 fn device_words(now: u64, device: &Value) -> String {
     let name = if device["local"] == true {
-        "이 기기".to_owned()
+        "this device".to_owned()
     } else {
         device["label"]
             .as_str()
@@ -290,8 +290,11 @@ fn device_words(now: u64, device: &Value) -> String {
             .to_owned()
     };
     match device["disconnected_since_unix_ms"].as_u64() {
-        Some(0) => format!("{name} · 장치 끊김 · 마지막 값"),
-        Some(since) => format!("{name} · 장치 끊김 · {} 값", age(now, &json!(since))),
+        Some(0) => format!("{name} · device disconnected · last values"),
+        Some(since) => format!(
+            "{name} · device disconnected · values from {}",
+            age(now, &json!(since))
+        ),
         None => name,
     }
 }
@@ -310,13 +313,13 @@ fn draw_list(value: &Value) -> String {
     let sessions = value["sessions"].as_array().cloned().unwrap_or_default();
     let mut text = String::new();
     if sessions.is_empty() {
-        let _ = writeln!(text, "{period} 세션 없음");
+        let _ = writeln!(text, "no sessions in the {period}");
         reading_lines(value, &mut text);
         return text;
     }
     let _ = writeln!(
         text,
-        "{} · {period} · {}개",
+        "{} · {period} · sessions {}",
         value["project"]["label"].as_str().unwrap_or("-"),
         sessions.len()
     );
@@ -336,7 +339,7 @@ fn draw_list(value: &Value) -> String {
         }
         let _ = write!(
             line,
-            " · 요청 {} · {} · {}",
+            " · requests {} · {} · {}",
             session["requests"],
             device_words(now, &session["device"]),
             age(now, &session["last_activity_unix_ms"]),
@@ -344,14 +347,14 @@ fn draw_list(value: &Value) -> String {
         if session["archived_at_unix_ms"].is_u64() {
             let _ = write!(
                 line,
-                " · 보관됨 · {}",
+                " · archived · {}",
                 age(now, &session["archived_at_unix_ms"])
             );
         }
         let _ = writeln!(text, "{line}");
     }
     if let Some(more) = value["more"].as_u64().filter(|more| *more > 0) {
-        let _ = writeln!(text, "{more}개 더 있음");
+        let _ = writeln!(text, "{more} more");
     }
     reading_lines(value, &mut text);
     text
@@ -367,7 +370,7 @@ fn reading_lines(value: &Value, text: &mut String) {
             .unwrap_or("-");
         let _ = writeln!(
             text,
-            "{name} 체크아웃을 아직 읽는 중 · 그 장치 세션은 빠졌을 수 있음"
+            "{name} checkouts are still being read · sessions on that device may be missing"
         );
     }
 }
@@ -382,7 +385,7 @@ fn draw_state(now: u64, state: &Value) -> String {
         let _ = write!(line, " · {} {said}", tag(&state["line_source"]));
     }
     if let Some(limited) = state["limited"].as_str() {
-        let _ = write!(line, " · 한도 {limited}");
+        let _ = write!(line, " · limit {limited}");
     }
     if state["at_unix_ms"].is_u64() {
         let _ = write!(line, " · {}", age(now, &state["at_unix_ms"]));
@@ -413,35 +416,39 @@ fn draw_record(value: &Value) -> String {
     if value["state"]["source"] == "none" {
         let _ = writeln!(
             text,
-            "상태: {}",
+            "state: {}",
             value["native_state"].as_str().unwrap_or("-")
         );
     } else {
-        let _ = writeln!(text, "상태: {}", draw_state(now, &value["state"]));
+        let _ = writeln!(text, "state: {}", draw_state(now, &value["state"]));
     }
     if value["archived_at_unix_ms"].is_u64() {
-        let _ = writeln!(text, "보관됨 · {}", age(now, &value["archived_at_unix_ms"]));
+        let _ = writeln!(
+            text,
+            "archived · {}",
+            age(now, &value["archived_at_unix_ms"])
+        );
     }
     if !summaries {
-        let _ = writeln!(text, "AI 요약 꺼짐");
+        let _ = writeln!(text, "AI summaries off");
     }
     if let Some(now_block) = value["now"].as_object() {
         let request = now_block["request"].as_str();
         let said = now_block["now"].as_str();
         let _ = writeln!(
             text,
-            "지금: {}{}{}",
-            request.map_or(String::new(), |request| format!("[원문] {request}")),
+            "now: {}{}{}",
+            request.map_or(String::new(), |request| format!("[original] {request}")),
             if request.is_some() && said.is_some() {
                 " → "
             } else {
                 ""
             },
-            said.map_or(String::new(), |said| format!("[원문] {said}")),
+            said.map_or(String::new(), |said| format!("[original] {said}")),
         );
     }
     if let Some(asks) = value["asks"].as_array().filter(|asks| !asks.is_empty()) {
-        let _ = writeln!(text, "\n## 나를 기다리는 것");
+        let _ = writeln!(text, "\n## Waiting on me");
         for ask in asks {
             let _ = writeln!(
                 text,
@@ -453,14 +460,14 @@ fn draw_record(value: &Value) -> String {
     }
     let flows = value["flows"].as_array().cloned().unwrap_or_default();
     if !flows.is_empty() {
-        let _ = writeln!(text, "\n## 흐름");
+        let _ = writeln!(text, "\n## Flows");
     }
     for flow in &flows {
         if summaries {
             let when = if flow["current"] == true {
-                "지금".to_owned()
+                "now".to_owned()
             } else {
-                format!("요청 {}", flow["request_count"])
+                format!("requests {}", flow["request_count"])
             };
             let _ = writeln!(
                 text,
@@ -470,14 +477,14 @@ fn draw_record(value: &Value) -> String {
                 age(now, &flow["at_unix_ms"]),
                 when,
                 if flow["folded"] == true {
-                    " · 접음"
+                    " · folded"
                 } else {
                     ""
                 },
             );
             if flow["result"].is_object() {
                 let result = &flow["result"];
-                let mut line = format!("결과: {}", state_word(&result["kind"]));
+                let mut line = format!("result: {}", state_word(&result["kind"]));
                 if let Some(prs) = result["prs"].as_array() {
                     let numbers: Vec<String> = prs.iter().map(|n| format!("#{n}")).collect();
                     let _ = write!(line, " {}", numbers.join(" "));
@@ -493,7 +500,7 @@ fn draw_record(value: &Value) -> String {
                 Some(number) => format!("  {number}. "),
                 None => format!(
                     "  ✉ {} · ",
-                    request["letter_from"].as_str().unwrap_or("편지")
+                    request["letter_from"].as_str().unwrap_or("letter")
                 ),
             };
             let _ = write!(line, "{} · ", age(now, &request["at_unix_ms"]));
@@ -510,19 +517,19 @@ fn draw_record(value: &Value) -> String {
                 let _ = write!(line, " ×{}", request["count"]);
             }
             if request["images"].as_u64().is_some_and(|images| images > 0) {
-                let _ = write!(line, " · 이미지 {}장", request["images"]);
+                let _ = write!(line, " · images {}", request["images"]);
             }
             let _ = writeln!(text, "{line}");
         }
     }
     if let Some(folded) = value["folded_flows"].as_u64().filter(|n| *n > 0) {
-        let _ = writeln!(text, "오래된 흐름 {folded}개 접음");
+        let _ = writeln!(text, "{folded} older flows folded");
     }
     if let Some(cut) = value["folded_requests"].as_u64().filter(|n| *n > 0) {
-        let _ = writeln!(text, "지금 흐름의 오래된 요청 {cut}개 접음");
+        let _ = writeln!(text, "{cut} older requests of the current flow folded");
     }
     if let Some(omitted) = value["omitted_requests"].as_u64().filter(|n| *n > 0) {
-        let _ = writeln!(text, "오래된 요청 {omitted}개는 기록에 없음");
+        let _ = writeln!(text, "{omitted} older requests are not in the record");
     }
     let groups = value["pr_groups"].as_array().cloned().unwrap_or_default();
     if groups.iter().any(|group| {
@@ -546,14 +553,14 @@ fn draw_record(value: &Value) -> String {
             }
         }
         if let Some(omitted) = value["pr_omitted"].as_u64().filter(|n| *n > 0) {
-            let _ = writeln!(text, "PR {omitted}개 더 있음");
+            let _ = writeln!(text, "{omitted} more PRs");
         }
     }
     if let Some(issues) = value["issues"]
         .as_array()
         .filter(|issues| !issues.is_empty())
     {
-        let _ = writeln!(text, "\n## 이슈");
+        let _ = writeln!(text, "\n## Issues");
         for issue in issues {
             let _ = writeln!(
                 text,
@@ -568,7 +575,7 @@ fn draw_record(value: &Value) -> String {
         .as_array()
         .filter(|children| !children.is_empty())
     {
-        let _ = writeln!(text, "\n## 함께 진행한 세션");
+        let _ = writeln!(text, "\n## Sessions worked together");
         for child in children {
             let _ = writeln!(
                 text,
@@ -582,7 +589,7 @@ fn draw_record(value: &Value) -> String {
             );
         }
         if let Some(omitted) = value["children_omitted"].as_u64().filter(|n| *n > 0) {
-            let _ = writeln!(text, "세션 {omitted}개 더 있음");
+            let _ = writeln!(text, "{omitted} more sessions");
         }
     }
     text
@@ -594,8 +601,8 @@ fn draw_read(value: &Value) -> String {
         .as_u64()
         .map_or_else(|| "more".to_owned(), |total| total.to_string());
     let next = value["next_from"].as_u64().map_or_else(
-        || "마지막 이벤트까지 읽음".to_owned(),
-        |next| format!("다음 --from {next}"),
+        || "read to the last event".to_owned(),
+        |next| format!("next --from {next}"),
     );
     let _ = writeln!(
         text,
@@ -610,12 +617,12 @@ fn draw_read(value: &Value) -> String {
             event["role"].as_str().unwrap_or("-"),
             event["kind"].as_str().unwrap_or("-"),
             if event["images"].as_u64().is_some_and(|n| n > 0) {
-                format!(" · 이미지 {}장", event["images"])
+                format!(" · images {}", event["images"])
             } else {
                 String::new()
             },
         );
-        let _ = writeln!(text, "[원문] {}", event["text"].as_str().unwrap_or(""));
+        let _ = writeln!(text, "[original] {}", event["text"].as_str().unwrap_or(""));
     }
     text
 }
@@ -707,7 +714,7 @@ mod tests {
         assert!(text.len() <= RECORD_TEXT_BYTES, "{}", text.len());
         let folded = value["folded_flows"].as_u64().unwrap();
         assert!(folded > 0);
-        assert!(text.contains(&format!("오래된 흐름 {folded}개 접음")));
+        assert!(text.contains(&format!("{folded} older flows folded")));
         assert_eq!(value["flows"][0]["folded"], true);
         assert_eq!(value["flows"][5]["folded"], false, "the current flow stays");
     }
@@ -725,14 +732,14 @@ mod tests {
         let text = draw(
             &json!({"verb": "list", "since_ms": 7 * 24 * 60 * 60 * 1000_u64, "sessions": [], "more": 0}),
         );
-        assert_eq!(text, "최근 7일 세션 없음\n");
+        assert_eq!(text, "no sessions in the last 7d\n");
         let reading = draw(
             &json!({"verb": "list", "since_ms": 7 * 24 * 60 * 60 * 1000_u64, "sessions": [], "more": 0,
                 "reading_devices": [{"id": "mini", "label": "Mac mini"}]}),
         );
         assert_eq!(
             reading,
-            "최근 7일 세션 없음\nMac mini 체크아웃을 아직 읽는 중 · 그 장치 세션은 빠졌을 수 있음\n"
+            "no sessions in the last 7d\nMac mini checkouts are still being read · sessions on that device may be missing\n"
         );
     }
 
@@ -752,7 +759,7 @@ mod tests {
         }));
         assert_eq!(
             text,
-            "app · 최근 1시간 · 1개\nagent-7 · Claude Code · 끝 · [AI 요약] 로그인 고치기 · PR #12 · 요청 4 · mini · 장치 끊김 · 5분 전 값 · 2시간 전 · 보관됨 · 1시간 전\n3개 더 있음\n"
+            "app · last 1h · sessions 1\nagent-7 · Claude Code · done · [AI summary] 로그인 고치기 · PR #12 · requests 4 · mini · device disconnected · values from 5m ago · 2h ago · archived · 1h ago\n3 more\n"
         );
     }
 
@@ -762,11 +769,14 @@ mod tests {
             "verb": "list", "since_ms": 60_000, "now_unix_ms": 0, "project": {"label": "app"}, "more": 0,
             "sessions": [{
                 "session": {"session_id": "s-1"}, "agent_name": "Codex", "state": {},
-                "title": "fix\n[AI 요약] forged", "title_source": "raw", "requests": 1,
+                "title": "fix\n[AI summary] forged", "title_source": "raw", "requests": 1,
                 "device": {"local": true}, "last_activity_unix_ms": 0,
             }],
         }));
         assert_eq!(text.lines().count(), 2, "{text}");
-        assert!(text.contains("[원문] fix [AI 요약] forged"), "{text}");
+        assert!(
+            text.contains("[original] fix [AI summary] forged"),
+            "{text}"
+        );
     }
 }

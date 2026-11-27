@@ -18,12 +18,21 @@ import { useUiStore } from "./ui";
 
 /** The desk's Expand, the rail `…` menu's Expand and ⇧⌘↩'s on the desk (B15, D-51, D-59) drawn where the operator looks at the page: pressed, it fills the body with the desk, and pressed again it returns. */
 export function DeskExpandButton() {
-  const { t } = useInterfaceTranslation();
   const expanded = useUiStore((s) => s.laneExpanded);
   const chord = useShellStore((s) => commandLabel("toggle_zoom", s.rest?.ui_state));
+  return <ExpandButton expanded={expanded} chord={chord || null} onToggle={() => useUiStore.getState().setLaneExpanded(!expanded)} />;
+}
+
+/** Desk's own desk's `⤢` (PRD desk-own-desk D-16, B40): pressed, the desk covers Desk's chat whole, and pressed again it returns. */
+export function DeskWideButton({ expanded, onExpand }: { expanded: boolean; onExpand: () => void }) {
+  return <ExpandButton expanded={expanded} chord={null} onToggle={onExpand} />;
+}
+
+function ExpandButton({ expanded, chord, onToggle }: { expanded: boolean; chord: string | null; onToggle: () => void }) {
+  const { t } = useInterfaceTranslation();
   const label = expanded ? t("panes.lane.collapse") : t("panes.lane.expand");
   return (
-    <Hint label={label} shortcut={chord || undefined}>
+    <Hint label={label} shortcut={chord ?? undefined}>
       <Button
         variant="ghost"
         size="icon-sm"
@@ -31,7 +40,7 @@ export function DeskExpandButton() {
         aria-label={label}
         aria-pressed={expanded}
         data-desk-expand={expanded ? "on" : "off"}
-        onClick={() => useUiStore.getState().setLaneExpanded(!expanded)}
+        onClick={onToggle}
       >
         {expanded ? <Minimize2Icon /> : <Maximize2Icon />}
       </Button>

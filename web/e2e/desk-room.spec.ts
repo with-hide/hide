@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { agentPane, reportedMarker } from "./agent-pane";
 import { agentIn, sendKeys, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { seedLedger, startHided, type Daemon } from "./hided-fixture";
@@ -13,10 +14,11 @@ import { enterWorkspace, screenshot } from "./wire";
 // PRD desk-2-ui B2-B7, B19, B21, B28, B35, B36, B43, B44, B47 and PRD
 // session-docs-and-assistant B41: Desk's room with a session opened beside it
 // from the sidebar, ⌘J between that session and its Agent tab, a file of the
-// tab panel saved without leaving a draft behind, the corner's notices above
+// desk saved without leaving a draft behind, the corner's notices above
 // Desk's input boxes, a sleeping session woken from beside Desk, a child's
-// ancestors in its head, and Settings › Labs › Desk's switch, off on a new
-// install. Each test starts one stack and asserts one contract.
+// ancestors in its head, Settings › Labs › Desk's switch, off on a new
+// install, and the session's 뷰 N list (PRD desk-own-desk B21-B25). Each test
+// starts one stack and asserts one contract.
 //
 // A Desk job is a spawn of Desk's own identity in the delivery ledger. Only
 // Desk's agent makes one, and the stack runs none, so the fixture writes the
@@ -28,8 +30,8 @@ type Desk = { page: Page; engine: AgentFixture; daemon: Daemon; pane: string };
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
-/** The ledger with Desk registered and one completed spawn of Desk's whose child runs in `pane`. */
-function deskLedger(node: string, pane: string, repo: string): unknown {
+/** The ledger with Desk registered and one completed spawn of Desk's whose child runs in `pane` on `session`. */
+function deskLedger(node: string, pane: string, repo: string, session = "fixture-two"): unknown {
   const desk = { pane_id: "hide:desk", name: "hide:desk", kind: "hide", device_id: node, session: digest("hide:desk") };
   return {
     version: 1,
@@ -38,7 +40,7 @@ function deskLedger(node: string, pane: string, repo: string): unknown {
     watches: [],
     agents: [
       { id: "agent-1", name: "hide:desk", machine: node, host_scope: "hide", native_machine: "hide", session: "hide:desk", instance: "hide:desk", pane: "hide:desk", parent: null, origin: null, project: null, actor: desk, ended: false, forked: false },
-      { id: "agent-3", name: "gallery-compare", machine: node, host_scope: "claude", native_machine: "claude", session: "fixture-two", instance: pane, pane, parent: null, origin: "agent-1", project: repo, actor: { pane_id: pane, name: "gallery-compare", kind: "claude", device_id: node, session: digest("fixture-two") }, ended: false, forked: false },
+      { id: "agent-3", name: "gallery-compare", machine: node, host_scope: "claude", native_machine: "claude", session, instance: pane, pane, parent: null, origin: "agent-1", project: repo, actor: { pane_id: pane, name: "gallery-compare", kind: "claude", device_id: node, session: digest(session) }, ended: false, forked: false },
     ],
     spawns: [
       { names: { workspace: "pending", tab: "pending" }, id: "spawn-2", parent: "agent-1", mode: "handoff", machine: null, intent: "desk-room-intent", name: "gallery-compare", kind: "claude", repo, branch: "main", requested_path: null, args: [], path: repo, pane, terminal: null, typed: 0, shell: null, child: "agent-3", completed: true, auto_watch_id: null, reserved_at_unix_ms: 1 },
@@ -86,13 +88,14 @@ async function startDesk(page: Page, name: string, open = true, agents = true): 
 const room = (page: Page) => page.locator("[data-desk-room]");
 const row = (page: Page, pane: string) => page.locator(`[data-agent-open="${pane}"]`);
 
-/** Opens `name` from the session's Explorer in Desk's tab panel, with the session beside Desk, and gives its editor. */
+/** Opens `name` from the session's Explorer on Desk's desk, with the session beside Desk, and gives its editor. */
 async function openDeskFile(page: Page, desk: Desk, name: string) {
   await row(page, desk.pane).click();
   await expect(page.locator(`[data-desk-thread-panel="${desk.pane}"]`)).toBeVisible();
   await page.locator("[data-desk-session-files]").click();
   await page.locator(`[data-desk-tab-panel] [data-explorer-row$="/${name}"]`).dblclick();
-  return page.locator(`[data-desk-file$="/${name}"] [data-editor-body] .cm-content`);
+  await expect(page.locator('[data-desk-tab-panel] [role="tab"][aria-selected="true"]')).toContainText(name);
+  return page.locator("[data-desk-tab-panel] [data-editor-body] .cm-content");
 }
 
 test("a sidebar row opens its session beside Desk, marked on its row, Escape closes it, and a ⌘-click goes to its tab (PRD desk-2-ui B2-B6, B21) @platform", async ({ page }) => {
@@ -118,6 +121,63 @@ test("a sidebar row opens its session beside Desk, marked on its row, Escape clo
   } finally {
     desk.daemon.stop();
     desk.engine.stop();
+  }
+});
+
+test("the session's 뷰 N list holds 볼 것 above 본 것, newest first, previews a row under the pointer, and a row opens on Desk's desk and turns seen (PRD desk-own-desk B21-B25)", async ({ page }) => {
+  // e2e: the list is drawn from what the session's own `hide file open` made the core record, and the row's press opens it through the core.
+  test.setTimeout(180_000);
+  // The session runs the stand-in in a shell pane, so `hide file open` runs as that agent; Desk's spawn names its reported session.
+  const engine = await startFixture({ agents: false });
+  const repo = path.join(engine.root, "fixture");
+  let daemon = await startHided(engine, "desk-room-views");
+  try {
+    fs.writeFileSync(path.join(repo, "notes.md"), "# Notes\n");
+    fs.writeFileSync(path.join(repo, "plan.md"), "# Plan\n");
+    const pane = engine.panes[0];
+    const agent = await agentPane(engine, daemon.stateDir, pane);
+    const session = fs.readFileSync(reportedMarker(engine.root, pane), "utf8");
+    daemon = await daemon.restart((stateDir) => {
+      seedLedger(stateDir, JSON.stringify(deskLedger(daemon.node, pane, repo, session)));
+    });
+    await page.goto("about:blank");
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await switchDesk(page, true);
+    await page.locator("[data-desk-sidebar-row]").click();
+    // Opened while the operator is on Desk, away from the agent's pane, both wait to be looked at.
+    for (const file of ["notes.md", "plan.md"]) {
+      const answer = await agent(["file", "open", file]);
+      expect(answer.status, answer.out).toBe(0);
+    }
+    await row(page, pane).click();
+    await expect(page.locator(`[data-desk-thread-panel="${pane}"]`)).toBeVisible();
+
+    const chip = page.locator("[data-desk-views]");
+    await expect(chip).toHaveAttribute("data-desk-views", "2");
+    await expect(chip).toHaveAttribute("data-desk-views-unseen", "true");
+    await chip.click();
+    const list = page.locator("[data-desk-views-list]");
+    const rows = list.locator("[data-desk-view-row]");
+    await expect(list.locator("[data-desk-views-group]")).toHaveCount(1);
+    await expect(rows).toHaveText([/plan\.md/, /notes\.md/]);
+    await rows.nth(1).hover();
+    await expect(page.locator("[data-desk-tile]")).toBeVisible();
+
+    await rows.nth(1).click();
+    await expect(list).toHaveCount(0);
+    await expect(page.locator('[data-desk-tab-panel] [role="tab"][aria-selected="true"]')).toContainText("notes.md");
+    await expect(page.locator("[data-desk-tab-panel]")).toHaveAttribute("data-desk-tab-panel", "beside_session");
+
+    await chip.click();
+    await expect(list.locator('[data-desk-views-group="to_look"]')).toContainText("1");
+    await expect(list.locator('[data-desk-views-group="seen"]')).toContainText("1");
+    await expect(rows).toHaveText([/plan\.md/, /notes\.md/]);
+    await expect(rows.nth(0)).toHaveAttribute("data-desk-view-unseen", "true");
+    await expect(rows.nth(1)).not.toHaveAttribute("data-desk-view-unseen", "true");
+  } finally {
+    daemon.stop();
+    engine.stop();
   }
 });
 
@@ -147,7 +207,7 @@ test("⌘J goes from the session beside Desk to its Agent tab and back to Desk w
   }
 });
 
-test("the session's Explorer opens a file in the tab panel as its checkout's own document, ⌘S saves it, and no Workspace View takes it in (PRD desk-2-ui B19, B28, B35, B36) @platform", async ({ page }) => {
+test("the session's Explorer opens a file on Desk's desk as its checkout's own document, ⌘S saves it, and no Workspace View takes it in (PRD desk-2-ui B19, B35, B36, desk-own-desk B2) @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-room-file");
   try {
@@ -163,20 +223,20 @@ test("the session's Explorer opens a file in the tab panel as its checkout's own
     await expect.poll(() => fs.readFileSync(file, "utf8")).toBe("plan saved\n");
     // Desk is still in front, and the Workspace's View never showed the file.
     await expect(page.locator("[data-desk-screen]")).toBeVisible();
-    await expect(page.locator('[data-view-area] [data-editor-path]')).toHaveCount(0);
+    await expect(page.locator('[data-workspace-screen]:not([data-workspace-screen="hide:desk"]) [data-editor-path]')).toHaveCount(0);
 
-    // B28: a file the core cannot read says why, and 다시 시도 reads it once it can.
+    // A file the core cannot read is an unavailable tab, and Retry reads it once it can (PRD desk-own-desk B2).
     // A mode bit locks a file only for an account that is not root, on a system that has them.
     if (process.platform !== "win32" && process.getuid?.() !== 0) {
       const locked = path.join(path.dirname(file), "locked.md");
       fs.writeFileSync(locked, "unlocked\n");
       fs.chmodSync(locked, 0o000);
       await page.locator('[data-desk-tab-panel] [data-explorer-row$="/locked.md"]').dblclick();
-      const retry = page.locator('[data-desk-file-retry$="/locked.md"]');
+      const retry = page.locator("[data-desk-tab-panel] [data-retry-unavailable]");
       await expect(retry).toBeVisible();
       fs.chmodSync(locked, 0o644);
       await retry.click();
-      await expect(page.locator('[data-desk-file$="/locked.md"] [data-editor-body] .cm-content')).toContainText("unlocked");
+      await expect(page.locator("[data-desk-tab-panel] [data-editor-body] .cm-content")).toContainText("unlocked");
     }
   } finally {
     desk.daemon.stop();
@@ -184,7 +244,7 @@ test("the session's Explorer opens a file in the tab panel as its checkout's own
   }
 });
 
-test("a file saved with ⌘S in Desk's tab panel leaves no unsaved draft in the browser, so a reload raises no draft notice (PRD desk-2-ui B36) @platform", async ({ page }) => {
+test("a file saved with ⌘S on Desk's desk leaves no unsaved draft in the browser, so a reload raises no draft notice (PRD desk-2-ui B36) @platform", async ({ page }) => {
   // e2e: the draft lives in the page's IndexedDB across a save through the core and a reload of the page.
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-room-saved-draft");

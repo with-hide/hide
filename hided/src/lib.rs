@@ -370,7 +370,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             if let Err(error) =
                 hide_core::diagnostics::record_now(&env.state_dir.join("core-state.json"), record)
             {
-                eprintln!("the start refusal could not be logged: {error}");
+                hide_core::diagnostic!(serde_json::json!({
+                    "kind": "diagnostics.record_failed", "record": "start_refusal", "message": error.to_string()
+                }));
             }
             refusal.to_string()
         })?;
@@ -386,7 +388,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         if let Err(error) =
             hide_core::diagnostics::record_now(&env.state_dir.join("core-state.json"), record)
         {
-            eprintln!("the conversion could not be logged: {error}");
+            hide_core::diagnostic!(serde_json::json!({
+                "kind": "diagnostics.record_failed", "record": "node_migration_converted", "message": error.to_string()
+            }));
         }
     }
     // A device an earlier build registered under its SSH alias takes its
@@ -397,7 +401,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         if let Err(error) =
             hide_core::diagnostics::record_now(&env.state_dir.join("core-state.json"), record)
         {
-            eprintln!("the device naming could not be logged: {error}");
+            hide_core::diagnostic!(serde_json::json!({
+                "kind": "diagnostics.record_failed", "record": "device_naming", "message": error.to_string()
+            }));
         }
     };
     let named =
@@ -446,14 +452,11 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     let token = seat.token.clone();
     let port = seat.port;
     seat.starting("core.engine");
-    eprintln!(
-        "{}",
-        serde_json::json!({
-            "component": "hided",
-            "kind": "engine.own",
-            "message": "the core runs its own engine over this node's pane holders",
-        })
-    );
+    hide_core::diagnostic!(serde_json::json!({
+        "component": "hided",
+        "kind": "engine.own",
+        "message": "the core runs its own engine over this node's pane holders",
+    }));
     let options = CoreOptions {
         schema_version: SCHEMA_VERSION,
         // A relative HOME names no account folder; the core then reports
@@ -747,7 +750,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         request_view_demand: Arc::new(demand::ObservationDemand::default()),
         window_focus_demand: Arc::new(demand::ObservationDemand::default()),
         origin_holds: Arc::new(demand::OriginHolds::default()),
-        desk_files: Arc::new(demand::DeskFileHolds::default()),
         thread_holds: Arc::new(demand::ThreadHolds::default()),
         daemon_info: Arc::new(serde_json::json!({
             "version": VERSION,
@@ -894,8 +896,7 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
         .ok_or("no core placement record: this state folder starts a core")?;
     // Its records go where the core's would: Logs beside the state folder.
     if let Err(error) = hide_core::diagnostics::install(&env.state_dir.join("core-state.json")) {
-        eprintln!(
-            "{}",
+        hide_core::diagnostic!(
             serde_json::json!({"kind": "diagnostics.open_failed", "message": error.to_string()})
         );
     }
@@ -1100,14 +1101,11 @@ fn roots_changed(rest: &hide_core::RestSections, have: u64) -> bool {
 
 /// The one line a failed root read leaves.
 pub(crate) fn roots_failed(message: &str) {
-    eprintln!(
-        "{}",
-        serde_json::json!({
-            "component": "hided",
-            "kind": "boundary.roots_failed",
-            "message": message,
-        })
-    );
+    hide_core::diagnostic!(serde_json::json!({
+        "component": "hided",
+        "kind": "boundary.roots_failed",
+        "message": message,
+    }));
 }
 
 /// Keeps the boundary's checkout roots in step with the core: one read per
@@ -1163,12 +1161,9 @@ fn apply_snapshot(
     boundary.set_roots(roots.clone());
     boundary.set_device_roots(device_roots_from_rest(rest, boundary.node().as_str()));
     if let Err(error) = core.set_file_roots(boundary.opened_roots()) {
-        eprintln!(
-            "{}",
-            serde_json::json!({
-                "component": "hided", "kind": "boundary.core_roots_failed", "message": error
-            })
-        );
+        hide_core::diagnostic!(serde_json::json!({
+            "component": "hided", "kind": "boundary.core_roots_failed", "message": error
+        }));
     }
     let device_roots = device_roots_from_rest(rest, boundary.node().as_str());
     index.set_roots(

@@ -9,6 +9,8 @@
 //! it. A key's value is never an argument: `--env` and `--header` take a
 //! name, and the operator types its value on the confirm.
 
+#![allow(clippy::disallowed_macros)] // the terminal is this command's output: it prints to the operator's own terminal and holds no lock
+
 use std::time::Duration;
 
 use hide_agent_hooks::mcp::{Reach, Remote};

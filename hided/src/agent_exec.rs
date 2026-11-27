@@ -57,6 +57,8 @@
 //! own installation is handed the call (`pane_install::hand_off`), which
 //! would leave a second process between the shell and the agent.
 
+#![allow(clippy::disallowed_macros)] // runs as a pane's foreground program and tells the person typing there; it holds no lock
+
 use std::ffi::{OsStr, OsString};
 use std::process::Command;
 

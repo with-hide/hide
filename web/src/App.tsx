@@ -63,8 +63,6 @@ import { configureAccessCalls } from "./accessCall";
 import { configureAutomationCalls } from "./automationCall";
 import { configureGuestCloseCalls } from "./guestCloseCall";
 import { OpeningStatus } from "./OpeningStatus";
-import { watchDeskFiles } from "./deskFiles";
-import { watchDeskOpens } from "./deskOpens";
 import { connectShell, type DispatchFn } from "./ws";
 
 const noop: DispatchFn = () => {};
@@ -154,10 +152,6 @@ export function App() {
         || state.automations.arriving !== previous.automations.arriving;
       if (moved) observeRecent(useShellStore.getState().rest, true);
     });
-    // Desk's file tabs reach hided as the room's whole file set, on each change and each connect (`deskFiles.ts`).
-    const unwatchDeskRoom = watchDeskFiles((files) => actions.deskFiles(files));
-    // A file Desk's agent opened goes to the tab panel while this window shows Desk (`deskOpens.ts`).
-    const unwatchDeskOpens = watchDeskOpens((entry) => actions.deskOpen({ kind: "file", device_id: entry.device_id, root: entry.root, path: entry.path }), (id) => actions.deskOpenTaken(id));
     // A failure the operator can act on is a notice rather than only a diagnostic (design 13); it is raised
     // before the rest of this subscriber runs, as it always was.
     const unsubscribeNotices = watchErrorNotices();
@@ -205,8 +199,6 @@ export function App() {
       window.removeEventListener("pointerdown", noteOperatorPointer, true);
       window.removeEventListener("keydown", endCommit, true);
       unsubscribeScreen();
-      unwatchDeskRoom();
-      unwatchDeskOpens();
       unsubscribeNotices();
       unsubscribe();
       unsubscribeHeldPlaces();

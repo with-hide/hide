@@ -141,8 +141,6 @@ pub struct AppState {
     /// Which connections show which backlog item's origin: the core keeps
     /// an origin until the last of them closes it or leaves.
     pub origin_holds: Arc<crate::demand::OriginHolds>,
-    /// The files each window's Desk room holds (`desk_files`).
-    pub desk_files: Arc<crate::demand::DeskFileHolds>,
     /// Which windows show the core's session thread; the last to let go or
     /// leave closes it.
     pub thread_holds: Arc<crate::demand::ThreadHolds>,
@@ -411,8 +409,7 @@ async fn release_browser_route(
 }
 
 fn browser_control_failure((reason, next_action): crate::browser_control::Failure) -> Response {
-    eprintln!(
-        "{}",
+    hide_core::diagnostic!(
         json!({"component":"browser_control","kind":"request.refused","reason":reason})
     );
     (
@@ -2739,15 +2736,12 @@ fn start_device_read(
         && let Some(oldest) = reads.pop_front()
     {
         oldest.task.abort();
-        eprintln!(
-            "{}",
-            json!({
-                "component": "hided", "kind": "device.file_bytes_ended",
-                "device": device,
-                "request_id": oldest.request_id.chars().take(LOGGED_PATH_CAP).collect::<String>(),
-                "reason": "a newer read for this client took its place",
-            })
-        );
+        hide_core::diagnostic!(json!({
+            "component": "hided", "kind": "device.file_bytes_ended",
+            "device": device,
+            "request_id": oldest.request_id.chars().take(LOGGED_PATH_CAP).collect::<String>(),
+            "reason": "a newer read for this client took its place",
+        }));
         superseded = Some(file_bytes_error(
             &oldest.request_id,
             &oldest.path,
@@ -2845,6 +2839,7 @@ enum ClientAction {
 /// to that device's own home (`hide_host::register`).
 const DEVICE_FILE_EVENTS: [&str; 13] = [
     "create_workspace",
+    "desk_view_open",
     "clone_repository",
     "file_list",
     "file_open",
@@ -2856,7 +2851,6 @@ const DEVICE_FILE_EVENTS: [&str; 13] = [
     "path_move",
     "path_copy",
     "path_trash",
-    "desk_file_retry",
 ];
 
 /// The SSH device a file event names, or `None` for this machine. Any id
@@ -3038,15 +3032,6 @@ fn handle_client_text(
         Some("backlog_origin") => {
             let owner = origin_identity(&event)?;
             state.origin_holds.hold(connection, &owner)?;
-        }
-        // A window's Desk room names every file it shows; hided owns the
-        // holds and the core hears one change for the whole message.
-        Some("desk_files") => {
-            let (files, refusals) = desk_files_admitted(state, &event)?;
-            state.desk_files.set(connection, files, |open, close| {
-                dispatch_desk_file(&state.core, connection, open, close)
-            })?;
-            return Ok(ClientAction::Replies(refusals));
         }
         Some("backlog_origin_close") => {
             let owner = origin_identity(&event)?;
@@ -3395,17 +3380,14 @@ fn device_listing(
     // `reason` is the host's refusal code, which the Explorer words; the
     // sentence beside it is the log's.
     let unavailable = |code: &str, reason: Option<&str>, message: String| {
-        eprintln!(
-            "{}",
-            json!({
-                "component": "hided",
-                "kind": "device.listing_unavailable",
-                "device": device,
-                "code": code,
-                "reason": reason,
-                "message": message,
-            })
-        );
+        hide_core::diagnostic!(json!({
+            "component": "hided",
+            "kind": "device.listing_unavailable",
+            "device": device,
+            "code": code,
+            "reason": reason,
+            "message": message,
+        }));
         json!({"type": "directory_unavailable", "payload": {
             "kind": "file_list", "device_id": device, "root_path": folder, "code": code, "reason": reason,
         }})
@@ -3524,13 +3506,10 @@ fn node_ask(core: &CoreHandle, boundary: &Boundary, event: &Value) -> Value {
             LinkError::Refused(refused) => (Some(refused.code), refused.message.clone()),
             other => (None, other.to_string()),
         };
-        eprintln!(
-            "{}",
-            json!({
-                "component": "hided", "kind": "add_project.node_refused", "event": kind,
-                "device": device, "code": code.map(|code| code.as_str()), "message": message,
-            })
-        );
+        hide_core::diagnostic!(json!({
+            "component": "hided", "kind": "add_project.node_refused", "event": kind,
+            "device": device, "code": code.map(|code| code.as_str()), "message": message,
+        }));
         node_ask_reason(&error)
     };
     let link = core.node_link(&device);
@@ -3572,13 +3551,10 @@ fn node_ask(core: &CoreHandle, boundary: &Boundary, event: &Value) -> Value {
                     // A source the node could not read is the log's, never
                     // the screen's (PRD device-add-project D-12, B27).
                     for dropped in &found.dropped {
-                        eprintln!(
-                            "{}",
-                            json!({
-                                "component": "hided", "kind": "add_project.import_source_dropped",
-                                "device": device, "source": dropped.source, "reason": dropped.reason,
-                            })
-                        );
+                        hide_core::diagnostic!(json!({
+                            "component": "hided", "kind": "add_project.import_source_dropped",
+                            "device": device, "source": dropped.source, "reason": dropped.reason,
+                        }));
                     }
                     (Some(found.projects), None)
                 }
@@ -3712,77 +3688,8 @@ fn close_backlog_origin(
         "payload": owner,
     });
     if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
-        eprintln!(
-            "{}",
+        hide_core::diagnostic!(
             json!({"component": "hided", "kind": "backlog.origin_release_failed", "connection": connection, "message": error})
-        );
-    }
-}
-
-/// The files a `desk_files` message names, each checked as an open is: a
-/// file of this machine's checkout by its root, a device's by the core and
-/// that device's helper. A refused file is answered and left out of the set.
-fn desk_files_admitted(
-    state: &AppState,
-    event: &Value,
-) -> Result<(Vec<crate::demand::DeskFileKey>, Vec<Message>), String> {
-    let files: Vec<crate::demand::DeskFileKey> = serde_json::from_value(
-        event
-            .get("payload")
-            .and_then(|payload| payload.get("files"))
-            .cloned()
-            .ok_or_else(|| "desk_files.files is required".to_owned())?,
-    )
-    .map_err(|error| format!("desk_files: {error}"))?;
-    let mut admitted = Vec::with_capacity(files.len());
-    let mut refusals = Vec::new();
-    for mut file in files {
-        let mut check = json!({
-            "schema_version": SCHEMA_VERSION,
-            "kind": "desk_files",
-            "payload": {
-                "workspace_id": file.workspace_id,
-                "checkout_id": file.checkout_id,
-                "device_id": file.device_id,
-                "path": file.path,
-            },
-        });
-        if event_device(&state.boundary, &check).is_none() {
-            if let Some(reply) =
-                admit_event(&state.boundary, &mut check, || roots_current(&state.roots))
-            {
-                refusals.push(Message::Text(reply.to_string().into()));
-                continue;
-            }
-            file.path = payload_str(&check, "path");
-        }
-        admitted.push(file);
-    }
-    Ok((admitted, refusals))
-}
-
-/// Tells the core which files Desk's rooms newly hold and which none holds
-/// any more, as one event.
-fn dispatch_desk_file(
-    core: &CoreHandle,
-    connection: u64,
-    open: &[crate::demand::DeskFileKey],
-    close: &[crate::demand::DeskFileKey],
-) {
-    let files = |list: &[crate::demand::DeskFileKey]| {
-        list.iter()
-            .map(|file| json!({"workspace_id": file.workspace_id, "checkout_id": file.checkout_id, "path": file.path}))
-            .collect::<Vec<_>>()
-    };
-    let event = json!({
-        "schema_version": SCHEMA_VERSION,
-        "kind": "desk_file",
-        "payload": {"open": files(open), "close": files(close)},
-    });
-    if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
-        eprintln!(
-            "{}",
-            json!({"component": "hided", "kind": "desk.file_dispatch_failed", "connection": connection, "message": error})
         );
     }
 }
@@ -3807,16 +3714,13 @@ pub(crate) fn dispatch_observation(
     connection: u64,
     observing: bool,
 ) {
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "settings.observation",
-            "connection": connection,
-            "demand": demand.field(),
-            "observing": observing,
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "settings.observation",
+        "connection": connection,
+        "demand": demand.field(),
+        "observing": observing,
+    }));
     let event = match demand {
         Demand::RequestView => json!({
             "schema_version": SCHEMA_VERSION,
@@ -3835,15 +3739,12 @@ pub(crate) fn dispatch_observation(
         }),
     };
     if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
-        eprintln!(
-            "{}",
-            json!({
-                "component": "hided",
-                "kind": "settings.observation_failed",
-                "connection": connection,
-                "message": error,
-            })
-        );
+        hide_core::diagnostic!(json!({
+            "component": "hided",
+            "kind": "settings.observation_failed",
+            "connection": connection,
+            "message": error,
+        }));
     }
 }
 
@@ -3866,14 +3767,11 @@ fn handle_open_external(state: &AppState, event: &Value) -> Vec<Message> {
     // rather than opening it, and this frame is a page's request rather than
     // the operator's own click, so the same rule holds here (D-12).
     if let Err(reason) = openable(&real) {
-        eprintln!(
-            "{}",
-            json!({
-                "component": "hided",
-                "kind": "open.external.refused",
-                "reason": reason,
-            })
-        );
+        hide_core::diagnostic!(json!({
+            "component": "hided",
+            "kind": "open.external.refused",
+            "reason": reason,
+        }));
         return vec![Message::Text(
             json!({
                 "type": "open_external_result",
@@ -3887,15 +3785,12 @@ fn handle_open_external(state: &AppState, event: &Value) -> Vec<Message> {
         Ok(()) => (true, Value::Null),
         Err(reason) => (false, Value::String(reason.to_owned())),
     };
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "open.external",
-            "ok": ok,
-            "open_handlers_in_flight": state.opener.in_flight(),
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "open.external",
+        "ok": ok,
+        "open_handlers_in_flight": state.opener.in_flight(),
+    }));
     vec![Message::Text(
         json!({
             "type": "open_external_result",
@@ -4711,16 +4606,13 @@ fn device_walk(state: &AppState, device: &str, root: &str) -> crate::index::Walk
     let (walk_device, walk_root) = (device.to_owned(), root.to_owned());
     Box::new(move || {
         let log = |code: &str, message: String| {
-            eprintln!(
-                "{}",
-                json!({
-                    "component": "hided",
-                    "kind": "device.index_unavailable",
-                    "device": walk_device,
-                    "code": code,
-                    "message": message,
-                })
-            );
+            hide_core::diagnostic!(json!({
+                "component": "hided",
+                "kind": "device.index_unavailable",
+                "device": walk_device,
+                "code": code,
+                "message": message,
+            }));
             code.to_owned()
         };
         let channel = core
@@ -4877,15 +4769,12 @@ pub(crate) fn split_bytes_frame(frame: &[u8]) -> Option<(Value, &[u8])> {
 /// A read the daemon could not serve as bytes: the file is past the read cap,
 /// or the disk refused it. The client shows one line and offers no retry.
 fn file_bytes_error(request_id: &str, path: &str, reason: &str) -> Message {
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "file_bytes.failed",
-            "reason": reason,
-            "path": path.chars().take(LOGGED_PATH_CAP).collect::<String>(),
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "file_bytes.failed",
+        "reason": reason,
+        "path": path.chars().take(LOGGED_PATH_CAP).collect::<String>(),
+    }));
     Message::Text(
         json!({
             "type": "file_bytes_error",
@@ -5000,15 +4889,12 @@ pub(crate) async fn stream_device_file_bytes(
                     .map_err(|_| ());
             }
             Err((None, message)) => {
-                eprintln!(
-                    "{}",
-                    json!({
-                        "component": "hided",
-                        "kind": "device.file_bytes_failed",
-                        "device": device,
-                        "message": message,
-                    })
-                );
+                hide_core::diagnostic!(json!({
+                    "component": "hided",
+                    "kind": "device.file_bytes_failed",
+                    "device": device,
+                    "message": message,
+                }));
                 return frames
                     .send(file_bytes_error(&request_id, &path, "read_failed"))
                     .await
@@ -5267,8 +5153,12 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
         "clone_repository" => clone_admit(boundary, event, &kind),
         "file_list" => explorer_listing(boundary, event, &kind),
         "file_open" | "reveal_path" => explorer_open(boundary, event, &kind),
-        // A file Desk's room holds, or reads again, is checked as an open is.
-        "desk_files" | "desk_file_retry" => explorer_open(boundary, event, &kind),
+        // A file Desk's desk opens is checked as an open is.
+        "desk_view_open"
+            if event.pointer("/payload/kind").and_then(Value::as_str) == Some("file") =>
+        {
+            explorer_open(boundary, event, &kind)
+        }
         "file_save" => explorer_save(boundary, event, &kind),
         "file_create" | "dir_create" => explorer_create(boundary, event, &kind),
         "path_rename" => explorer_rename(boundary, event, &kind),
@@ -5311,14 +5201,11 @@ fn admit_event(
     }
     let again = apply_boundary(boundary, event);
     if !again.as_ref().is_some_and(refused_outside_checkout) {
-        eprintln!(
-            "{}",
-            json!({
-                "component": "hided",
-                "kind": "boundary.roots_caught_up",
-                "event": event.get("kind").and_then(Value::as_str).unwrap_or(""),
-            })
-        );
+        hide_core::diagnostic!(json!({
+            "component": "hided",
+            "kind": "boundary.roots_caught_up",
+            "event": event.get("kind").and_then(Value::as_str).unwrap_or(""),
+        }));
     }
     again
 }
@@ -5529,15 +5416,12 @@ fn payload_str(event: &Value, field: &str) -> String {
 /// The frame a client-sent shell-only event is answered with: the event is
 /// never forwarded, so a path it carries cannot reach the core.
 fn rejected(kind: &str) -> Option<Value> {
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "client.rejected",
-            "event": kind,
-            "reason": "daemon_only_event",
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "client.rejected",
+        "event": kind,
+        "reason": "daemon_only_event",
+    }));
     Some(json!({
         "type": "error",
         "payload": {},
@@ -5840,17 +5724,14 @@ const LOGGED_PATH_CAP: usize = 256;
 
 fn log_path_refusal(kind: &str, path: &str, refusal: Refusal) {
     let logged: String = path.chars().take(LOGGED_PATH_CAP).collect();
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "path.refused",
-            "event": kind,
-            "reason": refusal.code(),
-            "path": logged,
-            "path_truncated": logged.len() < path.len(),
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "path.refused",
+        "event": kind,
+        "reason": refusal.code(),
+        "path": logged,
+        "path_truncated": logged.len() < path.len(),
+    }));
 }
 
 /// Which frame a delta read turned into, decided by the cursors alone.
@@ -5893,15 +5774,12 @@ async fn read_delta(
 /// A frame the daemon could not produce ends the client's loop, so the
 /// client sees a bare close; this record is the only trace of why.
 fn log_snapshot_failure(stage: &str, message: &str) {
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "ws.snapshot_failed",
-            "stage": stage,
-            "message": message,
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "ws.snapshot_failed",
+        "stage": stage,
+        "message": message,
+    }));
 }
 
 async fn send_snapshot(
@@ -5985,8 +5863,7 @@ fn close_session_thread(core: &CoreHandle, connection: u64) {
         "payload": {},
     });
     let failed = core.dispatch(event.to_string().into_bytes()).err();
-    eprintln!(
-        "{}",
+    hide_core::diagnostic!(
         json!({"component": "hided", "kind": "session_thread.closed_with_connection", "connection": connection, "failed": failed})
     );
 }
@@ -5999,8 +5876,7 @@ fn dispatch_ui_attached(core: &CoreHandle, attached: bool) {
         "payload": { "attached": attached },
     });
     if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
-        eprintln!(
-            "{}",
+        hide_core::diagnostic!(
             json!({"component": "hided", "kind": "ui_attached.dispatch_failed", "attached": attached, "message": error})
         );
     }
@@ -6093,9 +5969,6 @@ pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, des
     state.origin_holds.release(connection, |key| {
         close_backlog_origin(&state.core, connection, key)
     });
-    state.desk_files.release(connection, |open, close| {
-        dispatch_desk_file(&state.core, connection, open, close)
-    });
     state
         .thread_holds
         .release(connection, || close_session_thread(&state.core, connection));
@@ -6138,16 +6011,13 @@ pub(crate) async fn refuse(socket: &mut WebSocket, reason: CloseReason, extra: O
 }
 
 fn log_refusal(reason: CloseReason, extra: Option<usize>) {
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "ws.refused",
-            "reason": reason.name(),
-            "code": reason.code(),
-            "clients": extra,
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "ws.refused",
+        "reason": reason.name(),
+        "code": reason.code(),
+        "clients": extra,
+    }));
 }
 
 /// Mounts the core's routes on `seat` and starts the clock that ends the
@@ -6271,14 +6141,11 @@ fn panes_running(live: &(dyn Fn() -> Result<usize, String> + Send + Sync)) -> bo
     match live() {
         Ok(count) => count > 0,
         Err(message) => {
-            eprintln!(
-                "{}",
-                json!({
-                    "component": "hided",
-                    "kind": "idle.panes_uncounted",
-                    "message": message,
-                })
-            );
+            hide_core::diagnostic!(json!({
+                "component": "hided",
+                "kind": "idle.panes_uncounted",
+                "message": message,
+            }));
             true
         }
     }

@@ -467,6 +467,9 @@ impl Runtime {
     /// stays. The displays of a document that just closed leave first.
     pub(super) fn close_emptied_lane(&mut self, key: &WorkspaceKey) {
         self.reconcile_view_displays();
+        if self.is_desk_key(key) {
+            return;
+        }
         self.keep_pair_front_shown();
         let tab = self.front_tab(key);
         let Some(tray) = self
@@ -871,6 +874,10 @@ impl Runtime {
     /// a View the operator opened shows the tray of the tab in front, a
     /// folder the Explorer.
     pub(super) fn apply_area_intent_to(&mut self, key: &WorkspaceKey, intent: AreaIntent) {
+        // Desk's desk has no lane: the window shows it.
+        if self.is_desk_key(key) {
+            return;
+        }
         match intent {
             AreaIntent::Documents => {
                 let place = self.front_place(key);
@@ -1232,8 +1239,15 @@ impl Runtime {
             }
         }
         self.refresh_browser_inventory_scope();
+        // Desk's desk's pages are in the inventory too, so its count of
+        // changes moves the revision as the store's does.
+        let desk_generation = self.desk_views_generation();
+        let revision = self
+            .workspace_views
+            .as_ref()
+            .map(|store| store.generation.wrapping_add(desk_generation));
         if let Some(store) = self.workspace_views.as_ref()
-            && self.snapshot.browser_views_revision != Some(store.generation)
+            && self.snapshot.browser_views_revision != revision
         {
             // Retain authority across ordinary layout changes, but not
             // across a revoke/regrant coalesced into one outgoing frame.
@@ -1266,7 +1280,7 @@ impl Runtime {
                 for (place, layout) in view.layouts() {
                     let tray = match &place {
                         Place::Tray(tab) => Some(tab.clone()),
-                        Place::Shelf => None,
+                        Place::Shelf | Place::Desk => None,
                     };
                     for area in layout.areas() {
                         scopes.push(BrowserAreaScopeRow {
@@ -1317,10 +1331,14 @@ impl Runtime {
                 .flat_map(|view| view.views())
                 .filter_map(|display| display.external.as_ref().map(|file| file.grant.clone()))
                 .collect();
+            // Desk's pages are the operator's: held on Desk's own desk, never
+            // an agent's to drive, so they carry no scope.
+            displays.extend(self.desk_browser_inventory());
             self.snapshot.browser_views = displays;
             self.snapshot.browser_scopes = scopes;
-            self.snapshot.browser_views_revision = Some(store.generation);
+            self.snapshot.browser_views_revision = revision;
         }
+        self.publish_desk_view();
         self.publish_workspace_view(front.as_ref());
     }
 
@@ -1396,6 +1414,12 @@ impl Runtime {
     /// checkout's root: a read before it is refused, and would mark every
     /// restored file unavailable. Returns whether a restore began.
     pub(super) fn restore_front_when_ready(&mut self) -> bool {
+        // Desk's desk reads back each file whose checkout can be read now.
+        let desk = self.restore_desk_views();
+        self.restore_workspace_front_when_ready() || desk
+    }
+
+    fn restore_workspace_front_when_ready(&mut self) -> bool {
         let Some(store) = self.workspace_views.as_ref() else {
             return false;
         };
@@ -1567,7 +1591,7 @@ impl Runtime {
         path: &str,
         preview: bool,
         reason: String,
-    ) {
+    ) -> String {
         let tab_id = self.new_file_tab_id(workspace_id, checkout_id, path);
         self.push_diagnostic(
             "workspace_views.tab_unavailable",
@@ -1583,10 +1607,10 @@ impl Runtime {
             if tab.unavailable_reason.is_some() {
                 tab.unavailable_reason = Some(reason);
             }
-            return;
+            return tab_id;
         }
         self.place_editor_tab(EditorTabSnapshot {
-            id: tab_id,
+            id: tab_id.clone(),
             device_id: Default::default(),
             workspace_id: workspace_id.to_owned(),
             checkout_id: checkout_id.to_owned(),
@@ -1600,6 +1624,7 @@ impl Runtime {
             preview,
             unavailable_reason: Some(reason),
         });
+        tab_id
     }
 
     /// Queues a write of the Workspace view file on its own worker, outside

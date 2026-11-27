@@ -155,42 +155,54 @@ impl Runtime {
         view_id: &str,
         load: u64,
     ) -> Option<BrowserRouteSource> {
-        let connected = if device_id == self.node.as_str() {
+        // A page of Desk's own desk is keyed on the core's node and on no
+        // checkout; one a session opened names that session's machine and
+        // checkout (`origin`, PRD desk-own-desk D-10), whose loopback and
+        // files it loads from, as the session's own page does.
+        let key = (device_id.to_owned(), checkout_path.to_owned());
+        let desk = self.is_desk_key(&key);
+        let registered = |device: &str, path: &str| {
+            self.catalog_workspaces().into_iter().any(|workspace| {
+                workspace.device_id == device
+                    && workspace
+                        .checkouts
+                        .iter()
+                        .any(|checkout| checkout.path == path)
+            })
+        };
+        if !desk && !registered(device_id, checkout_path) {
+            return None;
+        }
+        let display = self.view_displays(&key).find(|display| {
+            display.id == view_id && display.kind == DisplayKind::Browser && display.load == load
+        })?;
+        let source = match (desk, &display.origin) {
+            (true, Some(origin)) if registered(&origin.device_id, &origin.path) => origin.key(),
+            (true, Some(_)) => return None,
+            _ => key.clone(),
+        };
+        let connected = if source.0 == self.node.as_str() {
             self.snapshot.status.engine.state == "connected"
         } else {
             self.snapshot
                 .status
                 .remote
                 .iter()
-                .any(|remote| remote.target_id == device_id && remote.state == "connected")
+                .any(|remote| remote.target_id == source.0 && remote.state == "connected")
         };
         if !connected {
             return None;
         }
-        let registered = self.catalog_workspaces().into_iter().any(|workspace| {
-            workspace.device_id == device_id
-                && workspace
-                    .checkouts
-                    .iter()
-                    .any(|checkout| checkout.path == checkout_path)
-        });
-        if !registered {
-            return None;
-        }
-        let key = (device_id.to_owned(), checkout_path.to_owned());
-        let display = self.view_displays(&key).find(|display| {
-            display.id == view_id && display.kind == DisplayKind::Browser && display.load == load
-        })?;
         let url = display.url.clone()?;
         // A local page's own files come from the checkout that holds it,
         // which an agent's open or a terminal link may have shown in another
         // checkout's Workspace.
         let root = hide_platform::path::from_file_url(&url).map_or_else(
-            || checkout_path.to_owned(),
-            |(path, _)| self.display_source_key(&key, &path).1,
+            || source.1.clone(),
+            |(path, _)| self.display_source_key(&source, &path).1,
         );
         Some(BrowserRouteSource {
-            device_id: device_id.to_owned(),
+            device_id: source.0,
             checkout_path: root,
             url,
             load,
@@ -278,7 +290,7 @@ impl Runtime {
         request_id: &str,
         action: &Action,
     ) -> Result<ActionPreparation, Refusal> {
-        // Desk has no View: its file open waits for its own tab panel.
+        // Desk has no checkout's View: its file open goes to Desk's desk.
         if Caller::parse(pane_id) == Caller::Desk {
             return self.desk_prepare_open(device_id, expected, request_id, action);
         }
@@ -486,7 +498,7 @@ impl Runtime {
                         && (self.tray_in_view(&key, tab)
                             || self.pair_left_of(&key, tab).as_deref() == Some(pane_id))
                 }
-                Place::Shelf => false,
+                Place::Shelf | Place::Desk => false,
             };
             let kept = (!in_view || !lane_call(&action)).then(|| self.keep_front(&key));
             // A run's desk is drawn by the automation screen, which no lane
@@ -820,7 +832,7 @@ impl Runtime {
                     _ => false,
                 };
                 let selected = match &target {
-                    Place::Shelf => false,
+                    Place::Shelf | Place::Desk => false,
                     Place::Tray(_) => self
                         .change_view_layout(key, &target, |layout, stamp| {
                             layout
@@ -833,7 +845,7 @@ impl Runtime {
                 // on a desk whose lane is closed), an agent's select is To
                 // look at (B2).
                 let unseen = match place {
-                    Place::Shelf => true,
+                    Place::Shelf | Place::Desk => true,
                     Place::Tray(tab) => !self.tray_in_view(key, tab),
                 };
                 if unseen
@@ -973,7 +985,7 @@ impl Runtime {
     fn placed_view(&self, key: &(String, String), view_id: &str) -> Result<Place, Refusal> {
         match self.view_place(key, view_id) {
             Some(Place::Tray(tab)) => Ok(Place::Tray(tab)),
-            Some(Place::Shelf) => Err(VIEW_NOT_IN_LANE),
+            Some(Place::Shelf | Place::Desk) => Err(VIEW_NOT_IN_LANE),
             None => Err(layout_refusal(
                 crate::view_layout::LayoutError::UnknownDisplay(view_id.to_owned()),
             )),
@@ -1282,7 +1294,7 @@ const VIEW_NOT_IN_LANE: Refusal = Refusal {
 
 /// Desk has no pane and no checkout: it acts through delivery commands
 /// (`hide agent`, `hide request`, `hide inbox`, `hide watch`, `hide ps`) and
-/// shows a file in its own tab panel (`desk/opens.rs`), never through a
+/// shows a file on Desk's desk (`desk/opens.rs`), never through a
 /// Workspace or View command.
 pub(super) const DESK_REFUSAL: Refusal = Refusal {
     reason: "desk_has_no_checkout",

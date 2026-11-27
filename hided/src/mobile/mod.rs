@@ -59,8 +59,7 @@ use store::{
 use tailscale::{Checklist, CliSource, CommandFailure, Ownership, StepState};
 
 fn projection_failed(stage: &str, message: &str) {
-    eprintln!(
-        "{}",
+    hide_core::diagnostic!(
         json!({"component": "hided", "kind": "mobile.projection_failed", "stage": stage, "message": message})
     );
 }

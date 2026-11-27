@@ -248,14 +248,11 @@ impl Attachments {
             // The staged bytes are the operator's own files and screenshots;
             // the directories stay private like the state file itself.
             if let Err(error) = hide_platform::fs::private::create_dir_all(folder) {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({
-                        "component": "hided",
-                        "kind": "attachment.stage_dir_failed",
-                        "message": error.to_string(),
-                    })
-                );
+                hide_core::diagnostic!(serde_json::json!({
+                    "component": "hided",
+                    "kind": "attachment.stage_dir_failed",
+                    "message": error.to_string(),
+                }));
             }
         }
         // A previous run's staged files must not survive as garbage: the
@@ -558,17 +555,14 @@ impl Attachments {
             });
         let incoming: u64 = files.iter().map(|(_, bytes)| bytes).sum();
         if held + files.len() > DESK_KEEP || held_bytes + incoming > DESK_KEEP_BYTES {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "component": "hided",
-                    "kind": "attachment.desk_full",
-                    "held_files": held,
-                    "held_bytes": held_bytes,
-                    "files": files.len(),
-                    "bytes": incoming,
-                })
-            );
+            hide_core::diagnostic!(serde_json::json!({
+                "component": "hided",
+                "kind": "attachment.desk_full",
+                "held_files": held,
+                "held_bytes": held_bytes,
+                "files": files.len(),
+                "bytes": incoming,
+            }));
             for (path, _) in &files {
                 let _ = std::fs::remove_file(path);
             }
@@ -584,15 +578,12 @@ impl Attachments {
             // (`hide-core/src/runtime/desk.rs`); the bubble keeps the file's name.
             let kept = self.desk_dir.join(staged.replace('"', "'"));
             if let Err(error) = std::fs::rename(path, &kept) {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({
-                        "component": "hided",
-                        "kind": "attachment.desk_keep_failed",
-                        "request_id": stage,
-                        "message": error.to_string(),
-                    })
-                );
+                hide_core::diagnostic!(serde_json::json!({
+                    "component": "hided",
+                    "kind": "attachment.desk_keep_failed",
+                    "request_id": stage,
+                    "message": error.to_string(),
+                }));
                 for (path, _) in &files {
                     let _ = std::fs::remove_file(path);
                 }

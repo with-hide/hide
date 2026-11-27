@@ -233,22 +233,26 @@ export function DocumentKeeper({ tabId, actions }: { tabId: string; actions: Act
   return null;
 }
 
+/** Where a file on Desk's desk comes from: its checkout's folder and the project the catalog names it by (PRD desk-own-desk B2). */
+export type DeskFilePlace = { root: string; project: string };
+
 /**
  * One open display (S7 B4): its header and its document or diff. `placeKey`
  * names the display and its document within its Workspace, so the selection
  * and scroll it had in that document come back with it, and a preview
  * retargeted to another document starts that one at its own place.
  */
-export function DisplayEditor({ display, workspace, placeKey, actions, root, trailing }: { display: ViewDisplaySnapshot; workspace: ViewWorkspace; placeKey: string; actions: Actions; root?: string; trailing?: React.ReactNode }) {
+
+export function DisplayEditor({ display, workspace, placeKey, actions, place }: { display: ViewDisplaySnapshot; workspace: ViewWorkspace; placeKey: string; actions: Actions; place?: DeskFilePlace }) {
   const tab = useShellStore((s) => editorTabFor(s.editor, display.tab_id));
   const document = useShellStore((s) => (display.tab_id ? (s.documents[display.tab_id] ?? null) : null));
   const scaleValue = useShellStore((s) => s.rest?.ui_state?.editor_text_scale);
   const scale = typeof scaleValue === "number" ? scaleValue : DEFAULT_SCALE;
   const { t } = useInterfaceTranslation();
-  if (!tab) return <><PendingDocumentHeader display={display} actions={actions} /><Notice text={t("common.loading")} state="loading" /></>;
+  if (!tab) return <><PendingDocumentHeader display={display} actions={actions} place={place} /><Notice text={t("common.loading")} state="loading" /></>;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-editor={tab.id} data-editor-kind={display.kind} data-editor-display={display.id}>
-      <EditorHeader display={display} tab={tab} document={document} actions={actions} root={root} trailing={trailing} />
+      <EditorHeader display={display} tab={tab} document={document} actions={actions} place={place} />
       {display.kind === "diff" ? (
         <DiffBody display={display} workspace={workspace} wrap={tab.wrap} scale={scale} actions={actions} />
       ) : (
@@ -291,19 +295,22 @@ function crumbs(path: string, home: string | null = null): string {
   return absolutePathRoot(path) ? home ?? path : path.split("/").filter(Boolean).join(" › ");
 }
 
-/** A file's path row: an image pasted into a terminal by what it is (`displayName`), else its path from the checkout in front. */
-function filePathLine(display: ViewDisplaySnapshot, root: string | null, t: TFunction<"translation">): string {
+/** A file's path row: an image pasted into a terminal by what it is (`displayName`), else its path from the checkout in front; on Desk's desk, where no checkout is in front, its project leads (`project › path`). */
+function filePathLine(display: ViewDisplaySnapshot, root: string | null, t: TFunction<"translation">, project: string | null = null): string {
   if (display.pasted) return displayName(display, t);
-  return crumbs(root ? relativeTo(display.path, root) : display.path, display.home_relative ?? null);
+  const path = root ? relativeTo(display.path, root) : display.path;
+  const line = crumbs(path, display.home_relative ?? null);
+  return project && !absolutePathRoot(path) ? `${project} › ${line}` : line;
 }
 
 /** Provenance remains reachable while a document is loading or unavailable. */
-export function PendingDocumentHeader({ display, actions }: { display: ViewDisplaySnapshot; actions: Actions }) {
+export function PendingDocumentHeader({ display, actions, place }: { display: ViewDisplaySnapshot; actions: Actions; /** The checkout the path names the file from, when it is not the one in front (Desk's desk). */ place?: DeskFilePlace }) {
   const { t } = useInterfaceTranslation();
-  const root = useShellStore((s) => frontCheckout(s.rest)?.path ?? null);
+  const front = useShellStore((s) => (place === undefined ? (frontCheckout(s.rest)?.path ?? null) : null));
+  const root = place?.root ?? front;
   return <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-sm border-b border-border px-sm text-caption text-subtle-foreground" data-document-header="true">
     <Hint label={display.path} reveals>
-      <span className="min-w-0 flex-1 truncate text-left [direction:rtl]" data-editor-path="true"><bdi dir="ltr">{filePathLine(display, root, t)}</bdi></span>
+      <span className="min-w-0 flex-1 truncate text-left [direction:rtl]" data-editor-path="true"><bdi dir="ltr">{filePathLine(display, root, t, place?.project)}</bdi></span>
     </Hint>
     {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
   </div>;
@@ -314,17 +321,14 @@ function EditorHeader({
   tab,
   document,
   actions,
-  root: shownRoot,
-  trailing,
+  place,
 }: {
   display: ViewDisplaySnapshot;
   tab: EditorTabSnapshot;
   document: EditorDocumentSnapshot | null;
   actions: Actions;
-  /** The checkout the path line names the file from, when it is not the one in front (Desk's file view, PRD desk-2-ui B19). */
-  root?: string;
-  /** What the header ends with, a split side's `✕` in Desk's tab panel (B37). */
-  trailing?: React.ReactNode;
+  /** The checkout the path line names the file from, when it is not the one in front (Desk's desk, PRD desk-own-desk B2). */
+  place?: DeskFilePlace;
 }) {
   const file = display.kind === "file";
   const isMarkdown = file && document?.document_kind === "markdown";
@@ -332,14 +336,14 @@ function EditorHeader({
   const { t } = useInterfaceTranslation();
   // A file or a diff is named from its checkout, as the Explorer names it; a path the
   // header still cannot fit loses its start, so the file name stays shown.
-  const front = useShellStore((s) => (shownRoot === undefined ? (frontCheckout(s.rest)?.path ?? null) : null));
-  const root = shownRoot ?? front;
+  const front = useShellStore((s) => (place === undefined ? (frontCheckout(s.rest)?.path ?? null) : null));
+  const root = place?.root ?? front;
   const path = root ? relativeTo(display.path, root) : display.path;
   return (
     <div className="flex h-[var(--size-tab-strip)] shrink-0 items-center gap-sm border-b border-border pl-xs pr-md text-caption text-subtle-foreground" data-document-header="true">
       <Hint label={file ? display.path : display.committed ? t("documents.committedPath", { path: display.path }) : t("documents.uncommittedPath", { path: display.path })} reveals>
       <span className="min-w-0 flex-1 truncate text-left [direction:rtl]" data-editor-path="true">
-        <bdi dir="ltr">{file ? filePathLine(display, root, t) : display.committed ? t("documents.branchDiffPath", { path: crumbs(path) }) : t("documents.workingDiffPath", { path: crumbs(path) })}</bdi>
+        <bdi dir="ltr">{file ? filePathLine(display, root, t, place?.project) : display.committed ? t("documents.branchDiffPath", { path: crumbs(path) }) : t("documents.workingDiffPath", { path: crumbs(path) })}</bdi>
       </span>
       </Hint>
       {document?.dirty ? (
@@ -373,8 +377,8 @@ function EditorHeader({
           </Button>
         </Hint>
       ) : null}
-      {/* A region comment is left on a View's display, which Desk's file view (`root`) is not. */}
-      {file && shownRoot === undefined && (document?.document_kind === "image" || document?.document_kind === "pdf") && !isVideoPath(display.path) ? (
+      {/* A region comment is left on a Workspace's View; a View of Desk's desk (`root`) takes none. */}
+      {file && place === undefined && (document?.document_kind === "image" || document?.document_kind === "pdf") && !isVideoPath(display.path) ? (
         <RegionCommentButton displayId={display.id} kind={document.document_kind} />
       ) : null}
       {file ? (
@@ -392,7 +396,6 @@ function EditorHeader({
         </Hint>
       ) : null}
       {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
-      {trailing}
     </div>
   );
 }

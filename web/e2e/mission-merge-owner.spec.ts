@@ -83,7 +83,7 @@ async function readyPull(page: Page, label: string, planned: ReturnType<typeof p
       fs.writeFileSync(planFile, shown);
       await ok(conductor, ["file", "open", planFile]);
       await showDocuments(page);
-      await expect(page.getByText("머지까지 · schema만 👤 내가 머지", { exact: false }).first()).toBeVisible();
+      await expect(page.getByText("through the merge · 👤 the operator merges schema", { exact: false }).first()).toBeVisible();
       await chooseTheme(page, "dark");
       await screenshot(page, "merge-owner-plan-dark");
       await chooseTheme(page, "light");
@@ -125,7 +125,7 @@ test("a node the plan leaves to the operator is done once its pull request is re
   await readyPull(page, "mission-merge-owner", plan("merge", true), async ({ conductor, gh }) => {
     // The Conductor's plan names the node under the head and on its own line.
     const shown = (await conductor(["mission", "show"])).out;
-    expect(shown).toContain("머지까지 · schema만 👤 내가 머지");
+    expect(shown).toContain("through the merge · 👤 the operator merges schema");
     keepText("merge-owner-plan-text", shown);
 
     // GitHub answers pull request 31 ready: the node is done without its merge, and the merge is the operator's now.
@@ -134,7 +134,7 @@ test("a node the plan leaves to the operator is done once its pull request is re
     expect(node.status).toBe("done");
     expect(node.merge).toEqual({ by: "operator", why: WHY, state: "due", prs: [31] });
     const detail = (await conductor(["mission", "show", "schema"])).out;
-    expect(detail).toContain("👤 머지할 차례");
+    expect(detail).toContain("👤 yours to merge");
     keepText("merge-owner-node-text", detail);
 
     // F1: the last held PR is already merged while #31 stays open and ready.

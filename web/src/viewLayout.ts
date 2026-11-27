@@ -50,9 +50,9 @@ export function isViewRefusal(error: { kind: string } | null | undefined): boole
   return !!error && (error.kind.startsWith("view_layout.") || error.kind === "agent_layout.display_limit") && error.kind !== "view_layout.stale_workspace";
 }
 
-/** Whether two displays show one document: its path and kind, and a diff's History group (the core's `Display::shows`). */
+/** Whether two displays show one document: its checkout on Desk's desk, its path and kind, and a diff's History group (the core's `Display::shows_from`). */
 export function showsSameDocument(a: ViewDisplaySnapshot, b: ViewDisplaySnapshot): boolean {
-  return a.path === b.path && a.kind === b.kind && (a.kind === "file" || a.committed === b.committed);
+  return a.origin?.device_id === b.origin?.device_id && a.origin?.path === b.origin?.path && a.path === b.path && a.kind === b.kind && (a.kind === "file" || a.committed === b.committed);
 }
 
 /** Every display that shows one document (editor tab), in tree order. */

@@ -1,11 +1,11 @@
 // ⌘P and ⌘K while Desk is in front (PRD desk-2-ui D-23, D-24, B37-B39): where
 // ⌘P searches, how an all-projects answer is put in order, and what a ⌘K
-// pick opens in the tab panel. The palettes themselves are the app's own;
+// pick opens on Desk's desk. The palettes themselves are the app's own;
 // these are the decisions Desk adds, kept as functions of values so they are
 // testable without a browser.
 
 import type { DeskItem } from "./desk";
-import type { DeskTab } from "./deskRoom";
+import type { DeskOpen } from "./deskDesk";
 import { groupEntries, type SearchEntry, type SearchSection } from "./search";
 import { catalogWorkspaces, checkoutAtRoot, checkoutOfPane, type SnapshotRest } from "./snapshot";
 
@@ -80,15 +80,10 @@ export function projectFileRows(rest: SnapshotRest | null, files: readonly DeskF
   return { named: first, other };
 }
 
-/** The tab ⌘K opens for a PR or a mission row (B39), null for any other kind of row. */
-export function deskTabOf(entry: SearchEntry): DeskTab | null {
-  if (entry.kind === "mission" && entry.missionId) return { kind: "mission", mission: entry.missionId, title: entry.title };
-  if (entry.kind === "pr" && !entry.external && entry.pr && entry.workspaceId) {
-    return {
-      kind: "output",
-      output: { id: `pr:${entry.workspaceId}:${entry.pr.number}`, kind: "pr", label: `#${entry.pr.number}`, thumb: null, seen: true, pr_state: entry.pr.state, device_id: null, checkout: null, path: null, url: entry.pr.url },
-    };
-  }
+/** The card ⌘K opens on Desk's desk for a PR or a mission row (PRD desk-own-desk B39), null for any other kind of row. */
+export function deskTabOf(entry: SearchEntry): DeskOpen | null {
+  if (entry.kind === "mission" && entry.missionId) return { kind: "card", card: { kind: "mission", mission: entry.missionId } };
+  if (entry.kind === "pr" && !entry.external && entry.pr && entry.workspaceId) return { kind: "card", card: { kind: "pull_request", workspace_id: entry.workspaceId, number: entry.pr.number } };
   return null;
 }
 

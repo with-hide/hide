@@ -136,6 +136,11 @@ pub struct Snapshot {
     /// keeps exactly its keys.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_view: Option<WorkspaceViewSnapshot>,
+    /// Desk's own desk (PRD desk-own-desk), present while Desk is on in a
+    /// shell that draws View areas, built on every snapshot read as
+    /// `workspace_view` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desk_view: Option<DeskViewSnapshot>,
     /// Browser displays across retained Workspaces. The native host uses this
     /// inventory to close a hidden page when a pane closes its View remotely.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -671,6 +676,10 @@ pub struct ViewDisplaySnapshot {
     /// checkout; absent outside that home and for every other kind.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub home_relative: Option<String>,
+    /// The checkout a file of Desk's desk is of (PRD desk-own-desk D-10);
+    /// absent on a Workspace's View and on a page or a card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::view_layout::ViewOrigin>,
 }
 
 impl ViewDisplaySnapshot {
@@ -9097,6 +9106,7 @@ impl Snapshot {
             },
             recent_closed: RecentClosedSnapshot::default(),
             workspace_view: None,
+            desk_view: None,
             browser_views: Vec::new(),
             browser_scopes: Vec::new(),
             external_grants: Vec::new(),

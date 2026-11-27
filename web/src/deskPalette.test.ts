@@ -6,7 +6,7 @@ import type { Checkout, DeskMention, SnapshotRest } from "./snapshot";
 
 // Expected answers are PRD desk-2-ui D-23, D-24, B37-B39: ⌘P on Desk searches the
 // checkout of the session beside Desk, else every project, the project Desk
-// named last first; a ⌘K PR or mission becomes a tab of the tab panel.
+// named last first; a ⌘K PR or mission becomes a card tab of Desk's own desk (PRD desk-own-desk B39).
 
 const checkout = (id: string, path: string, pane: string): Checkout => ({
   id, workspace_id: `w-${id}`, path, label: id, branch: null, purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, agent_scope: undefined as never, next_tab_label: "Tab 2",
@@ -62,12 +62,12 @@ describe("the all-projects answer", () => {
   });
 });
 
-describe("what ⌘K opens in the tab panel", () => {
+describe("what ⌘K opens on Desk's desk", () => {
   const base = { id: "x", title: "t", subtitle: "", group: { id: "g", label: "kind.mission" } } as const;
-  it("opens a mission as its map and a PR as an output tab, and nothing else", () => {
-    expect(deskTabOf({ ...base, kind: "mission", missionId: "mission-a", title: "1.3.0" } as SearchEntry)).toEqual({ kind: "mission", mission: "mission-a", title: "1.3.0" });
+  it("opens a mission as its map card and a PR as its card, and nothing else", () => {
+    expect(deskTabOf({ ...base, kind: "mission", missionId: "mission-a", title: "1.3.0" } as SearchEntry)).toEqual({ kind: "card", card: { kind: "mission", mission: "mission-a" } });
     const tab = deskTabOf({ ...base, kind: "pr", workspaceId: "w-ide", pr: { number: 12345, state: "mergeable", url: "https://github.com/o/r/pull/12345" } } as unknown as SearchEntry);
-    expect(tab).toMatchObject({ kind: "output", output: { id: "pr:w-ide:12345", kind: "pr", label: "#12345", pr_state: "mergeable", url: "https://github.com/o/r/pull/12345" } });
+    expect(tab).toEqual({ kind: "card", card: { kind: "pull_request", workspace_id: "w-ide", number: 12345 } });
     expect(deskTabOf({ ...base, kind: "agent" } as SearchEntry)).toBeNull();
     expect(deskTabOf({ ...base, kind: "pr", external: true, workspaceId: "w-ide", pr: { number: 1 } } as unknown as SearchEntry)).toBeNull();
   });

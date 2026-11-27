@@ -9,9 +9,17 @@
 //! connection only owns its own demand.
 
 use hide_core::links::ledger::BacklogOriginIdentity;
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+/// Takes a hold's lock whether or not a caller's callback panicked under it.
+/// Every callback here (`announce`, `close`, `dispatch`) runs while the lock
+/// is held, and each hold changes its set before it calls out, so the set
+/// stays valid after a panic; refusing every later caller would turn one
+/// failed callback into a daemon that panics on each connection event.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 #[derive(Default)]
 pub struct ObservationDemand {
@@ -29,7 +37,7 @@ impl ObservationDemand {
         observing: bool,
         announce: impl FnOnce(bool),
     ) -> Option<bool> {
-        let mut observers = self.observers.lock().expect("observation demand");
+        let mut observers = lock(&self.observers);
         let before = !observers.is_empty();
         if observing {
             observers.insert(connection);
@@ -51,7 +59,7 @@ impl ObservationDemand {
 
     #[cfg(test)]
     fn observers(&self) -> usize {
-        self.observers.lock().expect("observation demand").len()
+        lock(&self.observers).len()
     }
 }
 
@@ -74,7 +82,7 @@ impl OriginHolds {
     /// invalid identity and past `ORIGIN_HOLDS_PER_CONNECTION` items.
     pub fn hold(&self, connection: u64, key: &BacklogOriginIdentity) -> Result<(), String> {
         key.validate()?;
-        let mut holders = self.holders.lock().expect("origin holds");
+        let mut holders = lock(&self.holders);
         let held = holders
             .values()
             .filter(|connections| connections.contains(&connection))
@@ -104,7 +112,7 @@ impl OriginHolds {
         key: &BacklogOriginIdentity,
         close: impl FnOnce(&BacklogOriginIdentity),
     ) -> bool {
-        let mut holders = self.holders.lock().expect("origin holds");
+        let mut holders = lock(&self.holders);
         let Some(connections) = holders.get_mut(key) else {
             return false;
         };
@@ -119,7 +127,7 @@ impl OriginHolds {
     /// Drops what a closed connection held, calling `close` under the lock,
     /// in key order, for each key no connection shows any more.
     pub fn release(&self, connection: u64, mut close: impl FnMut(&BacklogOriginIdentity)) {
-        let mut holders = self.holders.lock().expect("origin holds");
+        let mut holders = lock(&self.holders);
         let mut emptied = Vec::new();
         holders.retain(|key, connections| {
             if connections.remove(&connection) && connections.is_empty() {
@@ -132,85 +140,6 @@ impl OriginHolds {
         for key in &emptied {
             close(key);
         }
-    }
-}
-
-/// The files one window's Desk room may hold at once; its tab panel drops
-/// its oldest file tab past this (`web/src/deskRoom.ts`).
-pub const DESK_FILES_PER_CONNECTION: usize = 32;
-
-/// A file a window's Desk room shows: its checkout's ids, the device the
-/// checkout is on, and its path as this daemon checked it.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DeskFileKey {
-    pub workspace_id: String,
-    pub checkout_id: String,
-    pub device_id: String,
-    pub path: String,
-}
-
-/// Which connections' Desk rooms hold each file (PRD desk-2-ui B19, B36).
-/// The core keeps a held file's document out of every View, so the hold
-/// belongs to the window that shows it: one window letting a file go must
-/// not close another's, and a window that leaves without saying so (a quit,
-/// a reload, a dropped socket) lets its files go with its connection.
-#[derive(Default)]
-pub struct DeskFileHolds {
-    holders: Mutex<BTreeMap<DeskFileKey, HashSet<u64>>>,
-}
-
-impl DeskFileHolds {
-    /// Makes `files` the whole set `connection` holds. When files no
-    /// connection held become held, or the last connection holding a file
-    /// lets it go, `change` receives both lists in one call, made while the
-    /// holds are still locked so two windows' changes reach the core in the
-    /// order they happened. Refused past `DESK_FILES_PER_CONNECTION` files.
-    pub fn set(
-        &self,
-        connection: u64,
-        files: Vec<DeskFileKey>,
-        change: impl FnOnce(&[DeskFileKey], &[DeskFileKey]),
-    ) -> Result<(), String> {
-        let mut wanted = Vec::with_capacity(files.len());
-        for file in files {
-            if !wanted.contains(&file) {
-                wanted.push(file);
-            }
-        }
-        if wanted.len() > DESK_FILES_PER_CONNECTION {
-            return Err(format!(
-                "desk_files: one window holds at most {DESK_FILES_PER_CONNECTION} files"
-            ));
-        }
-        let mut holders = self.holders.lock().expect("desk file holds");
-        let mut close = Vec::new();
-        holders.retain(|key, connections| {
-            if !wanted.contains(key) && connections.remove(&connection) && connections.is_empty() {
-                close.push(key.clone());
-                return false;
-            }
-            !connections.is_empty()
-        });
-        let mut open = Vec::new();
-        for file in wanted {
-            let connections = holders.entry(file.clone()).or_default();
-            if connections.is_empty() {
-                open.push(file);
-            }
-            connections.insert(connection);
-        }
-        if !open.is_empty() || !close.is_empty() {
-            change(&open, &close);
-        }
-        Ok(())
-    }
-
-    /// Lets go of every file a closed connection held, in one `change` for
-    /// the files no connection holds any more.
-    pub fn release(&self, connection: u64, change: impl FnOnce(&[DeskFileKey], &[DeskFileKey])) {
-        // An empty set is never refused.
-        let _ = self.set(connection, Vec::new(), change);
     }
 }
 
@@ -234,10 +163,8 @@ struct HeldThread {
 }
 
 impl ThreadHolds {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HeldThread> {
-        self.held
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    fn lock(&self) -> MutexGuard<'_, HeldThread> {
+        lock(&self.held)
     }
 
     /// A window (`Some(connection)`) or a tool (`None`) opens `pane`'s
@@ -518,80 +445,57 @@ mod tests {
     }
 
     #[test]
+    fn a_demand_stays_usable_after_its_announce_panics() {
+        let demand = ObservationDemand::default();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            demand.set(1, true, |_| panic!("the log write failed"))
+        }));
+        assert!(panicked.is_err(), "the callback's panic reaches the caller");
+        // The set changed before it announced, and the next caller is not
+        // refused: this one still sees the connection the panicked call held.
+        let announced = std::cell::RefCell::new(Vec::new());
+        let note = |flag| announced.borrow_mut().push(flag);
+        assert_eq!(demand.observers(), 1);
+        assert_eq!(
+            demand.set(2, true, note),
+            None,
+            "connection 1 still holds it"
+        );
+        assert_eq!(demand.release(1, note), None);
+        assert_eq!(demand.release(2, note), Some(false));
+        assert_eq!(*announced.borrow(), [false]);
+    }
+
+    #[test]
+    fn origin_and_thread_holds_stay_usable_after_their_callback_panics() {
+        let origins = OriginHolds::default();
+        origins.hold(1, &owner("local:/repo#1")).unwrap();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            origins.let_go(1, &owner("local:/repo#1"), |_| {
+                panic!("the log write failed")
+            })
+        }));
+        assert!(panicked.is_err());
+        origins.hold(2, &owner("local:/repo#1")).unwrap();
+        assert!(origins.let_go(2, &owner("local:/repo#1"), |_| {}));
+
+        let threads = ThreadHolds::default();
+        threads.open(Some(1), "w1:p1", || Ok(())).unwrap();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            threads.release(1, || panic!("the log write failed"))
+        }));
+        assert!(panicked.is_err());
+        threads.open(Some(2), "w1:p1", || Ok(())).unwrap();
+        assert!(threads.release(2, || {}));
+    }
+
+    #[test]
     fn a_connection_that_never_observed_releases_nothing() {
         let demand = ObservationDemand::default();
         assert_eq!(demand.release(7, |_| panic!("nothing to announce")), None);
         assert_eq!(
             demand.set(3, false, |_| panic!("nothing to announce")),
             None
-        );
-    }
-
-    fn file(path: &str) -> DeskFileKey {
-        DeskFileKey {
-            workspace_id: "workspace:a".into(),
-            checkout_id: "checkout:a".into(),
-            device_id: "device-a".into(),
-            path: path.into(),
-        }
-    }
-
-    type Changes = std::cell::RefCell<Vec<(Vec<String>, Vec<String>)>>;
-
-    fn record(changes: &Changes) -> impl FnOnce(&[DeskFileKey], &[DeskFileKey]) + '_ {
-        |open, close| {
-            let paths =
-                |files: &[DeskFileKey]| files.iter().map(|file| file.path.clone()).collect();
-            changes.borrow_mut().push((paths(open), paths(close)));
-        }
-    }
-
-    #[test]
-    fn a_desk_file_closes_only_when_the_last_window_holding_it_lets_it_go_or_leaves() {
-        let holds = DeskFileHolds::default();
-        let changes = Changes::default();
-        holds
-            .set(1, vec![file("/a"), file("/b")], record(&changes))
-            .unwrap();
-        holds.set(2, vec![file("/a")], record(&changes)).unwrap();
-        // A preview replace in window 1: one change opens /c and lets /b go.
-        holds
-            .set(1, vec![file("/a"), file("/c")], record(&changes))
-            .unwrap();
-        // The same set again changes nothing.
-        holds
-            .set(1, vec![file("/a"), file("/c")], record(&changes))
-            .unwrap();
-        holds.set(1, Vec::new(), record(&changes)).unwrap();
-        holds.release(2, record(&changes));
-        assert_eq!(
-            changes.into_inner(),
-            vec![
-                (vec!["/a".into(), "/b".into()], vec![]),
-                (vec!["/c".into()], vec!["/b".into()]),
-                (vec![], vec!["/c".into()]),
-                (vec![], vec!["/a".into()]),
-            ],
-            "window 2 kept /a open after window 1 let it go, until it left"
-        );
-    }
-
-    #[test]
-    fn a_window_past_its_desk_file_cap_is_refused_and_keeps_what_it_held() {
-        let holds = DeskFileHolds::default();
-        let changes = Changes::default();
-        holds.set(1, vec![file("/kept")], record(&changes)).unwrap();
-        let many = (0..=DESK_FILES_PER_CONNECTION)
-            .map(|n| file(&format!("/{n}")))
-            .collect();
-        assert!(holds.set(1, many, record(&changes)).is_err());
-        holds.release(1, record(&changes));
-        assert_eq!(
-            changes.into_inner(),
-            vec![
-                (vec!["/kept".into()], vec![]),
-                (vec![], vec!["/kept".into()])
-            ]
         );
     }
 }
