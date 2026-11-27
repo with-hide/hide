@@ -12179,7 +12179,11 @@ mod wire_enum_tests {
             &[DeskJobLocationKind::Checkout, DeskJobLocationKind::Worktree],
         );
         checked.insert("desk_job_location");
-        let capabilities = [ThreadCapability::None, ThreadCapability::Pending, ThreadCapability::Ready];
+        let capabilities = [
+            ThreadCapability::None,
+            ThreadCapability::Pending,
+            ThreadCapability::Ready,
+        ];
         for capability in capabilities {
             match capability {
                 ThreadCapability::None | ThreadCapability::Pending | ThreadCapability::Ready => {}

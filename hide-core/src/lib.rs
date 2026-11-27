@@ -21,6 +21,7 @@ mod code_host;
 pub use code_host::{
     ChangeRequestPlace, WrittenChangeRequest, change_request_name, written_change_request,
 };
+mod agent_commands;
 mod codex_launch;
 mod composer_checks;
 mod composer_store;
@@ -28,7 +29,6 @@ pub mod coordination;
 pub mod core_calls;
 pub mod dag;
 pub mod delivery;
-mod agent_commands;
 pub mod desk;
 mod device_catalog;
 pub mod device_command;

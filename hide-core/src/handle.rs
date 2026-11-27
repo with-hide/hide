@@ -537,11 +537,10 @@ impl Core {
             let moving = matches!(restored, Restored::Moving(_));
             let desk = crate::desk::DeskStore::new(hide_kit::layout::desk_store(directory));
             let desk_restored = desk.restore();
-            let desk_commands =
-                crate::agent_commands::AgentCommandsStore::with_legacy(
-                    hide_kit::layout::agent_commands(directory),
-                    hide_kit::layout::desk_commands(directory),
-                );
+            let desk_commands = crate::agent_commands::AgentCommandsStore::with_legacy(
+                hide_kit::layout::agent_commands(directory),
+                hide_kit::layout::desk_commands(directory),
+            );
             let desk_commands_restored = desk_commands.restore();
             let (access, access_restored) =
                 crate::runtime::access::restore(hide_kit::layout::access_store(directory));
