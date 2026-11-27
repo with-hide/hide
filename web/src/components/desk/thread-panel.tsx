@@ -11,7 +11,11 @@ import { fileWords, keepSent, mentionAt, pickCommand, pickWords, useComposerTray
 import { sessionBarSlots, sessionMentions, sessionWords, switchCommand, useMentionFiles } from "../../sessionInput";
 import { checkoutOfPane, type DeskAgentId } from "../../snapshot";
 import { useSessionThread } from "../../sessionThread";
+import { sessionDraft } from "../../sessionDrafts";
+import { remoteTargetOfPane } from "../../remote";
+import "../../sessionDraftSends";
 import { useShellStore } from "../../store";
+import { useUiStore } from "../../ui";
 import { threadInputHeld, threadScreen } from "../../threadView";
 import type { ReactNode } from "react";
 import type { AskLine } from "../open-asks";
@@ -69,31 +73,36 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   const refusal = useShellStore((s) => s.composerRefusal);
   const screen = useMemo(() => threadScreen(thread, history, { plans, missions }, rows), [thread, history, plans, missions, rows]);
 
-  const [text, setText] = useState("");
+  // The words are the pane's draft, kept while another session is open or Desk is left, and cleared once sent.
+  // An edit that would make the words longer past one send is not taken, and the line says so; the words stay.
+  const text = useUiStore((s) => (paneId ? sessionDraft(s.sessionDrafts, paneId) : ""));
+  const setText = (value: string) => {
+    if (!paneId) return;
+    const device = remoteTargetOfPane(useShellStore.getState().rest, paneId);
+    if (!useUiStore.getState().setSessionDraft(paneId, device, value)) setNotice(words("too_long"));
+  };
   const [caret, setCaret] = useState(0);
   const box = useRef<HTMLTextAreaElement>(null);
   const tray = useComposerTray();
-  // The request a send is waiting on and the tiles it carried; a change of model or effort keeps the words.
-  const [sent, setSent] = useState<{ request: string; tiles: string[]; keepWords?: boolean } | null>(null);
+  // The request a send is waiting on and the tiles it carried, while this panel stands; its words wait beside the
+  // pane's draft (`sessionDraftSends.ts`), so a send still unanswered when the panel closed holds the next one too.
+  const [sent, setSent] = useState<{ request: string; tiles: string[] } | null>(null);
+  const waiting = useUiStore((s) => (paneId ? s.sessionDrafts.some((draft) => draft.pane === paneId && draft.sending) : false));
   const [notice, setNotice] = useState<string | null>(null);
   const words = (reason: string) => (INPUT_WORDS.has(reason) ? t(`desk.thread.input.${reason}` as MessageKey) : refusalText(reason, t));
 
-  // The words stay in the box until the pane took them, so a refused send loses nothing.
-  // The answer names its request, so it is read from whichever thread the core
-  // holds: an input that arrived after another pane's thread opened is
-  // answered there, as closed.
+  // A send takes the words out of the box at once, and `sessionDraftSends.ts` gives them back on a refusal or lets
+  // them go once the pane took them, whether this panel still stands or not; here only the line and the files the
+  // send carried follow the answer. The answer names its request, so it is read from whichever thread the core
+  // holds: an input that arrived after another pane's thread opened is answered there, as closed.
   const input = useShellStore((s) => s.sessionThread?.input ?? null);
   useEffect(() => {
     if (!sent || input?.request_id !== sent.request || input.state === "sending") return;
     setSent(null);
-    if (input.state === "sent") {
-      if (!sent.keepWords) setText("");
-      // Only the files this send carried: one dropped since stays for the next.
-      sent.tiles.forEach(tray.remove);
-      setNotice(null);
-    } else {
-      setNotice(input.reason ? words(input.reason) : null);
-    }
+    if (input.state === "refused") return setNotice(input.reason ? words(input.reason) : null);
+    // Only the files this send carried: one dropped since stays for the next.
+    sent.tiles.forEach(tray.remove);
+    setNotice(null);
   }, [input, sent]);
   useEffect(() => {
     if (!sent || refusal?.request_id !== sent.request) return;
@@ -104,7 +113,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   const held = threadInputHeld(thread);
   const send = () => {
     const files = tray.outgoing();
-    if (!thread?.pane_id || held !== null || sent || !files) return;
+    if (!thread?.pane_id || !paneId || held !== null || sent || waiting || !files) return;
     const request = submitThreadInput(thread.generation, thread.pane_id, text, files.map(({ name, bytes }) => ({ name, bytes })));
     if (request && typeof request === "object") {
       setNotice(words(request.refused));
@@ -112,6 +121,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
       // The bubble the record will show names these files by their stages, here and on a device.
       files.forEach((file, index) => keepSent(`${request}-${index}`, file.name, file.image));
       setSent({ request, tiles: files.map((file) => file.id) });
+      useUiStore.getState().sendSessionDraft(paneId, remoteTargetOfPane(useShellStore.getState().rest, paneId), request, text);
       setNotice(null);
     } else {
       setNotice(words("forward_failed"));
@@ -171,7 +181,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
     if (!thread?.pane_id || held !== null || sent || ask !== null) return;
     const request = actions.switchThread(thread.generation, thread.pane_id, to);
     if (request) {
-      setSent({ request, tiles: [], keepWords: true });
+      setSent({ request, tiles: [] });
       setNotice(null);
     } else {
       setNotice(words("forward_failed"));
@@ -203,9 +213,14 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
     actions.readOlderThread(thread.generation);
   };
 
+  // Only a press made while this session is open takes the keyboard: an earlier session's `답하기` left the count
+  // raised, and a session opened later must not read it as its own.
   const root = useRef<HTMLDivElement>(null);
+  const answered = useRef(answer);
   useEffect(() => {
-    if (answer > 0) root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]")?.focus();
+    if (answer === answered.current) return;
+    answered.current = answer;
+    root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]")?.focus();
   }, [answer]);
 
   if (!job && !foot) {
@@ -240,7 +255,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
           value: text,
           tray,
           focused,
-          held: held !== null || sent !== null,
+          held: held !== null || sent !== null || waiting,
           notice: held === "pane_changed" || held === "pane_gone" ? words(held) : notice,
           textRef: box,
           menus,

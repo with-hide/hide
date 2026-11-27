@@ -1,4 +1,4 @@
-import { PanelRightOpenIcon, PlusIcon, XIcon } from "lucide-react";
+import { PanelRightOpenIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { DividerGrip } from "../../LaneDivider";
 import { holdShellDrag } from "../../shellDrag";
@@ -16,13 +16,12 @@ import { FileDropZone } from "./file-drop";
 const EDGE_STEP = 32;
 
 /**
- * The chat column's head: Desk's own mark and name, 한눈에's unfold while it is folded, `＋ 새 대화` (B10; Doop ①) and
- * at its right end `나가기 ✕` (feedback 1 D2), which goes back to the tab in
- * front before Desk (`leaveTo`), as `leaveChord` does.
+ * The chat column's head: Desk's own mark and name, and 한눈에's unfold while it is folded. Leaving Desk is the
+ * sidebar's Desk row and the recent-tab chord; a new conversation has no entry on screen until one is decided
+ * (operator decision 2026-11-27).
  */
-export function DeskChatHead({ onNewConversation, onLeave, leaveTo = null, leaveChord = null, onGlance = null }: { onNewConversation: () => void; onLeave: () => void; leaveTo?: string | null; leaveChord?: string | null; /** 한눈에 is folded with no session beside Desk: this unfolds it. */ onGlance?: (() => void) | null }) {
+export function DeskChatHead({ onGlance = null }: { /** 한눈에 is folded with no session beside Desk: this unfolds it. */ onGlance?: (() => void) | null }) {
   const { t } = useInterfaceTranslation();
-  const hint = [t("desk.leave.hint"), leaveTo ? t("desk.leave.to", { place: leaveTo }) : null].filter(Boolean).join(" · ");
   return (
     <>
       <span className="flex flex-1 items-center gap-xs font-semibold text-foreground"><DeskMark />{t("desk.name")}</span>
@@ -31,15 +30,11 @@ export function DeskChatHead({ onNewConversation, onLeave, leaveTo = null, leave
           <Button variant="ghost" size="icon-sm" className="text-subtle-foreground" aria-label={t("desk.glance.unfold")} data-desk-glance-unfold="true" onClick={onGlance}><PanelRightOpenIcon /></Button>
         </Hint>
       ) : null}
-      <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-new-conversation="true" onClick={onNewConversation}><PlusIcon />{t("desk.newConversation")}</Button>
-      <Hint label={hint} shortcut={leaveChord ?? undefined}>
-        <Button variant="ghost" size="sm" aria-label={`${t("desk.leave")} · ${hint}`} className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-leave="true" onClick={onLeave}>{t("desk.leave")}<XIcon /></Button>
-      </Hint>
     </>
   );
 }
 
-/** Desk's chat column: its head (the name and `＋ 새 대화`), the conversation, and the composer at the foot, all one place to drop files into the composer. `scrollRef` is the conversation's scroller. */
+/** Desk's chat column: its head, the conversation, and the composer at the foot, all one place to drop files into the composer. `scrollRef` is the conversation's scroller. */
 export function DeskChatColumn({ head, children, composer, tray = null, dragging = false, scrollRef }: { head: ReactNode; children: ReactNode; composer: ReactNode; /** The box's files: a file dropped anywhere on the column attaches there (Doop L). */ tray?: ComposerTray | null; /** A drag of files in progress, for review. */ dragging?: boolean; scrollRef?: Ref<HTMLDivElement> }) {
   return (
     <FileDropZone tray={tray} dragging={dragging} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-chat-drop="true">
@@ -204,9 +199,10 @@ export function DeskRoom({ chat, session = null, glance = false, panel = null, e
         <>
           {/* The dim covers Desk's chat and the sidebar; the session panel stands above it, bright and usable (B17). */}
           <div aria-hidden="true" className="fixed inset-0 z-10 bg-scrim" data-desk-dim="true" onPointerDown={(event) => { event.preventDefault(); onDim(); }} />
+          {/* Flush with the room's top and foot, so its tab strip lines up with Desk's head and the session's `‹ 한눈에` line. */}
           <section
             aria-label={t("desk.room.tabs")}
-            className="absolute inset-y-xs z-20 flex min-h-0 min-w-0 overflow-hidden rounded-l-lg border border-r-0 border-border bg-background shadow-overlay"
+            className="absolute inset-y-0 z-20 flex min-h-0 min-w-0 overflow-hidden border-l border-border bg-background shadow-overlay"
             style={placed.panelCovers || expanded ? { left: 0, right: placed.session } : { right: placed.session, width: placed.view }}
             data-desk-tab-panel={session !== null ? "beside_session" : "window_edge"}
             data-desk-expanded={expanded ? "true" : undefined}

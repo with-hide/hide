@@ -109,11 +109,14 @@ describe("Desk's room", () => {
     expect(useUiStore.getState().screen).toEqual({ kind: "main" });
   });
 
-  it("leaves the room on its head's 나가기 ✕ (feedback 1 D2)", async () => {
+  // Operator decision 2026-11-27 (mission-109): leaving is the sidebar's Desk row and the recent-tab chord, and a new
+  // conversation has no entry on screen for now, so the head carries neither.
+  it("draws no 새 대화 and no 나가기 in its head", async () => {
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([]));
-    await press("[data-desk-leave]");
-    expect(useUiStore.getState().screen).toEqual({ kind: "main" });
+    const head = document.body.querySelector("[data-desk-chat-head]")!;
+    expect(head.textContent).toBe("Desk");
+    expect(head.querySelectorAll("button")).toHaveLength(0);
   });
 
   it("lands at the conversation's foot when Desk opens again, though the browser nudges the view as the replies fill in", async () => {

@@ -33,7 +33,7 @@ import { useElapsed } from "./components/elapsed";
 import { askIdentity, inputFailure, noticeText } from "./mobile/protocol";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { commandLabel } from "./shortcutLabels";
-import { deskReturn, deskReturnWords, leaveDesk } from "./keyboard";
+import { leaveDesk } from "./keyboard";
 import { keepSent, outgoing, pickCommand, pickMention, useComposerTray } from "./deskComposer";
 import { refusalText, stageDeskFiles } from "./attachments";
 import { DeskChat, DeskEmpty, type DeskChatActions, type DeskNoticeAction } from "./components/desk/desk-chat";
@@ -378,7 +378,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
           actions={actions}
           room={room}
           chat={(
-            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} onGlance={glanceFolded ? () => actions.deskGlanceFold(false) : null} />} composer={composer} tray={tray} scrollRef={scroller}>
+            <DeskChatColumn head={<DeskChatHead onGlance={glanceFolded ? () => actions.deskGlanceFold(false) : null} />} composer={composer} tray={tray} scrollRef={scroller}>
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (

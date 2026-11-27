@@ -244,6 +244,9 @@ pub(super) struct ViewPlacement {
     pub(super) preview: bool,
     pub(super) beside: bool,
     pub(super) replace: Option<String>,
+    /// The open receipt a sender that named its open waits for, recorded
+    /// with the display once the document is placed (Desk's output open).
+    pub(super) receipt: Option<String>,
 }
 
 impl ViewPlacement {
@@ -404,9 +407,9 @@ struct OldestView {
     agents: bool,
 }
 
-struct LayoutRefusal {
-    kind: &'static str,
-    message: String,
+pub(super) struct LayoutRefusal {
+    pub(super) kind: &'static str,
+    pub(super) message: String,
 }
 
 impl From<LayoutError> for LayoutRefusal {
@@ -1349,6 +1352,7 @@ impl Runtime {
                     preview,
                     beside,
                     replace,
+                    receipt: None,
                 });
                 self.start_document_open(
                     root,
@@ -1478,11 +1482,29 @@ impl Runtime {
             placement.replace.as_deref(),
         );
         if let Err(error) = placed {
+            if let Some(request_id) = placement.receipt.clone() {
+                self.record_open_receipt(request_id, Err(LayoutRefusal::from(error.clone())));
+            }
             self.refuse_placement(&placement.key, &tab_id, error);
             if let Some(kept) = kept {
                 self.restore_front(kept);
             }
             return;
+        }
+        if let Some(request_id) = placement.receipt.clone() {
+            let origin = self.desk_origin(&placement.key, workspace_id, checkout_id);
+            let shown = self.view_showing(
+                &placement.key,
+                &placement.place,
+                origin.as_ref(),
+                path,
+                DisplayKind::File,
+                None,
+            );
+            let outcome = shown
+                .map(|display_id| (placement.key.clone(), display_id))
+                .ok_or_else(|| LayoutRefusal::from(LayoutError::UnknownDisplay(tab_id.clone())));
+            self.record_open_receipt(request_id, outcome);
         }
         if !background && self.front_workspace_key().as_ref() == Some(&placement.key) {
             self.apply_area_intent_to(&placement.key, AreaIntent::Documents);
@@ -2324,7 +2346,7 @@ impl Runtime {
     }
 
     /// The receipt a sender that named its open waits for.
-    fn record_open_receipt(
+    pub(super) fn record_open_receipt(
         &mut self,
         request_id: String,
         outcome: Result<(WorkspaceKey, String), LayoutRefusal>,

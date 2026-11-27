@@ -1,5 +1,6 @@
+// @vitest-environment jsdom
 import { afterEach, expect, it } from "vitest";
-import { forgetScrolls, keepScroll, keptScroll, KEPT_SCROLLS } from "./conversationScroll";
+import { forgetScrolls, keepScroll, keptScroll, KEPT_SCROLLS, stillAt } from "./conversationScroll";
 
 afterEach(forgetScrolls);
 
@@ -19,4 +20,16 @@ it("keeps each conversation's place apart, forgets one left at its foot, and let
   expect(keptScroll("thread:p1")).toBeNull();
   expect(keptScroll("thread:p0")).toEqual({ anchor: "0", offset: 4 });
   expect(keptScroll("thread:extra")).toEqual({ anchor: "x", offset: 0 });
+});
+
+// Mission-109 review: a session beside Desk drawn again after ⌃⇥ away and back first empties its box while its lines
+// are read again; the scroll that emptying makes is no one's, so the turn the operator was reading stays held.
+it("holds a place while the conversation draws no item, and lets it go once other items are drawn without it", () => {
+  const box = document.createElement("div");
+  const place = { anchor: "u30:16", offset: 0 };
+  expect(stillAt(box, place)).toBe(true);
+  const other = document.createElement("div");
+  other.dataset.scrollAnchor = "u40:21";
+  box.append(other);
+  expect(stillAt(box, place)).toBe(false);
 });

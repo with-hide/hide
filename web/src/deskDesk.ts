@@ -54,7 +54,7 @@ export type DeskOpen =
 
 /** A `desk_view_open` payload, a page to open outside Hide, or why nothing opens (the log's). */
 export type DeskOpenSend =
-  | { send: Record<string, unknown>; focus: { card: DetailItem } | { opened: { path: string; kind: "file"; committed: null } } | null }
+  | { send: Record<string, unknown>; focus: { card: DetailItem } | { opened: { path: string; kind: "file"; committed: null } } | { receipt: true } }
   | { link: string }
   | { refused: string };
 
@@ -80,7 +80,9 @@ export function deskOpenSend(rest: SnapshotRest | null | undefined, open: DeskOp
     return url ? { link: url } : { refused: "desk open: a pull request with no address" };
   }
   if (output.device_id !== null && output.checkout !== null && listed(output)) {
-    return { send: { kind: "output", device_id: output.device_id, checkout: output.checkout, id: output.id }, focus: null };
+    // The core places it under a display id the window cannot know ahead,
+    // and names it in the open's receipt, which the keyboard follows.
+    return { send: { kind: "output", device_id: output.device_id, checkout: output.checkout, id: output.id }, focus: { receipt: true } };
   }
   if (output.path === null) return { refused: `desk open: output ${output.id} names no file Hide lists` };
   const device = output.device_id ?? localDeviceId(rest ?? null);

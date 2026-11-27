@@ -12,6 +12,7 @@ import type { DeskJob } from "../../desk";
 import type { AgentRow, DeskMentions, SessionThreadSection, SnapshotRest, ThreadPage } from "../../snapshot";
 import { useShellStore } from "../../store";
 import { useUiStore } from "../../ui";
+import { NO_SESSION_DRAFTS, SESSION_DRAFT_BYTES } from "../../sessionDrafts";
 import { TooltipProvider } from "../ui/tooltip";
 import { ThreadPanel } from "./thread-panel";
 import { clearPreviews } from "../../filePreview";
@@ -45,6 +46,7 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   saved = useShellStore.getState();
   useShellStore.setState({ connection: "live" });
+  useUiStore.setState({ sessionDrafts: NO_SESSION_DRAFTS });
   events = [];
   configureAttachments({ dispatch: (event) => events.push({ kind: event.kind, payload: event.payload as Record<string, unknown> }), sendBinary: () => undefined });
 });
@@ -58,18 +60,20 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void } = {}) {
+async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined, pane = "w1:p2", answer = 0 }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void; pane?: string; answer?: number } = {}) {
   const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn(), switchThread: vi.fn(() => "switch-1"), observeCatalog: vi.fn(() => noop), requestFileIndex: vi.fn(), deskCommandsCheck: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   mounted.push(root);
   const noop = () => undefined;
-  await act(async () => root.render(
+  const draw = (raised: number) => root.render(
     <TooltipProvider>
-      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} ask={ask} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
+      <ThreadPanel job={card} paneId={pane} answer={raised} actions={actions} foot={foot} ask={ask} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
     </TooltipProvider>,
-  ));
+  );
+  await act(async () => draw(answer));
+  const answerAgain = (raised: number) => act(async () => draw(raised));
   const box = () => container.querySelector("textarea")!;
   const type = async (value: string) => {
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
@@ -79,7 +83,7 @@ async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks 
     });
   };
   const enter = (composing = false) => act(async () => { box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: composing })); });
-  return { actions, container, root, box, type, enter };
+  return { actions, container, root, box, type, enter, answerAgain };
 }
 
 it("opens its pane's thread while shown, draws what the core read, and closes it after", async () => {
@@ -107,7 +111,7 @@ it("keeps a sleeping session's record above the foot that wakes it once its card
   expect(container.querySelector("textarea")).toBeNull();
 });
 
-it("sends the box's words on Enter, keeps them until the pane took them, and never sends mid-composition", async () => {
+it("sends the box's words on Enter, takes them out of the box at once, and never sends mid-composition", async () => {
   const { box, type, enter } = await mount();
   await act(async () => useShellStore.setState({ sessionThread: section() }));
   await type("다크도 부탁해");
@@ -117,10 +121,122 @@ it("sends the box's words on Enter, keeps them until the pane took them, and nev
   expect(events).toHaveLength(1);
   expect(events[0]).toMatchObject({ kind: "thread_input", payload: { generation: 4, pane_id: "w1:p2", text: "다크도 부탁해", stages: [] } });
   const request = events[0]!.payload.request_id as string;
+  expect(box().value).toBe("");
   await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sending" } }) }));
-  expect(box().value).toBe("다크도 부탁해");
   await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sent" } }) }));
   expect(box().value).toBe("");
+});
+
+// Review round 1 F1 (mission-109): a send the pane took while its panel was closed never comes back as a draft to go twice.
+it("brings no sent words back when the panel closed before the pane took them", async () => {
+  const first = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await first.type("accepted once");
+  await first.enter();
+  const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
+  await act(async () => first.root.unmount());
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sent" } }) }));
+  const back = await mount();
+  expect(back.box().value).toBe("");
+});
+
+// Review round 1 F2, round 3: an edit that would make the words longer past one send is not taken, and the line
+// says so; the words already in the box stay whole.
+it("does not take an edit that makes the words longer past one send, keeping the words it holds, and says so", async () => {
+  const { container, box, type } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await type("hello");
+  await type("x".repeat(SESSION_DRAFT_BYTES + 10));
+  expect(box().value).toBe("hello");
+  expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe("Too long to send in one go");
+});
+
+it("puts refused words back before any words written since, so neither is lost", async () => {
+  const { box, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await type("계속");
+  await enter();
+  const request = events[0]!.payload.request_id as string;
+  await type("다른 말");
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "asleep" } }) }));
+  expect(box().value).toBe("계속\n다른 말");
+});
+
+// Review round 2 F1 (mission-109): words the pane refused after their panel closed come back when it opens again.
+it("gives words refused while its panel was closed back to the box when the session opens again", async () => {
+  const first = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await first.type("not delivered, must not vanish");
+  await first.enter();
+  const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
+  await act(async () => first.root.unmount());
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "closed" } }) }));
+  const back = await mount();
+  expect(back.box().value).toBe("not delivered, must not vanish");
+});
+
+// Review round 3 F1: the core's own order when another session opened while the words were on their way: the
+// closed thread and the new one carry no answer, then the late answer lands on the new one by its request id.
+it("frees the box and gives refused words back when the answer lands on a thread opened after the send", async () => {
+  const first = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await first.type("늦은 답");
+  await first.enter();
+  const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
+  await act(async () => first.root.unmount());
+  await act(async () => useShellStore.setState({ sessionThread: section({ state: "closed", pane_id: null }) }));
+  const back = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section({ generation: 5 }) }));
+  expect(back.container.querySelector<HTMLButtonElement>('[data-desk-composer-send="true"]')?.disabled).toBe(true);
+  await act(async () => useShellStore.setState({ sessionThread: section({ generation: 5, input: { request_id: request, state: "refused", reason: "closed" } }) }));
+  expect(back.box().value).toBe("늦은 답");
+  await back.enter();
+  expect(events.filter((event) => event.kind === "thread_input")).toHaveLength(2);
+});
+
+// Review round 3 F7: words refused at the cap and words written since both come back, nothing cut.
+it("gives back refused words at the cap together with every word written since", async () => {
+  const { box, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  const full = "x".repeat(SESSION_DRAFT_BYTES);
+  await type(full);
+  await enter();
+  const request = events[0]!.payload.request_id as string;
+  await type("new words");
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "asleep" } }) }));
+  expect(box().value).toBe(`${full}\nnew words`);
+});
+
+// Conductor's round 3 check: typing into a box that a restore left past one send never cuts its tail.
+it("keeps a restored box past one send whole while typing would lengthen it, and takes an edit that shortens it", async () => {
+  const { container, box, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  const full = "x".repeat(SESSION_DRAFT_BYTES);
+  await type(full);
+  await enter();
+  const request = events[0]!.payload.request_id as string;
+  await type("new words");
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "asleep" } }) }));
+  const restored = `${full}\nnew words`;
+  expect(box().value).toBe(restored);
+  await type(`${restored}!`);
+  expect(box().value).toBe(restored);
+  expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe("Too long to send in one go");
+  await type(restored.slice(1));
+  expect(box().value).toBe(restored.slice(1));
+});
+
+it("holds the next send while one the closed panel sent is still unanswered", async () => {
+  const first = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await first.type("first");
+  await first.enter();
+  await act(async () => first.root.unmount());
+  const back = await mount();
+  await back.type("second");
+  await back.enter();
+  expect(events.filter((event) => event.kind === "thread_input")).toHaveLength(1);
+  expect(back.box().value).toBe("second");
 });
 
 it("keeps the words and says why when the pane refused them, and holds send while the pane runs another session", async () => {
@@ -707,7 +823,8 @@ it("says why the session's agent has no list yet, the same as Desk's box, and se
   expect(document.body.querySelector('[data-desk-command-unread="sign_in"]')).not.toBeNull();
   await enter();
   expect(events[0]).toMatchObject({ kind: "thread_input", payload: { text: "/compact" } });
-  expect(box().value).toBe("/compact");
+  // Sent, the words leave the box at once.
+  expect(box().value).toBe("");
 });
 
 it("lists the project's files above Desk's sessions on `@`, without the session itself, and writes each as its agent reads it", async () => {
@@ -789,4 +906,35 @@ it("keeps a slot Hide cannot change in a running session read-only, and says so"
   expect(model.dataset.sessionBarFixed).toBe("true");
   expect(model.getAttribute("aria-label")).toContain("cannot change the model here yet");
   expect(container.querySelector('[data-session-bar="effort"]')?.getAttribute("data-session-bar-fixed")).toBe("true");
+});
+
+// Operator request 2026-11-27 (mission-109): a session's input keeps what was written in it per pane, as Desk's own
+// box keeps its draft, while another session is open beside Desk, and forgets it once the pane took it.
+it("keeps a session's words while another session opens beside Desk and gives them back on its return, and forgets them once sent", async () => {
+  const first = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await first.type("다크도 부탁해\n라이트도");
+  await act(async () => first.root.unmount());
+  const other = await mount({ ...job, pane_id: "w1:p3" }, null, { pane: "w1:p3" });
+  expect(other.box().value).toBe("");
+  await other.type("다른 세션");
+  await act(async () => other.root.unmount());
+  const back = await mount();
+  expect(back.box().value).toBe("다크도 부탁해\n라이트도");
+  await back.enter();
+  const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sent" } }) }));
+  expect(back.box().value).toBe("");
+  await act(async () => back.root.unmount());
+  expect((await mount()).box().value).toBe("");
+  expect((await mount({ ...job, pane_id: "w1:p3" }, null, { pane: "w1:p3" })).box().value).toBe("다른 세션");
+});
+
+// Operator request 2026-11-27 (mission-109): `답하기` gives the box the keyboard once per press; a count an earlier
+// session's press raised is no press for a session opened later.
+it("takes the keyboard on a 답하기 pressed while it is open, never on one pressed before it opened", async () => {
+  const opened = await mount(job, null, { answer: 3 });
+  expect(document.activeElement).not.toBe(opened.box());
+  await opened.answerAgain(4);
+  expect(document.activeElement).toBe(opened.box());
 });

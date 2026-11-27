@@ -5,6 +5,7 @@ import { DESK_ROOM_CLOSED, deskShown, panelPlace } from "./deskRoom";
 import type { Checkout, DeskOutput, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { workspaceKey } from "./viewLayout";
 import type { DispatchFn } from "./ws";
 
 // Expected answers are PRD desk-own-desk D-03, D-12, D-15, B10, B11, B14,
@@ -74,9 +75,19 @@ describe("what Desk opens on its own desk", () => {
     actions.deskOpen({ kind: "output", output: listed });
     actions.deskOpen({ kind: "output", output: output({ id: "answer:1", device_id: null, checkout: null, path: "/repo/docs/x.md" }) });
     expect(opens()).toEqual([
-      { kind: "output", device_id: "local", checkout: "/repo", id: "d4" },
+      { kind: "output", device_id: "local", checkout: "/repo", id: "d4", request_id: expect.stringMatching(/^follow:/) },
       { kind: "file", workspace_id: "w-repo", checkout_id: "repo", device_id: "local", path: "/repo/docs/x.md", preview: false, beside: false },
     ]);
+  });
+
+  // Operator request 2026-11-27 (mission-109): the core places a session's View on Desk's desk under a display id the
+  // window cannot know ahead, so the open names itself and the keyboard follows the display its receipt names.
+  it("names a session's View it opens, and the keyboard waits for the display the core's receipt names on Desk's desk", () => {
+    const listed = output({});
+    useShellStore.setState({ deskJobs: { jobs: [{ id: "j1", outputs: [listed] }], workers: [], named: [], records: [], moved: [] } as never });
+    actions.deskOpen({ kind: "output", output: listed });
+    const request = opens()[0]!.request_id as string;
+    expect(useUiStore.getState().viewFocusRequest).toEqual({ workspace: workspaceKey({ device_id: "local", path: "hide:desk" }), browserOpen: request });
   });
 
   it("opens nothing, and says so only in the log, for a file outside every checkout or while Desk is off", () => {
@@ -110,13 +121,13 @@ describe("what Desk opens on its own desk", () => {
     expect(shown()).toBe(true);
   });
 
-  it("starts the room closed the next time it is entered (B26), and ⌘J brings back the session it left for (B7)", () => {
+  it("folds the desk and keeps the session beside Desk the next time the room is entered (B26; operator request 2026-11-27), and ⌘J brings back the session it left for (B7)", () => {
     actions.openDeskSession("p-session");
     actions.deskOpen(mission);
     actions.deskTerminal();
-    // The Agent tab comes in front (openAgent's own work); leaving Desk closes its right side.
+    // The Agent tab comes in front (openAgent's own work); leaving Desk folds its desk and keeps the session.
     useUiStore.getState().setScreen({ kind: "workspace" });
-    expect(useUiStore.getState().deskRoom).toEqual(DESK_ROOM_CLOSED);
+    expect(useUiStore.getState().deskRoom).toEqual({ ...DESK_ROOM_CLOSED, session: "p-session" });
     expect(useUiStore.getState().deskReturn).toBe("p-session");
     useShellStore.setState({ focusedPaneId: "p-session" });
     actions.deskTerminal();
@@ -126,7 +137,7 @@ describe("what Desk opens on its own desk", () => {
     expect(useUiStore.getState().deskReturn).toBeNull();
     useUiStore.getState().setScreen({ kind: "workspace" });
     actions.openDesk();
-    expect(useUiStore.getState().deskRoom).toEqual(DESK_ROOM_CLOSED);
+    expect(useUiStore.getState().deskRoom).toEqual({ ...DESK_ROOM_CLOSED, session: "p-session" });
   });
 
   it("opens a sidebar row's session beside Desk while Desk is in front, and its tab on a ⌘-click or from any other caller (B3, B5, review O1)", () => {

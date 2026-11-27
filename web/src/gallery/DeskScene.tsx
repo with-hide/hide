@@ -141,7 +141,7 @@ function SceneSidebar({ jobs, selected }: { jobs: readonly DeskJob[]; selected: 
 
 /** The chat column's head, as a scene sets it. */
 function ChatHead() {
-  return <DeskChatHead onNewConversation={noop} onLeave={noop} leaveTo="herdr-ide › Windows 파일 링크 버그" leaveChord="⌃⇥" />;
+  return <DeskChatHead />;
 }
 
 /** Desk's composer with its bar in the box's foot, as a scene sets them. */

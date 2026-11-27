@@ -166,6 +166,35 @@ impl Runtime {
         })
     }
 
+    /// Hands `request_id` to the read of `path` waiting to show at `place` of
+    /// the Workspace `key`, whose placement writes the open's receipt when it
+    /// lands; gives it back when no such read waits.
+    pub(super) fn hold_open_receipt(
+        &mut self,
+        key: &WorkspaceKey,
+        place: &Place,
+        (workspace_id, checkout_id, path): (&str, &str, &str),
+        request_id: String,
+    ) -> Option<String> {
+        let held = self
+            .document_opens
+            .values_mut()
+            .filter(|open| {
+                open.workspace_id == workspace_id
+                    && open.checkout_id == checkout_id
+                    && open.path == path
+            })
+            .flat_map(|open| open.placements.iter_mut())
+            .find(|placement| &placement.key == key && &placement.place == place);
+        match held {
+            Some(placement) => {
+                placement.receipt = Some(request_id);
+                None
+            }
+            None => Some(request_id),
+        }
+    }
+
     /// Opens still being read that will add a View display at `place` of the
     /// Workspace `key`, so the display cap counts them before they land.
     pub(super) fn pending_view_placements(&self, key: &WorkspaceKey, place: &Place) -> usize {

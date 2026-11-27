@@ -310,6 +310,49 @@ test("a draft notice stands above Desk's input boxes, never over them (PRD desk-
   }
 });
 
+test("Desk's box and the session's grow with their lines, stop at the composer's cap and scroll past it, their files on a row of their own above the words (mission-109) @platform", async ({ page }) => {
+  // e2e: a box's height is the drawn layout of the real window (its text sizing), which jsdom does not lay out.
+  test.setTimeout(120_000);
+  const desk = await startDesk(page, "desk-room-grow");
+  try {
+    await row(page, desk.pane).click();
+    const panel = page.locator(`[data-desk-thread-panel="${desk.pane}"]`);
+    await expect(panel).toBeVisible();
+    const height = async (input: ReturnType<Page["locator"]>) => (await input.boundingBox())!.height;
+    const lines = async (count: number) => {
+      for (let line = 0; line < count; line += 1) {
+        await page.keyboard.press("Shift+Enter");
+        await page.keyboard.insertText(`line ${line}`);
+      }
+    };
+    for (const scope of [page.locator("[data-desk-chat-column]"), panel]) {
+      const input = scope.locator("[data-desk-composer-input]");
+      await input.click();
+      await page.keyboard.insertText("first");
+      const one = await height(input);
+      await lines(3);
+      await expect.poll(() => height(input)).toBeGreaterThan(one);
+      // Past the cap the box stands still and its words scroll inside it.
+      await lines(12);
+      await expect.poll(() => input.evaluate((box) => box.scrollHeight > box.clientHeight)).toBe(true);
+      const capped = await height(input);
+      await lines(2);
+      expect(await height(input)).toBe(capped);
+
+      await scope.locator("[data-desk-composer-picker]").setInputFiles({ name: "notes.md", mimeType: "text/markdown", buffer: Buffer.from("# notes\n") });
+      const file = scope.locator("[data-desk-attachment]").first();
+      await expect(file).toBeVisible();
+      await expect.poll(async () => {
+        const [tile, words] = [(await file.boundingBox())!, (await input.boundingBox())!];
+        return tile.y + tile.height <= words.y;
+      }).toBe(true);
+    }
+  } finally {
+    desk.daemon.stop();
+    desk.engine.stop();
+  }
+});
+
 type Box = { x: number; y: number; width: number; height: number };
 
 test("a session beside Desk that sleeps in its own pane offers 에이전트 깨우기 in its input box's place, which wakes it in that pane (PRD desk-2-ui B43) @platform", async ({ page }) => {
