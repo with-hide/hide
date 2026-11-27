@@ -14,7 +14,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover
 import { Hint } from "./components/ui/tooltip";
 import { BROWSER_DEVICES, deviceLabel, devicePlacement, type BrowserDevice } from "./browserDevice";
 import { cn } from "./lib/utils";
-import { browserBridge, type BrowserCommand } from "./host";
+import { browserBridge, hostBridge, type BrowserCommand } from "./host";
+import { isRemoteView } from "./remoteView";
+import { pairedSet } from "./remotePaired";
 import { localDeviceId, type ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
 import { locateDisplay, workspaceKey, type ViewWorkspace } from "./viewLayout";
@@ -42,7 +44,11 @@ export function BrowserDisplay({ display, workspace, actions }: { display: ViewD
   const url = display.url ?? "";
   if (!url) return <NewTab display={display} actions={actions} />;
   if (!bridge) {
-    const web = /^https?:/i.test(url);
+    // In another computer's screen whose window's app is older, that app
+    // draws no page and opens no window, so the notice asks for its update
+    // and offers no button that would do nothing.
+    const remote = isRemoteView();
+    const web = /^https?:/i.test(url) && !remote;
     return (
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-browser-display={display.id}>
         <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-xs border-b border-border pl-xs pr-md" data-browser-toolbar={display.id}>
@@ -51,7 +57,7 @@ export function BrowserDisplay({ display, workspace, actions }: { display: ViewD
           </span>
           {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
         </div>
-        <AreaEmpty state="browser-host" text={t("documents.browserDesktopOnly")}>
+        <AreaEmpty state="browser-host" text={t(remote ? "documents.browserUpdateHere" : "documents.browserDesktopOnly")}>
           {web ? (
             <Button variant="secondary" data-browser-open-external={display.id} onClick={() => window.open(url, "_blank", "noopener,noreferrer")}>
               {t("documents.openInBrowser")}
@@ -121,7 +127,8 @@ function HostedPage({ display, workspace, actions, external = false }: { display
   const address = page?.url || display.url || "";
   const view = parseWorkspaceKey(workspace);
   const areaId = useAreaOf(view, display.id);
-  const commented = useCommentsTaken();
+  // Comment is this machine's own window's: another computer's screen draws the page, so it has none.
+  const commented = useCommentsTaken() && !isRemoteView();
   const coreDevice = useShellStore((s) => localDeviceId(s.rest));
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-browser-display={display.id}>
@@ -418,6 +425,13 @@ export function BrowserHost({ actions }: { actions: Actions }) {
   useEffect(() => {
     if (connection !== "live") clearBrowserAttachments();
   }, [connection]);
+  // This window's paired machines, named to the desktop app once the shell
+  // holds a snapshot: each machine's login storage there lives while its pair does.
+  const paired = useShellStore((s) => (s.rest ? pairedSet(s.rest) : null));
+  useEffect(() => {
+    if (paired === null) return;
+    hostBridge()?.remoteScreens?.paired?.(JSON.parse(paired) as { core: string; pairs: { device: string; key: string }[] });
+  }, [paired]);
 
   const latest = useRef(actions);
   latest.current = actions;
@@ -605,7 +619,7 @@ function BrowserCommentButton({ display, workspace, areaId, address, actions }: 
 function OpenDefaultBrowserButton({ address, pageDevice, actions }: { address: string; pageDevice: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const own = useShellStore((s) => windowDeviceId(s.rest?.navigator?.devices));
-  const target = defaultBrowserAddress(address, pageDevice, own);
+  const target = defaultBrowserAddress(address, pageDevice, own, isRemoteView());
   if (!target) return null;
   const label = t("panes.menu.openDefaultBrowser");
   return (

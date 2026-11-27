@@ -102,7 +102,8 @@ import { deskOpenSend, deskTabCount, deskViewOf, deskWorkspaceOf, DESK_SCREEN, i
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type ExplorerTarget, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
-import { remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
+import { isRemoteView, remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
+import { isLocalNetworkHost } from "./loopbackHost";
 import type { PairingVerb } from "./pairing";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
@@ -4356,6 +4357,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       // The core keeps a Workspace in front while the page shows All projects
       // or an Overview; a display opened there would land out of sight.
       const inFront = ui().screen?.kind === "workspace" ? frontViewWorkspace() : null;
+      // In another computer's screen the default browser is the showing
+      // window's, which never opens this machine's loopback, LAN or local
+      // names; such a link opens as a page here, which reaches them through
+      // this machine (docs/BROWSER_DISPLAYS.md, A page in another computer's screen).
+      if (external && inFront && isRemoteView() && localNetworkLink(url)) {
+        this.openBrowser(url, undefined, undefined, undefined, openerPane);
+        return;
+      }
       if (external || !inFront) {
         window.open(url, "_blank", "noopener,noreferrer");
         return;
@@ -4633,4 +4642,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       });
     },
   };
+}
+
+/** Whether `url` is a web address on its machine's loopback, its LAN or a local name. */
+export function localNetworkLink(url: string): boolean {
+  try {
+    const address = new URL(url);
+    return (address.protocol === "http:" || address.protocol === "https:") && isLocalNetworkHost(address.hostname);
+  } catch {
+    return false;
+  }
 }

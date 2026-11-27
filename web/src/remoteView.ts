@@ -10,6 +10,7 @@
 // again, so the page opens it at once rather than after a reconnect wait.
 
 import type { Clipboard } from "./clipboard";
+import type { BrowserBridge } from "./host";
 import { readDisplayPreferences, sameDisplayPreferences, type DisplayPreferences } from "./displayPreferences";
 
 /** What the socket of the bridge tells the page. */
@@ -88,6 +89,14 @@ export type RemoteBridge = {
   onWork?(listener: (work: RemoteWork) => void): void;
   /** Tells the guest how a start it handed here ended. */
   workResult?(result: RemoteWorkResult): void;
+  /**
+   * The browser displays this screen places, which the showing window's
+   * desktop app draws in this screen's tile with every request leaving
+   * through this machine (docs/BROWSER_DISPLAYS.md, A page in another
+   * computer's screen); absent from an older desktop app. `bridge` stays 1,
+   * so an older page ignores it.
+   */
+  browser?: BrowserBridge;
 };
 
 /** The close the desktop gives the socket of a tile it hid: nothing to show, nothing to reconnect. */

@@ -22,7 +22,7 @@ import { windowDeviceId } from "./screenMachine";
 import { type SnapshotRest, type ViewLayoutSnapshot } from "./snapshot";
 import { useShellStore } from "./store";
 import { areasOf, workspaceKey, type ViewWorkspace } from "./viewLayout";
-import { isLoopbackHost } from "./loopbackHost";
+import { isLocalNetworkHost, isLoopbackHost } from "./loopbackHost";
 
 // --- pure rules ---------------------------------------------------------------
 
@@ -62,7 +62,7 @@ const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\])(?::\d+)?(?
  * the host's own rule), whose `localhost` would be this machine's in the
  * default browser.
  */
-export function defaultBrowserAddress(address: string, pageDevice: string, windowDevice: string): string | null {
+export function defaultBrowserAddress(address: string, pageDevice: string, windowDevice: string, remoteView = false): string | null {
   let url: URL;
   try {
     url = new URL(address);
@@ -71,6 +71,9 @@ export function defaultBrowserAddress(address: string, pageDevice: string, windo
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
   if (pageDevice !== windowDevice && isLoopbackHost(url.hostname)) return null;
+  // In another computer's screen the default browser is the showing
+  // window's: that computer's loopback, LAN and local names are not its own.
+  if (remoteView && isLocalNetworkHost(url.hostname)) return null;
   return url.href;
 }
 

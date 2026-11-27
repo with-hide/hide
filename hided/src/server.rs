@@ -94,6 +94,12 @@ pub struct AppState {
     /// Authenticated shell windows, distinct from CLI and non-rendering clients.
     pub renderers: Arc<AtomicUsize>,
     pub desktop_renderers: Arc<AtomicUsize>,
+    /// What draws this machine's browser displays: its desktop windows and
+    /// every other machine's view whose desktop app draws them there
+    /// (`draws_pages`). An agent's `hide browser open` needs one; the
+    /// gateway, the page commands and the route reaper still need a desktop
+    /// window, since a view gives no page control.
+    pub page_renderers: Arc<AtomicUsize>,
     /// Numbers connections so a stage can be released with its connection.
     pub connections: Arc<AtomicU64>,
     pub last_client_gone: Arc<Mutex<Instant>>,
@@ -166,6 +172,9 @@ pub struct AppState {
     /// Other machines' views of this core, and this machine's views of
     /// theirs (`remote_screen`).
     pub remote_screens: Arc<crate::remote_screen::RemoteScreens>,
+    /// The way a paired machine's browser pages drawn here leave through
+    /// it, and its half for this machine's pages drawn there (`screen_net`).
+    pub screen_net: Arc<crate::screen_net::ScreenNet>,
     /// Windows of this machine open now (`OwnScreen`).
     pub own_screens: Arc<Mutex<usize>>,
     /// Which screen each pane's terminal size follows (`pane_sizes`).
@@ -196,6 +205,10 @@ pub(crate) struct Handshake {
     pub(crate) have_terminal_sequence: Option<u64>,
     /// The epoch of the hub that gave the cursor.
     pub(crate) have_terminal_epoch: Option<String>,
+    /// Another machine's view of this one whose desktop app draws this
+    /// machine's browser displays in it (`page_renderers`); a window of this
+    /// machine says nothing, and an older guest's view never says it.
+    pub(crate) draws_pages: Option<bool>,
 }
 
 impl Handshake {
@@ -289,6 +302,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/peer-screen/{device}/ws",
             get(crate::remote_screen::guest_socket),
+        )
+        .route(
+            "/peer-screen/{device}/net",
+            post(crate::remote_screen::guest_net).delete(crate::remote_screen::guest_net),
+        )
+        .route(
+            "/peer-screen/{device}/page-route",
+            post(crate::remote_screen::guest_page_route),
         )
         .route(
             "/peer-screen/{device}/",
@@ -570,6 +591,9 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "program": state.program.as_deref(),
         "schema_version": SCHEMA_VERSION,
         "clients": state.clients.load(Ordering::SeqCst),
+        // What draws this machine's browser displays now: its desktop
+        // windows and the views of it whose app draws pages (`draws_pages`).
+        "page_renderers": state.page_renderers.load(Ordering::SeqCst),
         "open_handlers_in_flight": state.opener.in_flight(),
         "idle_remaining_secs": idle_remaining_secs(&state),
         "instance": state.seat.instance(),
@@ -1053,6 +1077,8 @@ async fn screen_loop(
     if desktop {
         state.desktop_renderers.fetch_add(1, Ordering::SeqCst);
     }
+    let _draws_pages = (desktop || (remote && handshake.draws_pages == Some(true)))
+        .then(|| PageRenderer::arrive(&state.page_renderers));
     // A window of this machine draws linked nodes' panes from this hub, so
     // they send their output up while one is open (`Router::mirror`).
     let _own_screen = (renderer && relay.is_none()).then(|| OwnScreen::arrive(&state));
@@ -2283,6 +2309,7 @@ async fn scoped_client_loop(
                         let registry = Arc::clone(&state.pane_capabilities);
                         let renderers = Arc::clone(&state.renderers);
                         let desktop_renderers = Arc::clone(&state.desktop_renderers);
+                        let page_renderers = Arc::clone(&state.page_renderers);
                         let browser_control = Arc::clone(&state.browser_control);
                         let query_token = token.clone();
                         let command_request_id = request_id.clone();
@@ -2527,17 +2554,11 @@ async fn scoped_client_loop(
                                         let (reason, next_action) = cap.changed_refusal();
                                         return Err((reason.to_owned(), next_action));
                                     }
-                                    if desktop_renderers.load(Ordering::SeqCst) == 0 {
-                                        result.capabilities.retain(|capability| !capability.starts_with("browser."));
-                                        if let Some(views) = &mut result.views {
-                                            for view in views {
-                                                if let Some(page) = &mut view.page {
-                                                    page.state = if page.state == "pending" { "unsupported" } else { "disconnected" };
-                                                    page.failure = None;
-                                                }
-                                            }
-                                        }
-                                    }
+                                    scope_page_query(
+                                        &mut result,
+                                        desktop_renderers.load(Ordering::SeqCst) > 0,
+                                        page_renderers.load(Ordering::SeqCst) > 0,
+                                    );
                                     serde_json::to_value(result).map_err(|_| {
                                         ("result_encoding_failed".to_owned(), "Reconnect Hide and retry")
                                     })?
@@ -2572,8 +2593,8 @@ async fn scoped_client_loop(
                                         }
                                         None => action,
                                     };
-                                    if matches!(action, hide_core::workspace_control::Action::OpenBrowser { .. }) && desktop_renderers.load(Ordering::SeqCst) == 0 {
-                                        return Err(("browser_unsupported".to_owned(), "Open the Hide desktop app and retry"));
+                                    if matches!(action, hide_core::workspace_control::Action::OpenBrowser { .. }) && page_renderers.load(Ordering::SeqCst) == 0 {
+                                        return Err(("browser_unsupported".to_owned(), NO_PAGE_RENDERER));
                                     }
                                     let preparation = core
                                         .workspace_prepare_action(
@@ -6003,6 +6024,58 @@ impl Drop for OwnScreen {
     }
 }
 
+/// One screen that draws this machine's browser pages, counted while it
+/// lives.
+struct PageRenderer(Arc<AtomicUsize>);
+
+impl PageRenderer {
+    fn arrive(count: &Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Self(Arc::clone(count))
+    }
+}
+
+impl Drop for PageRenderer {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// A pane's query as what draws this machine's pages can answer it: with
+/// no desktop window here no page command is offered, since only a window
+/// gives one; a view of another machine that draws the pages
+/// (`page_renderers`) still opens one and reports its state, so the states
+/// are kept while one draws them and read as unsupported or disconnected
+/// only while none does.
+pub(crate) fn scope_page_query(
+    result: &mut hide_core::workspace_control::QueryResult,
+    desktop: bool,
+    drawn: bool,
+) {
+    if !desktop {
+        result.capabilities.retain(|capability| {
+            !capability.starts_with("browser.")
+                || (drawn && matches!(*capability, "browser.open" | "browser.status"))
+        });
+    }
+    if !drawn && let Some(views) = &mut result.views {
+        for view in views {
+            if let Some(page) = &mut view.page {
+                page.state = if page.state == "pending" {
+                    "unsupported"
+                } else {
+                    "disconnected"
+                };
+                page.failure = None;
+            }
+        }
+    }
+}
+
+/// What an agent is told when nothing on this machine or another one could
+/// draw the page it opens.
+const NO_PAGE_RENDERER: &str = "Open the Hide desktop app here, or show this computer's screen in Hide on another computer, and retry";
+
 pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, desktop: bool) {
     if renderer {
         renderer_count(state, false);
@@ -6247,6 +6320,84 @@ pub fn allowed_origins(port: u16, vite: Option<&str>) -> HashSet<String> {
 
 #[cfg(test)]
 mod tests {
+    /// A pane's query result with one page loaded and one pending.
+    fn page_query() -> hide_core::workspace_control::QueryResult {
+        use hide_core::workspace_control::{BrowserPage, Context, QueryResult, View};
+        let view = |id: &str, state: &'static str| View {
+            area_id: "a1".to_owned(),
+            view_id: id.to_owned(),
+            kind: "browser",
+            target: format!("https://{id}.example/"),
+            selected: false,
+            active_area: false,
+            page: Some(BrowserPage {
+                load: 1,
+                state,
+                failure: Some("refused".to_owned()),
+            }),
+            openers: Vec::new(),
+            operator: false,
+            unseen: false,
+        };
+        QueryResult {
+            context: Context {
+                device_id: "mini".to_owned(),
+                workspace_id: "w".to_owned(),
+                checkout_id: "c".to_owned(),
+                checkout_path: "/web".to_owned(),
+            },
+            capabilities: vec![
+                "view.list",
+                "browser.open",
+                "browser.status",
+                "browser.snapshot",
+                "browser.click",
+            ],
+            views: Some(vec![view("d1", "loaded"), view("d2", "pending")]),
+        }
+    }
+
+    // With no desktop window here but another machine's view drawing this
+    // machine's pages, an agent may open one and read its state, never drive
+    // it; with neither, nothing of a page is offered and its state reads as
+    // nothing draws it.
+    #[test]
+    fn a_view_that_draws_pages_keeps_open_and_state_and_drops_the_page_commands() {
+        let mut drawn = page_query();
+        scope_page_query(&mut drawn, false, true);
+        assert_eq!(
+            drawn.capabilities,
+            ["view.list", "browser.open", "browser.status"]
+        );
+        let pages: Vec<_> = drawn
+            .views
+            .unwrap()
+            .into_iter()
+            .map(|view| view.page.unwrap())
+            .collect();
+        assert_eq!((pages[0].state, pages[1].state), ("loaded", "pending"));
+        assert_eq!(pages[0].failure.as_deref(), Some("refused"));
+
+        let mut none = page_query();
+        scope_page_query(&mut none, false, false);
+        assert_eq!(none.capabilities, ["view.list"]);
+        let pages: Vec<_> = none
+            .views
+            .unwrap()
+            .into_iter()
+            .map(|view| view.page.unwrap())
+            .collect();
+        assert_eq!(
+            (pages[0].state, pages[1].state),
+            ("disconnected", "unsupported")
+        );
+        assert!(pages.iter().all(|page| page.failure.is_none()));
+
+        let mut window = page_query();
+        scope_page_query(&mut window, true, true);
+        assert_eq!(window, page_query());
+    }
+
     /// Desk is judged at the command boundary as a bot of the whole Hide is:
     /// it reads, and what is the operator's alone or means an agent in a pane
     /// is refused with the table's codes. A capability that is no bot's or

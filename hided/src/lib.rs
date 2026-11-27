@@ -87,6 +87,7 @@ pub mod relay;
 pub mod remote_screen;
 pub mod role;
 pub mod screen_event;
+pub mod screen_net;
 pub mod screen_sign_in;
 pub mod seat;
 pub mod server;
@@ -665,6 +666,8 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         shutdown.clone(),
     );
     remote_screens.serve(&peers);
+    let screen_net = screen_net::ScreenNet::new(Arc::clone(&peers), env.screen_net_hosts.clone());
+    screen_net.serve(&peers);
     // A paired machine's login item follows the peer records (PRD
     // device-connect-iroh D-41).
     let always_on = always_on::Follower::new(
@@ -728,6 +731,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         local_seats: Arc::new(AtomicUsize::new(0)),
         renderers,
         desktop_renderers,
+        page_renderers: Arc::new(AtomicUsize::new(0)),
         connections: Arc::new(AtomicU64::new(0)),
         last_client_gone: Arc::new(Mutex::new(Instant::now())),
         keep_alive: env.keep_alive,
@@ -779,6 +783,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         desktop_notices,
         relay_grants: Arc::clone(&relay_grants),
         remote_screens: Arc::clone(&remote_screens),
+        screen_net,
         own_screens: Arc::new(Mutex::new(0)),
         pane_sizes: core.outputs.pane_sizes(),
         listeners: Arc::clone(&listeners),

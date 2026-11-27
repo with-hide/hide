@@ -5,7 +5,8 @@
 // socket while its tile shows, resuming from the revision it drew.
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { BACKOFF_START_MS, nextBackoff } from "./connection";
-import { HIDDEN_CLOSE, type BridgeSocketEvent, type RemoteBridge } from "./remoteView";
+import { browserBridge } from "./host";
+import { HIDDEN_CLOSE, remoteBridge, type BridgeSocketEvent, type RemoteBridge } from "./remoteView";
 import { useShellStore } from "./store";
 import { connectShell } from "./ws";
 
@@ -53,8 +54,8 @@ class FakeBridge {
     this.visible?.(visible);
   }
 
-  handshake(): { token: string; have_revision: number } {
-    return JSON.parse(this.sent[0] ?? "{}") as { token: string; have_revision: number };
+  handshake(): { token: string; have_revision: number; draws_pages?: boolean } {
+    return JSON.parse(this.sent[0] ?? "{}") as { token: string; have_revision: number; draws_pages?: boolean };
   }
 
   kinds(): string[] {
@@ -145,5 +146,26 @@ it("a connection never keeps the pairings an earlier one was shown", () => {
   vi.stubGlobal("fetch", fetched);
   const shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
   expect(useShellStore.getState().pairing).toBeNull();
+  shell.close();
+});
+
+// docs/BROWSER_DISPLAYS.md, A page in another computer's screen: a desktop
+// app that draws this machine's pages adds `browser` beside `bridge: 1`,
+// which every page checks, so an older page and an older app each keep
+// working with the other.
+it("a view whose window draws its pages says so and finds them, and one from an older app still connects without", () => {
+  expect(remoteBridge()).not.toBeNull();
+  expect(browserBridge()).toBeNull();
+  let shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
+  desktop.emit({ op: "open" });
+  expect(desktop.handshake().draws_pages).toBeUndefined();
+  shell.close();
+
+  const browser = { sync: vi.fn(), endCycle: vi.fn(), capture: vi.fn(), command: vi.fn(), onEvent: vi.fn(() => () => {}) };
+  vi.stubGlobal("hideRemote", { ...desktop.bridge, browser });
+  expect(browserBridge()).toBe(browser);
+  shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
+  desktop.emit({ op: "open" });
+  expect(desktop.handshake().draws_pages).toBe(true);
   shell.close();
 });
