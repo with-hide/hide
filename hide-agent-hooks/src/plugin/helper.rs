@@ -296,7 +296,12 @@ fn prompt_memory(
         // capsule when the guidance came first; Memory off answers no
         // capsule, so a later prompt does not carry it again.
         global = index.global.filter(|_| input.first || start);
-        sessions = index.sessions.filter(|_| input.first || start);
+        sessions = hide_agent_hooks::runtime::open_sessions_within_limit(
+            global.as_deref(),
+            index.context.as_deref(),
+            index.sessions.as_deref().filter(|_| input.first || start),
+        )
+        .map(str::to_owned);
     }
     let prompt = memory_context_until(request(HookEvent::UserPromptSubmit), home, deadline);
     let body = prompt.context.as_deref().unwrap_or_default();

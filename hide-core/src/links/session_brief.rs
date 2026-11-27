@@ -613,7 +613,8 @@ mod tests {
     fn the_worst_session_start_still_fits_what_claude_code_shows() {
         use crate::global_instruction::{Instruction, LIMIT_BYTES, LIMIT_TOKENS, render};
         use hide_agent_hooks::runtime::{
-            SESSIONS_LEFT_OUT, START_CONTEXT_LIMIT_CHARS, session_start_context,
+            AgentRuntime, HookEvent, SESSIONS_LEFT_OUT, START_CONTEXT_LIMIT_CHARS, START_LEFT_OUT,
+            append_session_context, hook_stdout_with_context, session_start_context,
         };
         use hide_memory::hook::{RENDERED_TOKEN_LIMIT, estimated_tokens};
         let longest = |fits: &dyn Fn(&str) -> bool| {
@@ -647,7 +648,16 @@ mod tests {
             "Hide Workspace: this session's checkout is `/{}`, and Workspace commands act only on it. `hide workspace info` lists the commands this pane may run.",
             "w".repeat(200)
         );
-        let context = format!("{start}\n\n{workspace}");
+        // Claude Code's envelope, with the Workspace note appended as the
+        // hook appends it.
+        let output =
+            hook_stdout_with_context(AgentRuntime::ClaudeCode, HookEvent::SessionStart, Some(&start))
+                .unwrap();
+        let output = append_session_context(&output, &workspace).unwrap();
+        let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let context = output["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
         assert!(start.chars().count() <= START_CONTEXT_LIMIT_CHARS);
         assert!(
             context.chars().count() < 10_000,
@@ -657,5 +667,8 @@ mod tests {
         assert!(context.starts_with(&format!("{global}\n{memory}")));
         assert!(context.contains(SESSIONS_LEFT_OUT));
         assert!(!context.contains(HEAD));
+        // At every cap the start text gives way too, to its one line.
+        assert!(context.contains(START_LEFT_OUT));
+        assert!(context.ends_with(&workspace));
     }
 }

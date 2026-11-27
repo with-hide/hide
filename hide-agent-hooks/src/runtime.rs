@@ -104,17 +104,36 @@ pub fn session_start_context(
     memory: Option<&str>,
     sessions: Option<&str>,
 ) -> String {
-    let sessions = sessions.filter(|sessions| !sessions.is_empty());
-    let left_out = sessions.map(|_| SESSIONS_LEFT_OUT);
-    [
-        (START_CONTEXT, sessions),
-        (START_CONTEXT, left_out),
-        (START_LEFT_OUT, left_out),
-    ]
-    .into_iter()
-    .map(|(start, sessions)| joined([global, memory, Some(start), sessions]))
-    .find(|context| context.chars().count() <= START_CONTEXT_LIMIT_CHARS)
-    .unwrap_or_else(|| joined([global, memory, Some(START_LEFT_OUT), left_out]))
+    let sessions = open_sessions_within_limit(global, memory, sessions);
+    let context = joined([global, memory, Some(START_CONTEXT), sessions]);
+    if within_limit(&context) {
+        return context;
+    }
+    joined([global, memory, Some(START_LEFT_OUT), sessions])
+}
+
+/// The open sessions as the core gave them while they fit beside the
+/// global instruction, the Memory index and [`START_CONTEXT`] under
+/// [`START_CONTEXT_LIMIT_CHARS`], else [`SESSIONS_LEFT_OUT`]; none when the
+/// core gave none. OpenCode, Pi and omp, whose script puts the start text
+/// in front of the first prompt's context, keep their sessions by this
+/// same rule.
+pub fn open_sessions_within_limit<'a>(
+    global: Option<&str>,
+    memory: Option<&str>,
+    sessions: Option<&'a str>,
+) -> Option<&'a str> {
+    let sessions = sessions.filter(|sessions| !sessions.is_empty())?;
+    let whole = joined([global, memory, Some(START_CONTEXT), Some(sessions)]);
+    Some(if within_limit(&whole) {
+        sessions
+    } else {
+        SESSIONS_LEFT_OUT
+    })
+}
+
+fn within_limit(context: &str) -> bool {
+    context.chars().count() <= START_CONTEXT_LIMIT_CHARS
 }
 
 /// `parts` one after another, a blank line between two, leaving out a
@@ -728,6 +747,21 @@ mod tests {
         // Nothing stands in for sessions the core did not give.
         let context = session_start_context(Some(&global), Some(&memory), None);
         assert_eq!(context, format!("{global}\n{memory}\n{START_LEFT_OUT}"));
+        // The first-prompt route of OpenCode, Pi and omp keeps its sessions
+        // by the same rule.
+        let memory_small = format!("<memory>{}</memory>\n", "m".repeat(1_000));
+        assert_eq!(
+            open_sessions_within_limit(Some(&global), Some(&memory_small), Some(&sessions)),
+            Some(sessions.as_str())
+        );
+        assert_eq!(
+            open_sessions_within_limit(Some(&global), Some(&memory), Some(&sessions)),
+            Some(SESSIONS_LEFT_OUT)
+        );
+        assert_eq!(
+            open_sessions_within_limit(Some(&global), Some(&memory), None),
+            None
+        );
         // Over the limit with the instruction and the index alone, both are
         // still given whole.
         let memory = format!("<memory>{}</memory>\n", "m".repeat(9_000));
