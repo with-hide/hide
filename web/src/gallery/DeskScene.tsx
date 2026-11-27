@@ -75,7 +75,8 @@ export const DESK_SCENES = [
   { state: "command-codex", label: "/ 메뉴: Codex, 스킬은 $ 그대로" },
   { state: "command-none", label: "/ 메뉴: 맞는 명령 없음 (↵ 는 그대로 보내요)" },
   { state: "command-waiting", label: "/ 메뉴: 세션이 열리는 중, 목록을 받는 중" },
-  { state: "command-first", label: "/ 메뉴: 세션을 연 적 없음, 첫 메시지 뒤에 와요" },
+  { state: "command-unread", label: "/ 메뉴: 로그인이 필요해 목록을 못 읽음" },
+  { state: "command-not-installed", label: "/ 메뉴: 이 컴퓨터에 설치되지 않음" },
   { state: "command-answers", label: "명령 답: OpenCode 압축 한 줄, Desk가 보내지 않는 명령" },
   { state: "composer-chips", label: "입력창 칩 · 보낸 말 칩 (B49)" },
   { state: "attachments", label: "첨부: 입력칸 타일, 20MB 넘는 파일, 올리는 중, 보낸 말 (desk-2-ui B41, B42)" },
@@ -379,12 +380,13 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "command-codex":
     case "command-none":
     case "command-waiting":
-    case "command-first": {
+    case "command-unread":
+    case "command-not-installed": {
       // Feedback 1 frame P 가: the panel as wide as the box, eight pixels over it.
       const codex = state === "command-codex";
       const query = state === "command-search" ? "co" : state === "command-none" ? "xyz" : "";
       const rows = commandRows(codex ? CODEX_COMMANDS : SCENE_COMMANDS, query);
-      const panel: DeskCommandPanel = state === "command-waiting" ? { kind: "waiting" } : state === "command-first" ? { kind: "first" } : rows.length ? { kind: "rows", commands: rows } : { kind: "none" };
+      const panel: DeskCommandPanel = state === "command-waiting" ? { kind: "waiting" } : state === "command-unread" ? { kind: "unread", why: "sign_in" } : state === "command-not-installed" ? { kind: "unread", why: "not_installed" } : rows.length ? { kind: "rows", commands: rows } : { kind: "none" };
       const menu = <DeskCommandMenu agent={codex ? "Codex" : "Claude Code"} panel={panel} query={query} active={(codex ? rows[1] : rows[0])?.name ?? ""} onActive={noop} onPick={noop} />;
       body = <Room chat={chat(mentionItems(now), <ChatComposer selection={codex ? CODEX : CLAUDE} value={`/${query}`} mention={menu} />)} />;
       break;

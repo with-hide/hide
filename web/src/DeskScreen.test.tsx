@@ -317,7 +317,7 @@ describe("Desk's room", () => {
     { name: "/context", description: "Show the context use" },
     { name: "/code-review", description: "Review the diff" },
   ];
-  const commands: DeskCommands = { lists: { claude: claudeList } };
+  const commands: DeskCommands = { lists: { claude: claudeList }, unread: {} };
   // Each draft mounts the room anew, so the caret starts at the draft's end as it does when Desk opens.
   const withCommands = async (text: string, section: DeskCommands | null = commands) => {
     await act(async () => root.unmount());
@@ -338,6 +338,8 @@ describe("Desk's room", () => {
 
     await withCommands("/con");
     expect(commandRowsShown()).toEqual(["/context"]);
+    // Each opening of the menu asks the core once whether the list moved.
+    expect(sent("desk_commands_check").at(-1)).toEqual({ agent: "claude" });
     // A name that holds the words further in comes after the ones it starts.
     await withCommands("/co");
     expect(commandRowsShown()).toEqual(["/compact", "/context", "/code-review"]);
@@ -366,7 +368,7 @@ describe("Desk's room", () => {
 
   it("opens no / menu for an agent whose session sent an empty list, past the first word or for a / inside the words", async () => {
     const cases: [string, DeskCommands | null][] = [
-      ["/", { lists: { claude: [] } }],
+      ["/", { lists: { claude: [] }, unread: {} }],
       ["/compact now", commands],
       ["see /compact", commands],
     ];
@@ -375,10 +377,11 @@ describe("Desk's room", () => {
       expect(document.body.querySelector("[data-desk-command-menu]"), text).toBeNull();
     }
     // Another agent's list is never the chosen one's rows.
-    await withCommands("/", { lists: { codex: claudeList } });
+    await withCommands("/", { lists: { codex: claudeList }, unread: { claude: "sign_in" } });
+    expect(document.body.querySelector<HTMLElement>("[data-desk-command-menu]")?.dataset.deskCommandUnread).toBe("sign_in");
     expect(commandRowsShown()).toEqual([]);
     // With no menu ↵ sends the words as they are.
-    await withCommands("/", { lists: { claude: [] } });
+    await withCommands("/", { lists: { claude: [] }, unread: {} });
     await key("Enter");
     expect(sent("desk_send")).toEqual([{ text: "/", mentions: [] }]);
   });
@@ -393,9 +396,30 @@ describe("Desk's room", () => {
     expect(sent("desk_send")).toEqual([{ text: "/zzz", mentions: [] }]);
   });
 
-  it("says the list comes with the first message before the agent's session opened, and that it is on its way while the session opens", async () => {
+  it("says Hide is reading an agent's list it never had, why one it could not read has none, and that it is on its way while the session opens", async () => {
+    await withCommands("/", { lists: {}, unread: { claude: "reading" } });
+    const reading = document.body.querySelector<HTMLElement>("[data-desk-command-menu]");
+    expect(reading?.dataset.deskCommandMenu).toBe("waiting");
+    expect(reading?.textContent).toContain("Getting the command list");
+    for (const [why, words] of [
+      ["sign_in", "Sign in to this agent"],
+      ["not_installed", "Not installed on this computer"],
+      ["agent_off", "Switched off in Settings › Agents"],
+      ["no_list", "sends no command list"],
+      ["failed", "could not be read"],
+      ["desk_off", "Turn on Desk"],
+    ] as const) {
+      await withCommands("/", { lists: {}, unread: { claude: why } });
+      const line = document.body.querySelector<HTMLElement>("[data-desk-command-menu]");
+      expect(line?.dataset.deskCommandMenu, why).toBe("unread");
+      expect(line?.dataset.deskCommandUnread).toBe(why);
+      expect(line?.textContent).toContain(words);
+      expect(line?.textContent).toContain("sends it as written");
+    }
+    await withCommands("/", { lists: {}, unread: { claude: "failed" } });
+    await key("Enter");
+    expect(sent("desk_send")).toEqual([{ text: "/", mentions: [] }]);
     await withCommands("/", null);
-    expect(document.body.querySelector<HTMLElement>("[data-desk-command-menu]")?.dataset.deskCommandMenu).toBe("first");
     await act(async () => { useShellStore.setState({ desk: { ...desk([]), host: { state: "starting", detail: null } } }); });
     const waiting = document.body.querySelector<HTMLElement>("[data-desk-command-menu]");
     expect(waiting?.dataset.deskCommandMenu).toBe("waiting");

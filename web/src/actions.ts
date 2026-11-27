@@ -2930,6 +2930,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_restart", payload: {} });
     },
 
+    /** The `/` menu opened on `agent`, in Desk's box or a session's: Hide reads its list again in the background only when its program, skills or sign-in moved (`desk_commands_check`). */
+    deskCommandsCheck(agent: DeskAgentId) {
+      dispatch({ schema_version: 2, kind: "desk_commands_check", payload: { agent } });
+    },
+
     /** The agent, model or effort under the composer (B4, B8, B9); a model or effort left null keeps the current one. */
     deskSelect(agent: DeskAgentId | null, model: string | null, effort: string | null) {
       dispatch({ schema_version: 2, kind: "desk_select", payload: { agent, model, effort } });

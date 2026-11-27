@@ -1,6 +1,6 @@
 import { Trans } from "react-i18next";
 import { LoaderCircleIcon } from "lucide-react";
-import type { DeskCommand } from "../../snapshot";
+import type { DeskCommand, DeskCommandsUnread } from "../../snapshot";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { Command, CommandGroup, CommandItem } from "../ui/command";
 import { Kbd } from "../ui/kbd";
@@ -8,13 +8,28 @@ import { DeskMenuLine, DeskMenuList } from "./desk-menu";
 
 /**
  * What the `/` panel shows (feedback 1 frame P 가): the agent's commands
- * that match, a line that none does, a line while the agent's session
- * opens and its list is on its way, or a line that the list comes with
- * the first message, before the agent's session ever opened; in a session's
- * box, before the agent ever listed its commands to Desk, a line that none
- * is known yet (`unknown`), where ↵ sends the words as typed.
+ * that match, a line that none does, a line while Hide reads the agent's
+ * list or its session opens, a line saying why an agent has no list
+ * (`unread`: its sign-in, not installed, it sends none, the read failed,
+ * Desk off), or, for an agent Desk does not speak with, a line that none
+ * is known (`unknown`); on each line but the reading one ↵ sends the words
+ * as typed.
  */
-export type DeskCommandPanel = { kind: "rows"; commands: readonly DeskCommand[] } | { kind: "none" } | { kind: "waiting" } | { kind: "first" } | { kind: "unknown" };
+export type DeskCommandPanel =
+  | { kind: "rows"; commands: readonly DeskCommand[] }
+  | { kind: "none" }
+  | { kind: "waiting" }
+  | { kind: "unread"; why: Exclude<DeskCommandsUnread, "reading"> }
+  | { kind: "unknown" };
+
+const UNREAD_WORDS = {
+  sign_in: "desk.command.unread.signIn",
+  not_installed: "desk.command.unread.notInstalled",
+  agent_off: "desk.command.unread.agentOff",
+  no_list: "desk.command.unread.noList",
+  failed: "desk.command.unread.failed",
+  desk_off: "desk.command.unread.deskOff",
+} as const;
 
 /**
  * The `/` menu in the panel Desk's composer menus share (`desk-menu.tsx`):
@@ -53,15 +68,14 @@ export function DeskCommandMenu({ agent, panel, query = "", active, onActive, on
       </DeskMenuLine>
     );
   }
-  if (panel.kind === "unknown") {
+  if (panel.kind === "unknown" || panel.kind === "unread") {
     return (
-      <DeskMenuLine heading={heading} data-desk-command-menu="unknown">
-        {t("desk.command.unknown")} ·
+      <DeskMenuLine heading={heading} data-desk-command-menu={panel.kind} data-desk-command-unread={panel.kind === "unread" ? panel.why : undefined}>
+        {t(panel.kind === "unread" ? UNREAD_WORDS[panel.why] : "desk.command.unknown")} ·
         <span className="flex items-center gap-xxs"><Trans i18n={i18n} t={t} i18nKey="desk.command.sendsAsIs" components={{ key: <Kbd /> }} /></span>
       </DeskMenuLine>
     );
   }
-  if (panel.kind === "first") return <DeskMenuLine heading={heading} data-desk-command-menu="first">{t("desk.command.firstMessage")}</DeskMenuLine>;
   return (
     <Command value={active} onValueChange={onActive} shouldFilter={false} loop aria-label={t("desk.command.menu")} className="bg-transparent" data-desk-command-menu="rows">
       <DeskMenuList>
