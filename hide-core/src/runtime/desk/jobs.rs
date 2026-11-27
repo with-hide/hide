@@ -2863,7 +2863,8 @@ mod tests {
         let open = |runtime: &mut Runtime, pane: &str| {
             assert!(runtime.open_session_thread(
                 crate::runtime::session_thread::ThreadOpenPayload {
-                    pane_id: pane.into()
+                    pane_id: pane.into(),
+                    pane_conversation: false,
                 }
             ));
             assert!(runtime.close_session_thread());
