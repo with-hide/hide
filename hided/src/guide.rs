@@ -191,10 +191,10 @@ mod tests {
             (
                 "panes",
                 &[
-                    "`hide pane read <pane>",
-                    "`hide pane send <pane>",
+                    "hide pane read <pane>",
+                    "hide pane send <pane>",
                     "`hide pane open --beside -- <command>`",
-                    "`hide agent read <agent>",
+                    "hide agent read <agent>",
                     "`remote:<device id>:pane:<id>`",
                     "`core:<device id>:pane:<id>`",
                     "`@name (pane <address> · task)`",
