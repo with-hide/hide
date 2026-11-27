@@ -252,6 +252,11 @@ enum ReadFailure {
     Busy,
     /// The cursor's file was replaced: the thread starts over.
     Stale,
+    /// The session the agent reported has no file yet
+    /// (`session_file_missing`): the agent writes it with its first
+    /// message, so for a pane still running that session this is an empty
+    /// conversation, and for one whose pane is gone a missing record.
+    NotWritten,
     NoRecord,
     Refused,
 }
@@ -265,6 +270,11 @@ impl ReadFailure {
             LinkError::Refused(refusal) => match refusal.code {
                 hide_node_link::ErrorCode::Busy => Self::Busy,
                 _ if refusal.message == "thread_cursor_stale" => Self::Stale,
+                hide_node_link::ErrorCode::NotFound
+                    if refusal.message == "session_file_missing" =>
+                {
+                    Self::NotWritten
+                }
                 hide_node_link::ErrorCode::NotFound | hide_node_link::ErrorCode::Unsupported => {
                     Self::NoRecord
                 }
@@ -885,7 +895,10 @@ impl Runtime {
             .map(|page| ReadPage::of(page, &earlier, ledger.as_deref(), &node))
             .map_err(|error| {
                 let failure = ReadFailure::of(&error);
-                if matches!(failure, ReadFailure::NoRecord | ReadFailure::Refused) {
+                if matches!(
+                    failure,
+                    ReadFailure::NotWritten | ReadFailure::NoRecord | ReadFailure::Refused
+                ) {
                     crate::diagnostic!(serde_json::json!({
                         "kind": "session_thread.read_refused", "generation": generation,
                         "error": error.to_string(),
@@ -974,8 +987,29 @@ impl Runtime {
                         thread.has_older = false;
                     })
             }
+            // The session the pane still runs has not written its record
+            // yet: its conversation is empty until it does, and the look
+            // that follows a drawn thread reads it once the file is there
+            // (`tick_session_thread`). The phone's conversation reads the
+            // same answer the same way (`hided/src/mobile/phone.rs`).
+            (Err(ReadFailure::NotWritten), ReadKind::Live)
+                if self
+                    .snapshot
+                    .session_thread
+                    .as_ref()
+                    .is_some_and(|thread| thread.pane == ThreadPane::Same) =>
+            {
+                self.set_session_thread(|thread| {
+                    thread.connected = true;
+                    if thread.state != ThreadState::Ready {
+                        thread.state = ThreadState::Ready;
+                        thread.failure = None;
+                    }
+                })
+            }
             (Err(failure), ReadKind::Live) => {
-                let failure = if failure == ReadFailure::NoRecord {
+                let failure = if matches!(failure, ReadFailure::NoRecord | ReadFailure::NotWritten)
+                {
                     ThreadFailure::NoRecord
                 } else {
                     ThreadFailure::Refused
@@ -1127,6 +1161,9 @@ impl Runtime {
                 open.next_check_ms = now + BUSY_RETRY_MS;
                 false
             }
+            // Nothing written yet: the next look, a second later, finds the
+            // file the agent's first message writes.
+            Err((ReadFailure::NotWritten, _)) => false,
             Err((_, reason)) => {
                 open.next_check_ms = now + REFUSED_LOOK_WAIT_MS;
                 if open.look_failure.as_deref() != Some(reason.as_str()) {
@@ -1970,6 +2007,95 @@ mod tests {
         assert_eq!(
             (shown.failure, shown.pane),
             (Some(ThreadFailure::NoRecord), ThreadPane::Gone)
+        );
+    }
+
+    /// What the node answers for a session the agent reported whose file
+    /// is not there (`hide-host`'s `session_refusal`).
+    fn not_written() -> LinkError {
+        LinkError::Refused(hide_node_link::HostError::new(
+            hide_node_link::ErrorCode::NotFound,
+            "session_file_missing",
+        ))
+    }
+
+    /// Mission-109's walk on main efd23d6fff: a new session opened beside
+    /// Desk before its first message read `기록 파일이 없어요`. Its pane still
+    /// runs the session it reported, which writes its file with its first
+    /// message, so the conversation is empty and nothing failed.
+    #[test]
+    fn a_session_that_has_not_written_its_record_yet_is_an_empty_conversation_read_once_it_writes()
+    {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Err(not_written()));
+        open(&mut runtime);
+        assert_eq!(node.asked(), vec![ThreadRead::Newest]);
+        let shown = thread(&runtime);
+        assert_eq!(
+            (shown.state, shown.failure, shown.pane, shown.connected),
+            (ThreadState::Ready, None, ThreadPane::Same, true)
+        );
+        assert!(history(&runtime).pages.is_empty() && shown.tail.is_none());
+
+        // A look a second later still finds no file: nothing is read, and
+        // the next look comes a second after it, not after a refusal's wait.
+        let now = 1_000_000;
+        node.look(Err(not_written()));
+        runtime.tick_session_thread(now);
+        assert!(node.asked().is_empty());
+        assert_eq!(thread(&runtime).failure, None);
+
+        // The first message writes the file: the next look reads its newest page.
+        node.activity(100);
+        node.answer(Ok(page(0, 100, false, vec![said("안녕")])));
+        runtime.tick_session_thread(now + ACTIVITY_EVERY_MS);
+        assert_eq!(node.asked(), vec![ThreadRead::Newest]);
+        assert_eq!(
+            history(&runtime).pages[0].updates[0]["content"]["text"],
+            "안녕"
+        );
+        assert_eq!(node.looks_left(), 0, "each scripted look was taken");
+    }
+
+    /// A record that should be there, a gone session's a Desk chip kept,
+    /// missing is still a failure the screen says.
+    #[test]
+    fn a_gone_sessions_kept_record_that_is_missing_reads_as_no_record() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        let mut stored = runtime.desk_stored_for_test().clone();
+        stored.keep_named(vec![crate::desk::NamedSession {
+            pane_id: "w1:p7".into(),
+            session: crate::links::ledger::SessionIdentity {
+                device_id: crate::node::TEST_NODE.into(),
+                agent: "claude".into(),
+                session_id: SESSION.into(),
+            },
+            agent_kind: "claude".into(),
+            thread: Some(
+                serde_json::from_value(json!({
+                    "agent": "claude", "account": "default", "reference_kind": "id",
+                    "reference_value": SESSION, "cwd": "/tmp/project",
+                }))
+                .unwrap(),
+            ),
+        }]);
+        runtime.read_desk_store_for_test(stored);
+        node.answer(Err(not_written()));
+        runtime.open_session_thread(ThreadOpenPayload {
+            pane_id: "w1:p7".to_owned(),
+        });
+        assert_eq!(node.asked(), vec![ThreadRead::Newest]);
+        let shown = thread(&runtime);
+        assert_eq!(
+            (shown.state, shown.failure, shown.pane),
+            (
+                ThreadState::Failed,
+                Some(ThreadFailure::NoRecord),
+                ThreadPane::Gone
+            )
         );
     }
 
