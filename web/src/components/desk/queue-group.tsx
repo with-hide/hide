@@ -1,6 +1,7 @@
 import { ChevronDownIcon, ChevronUpIcon, PlayIcon, SendIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useInterfaceTranslation } from "../../i18n/client";
+// The translator alone, which reads no shell state: the phone's group draws with these words too.
+import { useInterfaceTranslation } from "../../i18n/translator";
 import type { MessageKey } from "../../i18n/catalogs";
 import { cn } from "../../lib/utils";
 import type { InputQueueCleared, InputQueueFailure, QueueAction } from "../../snapshot";
@@ -17,14 +18,14 @@ export type QueueGroupLine = { id: number; text: string; files: readonly string[
  */
 export type QueueGroupState = "waiting" | "paused" | "held";
 
-const FAILURE: Record<InputQueueFailure, MessageKey> = {
+export const QUEUE_FAILURE: Record<InputQueueFailure, MessageKey> = {
   uncertain: "desk.queue.failure.uncertain",
   device_unreachable: "desk.queue.failure.device_unreachable",
   file_missing: "desk.queue.failure.file_missing",
   refused: "desk.queue.failure.refused",
 };
 
-const HEAD: Record<QueueGroupState, MessageKey> = {
+export const QUEUE_HEAD: Record<QueueGroupState, MessageKey> = {
   waiting: "desk.queue.waiting",
   paused: "desk.queue.paused",
   held: "desk.queue.held",
@@ -52,7 +53,7 @@ export function QueueGroup({ state, lines, cleared = null, sendable, dimmed = fa
   const paused = state === "paused";
   return (
     <section
-      aria-label={t(HEAD[state], { count: lines.length })}
+      aria-label={t(QUEUE_HEAD[state], { count: lines.length })}
       className={cn("flex min-w-0 flex-col rounded-xl border border-input bg-background text-body", dimmed && "opacity-(--opacity-dimmed)")}
       data-queue-group={state}
       data-queue-count={lines.length}
@@ -71,11 +72,11 @@ export function QueueGroup({ state, lines, cleared = null, sendable, dimmed = fa
               size="inline"
               className="min-w-0 gap-xxs text-caption text-foreground"
               aria-expanded={!folded}
-              aria-label={`${t(HEAD[state], { count: lines.length })}, ${t(folded ? "desk.queue.unfold" : "desk.queue.fold")}`}
+              aria-label={`${t(QUEUE_HEAD[state], { count: lines.length })}, ${t(folded ? "desk.queue.unfold" : "desk.queue.fold")}`}
               onClick={() => setFolded(!folded)}
               data-queue-fold={folded ? "folded" : "open"}
             >
-              <span className="truncate">{t(HEAD[state], { count: lines.length })}</span>
+              <span className="truncate">{t(QUEUE_HEAD[state], { count: lines.length })}</span>
               {folded ? <ChevronDownIcon className="size-(--size-icon-sm)" /> : <ChevronUpIcon className="size-(--size-icon-sm)" />}
             </Button>
             <span className="flex-1" />
@@ -104,7 +105,7 @@ function QueueLine({ line, paused, sendable, onAction }: { line: QueueGroupLine;
       <span className="flex min-w-0 flex-1 flex-col">
         <span className={cn("line-clamp-2 min-w-0 whitespace-pre-wrap break-words", line.sending ? "text-muted-foreground" : "text-foreground")} title={line.text}>{line.text}</span>
         {line.files.length > 0 ? <span className="truncate text-caption text-muted-foreground" data-queue-line-files={line.files.length}>{line.files.join(" · ")}</span> : null}
-        {line.failure ? <span className="text-caption text-warning" data-queue-line-failure={line.failure}>{t(FAILURE[line.failure])}</span> : null}
+        {line.failure ? <span className="text-caption text-warning" data-queue-line-failure={line.failure}>{t(QUEUE_FAILURE[line.failure])}</span> : null}
       </span>
       {paused && !line.sending ? (
         // A line goes only while the agent rests: one sent mid-turn would land in its work (B16).
@@ -124,7 +125,7 @@ function QueueLine({ line, paused, sendable, onAction }: { line: QueueGroupLine;
 }
 
 /** `cleared` while `되돌리기` is still offered, and none once its time runs out, read again when it does. */
-function useUndoShown(cleared: InputQueueCleared | null): InputQueueCleared | null {
+export function useUndoShown(cleared: InputQueueCleared | null): InputQueueCleared | null {
   const [now, setNow] = useState(() => Date.now());
   const until = cleared?.until_unix_ms ?? 0;
   useEffect(() => {

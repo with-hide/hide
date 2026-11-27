@@ -227,7 +227,7 @@ const KEY: AgentKey = { device_id: "local", pane_id: "w1:p1" };
 
 /** Opens `key`'s detail on a conversation of `messages`, as its first page reaches the phone. */
 function openConversation(messages: ConversationMessage[], key: AgentKey = KEY): void {
-  patch({ detail: { key, view: "conversation", tab: "conversation", rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null, ask: null, running: null } });
+  patch({ detail: { key, view: "conversation", tab: "conversation", rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null, ask: null, running: null, queue: null } });
   applyFrame({ type: "conversation", ...key, state: "ok", mode: "reset", messages, before: null });
 }
 

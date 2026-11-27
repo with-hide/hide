@@ -38,6 +38,7 @@ import {
   type ServerFrame,
 } from "./protocol";
 import { NO_CHOICE, mayHaveStarted, selectionOf, startFailure, startProblem, type StartChoice } from "./start";
+import type { QueueAction } from "../snapshot";
 import { confirmOf, holds, prHostOf, prOf } from "./prModel";
 import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openAutomation, openMission, openPr, patch, usePhone, withAnswer, type ChoiceState, type StartSheet } from "./store";
 import type { LookContent } from "./lookContent";
@@ -314,6 +315,11 @@ function connect(): void {
       onInputResult(frame.request_id, frame.ok, frame.reason);
       return;
     }
+    if (frame.type === "queue_result") {
+      // Handed to the core, the next `queue` frame shows what it did; refused, nothing moved and the line says why.
+      if (!frame.ok) patch({ inputError: inputFailure(frame.reason) });
+      return;
+    }
     if (frame.type === "attach_ack") {
       onAttachAck(frame);
       return;
@@ -441,7 +447,7 @@ export function openDetail(key: AgentKey, tab: DetailTab = "conversation"): void
   const view: DetailView = "conversation";
   dropTransfer();
   if (!sameKey(state.detail?.key ?? null, key)) dropFiles();
-  patch({ detail: { key, view, tab, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null, ask: null, running: null }, inputError: null, pendingInput: null });
+  patch({ detail: { key, view, tab, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null, ask: null, running: null, queue: null }, inputError: null, pendingInput: null });
   send({ type: "open", device_id: key.device_id, pane_id: key.pane_id, view });
 }
 
@@ -764,6 +770,25 @@ export function sendKey(key: QuickKey): void {
   const requestId = newRequestId();
   const sent = send({ type: "input", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, key });
   patch(sent ? { pendingInput: { requestId, kind: "key" }, inputError: null } : { inputError: inputFailure("offline") });
+}
+
+/** ■ (PRD desk-queue B33): the agent's own interrupt keys, typed while it works, and its waiting line paused; a refusal says why. */
+export function sendInterrupt(): void {
+  const state = usePhone.getState();
+  const detail = state.detail;
+  if (!detail || state.pendingInput || !state.queues) return;
+  const requestId = newRequestId();
+  const sent = send({ type: "input", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, interrupt: true });
+  patch(sent ? { pendingInput: { requestId, kind: "interrupt" }, inputError: null } : { inputError: inputFailure("offline") });
+}
+
+/** A press on the open detail's waiting words (PRD desk-queue B32): ✕ or `보내기` on line `id`, or the whole line's moves. */
+export function sendQueue(action: QueueAction, id?: number): void {
+  const state = usePhone.getState();
+  const detail = state.detail;
+  if (!detail || !state.queues) return;
+  const sent = send({ type: "queue", request_id: newRequestId(), device_id: detail.key.device_id, pane_id: detail.key.pane_id, action, ...(id === undefined ? {} : { id }) });
+  patch({ inputError: sent ? null : inputFailure("offline") });
 }
 
 /**
