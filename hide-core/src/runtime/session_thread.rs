@@ -155,12 +155,13 @@ struct OpenThread {
     reading: bool,
     /// The record moved while a read was out: read again when it returns.
     owed: bool,
-    /// The session the pane runs has not written its record yet
-    /// (`ReadFailure::NotWritten`) and nothing of it was read: the thread
-    /// is drawn empty and reads again each second until a page or a
-    /// refusal answers, a refusal then showing as one; never the state of
-    /// a thread that read and drew a page, which keeps it past a refusal.
-    awaiting_record: bool,
+    /// A page of the record arrived and was drawn. Set only by a page,
+    /// never by a wait, a lost node or a record not written yet, it is the
+    /// one fact both rules read: a thread that drew a page keeps it past a
+    /// refusal, and a ready thread that drew none is waiting for the first
+    /// record (`ReadFailure::NotWritten`), read again each second until a
+    /// page or a refusal answers, a refusal then showing as one.
+    drew_page: bool,
     reading_older: bool,
     checking: bool,
     activity: Option<SessionActivity>,
@@ -194,7 +195,7 @@ impl OpenThread {
             starts: Vec::new(),
             reading: false,
             owed: false,
-            awaiting_record: false,
+            drew_page: false,
             reading_older: false,
             checking: false,
             activity: None,
@@ -542,9 +543,10 @@ impl Runtime {
         let Some(reference) = open.reference.clone() else {
             return changed;
         };
-        // Waiting for the first record, the read itself is the look: its
-        // answer is the page, the same wait, or the refusal the screen says.
-        if open.awaiting_record {
+        // Ready with no page drawn is waiting for the first record: the read
+        // itself is the look, answering with the page, the same wait, or the
+        // refusal the screen says.
+        if !open.drew_page {
             open.next_check_ms = now_unix_ms + ACTIVITY_EVERY_MS;
             return self.read_session_thread() || changed;
         }
@@ -973,14 +975,9 @@ impl Runtime {
         // Whether the thread shows a page it read, which a refusal leaves as
         // it is, rather than the empty one a session not written yet stands
         // in.
-        let drawn = !open.awaiting_record
-            && self
-                .snapshot
-                .session_thread
-                .as_ref()
-                .is_some_and(|thread| thread.state == ThreadState::Ready);
-        if matches!(kind, ReadKind::Live) && !matches!(answer, Err(ReadFailure::NotWritten)) {
-            open.awaiting_record = false;
+        let drawn = open.drew_page;
+        if matches!(kind, ReadKind::Live) && answer.is_ok() {
+            open.drew_page = true;
         }
         let changed = match (answer, kind) {
             (Ok(page), ReadKind::Older) => self.prepend_thread_page(page),
@@ -1026,7 +1023,6 @@ impl Runtime {
                         .as_ref()
                         .is_some_and(|thread| thread.pane == ThreadPane::Same) =>
             {
-                open.awaiting_record = true;
                 self.set_session_thread(|thread| {
                     thread.connected = true;
                     thread.state = ThreadState::Ready;
@@ -2158,6 +2154,40 @@ mod tests {
                 ThreadPane::Gone
             )
         );
+    }
+
+    /// Review round 2 of pull request 3099, F3: a busy or lost node while
+    /// the first record is awaited draws no page, so the refusal that
+    /// answers once the node is reached again still shows as one.
+    #[test]
+    fn a_refusal_after_a_busy_or_lost_node_while_awaiting_the_first_record_says_why() {
+        let retry = |runtime: &Runtime| runtime.session_thread.open.as_ref().unwrap().retry_at_ms;
+        for lost in [LinkError::Busy, LinkError::NotConnected("gone".to_owned())] {
+            let node = Arc::new(ScriptedNode::default());
+            let mut runtime = runtime(&node);
+            observe(&mut runtime, "idle", 1, "t1", true);
+            node.answer(Err(not_written()));
+            open(&mut runtime);
+            assert_eq!(thread(&runtime).state, ThreadState::Ready);
+
+            // The next read meets a busy node, or none.
+            node.answer(Err(lost));
+            runtime.tick_session_thread(1_000_000);
+            let due = retry(&runtime).expect("a retry is set");
+
+            // Reached again, the node refuses the record that appeared.
+            node.answer(Err(LinkError::Refused(hide_node_link::HostError::new(
+                hide_node_link::ErrorCode::Io,
+                "label_session_id_mismatch",
+            ))));
+            runtime.tick_session_thread(due);
+            assert_eq!(node.asked().len(), 3);
+            let shown = thread(&runtime);
+            assert_eq!(
+                (shown.state, shown.failure, shown.connected),
+                (ThreadState::Failed, Some(ThreadFailure::Refused), true)
+            );
+        }
     }
 
     /// A device's thread is read by that device's node; one the core cannot
