@@ -24,7 +24,8 @@ export type DeskRoomWindow = {
   /**
    * The pane whose input box a `답하기` or `직접 쓰기` press asked for and has not given the keyboard yet: that
    * session's panel takes it once its box stands (`takeAnswer`), whether the session was open at the press or
-   * opened because of it; any other open or close lets it go, so a session opened later takes nothing from it.
+   * opened because of it; its pane closing or moving, any other open, a close or leaving Desk lets it go, so a
+   * session opened or resumed later takes nothing from it.
    */
   answer: string | null;
 };
@@ -54,7 +55,10 @@ export function openSession(room: DeskRoomWindow, pane: string, options: { answe
   return { ...room, session: pane, explorer: false, answer };
 }
 
-/** The press `pane`'s box answered by taking the keyboard: it is spent, and nothing takes it again. */
+/**
+ * The press for `pane` ends: its box took the keyboard, or its pane is no longer a live session (closed, or gone
+ * before its box stood). Either way nothing takes it again.
+ */
 export function takeAnswer(room: DeskRoomWindow, pane: string): DeskRoomWindow {
   return room.answer === pane ? { ...room, answer: null } : room;
 }
@@ -156,7 +160,8 @@ export function newSessionBeside(follow: NewSessionFollow, generation: number, i
  */
 export function followMoved(room: DeskRoomWindow, moved: readonly DeskMoved[]): DeskRoomWindow {
   const session = room.session === null ? null : livePane(moved, room.session);
-  const answer = room.answer === null ? null : livePane(moved, room.answer);
+  // A press names a live pane: one whose pane is gone ends there, and the pane the session resumes in takes nothing from it.
+  const answer = room.answer !== null && livePane(moved, room.answer) !== room.answer ? null : room.answer;
   return session === room.session && answer === room.answer ? room : { ...room, session, answer };
 }
 

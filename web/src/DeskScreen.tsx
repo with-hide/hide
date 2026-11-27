@@ -141,6 +141,15 @@ function useFollowMoved() {
   }, [moved]);
 }
 
+/** A `답하기` press whose pane no longer runs a session the sidebar lists ends, before any later pane could take it. */
+function useAnswerEndsWithItsPane() {
+  const answer = useUiStore((s) => s.deskRoom.answer);
+  const gone = useShellStore((s) => answer !== null && !agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(answer));
+  useLayoutEffect(() => {
+    if (gone && answer !== null) useUiStore.getState().setDeskRoom((room) => takeAnswer(room, answer));
+  }, [gone, answer]);
+}
+
 /** Where the `@` menu stands: the `@` word Esc closed it on, the project ⇥ entered, and the parents the operator folded open or shut. */
 
 export function DeskScreen({ actions }: { actions: Actions }) {
@@ -261,6 +270,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   useReadShownCards(scroller, jobs, actions.deskJobRead);
   useNewSessionBeside(actions, desk?.conversation.generation, items, byId);
   useFollowMoved();
+  useAnswerEndsWithItsPane();
 
   const send = (words = draft) => {
     if (!canSend || !items) return;

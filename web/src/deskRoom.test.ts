@@ -34,8 +34,10 @@ describe("Desk's room", () => {
     expect(openSession(pressed, "p1").answer).toBeNull();
     expect(closeSession(pressed).answer).toBeNull();
     expect(leaveRoom(pressed).answer).toBeNull();
-    // A session that moved to another pane takes its press with it.
-    expect(followMoved(pressed, [{ pane_id: "p1", live_pane_id: "p9" } satisfies DeskMoved])).toMatchObject({ session: "p9", answer: "p9" });
+    // Its pane gone and the session resumed in another: the press ends, and the resumed pane takes nothing (review F1).
+    expect(followMoved(pressed, [{ pane_id: "p1", live_pane_id: "p9" } satisfies DeskMoved])).toMatchObject({ session: "p9", answer: null });
+    // Another pane moving leaves the press where it is.
+    expect(followMoved(pressed, [{ pane_id: "p2", live_pane_id: "p9" } satisfies DeskMoved]).answer).toBe("p1");
   });
 
   it("hides the desk alone on ✕, Escape or the dim, and keeps it with the session panel's ✕ (B13, B18)", () => {
@@ -261,7 +263,7 @@ describe("the room after a gone session runs again", () => {
   it("moves the open session to the live pane, and keeps the desk", () => {
     const moved = [{ pane_id: "w1:p9", live_pane_id: "w1:p20" }];
     const room: DeskRoomWindow = { ...DESK_ROOM_CLOSED, session: "w1:p9", desk: true, explorer: true, answer: "w1:p9" };
-    expect(followMoved(room, moved)).toEqual({ ...room, session: "w1:p20", answer: "w1:p20" });
+    expect(followMoved(room, moved)).toEqual({ ...room, session: "w1:p20", answer: null });
     // Another pane, or no pair, leaves the very same room.
     const other: DeskRoomWindow = { ...DESK_ROOM_CLOSED, session: "w1:p3", desk: true };
     expect(followMoved(other, moved)).toBe(other);

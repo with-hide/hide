@@ -1185,6 +1185,32 @@ describe("Desk's room", () => {
     expect(document.activeElement).toBe(sessionBox());
   });
 
+  // Review round 1 of pull request 3099, F1: a press whose pane closed before its box stood ended nowhere, and the pane
+  // the session resumed in later took the keyboard from Desk's box with no new press.
+  it("ends a 답하기 press when its pane closes before its box stands, so the pane it resumes in takes no keyboard", async () => {
+    const row = { pane_id: "w1:p5", device_id: "local", identity_label: "asker", agent_kind: "claude", mark: "turn", state: { working: false, asking: true } } as never;
+    const card: DeskJob = { id: "intent-1", pane_id: "w1:p5", title: "asker", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
+      state: "asking", queue_position: null, now: null, plan: null, question: "Which one?", summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: "question",
+      mark: "turn", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 5, read: true, mission: null, workers: [], agent_id: null };
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([{ kind: "user", id: 1, text: "물어봐", at_ms: 0, mentions: [] }, { kind: "job", id: 2, job_id: "intent-1" }]));
+    await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [card], workers: [], named: [], records: [], moved: [], glance: NO_GLANCE } }));
+    await act(async () => useUiStore.getState().setDeskRoom(() => DESK_ROOM_CLOSED));
+    // The press and the pane's close land in one frame, before the session's box stands.
+    await act(async () => {
+      document.body.querySelector<HTMLElement>("[data-desk-job-action='answer']")!.click();
+      useShellStore.setState({ agents: [], deskJobs: { jobs: [], workers: [], named: [], records: [], moved: [], glance: NO_GLANCE } });
+    });
+    expect(useUiStore.getState().deskRoom.answer).toBeNull();
+    const deskBox = document.body.querySelector<HTMLElement>("[data-desk-composer-input]")!;
+    await act(async () => deskBox.focus());
+    // The session runs again in another pane.
+    await act(async () => useShellStore.setState({ agents: [{ ...(row as object), pane_id: "w1:p9" }] as never, deskJobs: { jobs: [{ ...card, pane_id: "w1:p9" }], workers: [], named: [], records: [], moved: [{ pane_id: "w1:p5", live_pane_id: "w1:p9" }], glance: NO_GLANCE } }));
+    expect(useUiStore.getState().deskRoom.session).toBe("w1:p9");
+    expect(document.body.querySelector("[data-desk-thread-panel] [data-desk-composer-input]")).not.toBeNull();
+    expect(document.activeElement).toBe(deskBox);
+  });
+
   it("reads what the session beside Desk asks and answers it as the phone does, once (B14)", async () => {
     const row = { pane_id: "w1:p2", device_id: "local", identity_label: "fixer", agent_kind: "claude", mark: "turn", state: { working: false, asking: true } } as never;
     const card: DeskJob = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
