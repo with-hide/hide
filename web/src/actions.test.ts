@@ -171,6 +171,47 @@ describe("a link of another computer's screen", () => {
   });
 });
 
+// An SSH device and another computer's screen behave the same: a ⌘-click
+// (Ctrl off macOS) on the device's loopback, LAN or local name in its pane
+// opens a page in the Workspace in front, whose loopback page reaches the
+// device through its link, never this machine's default browser, which
+// would read `localhost` as this machine's. A link of this machine's own
+// pane, and a public one of the device's, still open in the default
+// browser.
+describe("a link of an SSH device's pane", () => {
+  it("opens the device's local address as a page in front, and this machine's or a public one in the default browser", () => {
+    const saved = useShellStore.getState();
+    const savedUi = useUiStore.getState();
+    const opened = vi.fn();
+    vi.spyOn(window, "open").mockImplementation((...args) => { opened(...args); return null; });
+    try {
+      const device = { session: { agents: [], workspaces: [{ checkouts: [{ tabs: [{ panes: [{ id: "w2:p1", device_id: "devbox" }] }] }] }] } };
+      useShellStore.setState({ rest: { workspace_view: { device_id: "devbox", path: "/srv/web", layout: null }, status: { remote: [device] } } as never });
+      useUiStore.setState({ screen: { kind: "workspace" } as never });
+      const sent: Parameters<DispatchFn>[0][] = [];
+      const actions = createActions((event) => { sent.push(event); return true; });
+      for (const url of ["http://localhost:5173/", "http://192.168.0.4:8080/", "http://printer.local/"]) actions.openLink(url, true, "w2:p1");
+      const pages = sent.filter((event) => event.kind === "browser_open").map((event) => event.payload as { url: string; workspace: { device_id: string }; opener_pane?: string });
+      expect(pages.map((page) => [page.url, page.workspace.device_id, page.opener_pane])).toEqual([
+        ["http://localhost:5173/", "devbox", "w2:p1"],
+        ["http://192.168.0.4:8080/", "devbox", "w2:p1"],
+        ["http://printer.local/", "devbox", "w2:p1"],
+      ]);
+      expect(opened).not.toHaveBeenCalled();
+      actions.openLink("https://github.com/with-hide/hide", true, "w2:p1");
+      actions.openLink("http://localhost:5173/", true, "w1:p1");
+      expect(opened.mock.calls).toEqual([
+        ["https://github.com/with-hide/hide", "_blank", "noopener,noreferrer"],
+        ["http://localhost:5173/", "_blank", "noopener,noreferrer"],
+      ]);
+    } finally {
+      useShellStore.setState(saved, true);
+      useUiStore.setState(savedUi, true);
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 describe("Find while an agent answers its own search request", () => {
   it.each([false, true])("follows the answer only while the keyboard stays at its origin (moved: %s)", async (moved) => {
     const { act, createElement } = await import("react");

@@ -4357,11 +4357,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       // The core keeps a Workspace in front while the page shows All projects
       // or an Overview; a display opened there would land out of sight.
       const inFront = ui().screen?.kind === "workspace" ? frontViewWorkspace() : null;
-      // In another computer's screen the default browser is the showing
-      // window's, which never opens this machine's loopback, LAN or local
-      // names; such a link opens as a page here, which reaches them through
-      // this machine (docs/BROWSER_DISPLAYS.md, A page in another computer's screen).
-      if (external && inFront && isRemoteView() && localNetworkLink(url)) {
+      // The default browser is the showing window's machine's, whose
+      // loopback, LAN and local names are not those of another machine: a
+      // link in another computer's screen, or in an SSH device's pane, to
+      // one of them opens as a page here, which reaches that machine's
+      // loopback through it (docs/BROWSER_DISPLAYS.md, A page in another
+      // computer's screen; Open in default browser).
+      const elsewhere = isRemoteView() || (openerPane !== undefined && remoteTargetOfPane(rest(), openerPane) !== null);
+      if (external && inFront && elsewhere && localNetworkLink(url)) {
         this.openBrowser(url, undefined, undefined, undefined, openerPane);
         return;
       }

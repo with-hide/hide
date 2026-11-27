@@ -366,13 +366,38 @@ export class RemoteScreens {
       ready: () => this.deps.egress?.ready(device, key) ?? false,
       ensure: () => this.deps.egress?.ensure(device, key) ?? Promise.resolve("remote_update_here"),
       partition: () => this.deps.egress?.partition(device, key) ?? null,
+      filePartition: () => this.deps.egress?.filePartition(device, key) ?? null,
       storage: () => {
         const pairing = this.deps.egress?.pairing(device, key) ?? null;
         if (!this.deps.storage) return "live";
         return pairing === null ? "waiting" : this.deps.storage.admit(device, key, pairing);
       },
       route: (workspace, id, load) => this.route(device, key, workspace, id, load),
+      release: (workspace, id, load) => this.releaseRoute(device, key, workspace, id, load),
     };
+  }
+
+  /** The question a route of display `id` of `workspace` at `load` is asked or let go by; null for a key with no machine. */
+  private routeQuestion(workspace: string, id: string, load: number): string | null {
+    const at = workspace.indexOf("\u0000");
+    return at <= 0 ? null : JSON.stringify({ device: workspace.slice(0, at), checkout: workspace.slice(at + 1), view: id, load });
+  }
+
+  /**
+   * A page that loaded from a route that computer made for this screen
+   * closed: the route goes now rather than with the screen. Nothing waits on
+   * the answer; a route this misses still ends with its view.
+   */
+  private releaseRoute(device: string, key: string, workspace: string, id: string, load: number): void {
+    const daemon = this.deps.daemon();
+    const body = this.routeQuestion(workspace, id, load);
+    if (!daemon || body === null) return;
+    void fetch(`${daemon.origin}/peer-screen/${encodeURIComponent(device)}/page-route?key=${encodeURIComponent(key)}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${daemon.token}`, "content-type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(5_000),
+    }).catch(() => this.deps.log.event("remote.route_release_failed", { device }));
   }
 
   /**
@@ -382,14 +407,14 @@ export class RemoteScreens {
    */
   private async route(device: string, key: string, workspace: string, id: string, load: number): Promise<RemoteRoute> {
     const daemon = this.deps.daemon();
-    const at = workspace.indexOf("\u0000");
-    if (!daemon || at <= 0) return { refused: "not_connected" };
+    const question = this.routeQuestion(workspace, id, load);
+    if (!daemon || question === null) return { refused: "not_connected" };
     let answer: Response;
     try {
       answer = await fetch(`${daemon.origin}/peer-screen/${encodeURIComponent(device)}/page-route?key=${encodeURIComponent(key)}`, {
         method: "POST",
         headers: { authorization: `Bearer ${daemon.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ device: workspace.slice(0, at), checkout: workspace.slice(at + 1), view: id, load }),
+        body: question,
         signal: AbortSignal.timeout(20_000),
       });
     } catch {
@@ -399,9 +424,9 @@ export class RemoteScreens {
     const body: unknown = await answer.json().catch(() => null);
     const fields = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
     if (!answer.ok) return { refused: typeof fields.reason === "string" && fields.reason.length <= 64 ? fields.reason : "not_connected" };
-    const { url, source_url, own } = fields;
-    if (typeof url !== "string" || typeof source_url !== "string" || fields.load !== load || typeof own !== "boolean" || url.length > 8192) return { refused: "remote_route_invalid" };
-    return { url, source_url, load, own };
+    const { url, source_url, own, root } = fields;
+    if (typeof url !== "string" || typeof source_url !== "string" || fields.load !== load || typeof own !== "boolean" || url.length > 8192 || (root !== undefined && (typeof root !== "string" || root.length > 8192))) return { refused: "remote_route_invalid" };
+    return { url, source_url, load, own, ...(typeof root === "string" ? { root } : {}) };
   }
 
   /**

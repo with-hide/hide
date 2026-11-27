@@ -71,9 +71,10 @@ export function defaultBrowserAddress(address: string, pageDevice: string, windo
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
   if (pageDevice !== windowDevice && isLoopbackHost(url.hostname)) return null;
-  // In another computer's screen the default browser is the showing
-  // window's: that computer's loopback, LAN and local names are not its own.
-  if (remoteView && isLocalNetworkHost(url.hostname)) return null;
+  // The default browser is the showing window's machine's: another
+  // machine's loopback, LAN and local names (an SSH device's page, or one in
+  // another computer's screen) are not its own.
+  if ((remoteView || pageDevice !== windowDevice) && isLocalNetworkHost(url.hostname)) return null;
   return url.href;
 }
 

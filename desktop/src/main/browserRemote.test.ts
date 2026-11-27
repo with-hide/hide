@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializeInterfaceI18n } from "../../../web/src/i18n/instance";
 import { BROWSER_SYNC_CHANNEL, REMOTE_BROWSER_EVENT_CHANNEL } from "../channel";
 import { BrowserViews, type RemoteRoute, type RemoteSource } from "./browser";
-import { placeIn, remotePagePartition } from "./browserSync";
+import { placeIn, remoteFilePartition, remotePagePartition } from "./browserSync";
 import { session } from "electron";
 import { ExternalFiles } from "./externalFiles";
 import type { HostLog } from "./log";
@@ -34,6 +34,7 @@ const DEVICE = "mini";
 const KEY = "ab".repeat(32);
 const PAIRING = "11".repeat(16);
 const PARTITION = remotePagePartition(DEVICE, KEY, PAIRING);
+const FILE_PARTITION = remoteFilePartition(DEVICE, KEY, PAIRING);
 const workspace = "mini\u0000/web";
 const TILE = { x: 100, y: 50, width: 800, height: 600 };
 const RECT = { x: 400, y: 40, width: 600, height: 500 };
@@ -107,8 +108,10 @@ function screen() {
     ready: () => state.ready,
     ensure: vi.fn(async () => { state.ready = true; return "ready"; }),
     partition: () => state.partition,
+    filePartition: () => (state.partition === null ? null : FILE_PARTITION),
     storage: () => state.storage,
     route,
+    release: vi.fn(),
   };
   subject.addRemote(remote);
   const display = (id: string, visible = true, rect: typeof RECT | null = RECT, url = `https://${id}.example/`) => {
@@ -180,15 +183,15 @@ describe("a remote screen's pages", () => {
     expect(views[0]!.contents.loadURL).toHaveBeenCalledTimes(2);
   });
 
-  it("refuse a file display of that computer before asking anything", async () => {
+  it("tell an older Hide there to be updated rather than load its file, asking it first", async () => {
     const { sync, display, views, route, events, settle } = screen();
+    route.mockResolvedValueOnce({ refused: "remote_file_unavailable" });
     sync([display("f1", true, RECT, "file:///Users/me/report.html")]);
     await settle();
-    expect(route).not.toHaveBeenCalled();
+    expect(route).toHaveBeenCalledOnce();
     expect(views[0]!.contents.loadURL).not.toHaveBeenCalled();
-    expect(events().filter((event) => event.kind === "state").at(-1)?.state?.failure).toBe(english("native.browser.remoteFile"));
+    expect(events().filter((event) => event.kind === "state").at(-1)?.state?.failure).toBe(english("native.browser.remoteUpdateThere"));
   });
-
   it("stay apart from this window's: events go to the screen alone, and neither shell's sync closes the other's page of the same Workspace and id", async () => {
     const { sync, display, views, shellSend, events, settle } = screen();
     sync([display("d1")]);
@@ -216,8 +219,10 @@ describe("a remote screen's pages", () => {
       ready: () => true,
       ensure: vi.fn(async () => "ready"),
       partition: () => remotePagePartition("pc", KEY, PAIRING),
+      filePartition: () => remoteFilePartition("pc", KEY, PAIRING),
       storage: () => "live",
       route: async (_workspace, id, load) => ({ url: `https://${id}.example/`, source_url: `https://${id}.example/`, load, own: true }),
+      release: vi.fn(),
     };
     subject.addRemote(other);
     subject.remoteSync(other, { workspace, displays: [display("d1")], retained: [{ workspace, id: "d1", area_id: "a1", url: "https://d1.example/", load: 3 }] });
@@ -478,6 +483,83 @@ describe("a remote screen's pages", () => {
     sync([display("d1")]);
     await settle();
     expect(views).toHaveLength(2);
+  });
+});
+
+// docs/BROWSER_DISPLAYS.md, Its checkout files: a file of that computer's
+// checkout loads from the route that computer's daemon made for this
+// screen, on its own loopback, which the screen's proxy carries there, in a
+// storage apart from the screen's logins; it reaches its own route alone.
+describe("a remote screen's file pages", () => {
+  const FILE = "file:///Users/me/repo/report.html";
+  const ROUTE = "http://127.0.0.1:5000/s3cret/report%2Ehtml";
+  const routed = (url = ROUTE, own = true) => async (_workspace: string, _id: string, load: number): Promise<RemoteRoute> => ({ url, source_url: FILE, load, own, root: "/Users/me/repo" });
+
+  it("load from that computer's route, in storage apart from the logins, and reach that route alone", async () => {
+    for (const own of [true, false]) {
+      const { sync, display, views, route, sessions, contentsOf, settle } = screen();
+      // A device's file page of that computer is not that computer's own, and loads from its route all the same.
+      route.mockImplementation(routed(ROUTE, own));
+      sync([display("f1", true, RECT, FILE)]);
+      await settle();
+      expect(session.fromPartition).toHaveBeenCalledWith(FILE_PARTITION);
+      expect(FILE_PARTITION).not.toBe(PARTITION);
+      expect(views[0]!.contents.loadURL).toHaveBeenCalledExactlyOnceWith(ROUTE);
+      const page = views[0]!.contents;
+      const ask = (url: string, resourceType: string) => {
+        native.fromId = () => contentsOf(page.id, ROUTE);
+        let answer: { cancel: boolean } | undefined;
+        sessions.get(FILE_PARTITION)!.beforeRequest({ url, resourceType, webContentsId: page.id }, (given) => { answer = given; });
+        return answer?.cancel;
+      };
+      expect(ask(ROUTE, "mainFrame"), "own " + own).toBe(false);
+      expect(ask("http://127.0.0.1:5000/s3cret/style.css", "stylesheet")).toBe(false);
+      expect(ask("http://127.0.0.1:5173/api", "xhr")).toBe(true);
+      expect(ask("http://localhost:5000/s3cret/style.css", "stylesheet")).toBe(true);
+      expect(ask("https://cdn.example/app.js", "script")).toBe(true);
+      expect(ask("http://192.168.0.4/", "image")).toBe(true);
+      expect(ask("file:///Users/me/repo/.env", "xhr")).toBe(true);
+    }
+  });
+
+  // TF1: whatever that computer answers, a file page loads only from its
+  // own loopback over plain HTTP.
+  it("load nothing from a route that is not that computer's loopback", async () => {
+    for (const url of ["file:///etc/passwd", "http://files.example/s3cret/report.html", "http://localhost:5000/s3cret/report.html", "https://127.0.0.1:5000/s3cret/report.html", "http://127.0.0.1/s3cret/report.html", "http://u:p@127.0.0.1:5000/s3cret/report.html", "http://10.0.0.2:5000/s3cret/report.html"]) {
+      const { sync, display, views, route, events, settle } = screen();
+      route.mockImplementation(routed(url));
+      sync([display("f1", true, RECT, FILE)]);
+      await settle();
+      expect(views[0]!.contents.loadURL, url).not.toHaveBeenCalled();
+      expect(events().filter((event) => event.kind === "state").at(-1)?.state?.failure).toBe(english("native.browser.routeUnavailable"));
+    }
+  });
+
+  // Its route ends with the screen's view (a hidden tile), so Reload asks for
+  // a new one rather than reloading the ended one; a page that closes lets
+  // its route go.
+  it("ask for a new route on Reload, and let theirs go when they close", async () => {
+    const { subject, remote, sync, display, views, route, settle } = screen();
+    route.mockImplementation(routed());
+    sync([display("f1", true, RECT, FILE)]);
+    await settle();
+    route.mockImplementation(routed("http://127.0.0.1:5001/n3w/report%2Ehtml"));
+    subject.remoteCommand(remote, { workspace, id: "f1" }, "reload");
+    await settle();
+    expect(route).toHaveBeenCalledTimes(2);
+    expect(views[0]!.contents.loadURL.mock.calls.at(-1)?.[0]).toBe("http://127.0.0.1:5001/n3w/report%2Ehtml");
+    sync([]);
+    await settle();
+    expect(views[0]!.contents.close).toHaveBeenCalled();
+    expect(remote.release).toHaveBeenCalledExactlyOnceWith(workspace, "f1", 3);
+  });
+
+  it("say so when the screen holds as many routes as it may", async () => {
+    const { sync, display, route, events, settle } = screen();
+    route.mockResolvedValueOnce({ refused: "browser_route_limit" });
+    sync([display("f1", true, RECT, FILE)]);
+    await settle();
+    expect(events().filter((event) => event.kind === "state").at(-1)?.state?.failure).toBe(english("native.browser.remotePageLimit"));
   });
 });
 

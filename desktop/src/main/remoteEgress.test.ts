@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { remotePagePartition } from "./browserSync";
+import { remoteFilePartition, remotePagePartition } from "./browserSync";
 import type { HostLog } from "./log";
 import { MAX_STORED, RemoteEgress, RemoteStorage, type Clearable } from "./remoteEgress";
 
@@ -33,16 +33,21 @@ function egress(fetched: (url: string, init: RequestInit) => Response) {
 }
 
 describe("a remote screen's proxy", () => {
-  it("is set exactly, before the pair counts as ready, with its connections closed after", async () => {
+  // The logins' partition and the file pages' (that computer's checkout
+  // HTML, kept apart from the logins) both send every request to it.
+  it("is set exactly on both its partitions, before the pair counts as ready, with their connections closed after", async () => {
     const { subject, calls, fetch } = egress(() => answer(200, { port: 54321, secret: "0123456789abcdef0123456789abcdef", pairing: P1, state: "ready" }));
     expect(subject.ready("mini", KEY)).toBe(false);
+    expect(subject.filePartition("mini", KEY)).toBeNull();
     expect(await subject.ensure("mini", KEY)).toBe("ready");
     expect(fetch.mock.calls[0]![0]).toBe(`http://127.0.0.1:7/peer-screen/mini/net?key=${KEY}&owner=4242`);
-    expect(calls).toEqual([`proxy ${JSON.stringify({ mode: "fixed_servers", proxyRules: "http://127.0.0.1:54321", proxyBypassRules: "<-loopback>" })}`, "close"]);
+    const proxy = `proxy ${JSON.stringify({ mode: "fixed_servers", proxyRules: "http://127.0.0.1:54321", proxyBypassRules: "<-loopback>" })}`;
+    expect(calls).toEqual([proxy, "close", proxy, "close"]);
     expect(subject.ready("mini", KEY)).toBe(true);
+    expect(subject.filePartition("mini", KEY)).toBe(remoteFilePartition("mini", KEY, P1));
     // The same listener again sets nothing again.
     expect(await subject.ensure("mini", KEY)).toBe("ready");
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(4);
   });
 
   it("answers its proxy login by port, and no other", async () => {
@@ -84,12 +89,12 @@ describe("a remote screen's proxy", () => {
     expect(subject.partition("mini", KEY)).toBe(remotePagePartition("mini", KEY, P1));
     // A pause, a restart of the daemon: the same pairing, the same storage.
     await subject.ensure("mini", KEY);
-    expect(proxied).toEqual([remotePagePartition("mini", KEY, P1)]);
+    expect(proxied).toEqual([remotePagePartition("mini", KEY, P1), remoteFilePartition("mini", KEY, P1)]);
     expect(repaired).toEqual([]);
     pairing = P2;
     await subject.ensure("mini", KEY);
     expect(subject.partition("mini", KEY)).toBe(remotePagePartition("mini", KEY, P2));
-    expect(proxied).toEqual([remotePagePartition("mini", KEY, P1), remotePagePartition("mini", KEY, P2)]);
+    expect(proxied).toEqual([remotePagePartition("mini", KEY, P1), remoteFilePartition("mini", KEY, P1), remotePagePartition("mini", KEY, P2), remoteFilePartition("mini", KEY, P2)]);
     expect(subject.ready("mini", KEY)).toBe(true);
     expect(repaired).toEqual(["mini"]);
   });

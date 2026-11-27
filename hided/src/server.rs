@@ -309,7 +309,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/peer-screen/{device}/page-route",
-            post(crate::remote_screen::guest_page_route),
+            post(crate::remote_screen::guest_page_route)
+                .delete(crate::remote_screen::guest_page_route),
         )
         .route(
             "/peer-screen/{device}/",

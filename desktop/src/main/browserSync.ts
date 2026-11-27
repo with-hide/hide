@@ -299,7 +299,40 @@ export function browserPartition(workspace: string, url: string, node: string | 
  * under another key, or of an earlier pairing of it.
  */
 export function remotePagePartition(device: string, key: string, pairing: string): string {
-  return `persist:hide-remote-page-${createHash("sha256").update(`${device}\u0000${key}\u0000${pairing}`).digest("hex").slice(0, 32)}`;
+  return `persist:hide-remote-page-${pairHash(device, key, pairing)}`;
+}
+
+/**
+ * The storage of the file pages another computer's screen shows here (that
+ * computer's checkout HTML, served from its own route): one in-memory
+ * partition per machine, key and pairing, apart from that screen's logins
+ * (`remotePagePartition`), so an HTML file of a checkout reads none of them,
+ * and gone with the app.
+ */
+export function remoteFilePartition(device: string, key: string, pairing: string): string {
+  return `hide-remote-file-${pairHash(device, key, pairing)}`;
+}
+
+function pairHash(device: string, key: string, pairing: string): string {
+  return createHash("sha256").update(`${device}\u0000${key}\u0000${pairing}`).digest("hex").slice(0, 32);
+}
+
+/**
+ * Whether a route another computer answers for a page of its screen loads
+ * from where it may (TF1): a web page from its own address, and a file page
+ * only from that computer's own loopback over plain HTTP, a numeric address
+ * with a port, which the screen's proxy carries to that computer; never a
+ * file, a name, or anything that reaches this computer.
+ */
+export function remoteRouteAddress(route: PageRoute): boolean {
+  if (protocolOf(route.source_url) !== "file:") return route.url === route.source_url;
+  try {
+    const address = new URL(route.url);
+    const loopback = /^127(?:\.\d{1,3}){3}$/.test(address.hostname) || address.hostname === "[::1]";
+    return address.protocol === "http:" && loopback && address.port !== "" && address.username === "" && address.password === "";
+  } catch {
+    return false;
+  }
 }
 
 /**
