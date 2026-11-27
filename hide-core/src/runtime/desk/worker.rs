@@ -15,6 +15,7 @@ use hide_desk::adapter::{self, Paths};
 use hide_desk::host::{Host, MAX_DESCENDANTS, MAX_RSS_BYTES};
 use hide_desk::install::{self, InstallError};
 use hide_desk::permission;
+use hide_desk::read_ahead::Unread;
 use hide_desk::rpc::{CallError, Incoming, Sink};
 use hide_desk::session::{self, Choices, OpenError, Update};
 use hide_platform::programs;
@@ -34,9 +35,28 @@ const MAX_QUEUED_INCOMING: usize = 4096;
 const MAX_ANNOUNCED: usize = 256;
 
 pub(super) enum Order {
-    /// Look at every agent (its adapter, Node, its own CLI) and install
-    /// every adapter not in place (D-80).
-    Check,
+    /// Look at every agent (its adapter, Node, its own CLI), install every
+    /// adapter not in place (D-80), and read the commands of each agent in
+    /// place and switched on in Settings › Agents (`on`) whose list is not
+    /// read yet or is stale against its last read ahead (`marks`,
+    /// [`super::lists`]).
+    Check {
+        marks: crate::agent_commands::ReadMarks,
+        on: Vec<AdapterId>,
+        /// The agents the operator is signed out of, as Settings reads it: a
+        /// sign-out and the sign-in after it each read the list again.
+        signed_out: Vec<AdapterId>,
+        /// The operator asked for it (`다시 시작`): a list whose read failed
+        /// is tried once more on the same mark.
+        retry: bool,
+    },
+    /// The agents switched on or signed in moved in the catalog: only the
+    /// list reader is told, which keeps the agents in place itself.
+    Lists {
+        marks: crate::agent_commands::ReadMarks,
+        on: Vec<AdapterId>,
+        signed_out: Vec<AdapterId>,
+    },
     /// Install `adapter`'s adapter; `asked` when the operator pressed
     /// `다시 받기`.
     Install {
@@ -64,6 +84,21 @@ pub(super) enum Order {
     /// ([`session::Arrivals`]).
     Incoming(u64, Incoming),
     Installed(AdapterId, Result<(), InstallError>),
+    /// The `/` menu opened on `adapter`: its list is read again when what
+    /// it depends on moved.
+    CommandsCheck(AdapterId),
+    /// A read of `adapter`'s commands ahead of the operator ended
+    /// ([`super::lists`]).
+    ListRead {
+        adapter: AdapterId,
+        result: Result<
+            (
+                hide_desk::commands::Commands,
+                crate::agent_commands::ReadMark,
+            ),
+            Unread,
+        >,
+    },
     /// The runtime is gone: end the process and the worker.
     Shutdown,
 }
@@ -149,10 +184,17 @@ pub(super) enum Report {
         adapter: AdapterId,
         choices: Choices,
     },
-    /// The agent's commands, the whole list again.
+    /// The agent's commands, the whole list again: from its Desk session,
+    /// or read ahead with what the read depended on (`read`).
     Commands {
         adapter: AdapterId,
         commands: hide_desk::commands::Commands,
+        read: Option<crate::agent_commands::ReadMark>,
+    },
+    /// A read of the agent's commands ahead of the operator brought none.
+    Unread {
+        adapter: AdapterId,
+        why: crate::model::DeskCommandsUnread,
     },
     /// The turn compacted the conversation, or failed to, as its adapter
     /// told outside the reply; sent just before the turn ends.
@@ -209,14 +251,6 @@ fn first_line(words: &str) -> Option<String> {
     Some(line.chars().take(MAX_REASON_CHARS).collect())
 }
 
-/// Whether the agent refused the call until the operator signs in: ACP's
-/// `auth_required`, or any refusal from an agent that said it is signed out
-/// ([`session::sign_in_status`]), whatever code it carries.
-fn signs_in(error: &CallError, signed_out: bool) -> bool {
-    matches!(error, CallError::Rejected(rejected)
-        if rejected.code == session::AUTH_REQUIRED || signed_out)
-}
-
 /// An open the agent refused, as Desk reads it: one from an agent that
 /// said it is signed out is a sign-in refusal (B6), whatever it answered.
 fn open_refusal(error: OpenError, signed_out: bool) -> OpenError {
@@ -258,6 +292,8 @@ pub(super) fn start(
         on: false,
         running: None,
         installing: Vec::new(),
+        lists: None,
+        open: Arc::new(Mutex::new(None)),
     };
     std::thread::Builder::new()
         .name("hide-core-desk".into())
@@ -289,6 +325,12 @@ struct Worker {
     on: bool,
     running: Option<Running>,
     installing: Vec<AdapterId>,
+    /// The thread that reads each agent's commands ahead of the operator,
+    /// one agent at a time, while Desk is on; dropping it stops it.
+    lists: Option<super::lists::Reader>,
+    /// The agent whose Desk session is open, which the list reader leaves
+    /// alone: that session sends its list.
+    open: Arc<Mutex<Option<AdapterId>>>,
 }
 
 /// The Desk process and its session.
@@ -331,12 +373,27 @@ impl Worker {
             self.handle(order);
         }
         self.stop.store(true, Ordering::SeqCst);
+        self.lists = None;
         self.end_process(false);
     }
 
     fn handle(&mut self, order: Order) {
         match order {
-            Order::Check => self.check(),
+            Order::Check {
+                marks,
+                on,
+                signed_out,
+                retry,
+            } => self.check(marks, on, signed_out, retry),
+            Order::Lists {
+                marks,
+                on,
+                signed_out,
+            } => self.read_ahead(super::lists::Wanted::Catalog {
+                marks,
+                on,
+                signed_out,
+            }),
             Order::Install { adapter, asked } => self.install(adapter, asked),
             Order::Send(send) => self.send(send),
             Order::Cancel => {
@@ -355,6 +412,7 @@ impl Worker {
             Order::End => self.end_process(false),
             Order::Off => {
                 self.on = false;
+                self.lists = None;
                 self.stop.store(true, Ordering::SeqCst);
                 self.stop = Arc::new(AtomicBool::new(false));
                 self.end_process(false);
@@ -389,8 +447,100 @@ impl Worker {
                     DeskAgentState::Ready,
                     None,
                 )]));
+                self.read_ahead(super::lists::Wanted::Ready(adapter));
+            }
+            Order::ListRead { adapter, result } => self.list_read(adapter, result),
+            Order::CommandsCheck(adapter) => {
+                // Only a reader Desk started takes it: a `/` never starts one.
+                if let Some(reader) = &self.lists {
+                    reader.read(super::lists::Wanted::Check(adapter));
+                }
             }
         }
+    }
+
+    /// Hands the thread that reads the agents' commands what to read,
+    /// starting it on the first; a thread that cannot start leaves each
+    /// agent it would have read failed, with why in the log.
+    fn read_ahead(&mut self, wanted: super::lists::Wanted) {
+        if !self.on {
+            return;
+        }
+        if self.lists.is_none() {
+            let started = super::lists::Reader::start(
+                self.platform.places(),
+                self.orders.clone(),
+                Arc::clone(&self.open),
+            );
+            match started {
+                Ok(reader) => self.lists = Some(reader),
+                Err(error) => {
+                    crate::diagnostic!(json!({
+                        "component": "desk",
+                        "kind": "desk.lists_start_failed",
+                        "error": error.to_string(),
+                    }));
+                    let agents = match wanted {
+                        super::lists::Wanted::Look { on, ready, .. } => ready
+                            .into_iter()
+                            .filter(|agent| on.contains(agent))
+                            .collect(),
+                        super::lists::Wanted::Ready(agent) | super::lists::Wanted::Check(agent) => {
+                            vec![agent]
+                        }
+                        // Which agents are in place is the reader's to know.
+                        super::lists::Wanted::Catalog { .. } => Vec::new(),
+                    };
+                    for adapter in agents {
+                        self.report(Report::Unread {
+                            adapter,
+                            why: crate::model::DeskCommandsUnread::Failed,
+                        });
+                    }
+                    return;
+                }
+            }
+        }
+        if let Some(reader) = &self.lists {
+            reader.read(wanted);
+        }
+    }
+
+    /// A list read ahead reaches the core, with why when it brought none.
+    fn list_read(
+        &mut self,
+        adapter: AdapterId,
+        result: Result<
+            (
+                hide_desk::commands::Commands,
+                crate::agent_commands::ReadMark,
+            ),
+            Unread,
+        >,
+    ) {
+        let why = match result {
+            Ok((commands, read)) => {
+                self.report(Report::Commands {
+                    adapter,
+                    commands,
+                    read: Some(read),
+                });
+                return;
+            }
+            Err(Unread::Stopped) => return,
+            Err(Unread::SignIn) => crate::model::DeskCommandsUnread::SignIn,
+            Err(Unread::NoList) => crate::model::DeskCommandsUnread::NoList,
+            Err(Unread::Failed(detail)) => {
+                crate::diagnostic!(json!({
+                    "component": "desk",
+                    "kind": "desk.commands_unread",
+                    "adapter": adapter.as_str(),
+                    "error": detail,
+                }));
+                crate::model::DeskCommandsUnread::Failed
+            }
+        };
+        self.report(Report::Unread { adapter, why });
     }
 
     fn report(&self, report: Report) {
@@ -410,7 +560,13 @@ impl Worker {
     /// Looks at every agent and installs each adapter that is not in
     /// place, all at once (D-80): an agent is never left waiting for its
     /// adapter until it is chosen.
-    fn check(&mut self) {
+    fn check(
+        &mut self,
+        marks: crate::agent_commands::ReadMarks,
+        on: Vec<AdapterId>,
+        signed_out: Vec<AdapterId>,
+        retry: bool,
+    ) {
         self.on = true;
         let places = self.platform.places();
         let node = programs::find_cli("node");
@@ -419,7 +575,7 @@ impl Worker {
             Some(node) => install::check_node(node),
         };
         let mut missing = Vec::new();
-        let states = AdapterId::all()
+        let states: Vec<_> = AdapterId::all()
             .filter(|adapter| !self.installing.contains(adapter))
             .filter_map(|adapter| {
                 match look(
@@ -436,10 +592,24 @@ impl Worker {
                 }
             })
             .collect();
+        let ready = states
+            .iter()
+            .filter(|(_, state, _)| *state == DeskAgentState::Ready)
+            .map(|(adapter, _, _)| *adapter)
+            .collect();
         self.report(Report::Availability(states));
         for adapter in missing {
             self.install(adapter, false);
         }
+        // Every look replaces what the reader reads, so an agent switched
+        // off since leaves it.
+        self.read_ahead(super::lists::Wanted::Look {
+            marks,
+            on,
+            ready,
+            signed_out,
+            retry,
+        });
     }
 
     fn install(&mut self, adapter: AdapterId, asked: bool) {
@@ -512,6 +682,10 @@ impl Worker {
                         resume_failed,
                         choices,
                     });
+                    *self
+                        .open
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(send.adapter);
                     self.running = Some(running);
                 }
                 Err(error) => {
@@ -559,46 +733,9 @@ impl Worker {
     fn open(&mut self, send: &Send) -> Result<(Running, bool, Choices), OpenError> {
         let adapter = send.adapter;
         let places = self.platform.places();
-        let failed = |what: &str| OpenError::Failed(what.to_owned());
-        let package = match adapter.pin() {
-            Some(_) => Some((
-                install::installed(&places.adapters, adapter)
-                    .ok_or_else(|| failed("the agent's adapter is not installed"))?,
-                programs::find_cli("node")
-                    .ok_or_else(|| failed("node is missing"))?
-                    .into_path(),
-            )),
-            None => None,
-        };
-        let own_cli = match adapter.own_cli() {
-            Some(cli) => Some(
-                programs::find_cli(cli)
-                    .ok_or_else(|| failed(&format!("{cli} is missing")))?
-                    .into_path(),
-            ),
-            None => None,
-        };
-        let search = programs::account_path();
-        // From the same login shell read as the search, kept until a
-        // startup file changes, so a start asks no shell of its own.
-        let account = programs::account_environment();
         let credential = self.platform.issue().map_err(OpenError::Failed)?;
-        let launch = adapter::launch(
-            adapter,
-            &Paths {
-                package: package
-                    .as_ref()
-                    .map(|(package, node)| (package.as_path(), node.as_path())),
-                own_cli: own_cli.as_deref(),
-                hide_dir: &places.hide_dir,
-                search: search.as_ref(),
-                account: account.as_deref(),
-                desk: &places.desk,
-                capability: &credential.reference,
-            },
-        );
-        let launch = match launch {
-            Ok(launch) => launch,
+        let launch = match launch_for(adapter, &places, Some(&credential.reference)) {
+            Ok((launch, _)) => launch,
             Err(error) => {
                 self.platform.revoke(&credential);
                 return Err(OpenError::Failed(error));
@@ -758,6 +895,7 @@ impl Worker {
                     Update::Commands(update) => self.report(Report::Commands {
                         adapter,
                         commands: hide_desk::commands::read(adapter, &update),
+                        read: None,
                     }),
                     Update::Text { .. } | Update::Break | Update::Info(_) | Update::Other => {}
                 }
@@ -831,7 +969,11 @@ impl Worker {
                         _ => TurnOutcome::Done,
                     },
                     Err(error)
-                        if current && signs_in(&error, self.signed_out.load(Ordering::SeqCst)) =>
+                        if current
+                            && session::signs_in(
+                                &error,
+                                self.signed_out.load(Ordering::SeqCst),
+                            ) =>
                     {
                         self.turn_failed(adapter, &error);
                         self.sign_in_needed(adapter, tag);
@@ -967,6 +1109,10 @@ impl Worker {
         detail: Option<String>,
         last: Option<TurnEnd>,
     ) {
+        *self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         let Some(running) = self.running.take() else {
             return;
         };
@@ -1058,6 +1204,55 @@ fn merge_choices(choices: &mut Choices, answer: Choices) {
     if answer.effort.is_some() {
         choices.effort = answer.effort;
     }
+}
+
+/// How `adapter`'s process starts on this machine, with the agent's own
+/// CLI it found: what Desk's process and a read of its commands
+/// ([`super::lists`]) both start. `capability` is the reference the
+/// process's `hide` presents; none for a process that is never prompted.
+/// Refused, with why, when a piece its route needs is not in place.
+pub(super) fn launch_for(
+    adapter: AdapterId,
+    places: &crate::desk::DeskPlaces,
+    capability: Option<&std::path::Path>,
+) -> Result<(adapter::Launch, Option<std::path::PathBuf>), String> {
+    let package = match adapter.pin() {
+        Some(_) => Some((
+            install::installed(&places.adapters, adapter)
+                .ok_or("the agent's adapter is not installed")?,
+            programs::find_cli("node")
+                .ok_or("node is missing")?
+                .into_path(),
+        )),
+        None => None,
+    };
+    let own_cli = match adapter.own_cli() {
+        Some(cli) => Some(
+            programs::find_cli(cli)
+                .ok_or_else(|| format!("{cli} is missing"))?
+                .into_path(),
+        ),
+        None => None,
+    };
+    let search = programs::account_path();
+    // From the same login shell read as the search, kept until a startup
+    // file changes, so a start asks no shell of its own.
+    let account = programs::account_environment();
+    let launch = adapter::launch(
+        adapter,
+        &Paths {
+            package: package
+                .as_ref()
+                .map(|(package, node)| (package.as_path(), node.as_path())),
+            own_cli: own_cli.as_deref(),
+            hide_dir: &places.hide_dir,
+            search: search.as_ref(),
+            account: account.as_deref(),
+            desk: &places.desk,
+            capability,
+        },
+    )?;
+    Ok((launch, own_cli))
 }
 
 /// What looking at one agent found: its state, or an adapter to install.
@@ -1240,6 +1435,8 @@ mod tests {
                 now: None,
             }),
             installing: Vec::new(),
+            lists: None,
+            open: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -1611,10 +1808,10 @@ mod tests {
                 message: "Internal error".into(),
             })
         };
-        assert!(signs_in(&rejected(session::AUTH_REQUIRED), false));
-        assert!(!signs_in(&rejected(-32603), false));
-        assert!(signs_in(&rejected(-32603), true));
-        assert!(!signs_in(&CallError::Closed("eof".into()), true));
+        assert!(session::signs_in(&rejected(session::AUTH_REQUIRED), false));
+        assert!(!session::signs_in(&rejected(-32603), false));
+        assert!(session::signs_in(&rejected(-32603), true));
+        assert!(!session::signs_in(&CallError::Closed("eof".into()), true));
         assert_eq!(
             open_refusal(
                 OpenError::Failed("session/new: rejected -32603".into()),

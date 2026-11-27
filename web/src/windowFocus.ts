@@ -1,28 +1,43 @@
-// Whether this window holds the operator's keyboard on the Workspace screen:
-// the core reads what is in front of such a window as seen (PRD
-// unseen-agent-views D-07). It is sent only when it changes, and again on each
-// new connection, for which the daemon holds nothing yet.
+// Whether this window holds the operator's keyboard, and on which screen: the
+// Workspace screen, or Desk's room with Desk's desk drawn. The core reads what
+// is in front of such a window as seen (PRD unseen-agent-views D-07; 한눈에 for
+// Desk's desk). It is sent only when it changes, and again on each new
+// connection, for which the daemon holds nothing yet.
 
+import { deskViewOf } from "./deskDesk";
+import { deskShown } from "./deskRoom";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { subscribeKeyboardOwner, windowIsActive } from "./viewFocus";
 
-export function installWindowFocus(send: (focused: boolean) => void): () => void {
-  let sent: boolean | null = null;
+/** The screen a window holding the keyboard draws, whose View in front is seen, or null. */
+export type FocusScreen = "workspace" | "desk" | null;
+
+export function installWindowFocus(send: (screen: FocusScreen) => void): () => void {
+  let sent: FocusScreen | undefined;
   const report = () => {
     if (useShellStore.getState().connection !== "live") {
-      sent = null;
+      sent = undefined;
       return;
     }
-    const focused = windowIsActive() && document.visibilityState === "visible" && useUiStore.getState().screen?.kind === "workspace";
-    if (focused === sent) return;
-    sent = focused;
-    send(focused);
+    const looking = windowIsActive() && document.visibilityState === "visible";
+    const ui = useUiStore.getState();
+    const screen: FocusScreen = !looking
+      ? null
+      : ui.screen?.kind === "workspace"
+        ? "workspace"
+        : ui.screen?.kind === "desk" && deskShown(ui.deskRoom, deskViewOf(useShellStore.getState().rest)?.layout.display_count ?? 0)
+          ? "desk"
+          : null;
+    if (screen === sent) return;
+    sent = screen;
+    send(screen);
   };
   // The keyboard owner's listeners also hear the window gain and lose focus.
   const unsubscribeOwner = subscribeKeyboardOwner(report);
-  const unsubscribeShell = useShellStore.subscribe((state, previous) => { if (state.connection !== previous.connection) report(); });
-  const unsubscribeUi = useUiStore.subscribe((state, previous) => { if (state.screen?.kind !== previous.screen?.kind) report(); });
+  // A snapshot can add Desk's first tab or take its last, which shows or hides the desk.
+  const unsubscribeShell = useShellStore.subscribe((state, previous) => { if (state.connection !== previous.connection || state.rest !== previous.rest) report(); });
+  const unsubscribeUi = useUiStore.subscribe((state, previous) => { if (state.screen?.kind !== previous.screen?.kind || state.deskRoom !== previous.deskRoom) report(); });
   document.addEventListener("visibilitychange", report);
   report();
   return () => {

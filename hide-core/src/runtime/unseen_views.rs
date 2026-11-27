@@ -25,14 +25,25 @@ use super::*;
 use crate::model::UnseenViewFact;
 use crate::view_feedback::{Opener, Unseen};
 
+/// What the window holding the keyboard draws (`window_focus.screen`): the
+/// Workspace screen, whose front tray's tab is in front of the operator, or
+/// Desk's desk, whose front tab is.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum FocusScreen {
+    #[default]
+    Workspace,
+    Desk,
+}
+
 impl Runtime {
-    /// Whether a window holding the keyboard draws the Workspace in front,
-    /// as the daemon summed every window's report.
-    pub(super) fn set_window_focused(&mut self, focused: bool) -> bool {
-        if self.window_focused == focused {
+    /// The screen the window holding the keyboard draws, or none, as the
+    /// daemon summed every window's report.
+    pub(super) fn set_window_focus(&mut self, screen: Option<FocusScreen>) -> bool {
+        if self.window_focus == screen {
             return false;
         }
-        self.window_focused = focused;
+        self.window_focus = screen;
         self.settle_seen_views();
         true
     }
@@ -131,18 +142,23 @@ impl Runtime {
         }
     }
 
-    /// The View in front of the operator now, if a window with the keyboard
-    /// shows one (D-07): the tab in front of the active area of the tray the
-    /// front Workspace draws, in the lane or in pair view (PRD
-    /// lane-desk-pair-view B2).
+    /// The View in front of the operator now, if the window with the
+    /// keyboard shows one (D-07): on the Workspace screen the tab in front
+    /// of the active area of the tray the front Workspace draws, in the lane
+    /// or in pair view (PRD lane-desk-pair-view B2); on Desk's desk the tab
+    /// in front of it.
     fn looked_at_view(&self) -> Option<(WorkspaceKey, String)> {
-        if !self.window_focused {
-            return None;
+        match self.window_focus? {
+            FocusScreen::Workspace => {
+                let key = self.front_workspace_key()?;
+                let id = self.drawn_tray_layout(&key)?.active_area().active.clone()?;
+                Some((key, id))
+            }
+            FocusScreen::Desk => {
+                let id = self.desk_views()?.active_area().active.clone()?;
+                Some((self.desk_key(), id))
+            }
         }
-        let key = self.front_workspace_key()?;
-        let layout = self.drawn_tray_layout(&key)?;
-        let id = layout.active_area().active.clone()?;
-        Some((key, id))
     }
 
     /// Records the View in front of the operator as seen. Runs before every

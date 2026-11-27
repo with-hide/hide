@@ -15,7 +15,7 @@ import { answerPlace, type AnswerPlace, type FoundAnswerPath } from "./answerPat
 import { hostBridge } from "./host";
 import { keepScroll, keptScroll, placeAt, scrollPlace, stillAt } from "./conversationScroll";
 import { deskOn, deskPhase, holdsFoot, laneCards, livePane, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
-import { deskShown, followFrom, followMoved, newSessionBeside, openSession, outputNamed, showDesk, type NewSessionFollow } from "./deskRoom";
+import { deskShown, followFrom, followMoved, newSessionBeside, openSession, outputNamed, rightSide, showDesk, type NewSessionFollow } from "./deskRoom";
 import { deskViewOf, DESK_SCREEN } from "./deskDesk";
 import { CardPlaceContext, type CardPlace } from "./deskFront";
 import { DeskViewAreas } from "./ViewAreas";
@@ -28,6 +28,7 @@ import { LineButton } from "./LinkSessions";
 import { resumeBlock, resumeCheckout } from "./linkPanel";
 import { resumeFailureText, resumeReason, resumeRequest, useSessionResume } from "./useSessionResume";
 import { OutputShelf } from "./components/desk/output-shelf";
+import { GlanceCrumb, GlancePanel } from "./components/desk/glance-panel";
 import { rowPulls } from "./prMark";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { commandLabel } from "./shortcutLabels";
@@ -49,6 +50,7 @@ import { catalogOf, catalogWorkspaces, checkoutOfPane, localDeviceId, paneRowOf,
 import { askingSession } from "./sessionWork";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { AgentMark } from "./AgentMark";
 import { windowIsActive } from "./viewFocus";
 
 const NO_JOBS: DeskJob[] = [];
@@ -279,8 +281,8 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const menus = useComposerMenus({
     text: draft.text,
     caret,
-    commands: agent ? { agent: agent.label, list: commandSection?.lists[agent.id] ?? null, opening: desk?.host.state === "starting" || desk?.host.state === "thinking" } : null,
-    noList: "first",
+    commands: agent ? { agent: agent.label, list: commandSection?.lists[agent.id] ?? null, unread: commandSection?.unread[agent.id] ?? null, opening: desk?.host.state === "starting" || desk?.host.state === "thinking" } : null,
+    onCommandsOpen: agent ? () => actions.deskCommandsCheck(agent.id) : undefined,
     mentions,
     projects: true,
     onCommand: (at, command) => writeDraft(pickCommand(draft, at, command)),
@@ -330,6 +332,8 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     onFile: (file) => openAnswerFile(actions, file),
   }), [actions, onNoticeAction, room]);
   const place = useUiStore((s) => s.deskRoom);
+  // 한눈에 folded with no session beside Desk: Desk's head carries the way to unfold it.
+  const glanceFolded = useShellStore((s) => s.desk?.lane.glance_folded ?? false) && place.session === null;
   useDeskAgentOpens();
 
   if (!desk) return null;
@@ -373,7 +377,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
           actions={actions}
           room={room}
           chat={(
-            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} />} composer={composer} tray={tray} scrollRef={scroller}>
+            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} onGlance={glanceFolded ? () => actions.deskGlanceFold(false) : null} />} composer={composer} tray={tray} scrollRef={scroller}>
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
@@ -524,6 +528,7 @@ function DeskRoomView({ actions, room, chat }: { actions: Actions; room: RoomAct
   const scope = useMemo<ExplorerScope | null>(() => (scopeCheckout && scopeDevice ? { device: scopeDevice, checkout: scopeCheckout } : null), [scopeCheckout, scopeDevice]);
   const deskActions = useDeskPartActions(actions, room, scope);
   const shown = deskShown(place, view?.layout.display_count ?? 0);
+  const side = rightSide(place, lane.glance_folded ?? false);
   // The session beside Desk covers nothing, so it is no Escape layer: Escape closes it from the shell's Escape owner once no
   // layer is open (keyboard.ts). The desk dims the rest and Escape hides it first; it is where the operator works, so it
   // covers nothing for the close chords, and ⌘W closes its tab (B6).
@@ -544,10 +549,31 @@ function DeskRoomView({ actions, room, chat }: { actions: Actions; room: RoomAct
       chat={chat}
       widths={lane}
       expanded={place.expanded}
-      session={place.session ? <DeskSessionPanel key={place.session} paneId={place.session} actions={actions} deskActions={deskActions} room={room} /> : null}
+      glance={side === "glance"}
+      session={side === "session" && place.session ? <DeskSessionPanel key={place.session} paneId={place.session} actions={actions} deskActions={deskActions} room={room} /> : side === "glance" ? <DeskGlance actions={actions} room={room} /> : null}
       panel={shown ? <DeskDeskView view={view} actions={deskActions} room={room} scope={place.explorer ? scope : null} expanded={place.expanded} /> : null}
       onDim={() => actions.deskHideDesk()}
       onWidth={(panel, width) => actions.deskLaneWidth(panel, width)}
+    />
+  );
+}
+
+/**
+ * 한눈에 at Desk's right while no session is open beside it: a session row
+ * opens that session beside Desk, a file row opens it in front of Desk's desk
+ * and turns it seen, and `⟩` folds it, which the core keeps.
+ */
+function DeskGlance({ actions, room }: { actions: Actions; room: RoomActions }) {
+  const section = useShellStore((s) => s.deskJobs);
+  const cards = useMemo(() => laneCards(section), [section]);
+  if (!section) return null;
+  return (
+    <GlancePanel
+      glance={section.glance}
+      cards={cards}
+      onSession={(pane) => room.session({ name: "", mark: null, agent_kind: null, pane_id: pane })}
+      onFile={(file) => actions.deskOpen({ kind: "output", output: file })}
+      onFold={() => actions.deskGlanceFold(true)}
     />
   );
 }
@@ -596,7 +622,7 @@ function DeskDeskView({ view, actions, room, scope, expanded }: { view: import("
 
 const NO_QUEUED: readonly DeskQueuedMessage[] = [];
 const NO_OUTPUTS: readonly DeskOutput[] = [];
-const NO_WIDTHS = { view_width: null, session_width: null };
+const NO_WIDTHS: import("./snapshot").DeskLane = { view_width: null, session_width: null };
 
 /**
  * The session open beside Desk (PRD desk-2-ui D-01, D-09-D-11, D-20, D-28,
@@ -607,13 +633,17 @@ const NO_WIDTHS = { view_width: null, session_width: null };
 function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: string; actions: Actions; deskActions: Actions; room: RoomActions }) {
   const listed = useShellStore((s) => agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(paneId));
   const record = useShellStore((s) => (listed ? null : ((s.deskJobs?.records ?? []).find((one) => one.pane_id === paneId) ?? null)));
-  if (record) return <DeskRecordPanel record={record} actions={actions} deskActions={deskActions} room={room} />;
-  return <DeskLivePanel paneId={paneId} actions={actions} deskActions={deskActions} room={room} />;
+  return record ? <DeskRecordPanel record={record} actions={actions} deskActions={deskActions} room={room} /> : <DeskLivePanel paneId={paneId} actions={actions} deskActions={deskActions} room={room} />;
+}
+
+/** The way back to 한눈에 above the session beside Desk, naming it as its head does: each panel hands it the title it gives its head. */
+function SessionCrumb({ title, kind, actions }: { title: string; kind: string | null; actions: Actions }) {
+  return <GlanceCrumb title={title} lead={kind ? <AgentMark kind={kind} /> : null} onBack={() => actions.deskGlanceBack()} />;
 }
 
 /**
  * A session whose pane is gone, opened beside Desk from Hide's record of it
- * (feedback 2, frame K, 다): its head with `끝남` and only `✕`, its machine
+ * (feedback 2, frame K, 다): its head with `끝남` and no buttons, `‹ 한눈에` above it, its machine
  * and pull requests under it, its conversation read where it ran as any
  * session's, and in the input box's place the session record row's
  * `이어서 하기`, which resumes it as that row does, or the one line the app
@@ -655,6 +685,8 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
     </>
   );
   return (
+    <>
+    <SessionCrumb title={record.title} kind={record.agent_kind} actions={actions} />
     <ThreadPanel
       job={job}
       paneId={record.pane_id}
@@ -678,7 +710,6 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
           onFiles={() => undefined}
           onTerminal={() => undefined}
           onOwnTab={() => undefined}
-          onClose={() => actions.deskCloseSession()}
         />
       }
       foot={<SessionRecordFoot endedAt={record.ended_at_unix_ms} resume={button} blocked={reason} />}
@@ -690,6 +721,7 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
       onFile={(file) => openAnswerFile(actions, file)}
       place={place}
     />
+    </>
   );
 }
 
@@ -730,6 +762,8 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
   }, [actions, unread]);
   const write = () => useUiStore.getState().setDeskRoom((now) => openSession(now, paneId, { answer: true }));
   return (
+    <>
+    <SessionCrumb title={title} kind={row?.agent_kind ?? job?.agent_kind ?? null} actions={actions} />
     <ThreadPanel
       job={job}
       paneId={paneId}
@@ -754,7 +788,6 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
           onFiles={() => actions.deskToggleExplorer()}
           onTerminal={() => actions.deskTerminal()}
           onOwnTab={() => actions.openListedAgent(paneId)}
-          onClose={() => actions.deskCloseSession()}
         />
         <OutputShelf
           outputs={job?.outputs ?? NO_OUTPUTS}
@@ -799,6 +832,7 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
       onFile={(file) => openAnswerFile(actions, file)}
       place={place}
     />
+    </>
   );
 }
 

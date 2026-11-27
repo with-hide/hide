@@ -56,11 +56,36 @@ pub enum OpenError {
 
 impl OpenError {
     fn from_call(step: &str, error: CallError) -> Self {
-        match error {
-            CallError::Rejected(rejected) if rejected.code == AUTH_REQUIRED => Self::Login,
-            other => Self::Failed(format!("{step}: {other}")),
+        if signs_in(&error, false) {
+            return Self::Login;
         }
+        Self::Failed(format!("{step}: {error}"))
     }
+}
+
+/// Whether the agent refused a call until the operator signs in: ACP's
+/// `auth_required`, or any refusal from an agent that said it is signed out
+/// ([`sign_in_status`]), whatever code it carries. The one rule Desk's
+/// process and a read of an agent's commands (`crate::read_ahead`) both
+/// apply.
+pub fn signs_in(error: &CallError, signed_out: bool) -> bool {
+    matches!(error, CallError::Rejected(rejected)
+        if rejected.code == AUTH_REQUIRED || signed_out)
+}
+
+/// What Desk says of itself in `initialize`: ACP v1, and no client methods
+/// the agent may call.
+pub fn initialize_params() -> Value {
+    json!({
+        "protocolVersion": 1,
+        "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}, "terminal": false},
+        "clientInfo": {"name": "hide-desk", "version": env!("CARGO_PKG_VERSION")},
+    })
+}
+
+/// The params of a `session/new` in `cwd`, with no MCP servers of Desk's.
+pub fn new_session_params(cwd: &Path) -> Value {
+    json!({"cwd": cwd, "mcpServers": []})
 }
 
 /// Opens a session in `cwd`: loads `resume` when the agent can, else starts
@@ -71,21 +96,13 @@ pub fn open(
     resume: Option<&str>,
 ) -> Result<Opened, OpenError> {
     let initialized = connection
-        .call(
-            "initialize",
-            json!({
-                "protocolVersion": 1,
-                "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}, "terminal": false},
-                "clientInfo": {"name": "hide-desk", "version": env!("CARGO_PKG_VERSION")},
-            }),
-            CONTROL_TIMEOUT,
-        )
+        .call("initialize", initialize_params(), CONTROL_TIMEOUT)
         .map_err(|error| OpenError::from_call("initialize", error))?;
     let can_load = initialized
         .pointer("/agentCapabilities/loadSession")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let params = json!({"cwd": cwd, "mcpServers": []});
+    let params = new_session_params(cwd);
     let mut resume_failed = resume.is_some() && !can_load;
     let mut opened = None;
     if let Some(session_id) = resume.filter(|_| can_load) {

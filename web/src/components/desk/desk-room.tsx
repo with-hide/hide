@@ -1,4 +1,4 @@
-import { PlusIcon, XIcon } from "lucide-react";
+import { PanelRightOpenIcon, PlusIcon, XIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { DividerGrip } from "../../LaneDivider";
 import { holdShellDrag } from "../../shellDrag";
@@ -16,16 +16,21 @@ import { FileDropZone } from "./file-drop";
 const EDGE_STEP = 32;
 
 /**
- * The chat column's head: Desk's own mark and name, `＋ 새 대화` (B10; Doop ①) and
+ * The chat column's head: Desk's own mark and name, 한눈에's unfold while it is folded, `＋ 새 대화` (B10; Doop ①) and
  * at its right end `나가기 ✕` (feedback 1 D2), which goes back to the tab in
  * front before Desk (`leaveTo`), as `leaveChord` does.
  */
-export function DeskChatHead({ onNewConversation, onLeave, leaveTo = null, leaveChord = null }: { onNewConversation: () => void; onLeave: () => void; leaveTo?: string | null; leaveChord?: string | null }) {
+export function DeskChatHead({ onNewConversation, onLeave, leaveTo = null, leaveChord = null, onGlance = null }: { onNewConversation: () => void; onLeave: () => void; leaveTo?: string | null; leaveChord?: string | null; /** 한눈에 is folded with no session beside Desk: this unfolds it. */ onGlance?: (() => void) | null }) {
   const { t } = useInterfaceTranslation();
   const hint = [t("desk.leave.hint"), leaveTo ? t("desk.leave.to", { place: leaveTo }) : null].filter(Boolean).join(" · ");
   return (
     <>
       <span className="flex flex-1 items-center gap-xs font-semibold text-foreground"><DeskMark />{t("desk.name")}</span>
+      {onGlance ? (
+        <Hint label={t("desk.glance.unfold")}>
+          <Button variant="ghost" size="icon-sm" className="text-subtle-foreground" aria-label={t("desk.glance.unfold")} data-desk-glance-unfold="true" onClick={onGlance}><PanelRightOpenIcon /></Button>
+        </Hint>
+      ) : null}
       <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-new-conversation="true" onClick={onNewConversation}><PlusIcon />{t("desk.newConversation")}</Button>
       <Hint label={hint} shortcut={leaveChord ?? undefined}>
         <Button variant="ghost" size="sm" aria-label={`${t("desk.leave")} · ${hint}`} className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-leave="true" onClick={onLeave}>{t("desk.leave")}<XIcon /></Button>
@@ -152,16 +157,18 @@ function useRoomWidth() {
 /**
  * Desk's room (PRD desk-2-ui D-01, D-05, D-06, D-12, B1, B2, B17, B22-B24;
  * PRD desk-own-desk D-05, B16): Desk's chat in the middle, the session open
- * beside it docked at the right (the chat narrows by its width, keeping its
+ * beside it, or 한눈에 while none is, docked at the right (the chat narrows by its width, keeping its
  * own floor, under which the session floats over it), and Desk's own desk
  * floating at the session's left edge, or at the window's right edge with no
  * session, with its left corners rounded and its shadow; while it shows, the
  * chat and the sidebar dim and a press there hides it. The two edges drag
  * the desk's and the session's widths.
  */
-export function DeskRoom({ chat, session = null, panel = null, expanded = false, widths, onDim, onWidth }: {
+export function DeskRoom({ chat, session = null, glance = false, panel = null, expanded = false, widths, onDim, onWidth }: {
   chat: ReactNode;
+  /** What stands at the right: the session beside Desk, or 한눈에 while none is open (`glance`), at the session's width. */
   session?: ReactNode;
+  glance?: boolean;
   panel?: ReactNode;
   /** The desk covers Desk's chat whole (`⤢`, PRD desk-own-desk B40). */
   expanded?: boolean;
@@ -179,13 +186,13 @@ export function DeskRoom({ chat, session = null, panel = null, expanded = false,
   // render of the room places the desk's pages again, at most once a frame,
   // and the host is sent nothing when a page's rectangle did not move.
   useLayoutEffect(() => noteShellLayer());
-  const state = panel !== null ? "panel" : session !== null ? "session" : "closed";
+  const state = panel !== null ? "panel" : session !== null ? (glance ? "glance" : "session") : "closed";
   return (
     <div ref={room} className="relative flex min-h-0 min-w-0 flex-1" data-desk-room={state}>
       <main className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-chat-column="true">{chat}</main>
       {session !== null ? (
         <aside
-          aria-label={t("desk.room.session")}
+          aria-label={glance ? t("desk.glance.title") : t("desk.room.session")}
           className={cn("z-20 flex min-h-0 flex-col border-l border-border bg-background", placed.sessionFloats ? "absolute inset-y-0 right-0 shadow-overlay" : "relative shrink-0")}
           style={{ width: placed.session }}
           data-desk-session-panel={placed.sessionFloats ? "over" : "docked"}

@@ -8,10 +8,11 @@ impl Runtime {
     pub(crate) fn install_agent_commands(
         &mut self,
         store: crate::agent_commands::AgentCommandsStore,
-        lists: crate::agent_commands::CommandLists,
+        saved: crate::agent_commands::SavedCommands,
     ) {
         self.agent_commands.store = Some(store);
-        self.agent_commands.lists = lists;
+        self.agent_commands.lists = saved.lists;
+        self.agent_commands.read_marks = saved.read;
         self.compose_agent_commands();
     }
 
@@ -24,19 +25,32 @@ impl Runtime {
             .map_or(&[], Vec::as_slice)
     }
 
-    /// The `desk_commands` section, every agent's last list, sent again
-    /// only when a list moved.
+    /// Saves sent lists and their read marks off the runtime lock.
+    pub(super) fn save_agent_commands(&self) {
+        if let Some(store) = &self.agent_commands.store {
+            let mut lists = self.agent_commands.lists.clone();
+            lists.retain(|_, list| !list.is_empty());
+            store.save(crate::agent_commands::SavedCommands {
+                lists,
+                read: self.agent_commands.read_marks.clone(),
+            });
+        }
+    }
+
+    /// The shared command section, sent again only when lists or reasons move.
     pub(super) fn compose_agent_commands(&mut self) {
+        let unread = self.desk_commands_unread();
         if self
             .snapshot
             .desk_commands
             .as_deref()
-            .is_some_and(|shown| shown.lists == self.agent_commands.lists)
+            .is_some_and(|shown| shown.lists == self.agent_commands.lists && shown.unread == unread)
         {
             return;
         }
         self.snapshot.desk_commands = Some(Arc::new(crate::model::DeskCommandsSnapshot {
             lists: self.agent_commands.lists.clone(),
+            unread,
         }));
     }
 }

@@ -1,8 +1,8 @@
-import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { DeskMention } from "../../desk";
 import { commandAt, commandRows, mentionAt, mentionTree, type MentionFile, type MentionProject, type MentionSession } from "../../deskComposer";
 import { composingKey } from "../../keys";
-import type { DeskCommand, DeskMentions } from "../../snapshot";
+import type { DeskCommand, DeskCommandsUnread, DeskMentions } from "../../snapshot";
 import { DeskCommandMenu, type DeskCommandPanel } from "./desk-command-menu";
 import { DeskMentionMenu } from "./desk-mention-menu";
 
@@ -17,12 +17,13 @@ export type ComposerMenuSource = {
   text: string;
   caret: number;
   /**
-   * The `/` menu: the agent's name and its list, null before the agent ever sent one; `opening` while
-   * its session opens and the list is on its way. None for a box with no agent.
+   * The `/` menu: the agent's name and its list, null before the agent ever sent one, with why (`unread`, the
+   * core's; none for an agent Desk does not speak with); `opening` while Desk's session with it opens and the list
+   * is on its way. None for a box with no agent.
    */
-  commands: { agent: string; list: readonly DeskCommand[] | null; opening?: boolean } | null;
-  /** What `/` says before the agent ever sent a list: Desk's list comes with its first message; a session's box names none yet. */
-  noList: "first" | "unknown";
+  commands: { agent: string; list: readonly DeskCommand[] | null; unread?: DeskCommandsUnread | null; opening?: boolean } | null;
+  /** Called once each time the `/` menu opens, so the core can check whether the agent's list moved. */
+  onCommandsOpen?: () => void;
   mentions: DeskMentions | null;
   /** Desk's `@` lists the projects and enters one with ⇥; a session's lists its project's files instead. */
   projects: boolean;
@@ -71,13 +72,14 @@ export function useComposerMenus(source: ComposerMenuSource): ComposerMenus {
       : [];
 
   // The `/` menu: open while the box starts with a `/` word the caret is in. It lists the agent's commands that match;
-  // with none matching it says so, and before the agent ever sent a list it says where the list comes from. An agent
-  // whose session sent an empty list has no menu; ↵ sends when it lists nothing.
+  // with none matching it says so, and before the agent ever sent a list it says that Hide is reading it or why it
+  // has none. An agent whose session sent an empty list has no menu; ↵ sends when it lists nothing.
   const slash = commandAt(text, caret);
   const list = commands?.list ?? null;
   const commandHits = slash && list ? commandRows(list, slash.query) : NO_COMMANDS;
+  const unread = commands?.unread ?? null;
   const commandPanel: DeskCommandPanel | null = !slash || !commands ? null
-    : list === null ? { kind: source.noList === "first" ? (commands.opening ? "waiting" : "first") : "unknown" }
+    : list === null ? (unread === "reading" || commands.opening ? { kind: "waiting" } : unread ? { kind: "unread", why: unread } : { kind: "unknown" })
     : list.length === 0 ? null
     : commandHits.length > 0 ? { kind: "rows", commands: commandHits }
     : { kind: "none" };
@@ -87,6 +89,13 @@ export function useComposerMenus(source: ComposerMenuSource): ComposerMenus {
   useEffect(() => {
     if (!inSlash && commandMenu.dismissed) setCommandMenu({ active: "", dismissed: false });
   }, [inSlash, commandMenu.dismissed]);
+  // Once per opening of the `/` word, never per key typed after it.
+  const hasCommands = commands !== null;
+  const onCommandsOpen = useRef(source.onCommandsOpen);
+  onCommandsOpen.current = source.onCommandsOpen;
+  useEffect(() => {
+    if (inSlash && hasCommands) onCommandsOpen.current?.();
+  }, [inSlash, hasCommands]);
   const menuOpen = commandOpen || (at !== null && menu.dismissed !== at.start && (values.length > 0 || tree !== null));
   const menuEmpty = commandOpen ? commandHits.length === 0 : menuOpen && values.length === 0;
   const active = values.includes(menu.active) ? menu.active : (values[0] ?? "");

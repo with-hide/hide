@@ -102,7 +102,7 @@ test("a sidebar row opens its session beside Desk, marked on its row, Escape clo
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-room-beside");
   try {
-    await expect(room(page)).toHaveAttribute("data-desk-room", "closed");
+    await expect(room(page)).toHaveAttribute("data-desk-room", "glance");
     await row(page, desk.pane).click();
     await expect(room(page)).toHaveAttribute("data-desk-room", "session");
     await expect(page.locator("[data-desk-screen]")).toBeVisible();
@@ -112,7 +112,7 @@ test("a sidebar row opens its session beside Desk, marked on its row, Escape clo
 
     await page.locator("[data-desk-chat-column] [data-desk-composer-input]").focus();
     await page.keyboard.press("Escape");
-    await expect(room(page)).toHaveAttribute("data-desk-room", "closed");
+    await expect(room(page)).toHaveAttribute("data-desk-room", "glance");
     await expect(row(page, desk.pane)).not.toHaveAttribute("data-desk-beside", "true");
 
     await row(page, desk.pane).click({ modifiers: [process.platform === "darwin" ? "Meta" : "Control"] });

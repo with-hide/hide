@@ -17,6 +17,7 @@ import { DeskPaneReturn } from "../components/desk/desk-entry";
 import { DeskJobCard, JobMark, OutputMark } from "../components/desk/desk-job-card";
 import { DeskChatColumn, DeskChatHead, DeskRoom } from "../components/desk/desk-room";
 import { SessionAskCard, SessionHead, SessionRecordFoot } from "../components/desk/desk-session";
+import { GlanceCrumb, GlancePanel } from "../components/desk/glance-panel";
 import { LineButton } from "../LinkSessions";
 import { OutputShelf } from "../components/desk/output-shelf";
 import { FileDropZone } from "../components/desk/file-drop";
@@ -45,7 +46,7 @@ import { useBrowserStore } from "../browserViews";
 import { DeskViewAreas } from "../ViewAreas";
 import { cn } from "../lib/utils";
 import { useShellStore } from "../store";
-import type { DeskCommand, DeskRecord, SessionPull, SnapshotRest, ViewDisplaySnapshot, ViewLayoutSnapshot } from "../snapshot";
+import type { DeskCommand, DeskGlanceFile, DeskRecord, SessionPull, SnapshotRest, ViewDisplaySnapshot, ViewLayoutSnapshot } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
   AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_CARD, PLAN_EXIT_OPTIONS, WAITING_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, endedScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
@@ -59,6 +60,8 @@ export const DESK_SCENES = [
   { state: "s2b", label: "2-1 현황 묻기 (B7, D-24)" },
   { state: "s3", label: "3 카드 상태 모음 (B16-B24, B36-B39)" },
   { state: "s4", label: "4 Desk 옆에 연 세션 (B2, B6, B8, B9)" },
+  { state: "glance", label: "한눈에: Desk 오른쪽의 세션과 파일" },
+  { state: "glance-crumb", label: "한눈에: 세션 위 길 표시 ‹ 한눈에 ›" },
   { state: "s5", label: "5 세션이 물을 때: 에이전트 자신의 선택 카드 (B14, B34)" },
   { state: "s7", label: "7 결과물이 세션 옆 탭 패널에 (B16-B21)" },
   { state: "agent", label: "에이전트 고르기 · 바꿈 (B4, B8, B9, B44)" },
@@ -75,7 +78,8 @@ export const DESK_SCENES = [
   { state: "command-codex", label: "/ 메뉴: Codex, 스킬은 $ 그대로" },
   { state: "command-none", label: "/ 메뉴: 맞는 명령 없음 (↵ 는 그대로 보내요)" },
   { state: "command-waiting", label: "/ 메뉴: 세션이 열리는 중, 목록을 받는 중" },
-  { state: "command-first", label: "/ 메뉴: 세션을 연 적 없음, 첫 메시지 뒤에 와요" },
+  { state: "command-unread", label: "/ 메뉴: 로그인이 필요해 목록을 못 읽음" },
+  { state: "command-not-installed", label: "/ 메뉴: 이 컴퓨터에 설치되지 않음" },
   { state: "command-answers", label: "명령 답: OpenCode 압축 한 줄, Desk가 보내지 않는 명령" },
   { state: "composer-chips", label: "입력창 칩 · 보낸 말 칩 (B49)" },
   { state: "attachments", label: "첨부: 입력칸 타일, 20MB 넘는 파일, 올리는 중, 보낸 말 (desk-2-ui B41, B42)" },
@@ -213,7 +217,7 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, fo
     ? <SessionAskCard ask={{ kind: "permission", turn: `${job.id}:turn`, since_ms: 2 * 60_000, command: job.question, choices: [{ id: "1", label: "Yes" }, { id: "2", label: "Yes, and don't ask again for this command" }, { id: "3", label: "No, and tell Codex what to do differently" }], answerable: true }} disabled={false} waited="2분" picked={null} answer={null} error={null} onPick={noop} onAnswer={noop} onTerminal={noop} onWrite={noop} />
     : null;
   return <>
-    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />
+    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} />
     <OutputShelf outputs={job.outputs} pulls={scenePulls(job)} onOpen={noop} onPull={noop} />
     <ThreadView
       job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk
@@ -243,7 +247,7 @@ function EndedColumn({ record }: { record: DeskRecord }) {
   const lines = useMemo(() => threadLines(RECORD_THREAD, {}, sceneSession), []);
   const resume = <LineButton icon={<PlayIcon aria-hidden="true" />} label="이어서 하기" blocked={null} busy={false} onClick={noop} data="resume" id={record.session.session_id} />;
   return <>
-    <SessionHead paneId={record.pane_id} title={record.title} job={job} row={null} pane={null} machine={null} disconnected={false} sleeping={false} ended={{ pulls: record.pull_requests }} explorerOpen={false} filesChord={null} terminalChord={null} deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />
+    <SessionHead paneId={record.pane_id} title={record.title} job={job} row={null} pane={null} machine={null} disconnected={false} sleeping={false} ended={{ pulls: record.pull_requests }} explorerOpen={false} filesChord={null} terminalChord={null} deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} />
     <ThreadView job={job} lines={lines} mentions={MENTIONS} startedByDesk composer={{ value: "", tray: sceneTray([]), onChange: noop, onSend: noop }} foot={<SessionRecordFoot endedAt={record.ended_at_unix_ms} resume={resume} blocked={null} />} {...PART_ACTIONS} />
   </>;
 }
@@ -271,8 +275,23 @@ const S7_DESK = [
 const MISSION_DESK = [display("map", { kind: "card", label: "Desk 1차", card: { kind: "mission", mission: "mission-1" } })];
 
 /** Desk's room as a scene sets it. */
-function Room({ chat, session = null, panel = null }: { chat: ReactNode; session?: ReactNode; panel?: ReactNode }) {
-  return <DeskRoom chat={chat} session={session} panel={panel} widths={WIDTHS} onDim={noop} onWidth={noop} />;
+function Room({ chat, session = null, glance = false, panel = null }: { chat: ReactNode; session?: ReactNode; glance?: boolean; panel?: ReactNode }) {
+  return <DeskRoom chat={chat} session={session} glance={glance} panel={panel} widths={WIDTHS} onDim={noop} onWidth={noop} />;
+}
+
+/** 한눈에 over the story's jobs: their Views, a file Desk's agent opened, and more than the list shows. */
+function SceneGlance({ jobs }: { jobs: Record<string, DeskJob> }) {
+  const cards = Object.values(jobs);
+  const listed = ["gallery", "release", "mention", "record"].map((id) => jobs[id]!);
+  const files: DeskGlanceFile[] = [
+    { ...OUTPUTS.compareLight, pane_id: jobs.gallery!.pane_id },
+    { ...OUTPUTS.compareDark, pane_id: jobs.gallery!.pane_id },
+    { ...OUTPUTS.notes, id: "desk-plan", label: "plan.md", seen: false, pane_id: null },
+    { ...OUTPUTS.galleryPage, pane_id: jobs.gallery!.pane_id },
+    { ...OUTPUTS.notes, pane_id: jobs.release!.pane_id },
+    ...[1, 2, 3, 4].map((at) => ({ ...OUTPUTS.light1, id: `light-${at}`, label: `light-${at}.png`, pane_id: jobs.gallery!.pane_id })),
+  ];
+  return <GlancePanel glance={{ sessions: listed.map((job) => job.pane_id!), files, files_more: 2 }} cards={cards} onSession={noop} onFile={noop} onFold={noop} />;
 }
 
 export function DeskScene({ params }: { params: URLSearchParams }) {
@@ -333,6 +352,16 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
         session={<ThreadColumn job={gallery} updates={thread.updates} parts={thread.parts} />} />;
       break;
     }
+    case "glance":
+      body = <Room chat={chat(statusItems(now), <ChatComposer selection={CLAUDE} />)} glance session={<SceneGlance jobs={jobs} />} />;
+      break;
+    case "glance-crumb": {
+      const thread = galleryThread();
+      const gallery = jobs.gallery!;
+      body = <Room chat={chat(statusItems(now), <ChatComposer selection={CLAUDE} />)}
+        session={<><GlanceCrumb title={gallery.title} lead={<AgentMark kind={gallery.agent_kind} />} onBack={noop} /><ThreadColumn job={gallery} updates={thread.updates} parts={thread.parts} /></>} />;
+      break;
+    }
     case "s5": {
       const items: DeskItem[] = [{ kind: "job", id: 1, job_id: "record" }, { kind: "job", id: 2, job_id: "gallery" }];
       body = <Room chat={chat(items, <ChatComposer selection={CLAUDE} />, { selectedJob: "record" })}
@@ -379,12 +408,13 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "command-codex":
     case "command-none":
     case "command-waiting":
-    case "command-first": {
+    case "command-unread":
+    case "command-not-installed": {
       // Feedback 1 frame P 가: the panel as wide as the box, eight pixels over it.
       const codex = state === "command-codex";
       const query = state === "command-search" ? "co" : state === "command-none" ? "xyz" : "";
       const rows = commandRows(codex ? CODEX_COMMANDS : SCENE_COMMANDS, query);
-      const panel: DeskCommandPanel = state === "command-waiting" ? { kind: "waiting" } : state === "command-first" ? { kind: "first" } : rows.length ? { kind: "rows", commands: rows } : { kind: "none" };
+      const panel: DeskCommandPanel = state === "command-waiting" ? { kind: "waiting" } : state === "command-unread" ? { kind: "unread", why: "sign_in" } : state === "command-not-installed" ? { kind: "unread", why: "not_installed" } : rows.length ? { kind: "rows", commands: rows } : { kind: "none" };
       const menu = <DeskCommandMenu agent={codex ? "Codex" : "Claude Code"} panel={panel} query={query} active={(codex ? rows[1] : rows[0])?.name ?? ""} onActive={noop} onPick={noop} />;
       body = <Room chat={chat(mentionItems(now), <ChatComposer selection={codex ? CODEX : CLAUDE} value={`/${query}`} mention={menu} />)} />;
       break;
