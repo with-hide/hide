@@ -216,6 +216,7 @@ section!(RestSections, Snapshot, s, {
     ime: ImeSnapshot => s.ime,
     recent_closed: RecentClosedSnapshot => s.recent_closed,
     workspace_view: Option<WorkspaceViewSnapshot> => s.workspace_view,
+    desk_view: Option<DeskViewSnapshot> => s.desk_view,
     browser_views: Vec<BrowserViewInventoryRow> => s.browser_views; generation s.browser_views_revision,
     browser_scopes: Vec<BrowserAreaScopeRow> => s.browser_scopes; generation s.browser_views_revision,
     external_grants: Vec<String> => s.external_grants; generation s.browser_views_revision,
@@ -239,7 +240,8 @@ impl Serialize for RestWire<'_> {
 
 impl RestSections {
     fn legacy_omit(&self, field: &str) -> bool {
-        field == "workspace_view" && self.workspace_view.is_none()
+        (field == "workspace_view" && self.workspace_view.is_none())
+            || (field == "desk_view" && self.desk_view.is_none())
     }
 }
 impl NavigatorSections {

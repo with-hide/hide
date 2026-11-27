@@ -2069,6 +2069,8 @@ export type ViewDisplaySnapshot = {
   /** The document's name, a browser page's title (its host until it has one), or an outside file's name. */
   label: string;
   kind: "file" | "diff" | "browser" | "external" | "card";
+  /** On Desk's own desk, the checkout a file's document belongs to (PRD desk-own-desk D-10); absent on a Workspace's desk, whose checkout it is. */
+  origin?: { device_id: string; path: string };
   /** Which History group a diff shows; null for a file. */
   committed: boolean | null;
   preview: boolean;
@@ -3503,7 +3505,9 @@ export type DeskJob = {
   question: string | null;
   summary: string | null;
   pull_requests: { number: number; state: PrState }[];
+  /** Newest opened first, at most 32; `outputs_more` says older ones were left out (B27). */
   outputs: DeskOutput[];
+  outputs_more?: boolean;
   joined: boolean;
   reason: DeskJobReason | null;
   /** Why a failed start failed. */
@@ -3684,12 +3688,16 @@ export type DeskSection = {
   settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; /** How Desk answers its agent's requests, chosen under Desk's box (D-92). */ permission: DeskPermission };
   /** The panels' widths the core keeps (PRD desk-2-ui B23); which session, panel and tab show is the window's. */
   lane: DeskLane;
-  /** What Desk's agent opened with `hide file open`, oldest first and at most 16: a window showing Desk opens each in its tab panel and sends `desk_open_taken` (`deskOpens.ts`). */
-  opens: DeskOpen[];
 };
 
-/** A file Desk's agent opened: its machine, its checkout's folder and its path, checked inside that checkout on its own host. */
-export type DeskOpen = { id: number; device_id: string; root: string; path: string };
+/**
+ * The `desk_view` rest section (PRD desk-own-desk D-01, D-02): Desk's own
+ * desk of Views, under the reserved workspace `{device_id: <the core's
+ * node>, path: "hide:desk"}` every `view_layout`, `browser_open` and
+ * `browser_state` names it by. Absent while Desk is off. `opened` moves each time Desk's agent puts
+ * a file in front (B35), so a window showing Desk shows its desk.
+ */
+export type DeskViewSnapshot = { device_id: string; path: string; layout: ViewLayoutSnapshot; opened: number };
 
 /** The `desk_jobs` section: Desk's sessions as cards, newest first and at most 64, apart so a card's change never resends the conversation. */
 export type DeskJobsSection = {
@@ -4247,6 +4255,7 @@ export type SnapshotRest = {
   explorer_operation?: ExplorerOperation | null;
   /** The front Workspace's layout and tools (S6 D-10); absent when no Workspace is in front. */
   workspace_view?: import("./workspace").WorkspaceView | null;
+  desk_view?: DeskViewSnapshot | null;
   /** All retained Browser Views, including those outside the front Workspace. */
   /**
    * `tray`: the Agent tab whose desk holds the page, absent for one on no desk, which still loads (PRD lane-desk-pair-view D-37).

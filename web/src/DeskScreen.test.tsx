@@ -14,6 +14,7 @@ import { clientI18n } from "./i18n/translator";
 import type { DeskCommands, DeskMentions, DeskRecord, DeskSection, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { DESK_ROOM_CLOSED } from "./deskRoom";
 import { emptyScope } from "../test/legacyAgentScope";
 import type { DispatchFn } from "./ws";
 
@@ -46,7 +47,7 @@ const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: 
   conversation: { generation: 1, items, dropped: 0, queued, queued_max: 8, queued_full: queued.length >= 8, queued_held: held },
   approvals_waiting: 0,
   settings: { enabled: true, default_agent: "claude", location: "worktree", cap: 8, permission: "allow_all" },
-  lane: { view_width: null, session_width: null }, opens: [],
+  lane: { view_width: null, session_width: null },
 });
 
 const fixer = { kind: "session" as const, id: "w1:p2", name: "fixer" };
@@ -539,14 +540,15 @@ describe("Desk's room", () => {
     return reads;
   }
 
-  const frontOutput = () => useUiStore.getState().deskRoom.panel?.tabs.find((tab) => tab.kind === "output");
+  /** What the last press asked Desk's own desk to open (PRD desk-own-desk D-12). */
+  const lastOpen = () => sent("desk_view_open").at(-1);
 
   it("draws and opens a file a connected device's session showed from that device, which no card lists (PRD desk-2-ui B27)", async () => {
     const reads = await remoteSessionShowed(["/home/me/repo/new.md", "/home/me/repo/shot.png"], []);
     // Each tile's preview is read from the file on that device, as the open below reads it: the text's head, the image's size first.
     expect(reads).toMatchObject([{ path: "/home/me/repo/new.md", length: 4096, device_id: "deepbox", root: "/home/me/repo" }, { path: "/home/me/repo/shot.png", length: 1, device_id: "deepbox", root: "/home/me/repo" }]);
     await press("[data-desk-output='/home/me/repo/new.md'] [data-desk-tile-open]");
-    expect(frontOutput()).toMatchObject({ kind: "output", output: { device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" } });
+    expect(lastOpen()).toMatchObject({ kind: "file", device_id: "deepbox", path: "/home/me/repo/new.md" });
   });
 
   it("draws and opens an image the card lists from the card's own checkout, not the session's", async () => {
@@ -555,7 +557,8 @@ describe("Desk's room", () => {
     // The shelf and the conversation draw the same file, read once.
     expect(reads).toMatchObject([{ path: "/home/me/wt/shot.png", length: 1, device_id: "deepbox", root: "/home/me/wt" }]);
     await press("[data-desk-hide-part='view'] [data-desk-output='view-9'] [data-desk-tile-open]");
-    expect(frontOutput()).toMatchObject({ kind: "output", output: listed });
+    // The card lists it: the core opens the same file on Desk's desk and marks the session's View seen.
+    expect(lastOpen()).toEqual({ kind: "output", device_id: "deepbox", checkout: "/home/me/wt", id: "view-9" });
   });
 
   it("keeps one working line from the send to the turn's end, saying its step, and drops it while an approval waits (feedback 1 c3)", async () => {
@@ -600,7 +603,7 @@ describe("Desk's room", () => {
     expect(asked).toEqual(["/work/repo-home/notes/live.md"]);
   });
 
-  it("draws a file an answer names inside a project as a chip that opens it in the tab panel, and leaves a missing path and code as words (feedback 2 frame M [2])", async () => {
+  it("draws a file an answer names inside a project as a chip that opens it on Desk's desk, and leaves a missing path and code as words (feedback 2 frame M [2])", async () => {
     const asked: Record<string, unknown>[] = [];
     configureFileBytes((event) => {
       const read = event.payload as Record<string, unknown>;
@@ -615,7 +618,7 @@ describe("Desk's room", () => {
     expect(asked.map((read) => read.path).sort()).toEqual(["/work/repo-home/docs/report.md", "/work/repo-home/old/notes.md"]);
     stubTabStripTokens();
     await act(async () => chip.click());
-    expect(useUiStore.getState().deskRoom.panel?.tabs).toEqual([expect.objectContaining({ kind: "file", device_id: "local", root: "/work/repo-home", path: "/work/repo-home/docs/report.md" })]);
+    expect(sent("desk_view_open")).toEqual([expect.objectContaining({ kind: "file", device_id: "local", path: "/work/repo-home/docs/report.md" })]);
   });
 
   it("reveals a path outside every project from its ↗ chip in the file manager, and never reads or opens it (feedback 2 frame M [2])", async () => {
@@ -631,7 +634,7 @@ describe("Desk's room", () => {
       await act(async () => document.body.querySelector<HTMLElement>("[data-desk-file-chip='outside']")!.click());
       expect(revealPath).toHaveBeenCalledWith(outside);
       expect(asked).toEqual([]);
-      expect(useUiStore.getState().deskRoom.panel?.tabs ?? []).toEqual([]);
+      expect(sent("desk_view_open")).toEqual([]);
     } finally {
       delete (window as { hideHost?: unknown }).hideHost;
     }
@@ -879,7 +882,7 @@ describe("Desk's room", () => {
     });
   });
 
-  it("opens a session a chip names beside Desk, stays in Desk, and closes the tab panel before the session on Escape (D-09, B2, B21)", async () => {
+  it("opens a session a chip names beside Desk, stays in Desk, and closes Desk's desk before the session on Escape (D-09, B2, B21)", async () => {
     // `fixer` runs in the sidebar but Desk did not start it: it has no card until its conversation opens.
     const row = { pane_id: "w1:p2", identity_label: "fixer", agent_kind: "claude", mark: "going" } as never;
     const card: DeskJob = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
@@ -902,7 +905,9 @@ describe("Desk's room", () => {
     expect(sent("session_thread_open")).toHaveLength(1);
 
     stubTabStripTokens();
-    await act(async () => useUiStore.getState().setDeskRoom((now) => ({ ...now, panel: { tabs: [{ kind: "mission", mission: "mission-39", title: "1.3.0" }], preview: null, active: "mission:mission-39", explorer: false, beside: null } })));
+    const layout = { root: { area: { id: "a1", active: "d1", displays: [{ id: "d1", tab_id: null, path: "", label: "1.3.0", kind: "card" as const, committed: null, preview: false, state: "open" as const, reason: null, card: { kind: "mission" as const, mission: "mission-39" } }] } }, active_area: "a1", display_count: 1, limits: { areas: 6, depth: 3, displays: 32 } };
+    await act(async () => useShellStore.setState({ rest: { ...useShellStore.getState().rest!, desk_view: { device_id: "local", path: "hide:desk", layout, opened: 0 } } }));
+    await act(async () => useUiStore.getState().setDeskRoom((now) => ({ ...now, desk: true })));
     expect(document.body.querySelector("[data-desk-tab-panel]")?.getAttribute("data-desk-tab-panel")).toBe("beside_session");
     // Escape runs the innermost layer the shell's Escape owner holds, and with none open closes the session beside Desk,
     // as keyboard.ts does (its order is keyboard.desk.test.ts's).
@@ -913,7 +918,7 @@ describe("Desk's room", () => {
     });
     expect(useUiStore.getState().escapeLayers).toHaveLength(1);
     await escape();
-    expect([useUiStore.getState().deskRoom.panel, useUiStore.getState().deskRoom.session]).toEqual([null, "w1:p2"]);
+    expect([useUiStore.getState().deskRoom.desk, useUiStore.getState().deskRoom.session]).toEqual([false, "w1:p2"]);
     expect(useUiStore.getState().escapeLayers).toHaveLength(0);
     await escape();
     expect(useUiStore.getState().deskRoom.session).toBeNull();
@@ -1079,7 +1084,7 @@ describe("Desk's room", () => {
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([]));
     await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [], workers: [], named: [card], records: [], moved: [] } }));
-    await act(async () => useUiStore.getState().setDeskRoom(() => ({ session: "w1:p2", panel: null, closed: null, answer: 0 })));
+    await act(async () => useUiStore.getState().setDeskRoom(() => ({ ...DESK_ROOM_CLOSED, session: "w1:p2" })));
     expect(sent("pane_ask")).toEqual([{ device_id: "local", pane_id: "w1:p2" }]);
     // Until the screen is read, no card stands at the conversation's end: what the agent asked stays in its
     // words, and the card's question is not said again in a card of its own.

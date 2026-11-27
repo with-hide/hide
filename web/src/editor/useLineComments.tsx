@@ -9,7 +9,7 @@ import { createPortal } from "react-dom";
 import type { Actions } from "../actions";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { ViewCommentAnchor, ViewDisplaySnapshot } from "../snapshot";
-import { anchorMeta, CommentCard, NoteFormCard, useViewFeedback } from "../ViewComments";
+import { anchorMeta, CommentCard, NoteFormCard, useCommentsTaken, useViewFeedback } from "../ViewComments";
 import { commentsOn, COMMENTS_PER_VIEW, linesAnchor, openNote, relocation, useFeedbackStore } from "../viewFeedback";
 import type { ViewWorkspace } from "../viewLayout";
 import { setComments, type CommentBlock, type CommentHost } from "./comments";
@@ -119,6 +119,7 @@ export function useLineComments({
 }): { host: { current: CommentHost }; blocks: ReactNode } {
   const { t } = useInterfaceTranslation();
   const feedback = useViewFeedback();
+  const taken = useCommentsTaken();
   const form = useFeedbackStore((s) => s.forms[display.id] ?? null);
   const diff = display.kind === "diff";
   const comments = useMemo(() => commentsOn(feedback, display.id).filter((comment) => comment.anchor.kind === "lines"), [feedback, display.id]);
@@ -131,10 +132,11 @@ export function useLineComments({
   const host = useRef<CommentHost>(null as unknown as CommentHost);
   host.current = {
     pick(from, to) {
+      if (!taken) return;
       const anchor = pickedAnchor(model, from, to);
       if (anchor) openNote({ displayId: display.id, anchor, commentId: null, note: "" });
     },
-    commentable: (row) => model.at(row) !== null,
+    commentable: (row) => taken && model.at(row) !== null,
     label: (row) => t("feedback.addOnLine", { line: model.at(row)?.line ?? row }),
     render(block, element) {
       setMounted((now) => new Map(now).set(element, block));

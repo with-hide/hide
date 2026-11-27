@@ -6,7 +6,7 @@
 // mission, every chat notice, a thread that cannot be read, Settings ›
 // Desk). The sidebar column is a stand-in built from the shared row parts;
 // the real sidebar is not changed. Nothing leaves the page.
-import { DiamondIcon, FileTextIcon, ImageIcon, MapIcon, PlayIcon } from "lucide-react";
+import { DiamondIcon, PlayIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { createActions } from "../actions";
 import { AgentMark } from "../AgentMark";
@@ -15,7 +15,7 @@ import { sampleShot } from "../components/sample-shot";
 import { DeskApprovalCard, DeskChat, DeskEmpty, DeskHandedLine, type DeskChatActions, type DeskLiveAnswer } from "../components/desk/desk-chat";
 import { DeskPaneReturn } from "../components/desk/desk-entry";
 import { DeskJobCard, JobMark, OutputMark } from "../components/desk/desk-job-card";
-import { DeskChatColumn, DeskChatHead, DeskRoom, DeskTabPanel, type PanelTab } from "../components/desk/desk-room";
+import { DeskChatColumn, DeskChatHead, DeskRoom } from "../components/desk/desk-room";
 import { SessionAskCard, SessionHead, SessionRecordFoot } from "../components/desk/desk-session";
 import { LineButton } from "../LinkSessions";
 import { OutputShelf } from "../components/desk/output-shelf";
@@ -40,10 +40,12 @@ import { commandRows, keepSent, mentionTree, type ComposerTray, type TrayFile } 
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
-import { MissionMap } from "../MissionMap";
+import { DESK_SCREEN } from "../deskDesk";
+import { useBrowserStore } from "../browserViews";
+import { DeskViewAreas } from "../ViewAreas";
 import { cn } from "../lib/utils";
 import { useShellStore } from "../store";
-import type { DeskCommand, DeskRecord, SessionPull, SnapshotRest } from "../snapshot";
+import type { DeskCommand, DeskRecord, SessionPull, SnapshotRest, ViewDisplaySnapshot, ViewLayoutSnapshot } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
   AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_CARD, PLAN_EXIT_OPTIONS, WAITING_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, endedScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
@@ -189,13 +191,12 @@ function scenePulls(job: DeskJob): SessionPull[] {
 }
 
 /** A session open beside Desk: its head and outputs shelf, its conversation, and the question Hide found above the box when it asks. */
-function ThreadColumn({ job, updates, parts, reading = false, failure = null, selectedOutput = null, focused = false, draft = "", files = [] }: {
+function ThreadColumn({ job, updates, parts, reading = false, failure = null, focused = false, draft = "", files = [] }: {
   job: DeskJob;
   updates: Parameters<typeof threadLines>[0];
   parts?: Parameters<typeof threadLines>[1];
   reading?: boolean;
   failure?: ThreadReadFailure | null;
-  selectedOutput?: string | null;
   focused?: boolean;
   draft?: string;
   files?: TrayFile[];
@@ -213,7 +214,7 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, se
     : null;
   return <>
     <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />
-    <OutputShelf outputs={job.outputs} pulls={scenePulls(job)} selected={selectedOutput} onOpen={noop} onPull={noop} />
+    <OutputShelf outputs={job.outputs} pulls={scenePulls(job)} onOpen={noop} onPull={noop} />
     <ThreadView
       job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk
       composer={{ value: text, tray: sceneTray(files), focused, onChange: setText, onSend: noop, bar: (
@@ -247,14 +248,27 @@ function EndedColumn({ record }: { record: DeskRecord }) {
   </>;
 }
 
-/** An image output in the 보기 column: the picture, fitted as the image viewer fits it. */
-function PictureView({ src, label }: { src: string; label: string }) {
-  return <div className="flex min-h-0 flex-1 items-center justify-center p-md"><img src={src} alt={label} className="max-h-full max-w-full rounded-sm border border-border object-contain" /></div>;
+/** A display of Desk's own desk as a scene sets it. */
+const display = (id: string, fields: Partial<ViewDisplaySnapshot> & Pick<ViewDisplaySnapshot, "kind" | "label">): ViewDisplaySnapshot => ({ id, tab_id: null, path: "", committed: null, preview: false, state: "open", reason: null, ...fields });
+
+/** Desk's own desk (PRD desk-own-desk): the View areas drawn on Desk's displays, one area with `active` in front. */
+function SceneDesk({ displays, active, actions }: { displays: ViewDisplaySnapshot[]; active: string; actions: ReturnType<typeof createActions> }) {
+  const view = useMemo(() => ({ device_id: "local", path: "hide:desk", opened: 0, layout: { root: { area: { id: "a1", active, displays } }, active_area: "a1", display_count: displays.length, limits: { areas: 6, depth: 3, displays: 32 } } satisfies ViewLayoutSnapshot }), [displays, active]);
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1" data-workspace-screen={DESK_SCREEN}>
+      <DeskViewAreas view={view} ends={{ onClose: noop, expanded: false, onExpand: noop }} actions={actions} />
+    </div>
+  );
 }
 
-const tab = (id: string, label: string, preview: boolean, icon: ReactNode): PanelTab => ({ id, label, project: null, preview, icon });
-
 const WIDTHS = { view_width: null, session_width: null };
+
+const S7_DESK = [
+  display("notes", { kind: "file", label: "notes.md", path: "/work/hide/notes.md", state: "waiting", reason: "notes.md", origin: { device_id: "local", path: "/work/hide" } }),
+  display("page", { kind: "browser", label: "compare-dark", url: "http://127.0.0.1:4399/compare?theme=dark" }),
+];
+
+const MISSION_DESK = [display("map", { kind: "card", label: "Desk 1차", card: { kind: "mission", mission: "mission-1" } })];
 
 /** Desk's room as a scene sets it. */
 function Room({ chat, session = null, panel = null }: { chat: ReactNode; session?: ReactNode; panel?: ReactNode }) {
@@ -263,7 +277,6 @@ function Room({ chat, session = null, panel = null }: { chat: ReactNode; session
 
 export function DeskScene({ params }: { params: URLSearchParams }) {
   useFollowInterfaceLanguage(requireInterfaceLanguage(params.get("lang") ?? "ko"));
-  const { t } = useInterfaceTranslation();
   const theme = params.get("theme") === "light" ? "light" : "dark";
   const state = (params.get("state") ?? "s1") as SceneState;
   if (!DESK_SCENES.some((scene) => scene.state === state)) throw new Error(`Unknown Desk scene ${state}`);
@@ -279,12 +292,13 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", params.get("scale") ?? "1");
+    useBrowserStore.setState({ stills: { page: PICTURES.dark } });
   }, [mission, layout, state, theme, params]);
 
   const pick = (...ids: string[]) => ids.map((id) => jobs[id]!);
-  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: DeskLiveAnswer | null; working?: WorkingPhase; queued?: DeskQueuedMessage[] } = {}) => (
+  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; live?: DeskLiveAnswer | null; working?: WorkingPhase; queued?: DeskQueuedMessage[] } = {}) => (
     <DeskChatColumn head={<ChatHead />} composer={composer}>
-      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} working={options.working ? { phase: options.working, since: now - 3_000 } : null} queued={options.queued ?? []} {...CHAT_ACTIONS} />
+      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} selectedJob={options.selectedJob ?? null} live={options.live ?? null} working={options.working ? { phase: options.working, since: now - 3_000 } : null} queued={options.queued ?? []} {...CHAT_ACTIONS} />
     </DeskChatColumn>
   );
   let sidebar: ReactNode = <SceneSidebar jobs={pick("mention", "gallery", "release")} selected={null} />;
@@ -328,9 +342,10 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "s7": {
       const done = deskJob(jobs.gallery!, { state: "done", ask: null, question: null, summary: "차이 3곳", plan: { done: 5, total: 5 }, outputs: [OUTPUTS.compareLight, OUTPUTS.compareDark, OUTPUTS.notes] });
       const items: DeskItem[] = [{ kind: "job", id: 1, job_id: "gallery" }];
-      body = <Room chat={chat(items, <ChatComposer selection={CLAUDE} />, { jobs: { gallery: done }, selectedJob: "gallery", selectedOutput: OUTPUTS.compareDark.id })}
-        panel={<DeskTabPanel tabs={[tab("notes", "notes.md", false, <FileTextIcon aria-hidden="true" className="size-(--size-icon-sm)" />), tab("compare", "compare-dark.png", true, <ImageIcon aria-hidden="true" className="size-(--size-icon-sm)" />)]} active="compare" onTab={noop} onKeep={noop} onCloseTab={noop} onClose={noop}><PictureView src={PICTURES.dark} label="compare-dark.png" /></DeskTabPanel>}
-        session={<ThreadColumn job={done} updates={GALLERY_DONE_THREAD.updates} parts={GALLERY_DONE_THREAD.parts} selectedOutput={OUTPUTS.compareDark.id} />} />;
+      // The session's page opened on Desk's desk as a page of Desk's own (B34), drawn from its still.
+      body = <Room chat={chat(items, <ChatComposer selection={CLAUDE} />, { jobs: { gallery: done }, selectedJob: "gallery" })}
+        panel={<SceneDesk displays={S7_DESK} active="page" actions={actions} />}
+        session={<ThreadColumn job={done} updates={GALLERY_DONE_THREAD.updates} parts={GALLERY_DONE_THREAD.parts} />} />;
       break;
     }
     case "agent":
@@ -429,7 +444,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       break;
     case "mission":
       body = <Room chat={chat(missionItems(now), <ChatComposer selection={CLAUDE} />, { selectedJob: "conductor" })}
-        panel={<DeskTabPanel tabs={[tab("map", t("desk.lane.missionMap", { title: "Desk 1차" }), true, <MapIcon aria-hidden="true" className="size-(--size-icon-sm)" />)]} active="map" onTab={noop} onKeep={noop} onCloseTab={noop} onClose={noop}><MissionMap missionId="mission-1" actions={actions} /></DeskTabPanel>}
+        panel={<SceneDesk displays={MISSION_DESK} active="map" actions={actions} />}
         session={<ThreadColumn job={jobs["1b"]!} updates={WORKER_THREAD} />} />;
       break;
     case "outputs":
@@ -456,7 +471,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     }
     case "drop": {
       const items: DeskItem[] = [{ kind: "user", id: 1, text: "Windows 설치가 중간에 멈춰. 로그 붙일게", at_ms: now, mentions: [] }, { kind: "reply", mentions: [], missions: [], agent: "claude", id: 2, text: "로그를 주시면 어느 단계에서 멈췄는지 볼게요.", at_ms: now, state: "done", thought_ms: 8_000, steps: { sessions: 6, files: 0, letters: 0, starts: 0, other: 0 } }];
-      body = <Room chat={<DeskChatColumn head={<ChatHead />} composer={<ChatComposer selection={CLAUDE} />} tray={sceneTray([])} dragging>{<DeskChat items={items} jobs={jobs} agents={AGENTS} selectedJob={null} selectedOutput={null} live={null} working={null} queued={[]} {...CHAT_ACTIONS} />}</DeskChatColumn>} />;
+      body = <Room chat={<DeskChatColumn head={<ChatHead />} composer={<ChatComposer selection={CLAUDE} />} tray={sceneTray([])} dragging>{<DeskChat items={items} jobs={jobs} agents={AGENTS} selectedJob={null} live={null} working={null} queued={[]} {...CHAT_ACTIONS} />}</DeskChatColumn>} />;
       break;
     }
     case "drop-session": {

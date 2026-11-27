@@ -6,7 +6,7 @@
 // code that holds the path alone; a fenced code block stays code. A relative
 // path is read under the session's own folder. What it names decides the
 // chip: a file that exists inside a registered project of the session's
-// machine is a project chip, opened in the tab panel; a file or folder of
+// machine is a project chip, opened on Desk's desk; a file or folder of
 // this computer outside every project is an outside chip, revealed in the
 // system's file manager and never opened; anything else (nothing there, a
 // folder inside a project, an outside path of a connected device, which this

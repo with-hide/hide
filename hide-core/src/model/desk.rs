@@ -22,35 +22,36 @@ pub struct DeskSnapshot {
     pub approvals_waiting: usize,
     pub settings: DeskSettings,
     pub lane: DeskLane,
-    /// What Desk's agent opened with `hide file open`, oldest first, waiting
-    /// for a window showing Desk to open it in the tab panel and send
-    /// `desk_open_taken`; at most 16, the oldest dropped, kept in memory
-    /// only.
-    pub opens: Vec<DeskOpenSnapshot>,
 }
 
-/// A file Desk's agent opened for the operator: its machine, its checkout's
-/// folder as the catalog names it, and its path, checked inside that
-/// checkout on its own host.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct DeskOpenSnapshot {
-    pub id: u64,
+/// Desk's own desk (PRD desk-own-desk D-01, D-02): its View areas as a
+/// Workspace's desk carries them, under the key a `view_layout`,
+/// `browser_open` or `browser_state` names it by (`device_id` the core's own
+/// node, `path` Desk's own name). Each file names its checkout, and a page a
+/// session opened the checkout it loads from (`origin`). Whether the desk is
+/// drawn is the window's.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DeskViewSnapshot {
     pub device_id: String,
-    pub root: String,
     pub path: String,
+    pub layout: crate::model::ViewLayoutSnapshot,
+    /// How many files Desk's agent placed with `hide file open` since the
+    /// core started: a window showing Desk shows the desk when it moves
+    /// (B35), and one on another screen moves nothing.
+    pub opened: u64,
 }
 
 /// The widths of Desk's two panels as the operator last dragged them (PRD
 /// desk-2-ui D-06, D-07, B22, B23), in CSS pixels; `None` until dragged, so
-/// the shell draws its own first width. Which session is open beside Desk,
-/// whether the tab panel shows and which tab is in front are the window's,
-/// never the core's (B26).
+/// the shell draws its own first width. Which session is open beside Desk
+/// and whether Desk's desk shows are the window's; the desk's tabs are the
+/// core's (`DeskViewSnapshot`, PRD desk-own-desk D-02).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DeskLane {
-    /// The tab panel's width: its left edge.
+    /// Desk's desk's width: its left edge.
     pub view_width: Option<u32>,
-    /// The session panel's width: the edge between it and the tab panel.
+    /// The session panel's width: the edge between it and Desk's desk.
     pub session_width: Option<u32>,
 }
 
@@ -143,7 +144,12 @@ pub struct DeskJobSnapshot {
     /// The last turn's summary line, once `done`.
     pub summary: Option<String>,
     pub pull_requests: Vec<DeskPullRequest>,
+    /// The Views its session opened, newest first, at most 32, then its
+    /// pull requests (PRD desk-own-desk B23, B27).
     pub outputs: Vec<DeskJobOutput>,
+    /// Whether its session opened more Views than `outputs` lists, the
+    /// oldest left out (B27).
+    pub outputs_more: bool,
     /// The operator typed into its terminal (B36).
     pub joined: bool,
     pub reason: Option<DeskJobReason>,

@@ -110,7 +110,7 @@ function TileFace({ file, preview, onRetry }: { file: TileFile; preview: Preview
  * the session's opened-view line, the shelf's list and a file chip's card:
  * 150 by 100 with its name under it. An image is its picture, a PDF its
  * first page with its page count, a video its first frame with the play
- * mark and its length, a page the still the tab panel's page view has, a
+ * mark and its length, a page the still Desk's desk's page view has, a
  * Markdown or text file its title and first three lines; with no preview,
  * its kind icon and why (읽는 중, 못 읽음 · 다시, 너무 큼, 기기 연결 끊김).
  * Pressing it opens it (`onOpen`); without, it is the picture alone, as in

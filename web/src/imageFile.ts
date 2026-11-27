@@ -9,7 +9,7 @@ export const IMAGE_BYTES = 8 * 1024 * 1024;
 /**
  * Where a file a session showed is read from: this machine's own channel
  * when the file is on it (or the record names no machine), else the device
- * it is on, under the checkout it belongs to. The tab panel's output, the
+ * it is on, under the checkout it belongs to. The output on Desk's desk, the
  * session record's tiles and the shelf's pictures all ask this.
  */
 export function useFileSource(device: string | null, root: string | null): FileSource {

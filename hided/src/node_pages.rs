@@ -134,7 +134,8 @@ impl PageSources for NodePages {
         let answer: SourceAnswer =
             serde_json::from_slice(&bytes).map_err(|_| "core_unavailable")?;
         match answer.source {
-            Some(source) if device == self.node => self.own_page(source).map(Some),
+            // A page of Desk's desk loads on the machine its source names.
+            Some(source) if source.device_id == self.node => self.own_page(source).map(Some),
             source => Ok(source),
         }
     }

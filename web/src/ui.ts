@@ -320,7 +320,7 @@ type UiStore = {
   setSharing: (sharing: boolean) => void;
   deskDraft: DeskDraft;
   setDeskDraft: (draft: DeskDraft) => void;
-  /** Desk's room in this window: the session open beside Desk and its tab panel (`deskRoom.ts`); closed each time the room is left (PRD desk-2-ui B26). */
+  /** Desk's room in this window: the session open beside Desk and Desk's desk (`deskRoom.ts`); closed each time the room is left (PRD desk-2-ui B26). */
   deskRoom: DeskRoomWindow;
   setDeskRoom: (change: (room: DeskRoomWindow) => DeskRoomWindow) => void;
   /** The pane `터미널 ⌘J` left Desk for, which ⌘J on it brings back beside Desk (B7). */

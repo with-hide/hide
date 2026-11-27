@@ -8,8 +8,8 @@ import { countSent, enterWorkspace, screenshot } from "./wire";
 
 // PRD desk-2-ui B37, B38, B39: ⌘P and ⌘K while Desk is in front, on an isolated
 // engine and hided. With no session open beside Desk, ⌘P searches every
-// project at once, each result led by its project, and a pick is opened as the
-// preview of the tab panel without leaving Desk; ⌘K finds the same rows as
+// project at once, each result led by its project, and a pick is opened as a
+// preview tab on Desk's own desk without leaving Desk (PRD desk-own-desk B9); ⌘K finds the same rows as
 // elsewhere. Every other screen keeps its palettes (`Palette.desk.test.tsx`,
 // `SearchPalette.desk.test.tsx` hold the rules; this holds the wire and the
 // screen). Captured for the design comparison.
@@ -27,7 +27,7 @@ async function switchDeskOn(page: Page) {
   await expect(page.locator("[data-settings]")).toHaveCount(0);
 }
 
-test("⌘P on Desk with no session searches every project, and a pick opens as the tab panel's preview while Desk stays (B37, B38)", async ({ page }) => {
+test("⌘P on Desk with no session searches every project, and a pick opens as a preview tab on Desk's desk while Desk stays (B37, B38)", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const engine = await startFixture({ agents: false });
   const daemon = await startHided(engine, "desk-palette-files");
@@ -54,10 +54,10 @@ test("⌘P on Desk with no session searches every project, and a pick opens as t
     for (const row of await rows.all()) await expect(row).toContainText("fixture ›");
     await screenshot(page, "palette-p-all-projects");
 
-    const before = sent.get("desk_files") ?? 0;
+    const before = sent.get("desk_view_open") ?? 0;
     await page.keyboard.press("Enter");
     await expect(palette).toHaveCount(0);
-    await expect.poll(() => sent.get("desk_files") ?? 0).toBe(before + 1);
+    await expect.poll(() => sent.get("desk_view_open") ?? 0).toBe(before + 1);
     // Desk stays the screen.
     await expect(page.locator("[data-desk-screen]")).toBeVisible();
     await expect(page.locator("[data-desk-tab-panel]")).toBeVisible();
@@ -95,7 +95,7 @@ test("⌘K on Desk lists the sessions, and Escape hands the screen back to Desk 
   }
 });
 
-test("⌘P with a session beside Desk searches its checkout and opens the file in the tab panel beside the session; ⌘↵ opens it to the side (B37)", async ({ page }) => {
+test("⌘P with a session beside Desk searches its checkout and opens the file on Desk's desk beside the session; ⌘↵ opens it to the side (B37)", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const engine = await startFixture();
   const daemon = await startHided(engine, "desk-palette-session");
@@ -122,7 +122,7 @@ test("⌘P with a session beside Desk searches its checkout and opens the file i
     await expect(palette).toHaveCount(0);
     const panel = page.locator("[data-desk-tab-panel]");
     await expect(panel).toBeVisible();
-    await expect(page.locator("[data-desk-tab]")).toHaveCount(1);
+    await expect(page.locator('[data-desk-tab-panel] [role="tab"]')).toHaveCount(1);
     await screenshot(page, "palette-p-session-opened");
 
     await page.keyboard.press(chord("open_file"));
@@ -130,7 +130,7 @@ test("⌘P with a session beside Desk searches its checkout and opens the file i
     await expect(palette.locator("[data-palette-row]")).toHaveCount(1);
     await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Enter`);
     await expect(palette).toHaveCount(0);
-    await expect(page.locator("[data-desk-tab]")).toHaveCount(2);
+    await expect(page.locator('[data-desk-tab-panel] [role="tab"]')).toHaveCount(2);
     await screenshot(page, "palette-p-session-beside");
     // Desk stays the screen.
     await expect(page.locator("[data-desk-screen]")).toBeVisible();

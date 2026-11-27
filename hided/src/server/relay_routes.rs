@@ -37,7 +37,7 @@ pub(super) async fn relay_browser_source(
     };
     if query.device_id.is_empty()
         || query.device_id.len() > 256
-        || !hide_platform::path::is_wire_absolute(&query.checkout_path)
+        || !crate::browser_routes::is_page_checkout(&query.checkout_path)
         || query.checkout_path.len() > 8192
         || query.id.is_empty()
         || query.id.len() > 256

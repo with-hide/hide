@@ -171,7 +171,7 @@ const SCENE_DESK: DeskSection = {
   conversation: { generation: 1, items: [], dropped: 0, queued: [], queued_max: 8, queued_full: false, queued_held: false },
   approvals_waiting: 0,
   settings: { enabled: true, default_agent: "claude", location: "desk", cap: 8, permission: "allow_all" },
-  lane: { view_width: null, session_width: null }, opens: [],
+  lane: { view_width: null, session_width: null },
 };
 
 /** Phone access off, no phone paired, push only while the app is closed: the daemon's `mobile` frame on a fresh Mac. */

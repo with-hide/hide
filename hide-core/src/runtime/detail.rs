@@ -336,12 +336,24 @@ impl Runtime {
         place: &Place,
         item: DetailItem,
     ) -> bool {
+        self.place_card_on(key, place, item);
+        true
+    }
+
+    /// `open_card_on`, returning whether the card was placed; a refusal is
+    /// the error the window shows.
+    pub(super) fn place_card_on(
+        &mut self,
+        key: &WorkspaceKey,
+        place: &Place,
+        item: DetailItem,
+    ) -> bool {
         let existing =
             self.claim_existing_view(key, place, |display| display.card.as_ref() == Some(&item));
         if existing.is_none() && !self.make_view_room(key, place) {
             let error = crate::view_layout::LayoutError::DisplayLimit;
             self.set_error(error.kind(), error.message(), false);
-            return true;
+            return false;
         }
         let placed = self.change_view_layout(key, place, |layout, stamp| {
             match &existing {
@@ -358,7 +370,7 @@ impl Runtime {
         });
         if let Err(error) = placed {
             self.set_error(error.kind(), error.message(), false);
-            return true;
+            return false;
         }
         if let Some(store) = self.workspace_views.as_mut() {
             store.card_read_again = true;

@@ -284,6 +284,28 @@ pub struct Display {
     /// to open this (PRD lane-desk-pair-view D-54): the View is that pane's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_terminal: Option<crate::view_feedback::LinkTerminal>,
+    /// The checkout a View on Desk's desk shows a file of, or a page of
+    /// loads from (PRD desk-own-desk D-10): Desk's desk holds Views of every
+    /// project and device, so each names its own. Absent on a Workspace's
+    /// View, whose checkout is its Workspace, on a card, and on a page Desk
+    /// opened itself, which loads on the core's machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<ViewOrigin>,
+}
+
+/// The checkout a View of Desk's desk reads its file from: its machine and
+/// its folder, the two that key a Workspace.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct ViewOrigin {
+    pub device_id: String,
+    pub path: String,
+}
+
+impl ViewOrigin {
+    /// The origin as the runtime keys a Workspace: its device and folder.
+    pub fn key(&self) -> (String, String) {
+        (self.device_id.clone(), self.path.clone())
+    }
 }
 
 impl Display {
@@ -380,6 +402,19 @@ impl Display {
             && self.path == path
             && self.kind == kind
             && (kind == DisplayKind::File || self.committed == committed)
+    }
+
+    /// `shows` for a View of the checkout `origin` names: a View of Desk's
+    /// desk shows a file of its own checkout only, and `None` asks of a
+    /// Workspace's View, which has no origin of its own.
+    pub fn shows_from(
+        &self,
+        origin: Option<&ViewOrigin>,
+        path: &str,
+        kind: DisplayKind,
+        committed: Option<bool>,
+    ) -> bool {
+        self.origin.as_ref() == origin && self.shows(path, kind, committed)
     }
 }
 
@@ -680,6 +715,7 @@ impl Layout {
             external: None,
             card: None,
             link_terminal: None,
+            origin: None,
         }
     }
 

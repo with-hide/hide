@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
-import { DESK_ROOM_CLOSED, activeTab, openTab, type DeskRoomWindow } from "./deskRoom";
+import { DESK_ROOM_CLOSED } from "./deskRoom";
 import { clientI18n } from "./i18n/translator";
 import { Palette } from "./Palette";
 import type { Checkout, DeskSection, SnapshotRest } from "./snapshot";
@@ -13,7 +13,7 @@ import { useUiStore } from "./ui";
 import type { DispatchFn } from "./ws";
 
 // Expected answers are PRD desk-2-ui D-23, B37, B38: ⌘P on Desk searches the
-// session's checkout or every project, ↵ opens the file in the tab panel as a
+// session's checkout or every project, ↵ opens the file on Desk's desk as a
 // preview, ⌘↵ (Ctrl+Enter off macOS) opens it to the side in the panel, and the Explorer
 // column is left as it was.
 
@@ -34,8 +34,6 @@ const desk = {
   conversation: { generation: 1, dropped: 0, items: [{ kind: "user", id: 1, text: "", at_ms: 1, mentions: [{ kind: "project", id: "/ide", name: "herdr-ide" }] }] },
 } as unknown as DeskSection;
 
-/** A room whose tab panel already shows a file, so ⌘↵ has one to open the second view beside. */
-const showing: DeskRoomWindow = openTab(DESK_ROOM_CLOSED, { kind: "file", device_id: "local", root: "/atorni", path: "/atorni/src/token-guard.ts" });
 
 describe("⌘P on Desk", () => {
   let container: HTMLDivElement;
@@ -43,6 +41,11 @@ describe("⌘P on Desk", () => {
   let saved: ReturnType<typeof useShellStore.getState>;
   let savedUi: ReturnType<typeof useUiStore.getState>;
   let sent: Parameters<DispatchFn>[0][];
+  /** The files Desk's desk was asked to open, in order. */
+  const opened = () => sent.filter((event) => event.kind === "desk_view_open").map((event) => {
+    const { path, preview, beside } = event.payload as { path: string; preview: boolean; beside: boolean };
+    return { path, preview, beside };
+  });
   const all = (files: ReturnType<typeof file>[], extra: Partial<NonNullable<ReturnType<typeof useShellStore.getState>["fileIndexAll"]>> = {}) =>
     ({ query: "", files, more: false, index_truncated: false, indexing: false, unavailable: [], ...extra });
 
@@ -95,31 +98,27 @@ describe("⌘P on Desk", () => {
     expect([...document.querySelectorAll("[data-palette-group]")].map((group) => group.getAttribute("data-palette-group"))).toEqual(["named", "other"]);
   });
 
-  it("opens the highlighted file in the tab panel as the preview on ↵ and to the side on ⌘↵, leaving the Explorer column alone", async () => {
+  it("opens the highlighted file on Desk's desk as the preview on ↵ and to the side on ⌘↵, leaving the Explorer column alone (PRD desk-own-desk B38, B39)", async () => {
     await open(two());
     await press({});
-    let room = useUiStore.getState().deskRoom;
-    expect(activeTab(room.panel)).toEqual({ kind: "file", device_id: "local", root: "/ide", path: "/ide/web/src/token.ts" });
-    expect(room.panel?.preview).toBe("file:local:/ide:/ide/web/src/token.ts");
-    expect(room.panel?.explorer).toBe(false);
+    expect(opened()).toEqual([{ path: "/ide/web/src/token.ts", preview: true, beside: false }]);
+    expect(useUiStore.getState().deskRoom).toMatchObject({ desk: true, explorer: false });
     expect(useUiStore.getState().overlay).toBe("none");
 
     useUiStore.setState({ overlay: "file_palette" });
     await open(two());
     await press({ metaKey: true });
-    room = useUiStore.getState().deskRoom;
-    // The same file again, as a second view the window holds: the file in front stays and no Workspace's layout gets a view.
-    expect(room.panel?.beside).toBe("file:local:/ide:/ide/web/src/token.ts");
-    expect(room.panel?.preview).toBeNull();
+    expect(opened().at(-1)).toEqual({ path: "/ide/web/src/token.ts", preview: false, beside: true });
+    // No Workspace's layout gets a view.
     expect(sent.some((event) => event.kind === "file_open")).toBe(false);
   });
 
   it("opens a file to the side on the system's own command key: ⌘ on macOS, Ctrl elsewhere, and the other key alone is a plain ↵", async () => {
-    const sides = () => useUiStore.getState().deskRoom.panel?.beside != null;
+    const sides = () => opened().at(-1)?.beside === true;
     for (const [platform, held, other] of [["MacIntel", { metaKey: true }, { ctrlKey: true }], ["Win32", { ctrlKey: true }, { metaKey: true }]] as const) {
       system(platform);
       for (const [init, beside] of [[held, true], [other, false]] as const) {
-        useUiStore.setState({ overlay: "file_palette", deskRoom: showing });
+        useUiStore.setState({ overlay: "file_palette", deskRoom: DESK_ROOM_CLOSED });
         await open(two());
         await press(init);
         expect(sides()).toBe(beside);
@@ -142,7 +141,7 @@ describe("⌘P on Desk", () => {
     // Move the highlight to the second row, which is the device's.
     await act(async () => document.querySelector("[data-palette-input]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
     await press({});
-    expect(activeTab(useUiStore.getState().deskRoom.panel)).toMatchObject({ device_id: "mini", path: "/ide/a.ts" });
+    expect(sent.filter((event) => event.kind === "desk_view_open").at(-1)?.payload).toMatchObject({ device_id: "mini", path: "/ide/a.ts", checkout_id: "ide2" });
   });
 
   it("does not list an answer left from an earlier open", async () => {

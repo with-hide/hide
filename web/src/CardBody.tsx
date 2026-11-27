@@ -1,4 +1,5 @@
 import { ClipboardListIcon, CoinsIcon, FileDiffIcon, FileTextIcon, FolderGit2Icon, GitBranchIcon, GitPullRequestIcon, ListChecksIcon, SettingsIcon, WaypointsIcon } from "lucide-react";
+import { useContext } from "react";
 import { cn } from "./lib/utils";
 import { PR_LOOK } from "./prMark";
 import type { Actions } from "./actions";
@@ -14,7 +15,7 @@ import { PrCardView } from "./PrCard";
 import { SlotSessionRecord } from "./SessionRecord";
 import { cardPath, cardTitle } from "./cardTitle";
 import { OpenerMark } from "./ViewComments";
-import { useDeskFront } from "./deskFront";
+import { CardPlaceContext, useDeskFront } from "./deskFront";
 import { workKey } from "./sessionWork";
 import { catalogWorkspaces, type DetailItem, type ViewOpener } from "./snapshot";
 import { useShellStore } from "./store";
@@ -66,7 +67,8 @@ export function DetailIcon({ item, className }: { item: DetailItem; className?: 
 export function CardBody({ item, ownerPane = null, actions }: { item: DetailItem; ownerPane?: string | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const name = useShellStore((s) => cardPath(s, t, item));
-  const front = useDeskFront(item);
+  const place = useContext(CardPlaceContext);
+  const front = useDeskFront(item, place);
   const ownerRow = useShellStore((s) => (ownerPane ? s.agents.find((row) => row.pane_id === ownerPane) ?? null : null));
   const owner: ViewOpener | null = ownerRow ? { name: ownerRow.identity_label, provider: ownerRow.agent_kind, device_id: ownerRow.device_id, pane_id: ownerRow.pane_id, resumable: false } : null;
   const key = item.kind === "pull_request" ? `pr:${item.workspace_id}:${item.number}` : item.kind === "mission" ? `mission:${item.mission}` : item.kind === "record" || item.kind === "plan" ? `${item.kind}:${workKey(item.session)}` : item.kind === "branch" ? `branch:${item.workspace_id}:${item.row}:${item.path ?? ""}` : item.kind === "automation_run" ? `automation_run:${item.automation}:${item.run}` : `${item.kind}:${item.workspace_id}`;
@@ -102,7 +104,7 @@ export function CardBody({ item, ownerPane = null, actions }: { item: DetailItem
         {item.kind === "pull_request"
           ? <PrCardView workspaceId={item.workspace_id} number={item.number} actions={actions} front={front} />
           : item.kind === "mission"
-            ? <MissionMap missionId={item.mission} actions={actions} />
+            ? <MissionMap missionId={item.mission} actions={actions} onNode={place?.onMissionNode} />
             : item.kind === "plan"
               ? <PlanMap session={item.session} actions={actions} />
               : item.kind === "worktrees"

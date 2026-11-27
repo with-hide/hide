@@ -186,15 +186,15 @@ export function OutputMark({ output, className }: { output: DeskOutput; classNam
  * for the rest, and a dot while any is unseen. Pressing it opens them in the
  * lane's 보기 column.
  */
-export function OutputsChip({ outputs, selected = null, onOpen }: { outputs: readonly DeskOutput[]; selected?: string | null; onOpen: (output: DeskOutput) => void }) {
-  const shown = outputs.find((output) => output.id === selected) ?? outputs[0];
+export function OutputsChip({ outputs, onOpen }: { outputs: readonly DeskOutput[]; onOpen: (output: DeskOutput) => void }) {
+  const shown = outputs[0];
   if (!shown) return null;
   const more = outputs.length - 1;
   return (
     <Button
       variant="text"
       size="inline"
-      className={cn("relative h-(--size-badge-height) max-w-full gap-xxs rounded-xs bg-secondary px-xs text-micro text-subtle-foreground hover:fill-hovered hover:text-foreground", selected === shown.id && "ring-1 ring-ring")}
+      className="relative h-(--size-badge-height) max-w-full gap-xxs rounded-xs bg-secondary px-xs text-micro text-subtle-foreground hover:fill-hovered hover:text-foreground"
       aria-label={outputs.map((output) => output.label).join(", ")}
       data-desk-output-chip={shown.id}
       onClick={() => onOpen(shown)}
@@ -233,13 +233,13 @@ export type DeskJobCardActions = {
  * its state, in this order: its mission, its plan, the device it runs on,
  * the operator joining it, its outputs, its PR.
  */
-export function JobChip({ job, selectedOutput = null, onOutput, onMission }: { job: DeskJob; selectedOutput?: string | null; onOutput: (output: DeskOutput) => void; onMission: (missionId: string) => void }) {
+export function JobChip({ job, onOutput, onMission }: { job: DeskJob; onOutput: (output: DeskOutput) => void; onMission: (missionId: string) => void }) {
   const { t } = useInterfaceTranslation();
   if (job.mission) return <DeskMissionChip mission={job.mission} onOpen={onMission} />;
   if (job.plan && (job.state === "working" || job.ask === "plan_review")) return <DeskPlanChip plan={job.plan} review={job.ask === "plan_review"} />;
   if (job.machine) return <DeviceChip label={job.machine} />;
   if (job.joined) return <Badge variant="outline" data-desk-job-joined="true">{t("desk.job.joined")}</Badge>;
-  if (job.outputs.length) return <OutputsChip outputs={job.outputs} selected={selectedOutput} onOpen={onOutput} />;
+  if (job.outputs.length) return <OutputsChip outputs={job.outputs} onOpen={onOutput} />;
   const pr = job.pull_requests[0];
   return pr ? <PrMark state={pr.state} label={pullLabel(pr)} /> : null;
 }
@@ -275,7 +275,7 @@ function action(t: T, job: DeskJob, actions: DeskJobCardActions): ReactNode {
  * selected card sits on the selection ground. An ended job and a job on a
  * device that dropped are dimmed.
  */
-export function DeskJobCard({ job, selected = false, selectedOutput = null, ...actions }: { job: DeskJob; selected?: boolean; selectedOutput?: string | null } & DeskJobCardActions) {
+export function DeskJobCard({ job, selected = false, ...actions }: { job: DeskJob; selected?: boolean } & DeskJobCardActions) {
   const { t } = useInterfaceTranslation();
   const ended = jobDimmed(job.state);
   return (
@@ -293,7 +293,7 @@ export function DeskJobCard({ job, selected = false, selectedOutput = null, ...a
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <span className="min-w-0 flex-1 truncate font-medium text-foreground">{job.title}</span>
           <span className="pointer-events-auto relative flex shrink-0 items-center gap-xxs">
-            <JobChip job={job} selectedOutput={selectedOutput} onOutput={actions.onOutput} onMission={actions.onMission} />
+            <JobChip job={job} onOutput={actions.onOutput} onMission={actions.onMission} />
           </span>
         </div>
         <div className="col-start-2 flex min-w-0 items-center gap-xs">

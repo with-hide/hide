@@ -383,7 +383,7 @@ export function installKeyboard(actions: Actions): () => void {
       case "toggle_lane_memory":
         return actions.toggleTool("memory");
       case "toggle_lane_explorer":
-        // In Desk's room ⇧⌘E is the session panel's `파일`: the Explorer column of the tab panel (PRD desk-2-ui B35).
+        // In Desk's room ⇧⌘E is the session panel's `파일`: the Explorer column of Desk's desk (PRD desk-2-ui B35).
         if (useUiStore.getState().screen?.kind === "desk") return actions.deskToggleExplorer();
         return actions.toggleTool("explorer");
       case "toggle_lane_changes":
@@ -406,7 +406,7 @@ export function installKeyboard(actions: Actions): () => void {
         return actions.openFind();
       }
       case "save_file": {
-        // The document whose editor has the keyboard, wherever it is drawn (a View area or Desk's tab panel, PRD
+        // The document whose editor has the keyboard, wherever it is drawn (a View area or Desk's desk, PRD
         // desk-2-ui B19); with none focused, the active one.
         const focused = (document.activeElement as Element | null)?.closest?.("[data-editor]")?.getAttribute("data-editor") ?? null;
         return actions.saveFile(focused ?? undefined);
