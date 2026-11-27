@@ -862,6 +862,7 @@ fn pairing(env: &Env, ask: Value) -> Result<Value, Refused> {
 /// a closed input included, is a no.
 fn yes(question: &str) -> bool {
     eprint!("{question} [y/N] ");
+    #[allow(clippy::disallowed_methods)] // the result is ignored, at the operator's own terminal
     let _ = std::io::stderr().flush();
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line).is_err() {
