@@ -25,7 +25,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -56,9 +56,22 @@ const PLACE_WITHIN: Duration = Duration::from_secs(30);
 /// A tunnel that moved no byte either way for this long gives its place to
 /// a new one when every place is held.
 const QUIET_FOR: Duration = Duration::from_secs(60);
-/// The first request head of a connection: its bound and its wait.
+/// The first request head of a connection: its bound and its wait, and how
+/// many connections may be reading theirs at once before their secret is
+/// known, so a process that is no page cannot hold the pair's places.
 const MAX_HEAD: usize = 16 * 1024;
 const HEAD_WITHIN: Duration = Duration::from_secs(10);
+const MAX_UNPROVEN: usize = 64;
+/// The longest one address of a name may take to answer a dial, so a dead
+/// address family leaves time for the next.
+const DIAL_EACH: Duration = Duration::from_secs(3);
+/// How long an accept that failed waits before the next, and how long a
+/// stream the host refused for its count waits before asking again.
+const ACCEPT_AGAIN: Duration = Duration::from_millis(100);
+const OPEN_AGAIN: Duration = Duration::from_millis(50);
+/// Pairs whose relay bytes of the day are kept; past it, a new pair counts
+/// with the others in one shared record, so no allowance is ever reset.
+const MAX_BUDGETS: usize = 256;
 /// The most bytes one copy writes at once, each reserved first on the relay.
 pub const CHUNK: usize = 64 * 1024;
 /// How long the host's dial and the guest's stream open may take.
@@ -79,12 +92,34 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// open it under the key, or why not, in the words `/peer-screen` answers.
 pub trait Reach: Send + Sync + 'static {
     fn link(&self, device: &str, key: &PeerKey) -> Result<Link, &'static str>;
+    /// The pairing this machine holds with `device` under `key`
+    /// ([`pairing_of`] its grant), whatever its state; none when it holds
+    /// none.
+    fn pairing(&self, device: &str, key: &PeerKey) -> Option<String>;
 }
 
 impl Reach for Arc<PeerHost> {
     fn link(&self, device: &str, key: &PeerKey) -> Result<Link, &'static str> {
         crate::remote_screen::host_link_on(self, device, key).map(|(link, _)| link)
     }
+
+    fn pairing(&self, device: &str, key: &PeerKey) -> Option<String> {
+        let host = self
+            .peers()?
+            .hosts()
+            .into_iter()
+            .find(|host| host.device == device && host.key == *key)?;
+        Some(pairing_of(&host.grant))
+    }
+}
+
+/// The name a pairing is told by outside this daemon: the first half of the
+/// SHA-256 of the grant the host gave, in hex. A pause keeps the grant, and
+/// pairing again makes a new one, so the desktop's login storage of a
+/// machine, named with it, is never one an ended pairing filled
+/// (docs/BROWSER_DISPLAYS.md, A page in another computer's screen).
+pub fn pairing_of(grant: &str) -> String {
+    hex::encode(&ring::digest::digest(&ring::digest::SHA256, grant.as_bytes()).as_ref()[..16])
 }
 
 /// Whether a process started at `started` is still `pid`.
@@ -106,17 +141,25 @@ struct Listener {
     started: u64,
     port: u16,
     secret: String,
-    /// The host closed a `page` stream before any byte came back: its build
-    /// has no handler for the kind (security spec 7).
-    unsupported: AtomicBool,
-    /// Each refusal's reason, logged once.
-    refused: Mutex<HashSet<&'static str>>,
+    /// The connection (link id) on which the host closed a `page` stream
+    /// before any byte came back: a build with no handler for the kind
+    /// (security spec 7). It names that connection alone, so a host updated
+    /// and connected again is asked afresh, and the first byte back on any
+    /// tunnel clears it.
+    unsupported: Mutex<Option<u64>>,
+    /// Each refusal's reason, and each kind of accept failure, logged once.
+    refused: Mutex<HashSet<String>>,
+    /// Connections reading their head before their secret is known.
+    unproven: Arc<tokio::sync::Semaphore>,
     task: Mutex<Option<AbortOnDrop>>,
+    /// Accept failures a test makes the next accepts report.
+    #[cfg(test)]
+    fail_accepts: std::sync::atomic::AtomicUsize,
 }
 
 impl Listener {
-    fn refused(&self, reason: &'static str) {
-        if lock(&self.refused).insert(reason) {
+    fn refused(&self, reason: &str) {
+        if lock(&self.refused).insert(reason.to_owned()) {
             hide_core::diagnostic!(json!({
                 "component": "screen_net", "kind": "screen_net.refused",
                 "device": self.owner.device, "reason": reason,
@@ -130,6 +173,8 @@ impl Listener {
 pub struct Ensured {
     pub port: u16,
     pub secret: String,
+    /// The pairing the listener's requests ride ([`pairing_of`]).
+    pub pairing: String,
     /// `ready`, or why a request through it fails now.
     pub state: &'static str,
 }
@@ -177,13 +222,31 @@ impl Drop for Place {
     }
 }
 
+/// A connection counted among its pair's waiting ones, given back however
+/// its wait ends: a place, the bound, or its task dropped.
+struct Waiting<'a> {
+    places: &'a Places,
+    counted: bool,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        if self.counted {
+            lock(&self.places.inner).waiting -= 1;
+        }
+    }
+}
+
 impl Places {
     /// A place: a free one, else the quietest tunnel's when it moved nothing
     /// for `QUIET_FOR`, else the first freed within `PLACE_WITHIN` with at
     /// most `MAX_WAITING` waiting; `None` past either.
     async fn take(self: &Arc<Self>) -> Option<Place> {
         let deadline = Instant::now() + PLACE_WITHIN;
-        let mut counted = false;
+        let mut waiting = Waiting {
+            places: self,
+            counted: false,
+        };
         loop {
             {
                 let mut inner = lock(&self.inner);
@@ -202,8 +265,9 @@ impl Places {
                     quiet.reclaim.notify_one();
                 }
                 if inner.held.len() < PLACES {
-                    if counted {
+                    if waiting.counted {
                         inner.waiting -= 1;
+                        waiting.counted = false;
                     }
                     let slot = Arc::new(Slot {
                         last: Mutex::new(now),
@@ -215,19 +279,18 @@ impl Places {
                         slot,
                     });
                 }
-                if !counted {
+                if !waiting.counted {
                     if inner.waiting >= MAX_WAITING {
                         return None;
                     }
                     inner.waiting += 1;
-                    counted = true;
+                    waiting.counted = true;
                 }
             }
             if tokio::time::timeout_at(deadline, self.freed.notified())
                 .await
                 .is_err()
             {
-                lock(&self.inner).waiting -= 1;
                 return None;
             }
         }
@@ -327,12 +390,50 @@ impl ScreenNet {
         Arc::clone(lock(&self.places).entry(key).or_default())
     }
 
+    /// The pair's relay budget of the day. At most `MAX_BUDGETS` are kept:
+    /// a record of another day or with nothing used goes first, and when
+    /// every record holds bytes of today a new pair counts in the shared
+    /// overflow record, so no pair's allowance is reset.
     pub fn budget_of(&self, key: PeerKey) -> Arc<RelayBudget> {
+        let mut budgets = lock(&self.budgets);
+        if let Some(budget) = budgets.get(&key) {
+            return Arc::clone(budget);
+        }
+        if budgets.len() >= MAX_BUDGETS {
+            budgets.retain(|_, budget| {
+                Arc::strong_count(budget) > 1 || budget.used() > 0 || budget.spent()
+            });
+        }
+        if budgets.len() >= MAX_BUDGETS {
+            return Arc::clone(
+                budgets
+                    .entry(PeerKey::from_bytes([0; 32]))
+                    .or_insert_with(|| Arc::new(RelayBudget::new(self.budget))),
+            );
+        }
         Arc::clone(
-            lock(&self.budgets)
+            budgets
                 .entry(key)
                 .or_insert_with(|| Arc::new(RelayBudget::new(self.budget))),
         )
+    }
+
+    /// What is kept for a pair once no listener of it is left: its places
+    /// go when no tunnel holds or waits for one, and its budget when it
+    /// counted nothing today.
+    fn retire(&self, key: PeerKey) {
+        if lock(&self.listeners).keys().any(|owner| owner.key == key) {
+            return;
+        }
+        lock(&self.places).retain(|held, places| *held != key || Arc::strong_count(places) > 1);
+        lock(&self.budgets).retain(|held, budget| {
+            *held != key || Arc::strong_count(budget) > 1 || budget.used() > 0 || budget.spent()
+        });
+    }
+
+    /// How many pairs' records are kept now.
+    pub fn kept(&self) -> (usize, usize) {
+        (lock(&self.places).len(), lock(&self.budgets).len())
     }
 
     /// The listener `pid` asked for `device` under `key`, opened on the
@@ -351,6 +452,7 @@ impl ScreenNet {
         if matches!(now, Err("not_paired")) {
             return Err("not_paired");
         }
+        let pairing = self.reach.pairing(device, &key).ok_or("not_paired")?;
         let owner = Owner {
             device: device.to_owned(),
             key,
@@ -360,20 +462,19 @@ impl ScreenNet {
             Some(listener) => listener,
             None => self.open(owner, started).await?,
         };
-        let state = if listener.unsupported.load(Ordering::SeqCst) {
-            "unsupported_there"
-        } else {
-            match now {
-                Ok(link) if link.path() == PathKind::Relay && self.budget_of(key).spent() => {
-                    "relay_budget"
-                }
-                Ok(_) => "ready",
-                Err(reason) => reason,
+        let unsupported = *lock(&listener.unsupported);
+        let state = match now {
+            Ok(link) if unsupported == Some(link.id()) => "unsupported_there",
+            Ok(link) if link.path() == PathKind::Relay && self.budget_of(key).spent() => {
+                "relay_budget"
             }
+            Ok(_) => "ready",
+            Err(reason) => reason,
         };
         Ok(Ensured {
             port: listener.port,
             secret: listener.secret.clone(),
+            pairing,
             state,
         })
     }
@@ -388,6 +489,8 @@ impl ScreenNet {
                 if let Some(earlier) = listeners.remove(owner) {
                     lock(&earlier.task).take();
                 }
+                drop(listeners);
+                self.retire(owner.key);
                 None
             }
             None => None,
@@ -413,9 +516,12 @@ impl ScreenNet {
             started,
             port,
             secret: hex::encode(secret),
-            unsupported: AtomicBool::new(false),
+            unsupported: Mutex::new(None),
             refused: Mutex::default(),
+            unproven: Arc::new(tokio::sync::Semaphore::new(MAX_UNPROVEN)),
             task: Mutex::new(None),
+            #[cfg(test)]
+            fail_accepts: std::sync::atomic::AtomicUsize::new(0),
         });
         {
             let mut listeners = lock(&self.listeners);
@@ -448,10 +554,12 @@ impl ScreenNet {
             pid,
         };
         let removed = lock(&self.listeners).remove(&owner);
-        removed.is_some_and(|listener| {
+        let released = removed.is_some_and(|listener| {
             lock(&listener.task).take();
             true
-        })
+        });
+        self.retire(key);
+        released
     }
 
     pub fn listening(&self) -> usize {
@@ -481,6 +589,7 @@ impl ScreenNet {
             "component": "screen_net", "kind": "screen_net.closed",
             "device": listener.owner.device, "reason": reason,
         }));
+        self.retire(listener.owner.key);
         lock(&listener.task).take();
     }
 
@@ -490,8 +599,24 @@ impl ScreenNet {
         check.tick().await;
         loop {
             tokio::select! {
-                accepted = socket.accept() => {
-                    let Ok((local, _)) = accepted else { break };
+                accepted = next_connection(&listener, &socket) => {
+                    let local = match accepted {
+                        Ok((local, _)) => local,
+                        // A failed accept (a full file table, an aborted
+                        // connection) fails that one connection: the port
+                        // pages point at stays, and it is told once per kind.
+                        Err(error) => {
+                            let kind = format!("accept_{:?}", error.kind()).to_ascii_lowercase();
+                            if lock(&listener.refused).insert(kind.clone()) {
+                                hide_core::diagnostic!(json!({
+                                    "component": "screen_net", "kind": "screen_net.accept_failed",
+                                    "device": listener.owner.device, "error": kind,
+                                }));
+                            }
+                            tokio::time::sleep(ACCEPT_AGAIN).await;
+                            continue;
+                        }
+                    };
                     if !self.holds(&listener) {
                         break;
                     }
@@ -510,23 +635,30 @@ impl ScreenNet {
         self.close(&listener, "owner_or_pairing_gone");
     }
 
-    /// One connection of a page: its place, its head and secret, the grant
-    /// judged now, then one `page` stream carrying its bytes both ways.
+    /// One connection of a page: its head and secret, then its place, the
+    /// grant judged now, then one `page` stream carrying its bytes both ways,
+    /// the head first, all of them reserved on the relay.
     async fn carry(&self, listener: &Listener, mut local: TcpStream) {
-        let Some(place) = self.places_of(listener.owner.key).take().await else {
-            listener.refused("busy");
-            answer(&mut local, "503 Service Unavailable", Some("busy")).await;
-            return;
-        };
-        let head = match tokio::time::timeout(HEAD_WITHIN, read_head(&mut local)).await {
-            Ok(Ok(head)) => head,
-            _ => return,
+        let head = {
+            let Ok(_unproven) = Arc::clone(&listener.unproven).try_acquire_owned() else {
+                listener.refused("busy");
+                return;
+            };
+            match tokio::time::timeout(HEAD_WITHIN, read_head(&mut local)).await {
+                Ok(Ok(head)) => head,
+                _ => return,
+            }
         };
         if !authorized(&head, &listener.secret) {
             listener.refused("proxy_auth");
             answer(&mut local, "407 Proxy Authentication Required", None).await;
             return;
         }
+        let Some(place) = self.places_of(listener.owner.key).take().await else {
+            listener.refused("busy");
+            answer(&mut local, "503 Service Unavailable", Some("busy")).await;
+            return;
+        };
         let link = match self.reach.link(&listener.owner.device, &listener.owner.key) {
             Ok(link) => link,
             Err(reason) => {
@@ -541,36 +673,45 @@ impl ScreenNet {
             answer(&mut local, "503 Service Unavailable", Some("relay_budget")).await;
             return;
         }
-        let stream = match tokio::time::timeout(DIAL_WITHIN, link.open(StreamKind::Page)).await {
-            Ok(Ok(stream)) => stream,
-            Ok(Err(hide_peer::peers::OpenError::NoGrant(_))) | Err(_) | Ok(Err(_)) => {
-                let reason = match link.granted() {
-                    hide_peer::protocol::hello::GrantState::Paused => "paused_there",
-                    hide_peer::protocol::hello::GrantState::Active => "not_connected",
-                    _ => "no_grant",
-                };
+        let stream = match open_page(&link).await {
+            Ok(stream) => stream,
+            Err(reason) => {
                 listener.refused(reason);
                 answer(&mut local, "503 Service Unavailable", Some(reason)).await;
                 return;
             }
         };
-        let mut send = stream.send;
-        if send.write_all(&head).await.is_err() {
-            return;
-        }
+        let link_id = link.id();
         let relay = move || link.path() == PathKind::Relay;
-        let piped = pipe(&mut local, stream.recv, send, &budget, &relay, &place.slot).await;
-        if piped == Piped::Unanswered {
-            listener.unsupported.store(true, Ordering::SeqCst);
-            listener.refused("unsupported_there");
-            answer(
-                &mut local,
-                "503 Service Unavailable",
-                Some("unsupported_there"),
-            )
-            .await;
-        } else if piped == Piped::Budget {
-            listener.refused("relay_budget");
+        let (piped, back) = pipe(
+            &mut local,
+            &head,
+            stream.recv,
+            stream.send,
+            &budget,
+            &relay,
+            &place.slot,
+            &|| *lock(&listener.unsupported) = None,
+        )
+        .await;
+        match piped {
+            Piped::Unanswered => {
+                *lock(&listener.unsupported) = Some(link_id);
+                listener.refused("unsupported_there");
+                answer(
+                    &mut local,
+                    "503 Service Unavailable",
+                    Some("unsupported_there"),
+                )
+                .await;
+            }
+            Piped::Budget => {
+                listener.refused("relay_budget");
+                if back == 0 {
+                    answer(&mut local, "503 Service Unavailable", Some("relay_budget")).await;
+                }
+            }
+            Piped::Done | Piped::Reclaimed => {}
         }
     }
 
@@ -606,6 +747,57 @@ impl ScreenNet {
         };
         serve_proxy(io, tunnel, Arc::new(self.hosts.clone())).await;
     }
+}
+
+/// A `page` stream to the host under the grant's generation. The host
+/// counts its streams on its own side and frees a tunnel's place only once
+/// that tunnel ended there, so a stream refused for the count is asked for
+/// again until `DIAL_WITHIN`; the refusal says which of the reasons the
+/// page's words tell apart.
+async fn open_page(link: &Link) -> Result<crate::peer_host::Stream, &'static str> {
+    use hide_peer::peers::OpenError;
+    use hide_peer::protocol::hello::GrantState;
+    use hide_peer::protocol::stream::Status;
+    let deadline = Instant::now() + DIAL_WITHIN;
+    loop {
+        let opened = tokio::time::timeout_at(deadline, link.open(StreamKind::Page)).await;
+        match opened {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(OpenError::Refused(Status::Limit)))
+                if Instant::now() + OPEN_AGAIN < deadline =>
+            {
+                tokio::time::sleep(OPEN_AGAIN).await;
+            }
+            Ok(Err(OpenError::Refused(Status::Limit))) => return Err("busy"),
+            _ => {
+                return Err(match link.granted() {
+                    GrantState::Paused => "paused_there",
+                    GrantState::Active => "not_connected",
+                    _ => "no_grant",
+                });
+            }
+        }
+    }
+}
+
+/// The listener's next connection; a test makes it report failures first.
+async fn next_connection(
+    listener: &Listener,
+    socket: &TcpListener,
+) -> io::Result<(TcpStream, SocketAddr)> {
+    #[cfg(test)]
+    if listener
+        .fail_accepts
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            left.checked_sub(1)
+        })
+        .is_ok()
+    {
+        return Err(io::ErrorKind::ConnectionAborted.into());
+    }
+    #[cfg(not(test))]
+    let _ = listener;
+    socket.accept().await
 }
 
 /// One stream of the host's forward proxy, over any byte stream.
@@ -752,7 +944,9 @@ async fn dial(
     let deadline = Instant::now() + DIAL_WITHIN;
     let mut last = io::Error::from(io::ErrorKind::NotFound);
     for address in addresses {
-        match tokio::time::timeout_at(deadline, TcpStream::connect(address)).await {
+        // Each address gets a bounded share, so a dead family leaves the next one time.
+        let until = deadline.min(Instant::now() + DIAL_EACH);
+        match tokio::time::timeout_at(until, TcpStream::connect(address)).await {
             Ok(Ok(stream)) => {
                 let _ = stream.set_nodelay(true);
                 hide_core::diagnostic!(json!({
@@ -762,6 +956,7 @@ async fn dial(
                 return Ok(stream);
             }
             Ok(Err(error)) => last = error,
+            Err(_) if Instant::now() < deadline => last = io::Error::from(io::ErrorKind::TimedOut),
             Err(_) => return Err(io::Error::from(io::ErrorKind::TimedOut)),
         }
     }
@@ -856,24 +1051,42 @@ enum Piped {
 enum Copied {
     Closed,
     Budget,
-    Failed,
+    /// Reading its source failed.
+    ReadFailed,
+    /// Writing to its far end failed.
+    WriteFailed,
 }
 
 /// Copies `from` into `to` in chunks of at most `CHUNK`, each reserved
 /// against `budget` before it is written while `relay` says the
 /// connection takes the relay.
+#[allow(clippy::too_many_arguments)]
 async fn copy_reserved<R, W>(
     mut from: R,
     mut to: W,
+    first: &[u8],
     budget: &RelayBudget,
     relay: &(dyn Fn() -> bool + Send + Sync),
     slot: &Slot,
     moved: &AtomicU64,
+    answered: &(dyn Fn() + Send + Sync),
 ) -> Copied
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    // What was read before the copy began (a connection's head) goes first,
+    // reserved and counted as every later chunk is.
+    for chunk in first.chunks(CHUNK) {
+        if relay() && !budget.reserve(chunk.len() as u64) {
+            return Copied::Budget;
+        }
+        if to.write_all(chunk).await.is_err() || to.flush().await.is_err() {
+            return Copied::WriteFailed;
+        }
+        moved.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        slot.touch();
+    }
     let mut buffer = vec![0_u8; CHUNK];
     loop {
         let read = match from.read(&mut buffer).await {
@@ -882,29 +1095,37 @@ where
                 return Copied::Closed;
             }
             Ok(read) => read,
-            Err(_) => return Copied::Failed,
+            Err(_) => return Copied::ReadFailed,
         };
         if relay() && !budget.reserve(read as u64) {
             return Copied::Budget;
         }
         if to.write_all(&buffer[..read]).await.is_err() || to.flush().await.is_err() {
-            return Copied::Failed;
+            return Copied::WriteFailed;
         }
-        moved.fetch_add(read as u64, Ordering::Relaxed);
+        if moved.fetch_add(read as u64, Ordering::Relaxed) == 0 {
+            answered();
+        }
         slot.touch();
     }
 }
 
-/// A tunnel's bytes both ways until both sides close, either fails, a chunk
-/// is refused on the relay, or its place is taken.
+/// A tunnel's bytes both ways, `head` first on the way up, until both sides
+/// close, either fails, a chunk is refused on the relay, or its place is
+/// taken; with the bytes that came back. The host closing the stream, or
+/// refusing the head's write, before any byte came back while the page
+/// still waited is a build with no handler for the kind.
+#[allow(clippy::too_many_arguments)]
 async fn pipe<L, FR, FW>(
     local: &mut L,
+    head: &[u8],
     far_recv: FR,
     far_send: FW,
     budget: &RelayBudget,
     relay: &(dyn Fn() -> bool + Send + Sync),
     slot: &Slot,
-) -> Piped
+    answered: &(dyn Fn() + Send + Sync),
+) -> (Piped, u64)
 where
     L: AsyncRead + AsyncWrite + Unpin,
     FR: AsyncRead + Unpin,
@@ -912,29 +1133,50 @@ where
 {
     let (local_read, local_write) = tokio::io::split(local);
     let (sent, back) = (AtomicU64::new(0), AtomicU64::new(0));
-    let up = copy_reserved(local_read, far_send, budget, relay, slot, &sent);
-    let down = copy_reserved(far_recv, local_write, budget, relay, slot, &back);
+    let up = copy_reserved(
+        local_read,
+        far_send,
+        head,
+        budget,
+        relay,
+        slot,
+        &sent,
+        &|| {},
+    );
+    let down = copy_reserved(
+        far_recv,
+        local_write,
+        &[],
+        budget,
+        relay,
+        slot,
+        &back,
+        answered,
+    );
     tokio::pin!(up, down);
     let (mut up_closed, mut down_closed) = (false, false);
-    loop {
+    let unanswered = |up_closed: bool| back.load(Ordering::Relaxed) == 0 && !up_closed;
+    let piped = loop {
         tokio::select! {
-            () = slot.reclaim.notified() => return Piped::Reclaimed,
+            () = slot.reclaim.notified() => break Piped::Reclaimed,
             copied = &mut up, if !up_closed => match copied {
                 Copied::Closed => up_closed = true,
-                Copied::Budget => return Piped::Budget,
-                Copied::Failed => return Piped::Done,
+                Copied::Budget => break Piped::Budget,
+                Copied::WriteFailed if unanswered(false) => break Piped::Unanswered,
+                Copied::WriteFailed | Copied::ReadFailed => break Piped::Done,
             },
             copied = &mut down, if !down_closed => match copied {
-                Copied::Closed if back.load(Ordering::Relaxed) == 0 && !up_closed => return Piped::Unanswered,
+                Copied::Closed if unanswered(up_closed) => break Piped::Unanswered,
                 Copied::Closed => down_closed = true,
-                Copied::Budget => return Piped::Budget,
-                Copied::Failed => return Piped::Done,
+                Copied::Budget => break Piped::Budget,
+                Copied::WriteFailed | Copied::ReadFailed => break Piped::Done,
             },
         }
         if up_closed && down_closed {
-            return Piped::Done;
+            break Piped::Done;
         }
-    }
+    };
+    (piped, back.load(Ordering::Relaxed))
 }
 
 /// A connection's first request head, with whatever followed it in the same
@@ -948,11 +1190,13 @@ async fn read_head<R: AsyncRead + Unpin>(local: &mut R) -> io::Result<Vec<u8>> {
             return Err(io::ErrorKind::UnexpectedEof.into());
         }
         head.extend_from_slice(&buffer[..read]);
-        if head.windows(4).any(|window| window == b"\r\n\r\n") {
-            return Ok(head);
-        }
-        if head.len() > MAX_HEAD {
-            return Err(io::ErrorKind::InvalidData.into());
+        // The head, its blank line included, is held to `MAX_HEAD`; body
+        // bytes read with a head within it go on with it.
+        match head.windows(4).position(|window| window == b"\r\n\r\n") {
+            Some(end) if end + 4 <= MAX_HEAD => return Ok(head),
+            Some(_) => return Err(io::ErrorKind::InvalidData.into()),
+            None if head.len() >= MAX_HEAD => return Err(io::ErrorKind::InvalidData.into()),
+            None => {}
         }
     }
 }

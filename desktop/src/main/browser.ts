@@ -30,7 +30,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { BrowserDevicePlacement, BrowserHostEvent, BrowserPageState, BrowserPlacement, BrowserRect, BrowserSync } from "../../../web/src/host";
 import { hostChord, isCycleCommand, keySystemOf, matchHost, releaseModifier, systemRegistry, type Command, type CommandId } from "../../../web/src/shortcuts";
 import { BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL, REMOTE_BROWSER_EVENT_CHANNEL } from "../channel";
-import { appScheme, browserPartition, deviceEmulation, fileLink, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localNetworkReach, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, offScreenBounds, offScreenEmulation, overCap, parseCommand, parseRemoteSync, parseSync, parseTarget, placeIn, popupBounds, PRESS_WITHIN_MS, protocolOf, REMOTE_BOUNDS, remotePagePartition, remoteRequest, routed, toBounds, viewKey } from "./browserSync";
+import { appScheme, browserPartition, deviceEmulation, fileLink, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localNetworkReach, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, offScreenBounds, offScreenEmulation, overCap, parseCommand, parseRemoteSync, parseSync, parseTarget, placeIn, popupBounds, PRESS_WITHIN_MS, protocolOf, REMOTE_BOUNDS, remoteRequest, routed, toBounds, viewKey } from "./browserSync";
 import { isLoopbackHost } from "../../../web/src/loopbackHost";
 import { nextZoomFactor, type PageZoom } from "../../../web/src/zoomSteps";
 import type { HostLog } from "./log";
@@ -222,8 +222,10 @@ export type RemoteSource = {
   ready(): boolean;
   /** Asks for its proxy: `ready`, or why its pages cannot load now. */
   ensure(): Promise<string>;
-  /** Whether its login storage may hold pages now. */
-  storage(): "live" | "clearing" | "full";
+  /** The partition its pages keep their logins in now (`remotePagePartition`); null before its proxy's first answer. */
+  partition(): string | null;
+  /** Whether its login storage may hold pages now; `waiting` until it can be judged. */
+  storage(): "live" | "clearing" | "full" | "waiting";
   route(workspace: string, id: string, load: number): Promise<RemoteRoute>;
 };
 
@@ -308,8 +310,6 @@ export class BrowserViews {
   private readonly local: Source = newSource("", null);
   /** Each remote screen's pages, by `remoteId`. */
   private readonly sources = new Map<string, Source>();
-  /** The remote source a partition of remote pages belongs to. */
-  private readonly remotePartitions = new Map<string, Source>();
   /** Views added to the window by another owner (a remote screen); a page added before the latest is raised when placed. */
   private viewsAdded = 0;
   /** Positive core authority is independent of whether an area has pages. */
@@ -555,7 +555,6 @@ export class BrowserViews {
     if (earlier?.remote) this.removeRemote(earlier.remote);
     const source = newSource(id, remote);
     this.sources.set(id, source);
-    this.remotePartitions.set(remotePagePartition(remote.device, remote.key), source);
   }
 
   /** The screen is gone (trimmed, another key, unpaired, every screen closed): its pages and popups close with it. */
@@ -565,8 +564,6 @@ export class BrowserViews {
     for (const page of [...this.pages.values()]) if (page.source === source) this.destroy(page, "closed");
     this.forgetSource(source);
     this.sources.delete(source.id);
-    const partition = remotePagePartition(remote.device, remote.key);
-    if (this.remotePartitions.get(partition) === source) this.remotePartitions.delete(partition);
   }
 
   /**
@@ -585,6 +582,12 @@ export class BrowserViews {
   remoteRetry(device: string, key: string): void {
     const source = this.sources.get(remoteId({ device, key }));
     if (source) this.applyRemote(source);
+  }
+
+  /** The remote source whose pages keep their logins in `partition` now; none for an ended pairing's. */
+  private remoteSourceOf(partition: string): Source | null {
+    for (const source of this.sources.values()) if (source.remote?.partition() === partition) return source;
+    return null;
   }
 
   private sourceOf(remote: RemoteSource): Source | null {
@@ -711,8 +714,6 @@ export class BrowserViews {
         this.show(page, false);
       }
     }
-    const storage = remote.storage();
-    if (storage !== "live") return this.failSlots(source, sync, storage === "full" ? "remoteStorageFull" : "remoteStorageClearing");
     if (!remote.ready()) {
       // The proxy goes first; nothing of the screen's is made before it is set.
       if (source.egressAsked) return;
@@ -725,6 +726,10 @@ export class BrowserViews {
       });
       return;
     }
+    // The storage is the pairing's, which the proxy's answer named.
+    const storage = remote.storage();
+    if (storage === "waiting") return;
+    if (storage !== "live") return this.failSlots(source, sync, storage === "full" ? "remoteStorageFull" : "remoteStorageClearing");
     source.created = recent(source.created, now, REMOTE_BOUNDS.creationWindowMs);
     for (const display of sync.displays) {
       if (!display.rect) continue;
@@ -732,7 +737,7 @@ export class BrowserViews {
       let page = this.pages.get(key);
       if (!page) {
         this.evictOverCap(source);
-        if ([...this.pages.values()].filter((live) => live.source === source).length >= REMOTE_BOUNDS.pages) {
+        if ([...this.pages.values()].filter((live) => live.source === source).length >= REMOTE_BOUNDS.pages && !this.evictHidden(source, placed)) {
           this.failSlot(source, workspace, display, "remotePageLimit");
           continue;
         }
@@ -1074,7 +1079,9 @@ export class BrowserViews {
   private partitionOf(source: Source, workspace: string, display: BrowserPlacement): string {
     // Every page of a remote screen keeps that machine's login storage, its
     // file pages included, which load nothing here yet.
-    if (source.remote) return remotePagePartition(source.remote.device, source.remote.key);
+    // None is made before its proxy's answer named one (`ready`); were one
+    // asked for, its session belongs to no source and refuses every request.
+    if (source.remote) return source.remote.partition() ?? `${REMOTE_PAGE_PARTITION}unproxied`;
     return display.grant ? (this.externals.partition(display.grant) ?? GONE_GRANT_PARTITION) : browserPartition(workspace, display.url, source.node);
   }
 
@@ -1265,7 +1272,7 @@ export class BrowserViews {
    * per page and reason, with its scheme alone.
    */
   private remoteRequest(partition: string, page: Page | undefined, details: Electron.OnBeforeRequestListenerDetails): { cancel: boolean } {
-    const source = this.remotePartitions.get(partition);
+    const source = this.remoteSourceOf(partition);
     const mainFrame = details.resourceType === "mainFrame";
     let host: string | null = null;
     try { host = new URL(details.url).hostname; } catch { /* refused below */ }
@@ -1900,6 +1907,25 @@ export class BrowserViews {
   }
 
   /** Closes a source's hidden pages past its bound, least recently shown first, whatever holds them (B2). */
+  /**
+   * A remote source at its bound with a display it places needing a page:
+   * the source's page shown longest ago among those this sync does not place
+   * (`placed`, the sync's own set, never `page.placed`, which a display placed
+   * later in the same sync has not set yet) closes, as a page past its bound
+   * does, so only displays all on screen at once are refused. False when
+   * every page is placed.
+   */
+  private evictHidden(source: Source, placed: ReadonlySet<string>): boolean {
+    let oldest: Page | null = null;
+    for (const page of this.pages.values()) {
+      if (page.source !== source || placed.has(page.key)) continue;
+      if (!oldest || page.shownAt < oldest.shownAt) oldest = page;
+    }
+    if (!oldest) return false;
+    this.destroy(oldest, "evicted");
+    return true;
+  }
+
   private evictOverCap(source: Source): void {
     const cap = source.remote ? REMOTE_BOUNDS.pages : MAX_LIVE_VIEWS;
     for (const key of overCap([...this.pages.values()].filter((page) => page.source === source), cap)) {

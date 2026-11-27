@@ -374,12 +374,13 @@ export type RemoteScreensBridge = {
    */
   go?(request: { device: string; key: string; work: RemoteWork }): void;
   /**
-   * The machines this window's operator has paired with, each by its device
-   * and the key it was paired under, sent once the shell holds a snapshot
-   * and again when the list changes: a screen's login storage here lives
-   * while its pair does. Absent on an older desktop app.
+   * The machines this window's core (`core`, its own machine's id) holds
+   * pairings with, each by its device and the key it was paired under, sent
+   * once the shell holds a snapshot with its device list and again when the
+   * list changes: a screen's login storage here lives while its pair does.
+   * Absent on an older desktop app.
    */
-  paired?(pairs: { device: string; key: string }[]): void;
+  paired?(paired: { core: string; pairs: { device: string; key: string }[] }): void;
   /**
    * Settings from this window's chrome (the rail's gear): the Settings of
    * the screen in front, as ⌘, opens (B20), else this window's own. Absent

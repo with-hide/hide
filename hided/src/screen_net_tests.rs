@@ -1,3 +1,4 @@
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
@@ -143,9 +144,19 @@ async fn one_tunnel_streaming_past_the_budget_ends_and_the_counter_never_passes_
     let relay = || true;
     let piped = within(
         "the tunnel",
-        pipe(&mut local, near_read, near_write, &budget, &relay, &slot()),
+        pipe(
+            &mut local,
+            &[],
+            near_read,
+            near_write,
+            &budget,
+            &relay,
+            &slot(),
+            &|| {},
+        ),
     )
-    .await;
+    .await
+    .0;
     assert_eq!(piped, Piped::Budget);
     assert!(budget.used() <= 3 * CHUNK as u64 + 100);
     assert!(budget.spent());
@@ -178,7 +189,18 @@ async fn sixteen_tunnels_sending_and_receiving_at_once_end_with_the_counter_at_m
                 flood(host_write),
             );
             let relay = || true;
-            pipe(&mut local, near_read, near_write, &budget, &relay, &slot()).await
+            pipe(
+                &mut local,
+                &[],
+                near_read,
+                near_write,
+                &budget,
+                &relay,
+                &slot(),
+                &|| {},
+            )
+            .await
+            .0
         }));
     }
     for tunnel in tunnels {
@@ -206,7 +228,18 @@ async fn a_direct_tunnel_passes_the_budget_and_one_that_moves_to_the_relay_is_he
         tokio::spawn(async move {
             let mut local = local;
             let relay = move || on_relay.load(Ordering::SeqCst);
-            pipe(&mut local, near_read, near_write, &budget, &relay, &slot()).await
+            pipe(
+                &mut local,
+                &[],
+                near_read,
+                near_write,
+                &budget,
+                &relay,
+                &slot(),
+                &|| {},
+            )
+            .await
+            .0
         })
     };
     let _host_in = drain(host_read);
@@ -241,10 +274,160 @@ async fn a_stream_the_host_drops_unanswered_is_told_apart() {
     let relay = || false;
     let piped = within(
         "the tunnel",
-        pipe(&mut local, near_read, near_write, &budget, &relay, &slot()),
+        pipe(
+            &mut local,
+            &[],
+            near_read,
+            near_write,
+            &budget,
+            &relay,
+            &slot(),
+            &|| {},
+        ),
     )
     .await;
-    assert_eq!(piped, Piped::Unanswered);
+    assert_eq!(piped, (Piped::Unanswered, 0));
+
+    // On the real transport the host's end closes both ways at once, so the
+    // head's own write is what fails first; that is the same answer.
+    let Ends {
+        page: _page,
+        mut local,
+        host,
+        near,
+    } = ends();
+    let (near_read, near_write) = tokio::io::split(near);
+    drop(host);
+    let head = b"GET http://example.test/ HTTP/1.1\r\n\r\n".repeat(4096);
+    let piped = within(
+        "the tunnel",
+        pipe(
+            &mut local,
+            &head,
+            near_read,
+            near_write,
+            &budget,
+            &relay,
+            &slot(),
+            &|| {},
+        ),
+    )
+    .await;
+    assert_eq!(piped, (Piped::Unanswered, 0));
+}
+
+// A connection's head, and the body bytes read with it, are the first bytes
+// the guest sends: they are reserved on the relay as every later chunk is,
+// and a head the day's budget cannot hold is not written at all.
+#[tokio::test]
+async fn a_head_is_reserved_before_it_is_written_and_one_past_the_budget_writes_nothing() {
+    let head = vec![b'h'; 3 * 1024];
+    let relay = || true;
+    let refused = RelayBudget::new(1024);
+    let Ends {
+        page: _page,
+        mut local,
+        host,
+        near,
+    } = ends();
+    let (host_read, _host_write) = tokio::io::split(host);
+    let (near_read, near_write) = tokio::io::split(near);
+    let host_got = drain(host_read);
+    let piped = within(
+        "the tunnel",
+        pipe(
+            &mut local,
+            &head,
+            near_read,
+            near_write,
+            &refused,
+            &relay,
+            &slot(),
+            &|| {},
+        ),
+    )
+    .await;
+    assert_eq!(piped, (Piped::Budget, 0));
+    assert_eq!(refused.used(), 0);
+    drop(local);
+    assert_eq!(
+        within("the host's end", host_got).await.unwrap(),
+        0,
+        "nothing of the head was written"
+    );
+
+    let counted = RelayBudget::new(8 * 1024);
+    let Ends {
+        page,
+        mut local,
+        host,
+        near,
+    } = ends();
+    let (near_read, near_write) = tokio::io::split(near);
+    drop(page);
+    let host_got = tokio::spawn(async move {
+        let (mut host_read, host_write) = tokio::io::split(host);
+        let mut got = Vec::new();
+        let _ = host_read.read_to_end(&mut got).await;
+        drop(host_write);
+        got.len()
+    });
+    within(
+        "the tunnel",
+        pipe(
+            &mut local,
+            &head,
+            near_read,
+            near_write,
+            &counted,
+            &relay,
+            &slot(),
+            &|| {},
+        ),
+    )
+    .await;
+    assert_eq!(
+        within("the host's end", host_got).await.unwrap(),
+        head.len()
+    );
+    assert_eq!(counted.used(), head.len() as u64);
+}
+
+// A connection whose task is dropped while it waits for a place (its
+// listener released, its owner gone) gives its waiting count back, so the
+// pair's next connections still wait rather than being refused at once.
+#[tokio::test(start_paused = true)]
+async fn waiters_whose_tasks_are_dropped_give_their_count_back() {
+    let places = Arc::new(Places::default());
+    let mut held = Vec::new();
+    for _ in 0..PLACES {
+        held.push(places.take().await.unwrap());
+    }
+    let waiting: Vec<_> = (0..MAX_WAITING)
+        .map(|_| {
+            let places = Arc::clone(&places);
+            tokio::spawn(async move { places.take().await.is_some() })
+        })
+        .collect();
+    while lock(&places.inner).waiting < MAX_WAITING {
+        tokio::task::yield_now().await;
+    }
+    for waiter in &waiting {
+        waiter.abort();
+    }
+    for waiter in waiting {
+        let _ = waiter.await;
+    }
+    assert_eq!(lock(&places.inner).waiting, 0);
+    let next = {
+        let places = Arc::clone(&places);
+        tokio::spawn(async move { places.take().await.is_some() })
+    };
+    while lock(&places.inner).waiting < 1 {
+        tokio::task::yield_now().await;
+    }
+    drop(held.pop());
+    assert!(next.await.unwrap(), "it waited and took the freed place");
 }
 
 fn basic(secret: &str) -> String {
@@ -294,6 +477,31 @@ async fn a_head_past_its_bound_is_refused() {
     let (mut page, mut local) = tokio::io::duplex(4 * MAX_HEAD);
     page.write_all(&vec![b'a'; MAX_HEAD + 2]).await.unwrap();
     assert!(read_head(&mut local).await.is_err());
+}
+
+// The bound holds the head with its blank line, whether or not it ended:
+// one that ends past it is refused, and one that ends exactly at it is kept
+// with the body bytes read beside it.
+#[tokio::test]
+async fn a_completed_head_past_its_bound_is_refused_and_one_at_it_keeps_its_body() {
+    let start = b"GET http://example.test/ HTTP/1.1\r\nX-Pad: ".to_vec();
+    let mut long = start.clone();
+    long.extend(vec![b'a'; MAX_HEAD]);
+    long.extend(b"\r\n\r\n");
+    let (mut page, mut local) = tokio::io::duplex(4 * MAX_HEAD);
+    page.write_all(&long).await.unwrap();
+    assert!(read_head(&mut local).await.is_err());
+
+    let mut exact = start;
+    exact.extend(vec![b'a'; MAX_HEAD - exact.len() - 4]);
+    exact.extend(b"\r\n\r\n");
+    assert_eq!(exact.len(), MAX_HEAD);
+    exact.extend(b"body");
+    let (mut page, mut local) = tokio::io::duplex(4 * MAX_HEAD);
+    page.write_all(&exact).await.unwrap();
+    drop(page);
+    let head = read_head(&mut local).await.expect("a head at the bound");
+    assert!(head.len() >= MAX_HEAD);
 }
 
 /// An origin on this machine's loopback that answers every request `ok`
@@ -441,6 +649,10 @@ impl Reach for Unpaired {
     fn link(&self, _device: &str, _key: &PeerKey) -> Result<Link, &'static str> {
         Err("not_paired")
     }
+
+    fn pairing(&self, _device: &str, _key: &PeerKey) -> Option<String> {
+        None
+    }
 }
 
 /// A page's connection to the guest's listener at `port`.
@@ -510,6 +722,60 @@ async fn a_page_s_request_rides_a_page_stream_to_the_host_s_network_only_with_it
     .await;
 }
 
+/// Processes the listener tests own as listeners' owners: this test binary
+/// run as `idle_owner`, which waits on its standard input, so the test needs
+/// no program of the system's; every one is ended and reaped when the guard
+/// goes, a failing assertion included.
+struct Owners(Vec<std::process::Child>);
+
+impl Owners {
+    fn start(count: usize) -> Self {
+        let mut owners = Self(Vec::new());
+        for _ in 0..count {
+            owners.0.push(
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "screen_net::tests::idle_owner",
+                        "--ignored",
+                        "--quiet",
+                    ])
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            );
+        }
+        owners
+    }
+
+    fn pid(&self, at: usize) -> i32 {
+        i32::try_from(self.0[at].id()).unwrap()
+    }
+
+    fn end(&mut self, at: usize) {
+        let _ = self.0[at].kill();
+        let _ = self.0[at].wait();
+    }
+}
+
+impl Drop for Owners {
+    fn drop(&mut self) {
+        for owner in &mut self.0 {
+            let _ = owner.kill();
+            let _ = owner.wait();
+        }
+    }
+}
+
+/// The process `Owners` starts: it ends when its standard input closes.
+#[test]
+#[ignore = "run only as the child of the listener tests"]
+fn idle_owner() {
+    let _ = std::io::Read::read(&mut std::io::stdin(), &mut [0_u8; 1]);
+}
+
 // A machine not paired under the key opens nothing; with every place held
 // a new owner is refused and every held listener keeps its port; a listener
 // whose owner process ended closes at its next check.
@@ -519,46 +785,179 @@ async fn listeners_are_bounded_and_end_with_their_owner_or_their_pairing() {
     let own = i32::try_from(std::process::id()).unwrap();
     assert_eq!(net.ensure("another-pc", key, own).await, Err("not_paired"));
     assert_eq!(net.listening(), 0);
-    let mut owners: Vec<std::process::Child> = (0..=MAX_LISTENERS)
-        .map(|_| {
-            std::process::Command::new("sleep")
-                .arg("60")
-                .spawn()
-                .unwrap()
-        })
-        .collect();
+    let mut owners = Owners::start(MAX_LISTENERS + 1);
     let mut held = Vec::new();
-    for owner in &owners[..MAX_LISTENERS] {
-        held.push(
-            net.ensure("windows-pc", key, owner.id() as i32)
-                .await
-                .unwrap(),
-        );
+    for at in 0..MAX_LISTENERS {
+        held.push(net.ensure("windows-pc", key, owners.pid(at)).await.unwrap());
     }
     assert_eq!(
-        net.ensure("windows-pc", key, owners[MAX_LISTENERS].id() as i32)
+        net.ensure("windows-pc", key, owners.pid(MAX_LISTENERS))
             .await,
         Err("net_limit")
     );
-    for (owner, listener) in owners.iter().zip(&held) {
+    for (at, listener) in held.iter().enumerate() {
         assert_eq!(
-            net.ensure("windows-pc", key, owner.id() as i32)
+            net.ensure("windows-pc", key, owners.pid(at))
                 .await
                 .unwrap()
                 .port,
             listener.port
         );
     }
-    owners[0].kill().unwrap();
-    owners[0].wait().unwrap();
+    owners.end(0);
     within("the gone owner's listener to close", async {
         while net.listening() == MAX_LISTENERS {
             tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the gone owner's listener is closed by its periodic check
         }
     })
     .await;
-    for owner in &mut owners {
-        let _ = owner.kill();
-        let _ = owner.wait();
+}
+
+/// The one listener `net` holds now.
+fn only_listener(net: &ScreenNet) -> Arc<Listener> {
+    let listeners = lock(&net.listeners);
+    let [listener] = listeners.values().collect::<Vec<_>>()[..] else {
+        panic!("one listener: {}", listeners.len())
+    };
+    Arc::clone(listener)
+}
+
+/// A request through the listener at `port` for an origin on this
+/// machine's loopback, and the status line of its answer.
+async fn through(port: u16, secret: &str, origin: u16, path: &str) -> String {
+    let mut page = page(port).await;
+    page.write_all(
+        format!(
+            "GET http://127.0.0.1:{origin}{path} HTTP/1.1\r\nHost: 127.0.0.1:{origin}\r\nProxy-Authorization: Basic {}\r\n\r\n",
+            basic(secret)
+        )
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+    answer_of(&mut page)
+        .await
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+// A host that dropped a stream unanswered is a build to update on the
+// connection it was seen on alone: the same host updated and connected
+// again is asked afresh, and the first answer back clears the mark, through
+// the same port.
+#[tokio::test]
+async fn an_unanswered_stream_names_its_connection_and_an_answer_clears_it() {
+    let (_host, guest, net, key) = pair().await;
+    let pid = i32::try_from(std::process::id()).unwrap();
+    let ensured = net.ensure("windows-pc", key, pid).await.unwrap();
+    let listener = only_listener(&net);
+    let link = net.reach.link("windows-pc", &key).unwrap();
+    let grant = guest
+        .host
+        .peers()
+        .unwrap()
+        .hosts()
+        .into_iter()
+        .find(|host| host.key == key)
+        .unwrap()
+        .grant;
+    assert_eq!(
+        ensured.pairing,
+        pairing_of(&grant),
+        "the pairing names the grant"
+    );
+    assert_eq!(ensured.pairing.len(), 32);
+    *lock(&listener.unsupported) = Some(link.id().wrapping_add(1));
+    assert_eq!(
+        net.ensure("windows-pc", key, pid).await.unwrap().state,
+        "ready",
+        "another connection's mark"
+    );
+    *lock(&listener.unsupported) = Some(link.id());
+    assert_eq!(
+        net.ensure("windows-pc", key, pid).await.unwrap().state,
+        "unsupported_there"
+    );
+    let (origin, _) = origin().await;
+    assert_eq!(
+        through(ensured.port, &ensured.secret, origin, "/answered").await,
+        "HTTP/1.1 200 OK"
+    );
+    let again = net.ensure("windows-pc", key, pid).await.unwrap();
+    assert_eq!((again.port, again.state), (ensured.port, "ready"));
+}
+
+// A failed accept fails that one connection: the listener and the port the
+// pages point at stay, and the next connection is carried.
+#[tokio::test]
+async fn a_failed_accept_keeps_the_listener_and_its_port() {
+    let (_host, _guest, net, key) = pair().await;
+    let pid = i32::try_from(std::process::id()).unwrap();
+    let ensured = net.ensure("windows-pc", key, pid).await.unwrap();
+    only_listener(&net).fail_accepts.store(3, Ordering::SeqCst);
+    let (origin, _) = origin().await;
+    assert_eq!(
+        through(ensured.port, &ensured.secret, origin, "/after").await,
+        "HTTP/1.1 200 OK"
+    );
+    assert_eq!(net.listening(), 1);
+    assert_eq!(
+        net.ensure("windows-pc", key, pid).await.unwrap().port,
+        ensured.port
+    );
+}
+
+// The host counts its streams on its own side: a stream it refuses for the
+// count is asked for again, and carried once one of the pair's ends there.
+#[tokio::test]
+async fn a_stream_the_host_refuses_for_its_count_is_asked_for_again_until_one_ends() {
+    let (_host, _guest, net, key) = pair().await;
+    let link = net.reach.link("windows-pc", &key).unwrap();
+    let mut held = Vec::new();
+    for _ in 0..PLACES {
+        held.push(link.open(StreamKind::Page).await.unwrap());
     }
+    assert!(matches!(
+        link.open(StreamKind::Page).await,
+        Err(hide_peer::peers::OpenError::Refused(
+            hide_peer::protocol::stream::Status::Limit
+        ))
+    ));
+    let asking = {
+        let link = link.clone();
+        tokio::spawn(async move { open_page(&link).await.is_ok() })
+    };
+    tokio::time::sleep(OPEN_AGAIN * 4).await; // wait-ok: the open has been refused at least once before a stream ends
+    drop(held.pop());
+    assert!(within("the stream after one ended", asking).await.unwrap());
+}
+
+// What is kept for a pair goes with its last listener unless it counted
+// relay bytes today, and the budgets are held to `MAX_BUDGETS` with no
+// allowance reset: a pair past it counts in the shared record.
+#[tokio::test]
+async fn a_pair_s_records_go_with_its_last_listener_and_today_s_bytes_stay() {
+    let (_host, _guest, net, key) = pair().await;
+    let pid = i32::try_from(std::process::id()).unwrap();
+    net.ensure("windows-pc", key, pid).await.unwrap();
+    let _ = net.places_of(key);
+    let _ = net.budget_of(key);
+    assert_eq!(net.kept(), (1, 1));
+    net.release("windows-pc", key, pid);
+    assert_eq!(net.kept(), (0, 0), "nothing counted: nothing kept");
+    net.ensure("windows-pc", key, pid).await.unwrap();
+    assert!(net.budget_of(key).reserve(10));
+    net.release("windows-pc", key, pid);
+    assert_eq!(net.kept().1, 1, "today's bytes stay");
+    assert_eq!(net.budget_of(key).used(), 10);
+
+    for n in 0..MAX_BUDGETS + 10 {
+        let mut bytes = [1_u8; 32];
+        bytes[..8].copy_from_slice(&(n as u64).to_le_bytes());
+        assert!(net.budget_of(PeerKey::from_bytes(bytes)).reserve(1));
+    }
+    assert!(net.kept().1 <= MAX_BUDGETS + 1, "{}", net.kept().1);
+    assert_eq!(net.budget_of(key).used(), 10, "no allowance was reset");
 }

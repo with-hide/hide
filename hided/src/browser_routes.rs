@@ -682,7 +682,8 @@ fn loopback_target(raw: &str) -> Option<(String, u16, String, String)> {
         .port_u16()
         .unwrap_or(if scheme == "https" { 443 } else { 80 });
     let local_host = match host.as_str() {
-        "0.0.0.0" => "127.0.0.1",
+        "0.0.0.0" | "[::ffff:0.0.0.0]" | "[::ffff:0:0]" => "127.0.0.1",
+        "::" | "[::]" => "[::1]",
         "localhost." => "localhost",
         "::1" => "[::1]",
         _ => &host,

@@ -293,12 +293,13 @@ export function browserPartition(workspace: string, url: string, node: string | 
 
 /**
  * The login storage of the pages another computer's screen shows here: one
- * persistent partition per machine and the key it was paired under, shared
- * with no page of this window, of another machine or of that machine under
- * another key.
+ * persistent partition per machine, the key it was paired under and the
+ * pairing itself (the daemon's name for the grant that machine gave),
+ * shared with no page of this window, of another machine, of that machine
+ * under another key, or of an earlier pairing of it.
  */
-export function remotePagePartition(device: string, key: string): string {
-  return `persist:hide-remote-page-${createHash("sha256").update(`${device}\u0000${key}`).digest("hex").slice(0, 32)}`;
+export function remotePagePartition(device: string, key: string, pairing: string): string {
+  return `persist:hide-remote-page-${createHash("sha256").update(`${device}\u0000${key}\u0000${pairing}`).digest("hex").slice(0, 32)}`;
 }
 
 /**

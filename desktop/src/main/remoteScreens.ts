@@ -302,17 +302,17 @@ export class RemoteScreens {
   }
 
   /**
-   * The machines this window's operator holds now, by `pairName`: the login
-   * storage of every other one is cleared, with its pages, and its proxy is
-   * let go.
+   * The machines core `core` holds now, by `pairName`, as this window's
+   * shell names them: the login storage of every other one of that core's is
+   * cleared, with its pages, and its proxy is let go.
    */
-  keepPaired(paired: ReadonlySet<string>): void {
+  keepPaired(core: string, paired: ReadonlySet<string>): void {
     for (const screen of this.screens.values()) {
       if (paired.has(pairName(screen.device, screen.key))) continue;
       this.deps.browsers?.()?.closeRemotePages(screen.device, screen.key);
       this.deps.egress?.release(screen.device, screen.key);
     }
-    this.deps.storage?.keep(paired);
+    this.deps.storage?.keep(core, paired);
   }
 
   /** Every screen closes: the window went, or this computer's daemon is another one now. */
@@ -365,7 +365,12 @@ export class RemoteScreens {
       focused: () => !contents.isDestroyed() && contents.isFocused(),
       ready: () => this.deps.egress?.ready(device, key) ?? false,
       ensure: () => this.deps.egress?.ensure(device, key) ?? Promise.resolve("remote_update_here"),
-      storage: () => this.deps.storage?.admit(device, key) ?? "live",
+      partition: () => this.deps.egress?.partition(device, key) ?? null,
+      storage: () => {
+        const pairing = this.deps.egress?.pairing(device, key) ?? null;
+        if (!this.deps.storage) return "live";
+        return pairing === null ? "waiting" : this.deps.storage.admit(device, key, pairing);
+      },
       route: (workspace, id, load) => this.route(device, key, workspace, id, load),
     };
   }

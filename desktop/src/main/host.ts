@@ -396,7 +396,14 @@ export class DesktopHost {
    * shell says which one shows where, and only this window's shell is heard.
    */
   private listenRemoteScreens(): void {
-    const egress = new RemoteEgress({ daemon: () => this.remoteDaemon(), log: this.log });
+    const egress = new RemoteEgress({
+      daemon: () => this.remoteDaemon(), log: this.log,
+      // A pairing made again under the same key: its pages move to the new pairing's storage.
+      repaired: (device, key) => {
+        this.browsers?.closeRemotePages(device, key);
+        this.browsers?.remoteRetry(device, key);
+      },
+    });
     const storage = RemoteStorage.at(app.getPath("userData"), this.log, (device, key) => this.browsers?.closeRemotePages(device, key), (device, key) => this.browsers?.remoteRetry(device, key));
     const remote = new RemoteScreens({
       window: () => this.window, daemon: () => this.remoteDaemon(), registry: () => this.registry, background: __HIDE_BACKGROUND__, language: () => this.language.language, log: this.log,
@@ -418,9 +425,9 @@ export class DesktopHost {
     // none names nothing, so a reload clears nothing.
     ipcMain.on(REMOTE_PAIRED_CHANNEL, (event: IpcMainEvent, reported: unknown) => {
       if (!this.fromShell(event)) return;
-      const pairs = parsePaired(reported);
-      if (!pairs) return this.log.event("remote.paired_refused", {});
-      remote.keepPaired(pairs);
+      const paired = parsePaired(reported);
+      if (!paired) return this.log.event("remote.paired_refused", {});
+      remote.keepPaired(paired.core, paired.pairs);
     });
     ipcMain.on(REMOTE_SHOW_CHANNEL, (event: IpcMainEvent, reported: unknown) => {
       if (!this.fromShell(event)) return;

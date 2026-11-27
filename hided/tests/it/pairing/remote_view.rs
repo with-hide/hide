@@ -647,6 +647,11 @@ async fn a_screen_page_request_comes_from_a_port_the_host_dialed() {
         during["port"], listener["port"],
         "a pause keeps the listener"
     );
+    assert_eq!(
+        during["pairing"], listener["pairing"],
+        "a pause keeps the pairing its sign-ins are stored under"
+    );
+    assert_eq!(listener["pairing"].as_str().map(str::len), Some(32));
     let mut later = tokio::net::TcpStream::connect(("127.0.0.1", listen))
         .await
         .unwrap();
@@ -682,5 +687,81 @@ async fn a_screen_page_request_comes_from_a_port_the_host_dialed() {
         through(&mut again, origin_port, "/resumed", Some(&secret)).await,
         "HTTP/1.1 200 OK"
     );
+    drop(running);
+}
+
+/// A POST of `body` on the guest daemon, with its token.
+async fn post_json(port: u16, path: &str, token: &str, body: &Value) -> (u16, Value) {
+    use http_body_util::{BodyExt, Full};
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::TokioExecutor;
+    let client = Client::builder(TokioExecutor::new()).build_http::<Full<hyper::body::Bytes>>();
+    let request = hyper::Request::post(format!("http://127.0.0.1:{port}{path}"))
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Full::new(hyper::body::Bytes::from(body.to_string())))
+        .unwrap();
+    let response = client.request(request).await.unwrap();
+    let status = response.status().as_u16();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+
+// docs/BROWSER_DISPLAYS.md, A page in another computer's screen: the guest
+// asks the host where a display of the host's screen loads from, over that
+// screen's own stream, so the host's core is the one that decides. Nothing is
+// asked while the guest shows no screen of the host; once it shows one, the
+// host reads the question (one out of shape is refused, which it does only
+// for a live view of this guest) and asks its core, which answers a display
+// it does not have as gone. The core's answers for a display that is there,
+// the host's own and a third machine's, are `remote_screen::tests`' (a
+// display needs a pane, which this fixture's daemon has no holder for).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_screen_asks_its_host_where_a_display_loads_from() {
+    let root = crate::fixtures::fixture_root("hr");
+    let running = hided::start_daemon(host_env(root.path())).await.unwrap();
+    let host = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
+    let _stop = StopOnDrop(&guest);
+    let connected = guest.run(&["connect"]);
+    assert!(connected.ok, "the guest daemon: {}", connected.text());
+    let (window, host_id, _) = pair_by_link(&running, &host, &guest).await;
+    drop(window);
+    let (port, token) = daemon_of(&guest);
+    let key = host_key(&guest);
+    let route = format!("/peer-screen/{host_id}/page-route?key={key}");
+    let ask = json!({"device": host_id, "checkout": "/web", "view": "d999", "load": 1});
+
+    let (status, answer) = post_json(port, &route, &token, &ask).await;
+    assert_eq!(
+        (status, answer["reason"].as_str()),
+        (503, Some("not_shown")),
+        "{answer}"
+    );
+    let mut view = open_view(port, &token, &host_id, &key).await;
+    until(&mut view, "the host's snapshot", |frame| {
+        frame["type"] == "snapshot"
+    })
+    .await;
+    let (status, answer) = post_json(port, &route, &token, &json!({"device": ""})).await;
+    assert_eq!(
+        status, 400,
+        "the host read the question of a live view: {answer}"
+    );
+    let (status, answer) = post_json(port, &route, &token, &ask).await;
+    assert_eq!(
+        (status, answer["reason"].as_str()),
+        (410, Some("view_unavailable")),
+        "{answer}"
+    );
+    drop(view);
     drop(running);
 }

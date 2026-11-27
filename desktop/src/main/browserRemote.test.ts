@@ -32,7 +32,8 @@ vi.mock("electron", () => ({
 
 const DEVICE = "mini";
 const KEY = "ab".repeat(32);
-const PARTITION = remotePagePartition(DEVICE, KEY);
+const PAIRING = "11".repeat(16);
+const PARTITION = remotePagePartition(DEVICE, KEY, PAIRING);
 const workspace = "mini\u0000/web";
 const TILE = { x: 100, y: 50, width: 800, height: 600 };
 const RECT = { x: 400, y: 40, width: 600, height: 500 };
@@ -92,7 +93,7 @@ function screen() {
   });
   subject.attach(window as never);
   const screenContents = Object.assign(new EventEmitter(), { id: 1, isDestroyed: () => false, isFocused: () => false, send: vi.fn(), focus: vi.fn() });
-  const state = { ready: false, area: { bounds: TILE, zoom: 1 } as { bounds: typeof TILE; zoom: number } | null, storage: "live" as "live" | "clearing" | "full" };
+  const state = { ready: false, area: { bounds: TILE, zoom: 1 } as { bounds: typeof TILE; zoom: number } | null, storage: "live" as "live" | "clearing" | "full" | "waiting", partition: PARTITION as string | null };
   const addresses = new Map<string, string>();
   const route = vi.fn(async (_workspace: string, id: string, load: number): Promise<RemoteRoute> => {
     const url = addresses.get(id) ?? "";
@@ -105,6 +106,7 @@ function screen() {
     focused: () => false,
     ready: () => state.ready,
     ensure: vi.fn(async () => { state.ready = true; return "ready"; }),
+    partition: () => state.partition,
     storage: () => state.storage,
     route,
   };
@@ -183,6 +185,38 @@ describe("a remote screen's pages", () => {
     await settle();
     expect(views).toHaveLength(4);
     expect(events().find((event) => event.id === "d5" && event.kind === "state")?.state?.failure).toBe(english("native.browser.remotePageLimit"));
+  });
+
+  // The operator walks through five displays: the four first stay retained,
+  // hidden, and the one on screen takes the place of the one shown longest
+  // ago rather than being refused.
+  it("close the hidden page shown longest ago for a placed display past four", async () => {
+    const { sync, display, views, events, settle } = screen();
+    const ids = ["d1", "d2", "d3", "d4", "d5"];
+    const retained = ids.map((id) => ({ workspace, id, area_id: "a1", url: `https://${id}.example/`, load: 3 }));
+    for (const id of ids) {
+      sync([display(id)], retained);
+      await settle();
+    }
+    expect(views).toHaveLength(5);
+    expect(views.map((view) => view.contents.close.mock.calls.length > 0)).toEqual([true, false, false, false, false]);
+    expect(events().some((event) => event.kind === "state" && event.state?.failure === english("native.browser.remotePageLimit"))).toBe(false);
+  });
+
+  // A display placed later in the same sync is not the one closed, though its
+  // page was shown longest ago: the choice reads the sync's own placements.
+  it("never close for a placement a page the same sync places", async () => {
+    const { sync, display, views, settle } = screen();
+    const ids = ["a", "b", "c", "d", "e"];
+    const retained = ids.map((id) => ({ workspace, id, area_id: "a1", url: `https://${id}.example/`, load: 3 }));
+    for (const id of ["a", "b", "c", "d"]) {
+      sync([display(id)], retained);
+      await settle();
+    }
+    sync([display("e"), display("a")], retained);
+    await settle();
+    expect(views).toHaveLength(5);
+    expect(views.map((view) => view.contents.close.mock.calls.length > 0)).toEqual([false, true, false, false, false]);
   });
 
   it("make at most eight in ten seconds, and the ninth once the window has room", async () => {

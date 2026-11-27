@@ -317,13 +317,15 @@ describe("another computer's screen's pages", () => {
     expect(parseRemoteSync({ workspace: null, displays: [], retained: retained(Array.from({ length: REMOTE_BOUNDS.retained + 1 }, (_, n) => `r${n}`)) })).toBeNull();
   });
 
-  it("keep one login storage per machine and key, never one of this window's", () => {
+  it("keep one login storage per machine, key and pairing, never one of this window's", () => {
     const key = "ab".repeat(32);
-    const partition = remotePagePartition("mini", key);
+    const pairing = "11".repeat(16);
+    const partition = remotePagePartition("mini", key, pairing);
     expect(partition).toMatch(/^persist:hide-remote-page-[0-9a-f]{32}$/);
-    expect(remotePagePartition("mini", key)).toBe(partition);
-    expect(remotePagePartition("mini", "cd".repeat(32))).not.toBe(partition);
-    expect(remotePagePartition("pc", key)).not.toBe(partition);
+    expect(remotePagePartition("mini", key, pairing)).toBe(partition);
+    expect(remotePagePartition("mini", "cd".repeat(32), pairing)).not.toBe(partition);
+    expect(remotePagePartition("pc", key, pairing)).not.toBe(partition);
+    expect(remotePagePartition("mini", key, "22".repeat(16))).not.toBe(partition);
     for (const url of ["https://mini.example/", "http://localhost:3000/", "file:///Users/me/a.html"]) {
       expect(browserPartition(workspace, url, null)).not.toBe(partition);
       expect(browserPartition(workspace, url, "mini")).not.toBe(partition);

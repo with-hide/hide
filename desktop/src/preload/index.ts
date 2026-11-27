@@ -187,8 +187,8 @@ contextBridge.exposeInMainWorld("hideHost", {
     go(request: { device: string; key: string; work: RemoteWork }): void {
       ipcRenderer.send(REMOTE_GO_CHANNEL, request);
     },
-    paired(pairs: { device: string; key: string }[]): void {
-      ipcRenderer.send(REMOTE_PAIRED_CHANNEL, pairs);
+    paired(paired: { core: string; pairs: { device: string; key: string }[] }): void {
+      ipcRenderer.send(REMOTE_PAIRED_CHANNEL, paired);
     },
     settings(): void {
       ipcRenderer.send(REMOTE_SETTINGS_CHANNEL);

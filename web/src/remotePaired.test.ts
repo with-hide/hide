@@ -17,7 +17,15 @@ describe("the paired set", () => {
       },
       peers: [],
     } as unknown as SnapshotRest;
-    expect(JSON.parse(pairedSet(rest))).toEqual([{ device: "mini", key: "aa".repeat(32) }, { device: "pc", key: "bb".repeat(32) }]);
-    expect(pairedSet({ navigator: { devices: [] } } as unknown as SnapshotRest)).toBe("[]");
+    expect(JSON.parse(pairedSet(rest)!)).toEqual({ core: "mac", pairs: [{ device: "mini", key: "aa".repeat(32) }, { device: "pc", key: "bb".repeat(32) }] });
+    expect(JSON.parse(pairedSet({ navigator: { devices: [{ id: "mac", kind: "local" }] } } as unknown as SnapshotRest)!)).toEqual({ core: "mac", pairs: [] });
+  });
+
+  // A snapshot with no device list, or none of its own machine, names
+  // nothing: the desktop app then clears no machine's logins.
+  it("names nothing when the snapshot does not say which machines the core holds", () => {
+    expect(pairedSet({} as SnapshotRest)).toBeNull();
+    expect(pairedSet({ navigator: {} } as unknown as SnapshotRest)).toBeNull();
+    expect(pairedSet({ navigator: { devices: [] } } as unknown as SnapshotRest)).toBeNull();
   });
 });

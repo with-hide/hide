@@ -387,13 +387,41 @@ fn refusal(status: StatusCode, reason: &str) -> Response {
 /// and the answer says whether it is this machine's own, whose loopback the
 /// page may reach through this machine.
 async fn page_route(headers: HeaderMap, State(route): State<ViewRoute>, body: Bytes) -> Response {
-    let Some(view) = view_of(&headers) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    if !lock(&route.screens.bulks).contains_key(&(route.viewer.key, view)) {
-        return refusal(StatusCode::GONE, "view_unavailable");
+    let live = view_of(&headers)
+        .map(|view| lock(&route.screens.bulks).contains_key(&(route.viewer.key, view)));
+    let core = Arc::clone(&route.state.core);
+    answer_page_route(live, &body, move |ask| {
+        let own = core.node().as_str().to_owned();
+        core.browser_route_source(&ask.device, &ask.checkout, &ask.view, ask.load)
+            .map(|source| (source, own))
+    })
+    .await
+}
+
+/// The core's answer to where a display loads from, with the core's own
+/// node id.
+type RouteSourceOf = Result<
+    (
+        Option<hide_core::workspace_control::BrowserRouteSource>,
+        String,
+    ),
+    String,
+>;
+
+/// `/page-route`'s whole answer once the view the request named is judged
+/// (`None`: it named none; `Some(false)`: not one of this guest's live
+/// views): the question read and bounded, the core asked through
+/// `source_of` on a blocking task, and its source decided.
+async fn answer_page_route<F>(view_live: Option<bool>, body: &[u8], source_of: F) -> Response
+where
+    F: FnOnce(PageRouteAsk) -> RouteSourceOf + Send + 'static,
+{
+    match view_live {
+        None => return StatusCode::BAD_REQUEST.into_response(),
+        Some(false) => return refusal(StatusCode::GONE, "view_unavailable"),
+        Some(true) => {}
     }
-    let Ok(ask) = serde_json::from_slice::<PageRouteAsk>(&body) else {
+    let Ok(ask) = serde_json::from_slice::<PageRouteAsk>(body) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
     if [&ask.device, &ask.checkout, &ask.view]
@@ -402,15 +430,8 @@ async fn page_route(headers: HeaderMap, State(route): State<ViewRoute>, body: By
     {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let core = Arc::clone(&route.state.core);
     let load = ask.load;
-    let source = tokio::task::spawn_blocking(move || {
-        let own = core.node().as_str().to_owned();
-        core.browser_route_source(&ask.device, &ask.checkout, &ask.view, ask.load)
-            .map(|source| (source, own))
-    })
-    .await;
-    let (source, own_node) = match source {
+    let (source, own_node) = match tokio::task::spawn_blocking(move || source_of(ask)).await {
         Ok(Ok(found)) => found,
         _ => return refusal(StatusCode::SERVICE_UNAVAILABLE, "core_unavailable"),
     };
@@ -981,6 +1002,109 @@ async fn open_view_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The answer `/page-route` gives a question for `url`, the core naming
+    /// `device` as the page's machine and `host` as its own.
+    async fn routed(device: &str, url: &str) -> (StatusCode, serde_json::Value) {
+        let body =
+            json!({"device": "host", "checkout": "/web", "view": "d1", "load": 7}).to_string();
+        let (device, url) = (device.to_owned(), url.to_owned());
+        let answer = answer_page_route(Some(true), body.as_bytes(), move |ask| {
+            assert_eq!(
+                (ask.device.as_str(), ask.view.as_str(), ask.load),
+                ("host", "d1", 7)
+            );
+            Ok((
+                Some(hide_core::workspace_control::BrowserRouteSource {
+                    device_id: device,
+                    checkout_path: "/web".to_owned(),
+                    url,
+                    load: 7,
+                }),
+                "host".to_owned(),
+            ))
+        })
+        .await;
+        let status = answer.status();
+        let bytes = http_body_util::BodyExt::collect(answer.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    // Where a display the guest draws loads from is the host core's answer:
+    // a page of a third device on that device's loopback, the unspecified
+    // address that reaches it included, or in its files is refused, since
+    // only that device reaches it; the host's own file page is not served to
+    // a screen yet; a public page of another device loads through the host as
+    // not its own, and the host's own loopback page as its own.
+    #[tokio::test]
+    async fn a_screen_s_page_route_refuses_a_third_device_s_loopback_and_files() {
+        for url in [
+            "http://localhost:5173/",
+            "http://127.0.0.1:3000/a",
+            "http://[::]:8080/",
+            "http://0.0.0.0:8080/",
+            "file:///Users/c/report.html",
+        ] {
+            let (status, body) = routed("device-c", url).await;
+            assert_eq!(
+                (status, body["reason"].as_str()),
+                (
+                    StatusCode::FORBIDDEN,
+                    Some("remote_device_page_unavailable")
+                ),
+                "{url}"
+            );
+        }
+        let (status, body) = routed("host", "file:///Users/h/report.html").await;
+        assert_eq!(
+            (status, body["reason"].as_str()),
+            (StatusCode::FORBIDDEN, Some("remote_file_unavailable"))
+        );
+        let (status, body) = routed("device-c", "https://example.com/").await;
+        assert_eq!(
+            (status, body["own"].as_bool(), body["url"].as_str()),
+            (StatusCode::OK, Some(false), Some("https://example.com/"))
+        );
+        let (status, body) = routed("host", "http://localhost:5173/").await;
+        assert_eq!(
+            (status, body["own"].as_bool(), body["load"].as_u64()),
+            (StatusCode::OK, Some(true), Some(7))
+        );
+    }
+
+    // A view that is not this guest's live one is answered before the core
+    // is asked, and a question out of shape is refused.
+    #[tokio::test]
+    async fn a_page_route_answers_only_a_live_view_of_its_guest() {
+        let never = |_: PageRouteAsk| -> RouteSourceOf { panic!("the core is not asked") };
+        assert_eq!(
+            answer_page_route(Some(false), b"{}", never).await.status(),
+            StatusCode::GONE
+        );
+        assert_eq!(
+            answer_page_route(None, b"{}", never).await.status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            answer_page_route(Some(true), b"not json", never)
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        let gone = answer_page_route(
+            Some(true),
+            br#"{"device":"h","checkout":"/w","view":"d1","load":1}"#,
+            |_| Ok((None, "h".to_owned())),
+        )
+        .await;
+        assert_eq!(gone.status(), StatusCode::GONE);
+    }
 
     fn viewer(byte: u8) -> Viewer {
         Viewer {

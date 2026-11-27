@@ -465,12 +465,12 @@ describe("a remote screen's pages and links", () => {
   it("closes an unpaired machine's pages and lets go of its proxy, and a key change ends the earlier key's source", () => {
     const { screens, browsers, egress, storage } = screensWith(() => 0);
     screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null, display: null });
-    screens.keepPaired(new Set([`${DEVICE}\u0000${KEY}`]));
+    screens.keepPaired("laptop-core", new Set([`${DEVICE}\u0000${KEY}`]));
     expect(browsers.closeRemotePages).not.toHaveBeenCalled();
-    screens.keepPaired(new Set());
+    screens.keepPaired("laptop-core", new Set());
     expect(browsers.closeRemotePages).toHaveBeenCalledWith(DEVICE, KEY);
     expect(egress.release).toHaveBeenCalledWith(DEVICE, KEY);
-    expect(storage.keep).toHaveBeenLastCalledWith(new Set());
+    expect(storage.keep).toHaveBeenLastCalledWith("laptop-core", new Set());
     screens.show({ device: DEVICE, key: REPLACEMENT, rect: RECT, name: null, display: null });
     expect(browsers.removeRemote).toHaveBeenCalledWith(browsers.addRemote.mock.calls[0]![0]);
     expect(egress.release).toHaveBeenLastCalledWith(DEVICE, KEY);

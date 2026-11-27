@@ -430,7 +430,7 @@ export function BrowserHost({ actions }: { actions: Actions }) {
   const paired = useShellStore((s) => (s.rest ? pairedSet(s.rest) : null));
   useEffect(() => {
     if (paired === null) return;
-    hostBridge()?.remoteScreens?.paired?.(JSON.parse(paired) as { device: string; key: string }[]);
+    hostBridge()?.remoteScreens?.paired?.(JSON.parse(paired) as { core: string; pairs: { device: string; key: string }[] });
   }, [paired]);
 
   const latest = useRef(actions);
