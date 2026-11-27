@@ -70,9 +70,18 @@ pub(crate) struct Release {
     /// The screen of this episode showed no composer where its declaration
     /// puts it: the pane is too narrow for the agent to draw one, or a menu
     /// or a dialog covers it. The letters are held for that, not for a
-    /// draft, until a read of a later episode (a key, a state change or a
-    /// new size) finds the composer.
+    /// draft, until a read finds the composer.
     pub unreadable: bool,
+}
+
+/// When a screen read with no composer on it is read again in the same
+/// episode: on the doorbell's bell backoff, 5 seconds doubling to two
+/// minutes, since the screen can change with nothing Hide observes (an
+/// agent redrawing after a resize, a menu closing on its own).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Again {
+    at: u64,
+    delay: u64,
 }
 
 /// What the reader keeps between doorbell passes. Each map is keyed by a pane
@@ -80,9 +89,9 @@ pub(crate) struct Release {
 /// it is bounded by the open letters and answers and the observation limit.
 #[derive(Default)]
 pub(crate) struct Reader {
-    /// The draft episode each pane's composer was read for, and whether
-    /// that read could not find the composer.
-    read: HashMap<String, (Episode, bool)>,
+    /// The draft episode each pane's composer was read for and, when that
+    /// read could not find the composer, when it is read again.
+    read: HashMap<String, (Episode, Option<Again>)>,
     /// Why a pane's draft episode is not read, logged once per change.
     skipped: HashMap<String, (u64, &'static str)>,
     /// The prompt hook moment each pane was tried at for a version check.
@@ -100,8 +109,10 @@ impl Reader {
     /// Reads the composer of `recipient`, a letter's or an answer's, held
     /// on a possible draft, once per draft episode, and releases the draft
     /// when the screen shows the composer empty. The episode includes the
-    /// pane's size, so a screen that showed no composer is read again once
-    /// the pane is resized, with no key and no state change.
+    /// pane's size, so a resized pane is read at once; a screen that showed
+    /// no composer is read again on the bell's backoff within its episode,
+    /// so a redraw Hide cannot observe, such as the agent's own after a
+    /// resize, is read too.
     pub(crate) fn release(
         &mut self,
         owner: &Mutex<Runtime>,
@@ -132,17 +143,38 @@ impl Reader {
             read.observed.state_change_seq,
             read.size,
         );
-        if let Some((read, unreadable)) = self.read.get(pane)
-            && *read == key
-        {
-            return Release {
-                read: false,
-                unreadable: *unreadable,
-            };
+        let last = self
+            .read
+            .get(pane)
+            .filter(|(read, _)| *read == key)
+            .map(|(_, again)| *again);
+        match last {
+            Some(None) => return Release::default(),
+            Some(Some(again)) if now < again.at => {
+                return Release {
+                    read: false,
+                    unreadable: true,
+                };
+            }
+            _ => {}
         }
         let reading = screen(owner, &read);
         let unreadable = matches!(reading, Ok(Err(miss)) if miss.verdict() == Verdict::NotFound);
-        self.read.insert(pane.clone(), (key, unreadable));
+        let again = unreadable.then(|| {
+            let delay = last
+                .flatten()
+                .map_or(super::doorbell::RETRY_FIRST_MS, |again| {
+                    again
+                        .delay
+                        .saturating_mul(2)
+                        .min(super::doorbell::RETRY_LIMIT_MS)
+                });
+            Again {
+                at: now.saturating_add(delay),
+                delay,
+            }
+        });
+        self.read.insert(pane.clone(), (key, again));
         crate::diagnostic!(json!({"component":"delivery","kind":"composer.read",
             "pane_id":pane,"agent":read.agent,"version":read.version,
             "verdict":verdict_code(reading),"reason":miss_code(reading),

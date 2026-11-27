@@ -39,7 +39,7 @@ const PROMPT_TIMEOUT: Duration = Duration::from_secs(5);
 /// the letter itself or the delivery store's answer, so waiting for the
 /// episode to move could wait until the letter expires.
 pub(crate) const RETRY_FIRST_MS: u64 = 5_000;
-const RETRY_LIMIT_MS: u64 = 120_000;
+pub(crate) const RETRY_LIMIT_MS: u64 = 120_000;
 /// How long a pane whose letters wait on a possible draft rests, with no
 /// input hide routed and no change of the engine's status, before the operator is
 /// shown that they wait (`docs/delivery.md`, Delivering a held letter now).
@@ -460,6 +460,13 @@ pub(crate) struct Doorbell {
     /// into a working pane moves nothing, so that pane is belled again, for a
     /// later letter, once the letter it rang for has left `pending`.
     rung: HashMap<String, Rung>,
+    /// The panes whose last bell try found no composer on the screen
+    /// (`Hold::ComposerUnreadable`), with the recipient it was tried for:
+    /// one bell names every letter waiting there, so each letter of that
+    /// recipient that waits behind the tried one is held for the same, also
+    /// while the tried one sits out its backoff. Pruned to the pending
+    /// letters' panes, as `rung` is.
+    unreadable: HashMap<String, Actor>,
     /// Why each letter waits, logged once per change.
     held: HashMap<String, Hold>,
     /// The composer reads made for panes held on a possible draft.
@@ -728,6 +735,11 @@ impl Doorbell {
                 .iter()
                 .any(|letter| &letter.recipient.pane_id == pane)
         });
+        self.unreadable.retain(|pane, _| {
+            pending
+                .iter()
+                .any(|letter| &letter.recipient.pane_id == pane)
+        });
         let answers = owner
             .lock()
             .map(|mut guard| guard.mission_answers_due())
@@ -806,6 +818,17 @@ impl Doorbell {
             // Exhausted letters still expose a hold, but must not claim the
             // recipient's one bell slot ahead of a newer pending letter.
             if !targets.insert(pane.clone()) {
+                // Behind the letter the pane's bell is tried for: the screen
+                // that held that bell holds this letter too.
+                if self
+                    .unreadable
+                    .get(pane)
+                    .is_some_and(|actor| actor.same_identity(&letter.recipient))
+                {
+                    self.hold(&letter.id, pane, Hold::ComposerUnreadable);
+                } else if self.held.get(&letter.id) == Some(&Hold::ComposerUnreadable) {
+                    self.held.remove(&letter.id);
+                }
                 continue;
             }
             // The bell is worded in the operator's language, read with the
@@ -872,6 +895,7 @@ impl Doorbell {
                 Ok(Outcome::Rung(route)) => {
                     self.held.remove(&letter.id);
                     self.tried.remove(&letter.id);
+                    self.unreadable.remove(pane);
                     self.rung.insert(
                         pane.clone(),
                         Rung {
@@ -884,6 +908,12 @@ impl Doorbell {
                 }
                 Ok(Outcome::Held(reason)) => {
                     self.hold(&letter.id, pane, reason);
+                    if reason == Hold::ComposerUnreadable {
+                        self.unreadable
+                            .insert(pane.clone(), letter.recipient.clone());
+                    } else {
+                        self.unreadable.remove(pane);
+                    }
                     self.tried.insert(
                         letter.id.clone(),
                         Tried {
@@ -904,6 +934,7 @@ impl Doorbell {
                     };
                     crate::diagnostic!(json!({"component":"delivery","kind":"doorbell.failed",
                         "letter_id":letter.id,"pane_id":pane,"code":code,"maybe_typed":typed}));
+                    self.unreadable.remove(pane);
                     record(
                         client,
                         &letter.id,
@@ -5278,9 +5309,11 @@ mod tests {
 
     /// mission-108: a Conductor's pane stood six columns wide all night, so
     /// the read of its draft found no composer and was never made again.
-    /// Such a read holds the letter for that, not as a draft; once the pane
-    /// is widened, with no key and no change of state, the screen is read
-    /// again, shows the composer empty, and the letter rings.
+    /// Such a read holds the letter for that, not as a draft, and is made
+    /// again on the bell's backoff, so the agent's redraw after the pane is
+    /// widened is read even when the read right after the resize still saw
+    /// the narrow frame: with no key, no change of state and no further
+    /// resize, the screen shows the composer empty and the letter rings.
     #[test]
     fn a_draft_read_with_no_composer_is_read_again_and_rung_once_the_pane_widens() {
         let bell = Bell::start(json!({}));
@@ -5305,23 +5338,32 @@ mod tests {
         assert_eq!(read["verdict"], "not_found");
         assert_eq!(read["size"], json!({"rows": 26, "cols": 6}));
         assert_eq!(held(&narrow), ["composer_unreadable"]);
-        assert_eq!(bell.reads(), 1, "the same narrow screen is not read again");
+        assert_eq!(bell.reads(), 1, "not read again inside the backoff");
         assert!(bell.typed().is_empty());
 
+        // The view reports the wider grid, and the read made for it still
+        // sees the frame the agent drew for six columns.
         bell.resize(26, 80);
+        let stale = pass_logged(&bell, &mut doorbell, start + 1_250);
+        assert_eq!(kinds_of(&stale), ["composer.read"]);
+        assert_eq!(bell.reads(), 2);
+        // The agent redraws; nothing Hide observes moves.
         *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
-        let widened = pass_logged(&bell, &mut doorbell, start + 1_250);
-        assert_eq!(kinds_of(&widened), ["composer.read", "composer.released"]);
-        pass_logged(&bell, &mut doorbell, start + 1_500);
+        pass_logged(&bell, &mut doorbell, start + 1_250 + RETRY_FIRST_MS - 1);
+        assert_eq!(bell.reads(), 2, "the backoff holds");
+        let redrawn = pass_logged(&bell, &mut doorbell, start + 1_250 + RETRY_FIRST_MS);
+        assert_eq!(kinds_of(&redrawn), ["composer.read", "composer.released"]);
+        pass_logged(&bell, &mut doorbell, start + 1_500 + RETRY_FIRST_MS);
         let typed = bell.typed();
         assert_eq!(typed.len(), 1);
         assert_eq!(typed[0]["text"], "🦉 Codex report: private · hide inbox");
     }
 
     /// The read right before typing finds no composer in a narrow pane: the
-    /// bell is held for that (`composer_unreadable`), not tried again inside
-    /// its backoff while the pane stays as it is, and tried again at once
-    /// when the pane is resized, with no key and no change of state.
+    /// bell is held for that (`composer_unreadable`), and it is tried again
+    /// at once when the pane is resized; a read that still sees the narrow
+    /// frame then is tried again on the backoff, which reads the agent's
+    /// redraw with no key, no change of state and no further resize.
     #[test]
     fn a_bell_whose_read_finds_no_composer_is_tried_again_when_the_pane_is_resized() {
         let bell = Bell::start(json!({}));
@@ -5339,9 +5381,74 @@ mod tests {
         assert!(bell.typed().is_empty());
 
         bell.resize(26, 80);
+        bell.pass(&mut doorbell, start + 500);
+        assert_eq!(bell.reads(), reads + 1, "the resize is read at once");
+        assert!(bell.typed().is_empty(), "the narrow frame still shows");
+        *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+        bell.pass(&mut doorbell, start + 500 + RETRY_FIRST_MS - 1);
+        assert!(bell.typed().is_empty(), "the backoff holds");
+        bell.pass(&mut doorbell, start + 500 + RETRY_FIRST_MS);
+        assert_eq!(bell.typed().len(), 1);
+    }
+
+    /// One bell names every letter waiting at its recipient, so letters
+    /// behind the one the bell was tried for are held for the screen that
+    /// held it, also a letter that arrives while that bell sits out its
+    /// backoff, and none is left held for it once the bell rings.
+    #[test]
+    fn every_letter_behind_a_bell_held_on_an_unreadable_composer_is_held_for_it() {
+        let bell = Bell::start(json!({}));
+        let second = bell.send_another("second", false);
+        bell.resize(26, 6);
+        *bell.screen.lock().unwrap() = NO_COMPOSER.into();
+        let start = now();
+        let mut doorbell = Doorbell::default();
+        bell.pass(&mut doorbell, start);
+        let third = bell.send_another("third", false);
+        bell.pass(&mut doorbell, start + 250);
+        let reads = bell.reads();
+        for letter in [&bell.letter, &second, &third] {
+            assert_eq!(
+                doorbell.held.get(letter),
+                Some(&Hold::ComposerUnreadable),
+                "{letter}"
+            );
+        }
+        // What the pass publishes (`Runtime::publish_delivery_holds`).
+        let holds: BTreeMap<String, Hold> = doorbell
+            .held
+            .iter()
+            .map(|(id, hold)| (id.clone(), *hold))
+            .collect();
+        let recipient =
+            crate::runtime::delivery::tests::observed(&bell.runtime.lock().unwrap(), "recipient")
+                .actor;
+        let at_rest = start + WAITING_MARK_REST_MS + 60_000;
+        {
+            let guard = bell.runtime.lock().unwrap();
+            let ledger = guard.delivery_state().unwrap();
+            let (held, _) =
+                crate::delivery::held::letters_held(&ledger, &holds, &recipient, at_rest);
+            let held = held.unwrap();
+            assert_eq!(
+                (held.count, held.reason),
+                (3, crate::delivery::held::HeldFor::Unreadable)
+            );
+        }
+        assert_eq!(bell.reads(), reads, "counting them read nothing more");
+
+        bell.resize(26, 80);
         *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
         bell.pass(&mut doorbell, start + 500);
-        assert_eq!(bell.typed().len(), 1, "rung well inside the 5 s backoff");
+        assert_eq!(bell.typed().len(), 1);
+        bell.pass(&mut doorbell, start + 750);
+        for letter in [&bell.letter, &second, &third] {
+            assert_ne!(
+                doorbell.held.get(letter),
+                Some(&Hold::ComposerUnreadable),
+                "{letter}"
+            );
+        }
     }
 
     /// A composer that shows text keeps the hold, and the screen is read
