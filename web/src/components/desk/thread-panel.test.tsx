@@ -140,12 +140,14 @@ it("brings no sent words back when the panel closed before the pane took them", 
   expect(back.box().value).toBe("");
 });
 
-// Review round 1 F2: a draft holds at most what one send takes, and the line says the rest was cut.
-it("cuts words past what one send takes and says so", async () => {
+// Review round 1 F2, round 3: an edit that would make the words longer past one send is not taken, and the line
+// says so; the words already in the box stay whole.
+it("does not take an edit that makes the words longer past one send, keeping the words it holds, and says so", async () => {
   const { container, box, type } = await mount();
   await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await type("hello");
   await type("x".repeat(SESSION_DRAFT_BYTES + 10));
-  expect(box().value).toHaveLength(SESSION_DRAFT_BYTES);
+  expect(box().value).toBe("hello");
   expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe("Too long to send in one go");
 });
 
@@ -203,6 +205,25 @@ it("gives back refused words at the cap together with every word written since",
   await type("new words");
   await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "asleep" } }) }));
   expect(box().value).toBe(`${full}\nnew words`);
+});
+
+// Conductor's round 3 check: typing into a box that a restore left past one send never cuts its tail.
+it("keeps a restored box past one send whole while typing would lengthen it, and takes an edit that shortens it", async () => {
+  const { container, box, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  const full = "x".repeat(SESSION_DRAFT_BYTES);
+  await type(full);
+  await enter();
+  const request = events[0]!.payload.request_id as string;
+  await type("new words");
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "asleep" } }) }));
+  const restored = `${full}\nnew words`;
+  expect(box().value).toBe(restored);
+  await type(`${restored}!`);
+  expect(box().value).toBe(restored);
+  expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe("Too long to send in one go");
+  await type(restored.slice(1));
+  expect(box().value).toBe(restored.slice(1));
 });
 
 it("holds the next send while one the closed panel sent is still unanswered", async () => {

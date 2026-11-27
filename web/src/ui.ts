@@ -14,7 +14,7 @@ import type { NumberedFamily } from "./shortcuts";
 import type { ViewFocusRequest, ViewWorkspace } from "./viewLayout";
 import type { KeyboardOwner } from "./viewFocus";
 import { DESK_ROOM_CLOSED, leaveRoom, type DeskRoomWindow } from "./deskRoom";
-import { fitSessionDraft, keepSessionDraft, NO_SESSION_DRAFTS, sendSessionDraft, sessionDraftsLeft, settleSessionSend, type SessionDrafts } from "./sessionDrafts";
+import { keepSessionDraft, NO_SESSION_DRAFTS, sendSessionDraft, sessionDraftsLeft, sessionDraftTakes, settleSessionSend, type SessionDrafts } from "./sessionDrafts";
 import type { RemoteStatus } from "./snapshot";
 import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
@@ -324,7 +324,7 @@ type UiStore = {
   setDeskDraft: (draft: DeskDraft) => void;
   /** What each session's input beside Desk holds, kept across opening another session and leaving Desk (`sessionDrafts.ts`). */
   sessionDrafts: SessionDrafts;
-  /** Keeps `pane`'s words, cut to what one send takes; true when they were cut. */
+  /** Keeps `pane`'s words unless the edit makes them longer past one send (`sessionDraftTakes`); false when it did not take them. */
   setSessionDraft: (pane: string, device: string | null, text: string) => boolean;
   /** `pane`'s box sent its words as `request`; they wait beside the draft for the pane's answer (`sessionDraftSends.ts`). */
   sendSessionDraft: (pane: string, device: string | null, request: string, words: string) => void;
@@ -594,9 +594,9 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setDeskDraft: (deskDraft) => set({ deskDraft }),
   sessionDrafts: NO_SESSION_DRAFTS,
   setSessionDraft: (pane, device, text) => {
-    const fit = fitSessionDraft(text);
-    set((state) => ({ sessionDrafts: keepSessionDraft(state.sessionDrafts, pane, device, fit.text) }));
-    return fit.cut;
+    if (!sessionDraftTakes(get().sessionDrafts, pane, text)) return false;
+    set((state) => ({ sessionDrafts: keepSessionDraft(state.sessionDrafts, pane, device, text) }));
+    return true;
   },
   sendSessionDraft: (pane, device, request, words) => set((state) => ({ sessionDrafts: sendSessionDraft(state.sessionDrafts, pane, device, request, words) })),
   settleSessionSend: (request, taken) => {

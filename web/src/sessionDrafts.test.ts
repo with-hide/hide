@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fitSessionDraft, keepSessionDraft, NO_SESSION_DRAFTS, sendSessionDraft, SESSION_DRAFT_BYTES, SESSION_DRAFTS_KEPT, sessionDraft, sessionDraftsLeft, settleSessionSend } from "./sessionDrafts";
+import { keepSessionDraft, NO_SESSION_DRAFTS, sendSessionDraft, SESSION_DRAFT_BYTES, SESSION_DRAFTS_KEPT, sessionDraft, sessionDraftsLeft, sessionDraftTakes, settleSessionSend } from "./sessionDrafts";
 import type { RemoteStatus } from "./snapshot";
 
 // Operator request 2026-11-27 (mission-109): a session's input keeps its words per pane, capped, the pane written in
@@ -25,13 +25,14 @@ describe("the words kept per session's input", () => {
     expect([sessionDraft(kept, "p0"), sessionDraft(kept, "p1"), sessionDraft(kept, "new")]).toEqual(["words 0 again", "", "new words"]);
   });
 
-  it("cuts words past what one send takes on a character's edge, and says it cut them", () => {
+  it("takes an edit within one send, or one that shortens a box already past it, and never one that lengthens past it", () => {
     const fits = "가".repeat(SESSION_DRAFT_BYTES / 3);
-    expect(fitSessionDraft(fits)).toEqual({ text: fits, cut: false });
-    // One more three-byte character no longer fits: the text stops before it, never inside it.
-    expect(fitSessionDraft(`${fits}가`)).toEqual({ text: fits, cut: true });
-    const large = fitSessionDraft("x".repeat(8 * 1024 * 1024));
-    expect([large.text.length, large.cut]).toEqual([SESSION_DRAFT_BYTES, true]);
+    expect(sessionDraftTakes(NO_SESSION_DRAFTS, "w1:p2", fits)).toBe(true);
+    // One more three-byte character no longer fits.
+    expect(sessionDraftTakes(NO_SESSION_DRAFTS, "w1:p2", `${fits}가`)).toBe(false);
+    const over = keepSessionDraft(NO_SESSION_DRAFTS, "w1:p2", null, `${fits}가가`);
+    expect(sessionDraftTakes(over, "w1:p2", `${fits}가`)).toBe(true);
+    expect(sessionDraftTakes(over, "w1:p2", `${fits}가가가`)).toBe(false);
   });
 
   it("lets a pane's words go once its own machine no longer lists it, and keeps a device's while that device is not connected", () => {

@@ -74,12 +74,12 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   const screen = useMemo(() => threadScreen(thread, history, { plans, missions }, rows), [thread, history, plans, missions, rows]);
 
   // The words are the pane's draft, kept while another session is open or Desk is left, and cleared once sent.
-  // Words past what one send takes are cut, and the line says so.
+  // An edit that would make the words longer past one send is not taken, and the line says so; the words stay.
   const text = useUiStore((s) => (paneId ? sessionDraft(s.sessionDrafts, paneId) : ""));
   const setText = (value: string) => {
     if (!paneId) return;
     const device = remoteTargetOfPane(useShellStore.getState().rest, paneId);
-    if (useUiStore.getState().setSessionDraft(paneId, device, value)) setNotice(words("too_long"));
+    if (!useUiStore.getState().setSessionDraft(paneId, device, value)) setNotice(words("too_long"));
   };
   const [caret, setCaret] = useState(0);
   const box = useRef<HTMLTextAreaElement>(null);

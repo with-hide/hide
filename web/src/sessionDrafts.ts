@@ -15,23 +15,27 @@ export type SessionDraft = { pane: string; device: string | null; text: string; 
 /** At most this many panes keep their words; a new one past it lets the one written in longest ago go. */
 export const SESSION_DRAFTS_KEPT = 32;
 
-/** What is typed into a draft is cut to what a session takes in one send, in UTF-8 bytes (`operator_input::LIMIT_BYTES` in hide-core); refused words given back to it ride on top (`settleSessionSend`). */
+/**
+ * What one send takes, in UTF-8 bytes (`operator_input::LIMIT_BYTES` in hide-core): an edit that would make a draft
+ * longer past it is not taken, while refused words given back ride on top of it (`settleSessionSend`).
+ */
 export const SESSION_DRAFT_BYTES = 16 * 1024;
 
 export const NO_SESSION_DRAFTS: SessionDrafts = [];
 
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
 
-/** `text` cut to [`SESSION_DRAFT_BYTES`] on a character's edge, and whether anything was cut. */
-export function fitSessionDraft(text: string): { text: string; cut: boolean } {
-  // Each UTF-16 unit is at most three UTF-8 bytes, so a short text needs no count.
-  if (text.length * 3 <= SESSION_DRAFT_BYTES) return { text, cut: false };
-  const bytes = encoder.encode(text);
-  if (bytes.length <= SESSION_DRAFT_BYTES) return { text, cut: false };
-  let end = SESSION_DRAFT_BYTES;
-  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
-  return { text: decoder.decode(bytes.subarray(0, end)), cut: true };
+function bytesOf(text: string): number {
+  return encoder.encode(text).length;
+}
+
+/**
+ * Whether `pane`'s box may hold `text` in place of what it holds: an edit that makes it shorter always may; one that
+ * makes it longer may while it stays within one send, so typing never cuts words the box already holds.
+ */
+export function sessionDraftTakes(drafts: SessionDrafts, pane: string, text: string): boolean {
+  const size = bytesOf(text);
+  return size <= SESSION_DRAFT_BYTES || size <= bytesOf(sessionDraft(drafts, pane));
 }
 
 /** The words `pane`'s input holds, none when it holds nothing. */
