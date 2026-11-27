@@ -464,6 +464,10 @@ fn a_split_after_a_text_scale_change_waits_for_a_measure_at_the_new_scale() {
     );
     assert!(runtime.dispatch_json(&larger));
     assert_eq!(runtime.split_right_floor(LEFT), stale);
+    // R9: the window's measure at the new size, sent though the pane's own
+    // size rounds the same (`applyTerminalFontSize`), judges the split again.
+    measured(&mut runtime, LEFT, 320.0);
+    assert_eq!(runtime.split_right_floor(LEFT), Ok(()));
 }
 
 /// A tab a window draws but has not measured is not judged as wide: its
