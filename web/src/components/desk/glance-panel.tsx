@@ -121,7 +121,7 @@ function SessionGroups({ sessions, query, folds, onGroup, onSession }: { session
   );
 }
 
-/** A session in 한눈에: its marks, its name and the time since it last moved, and under them its state in one line as its card says it. */
+/** A session in 한눈에: its marks, its name and the time since it last moved, and under them what it does or asks in one line, never its group's state word, and no line when there is nothing more. */
 function SessionRow({ job, onSession }: { job: DeskJob; onSession: (pane: string) => void }) {
   return (
     <RowButton className={cn("items-start gap-xs py-xs", job.disconnected && "opacity-(--opacity-dimmed)")} data-desk-glance-session={job.pane_id} data-desk-glance-group={glanceGroup(job)} data-desk-glance-disconnected={job.disconnected ? "true" : undefined} onClick={() => onSession(job.pane_id!)}>
@@ -131,7 +131,7 @@ function SessionRow({ job, onSession }: { job: DeskJob; onSession: (pane: string
           <span className="min-w-0 flex-1 truncate text-body text-foreground">{job.title}</span>
           <Elapsed since={job.changed_at_unix_ms > 0 ? job.changed_at_unix_ms : null} className="shrink-0 font-mono text-caption text-muted-foreground" data-desk-glance-since="true" />
         </span>
-        <JobLine job={job} place={false} />
+        <JobLine job={job} place={false} stateWord={false} />
       </span>
     </RowButton>
   );

@@ -85,10 +85,24 @@ it("draws the folds the core keeps, and each row's state in one line with the ti
 
   const rows = all("[data-desk-glance-session]");
   expect(rows.map((row) => row.dataset.deskGlanceSession)).toEqual(["p2", "p3"]);
-  expect(rows.map((row) => row.querySelector("[data-desk-job-line]")?.textContent)).toEqual(["챕터 2 고치는 중", "Done · 원인을 찾았어요"]);
+  // Under its group's head a row never says the state again: only what it does or how it ended.
+  expect(rows.map((row) => row.querySelector("[data-desk-job-line]")?.textContent)).toEqual(["챕터 2 고치는 중", "원인을 찾았어요"]);
   expect(rows[0]!.querySelector("[data-desk-glance-since]")?.textContent).toBe("3m");
   // A card whose time Hide never measured shows none.
   expect(rows[1]!.querySelector("[data-desk-glance-since]")).toBeNull();
+});
+
+it("draws no second line where nothing is left once the group's state word is gone, and keeps what an ask asks for", async () => {
+  const cards = [
+    card("p1", "Play 스토어 등록", "asking", { ask: "approval", question: null }),
+    card("p2", "하네스 강의", "working"),
+    card("p3", "페이지 원인", "done"),
+    card("p4", "릴리스 노트", "sleeping"),
+  ];
+  await render(<GlancePanel glance={{ sessions: ["p4", "p3", "p2", "p1"], files: [], files_more: 0 }} cards={cards} folds={OPEN} onTab={noop} onGroup={noop} onSession={noop} onFile={noop} onFold={noop} />);
+  const lines = all("[data-desk-glance-session]").map((row) => row.querySelector("[data-desk-job-line]")?.textContent ?? null);
+  expect(lines).toEqual(["Permission", null, null, null]);
+  for (const row of all("[data-desk-glance-session]")) expect(row.textContent).not.toMatch(/Working|Done|Asleep/);
 });
 
 it("keeps only the open tab's rows whose name holds the search, and says so when none does", async () => {

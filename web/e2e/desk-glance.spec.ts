@@ -65,11 +65,10 @@ test("한눈에 lists the sessions opened beside Desk and the file one opened, w
     await setAgentState(daemon, child!, "working");
     await page.locator("[data-desk-glance-back]").click();
     await expect(room(page)).toHaveAttribute("data-desk-room", "glance");
-    // Both work, so the newest opened is first under 작업 중, and each row says its state under its name.
+    // Both work, so the newest opened is first under 작업 중.
     await expect(page.locator("[data-desk-glance-session]")).toHaveCount(2);
     await expect(page.locator("[data-desk-glance-session]").first()).toHaveAttribute("data-desk-glance-session", child!);
     await expect(page.locator('[data-desk-glance-group-head="working"]')).toContainText("2");
-    await expect(page.locator("[data-desk-glance-session] [data-desk-job-line]")).toHaveCount(2);
     // The file is on the 파일 tab, naming its session as the sidebar does.
     await page.locator('[data-desk-glance-tab-trigger="files"]').click();
     const file = page.locator("[data-desk-glance-file]");
