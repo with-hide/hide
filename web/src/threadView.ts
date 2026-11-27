@@ -88,26 +88,29 @@ export function threadScreen(thread: SessionThreadSection | null, history: Sessi
 function hidePart(part: ThreadPart, found: { session: (name: string) => DeskSessionRef; plan: PlanView | null; missions: MissionsSnapshot | undefined }): ThreadHidePart | null {
   switch (part.kind) {
     case "plan":
-      return found.plan ? { kind: "plan", plan: found.plan } : null;
+      return found.plan ? { kind: "plan", plan: found.plan, target: "plan" } : null;
     case "spawn": {
       const named = part.agent_id ?? part.name;
       if (!named) return null;
       const placed = found.session(named);
-      // A new session Hide cannot place is called by the name it was given, not its id.
-      return { kind: "spawn", session: placed.mark === null && part.name ? { ...placed, name: part.name } : placed };
+      // A new session Hide cannot place is called by the name it was given, not its id, and told apart by its id.
+      return { kind: "spawn", session: placed.mark === null && part.name ? { ...placed, name: part.name } : placed, target: `spawn:${placed.pane_id ?? named}` };
     }
-    case "letter":
-      return { kind: "letter", direction: "sent", peer: found.session(part.to), body: (part.body ?? "").trim().split("\n", 1)[0] ?? "" };
+    case "letter": {
+      const peer = found.session(part.to);
+      return { kind: "letter", direction: "sent", peer, body: (part.body ?? "").trim().split("\n", 1)[0] ?? "", target: `letter:${peer.pane_id ?? part.to}` };
+    }
     case "view": {
       const output = viewOutput(part.view, part.target);
-      return output ? { kind: "view", output, view_id: part.view_id ?? null } : null;
+      // The View its answer named is the one thing opened, however its path was typed.
+      return output ? { kind: "view", output, view_id: part.view_id ?? null, target: `view:${part.view_id ?? part.target}` } : null;
     }
     case "mission": {
       const mission = part.mission ? (found.missions?.items.find((one) => one.id === part.mission) ?? null) : null;
       if (!mission) return null;
       const { done, total } = missionCounts(mission);
       const delay = heldBy(mission);
-      return { kind: "mission", mission: { id: mission.id, title: mission.title, status: mission.status, done, total, turn: missionTurn(mission), delay: delay?.line ?? null, delay_until_unix_ms: delay?.until ?? null } };
+      return { kind: "mission", target: `mission:${mission.id}`, mission: { id: mission.id, title: mission.title, status: mission.status, done, total, turn: missionTurn(mission), delay: delay?.line ?? null, delay_until_unix_ms: delay?.until ?? null } };
     }
   }
 }

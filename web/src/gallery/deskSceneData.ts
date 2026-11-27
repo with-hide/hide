@@ -301,9 +301,9 @@ const GALLERY_FIRST_TURN: AcpSessionUpdate[] = [
 ];
 
 const GALLERY_FIRST_PARTS: Record<string, ThreadHidePart> = {
-  "g-view-1": { kind: "view", output: OUTPUTS.light1, view_id: null },
-  "g-view-2": { kind: "view", output: OUTPUTS.light2, view_id: null },
-  "g-view-3": { kind: "view", output: OUTPUTS.light3, view_id: null },
+  "g-view-1": { kind: "view", output: OUTPUTS.light1, view_id: null, target: "view:light1" },
+  "g-view-2": { kind: "view", output: OUTPUTS.light2, view_id: null, target: "view:light2" },
+  "g-view-3": { kind: "view", output: OUTPUTS.light3, view_id: null, target: "view:light3" },
 };
 
 /** Scene 4: the gallery thread at work on its second turn, its `hide` calls read into Hide's parts. */
@@ -320,8 +320,8 @@ export function galleryThread(): { updates: AcpSessionUpdate[]; parts: Record<st
     ],
     parts: {
       ...GALLERY_FIRST_PARTS,
-      "g2-letter": { kind: "letter", direction: "sent", peer: SESSIONS.recordNow, body: "다크 캡처 경로가 바뀌어요" },
-      "g2-spawn": { kind: "spawn", session: SESSIONS.review },
+      "g2-letter": { kind: "letter", direction: "sent", peer: SESSIONS.recordNow, body: "다크 캡처 경로가 바뀌어요", target: "letter:record-now" },
+      "g2-spawn": { kind: "spawn", session: SESSIONS.review, target: "spawn:review" },
     },
   };
 }
@@ -363,12 +363,12 @@ export function conductorThread(jobs: Record<string, DeskJob>): { updates: AcpSe
       text("agent_message_chunk", "1b가 끝나면 lane 노드를 띄울게요."),
     ],
     parts: {
-      "h-plan": { kind: "plan", plan },
-      "h-spawn": { kind: "spawn", session: { name: jobs["1b"]!.title, mark: "going", agent_kind: jobs["1b"]!.agent_kind } },
-      "h-letter": { kind: "letter", direction: "sent", peer: SESSIONS.room, body: "리뷰 지적 2개 반영해서 다시 올려줘" },
-      "h-view": { kind: "view", output: OUTPUTS.galleryPage, view_id: null },
-      "h-mission": { kind: "mission", mission: MISSION },
-      "h-pr": { kind: "pr", number: 1905, state: "pending" },
+      "h-plan": { kind: "plan", plan, target: "plan" },
+      "h-spawn": { kind: "spawn", session: { name: jobs["1b"]!.title, mark: "going", agent_kind: jobs["1b"]!.agent_kind }, target: "spawn:1b" },
+      "h-letter": { kind: "letter", direction: "sent", peer: SESSIONS.room, body: "리뷰 지적 2개 반영해서 다시 올려줘", target: "letter:room" },
+      "h-view": { kind: "view", output: OUTPUTS.galleryPage, view_id: null, target: "view:gallery-page" },
+      "h-mission": { kind: "mission", mission: MISSION, target: "mission:gallery" },
+      "h-pr": { kind: "pr", number: 1905, state: "pending", target: "pr:1905" },
     },
   };
 }
