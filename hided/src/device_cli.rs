@@ -14,6 +14,8 @@
 //! for its guest, a link for its words, a retry for its outcome), and
 //! prints the answer: one JSON line with `--json`, lines for a person
 //! without.
+#![allow(clippy::disallowed_macros)] // the terminal is this command's output: it prints to the operator's own terminal and holds no lock
+
 use crate::env::Env;
 use hide_core::device_command::DeviceCommand;
 use serde_json::{Value, json};
@@ -860,6 +862,7 @@ fn pairing(env: &Env, ask: Value) -> Result<Value, Refused> {
 /// a closed input included, is a no.
 fn yes(question: &str) -> bool {
     eprint!("{question} [y/N] ");
+    #[allow(clippy::disallowed_methods)] // the result is ignored, at the operator's own terminal
     let _ = std::io::stderr().flush();
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line).is_err() {

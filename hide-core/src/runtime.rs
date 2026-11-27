@@ -1326,8 +1326,9 @@ pub struct Runtime {
     pending_revisit: BTreeMap<String, Option<crate::agent_state::sessions::RevisitMark>>,
     delivery_holds: BTreeMap<String, crate::delivery::doorbell::Hold>,
     /// The panes whose letters the operator is shown waiting on a possible
-    /// draft, with how many (`doorbell::letters_waiting`).
-    letters_waiting: BTreeMap<String, u32>,
+    /// draft or an input no read finds, with how many and why
+    /// (`doorbell::letters_waiting`).
+    letters_waiting: BTreeMap<String, crate::delivery::held::Waiting>,
     /// When the session projection is next due on the clock: the oldest
     /// Resolved row leaves the 24-hour window, or a blocked child's grace ends.
     session_window_deadline_unix_ms: u64,

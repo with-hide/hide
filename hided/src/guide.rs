@@ -141,6 +141,47 @@ mod tests {
         }
     }
 
+    /// Every agent reads the same help whatever language its operator
+    /// uses, and answers the operator in the language they write in, so
+    /// what an agent is taught is English (docs/LOCALIZATION.md, A message
+    /// for an agent is not screen copy): an example or a screen name in it
+    /// is written in its English form.
+    #[test]
+    fn what_an_agent_is_taught_is_english() {
+        let helps = [
+            ("hide automation help", crate::automation_cli::HELP),
+            ("hide task help", crate::plan_cli::HELP),
+            ("hide wait help", crate::wait_cli::HELP),
+            ("hide browser help", crate::browser_page::HELP),
+        ];
+        let taught = taught()
+            .into_iter()
+            .chain(helps.map(|(name, text)| (name, text.to_owned())));
+        for (name, text) in taught {
+            let other: Vec<&str> = text
+                .lines()
+                .filter(|line| line.chars().any(korean_chinese_or_japanese))
+                .collect();
+            assert!(
+                other.is_empty(),
+                "{name} is not English:\n{}",
+                other.join("\n")
+            );
+        }
+    }
+
+    fn korean_chinese_or_japanese(c: char) -> bool {
+        matches!(
+            c,
+            '\u{1100}'..='\u{11ff}'
+                | '\u{3040}'..='\u{30ff}'
+                | '\u{3130}'..='\u{318f}'
+                | '\u{3400}'..='\u{4dbf}'
+                | '\u{4e00}'..='\u{9fff}'
+                | '\u{ac00}'..='\u{d7a3}'
+        )
+    }
+
     /// Every `hide` command of the contract's topics that an agent is taught
     /// is a command of the contract, so a guide cannot point at one that
     /// does not exist.

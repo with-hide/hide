@@ -929,6 +929,7 @@ mod tests {
             revisit: None,
             escalation: None,
             letters_waiting: None,
+            letters_reason: None,
             raised: Vec::new(),
             human_below: Vec::new(),
             declared_human_turn: None,

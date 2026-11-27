@@ -70,7 +70,7 @@ test("a mission made on a feature branch starts its worker there and names it as
     await ok(conductor, ["mission", "create", "--title", "도착 브랜치 확인"]);
     const { mission } = (await ok(conductor, ["mission", "show", "--json"])).result as { mission: { id: string; destination?: string } };
     expect(mission.destination).toBe("feat/x");
-    expect((await conductor(["mission", "show"])).out).toContain("도착 · feat/x");
+    expect((await conductor(["mission", "show"])).out).toContain("destination · feat/x");
 
     await ok(conductor, ["mission", "plan", "--json", JSON.stringify({ scope: "pr", nodes: [{ key: "fix", title: "기능 수정", kind: "change", delivery: "pr", criteria: ["수정이 들어갔다"] }] })]);
     await ok(conductor, ["mission", "start"]);
@@ -90,7 +90,7 @@ test("a mission made on a feature branch starts its worker there and names it as
     const worker = fixture.runAs(pane);
     const node = (await ok(worker, ["mission", "show", "fix", "--json"])).result as { destination?: string };
     expect(node.destination).toBe("feat/x");
-    expect((await worker(["mission", "show", "fix"])).out).toContain("도착 feat/x");
+    expect((await worker(["mission", "show", "fix"])).out).toContain("destination feat/x");
     const log = path.join(fixture.root, "gh-writes.log");
     const gh = fixtureProgram(path.join(fixture.root, "gh-bin"), "gh", `require("fs").appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");`);
     const opened = await worker(["pr", "create", "--base", node.destination!, "--head", "fix-task", "--title", "fix: 기능 수정", "--body", ""], { program: gh });

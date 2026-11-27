@@ -397,6 +397,14 @@ fn a_newer_app_updates_the_core_its_login_item_runs_and_keeps_the_previous_build
     let (ok, line) = machine.connect();
 
     assert!(ok, "the newer app's connect updates the core: {line}");
+    // The connect notes the app's package as Hide's canonical path spells
+    // it, the one the kit's `hide.cmd` in `~/.local/bin` can name: the
+    // system's own `\\?\C:\...` on Windows read as another drive, and the
+    // command kept an older build (with-hide/hide#3051).
+    assert_eq!(
+        hide_kit::app::package(&machine.state),
+        Ok(Some(machine.app_cli.parent().unwrap().to_path_buf()))
+    );
     let new_build = build_of(&machine.app_daemon);
     let updated = machine.health_until(|health| health["build"] == new_build.as_str());
     let program = program_of(&updated);

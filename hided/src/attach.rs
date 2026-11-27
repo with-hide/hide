@@ -763,8 +763,7 @@ fn pipe(core: LocalStream) -> ! {
         None => lock(&ended).unwrap_or("ended"),
     };
     core.shutdown_handle().shutdown();
-    eprintln!(
-        "{}",
+    hide_core::diagnostic!(
         json!({"component": "node_link", "kind": "attach.ended", "reason": reason})
     );
     std::process::exit(0)

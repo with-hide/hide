@@ -445,11 +445,15 @@ impl Runtime {
 
     /// Logs each pane whose waiting mark appears or goes, with its count and
     /// never a letter, so a held letter shown to the operator can be traced.
-    pub(super) fn set_letters_waiting(&mut self, waiting: BTreeMap<String, u32>) {
-        for (pane, letters) in &waiting {
-            if self.letters_waiting.get(pane) != Some(letters) {
+    pub(super) fn set_letters_waiting(
+        &mut self,
+        waiting: BTreeMap<String, crate::delivery::held::Waiting>,
+    ) {
+        for (pane, shown) in &waiting {
+            if self.letters_waiting.get(pane) != Some(shown) {
                 crate::diagnostic!(serde_json::json!({"component":"delivery",
-                    "kind":"letter_mark.shown","pane_id":pane,"letters":letters}));
+                    "kind":"letter_mark.shown","pane_id":pane,"letters":shown.count,
+                    "reason":shown.reason}));
             }
         }
         for pane in self.letters_waiting.keys() {
@@ -482,7 +486,9 @@ impl Runtime {
             if let Some(end) = escalation::grace_end(row).filter(|&end| end > at) {
                 deadline = deadline.min(end);
             }
-            row.letters_waiting = self.letters_waiting.get(&row.pane_id).copied();
+            let waiting = self.letters_waiting.get(&row.pane_id);
+            row.letters_waiting = waiting.map(|shown| shown.count);
+            row.letters_reason = waiting.map(|shown| shown.reason);
             let record = self.snapshot.ui_state.resolved_sessions.get(&row.pane_id);
             let pending = self.pending_session_resolutions.get(&row.pane_id);
             if record.or(pending).is_some_and(|record| {

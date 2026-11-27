@@ -53,13 +53,14 @@ pub const RESULT_ADDRESS_LIMIT: usize = 1024;
 const SCHEMA_VERSION: u32 = 1;
 const NAME_CAP: usize = 80;
 const TASK_CAP: usize = 16 * 1024;
-/// The line every run's first prompt carries after the task: a result file
-/// is shown with `hide file open`, which is how a run's result reaches the
-/// operator (`Run::results`), and a run with nothing to show just ends. A
-/// reminder in the prompt, not a check at the run's end, so it reads the same
-/// for every agent on every system.
-const RESULT_LINE: &str =
-    "[결과] 결과 파일을 만들었으면 `hide file open <경로>`로 보여 줘. 만들 게 없으면 그냥 끝내.";
+/// The line every run's first prompt carries after the task: a result is
+/// shown in a View, which is how it reaches the operator (`Run::results`),
+/// a page (an HTML file or a URL) with `hide browser open` so it is drawn
+/// rather than shown as its source, any other file with `hide file open`,
+/// and a run with nothing to show just ends. A reminder in the prompt, not a
+/// check at the run's end, so it reads the same for every agent on every
+/// system.
+const RESULT_LINE: &str = "[결과] 결과를 만들었으면 HTML 페이지나 URL은 `hide browser open <경로>`로, 그 밖의 파일은 `hide file open <경로>`로 보여 줘. 만들 게 없으면 그냥 끝내.";
 /// The last answer a run keeps for the next one: one paragraph (D-10).
 const ANSWER_CAP: usize = 1_000;
 /// A failure's code as a run keeps it.

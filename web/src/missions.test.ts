@@ -979,6 +979,7 @@ describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
     }
     expect(nodeWorkWords({ state: "waiting", on: { kind: "attention", to: "operator", reason: "worker_ended" } }, t)).toBe("Waiting · You");
     expect(heldLettersText({ count: 2, reason: "draft", since_unix_ms: 1 }, t)).toBe("Letters waiting for the Conductor: 2 · unsent text in the Conductor's input: send or clear it");
+    expect(heldLettersText({ count: 1, reason: "unreadable", since_unix_ms: 1 }, t)).toBe("Letters waiting for the Conductor: 1 · the Conductor's pane is too narrow, or covered, to read its input: widen it");
   });
 
   it("folds a worker raised for its held letter into the Conductor's letters line, in 내 차례 and the summary's 확인 필요 alike, and keeps any other cause in both", () => {

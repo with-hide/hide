@@ -147,8 +147,10 @@ export type AgentRow = {
   /** The operator's ★ or a read, unanswered ask, and since when it waits (PRD revisit-group). */
   revisit?: { starred: boolean; read_ask: boolean; since_unix_ms: number } | null;
   escalation?: { cause: "parent_blocked" | "draft" | "child_blocked" | "observer_unconfirmed" | "input_unconfirmed" | "human_turn"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
-  /** How many letters wait on this pane for a possible draft, once it has rested; absent while none waits (docs/delivery.md). */
+  /** How many letters wait on this pane for a possible draft or a composer no read finds, once it has rested; absent while none waits (docs/delivery.md). */
   letters_waiting?: number;
+  /** Why they wait: `draft`, which Deliver now lets through, or `unreadable`, a pane too narrow or covered for its composer to be read. */
+  letters_reason?: MissionLettersHeldFor;
   /** On a lineage root: every raised descendant, lead first. */
   raised?: RaisedAsk[];
   /** The one mark a folded parent wears for its descendants: raised, else working, else none. */
@@ -1838,7 +1840,7 @@ export type MissionNodeWork =
 export type MissionStopCause = { kind: "limit"; line: string } | { kind: "error"; line: string };
 
 /** What the operator does to let a Conductor's held letters through (`delivery::held::HeldFor`, `contracts/snapshot-wire-enums.json`: `mission_letters_held_for`). */
-export type MissionLettersHeldFor = "approval" | "draft";
+export type MissionLettersHeldFor = "approval" | "draft" | "unreadable";
 /** The letters to a running mission's Conductor only the operator can let through (`HeldLetters`, hide-private issue 678). */
 export type MissionHeldLetters = { count: number; reason: MissionLettersHeldFor; since_unix_ms: number };
 

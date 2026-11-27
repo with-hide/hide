@@ -355,8 +355,7 @@ impl BrowserRoutes {
                     })
                     .await;
                 if let Err(error) = result {
-                    eprintln!(
-                        "{}",
+                    hide_core::diagnostic!(
                         serde_json::json!({"component":"browser_routes","kind":"file_server.failed","reason":error.to_string()})
                     );
                 }
@@ -388,10 +387,7 @@ impl BrowserRoutes {
                 .map(|forward| (forward.local_addr(), RouteKind::Page(forward)))
                 .map_err(|error| error.to_string());
             let (local_addr, kind) = forwarded.map_err(|reason| {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"component":"browser_routes","kind":"forward.failed","reason":reason})
-                );
+                hide_core::diagnostic!(serde_json::json!({"component":"browser_routes","kind":"forward.failed","reason":reason}));
                 "route_failed"
             })?;
             let url = forwarded_url(&scheme, &host, local_addr, &tail);
@@ -440,8 +436,7 @@ impl BrowserRoutes {
             if let Ok(Some(route)) = built {
                 route.close();
             }
-            eprintln!(
-                "{}",
+            hide_core::diagnostic!(
                 serde_json::json!({"component":"browser_routes","kind":"route.discarded","reason":"reservation_superseded","device_id":source.device_id,"load":source.load})
             );
             return;
@@ -450,8 +445,7 @@ impl BrowserRoutes {
             (true, Ok(Some(route))) => {
                 let resolved = Resolved::of(&source, route.url.clone());
                 routes.insert(key, RouteEntry::Ready(route));
-                eprintln!(
-                    "{}",
+                hide_core::diagnostic!(
                     serde_json::json!({"component":"browser_routes","kind":"route.ready","device_id":source.device_id,"load":source.load})
                 );
                 Ok(resolved)
@@ -628,8 +622,7 @@ pub(crate) async fn resolve_answer(routes: &Arc<BrowserRoutes>, request: RouteRe
     {
         Ok(route) => axum::Json(route).into_response(),
         Err(reason) => {
-            eprintln!(
-                "{}",
+            hide_core::diagnostic!(
                 serde_json::json!({"component":"browser_routes","kind":"resolve.refused","reason":reason})
             );
             (
@@ -840,8 +833,7 @@ async fn serve_file(State(route): State<FileRoute>, uri: Uri) -> Response {
             .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         Ok(Err(reason)) => {
-            eprintln!(
-                "{}",
+            hide_core::diagnostic!(
                 serde_json::json!({"component":"browser_routes","kind":"file.refused","reason":reason})
             );
             match reason {
