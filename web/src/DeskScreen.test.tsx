@@ -1153,7 +1153,7 @@ describe("Desk's room", () => {
   });
 
   // Mission-109's walk on main efd23d6fff: 답하기 on the card of a session not open opened it beside Desk with the keyboard
-  // left on the button, so typed letters landed nowhere (a regression of #3076).
+  // left on the button, so typed letters landed nowhere (a regression of pull request 3076).
   it("gives the keyboard to the box of the session whose 답하기 was pressed, open or not, and none to a session opened later", async () => {
     const row = { pane_id: "w1:p5", device_id: "local", identity_label: "asker", agent_kind: "claude", mark: "turn", state: { working: false, asking: true } } as never;
     const card: DeskJob = { id: "intent-1", pane_id: "w1:p5", title: "asker", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },

@@ -21,7 +21,7 @@ describe("Desk's room", () => {
     expect(openSession(room, "p2")).toEqual({ ...room, session: "p2", explorer: false });
   });
 
-  // Mission-109's walk on main: a 답하기 on a card whose session was not open gave no keyboard (regression of #3076).
+  // Mission-109's walk on main: a 답하기 on a card whose session was not open gave no keyboard (regression of pull request 3076).
   it("names the session a 답하기 was pressed for until that session's box takes it, and lets it go on any other open", () => {
     const pressed = openSession(DESK_ROOM_CLOSED, "p1", { answer: true });
     expect(pressed).toMatchObject({ session: "p1", answer: "p1" });
