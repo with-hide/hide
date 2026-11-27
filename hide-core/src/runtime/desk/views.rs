@@ -255,7 +255,20 @@ impl Runtime {
     ) -> Option<String> {
         let path = material.path;
         let key = self.desk_key();
+        let origin = self.desk_origin(&key, workspace_id, checkout_id);
+        // Room first, as a pane's open asks it before its tab exists: a
+        // refused open leaves no tab behind for a Workspace to take in (B15).
         let placed = self.catalog_checkout(workspace_id, checkout_id).is_some()
+            && self.admit_view_open_from(
+                &key,
+                &Place::Desk,
+                origin.as_ref(),
+                &path,
+                DisplayKind::File,
+                None,
+                false,
+                false,
+            )
             && match self.read_file_tab(workspace_id, checkout_id, &path, material.file) {
                 Ok(tab_id) => self.show_file_in_view(
                     super::super::editor::PreparedFileTab::Open(tab_id),
@@ -268,7 +281,6 @@ impl Runtime {
                 ),
                 Err(refusal) => super::refused(refusal.reason),
             };
-        let origin = self.desk_origin(&key, workspace_id, checkout_id);
         let view = placed
             .then(|| {
                 self.view_showing(

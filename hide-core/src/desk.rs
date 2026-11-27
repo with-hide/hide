@@ -599,6 +599,10 @@ pub(crate) struct JobMark {
     pub watched: bool,
     /// The operator saw it since it ended.
     pub read: bool,
+    /// It was put among 한눈에's sessions once, when a refresh first found
+    /// its pane; one pushed out of that list after it is not put back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub glanced: bool,
     pub changed_at_ms: u64,
 }
 

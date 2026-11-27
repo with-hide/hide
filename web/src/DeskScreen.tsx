@@ -580,11 +580,6 @@ function DeskGlance({ actions, room }: { actions: Actions; room: RoomActions }) 
 }
 
 /**
- * The tab in front of Desk's desk while the desk shows is in front of the
- * operator, so a View there not looked at yet (one Desk's agent opened) is
- * seen, as a Workspace's View in front is.
- */
-/**
  * B35: a file Desk's agent puts on Desk's desk shows it while this window
  * shows Desk; on any other screen nothing moves, and the tab waits on the desk
  * until something next opens there. Only a move of the core's count after the room opened shows it.

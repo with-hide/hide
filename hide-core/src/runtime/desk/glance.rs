@@ -25,30 +25,35 @@ const MAX_GLANCE_FILES: usize = 32;
 
 impl Runtime {
     /// The operator opened `pane`'s session beside Desk: it is one of
-    /// 한눈에's, the newest, while its pane has a row; a session read from
-    /// its record alone (its pane gone) is never listed, so it takes no
-    /// place. Whether the store changed, for a save.
+    /// 한눈에's, the newest, while its pane has a row, this machine's or a
+    /// connected device's; a session read from its record alone (its pane
+    /// gone) is never listed, so it takes no place. Whether the store
+    /// changed, for a save.
     pub(in crate::runtime) fn desk_glance_opened(&mut self, pane: &str) -> bool {
         self.desk.worker.is_some()
-            && self
-                .snapshot
-                .navigator
-                .agents
-                .iter()
-                .any(|row| row.pane_id == pane)
+            && self.agent_rows().any(|row| row.pane_id == pane)
             && self.keep_desk_glance(pane, crate::runtime::unix_milliseconds())
     }
 
-    /// Keeps `pane` among 한눈에's sessions as of `at_ms`. A new one, with
-    /// the list full, first takes the place of the oldest kept session that
-    /// has ended (its state ended, or the last published 한눈에 no longer
-    /// shows it: its tab closed and no job of Desk's), so a session at work
-    /// or asking the operator goes last (engineering principle 15). Whether
-    /// the store changed.
+    /// Keeps `pane` among 한눈에's sessions as of `at_ms`. A new one that a
+    /// full list takes (newer than its oldest) first takes the place of the
+    /// oldest kept session that has ended (its state ended, or the last
+    /// published 한눈에 no longer shows it: its tab closed and no job of
+    /// Desk's), so a session at work or asking the operator goes last
+    /// (engineering principle 15); one older than all of a full list is not
+    /// taken and moves nothing. A refresh asks this once per Desk session
+    /// (`JobMark::glanced`), so one pushed out is not put back. Whether the
+    /// store changed.
     pub(in crate::runtime) fn keep_desk_glance(&mut self, pane: &str, at_ms: u64) -> bool {
         use crate::model::DeskJobState;
         let stored = &mut self.desk.stored;
-        let room = !stored.glance.iter().any(|kept| kept.pane_id == pane) && {
+        let new = !stored.glance.iter().any(|kept| kept.pane_id == pane);
+        let taken = stored.glance.len() < crate::desk::MAX_GLANCE_SESSIONS
+            || stored
+                .glance
+                .first()
+                .is_some_and(|oldest| oldest.at_ms < at_ms);
+        let room = new && taken && {
             let section = self.snapshot.desk_jobs.as_ref();
             let going = |kept: &str| {
                 section.is_some_and(|section| {

@@ -1553,10 +1553,16 @@ impl Runtime {
                 continue;
             };
             // Every session Desk started is one of 한눈에's.
-            marked |= self.keep_desk_glance(&pane, spawn.reserved_at_unix_ms);
             let mark = self.desk_mark(&spawn.intent).cloned().unwrap_or_default();
             let mut next = mark.clone();
             next.intent.clone_from(&spawn.intent);
+            // Put among 한눈에's sessions once, when its pane is first found;
+            // one pushed out after it stays out, so a refresh never churns
+            // a full list.
+            if !mark.glanced {
+                marked |= self.keep_desk_glance(&pane, spawn.reserved_at_unix_ms);
+                next.glanced = true;
+            }
             // A tab the operator closed and opened again (세션 복구하기,
             // ⇧⌘T) comes back to its place in the group and is Desk's again.
             if !mark.closed && self.desk_pane_closed(&pane) {
@@ -2722,6 +2728,105 @@ mod tests {
         assert!(named(&runtime).is_empty());
         assert!(listed(&runtime).is_empty());
         assert_eq!(runtime.desk.stored.glance.len(), 1);
+    }
+
+    /// More sessions of Desk's than 한눈에 keeps: the first refresh keeps
+    /// the newest 32, and a refresh after it, with nothing changed, changes
+    /// nothing in Desk's store, so nothing goes to save and no session is
+    /// pushed out.
+    #[test]
+    fn a_refresh_with_more_desk_sessions_than_glance_keeps_changes_nothing_again() {
+        let root = tempfile::tempdir().unwrap();
+        let names: Vec<String> = (0..34).map(|at| format!("b{at}")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut runtime = desk(root.path(), 4, &names);
+        runtime.start_test_desk();
+        runtime.snapshot.navigator.agents =
+            (0..34).map(|at| row(&format!("p{at}"), "done")).collect();
+        runtime.refresh_desk_jobs();
+        assert_eq!(
+            runtime.desk.stored.glance.len(),
+            crate::desk::MAX_GLANCE_SESSIONS
+        );
+        let stored = runtime.desk.stored.clone();
+        for _ in 0..3 {
+            runtime.refresh_desk_jobs();
+            assert_eq!(runtime.desk.stored, stored, "a refresh changed the store");
+        }
+    }
+
+    /// A session Desk just started is one of 한눈에's when its pane first
+    /// shows, even when the list is full and a session opened since its
+    /// start is newer: the oldest ended one makes room for it.
+    #[test]
+    fn a_desk_session_first_seen_after_a_newer_open_joins_a_full_glance() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &["b0"]);
+        runtime.start_test_desk();
+        let reserved = runtime.desk_spawns()[0].reserved_at_unix_ms;
+        assert!(reserved > 0, "the fixture's clock starts past zero");
+        let max = crate::desk::MAX_GLANCE_SESSIONS as u64;
+        // One kept before Desk reserved its spawn, the rest opened beside
+        // Desk after it, the newest last.
+        runtime.desk.stored.keep_glance("q1", reserved - 1);
+        for at in 2..max {
+            runtime
+                .desk
+                .stored
+                .keep_glance(&format!("q{at}"), reserved + at);
+        }
+        runtime.desk.stored.keep_glance("newer", reserved + 1_000);
+        runtime.snapshot.navigator.agents = vec![row("p0", "working")];
+
+        runtime.refresh_desk_jobs();
+        let kept: Vec<&str> = runtime
+            .desk
+            .stored
+            .glance
+            .iter()
+            .map(|kept| kept.pane_id.as_str())
+            .collect();
+        assert_eq!(kept.len(), max as usize);
+        assert!(kept.contains(&"p0"), "{kept:?}");
+        assert!(!kept.contains(&"q1"), "the oldest ended one made room");
+        assert_eq!(kept.last(), Some(&"newer"));
+    }
+
+    /// A session on a connected device, opened beside Desk, is one of
+    /// 한눈에's as this machine's is: its row is the device's.
+    #[test]
+    fn a_device_session_opened_beside_desk_is_kept_in_glance() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &[]);
+        runtime.start_test_desk();
+        let pane = "remote:device-1:pane:p5";
+        runtime
+            .snapshot
+            .status
+            .remote
+            .push(crate::model::RemoteStatusSnapshot {
+                target_id: "device-1".into(),
+                state: "connected".into(),
+                message: None,
+                session: Some(crate::model::RemoteSessionSnapshot {
+                    workspaces: Vec::new(),
+                    agents: vec![row(pane, "working")],
+                    active_tab_ids: Default::default(),
+                    focused_workspace_id: None,
+                    focused_checkout_id: None,
+                    focused_tab_id: None,
+                    focused_pane_id: None,
+                    pane_layouts: Vec::new(),
+                    pane_hook_tokens: Default::default(),
+                    issue_tokens: Default::default(),
+                    issue_links: Default::default(),
+                }),
+                files: crate::model::RemoteFileListSnapshot::idle(),
+                catalog: Default::default(),
+                unreachable_since_unix_ms: None,
+            });
+        assert!(runtime.desk_glance_opened(pane));
+        assert_eq!(runtime.desk.stored.glance[0].pane_id, pane);
     }
 
     /// 한눈에's cap lets an ended session go before one at work (engineering
