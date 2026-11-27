@@ -317,6 +317,25 @@ describe("Desk's room", () => {
   const key = async (name: string) => act(async () => { box().dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })); });
   const listed = () => Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-mention-session]")).map((row) => row.dataset.deskMentionSession);
 
+  // Mission-109's walk on main efd23d6fff: Desk turned on with no default agent dropped ↵ with nothing said.
+  it("keeps the words on ↵ with no agent chosen and says under the box to pick one, then sends once one is", async () => {
+    const unpicked = (section: DeskSection): DeskSection => ({ ...section, selection: { agent: null, model: null, effort: null }, settings: { ...section.settings, default_agent: null } });
+    const notice = () => document.body.querySelector("[data-desk-composer-notice]")?.textContent ?? null;
+    await render(unpicked(desk([])));
+    // An empty box asks nothing yet.
+    expect(notice()).toBeNull();
+    await act(async () => useUiStore.setState({ deskDraft: { text: "빌드 고쳐 줘", mentions: [] } }));
+    await key("Enter");
+    expect(sent("desk_send")).toEqual([]);
+    expect(useUiStore.getState().deskDraft.text).toBe("빌드 고쳐 줘");
+    expect(notice()).toBe("Pick an agent first");
+    // Picked, the line goes and the same press sends.
+    await show(desk([]));
+    expect(notice()).toBeNull();
+    await key("Enter");
+    expect(sent("desk_send")).toEqual([{ text: "빌드 고쳐 줘", mentions: [] }]);
+  });
+
   const claudeList: NonNullable<DeskCommands["lists"]["claude"]> = [
     { name: "/compact", description: "Clear history but keep a summary", hint: "what to keep" },
     { name: "/context", description: "Show the context use" },

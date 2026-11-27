@@ -188,6 +188,11 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const queuedHeld = desk?.conversation.queued_held ?? false;
   const queuedPaused = desk?.conversation.queued_paused ?? false;
   const canSend = agent?.state === "ready" && !queuedFull;
+  // Why the box holds what it holds, in the one line under it: a full waiting line, or no agent to send to. With no agent
+  // chosen (no default, or one Desk no longer lists) ↵ keeps the words and the line says to pick one, once there is
+  // something to send.
+  const unpicked = agent === undefined && (draft.text.trim() !== "" || tray.files.length > 0);
+  const heldLine = queuedFull ? t("desk.queued.full") : unpicked ? t("desk.composer.pickAgent") : null;
 
   const lastUserId = (list: readonly DeskItem[]) => list.reduce((last, item) => (item.kind === "user" ? item.id : last), -1);
   useEffect(() => {
@@ -363,7 +368,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       label={t("desk.composer.label")}
       placeholder={t("desk.composer.placeholder")}
       tray={tray}
-      notice={queuedFull ? t("desk.queued.full") : notice}
+      notice={heldLine ?? notice}
       answering={answering}
       held={!canSend}
       focused={menus.menuOpen}
