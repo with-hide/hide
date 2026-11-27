@@ -149,6 +149,19 @@ it("draws a ring and the computer's name while its screen opens, names the relay
     expect(slow()).toBeNull();
     await wait(1);
     expect(slow()).not.toBeNull();
+
+    // Another relayed computer chosen while this one opens counts its own 5 s from zero.
+    await act(async () => useShellStore.setState({ rest: { navigator: { devices: [], peers: [peer({ connected: true, path: "relay" }), peer({ key: "cd".repeat(32), device_id: "studio", name: "Studio", connected: true, path: "relay" })] } } } as never));
+    await act(async () => useUiStore.setState({ remoteScreen: "studio" }));
+    expect(stage()?.textContent).toContain("Studio");
+    expect(ring()).not.toBeNull();
+    expect(slow()).toBeNull();
+    await wait(SLOW_OPENING_MS - 1);
+    expect(slow()).toBeNull();
+    await wait(1);
+    expect(slow()).not.toBeNull();
+    // The relay line sits in a status region that stood from the start, so it is read out when it appears.
+    expect(slow()?.closest("[role=status]")).not.toBeNull();
     await act(async () => root.unmount());
   } finally {
     useShellStore.setState(shell, true);

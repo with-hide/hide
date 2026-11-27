@@ -142,6 +142,7 @@ export function RemoteStage({ actions }: { actions: Actions }) {
   // Opening: the machine can show and its screen has not shown yet.
   const opening = why === null && loaded?.state !== "shown";
   const [slow, setSlow] = useState(false);
+  // Another computer chosen while one opens stays opening, so its device starts the count over.
   useEffect(() => {
     setSlow(false);
     if (!opening) return undefined;
@@ -168,8 +169,11 @@ export function RemoteStage({ actions }: { actions: Actions }) {
           <>
             <LoaderCircleIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground motion-safe:animate-spin" />
             <span className="text-headline font-semibold text-foreground">{peer?.name ?? ""}</span>
-            <span className="text-caption text-muted-foreground">{t("remoteScreen.opening")}</span>
-            {slow && peer?.path === "relay" ? <span className="text-caption text-muted-foreground" data-remote-slow="relay">{t("remoteScreen.slowRelay")}</span> : null}
+            {/* A status region from the start, so the relay line is read out when it appears. */}
+            <div role="status" className="flex flex-col items-center gap-sm">
+              <span className="text-caption text-muted-foreground">{t("remoteScreen.opening")}</span>
+              {slow && peer?.path === "relay" ? <span className="text-caption text-muted-foreground" data-remote-slow="relay">{t("remoteScreen.slowRelay")}</span> : null}
+            </div>
           </>
         ) : null}
       </div>

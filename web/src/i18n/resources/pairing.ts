@@ -479,7 +479,7 @@ const zhCN = {
   "remoteScreen.noGrant": "无许可",
   "remoteScreen.reconnects": "连上后会自动打开",
   "remoteScreen.opening": "正在打开画面…",
-  "remoteScreen.slowRelay": "通过 relay 连接，可能要稍等一会儿",
+  "remoteScreen.slowRelay": "通过中继连接，可能要稍等一会儿",
   "remoteScreen.openSettings": "打开设备设置",
 } satisfies Catalog<typeof pairingEnglish>;
 
@@ -638,7 +638,7 @@ const ja = {
   "remoteScreen.noGrant": "許可なし",
   "remoteScreen.reconnects": "つながり次第、自動で開きます",
   "remoteScreen.opening": "画面を開いています…",
-  "remoteScreen.slowRelay": "relay 経由でつながるため、少し時間がかかることがあります",
+  "remoteScreen.slowRelay": "リレー経由でつながるため、少し時間がかかることがあります",
   "remoteScreen.openSettings": "デバイス設定を開く",
 } satisfies Catalog<typeof pairingEnglish>;
 
