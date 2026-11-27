@@ -45,6 +45,19 @@ class DaemonStderr(unittest.TestCase):
         })
         self.assertEqual(load().violations(root), [])
 
+    def test_a_new_file_is_daemon_code_whatever_its_name_ends_in(self):
+        root = self.tree({"src/server_cli.rs": PRINTS, "src/tools/device_cli.rs": PRINTS})
+        self.assertEqual(
+            load().violations(root), ["hided/src/server_cli.rs:1", "hided/src/tools/device_cli.rs:1"]
+        )
+
+    def test_an_alias_or_a_wrapper_of_the_macro_is_a_print(self):
+        root = self.tree({
+            "src/a.rs": "use std::eprintln as log;\nfn f() { log!(\"x\"); }\n",
+            "src/b.rs": "macro_rules! say { ($m:expr) => { std::eprintln!($m) }; }\n",
+        })
+        self.assertEqual(load().violations(root), ["hided/src/a.rs:1", "hided/src/b.rs:1"])
+
     def test_a_comment_a_string_and_test_code_are_not_prints(self):
         root = self.tree({
             "src/server.rs": '// eprintln!("x")\nfn a() { let _ = "eprintln!(x)"; }\n'

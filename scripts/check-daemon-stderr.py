@@ -23,19 +23,27 @@ import rust_scan  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SOURCES = ROOT / "hided" / "src"
 
+# Each file is named: a new file, whatever its name ends in, is daemon code until
+# it is added here with its reason.
 # `hide` and `hided`'s `main`: the entry points print their usage and their
 # last error to the terminal that started them, before any role holds a lock
 # and just before they exit with a code.
 ENTRY_POINTS = ("bin/",)
 # What an operator or an agent types: `hide <command>` prints its answer and
 # its refusal to its own terminal.
-COMMAND_SUFFIX = "_cli.rs"
-COMMAND_FILES = ("cli.rs",)
+COMMAND_FILES = (
+    "access_cli.rs", "agent_cli.rs", "automation_cli.rs", "browser_cli.rs", "cli.rs",
+    "delivery_cli.rs", "device_cli.rs", "issue_cli.rs", "mission_cli.rs", "node_cli.rs",
+    "pane_cli.rs", "phone_cli.rs", "plan_cli.rs", "profile_cli.rs", "ps_cli.rs",
+    "session_cli.rs", "store_cli.rs", "wait_cli.rs", "workspace_cli.rs", "worktree_cli.rs",
+)
 # A pane's shell: `hide agent exec` and the pane's own `hide` install run as
 # the pane's foreground program and tell the person typing there.
 PANE_FILES = ("agent_exec.rs", "pane_install.rs")
 
-STDERR_MACRO = re.compile(r"\b(?:eprintln|eprint|dbg)\s*!")
+# The macro's name wherever it appears, not only as a call: `use std::eprintln as log;`
+# or a `macro_rules!` that expands to it panics the same way.
+STDERR_MACRO = re.compile(r"\b(?:eprintln|eprint|dbg)\b")
 
 ADVICE = """\
 Daemon code does not print to stderr: `eprintln!` panics when the write fails, and a panic under a
@@ -48,7 +56,6 @@ as its output is listed in scripts/check-daemon-stderr.py with the reason."""
 def allowed(relative: str) -> bool:
     return (
         relative.startswith(ENTRY_POINTS)
-        or relative.endswith(COMMAND_SUFFIX)
         or relative in COMMAND_FILES
         or relative in PANE_FILES
     )
