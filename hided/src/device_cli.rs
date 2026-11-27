@@ -809,7 +809,19 @@ fn add_alias(
         .and_then(|looked| looked["looked"]["state"].as_str())
     {
         Some("ready") => {
-            let mut value = pairing(env, json!({"verb":"pair_ssh","alias":alias}))?;
+            let asked = json!({"verb":"pair_ssh","alias":alias});
+            let answer = crate::workspace_cli::pairing_ask(env, asked.clone())
+                .map_err(Refused::Unreachable)?;
+            // A machine paired already: what became of the alias (mission-107).
+            if answer["reason"] == "device_already_connected"
+                && let Some(ssh) = answer["ssh"].as_str()
+            {
+                return Ok(Printed::Value(
+                    json!({ "already_connected": true, "ssh": ssh }),
+                    alias_line(alias, ssh),
+                ));
+            }
+            let mut value = pairing(env, asked)?;
             value["paired"] = json!("ssh");
             let name = value["name"].as_str().unwrap_or(alias).to_owned();
             return Ok(Printed::Value(
@@ -882,6 +894,33 @@ fn pairing(env: &Env, ask: Value) -> Result<Value, Refused> {
         .to_owned();
     let message = answer["next_action"].as_str().unwrap_or(&code).to_owned();
     Err(Refused::Answer { code, message })
+}
+
+/// What adding `alias` to a machine this computer is paired with already did
+/// with the alias (mission-107): recorded once a carrier over it proved that
+/// machine's key, and otherwise why not.
+fn alias_line(alias: &str, ssh: &str) -> String {
+    match ssh {
+        "recorded" => format!(
+            "{alias} reaches a computer this one is already connected to: from now on they connect over SSH through {alias} when no direct path opens.\n"
+        ),
+        "not_proved" => format!(
+            "{alias} reaches a computer that did not prove it is the one this computer is connected to: nothing was recorded.\n"
+        ),
+        "check_timed_out" => format!(
+            "The computer {alias} reaches did not answer the check in time: nothing was recorded. Run hide device add {alias} again.\n"
+        ),
+        "update_there" => format!(
+            "Hide on {alias} is too old to connect over SSH: update it there and run hide device add {alias} again.\n"
+        ),
+        "hide_absent" => format!(
+            "{alias} has no hide command where Hide links it: open Hide there once and run hide device add {alias} again.\n"
+        ),
+        "hide_not_running" => format!(
+            "Hide is not running on {alias}: open it there and run hide device add {alias} again.\n"
+        ),
+        other => format!("{alias} is already connected; the SSH check answered {other}.\n"),
+    }
 }
 
 /// A yes or no the operator types at this terminal. Anything but a yes,
@@ -1331,22 +1370,30 @@ fn held_line(device: &str, answer: &Value) -> String {
 }
 
 /// A paired machine: who opens whom, whether the two are connected, and the
-/// path the connection takes now in one word (D-86).
+/// path the connection takes now in one word (D-86). A relayed one whose SSH
+/// route waits for the operator says why, as its row does (mission-107).
 fn peer_line(peer: &Value) -> String {
     let text = |key: &str| peer[key].as_str().unwrap_or_default();
-    let mut line = format!(
-        "{}  {}  {}\n",
-        text("id"),
-        text("name"),
-        match (peer["connected"] == true, text("path")) {
-            (true, "direct") => "connected · direct",
-            (true, "tailscale") => "connected · Tailscale",
-            (true, "relay") => "connected · relay",
-            // A WSL distribution and its PC: one machine, no path to name.
-            (true, _) => "connected",
-            (false, _) => "not connected",
-        },
-    );
+    let name = text("name");
+    let parked = match peer["ssh"]["blocked"].as_str() {
+        Some("sign_in") => " · SSH: sign in needed".to_owned(),
+        Some("check_host_key") => " · SSH: check the server key".to_owned(),
+        Some("reopen_hide") => " · SSH: open Hide again".to_owned(),
+        Some("update_there") => format!(" · SSH: update {name}"),
+        Some("retry") => " · SSH: retry".to_owned(),
+        Some("not_saved") => " · SSH: could not save, retry".to_owned(),
+        _ => String::new(),
+    };
+    let state = match (peer["connected"] == true, text("path")) {
+        (true, "direct") => "connected · direct".to_owned(),
+        (true, "tailscale") => "connected · Tailscale".to_owned(),
+        (true, "ssh") => "connected · SSH".to_owned(),
+        (true, "relay") => format!("connected · relay{parked}"),
+        // A WSL distribution and its PC: one machine, no path to name.
+        (true, _) => "connected".to_owned(),
+        (false, _) => "not connected".to_owned(),
+    };
+    let mut line = format!("{}  {name}  {state}\n", text("id"));
     if let Some(opens) = peer["opens"].as_str() {
         line.push_str(&format!(
             "  this machine opens it: {}\n",
@@ -1481,6 +1528,38 @@ mod tests {
         assert_eq!(
             first(peer(false, Value::Null)),
             "m1  Mac mini  not connected"
+        );
+        assert_eq!(
+            first(peer(true, json!("ssh"))),
+            "m1  Mac mini  connected · SSH"
+        );
+    }
+
+    /// A relayed machine whose SSH route waits for the operator says why,
+    /// naming the machine and never the alias (mission-107).
+    #[test]
+    fn a_relayed_machine_says_why_its_ssh_route_waits() {
+        let first = |blocked: &str| {
+            let peer = json!({"id": "m1", "name": "Mac mini", "connected": true, "path": "relay", "ssh": {"blocked": blocked}});
+            peer_line(&peer).lines().next().unwrap().to_owned()
+        };
+        for (blocked, said) in [
+            ("sign_in", "SSH: sign in needed"),
+            ("check_host_key", "SSH: check the server key"),
+            ("reopen_hide", "SSH: open Hide again"),
+            ("update_there", "SSH: update Mac mini"),
+            ("retry", "SSH: retry"),
+            ("not_saved", "SSH: could not save, retry"),
+        ] {
+            assert_eq!(
+                first(blocked),
+                format!("m1  Mac mini  connected · relay · {said}")
+            );
+        }
+        let direct = json!({"id": "m1", "name": "Mac mini", "connected": true, "path": "direct", "ssh": {"blocked": "retry"}});
+        assert_eq!(
+            peer_line(&direct).lines().next().unwrap(),
+            "m1  Mac mini  connected · direct"
         );
     }
 

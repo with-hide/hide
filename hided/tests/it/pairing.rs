@@ -40,6 +40,11 @@ const GUEST: &str = "pairing-guest";
 
 const WITHIN: Duration = Duration::from_secs(40);
 
+/// A relay nothing answers at: with `HIDE_PEER_RELAY_ONLY` an endpoint has
+/// no IP path and reaches no relay, as two machines with no way to each
+/// other but SSH.
+const NO_RELAY: &str = "https://127.0.0.1:9";
+
 fn host_env(root: &Path) -> Env {
     let state = root.join("host-state");
     hide_platform::fs::private::create_dir_all(&state).unwrap();
@@ -144,6 +149,9 @@ struct Terminal {
     home: PathBuf,
     state: PathBuf,
     machine: Option<&'static str>,
+    /// The daemon this terminal starts has no IP path and an unreachable
+    /// relay, so nothing but SSH reaches another machine from it.
+    no_direct_path: bool,
 }
 
 impl Terminal {
@@ -155,7 +163,14 @@ impl Terminal {
             home,
             state,
             machine,
+            no_direct_path: false,
         }
+    }
+
+    /// This terminal, its daemon reaching nothing but over SSH.
+    fn with_no_direct_path(mut self) -> Self {
+        self.no_direct_path = true;
+        self
     }
 
     fn command_of(&self, program: &Path, args: &[&str]) -> Command {
@@ -184,7 +199,6 @@ impl Terminal {
             .env("HIDE_STATE_DIR", &self.state)
             .env("HIDE_TAILSCALE_BIN", self.home.join("no-tailscale"))
             .env("HIDE_RELAY_URL", "ws://127.0.0.1:9/ws")
-            .env("HIDE_PEER_DIRECT", "127.0.0.1:0")
             .env("LANG", "en_US.UTF-8")
             .env_remove("LC_ALL")
             .env_remove("LC_MESSAGES")
@@ -194,6 +208,12 @@ impl Terminal {
         if let Some(machine) = self.machine {
             command.env(hided::env::HIDE_MACHINE_ID, machine);
         }
+        match self.no_direct_path {
+            true => command
+                .env("HIDE_PEER_RELAY", NO_RELAY)
+                .env("HIDE_PEER_RELAY_ONLY", "1"),
+            false => command.env("HIDE_PEER_DIRECT", "127.0.0.1:0"),
+        };
         command
     }
 
@@ -1016,6 +1036,79 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
         "--json",
     ]);
     assert!(removed.ok, "{}", removed.text());
+    ssh.stop().unwrap();
+}
+
+/// Two Hides with no direct path and no relay between them connect over the
+/// SSH alias the guest paired through, and both say the path is SSH
+/// (mission-107): the guest's first dial runs the ladder, the far account's
+/// `hide device carry --ssh` hands its stdio to the target's daemon, and the
+/// pending grant is confirmed over that connection.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
+async fn two_hides_with_no_other_way_connect_over_ssh() {
+    use crate::support::sshd::Sshd;
+
+    let root = crate::fixtures::fixture_root("hq");
+    let mut env = host_env(root.path());
+    env.peer_direct = None;
+    env.peer_relay = Some(NO_RELAY.to_owned());
+    env.peer_relay_only = true;
+    let _running = hided::start_daemon(env).await.unwrap();
+    let target = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    )
+    .with_no_direct_path();
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    )
+    .with_no_direct_path();
+    let ssh = Sshd::start(
+        &root.path().join("sshd"),
+        &[
+            (hided::env::HOME.into(), target.home.clone().into()),
+            ("HIDE_STATE_DIR".into(), target.state.clone().into()),
+        ],
+    )
+    .unwrap();
+    std::fs::create_dir_all(guest.home.join(".ssh")).unwrap();
+    std::fs::write(guest.home.join(".ssh/config"), ssh.client_config("studio")).unwrap();
+    let _stop = StopOnDrop(&guest);
+    let connected = guest.run(&["connect"]);
+    assert!(connected.ok, "the guest daemon: {}", connected.text());
+    let commands = target.home.join(".local/bin");
+    std::fs::create_dir_all(&commands).unwrap();
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_hide"), commands.join("hide")).unwrap();
+
+    let added = guest.run(&["device", "add", "studio", "--json"]);
+    assert!(added.ok, "{}", added.text());
+    assert_eq!(added.json()["value"]["paired"], "ssh", "{}", added.text());
+    let opened = guest
+        .peer_becomes("the guest opens the target over SSH", |peer| {
+            peer["opens"] == "active" && peer["connected"] == true
+        })
+        .await;
+    assert_eq!(opened["path"], "ssh", "{opened}");
+    let opener = target
+        .peer_becomes("the target is opened by the guest over SSH", |peer| {
+            peer["opened_by"] == "active" && peer["connected"] == true
+        })
+        .await;
+    assert_eq!(opener["path"], "ssh", "{opener}");
+    let listed = guest.run(&["device", "list"]);
+    assert!(
+        listed.text().contains("connected · SSH"),
+        "{}",
+        listed.text()
+    );
+    // The alias is the guest's own: the target's records never name it.
+    let records = std::fs::read_to_string(hide_kit::layout::peer_grants(&target.state)).unwrap();
+    assert!(!records.contains("studio"), "{records}");
     ssh.stop().unwrap();
 }
 
