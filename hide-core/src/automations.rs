@@ -55,26 +55,28 @@ pub const RESULT_ADDRESS_LIMIT: usize = 1024;
 const SCHEMA_VERSION: u32 = 1;
 const NAME_CAP: usize = 80;
 const TASK_CAP: usize = 16 * 1024;
-/// The line every run's first prompt carries after the task: a result file
-/// is shown with `hide file open`, which is how a run's result reaches the
-/// operator (`Run::results`), and a run with nothing to show just ends. A
-/// reminder in the prompt, not a check at the run's end, so it reads the same
-/// for every agent on every system. It is typed into the run's conversation
+/// The line every run's first prompt carries after the task: a result is
+/// shown in a View, which is how it reaches the operator (`Run::results`),
+/// a page (an HTML file or a URL) with `hide browser open` so it is drawn
+/// rather than shown as its source, any other file with `hide file open`,
+/// and a run with nothing to show just ends. A reminder in the prompt, not a
+/// check at the run's end, so it reads the same for every agent on every
+/// system. It is typed into the run's conversation
 /// as the operator's words, so it is in the operator's language, which the
 /// agent then answers in.
 fn result_line(language: InterfaceLanguage) -> &'static str {
     match language {
         InterfaceLanguage::English => {
-            "[Result] If you made a result file, show it with `hide file open <path>`. If there is nothing to make, just finish."
+            "[Result] If you made a result, show an HTML page or a URL with `hide browser open <path>` and any other file with `hide file open <path>`. If there is nothing to make, just finish."
         }
         InterfaceLanguage::Korean => {
-            "[결과] 결과 파일을 만들었으면 `hide file open <경로>`로 보여 줘. 만들 게 없으면 그냥 끝내."
+            "[결과] 결과를 만들었으면 HTML 페이지나 URL은 `hide browser open <경로>`로, 그 밖의 파일은 `hide file open <경로>`로 보여 줘. 만들 게 없으면 그냥 끝내."
         }
         InterfaceLanguage::Japanese => {
-            "[結果] 結果ファイルを作ったら `hide file open <パス>` で見せて。作るものがなければそのまま終えて。"
+            "[結果] 結果を作ったら、HTMLページやURLは `hide browser open <パス>` で、それ以外のファイルは `hide file open <パス>` で見せて。作るものがなければそのまま終えて。"
         }
         InterfaceLanguage::SimplifiedChinese => {
-            "[结果] 如果做了结果文件，就用 `hide file open <路径>` 打开给我看。没有要做的就直接结束。"
+            "[结果] 如果做了结果，HTML 页面或 URL 用 `hide browser open <路径>` 打开，其他文件用 `hide file open <路径>` 打开给我看。没有要做的就直接结束。"
         }
     }
 }
@@ -1776,7 +1778,7 @@ mod tests {
         let first = automation.new_run(Trigger::Scheduled, Some(now), now);
         assert_eq!(
             automation.prompt(first, &zone, InterfaceLanguage::Korean),
-            "새 이슈를 정리해줘\n\n[결과] 결과 파일을 만들었으면 `hide file open <경로>`로 보여 줘. 만들 게 없으면 그냥 끝내."
+            "새 이슈를 정리해줘\n\n[결과] 결과를 만들었으면 HTML 페이지나 URL은 `hide browser open <경로>`로, 그 밖의 파일은 `hide file open <경로>`로 보여 줘. 만들 게 없으면 그냥 끝내."
         );
         let run = automation.run_mut(first).unwrap();
         run.state = RunState::Succeeded;
@@ -1791,7 +1793,7 @@ mod tests {
         );
         assert_eq!(
             automation.prompt(second, &zone, InterfaceLanguage::English),
-            "새 이슈를 정리해줘\n\n[Result] If you made a result file, show it with `hide file open <path>`. If there is nothing to make, just finish.\n\n[Last run · 2026-11-19 09:00 · Succeeded]\n새 이슈 3개를 정리했어요.",
+            "새 이슈를 정리해줘\n\n[Result] If you made a result, show an HTML page or a URL with `hide browser open <path>` and any other file with `hide file open <path>`. If there is nothing to make, just finish.\n\n[Last run · 2026-11-19 09:00 · Succeeded]\n새 이슈 3개를 정리했어요.",
             "Hide's own lines follow the operator's language; the task and the answer stay as written"
         );
         let run = automation.run_mut(second).unwrap();
