@@ -1963,6 +1963,7 @@ pub(super) enum Event {
     FirstRunBack(FirstRunBackPayload),
     HerdrImport(HerdrImportPayload),
     Desk(super::desk::DeskEvent),
+    InputQueue(super::input_queue::QueueEvent),
     Access(super::access::AccessEvent),
     Automation(crate::automations::Call),
     FirstRunDraft(FirstRunDraftPayload),
@@ -2471,6 +2472,11 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         desk if super::desk::DeskEvent::KINDS.contains(&desk) => {
             super::desk::DeskEvent::decode(desk, payload)
                 .map(Event::Desk)
+                .ok_or_else(|| invalid_payload(&kind))
+        }
+        queue if super::input_queue::QueueEvent::KINDS.contains(&queue) => {
+            super::input_queue::QueueEvent::decode(queue, payload)
+                .map(Event::InputQueue)
                 .ok_or_else(|| invalid_payload(&kind))
         }
         "external_grants" => decode!(ExternalGrantsPayload, ExternalGrants),
@@ -4554,6 +4560,7 @@ impl Runtime {
             Event::FirstRunBack(payload) => self.back_first_run(payload.from),
             Event::HerdrImport(payload) => self.herdr_import_action(payload.action, payload.device),
             Event::Desk(event) => self.desk_event(event),
+            Event::InputQueue(event) => self.input_queue_event(event),
             Event::Access(event) => self.access_event(event),
             Event::Automation(call) => self.automation_event(call),
             Event::FirstRunDraft(payload) => self.update_first_run_draft(payload),

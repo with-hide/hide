@@ -27,7 +27,7 @@ pub use hide_screen_rules::{Asks, Rules, State};
 mod file;
 pub use file::{
     ACCOUNT_PART, AccountPath, AccountRule, AccountVar, Answer, Base, By, CommandSlot, Desk, Hooks,
-    KEY_NAMES, LINE_BYTES, LINE_WORDS, LoginRule, MAX_ANSWER_KEYS, MAX_ID_BYTES, McpFormat,
+    Interrupt, KEY_NAMES, LINE_BYTES, LINE_WORDS, LoginRule, MAX_ANSWER_KEYS, MAX_ID_BYTES, MAX_INTERRUPT_KEYS, McpFormat,
     PathRule, PermissionKeys, PlanKeys, QuestionKeys, ROW_LABEL, ROW_NUMBER, SCHEMA, Switch,
     Template, TrustFormat, id_is_valid, is_plain_command, is_typable_word, reserved_variable,
     switch_effort_is_valid, valid_variable,
@@ -108,6 +108,9 @@ pub struct Definition {
     /// How a running session changes its model and effort (`[switch]`);
     /// built-in agents alone, and their copies.
     pub switch: Switch,
+    /// The keys that interrupt a turn under way (`[interrupt]`); built-in
+    /// agents alone, and their copies.
+    pub interrupt: Option<Interrupt>,
     pub source: Source,
     /// The built-in agent a user file copied.
     pub based_on: Option<String>,
@@ -406,6 +409,7 @@ fn new_definition(
         answer: file.answer,
         desk: file.desk.unwrap_or_default(),
         switch: file.switch.unwrap_or_default(),
+        interrupt: file.interrupt,
         source,
         based_on: None,
     })
@@ -471,6 +475,7 @@ fn based_on(
         answer: builtin.answer.clone(),
         desk: builtin.desk.clone(),
         switch: builtin.switch.clone(),
+        interrupt: builtin.interrupt.clone(),
         source,
         based_on: Some(base.to_owned()),
     })

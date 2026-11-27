@@ -436,6 +436,26 @@ pub fn desk_attachments(state_dir: &Path) -> PathBuf {
     state_dir.join(DESK_ATTACHMENTS)
 }
 
+/// The operator's words that wait for a pane's agent to rest, by pane (PRD
+/// desk-queue D-12); its owner is the core's `input_queue`.
+pub const INPUT_QUEUE: &str = "input-queue.json";
+
+pub fn input_queue(state_dir: &Path) -> PathBuf {
+    state_dir.join(INPUT_QUEUE)
+}
+
+/// The files a session's input or a phone's reply attached, moved here from
+/// `SCREEN_ATTACHMENTS` when they are sent, so the paths of words that wait
+/// for the agent's rest outlive a restart and the staging folder's eviction
+/// (PRD desk-queue D-12). Bounded by count and bytes, the oldest going
+/// first but never one a waiting line still names; its owner is `hided`'s
+/// `attachments`.
+pub const INPUT_ATTACHMENTS: &str = "input-attachments";
+
+pub fn input_attachments(state_dir: &Path) -> PathBuf {
+    state_dir.join(INPUT_ATTACHMENTS)
+}
+
 /// Files the operator attached to a terminal of this machine's panes from a
 /// window on another machine, one owner-only file each, kept 24 hours (PRD
 /// wsl-device B10); its owner is that node's `hide_host::attachments`.

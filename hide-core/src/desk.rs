@@ -202,6 +202,10 @@ pub(crate) struct Stored {
     /// older Hide reads past the key.
     #[serde(default)]
     pub queued: Vec<crate::model::DeskQueuedMessage>,
+    /// The waiting messages stopped with Desk's ■ (`멈춤`, PRD desk-queue
+    /// D-10): none goes until the operator sends one or resumes the line.
+    #[serde(default)]
+    pub queued_paused: bool,
     /// The sessions the conversation's chips name, by pane, the one named
     /// least recently first, so a chip whose pane is gone still reads its
     /// session's record and thread (feedback 2, frame K). An older Hide

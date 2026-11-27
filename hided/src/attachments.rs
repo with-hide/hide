@@ -42,6 +42,14 @@ const MAX_STAGED_BYTES: u64 = 256 * 1024 * 1024;
 /// told so under it (`hide-core/src/runtime/desk/worker.rs`).
 const DESK_KEEP: usize = 64;
 const DESK_KEEP_BYTES: u64 = 256 * 1024 * 1024;
+/// The folder of a session input's and a phone reply's files keeps this many
+/// and no more bytes than this, the staging folder's own bounds: past
+/// either the oldest go first, never one the operator's waiting words still
+/// name (`Core::input_files_in_use`) or one given within `COMMIT_GRACE`,
+/// and an input those alone would push past either is refused
+/// (`input_full`, PRD desk-queue D-12).
+const INPUT_KEEP: usize = STAGED_KEEP;
+const INPUT_KEEP_BYTES: u64 = MAX_STAGED_BYTES;
 
 /// Stages one connection may have open at once; past it the oldest open stage
 /// is dropped, so an abandoned upload cannot hold file descriptors forever.
@@ -226,6 +234,9 @@ pub struct Attachments {
     dir: PathBuf,
     /// Desk's files, kept across runs (`hide_kit::layout::desk_attachments`).
     desk_dir: PathBuf,
+    /// A session input's and a phone reply's files, kept across runs while
+    /// words wait for the agent (`hide_kit::layout::input_attachments`).
+    input_dir: PathBuf,
     clipboard_root: PathBuf,
     /// The account's state folder, where a View comment's screenshot is
     /// staged (`hide_host::feedback`).
@@ -235,6 +246,8 @@ pub struct Attachments {
     /// core may not have queued yet; locked for a whole commit to Desk's
     /// folder, so two windows' commits take it one at a time.
     desk_recent: Mutex<Vec<(PathBuf, Instant)>>,
+    /// The same for the folder of waiting input's files.
+    input_recent: Mutex<Vec<(PathBuf, Instant)>>,
 }
 
 impl Attachments {
@@ -244,7 +257,8 @@ impl Attachments {
         // stages it exactly there (`hide-core/src/terminal_attachments.rs`).
         let clipboard_root = state_dir.join(hide_node_link::attachments::CLIPBOARD_FOLDER);
         let desk_dir = hide_kit::layout::desk_attachments(state_dir);
-        for folder in [&dir, &clipboard_root, &desk_dir] {
+        let input_dir = hide_kit::layout::input_attachments(state_dir);
+        for folder in [&dir, &clipboard_root, &desk_dir, &input_dir] {
             // The staged bytes are the operator's own files and screenshots;
             // the directories stay private like the state file itself.
             if let Err(error) = hide_platform::fs::private::create_dir_all(folder) {
@@ -280,10 +294,12 @@ impl Attachments {
         Self {
             dir,
             desk_dir,
+            input_dir,
             clipboard_root,
             state_dir: state_dir.to_owned(),
             state: Mutex::new(State::default()),
             desk_recent: Mutex::new(Vec::new()),
+            input_recent: Mutex::new(Vec::new()),
         }
     }
 
@@ -612,6 +628,130 @@ impl Attachments {
         }
         keep_newest(&self.desk_dir, &keep, DESK_KEEP, DESK_KEEP_BYTES);
         Ok(committed)
+    }
+
+    /// The staged files of a session's input, kept in the folder for waiting
+    /// input so their paths outlive a restart while the words wait for the
+    /// agent (PRD desk-queue D-12), in the order the client names them, with
+    /// their bytes together. `in_use` are the files waiting words name
+    /// (`Core::input_files_in_use`). Blocks on the disk.
+    pub fn commit_held(
+        &self,
+        stages: &[String],
+        in_use: &[String],
+    ) -> Result<(Vec<String>, u64), &'static str> {
+        let files = self.commit_files(stages, MAX_FILES, None)?;
+        self.let_go_of_staged(&files);
+        self.keep_input(files, in_use)
+    }
+
+    /// A phone's reply that waits for the agent: the files its commit named
+    /// in the staging folder (`commit_reply`) move to the folder for waiting
+    /// input, as a session input's do, with their bytes together.
+    pub fn hold_reply(
+        &self,
+        paths: &[String],
+        in_use: &[String],
+    ) -> Result<(Vec<String>, u64), &'static str> {
+        let mut files = Vec::with_capacity(paths.len());
+        for path in paths {
+            let path = PathBuf::from(path);
+            // Only a file this folder staged moves.
+            if path.parent() != Some(self.dir.as_path()) {
+                return Err("unknown_stage");
+            }
+            let bytes = std::fs::metadata(&path)
+                .map_err(|_| "attachment_lost")?
+                .len();
+            files.push((path, bytes));
+        }
+        self.let_go_of_staged(&files);
+        self.keep_input(files, in_use)
+    }
+
+    /// The staging folder no longer counts `files`: they are the waiting
+    /// input folder's now.
+    fn let_go_of_staged(&self, files: &[(PathBuf, u64)]) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (moved, kept): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut state.staged)
+            .into_iter()
+            .partition(|entry| files.iter().any(|(path, _)| *path == entry.path));
+        state.staged = kept;
+        let freed: u64 = moved.iter().map(|entry| entry.bytes).sum();
+        state.staged_bytes = state.staged_bytes.saturating_sub(freed);
+    }
+
+    /// Moves `files` into the folder for waiting input under their staged
+    /// names, refused when the files waiting words name leave no room.
+    fn keep_input(
+        &self,
+        files: Vec<(PathBuf, u64)>,
+        in_use: &[String],
+    ) -> Result<(Vec<String>, u64), &'static str> {
+        let mut recent = self
+            .input_recent
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        recent.retain(|(_, at)| at.elapsed() < COMMIT_GRACE);
+        let mut keep: HashSet<PathBuf> = in_use
+            .iter()
+            .map(PathBuf::from)
+            .chain(recent.iter().map(|(path, _)| path.clone()))
+            .collect();
+        let (held, held_bytes) = files_in(&self.input_dir)
+            .into_iter()
+            .filter(|(_, _, path)| keep.contains(path))
+            .fold((0usize, 0u64), |(count, sum), (_, size, _)| {
+                (count + 1, sum + size)
+            });
+        let incoming: u64 = files.iter().map(|(_, bytes)| bytes).sum();
+        if held + files.len() > INPUT_KEEP || held_bytes + incoming > INPUT_KEEP_BYTES {
+            hide_core::diagnostic!(serde_json::json!({
+                "component": "hided",
+                "kind": "attachment.input_full",
+                "held_files": held,
+                "held_bytes": held_bytes,
+                "files": files.len(),
+                "bytes": incoming,
+            }));
+            for (path, _) in &files {
+                let _ = std::fs::remove_file(path);
+            }
+            return Err("input_full");
+        }
+        let mut kept: Vec<String> = Vec::with_capacity(files.len());
+        for (path, _) in &files {
+            let Some(name) = path.file_name() else {
+                return Err("stage_failed");
+            };
+            let destination = self.input_dir.join(name);
+            if let Err(error) = std::fs::rename(path, &destination) {
+                hide_core::diagnostic!(serde_json::json!({
+                    "component": "hided",
+                    "kind": "attachment.input_keep_failed",
+                    "message": error.to_string(),
+                }));
+                for (path, _) in &files {
+                    let _ = std::fs::remove_file(path);
+                }
+                for path in &kept {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err("stage_failed");
+            }
+            kept.push(destination.display().to_string());
+        }
+        let now = Instant::now();
+        for path in &kept {
+            let path = PathBuf::from(path);
+            recent.push((path.clone(), now));
+            keep.insert(path);
+        }
+        keep_newest(&self.input_dir, &keep, INPUT_KEEP, INPUT_KEEP_BYTES);
+        Ok((kept, incoming))
     }
 
     /// The staged paths of a phone's reply, in the order it names them, with

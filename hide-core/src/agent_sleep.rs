@@ -62,6 +62,9 @@ pub struct Awake<'a> {
     pub backoff_until: &'a HashMap<String, u64>,
     /// The agents a letter waits to be delivered to.
     pub letters: &'a LetterWaits,
+    /// The panes where the operator's own words wait for the agent's rest
+    /// (PRD desk-queue D-16): asleep, it would never rest for them.
+    pub queued: &'a HashSet<String>,
 }
 
 impl Awake<'_> {
@@ -73,6 +76,7 @@ impl Awake<'_> {
                 .get(&agent.pane_id)
                 .is_some_and(|until| now_unix_ms < *until)
             || self.letters.holds(agent)
+            || self.queued.contains(&agent.pane_id)
     }
 }
 
@@ -1061,6 +1065,7 @@ mod tests {
             on_screen: &on_screen,
             backoff_until: &backoff_until,
             letters,
+            queued: &HashSet::new(),
         };
         store.due(agents, SleepMachine::Core, &awake, Some(24), now)
     }
@@ -1078,6 +1083,7 @@ mod tests {
             on_screen: &on_screen,
             backoff_until: &backoff_until,
             letters,
+            queued: &HashSet::new(),
         };
         store
             .pressure_candidates(agents, SleepMachine::Core, &awake, &[], now)
@@ -1160,6 +1166,7 @@ mod tests {
             on_screen: &on_screen,
             backoff_until: &backoff_until,
             letters: &LetterWaits::default(),
+            queued: &HashSet::new(),
         };
         assert!(
             store
@@ -1281,6 +1288,7 @@ mod tests {
             on_screen: &on_screen,
             backoff_until: &backoff_until,
             letters: &LetterWaits::default(),
+            queued: &HashSet::new(),
         };
         let due = store.due(&agents, SleepMachine::Core, &awake, Some(12), 12 * HOUR);
         assert_eq!(due, ["w1:p1", "w1:p7", "w1:p11", "w1:p12", "w1:p10"]);

@@ -599,6 +599,12 @@ pub struct DeskConversationSnapshot {
     /// its head (a sign-in, a session that did not open), so nothing goes
     /// until `다시 시작` or a new message.
     pub queued_held: bool,
+    /// The line stopped with ■ (`멈춤`, PRD desk-queue D-10): nothing goes
+    /// until a message's `보내기` or `▶ 이어 보내기`.
+    pub queued_paused: bool,
+    /// What `모두 지우기` took, while `되돌리기` can bring it back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queued_cleared: Option<crate::model::InputQueueCleared>,
 }
 
 /// A message waiting for the turn before it to end (desk.md: "while a reply

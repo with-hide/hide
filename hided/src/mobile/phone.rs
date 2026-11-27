@@ -4,11 +4,12 @@
 //! phone, `{client_kind: "phone", pair, name}` to pair with the live code.
 //! After that the phone may only: open one agent's detail, choose its
 //! conversation or its terminal, ask for older messages or more rows, close
-//! it, send that pane a reply or one key, open the start sheet and start an
+//! it, send that pane a reply, one key or its interrupt, open the start sheet and start an
 //! agent from it, wake a sleeping agent in its pane, wake or inspect a listed
 //! sleeping conversation, answer the decision a listed mission waits on
 //! (`answer_mission`), read, merge or hand to an agent a listed pull request
-//! (`read_pr`, `merge_pr`, `read_pr_feedback`, `delegate_pr`), register or
+//! (`read_pr`, `merge_pr`, `read_pr_feedback`, `delegate_pr`), press on the
+//! open detail's waiting words (`queue`), register or
 //! report its push subscription, ask whether hided still answers (`ping`),
 //! and look at one View an agent of its open detail opened (`look_open`,
 //! `look_ack`, `look_seen`). Anything else is refused and recorded. It never
@@ -458,10 +459,13 @@ fn spawn_detail(
         // The agent's ask and running command the phone was last told.
         let mut told_ask: Option<Value> = None;
         let mut told_running = Value::Null;
+        // The pane's waiting words the phone was last told.
+        let mut told_queue: Option<Value> = None;
         loop {
             let ask = *asks.borrow_and_update();
             let mut outgoing = Vec::new();
             outgoing.extend(looks_step(&mobile, &key, &mut told_looks).await);
+            outgoing.extend(queue_step(&mobile, &key, &mut told_queue).await);
             if ask.view == View::Conversation {
                 let follow = follows_calls(&mobile, &key);
                 let (next, next_calls, frame) =
@@ -565,6 +569,87 @@ async fn looks_step(
     let frame = looks::list_frame(key, &looks);
     *told = Some(looks);
     Some(frame)
+}
+
+/// A press on the open detail's waiting words (PRD desk-queue D-11): ✕ on
+/// a line (`remove`), a paused line's `보내기` (`send`), `▶ 이어 보내기`
+/// (`resume`), `모두 지우기` (`clear`) and `되돌리기` (`restore`), handed to the
+/// core as a window's press is; answered `queue_result` once it was handed.
+async fn queue_request(
+    mobile: &Arc<Mobile>,
+    phone_id: &str,
+    message: &Value,
+    projection: &Projection,
+) -> Value {
+    let request_id = message.get("request_id").cloned().unwrap_or(Value::Null);
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({"type": "queue_result", "request_id": request_id, "ok": ok, "reason": reason})
+    };
+    let Some(key) = key_of(message).filter(|key| projection.find(key).is_some()) else {
+        refusal_logged("scope.refused", Some(phone_id), "queue_not_an_agent");
+        return answer(false, Some("gone"));
+    };
+    let action = message.get("action").and_then(Value::as_str);
+    let (kind, line) = match action {
+        Some("remove") => ("input_queue_remove", true),
+        Some("send") => ("input_queue_send", true),
+        Some("resume") => ("input_queue_resume", false),
+        Some("clear") => ("input_queue_clear", false),
+        Some("restore") => ("input_queue_restore", false),
+        _ => return answer(false, Some("invalid_request")),
+    };
+    let mut payload = json!({"pane_id": key.pane_id});
+    if line {
+        let Some(id) = message.get("id").and_then(Value::as_u64) else {
+            return answer(false, Some("invalid_request"));
+        };
+        payload["id"] = json!(id);
+    }
+    let event = json!({"schema_version": 2, "kind": kind, "payload": payload});
+    let core = Arc::clone(mobile.core());
+    let handed = tokio::task::spawn_blocking(move || {
+        core.dispatch(serde_json::to_vec(&event).unwrap_or_default())
+    })
+    .await;
+    match handed {
+        Ok(Ok(())) => answer(true, None),
+        Ok(Err(message)) => {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "queue.dispatch_failed", "message": message,
+            }));
+            answer(false, Some("unavailable"))
+        }
+        Err(_) => answer(false, Some("unavailable")),
+    }
+}
+
+/// The pane's waiting words (PRD desk-queue D-11), when they differ from
+/// what the phone was last told: a `queue` frame, which an older bundle
+/// ignores (docs/ARCHITECTURE.md, The mobile companion).
+async fn queue_step(mobile: &Arc<Mobile>, key: &AgentKey, told: &mut Option<Value>) -> Option<Value> {
+    let (core, pane_id) = (Arc::clone(mobile.core()), key.pane_id.clone());
+    let queue = match tokio::task::spawn_blocking(move || core.input_queue(&pane_id)).await {
+        Ok(Ok(queue)) => queue.unwrap_or(Value::Null),
+        Ok(Err(message)) => {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "queue.read_failed", "message": message,
+            }));
+            return None;
+        }
+        Err(error) => {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "queue.read_failed", "message": error.to_string(),
+            }));
+            return None;
+        }
+    };
+    if told.as_ref() == Some(&queue) {
+        return None;
+    }
+    *told = Some(queue.clone());
+    Some(json!({
+        "type": "queue", "device_id": key.device_id, "pane_id": key.pane_id, "queue": queue,
+    }))
 }
 
 fn looks_failed(message: &str) {
@@ -985,6 +1070,12 @@ async fn run(
     // connections between two Hides, which every computer from this build
     // on does; an older bundle ignores the field.
     hello["device_connect"] = json!(true);
+    // An addition (docs/ARCHITECTURE.md, The mobile companion): a bundle
+    // draws the open detail's waiting words (`queue` frames, `queue`
+    // requests) and the reply bar's ■ (`input` with `interrupt`) only on a
+    // computer that says it holds them (PRD desk-queue D-11); an older
+    // bundle ignores the field.
+    hello["queue"] = json!(true);
     // This computer's product device id, which another computer's
     // `machines` names it by, so the phone knows which of those it has.
     hello["machine"] = json!(mobile.node().as_str());
@@ -1209,6 +1300,7 @@ async fn handle(
             Some(pr_request(mobile, phone_id, kind, message).await)
         }
         "automation" => Some(automation_request(mobile, phone_id, message).await),
+        "queue" => Some(queue_request(mobile, phone_id, message, projection).await),
         "delegate_pr" => {
             let busy = json!({"type": "start_result", "request_id": message.get("request_id"), "ok": false, "reason": "in_flight"});
             // Answered once the core says how the start went, like a start from the sheet.
@@ -1409,6 +1501,7 @@ fn operator_action(kind: &str) -> bool {
             | "reopen_mission_view"
             | "merge_pr"
             | "automation"
+            | "queue"
             | "delegate_pr"
             | "wake_sleeping_session"
             | "start_agent"
@@ -2236,6 +2329,55 @@ fn reply_words(
         .words(text, &paths, &staging)
 }
 
+/// How a phone's input that went ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Written {
+    Typed,
+    /// Held in the pane's line for the agent's rest.
+    Queued,
+}
+
+/// Holds a reply in the pane's line: its files move from the staging folder
+/// to the one waiting input keeps (`Attachments::hold_reply`), so they
+/// outlive a restart, and the core keeps the words.
+fn queue_reply(
+    mobile: &Mobile,
+    connection: u64,
+    pane_id: &str,
+    text: &str,
+    stages: &[String],
+) -> Result<(), &'static str> {
+    let (paths, bytes) = if stages.is_empty() {
+        (Vec::new(), 0)
+    } else {
+        let committed = mobile
+            .attachments()
+            .commit_reply(connection, stages)
+            .map_err(|reason| match reason {
+                "unknown_stage" | "stage_incomplete" => "attachment_lost",
+                other => other,
+            })?;
+        let in_use = mobile
+            .config
+            .core
+            .input_files_in_use()
+            .map_err(|_| "unavailable")?;
+        mobile.attachments().hold_reply(&committed, &in_use)?
+    };
+    let stage_id = crate::attachments::random_id().ok_or("unavailable")?;
+    mobile
+        .config
+        .core
+        .queue_input(pane_id, text.to_owned(), paths, bytes, stage_id)
+        .map(|_| ())
+        .map_err(|reason| match reason.as_str() {
+            hide_core::QUEUE_FULL => hide_core::QUEUE_FULL,
+            hide_core::QUEUE_FILES_FULL => hide_core::QUEUE_FILES_FULL,
+            "pane_gone" => "gone",
+            _ => "unavailable",
+        })
+}
+
 /// The ask the open detail shows now, if the input is for its agent.
 fn shown_now(
     shown: &Option<tokio::sync::watch::Receiver<Option<ask::Shown>>>,
@@ -2304,7 +2446,12 @@ async fn input(
     let shown = shown
         .filter(|(detail, _)| key_of(message).as_ref() == Some(detail))
         .map(|(_, shown)| shown);
+    // ■ on the reply bar (PRD desk-queue D-11): the agent's own interrupt
+    // keys, which the core names while the agent works.
+    let interrupt = message.get("interrupt") == Some(&Value::Bool(true));
     let problem = match (text, engine_key, choice) {
+        (None, None, None) if interrupt && stages.is_empty() => None,
+        _ if interrupt => Some("invalid_request"),
         (Some(text), None, None) => operator_input::problem(text, stages.len()),
         // Only words carry files.
         _ if !stages.is_empty() => Some("invalid_request"),
@@ -2379,7 +2526,37 @@ async fn input(
                 .collect();
             let pressed;
             let words;
+            let interrupting: Vec<String>;
+            let interrupt_keys: Vec<&str>;
             let typed = match (&text, engine_key, &chosen) {
+                (None, None, None) if interrupt => {
+                    interrupting = writer
+                        .config
+                        .core
+                        .interrupt_keys(&core_pane_id)
+                        .map_err(|reason| match reason.as_str() {
+                            "agent_asking" => "agent_asking",
+                            "agent_not_working" => "agent_not_working",
+                            "interrupt_unsupported" => "interrupt_unsupported",
+                            "pane_gone" => "gone",
+                            _ => "unavailable",
+                        })?;
+                    interrupt_keys = interrupting.iter().map(String::as_str).collect();
+                    Typed::Keys(&interrupt_keys)
+                }
+                // While the agent works, or words wait ahead of these, the
+                // reply waits in the pane's line as a session input's does
+                // (PRD desk-queue D-01, D-11).
+                (Some(text), _, _)
+                    if writer
+                        .config
+                        .core
+                        .input_waits(&core_pane_id)
+                        .map_err(|_| "unavailable")? =>
+                {
+                    queue_reply(&writer, connection, &core_pane_id, text, &stages)?;
+                    return Ok(Written::Queued);
+                }
                 (Some(text), _, _) => {
                     words = reply_words(&writer, connection, &device_id, text, &stages)?;
                     Typed::Words(&words)
@@ -2437,7 +2614,7 @@ async fn input(
             if reply && sent.is_ok() {
                 writer.note_submit(&core_pane_id);
             }
-            sent.map_err(|unwritten| {
+            sent.map(|()| Written::Typed).map_err(|unwritten| {
                 if unwritten.certain() {
                     pane::unwritten_reason(unwritten)
                 } else {
@@ -2449,7 +2626,7 @@ async fn input(
         // reserved, so a repeat is answered from the claim and never typed
         // twice.
         settlement.state = match result {
-            Ok(()) => Some(InputState::Written),
+            Ok(_) => Some(InputState::Written),
             Err("uncertain") => Some(InputState::Uncertain),
             Err(_) => None,
         };
@@ -2459,7 +2636,7 @@ async fn input(
     .await
     .unwrap_or(Err("uncertain"));
     match result {
-        Ok(()) => {
+        Ok(written) => {
             if message.get("choice").is_some() {
                 mobile
                     .config
@@ -2475,10 +2652,16 @@ async fn input(
             hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.sent", "phone_id": phone_id,
                 "device_id": key.device_id,
-                "kind_of_input": if message.get("key").is_some() { "key" } else if message.get("choice").is_some() { "choice" } else { "reply" },
-                "files": files,
+                "kind_of_input": if interrupt { "interrupt" } else if message.get("key").is_some() { "key" } else if message.get("choice").is_some() { "choice" } else { "reply" },
+                "files": files, "queued": written == Written::Queued,
             }));
-            answer(true, None)
+            let mut answered = answer(true, None);
+            // An addition an older bundle reads past: the reply waits in the
+            // pane's line, which the conversation frame shows.
+            if written == Written::Queued {
+                answered["queued"] = json!(true);
+            }
+            answered
         }
         Err(reason) => {
             hide_core::diagnostic!(json!({

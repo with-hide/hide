@@ -1866,6 +1866,11 @@ impl Runtime {
         if self.ui_attached() && self.agent_sleep_on_screen(None).contains(&row.pane_id) {
             return Some("on_screen");
         }
+        // The operator's own words wait for this agent's rest (PRD
+        // desk-queue D-16).
+        if self.input_queue_panes().contains(&row.pane_id) {
+            return Some("queued_input");
+        }
         let letters = self
             .delivery_state()
             .map(|ledger| crate::agent_sleep::LetterWaits::of(&ledger))

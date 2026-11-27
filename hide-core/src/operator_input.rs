@@ -164,11 +164,12 @@ pub enum Typed<'a> {
     /// The operator's words, submitted with Enter: they may answer the
     /// question on screen, so the agent's state never holds them.
     Words(&'a str),
-    /// A line Hide types for the operator, such as a session bar's switch of
-    /// model or effort, submitted with Enter: typed as a letter is, only
-    /// while the agent is at rest and asks nothing, so its Enter never
-    /// answers a permission or lands in a turn.
-    Command(&'a str),
+    /// Words typed only while the agent is at rest and asks nothing, as a
+    /// letter is, submitted with Enter, so the Enter never answers a
+    /// permission or lands in a turn: a session bar's switch of model or
+    /// effort, and the operator's words that waited for the agent's rest
+    /// (PRD desk-queue D-14).
+    AtRest(&'a str),
     /// Keys in order, each an engine key name (`down`, `enter`, `esc`) or
     /// one character typed as a key press, never pasted.
     Keys(&'a [&'a str]),
@@ -186,7 +187,7 @@ impl Typed<'_> {
     /// [`KEY_BYTES`] a key.
     fn reserved(&self) -> usize {
         match self {
-            Self::Words(text) | Self::Command(text) => text.len() + 1,
+            Self::Words(text) | Self::AtRest(text) => text.len() + 1,
             Self::Keys(keys) | Self::Choice { keys, .. } => keys.len() * KEY_BYTES,
         }
     }
@@ -207,7 +208,7 @@ pub enum Unwritten {
     /// may have landed.
     Uncertain,
     /// The agent was asking (`agent_asking`) or not at rest
-    /// (`agent_busy`), so a [`Typed::Command`] typed nothing.
+    /// (`agent_busy`), so a [`Typed::AtRest`] typed nothing.
     Busy(&'static str),
     /// The caller's last step refused, for the reason it named: the pane
     /// moved on, or its machine's engine could not be had; nothing was typed.
@@ -276,7 +277,7 @@ pub fn write(
     // One key write in a pane at a time, so two screens' keys never
     // interleave between a row read and the key after it.
     let _keys = match typed {
-        Typed::Words(_) | Typed::Command(_) => None,
+        Typed::Words(_) | Typed::AtRest(_) => None,
         Typed::Keys(_) | Typed::Choice { .. } => Some(
             gate.hold_keys(core_pane)
                 .ok_or(Unwritten::Unready(IN_FLIGHT))?,
@@ -287,7 +288,7 @@ pub fn write(
         Typed::Words(text) => engine
             .prompt_agent(raw_pane, text, PromptBy::Operator, STEP_TIMEOUT)
             .map_err(|error| Unwritten::of(&error)),
-        Typed::Command(text) => engine
+        Typed::AtRest(text) => engine
             .prompt_agent(raw_pane, text, PromptBy::Letter, STEP_TIMEOUT)
             .map_err(|error| Unwritten::of(&error)),
         Typed::Keys(keys) => press(&engine, raw_pane, keys, None),

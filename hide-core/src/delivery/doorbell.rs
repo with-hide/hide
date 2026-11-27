@@ -116,6 +116,9 @@ pub(crate) enum Hold {
     /// A `progress` letter, which no bell rings for (`Letter::rings`): it
     /// rides the next handover of its recipient's letters.
     Rides,
+    /// The operator's own words wait in the pane's line: they go first, and
+    /// the bell at the rest after the turn they start (PRD desk-queue D-13).
+    Queued,
 }
 
 impl Hold {
@@ -133,7 +136,7 @@ impl Hold {
         }
     }
 
-    fn code(self) -> &'static str {
+    pub(crate) fn code(self) -> &'static str {
         match self {
             Self::Kind => "kind_not_belled",
             Self::Session => "session_changed",
@@ -157,6 +160,7 @@ impl Hold {
             Self::ComposerUnread => "composer_unconfirmed",
             Self::ComposerUnreadable => "composer_unreadable",
             Self::Rides => "rides_next_handover",
+            Self::Queued => "operator_line_first",
         }
     }
 }
@@ -237,11 +241,29 @@ impl Patience {
 /// menu, a question of the agent's own, and a kind that takes letters at its
 /// tools while it works, whose next tool hands the letter over.
 pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> Result<(), Hold> {
+    verdict(observation, Some(patience), now)
+}
+
+/// The same verdict for the operator's own words that waited in the pane's
+/// line (PRD desk-queue D-02): the agent at rest, asking nothing, its session
+/// read settled and no draft in its composer. A letter's other waits are
+/// not the operator's: every agent with a session input takes them, not only
+/// a kind a bell rings for, never mid-turn, and with no quiet period, since
+/// the words are the operator's own and go a few seconds after the turn
+/// ends (B4).
+pub(crate) fn judge_operator(observation: &Observation) -> Result<(), Hold> {
+    verdict(observation, None, 0)
+}
+
+/// `letter` is the waiting letter's patience; `None` for the operator's
+/// own line.
+fn verdict(observation: &Observation, letter: Option<Patience>, now: u64) -> Result<(), Hold> {
     use crate::agent_state::AgentActivity;
+    let forced = letter.is_some_and(|patience| patience.forced);
     if observation.telemetry_stale {
         return Err(Hold::Status);
     }
-    if !patience.forced && !bell_target(&observation.actor.kind) {
+    if letter.is_some() && !forced && !bell_target(&observation.actor.kind) {
         return Err(Hold::Kind);
     }
     if observation.actor.require_native_identity().is_err() {
@@ -251,24 +273,26 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
     match projected.turn.activity {
         AgentActivity::Stopped => {}
         AgentActivity::Working
-            if !super::mailbox::tool_letters(&observation.actor.kind)
-                && (patience.forced || patience.due(projected.working_since(observation), now)) => {
-        }
+            if letter.is_some_and(|patience| {
+                !super::mailbox::tool_letters(&observation.actor.kind)
+                    && (patience.forced || patience.due(projected.working_since(observation), now))
+            }) => {}
         AgentActivity::Working => return Err(Hold::Working),
         AgentActivity::Unknown => return Err(Hold::Status),
     }
     takes_keys(observation)?;
-    if observation.turn == Turn::Unread && !patience.forced {
+    if observation.turn == Turn::Unread && !forced {
         return Err(Hold::SessionUnread);
     }
-    if patience.forced {
+    if forced {
         return Ok(());
     }
     if observation.unsent_draft() {
         return Err(Hold::Draft);
     }
-    if now.saturating_sub(observation.last_input_at_unix_ms) < super::INPUT_QUIET_MS
-        || now.saturating_sub(projected.changed_at(observation)) < super::INPUT_QUIET_MS
+    if letter.is_some()
+        && (now.saturating_sub(observation.last_input_at_unix_ms) < super::INPUT_QUIET_MS
+            || now.saturating_sub(projected.changed_at(observation)) < super::INPUT_QUIET_MS)
     {
         return Err(Hold::Quiet);
     }
@@ -746,15 +770,33 @@ impl Doorbell {
             .lock()
             .map(|mut guard| guard.mission_answers_due())
             .unwrap_or_default();
+        // The operator's own waiting words go first at a rest, before any
+        // letter is judged (PRD desk-queue D-13): a pane whose line waits
+        // holds its letters (`Hold::Queued`).
+        let line_drafts = owner
+            .lock()
+            .map(|mut guard| guard.send_queued_lines(now))
+            .unwrap_or_default();
         // A Conductor's pane keeps its composer read as a recipient's does,
-        // so a draft that did not read empty is not read again every pass.
+        // so a draft that did not read empty is not read again every pass;
+        // so does a pane whose waiting line a draft holds.
         self.composer.retain(|pane| {
             pending
                 .iter()
                 .any(|letter| letter.recipient.pane_id == pane)
                 || answers.iter().any(|work| work.conductor.pane_id == pane)
+                || line_drafts.iter().any(|actor| actor.pane_id == pane)
         });
         let mut count = asked;
+        // A draft that holds the operator's line is read as a letter's is,
+        // and the next pass sends the line once it reads empty.
+        for actor in &line_drafts {
+            if stop.load(Ordering::Acquire) || count >= WORK_PER_PASS {
+                break;
+            }
+            let release = self.composer.release(owner, actor, now);
+            count += usize::from(release.read);
+        }
         // Whether each pane read for its draft this pass showed no composer.
         let mut drafts = HashMap::<String, bool>::new();
         for &letter in &pending {

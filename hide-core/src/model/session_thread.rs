@@ -75,6 +75,9 @@ pub enum ThreadInputState {
     Sending,
     /// The engine took the words and the Enter for the pane.
     Sent,
+    /// The agent was at work, so the words wait in the pane's line
+    /// (`queue`), typed at a later rest (PRD desk-queue B1).
+    Queued,
     /// Nothing was typed into the pane; `reason` says why.
     Refused,
 }
@@ -133,11 +136,61 @@ pub struct SessionThreadSnapshot {
     /// The page the session is still writing, read again as it writes.
     pub tail: Option<Arc<ThreadPageSnapshot>>,
     pub input: Option<ThreadInputSnapshot>,
+    /// The operator's words that wait for the pane's agent to rest (PRD
+    /// desk-queue); none while it holds none.
+    pub queue: Option<InputQueueSnapshot>,
     /// The model and effort the session runs with as Hide knows them: what
     /// its start named, or the last a session input changed; each absent
     /// for the CLI's own (docs/ARCHITECTURE.md, A session's model and
     /// effort).
     pub choice: hide_agent_adapter::LaunchChoice,
+}
+
+/// Whether a pane's waiting words go at its agent's rests
+/// (`input_queue_state`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputQueueState {
+    /// `대기 중`: one goes each time the agent rests.
+    Waiting,
+    /// `멈춤`: none goes until the operator sends one or resumes.
+    Paused,
+}
+
+/// A pane's waiting words, as every screen draws them above its input
+/// (PRD desk-queue D-05).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct InputQueueSnapshot {
+    pub state: InputQueueState,
+    /// Oldest first, the order they go in.
+    pub lines: Vec<InputQueueLine>,
+    /// How many the line holds (`input_queue::LINES_MAX`).
+    pub max: usize,
+    /// The line holds `max`: a send now is refused.
+    pub full: bool,
+    /// What `모두 지우기` took, while `되돌리기` can bring it back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleared: Option<InputQueueCleared>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct InputQueueLine {
+    pub id: u64,
+    pub text: String,
+    /// The names of the files it attaches.
+    pub files: Vec<String>,
+    /// On its way to the pane: it has no ✕.
+    pub sending: bool,
+    /// Why it did not go (`input_queue_failure`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<crate::input_queue::Failure>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct InputQueueCleared {
+    pub count: usize,
+    /// When `되돌리기` stops being offered.
+    pub until_unix_ms: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]

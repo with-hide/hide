@@ -223,6 +223,10 @@ pub(super) struct ThreadInputPayload {
     pub text: String,
     #[serde(default)]
     pub paths: Vec<String>,
+    /// The bytes the files at `paths` hold together, which hided measured
+    /// as it kept them: a line of waiting words is capped by them.
+    #[serde(default)]
+    pub bytes: u64,
 }
 
 /// A change of model or effort for the session a thread shows (`[switch]`
@@ -333,6 +337,7 @@ impl Runtime {
             thread.pane = ThreadPane::Gone;
         }
         thread.choice = self.session_choice(&payload.pane_id);
+        thread.queue = self.input_queue_snapshot(&payload.pane_id);
         self.snapshot.session_thread = Some(Arc::new(thread));
         self.snapshot.session_thread_history = Some(Arc::new(SessionThreadHistorySnapshot {
             generation,
@@ -581,6 +586,7 @@ impl Runtime {
             payload.request_id,
             payload.text,
             payload.paths,
+            payload.bytes,
             None,
         )
     }
@@ -649,6 +655,7 @@ impl Runtime {
             payload.request_id,
             line,
             Vec::new(),
+            0,
             Some(after),
         )
     }
@@ -714,6 +721,7 @@ impl Runtime {
         request_id: String,
         text: String,
         paths: Vec<String>,
+        bytes: u64,
         choice: Option<hide_agent_adapter::LaunchChoice>,
     ) -> bool {
         let payload = ThreadInputPayload {
@@ -722,6 +730,7 @@ impl Runtime {
             request_id,
             text,
             paths,
+            bytes,
         };
         let Some(open) = self.session_thread.open.as_ref().filter(|open| {
             open.generation == payload.generation && open.pane_id == payload.pane_id
@@ -740,6 +749,24 @@ impl Runtime {
             .or(open.inputting.then_some("in_flight"));
         if let Some(reason) = refusal {
             return self.settle_thread_input(&payload.request_id, Err(reason));
+        }
+        // The operator's words wait for an agent at work, behind words that
+        // wait already (PRD desk-queue D-01); a switch line is refused there
+        // instead (`switch_session_thread`).
+        if choice.is_none()
+            && self.input_route(&payload.pane_id) == crate::input_queue::Route::Queue
+        {
+            let queued = self.queue_input(
+                &payload.pane_id,
+                payload.text,
+                payload.paths,
+                payload.bytes,
+                payload.request_id.clone(),
+            );
+            return match queued {
+                Ok(_) => self.settle_thread_queued(&payload.request_id),
+                Err(reason) => self.settle_thread_input(&payload.request_id, Err(reason)),
+            };
         }
         let device = open.device.clone();
         let raw_pane = open.raw_pane.clone();
@@ -792,7 +819,7 @@ impl Runtime {
                     &core_pane,
                     &raw_pane,
                     if command {
-                        crate::operator_input::Typed::Command(&text)
+                        crate::operator_input::Typed::AtRest(&text)
                     } else {
                         crate::operator_input::Typed::Words(&text)
                     },
@@ -1211,7 +1238,11 @@ impl Runtime {
             .filter(|input| input.state != ThreadInputState::Sending)
     }
 
-    fn settle_thread_input(&mut self, request_id: &str, sent: Result<(), &'static str>) -> bool {
+    pub(super) fn settle_thread_input(
+        &mut self,
+        request_id: &str,
+        sent: Result<(), &'static str>,
+    ) -> bool {
         self.set_session_thread(|thread| {
             thread.input = Some(ThreadInputSnapshot {
                 request_id: request_id.to_owned(),
@@ -1225,9 +1256,30 @@ impl Runtime {
         })
     }
 
+    /// The words of `request_id` wait in the pane's line: the box lets them
+    /// go as it does sent ones (PRD desk-queue B1).
+    pub(super) fn settle_thread_queued(&mut self, request_id: &str) -> bool {
+        self.set_session_thread(|thread| {
+            thread.input = Some(ThreadInputSnapshot {
+                request_id: request_id.to_owned(),
+                state: ThreadInputState::Queued,
+                reason: None,
+            });
+        })
+    }
+
+    /// The open thread's pane, while one is open on a pane that still runs
+    /// its session.
+    pub(super) fn session_thread_pane(&self) -> Option<&str> {
+        self.session_thread
+            .open
+            .as_ref()
+            .map(|open| open.pane_id.as_str())
+    }
+
     /// Changes the thread section, as a new value so a payload already
     /// handed out keeps the state it was taken at.
-    fn set_session_thread(&mut self, change: impl FnOnce(&mut SessionThreadSnapshot)) -> bool {
+    pub(super) fn set_session_thread(&mut self, change: impl FnOnce(&mut SessionThreadSnapshot)) -> bool {
         let Some(held) = self.snapshot.session_thread.as_ref() else {
             return false;
         };
@@ -1990,6 +2042,7 @@ mod tests {
             request_id: INPUT.to_owned(),
             text: "이거 봐줘".to_owned(),
             paths: vec![file.clone()],
+            bytes: 0,
         });
         let sent = fake.calls_of("prompt_agent");
         assert_eq!(sent.len(), 1, "{sent:?}");
@@ -2025,6 +2078,7 @@ mod tests {
             request_id: INPUT.to_owned(),
             text: "계속".to_owned(),
             paths: Vec::new(),
+            bytes: 0,
         });
         assert_eq!(fake.calls_of("prompt_agent").len(), 1);
         assert_eq!(
@@ -2372,6 +2426,7 @@ mod tests {
                 request_id: INPUT.to_owned(),
                 text: "계속".to_owned(),
                 paths: Vec::new(),
+                bytes: 0,
             });
         };
         let refusal = |runtime: &Runtime| {
@@ -2434,6 +2489,7 @@ mod tests {
                 request_id: INPUT.to_owned(),
                 text: "계속".to_owned(),
                 paths: Vec::new(),
+                bytes: 0,
             });
         }
         crate::runtime::tests::wait_for("the input's permit ask", || {
@@ -2483,6 +2539,7 @@ mod tests {
             request_id: INPUT.to_owned(),
             text: "계속".to_owned(),
             paths: Vec::new(),
+            bytes: 0,
         });
         assert!(fake.calls_of("prompt_agent").is_empty());
         assert_eq!(
@@ -2530,6 +2587,7 @@ mod tests {
                 request_id: INPUT.to_owned(),
                 text: "계속".to_owned(),
                 paths: Vec::new(),
+                bytes: 0,
             });
         }
         crate::runtime::tests::wait_for("the input's permit ask", || {
@@ -2592,6 +2650,7 @@ mod tests {
                 request_id: INPUT.to_owned(),
                 text: "계속".to_owned(),
                 paths: Vec::new(),
+                bytes: 0,
             });
         }
         crate::runtime::tests::wait_for("the input's permit ask", || {
@@ -2682,6 +2741,7 @@ mod tests {
             request_id: INPUT.to_owned(),
             text: "계속해".to_owned(),
             paths: Vec::new(),
+            bytes: 0,
         });
         let sent = device.calls_of("prompt_agent");
         assert_eq!(sent.len(), 1, "{sent:?}");
@@ -2903,5 +2963,193 @@ mod tests {
             first.get("b"),
             Some(&view("github.com/with-hide/hide/pull/2529/files", None))
         );
+    }
+
+    const SECOND: &str = "5a2d3c4b-6e7f-4a81-9bac-1d2e3f4a5b6c";
+
+    fn send_words(runtime: &mut Runtime, generation: u64, request: &str, text: &str) {
+        runtime.send_session_thread_input(ThreadInputPayload {
+            generation,
+            pane_id: "w1:p1".to_owned(),
+            request_id: request.to_owned(),
+            text: text.to_owned(),
+            paths: Vec::new(),
+            bytes: 0,
+        });
+    }
+
+    fn waiting(runtime: &Runtime) -> Vec<String> {
+        thread(runtime)
+            .queue
+            .map(|queue| queue.lines.into_iter().map(|line| line.text).collect())
+            .unwrap_or_default()
+    }
+
+    /// The engine reports the agent at `status` under `seq`, the session read
+    /// settled and nothing waiting for the operator; the open thread reads
+    /// what it wrote.
+    fn moved(runtime: &mut Runtime, node: &ScriptedNode, status: &str, seq: u64) {
+        node.answer(Ok(page(100, 100 + seq, false, vec![said("…")])));
+        observe(runtime, status, seq, "t1", true);
+        crate::runtime::delivery::tests::read_nothing_waits(
+            runtime.delivery_observations.get_mut("w1:p1").unwrap(),
+        );
+    }
+
+    fn queued_runtime(
+        node: &Arc<ScriptedNode>,
+    ) -> (Runtime, Arc<crate::engine::fake::FakeEngine<'static>>, u64) {
+        let mut runtime = runtime(node);
+        runtime.set_terminals(Arc::new(GrantingTerminals::default()) as _);
+        let fake = crate::engine::fake::FakeEngine::start(|method, _| {
+            assert!(matches!(method, "prompt_agent" | "send_keys"), "{method}");
+            crate::engine::fake::reply(())
+        });
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
+        observe(&mut runtime, "working", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("일하는 중")])));
+        open(&mut runtime);
+        let generation = thread(&runtime).generation;
+        send_words(&mut runtime, generation, INPUT, "테스트도 돌려 줘");
+        send_words(&mut runtime, generation, SECOND, "끝나면 PR 열어 줘");
+        (runtime, fake, generation)
+    }
+
+    /// PRD desk-queue B1-B3, B29: words sent while the agent works are typed
+    /// into nothing, wait in the pane's line in order, and go one at a time
+    /// as the agent rests, as a letter's bell is typed; a letter's bell
+    /// waits behind them.
+    #[test]
+    fn words_sent_while_the_agent_works_wait_and_go_one_at_a_time_at_its_rests() {
+        let node = Arc::new(ScriptedNode::default());
+        let (mut runtime, fake, _) = queued_runtime(&node);
+        assert!(
+            fake.calls_of("prompt_agent").is_empty(),
+            "nothing is typed into a working agent"
+        );
+        assert_eq!(
+            thread(&runtime).input.map(|input| input.state),
+            Some(ThreadInputState::Queued),
+            "the box lets the words go as it does sent ones"
+        );
+        assert_eq!(waiting(&runtime), ["테스트도 돌려 줘", "끝나면 PR 열어 줘"]);
+        assert_eq!(
+            thread(&runtime).queue.map(|queue| queue.state),
+            Some(crate::model::InputQueueState::Waiting)
+        );
+        assert!(runtime.input_queue_waits("w1:p1"), "a letter's bell waits");
+
+        moved(&mut runtime, &node, "idle", 2);
+        runtime.send_queued_lines(unix_milliseconds());
+        let sent = fake.calls_of("prompt_agent");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["text"], "테스트도 돌려 줘");
+        assert_eq!(sent[0]["by"], "Letter", "typed only at rest, as a letter is");
+        assert_eq!(waiting(&runtime), ["끝나면 PR 열어 줘"]);
+        runtime.send_queued_lines(unix_milliseconds());
+        assert_eq!(
+            fake.calls_of("prompt_agent").len(),
+            1,
+            "the next waits for the turn the first starts"
+        );
+
+        moved(&mut runtime, &node, "working", 3);
+        runtime.send_queued_lines(unix_milliseconds());
+        assert_eq!(fake.calls_of("prompt_agent").len(), 1, "never into a turn");
+        moved(&mut runtime, &node, "idle", 4);
+        runtime.send_queued_lines(unix_milliseconds());
+        let sent = fake.calls_of("prompt_agent");
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[1]["text"], "끝나면 PR 열어 줘");
+        assert!(thread(&runtime).queue.is_none(), "the last line gone, the group goes");
+        assert!(!runtime.input_queue_waits("w1:p1"));
+    }
+
+    /// PRD desk-queue B10, B14-B16: ■ types the agent's interrupt keys and
+    /// pauses the line, which then goes only by a line's 보내기 (that line
+    /// alone) or 이어 보내기.
+    #[test]
+    fn a_stop_pauses_the_line_until_a_line_is_sent_or_it_resumes() {
+        let node = Arc::new(ScriptedNode::default());
+        let (mut runtime, fake, generation) = queued_runtime(&node);
+        runtime.input_queue_event(crate::runtime::input_queue::QueueEvent::Interrupt(
+            crate::runtime::input_queue::ThreadInterruptPayload {
+                generation,
+                pane_id: "w1:p1".to_owned(),
+                request_id: INPUT.to_owned(),
+            },
+        ));
+        let keys = fake.calls_of("send_keys");
+        assert_eq!(keys.len(), 1, "{keys:?}");
+        assert_eq!(keys[0]["keys"], json!(["esc"]));
+        assert_eq!(
+            thread(&runtime).queue.map(|queue| queue.state),
+            Some(crate::model::InputQueueState::Paused)
+        );
+
+        moved(&mut runtime, &node, "idle", 2);
+        runtime.send_queued_lines(unix_milliseconds());
+        assert!(
+            fake.calls_of("prompt_agent").is_empty(),
+            "a paused line does not go at the rest"
+        );
+        assert!(!runtime.input_queue_waits("w1:p1"), "nor holds a letter back");
+
+        let second = thread(&runtime).queue.unwrap().lines[1].id;
+        runtime.input_queue_event(crate::runtime::input_queue::QueueEvent::Send(
+            serde_json::from_value(json!({"pane_id": "w1:p1", "id": second})).unwrap(),
+        ));
+        let sent = fake.calls_of("prompt_agent");
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0]["text"], "끝나면 PR 열어 줘");
+        assert_eq!(waiting(&runtime), ["테스트도 돌려 줘"]);
+        assert_eq!(
+            thread(&runtime).queue.map(|queue| queue.state),
+            Some(crate::model::InputQueueState::Paused),
+            "the rest stays paused"
+        );
+
+        moved(&mut runtime, &node, "working", 3);
+        moved(&mut runtime, &node, "idle", 4);
+        runtime.input_queue_event(crate::runtime::input_queue::QueueEvent::Resume(
+            serde_json::from_value(json!({"pane_id": "w1:p1"})).unwrap(),
+        ));
+        runtime.send_queued_lines(unix_milliseconds());
+        let sent = fake.calls_of("prompt_agent");
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[1]["text"], "테스트도 돌려 줘");
+    }
+
+    /// PRD desk-queue B12, B19, D-23: an agent that asks takes the
+    /// operator's words as its answer at once, and ■ types nothing into it.
+    #[test]
+    fn an_asking_agent_takes_words_now_and_a_stop_types_nothing() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        runtime.set_terminals(Arc::new(GrantingTerminals::default()) as _);
+        let fake = crate::engine::fake::FakeEngine::start(|_, _| crate::engine::fake::reply(()));
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
+        observe(&mut runtime, "blocked", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("허용할까요?")])));
+        open(&mut runtime);
+        let generation = thread(&runtime).generation;
+        runtime.input_queue_event(crate::runtime::input_queue::QueueEvent::Interrupt(
+            crate::runtime::input_queue::ThreadInterruptPayload {
+                generation,
+                pane_id: "w1:p1".to_owned(),
+                request_id: SECOND.to_owned(),
+            },
+        ));
+        assert!(fake.calls_of("send_keys").is_empty());
+        assert_eq!(
+            thread(&runtime).input.and_then(|input| input.reason),
+            Some("agent_asking".to_owned())
+        );
+        node.answer(Ok(page(100, 200, false, vec![said("네")])));
+        send_words(&mut runtime, generation, INPUT, "응 허용해");
+        let sent = fake.calls_of("prompt_agent");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["by"], "Operator");
+        assert!(thread(&runtime).queue.is_none());
     }
 }

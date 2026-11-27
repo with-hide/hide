@@ -196,3 +196,7 @@ plan_approval = { approve = ["a"], keep_planning = ["s"] }
 model = "/model {model}"
 effort = "/model {model} {effort}"
 efforts = ["low", "medium", "high", "xhigh"]
+
+# Esc cancels the turn under way, as its working line says (`esc:cancel`).
+[interrupt]
+keys = ["esc"]

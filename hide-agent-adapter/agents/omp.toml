@@ -61,3 +61,7 @@ left_out = ["move", "wt", "ssh", "plugins", "force", "session delete"]
 [switch]
 effort = "/effort {effort}"
 efforts = ["off", "auto", "low", "medium", "high", "xhigh", "max"]
+
+# Esc aborts the turn under way, as in Pi.
+[interrupt]
+keys = ["esc"]

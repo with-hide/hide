@@ -12216,15 +12216,43 @@ mod wire_enum_tests {
         let thread_inputs = [
             ThreadInputState::Sending,
             ThreadInputState::Sent,
+            ThreadInputState::Queued,
             ThreadInputState::Refused,
         ];
         for variant in thread_inputs {
             match variant {
-                ThreadInputState::Sending | ThreadInputState::Sent | ThreadInputState::Refused => {}
+                ThreadInputState::Sending
+                | ThreadInputState::Sent
+                | ThreadInputState::Queued
+                | ThreadInputState::Refused => {}
             }
         }
         assert_wire(&contract, "session_thread_input_state", &thread_inputs);
         checked.insert("session_thread_input_state");
+        let queue_states = [InputQueueState::Waiting, InputQueueState::Paused];
+        for variant in queue_states {
+            match variant {
+                InputQueueState::Waiting | InputQueueState::Paused => {}
+            }
+        }
+        assert_wire(&contract, "input_queue_state", &queue_states);
+        checked.insert("input_queue_state");
+        let queue_failures = [
+            crate::input_queue::Failure::Uncertain,
+            crate::input_queue::Failure::DeviceUnreachable,
+            crate::input_queue::Failure::FileMissing,
+            crate::input_queue::Failure::Refused,
+        ];
+        for variant in queue_failures {
+            match variant {
+                crate::input_queue::Failure::Uncertain
+                | crate::input_queue::Failure::DeviceUnreachable
+                | crate::input_queue::Failure::FileMissing
+                | crate::input_queue::Failure::Refused => {}
+            }
+        }
+        assert_wire(&contract, "input_queue_failure", &queue_failures);
+        checked.insert("input_queue_failure");
         let hide_parts = [
             hide_session::thread::HideCall::Plan,
             hide_session::thread::HideCall::Spawn {
