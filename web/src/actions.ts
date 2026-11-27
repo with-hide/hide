@@ -102,6 +102,7 @@ import { closeSession as closeDeskSession, deskShown, hideDesk, openSession as o
 import { deskOpenSend, deskTabCount, deskViewOf, deskWorkspaceOf, DESK_SCREEN, isDeskWorkspace, type DeskOpen } from "./deskDesk";
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type ExplorerTarget, type PendingClose, type PendingViewsClose } from "./ui";
+import { visitSessionTerminal } from "./sessionDrafts";
 import { windowScreen, type WindowScreen } from "./windowScreen";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import { isRemoteView, remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
@@ -2855,7 +2856,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const row = allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote).find((row) => row.pane_id === paneId);
       if (row?.thread_capability !== "ready" || !row.thread_identity) return;
       const selected = ui().paneConversation;
-      useUiStore.setState({ paneConversation: selected?.paneId === paneId ? null : { paneId, session: row.thread_identity } });
+      useUiStore.setState({ paneConversation: selected?.paneId === paneId ? null : { paneId, session: row.thread_identity }, ...(selected?.paneId === paneId ? { sessionDrafts: visitSessionTerminal(ui().sessionDrafts, paneId) } : {}) });
       if (selected?.paneId === paneId) focusTerminal(paneId);
       else this.focusPane(paneId);
     },
@@ -2866,6 +2867,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (state.screen?.kind === "desk") {
         const pane = state.deskRoom.session;
         if (!pane) return;
+        useUiStore.setState({ sessionDrafts: visitSessionTerminal(state.sessionDrafts, pane) });
         state.setDeskReturn(pane);
         return this.openAgent(pane);
       }

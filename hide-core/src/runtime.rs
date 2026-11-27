@@ -35,7 +35,9 @@ mod clone;
 mod closed_registrations;
 pub(crate) use closed_registrations::settle_reopen;
 pub(crate) use core_calls::SENDER_NOT_REGISTERED;
-pub(crate) use session_thread::ThreadReference;
+pub(crate) use session_thread::{
+    ThreadInputPayload, ThreadInputReply, ThreadReference, ThreadSwitchPayload,
+};
 mod control_lane;
 mod core_calls;
 pub(crate) mod delivery;

@@ -16,6 +16,7 @@ import type { ViewCommentAnchor } from "./snapshot";
 import { browserCommentKey, closeBrowserNote, noteBrowserComment, openBrowserNote, resetBrowserComments, type PagePlace } from "./viewFeedback";
 import { BridgeSocket, HIDDEN_CLOSE, remoteBridge } from "./remoteView";
 import { refuseCallsOf } from "./windowCall";
+import { receiveThreadInputResult } from "./sessionDraftSends";
 
 export type DispatchFn = (event: {
   schema_version: number;
@@ -259,6 +260,10 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
         else if (answer.on && answer.open) openBrowserNote(key, { kind: "open", commentId: answer.open.id, at: answer.open.at });
         // The page left the document its place was picked on.
         else if (answer.dropped) closeBrowserNote(key);
+        return;
+      }
+      if (frame.type === "thread_input_result") {
+        receiveThreadInputResult(frame.payload as unknown as NonNullable<import("./snapshot").SessionThreadSection["input"]>);
         return;
       }
       if (frame.type === "attachment_refused") {

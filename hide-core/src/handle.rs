@@ -738,6 +738,51 @@ impl Core {
         self.dispatch_bytes_on(bytes, None)
     }
 
+    /// Sends one trusted daemon input and completes it separately from the
+    /// display snapshot. `reply` must be nonblocking; no I/O runs under the
+    /// runtime lock. A coalesced snapshot cannot erase this request's answer.
+    pub fn send_thread_input(
+        &self,
+        kind: &str,
+        payload: serde_json::Value,
+        reply: impl Fn(Result<(), &'static str>) + Send + Sync + 'static,
+    ) {
+        if !check_owner_thread(self, "thread_input") {
+            reply(Err("unavailable"));
+            return;
+        }
+        let reply: crate::runtime::ThreadInputReply = Arc::new(reply);
+        let mut runtime = lock_recover(&self.runtime);
+        let changed = match kind {
+            "session_thread_input" => {
+                match serde_json::from_value::<crate::runtime::ThreadInputPayload>(payload) {
+                    Ok(payload) => runtime.send_session_thread_input_answered(payload, Some(reply)),
+                    Err(_) => {
+                        reply(Err("invalid_request"));
+                        false
+                    }
+                }
+            }
+            "session_thread_switch" => {
+                match serde_json::from_value::<crate::runtime::ThreadSwitchPayload>(payload) {
+                    Ok(payload) => runtime.switch_session_thread_answered(payload, Some(reply)),
+                    Err(_) => {
+                        reply(Err("invalid_request"));
+                        false
+                    }
+                }
+            }
+            _ => {
+                reply(Err("invalid_request"));
+                false
+            }
+        };
+        drop(runtime);
+        if changed {
+            notify_change(self);
+        }
+    }
+
     /// Dispatches a window's or a view's event sent from `screen`, which is
     /// where whatever it chooses of the operator's look is chosen
     /// (`docs/status-model.md`, Hide owns the read axis).

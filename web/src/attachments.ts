@@ -109,7 +109,7 @@ export function stageDeskFiles(files: AttachmentInput[]): { request_id: string; 
 /**
  * A thread's input box (B29): the files stage as an attachment's do, then one
  * `thread_input` names them with the words. Answers the input's request id,
- * which the thread section's `input` settles, the reason a cap refuses the
+ * which its direct `thread_input_result` settles, the reason a cap refuses the
  * files before a byte leaves the page, or null when there is no connection.
  */
 export function submitThreadInput(generation: number, paneId: string, text: string, files: AttachmentInput[]): string | { refused: string } | null {

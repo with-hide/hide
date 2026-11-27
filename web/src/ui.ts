@@ -334,7 +334,7 @@ type UiStore = {
   /** Keeps `pane`'s words unless the edit makes them longer past one send (`sessionDraftTakes`); false when it did not take them. */
   setSessionDraft: (pane: string, device: string | null, text: string) => boolean;
   /** `pane`'s box sent its words as `request`; they wait beside the draft for the pane's answer (`sessionDraftSends.ts`). */
-  sendSessionDraft: (pane: string, device: string | null, request: string, words: string) => void;
+  sendSessionDraft: (pane: string, device: string | null, request: string, words: string, preserveDraft?: boolean) => void;
   /** The pane answered `request`: taken, its words go; refused, they come back to its box. */
   settleSessionSend: (request: string, taken: boolean) => void;
   /** Lets go of the drafts whose pane its machine says is gone (`sessionDraftsLeft`). */
@@ -608,7 +608,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
     set((state) => ({ sessionDrafts: keepSessionDraft(state.sessionDrafts, pane, device, text) }));
     return true;
   },
-  sendSessionDraft: (pane, device, request, words) => set((state) => ({ sessionDrafts: sendSessionDraft(state.sessionDrafts, pane, device, request, words) })),
+  sendSessionDraft: (pane, device, request, words, preserveDraft) => set((state) => ({ sessionDrafts: sendSessionDraft(state.sessionDrafts, pane, device, request, words, preserveDraft) })),
   settleSessionSend: (request, taken) => {
     const drafts = get().sessionDrafts;
     const next = settleSessionSend(drafts, request, taken);

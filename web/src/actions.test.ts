@@ -416,6 +416,22 @@ describe("input after a confirmed View close", () => {
     } finally { stopKeyboard(); noteDrawnViews(null); window.hideHost = previousHost; remove(); }
   });
 
+  it("toggles the pane owning the composer while the last core focus still names another pane", async () => {
+    const { remove, actions } = await setup();
+    useUiStore.setState({ screen: { kind: "workspace" } });
+    useShellStore.setState({ focusedPaneId: "w1:p2", agents: [
+      { pane_id: "w1:p1", thread_capability: "ready", thread_identity: "one" },
+      { pane_id: "w1:p2", thread_capability: "ready", thread_identity: "two" },
+    ] as never });
+    noteKeyboardOwner({ kind: "pane", workspace, paneId: "w1:p1" });
+    try {
+      actions.deskTerminal();
+      expect(useUiStore.getState().paneConversation).toEqual({ paneId: "w1:p1", session: "one" });
+      actions.deskTerminal();
+      expect(useUiStore.getState().paneConversation).toBeNull();
+    } finally { noteKeyboardOwner({ kind: "none" }); remove(); }
+  });
+
   it("toggles a ready pane with Desk off or on, without returning it to Desk", async () => {
     const { remove, actions } = await setup();
     const { installKeyboard } = await import("./keyboard");

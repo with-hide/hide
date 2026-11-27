@@ -224,6 +224,7 @@ export interface ServerFrame {
     | "pane_ask"
     | "pane_choice_result"
     | "attachment_refused"
+    | "thread_input_result"
     | "open_external_result"
     | "clone_target"
     | "home_folder_list"

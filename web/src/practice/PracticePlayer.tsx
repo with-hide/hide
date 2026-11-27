@@ -150,6 +150,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       listings: frames?.listings ?? NO_LISTINGS, changes: frames?.changes ?? null, memory: frames?.memory ?? null, suggestions: frames?.suggestions ?? null,
       access: frames?.access ?? null,
       sessionThread: frames?.sessionThread ?? null, sessionThreadHistory: frames?.sessionThreadHistory ?? null,
+      threadInputResult: frames?.threadInputResult ?? null,
       // The practice screen is this computer's own window, which hided sends its `pairing` frame (B52): nothing under way unless the world pairs.
       pairing: frames?.pairing ?? NOTHING_UNDER_WAY, pairingResult: frames?.pairingResult ?? null,
       automations: automations ?? null,

@@ -20,7 +20,7 @@ function initial(): ConversationModel {
 }
 function snapshot(model: ConversationModel, now: number): WorldSnapshot {
   const drawn = deskSnapshot([{ place: PLACE, model }], PLACE.project, now);
-  return { ...drawn, frames: { sessionThread: conversationThread(model), sessionThreadHistory: { generation: model.generation, pages: [] } } };
+  return { ...drawn, frames: { sessionThread: conversationThread(model), sessionThreadHistory: { generation: model.generation, pages: [] }, threadInputResult: model.request ? { request_id: model.request, state: "sent" } : null } };
 }
 export const CONVERSATION_WORLD: PracticeWorld<ConversationModel> = {
   initial, snapshot,
