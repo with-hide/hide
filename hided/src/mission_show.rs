@@ -1331,7 +1331,10 @@ mod tests {
         assert_eq!(said(json!({"preset": "verify"})), "general · verify");
         assert_eq!(said(json!({"preset": "deploy"})), "general · deploy");
         assert_eq!(said(json!({"preset": null})), "general");
-        assert_eq!(said(json!({"kind": "external", "preset": null})), "watching");
+        assert_eq!(
+            said(json!({"kind": "external", "preset": null})),
+            "watching"
+        );
     }
 
     /// PRD node-presets D-06: a start gate's line says it asks before the
