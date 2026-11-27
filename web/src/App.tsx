@@ -11,6 +11,7 @@ import { pruneDrafts, settleDraft } from "./editor/draft";
 import { ConnectionBadge } from "./badge";
 import { configureFileBytes } from "./fileBytes";
 import { installKeyboard, observeRecent, reconcileHeldCycle } from "./keyboard";
+import { installWindowScreen } from "./windowScreen";
 import { noteOperatorPointer, observeInputRequests } from "./keyTarget";
 import { OverviewModal, OverviewPage } from "./Overview";
 import { AgentCloseNotice, ConfirmClose, ConfirmTrash, ConfirmViewsClose, CycleOverlay, NoticeToasts } from "./Overlays";
@@ -108,6 +109,9 @@ export function App() {
     configureGuestCloseCalls(session.dispatch);
     configurePlaceVisits(actions.placeVisit);
     const keyboard = installKeyboard(actions);
+    // Which machine's screen this window shows, told to each new connection;
+    // an action that changes it tells it after its own events.
+    const windowScreen = installWindowScreen(() => actions.noteWindowScreen());
     if (probeEnabled()) {
       installProbe(
         () => terminalFor(useShellStore.getState().focusedPaneId),
@@ -206,6 +210,7 @@ export function App() {
       unsubscribe();
       unsubscribeHeldPlaces();
       keyboard();
+      windowScreen();
       configurePlaceVisits(() => {});
       socketOpenRef.current = () => false;
       session.close();

@@ -146,8 +146,14 @@ impl Runtime {
     /// keyboard shows one (D-07): on the Workspace screen the tab in front
     /// of the active area of the tray the front Workspace draws, in the lane
     /// or in pair view (PRD lane-desk-pair-view B2); on Desk's desk the tab
-    /// in front of it.
+    /// in front of it. None while no window of this machine shows its own
+    /// screen (`window_screen`): a window on another computer's screen
+    /// draws neither, and a window that names a screen before it says it
+    /// came back is read only once it has (`look.rs`).
     fn looked_at_view(&self) -> Option<(WorkspaceKey, String)> {
+        if !self.look.own_shows() {
+            return None;
+        }
         match self.window_focus? {
             FocusScreen::Workspace => {
                 let key = self.front_workspace_key()?;

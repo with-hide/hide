@@ -139,6 +139,16 @@ pub(super) struct WindowFocusPayload {
     pub(super) screen: super::unseen_views::FocusScreen,
 }
 
+/// What this machine's windows show, as the daemon sums every window's
+/// report: its own screen in one window at least, or another computer's in
+/// every window that reports; sent only when that changes, and released with
+/// a window's connection (`look.rs`, `WindowScreen`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct WindowScreenPayload {
+    pub(super) screen: super::look::WindowScreen,
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct CreateWorkspacePayload {
     /// The device that holds the folder; this machine when absent. A
@@ -2025,6 +2035,7 @@ pub(super) enum Event {
     RemoteViews(RemoteViewsPayload),
     RequestView(RequestViewPayload),
     WindowFocus(WindowFocusPayload),
+    WindowScreen(WindowScreenPayload),
     /// The card's refresh button, opening the delete confirmation, and a
     /// completed worktree removal. All three say "read again now" about a
     /// different set of readers, and none needs a target: the card is always
@@ -2431,6 +2442,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "remote_views" => decode!(RemoteViewsPayload, RemoteViews),
         "request_view" => decode!(RequestViewPayload, RequestView),
         "window_focus" => decode!(WindowFocusPayload, WindowFocus),
+        "window_screen" => decode!(WindowScreenPayload, WindowScreen),
         "cleanup_review" => decode!(CleanupReviewPayload, CleanupReview),
         "cleanup_confirm" => decode!(CleanupConfirmPayload, CleanupConfirm),
         "cleanup_dismiss" => Ok(Event::CleanupDismiss),
@@ -4395,6 +4407,7 @@ impl Runtime {
             Event::WindowFocus(payload) => {
                 self.set_window_focus(payload.focused.then_some(payload.screen))
             }
+            Event::WindowScreen(payload) => self.set_window_screen(payload.screen),
             Event::OverviewRefresh(payload) => {
                 let project = self
                     .snapshot

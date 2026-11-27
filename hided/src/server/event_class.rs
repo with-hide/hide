@@ -476,6 +476,7 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("view_layout", Screen),
     ("wake_sleeping_session", Screen),
     ("window_focus", OwnWindow),
+    ("window_screen", OwnWindow),
     ("workspace_pin_set", Screen),
     ("workspace_view", Screen),
     ("worktree_name_suggest", Screen),
@@ -638,6 +639,7 @@ mod tests {
             "open_external",
             "reveal_path",
             "window_focus",
+            "window_screen",
             "product_analytics_connected",
             "desktop_activity",
         ] {
@@ -705,5 +707,6 @@ mod tests {
             Err(Refused::NotHere)
         );
         assert_eq!(admit("window_focus", Client::Tool), Err(Refused::NotHere));
+        assert_eq!(admit("window_screen", Client::Tool), Err(Refused::NotHere));
     }
 }
