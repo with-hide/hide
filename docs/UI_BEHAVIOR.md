@@ -1520,6 +1520,24 @@ Reintroducing a shared attachment shelf requires a supported provider contract f
 Core owner: `hide-core/src/runtime/session_thread.rs`; reader `hide-session/src/thread/`; web store `web/src/store.ts` (`sessionThread`, `sessionThreadHistory`), actions `openThread`, `readOlderThread`, `closeThread`, `switchThread` in `web/src/actions.ts`, input `submitThreadInput` in `web/src/attachments.ts`, the box's menus and bar `web/src/sessionInput.ts`.
 Screen: `web/src/components/desk/thread-panel.tsx` connects a Desk job's thread to the store and draws it with `thread-view.tsx`; `web/src/threadView.ts` turns the sections into its lines and Hide parts, and `web/src/desk.ts` owns the line and turn rules.
 
+An agent pane whose core row reports `thread_capability: ready` has a `MessageSquare` and `대화` toggle in its header, selected with the existing lime accent and tint; a narrow header keeps the icon alone.
+Its hint is `대화로 보기` and the current `desk_terminal` binding.
+A reader awaiting a session reports `pending`: the same toggle is dimmed and disabled, with `세션을 찾는 중` only in its hint; `none`, or a row from an older core without the field, has no toggle.
+The core derives this capability from its thread reader, never a web list of agent names.
+The toggle covers the still-mounted terminal with the same `ThreadPanel` Desk uses, so toggling neither resizes nor reattaches its PTY.
+One pane per window is selected; picking another returns the first to its terminal.
+The choice is window-local and unsaved, survives tab and zoom changes, and clears when the pane disappears or its opaque `thread_identity` changes.
+An invisible pane releases its thread hold and reads again on return; restarting starts with terminals.
+`desk_terminal`, named `대화 ⇄ 터미널` (`Conversation ⇄ terminal`), works with Desk on or off: ⌘J on macOS, Ctrl+Shift+J on Windows and Linux, or Alt+Shift+J in a browser.
+In a workspace it toggles the focused ready agent, focusing the composer on entry and the terminal on return; on a shell or a pending or unsupported agent it does nothing.
+In Desk it opens the adjacent session's terminal as before, and in that pane the next press toggles its own conversation rather than returning to Desk.
+The shortcut sheet, Settings and the desktop View menu all expose the same command regardless of Desk's setting.
+
+A core still holds one thread, with a hold per window.
+If another window opens a different pane, the losing window keeps its last bounded pages dimmed and inert, with one `여기서 다시 보기` button and `대화는 한 곳에서만 보여요` only in the hint.
+It never reclaims on a render, remount or reconnect; pressing the button reclaims explicitly, and two windows on the same pane share the thread without taking it.
+Desk uses this same state.
+
 A thread shows one agent pane's session as a conversation: what the operator and Hide said to the agent, what the agent said and thought, its tool calls with their input, diffs and output, and its plans, newest last (B25).
 It follows the session while it works: what the agent writes reaches the thread within about a second of the engine seeing the agent work, and the earlier part stays as it was drawn.
 Older pages load on request, up to four kept pages besides the live one; past that the request is refused as `capacity` and the terminal has the rest.
@@ -1542,6 +1560,7 @@ An agent's compaction keeps the messages before it in its record (Claude Code, C
 The conversation stays at its end while the operator is there, so new lines come into view; scrolled up, it stays put, a page read in above keeps the lines in view where they were, and reaching the top reads the page before, asked once for each state the core shows, so a read that failed is asked again only after the core answered the last ask.
 When the record cannot be read, the thread says why in one line, `no_record` (no session reported, no file, or an agent Hide cannot read a thread of) or `refused` (the record is there and could not be read), beside `터미널로` (B27); a session the agent reports later is read then.
 A device whose link is down keeps the thread it drew, dimmed by `connected` false, and reads again when the link returns.
+An empty conversation says `아직 대화가 없어요` with its usable composer; the same loading, empty and failure forms fit both Desk and a pane.
 
 The input box sends its words to the thread's pane only (B29, D-62): the same pane, terminal and session the thread was opened for, else it refuses as `pane_changed` or `pane_gone` and nothing is typed anywhere, checked again just before the words go, after their files are staged and the pane let them in.
 Files dropped on the box, pasted into it or picked with 📎 join it above the words (PRD desk-2-ui B41, B42; `useComposerTray` in `web/src/deskComposer.ts`, the same tray Desk's composer holds): an image as its thumbnail, any other file as its mark, name and size, each with its `✕`, and a band under it while its bytes are read in.
@@ -1556,10 +1575,10 @@ Enter sends and Shift+Enter starts a line; an Enter that ends an IME composition
 The words stay in the box until the pane took them, so a refused send loses nothing, and the refusal is one line under the box; while the pane runs another session, or is gone, that line says so and send waits.
 
 The box has Desk's composer's `/` and `@` menus, in the same panel, from the one hook both boxes use (`useComposerMenus`, `web/src/components/desk/composer-menus.tsx`; mission-106).
-`/` at the start of the words lists the session's agent's own commands, the list Desk keeps for that agent (`desk_commands`, [ARCHITECTURE.md: Desk's commands](ARCHITECTURE.md#desks-commands)); before Desk has ever opened that agent no list is known, and the panel says so in one line while ↵ sends the words as typed.
+`/` at the start of the words lists the session's agent's own commands, the agent-owned saved list shared with Desk (`desk_commands`, [ARCHITECTURE.md: Desk's commands](ARCHITECTURE.md#desks-commands)); before Desk has ever opened that agent no list is known, and the panel says so in one line while ↵ sends the words as typed.
 The list is Desk's: it leaves out what the agent's `[desk] left_out` names for Desk's shared session, and it was read in Desk's folder, so a command only the session's project defines is not in it; typed by hand, it still reaches the agent.
 A picked command is written into the box with one space after it, and a send types it as the agent's own command, as the terminal would.
-`@` lists the session's project's files that match what follows it, five at most from the index ⌘P reads (`file_index`), above Desk's `@` session tree without the session itself and without a session its agent could not address; it lists no projects.
+`@` lists the session's project's files that match what follows it, five at most from the index ⌘P reads (`file_index`), above the shared `@` session tree without the session itself and without a session its agent could not address; it lists no projects.
 A pick is written as the agent reads it in its terminal: a file as `@<path in the checkout>`, quoted when the path holds a space, and a session as its reference, `@<name> (pane <id>)` (`agentReference.ts`).
 
 Under the box stands Desk's agent bar with the session's agent shown and fixed (`SessionAgentBar`): a session keeps the agent it runs, so the agent is a mark and a name whose hint says so.
