@@ -576,15 +576,22 @@ struct SshAttempt {
 
 impl SshAttempt {
     fn start(pipe: &Arc<PipeTransport>, to: PeerAddr) -> Arc<Self> {
+        Self::start_at(pipe, to, Instant::now())
+    }
+
+    /// An attempt whose bound runs from `started` (a test's attempt that
+    /// started long ago).
+    fn start_at(pipe: &Arc<PipeTransport>, to: PeerAddr, started: Instant) -> Arc<Self> {
         let attempt = Arc::new(Self {
-            started: Instant::now(),
+            started,
             state: Mutex::new(Attempted::Running),
             changed: Notify::new(),
             task: Mutex::new(None),
         });
         let (pipe, running) = (Arc::clone(pipe), Arc::downgrade(&attempt));
         let task = tokio::spawn(async move {
-            let done = match tokio::time::timeout(limits::CARRIER_WITHIN, pipe.dial(&to)).await {
+            let over = started + limits::CARRIER_WITHIN;
+            let done = match tokio::time::timeout_at(over, pipe.dial(&to)).await {
                 Ok(Ok(conn)) => Ok(conn),
                 Ok(Err(error)) => Err(error.to_string()),
                 Err(_) => Err("the SSH attempt did not finish in its time".to_owned()),
@@ -1301,6 +1308,48 @@ mod tests {
                 (path, path)
             );
         }
+    }
+
+    /// A handed attempt that proved just before its own bound is kept only
+    /// until that bound, not `TAKE_WITHIN` past its proof: it leaves the
+    /// handed list and its connection ends on both machines.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_handed_attempt_proved_near_its_bound_ends_at_that_bound() {
+        let far = Arc::new(PipeTransport::accepting(key()));
+        let arrives = Arc::clone(&far);
+        let ours = key();
+        let twin = MachineKey::from_secret(&ours.secret());
+        let pipe = PipeTransport::dialing(twin, move |_| {
+            let (near, theirs) = LocalStream::pair().unwrap();
+            arrives.arrived(theirs.into(), PathKind::Ssh);
+            async move { Ok(Carrier::from(near)) }
+        });
+        let beside = Beside::new(Net::new().join(ours), pipe);
+        let to = PeerAddr::new(far.key(), vec![Candidate::Ssh("studio".to_owned())]);
+        let left = Duration::from_millis(800);
+        let started = Instant::now() - (limits::CARRIER_WITHIN - left);
+        let attempt = SshAttempt::start_at(&beside.pipe, to.clone(), started);
+        let theirs = within("the far end", far.accept()).await.unwrap();
+        within("the proof", async {
+            while !attempt.proved() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        let proved = Instant::now();
+        beside.hand(to.key, attempt);
+        within("its end", async {
+            while beside.handed(&to.key).is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            proved.elapsed() < limits::TAKE_WITHIN,
+            "kept past its bound: {:?}",
+            proved.elapsed()
+        );
+        within("the far connection's end", theirs.closed()).await;
     }
 
     /// A dial tells its carrier what the proof found, once, before it

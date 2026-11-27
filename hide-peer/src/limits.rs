@@ -166,17 +166,21 @@ pub const MAX_CARRIER_SIGN_INS: usize = 2;
 /// How long a connection that was closed waits for its `BYE` to be read.
 pub const BYE_WITHIN: Duration = Duration::from_secs(2);
 
-/// How long a connection a move replaced is remembered as replaced
-/// ([`crate::peers`]): past it no first exchange of it can still finish.
+/// How long the name of a connection ended for another is remembered
+/// ([`crate::peers`]). A connection reaches the other end's first exchange
+/// before anything can replace it (its dial returns only after that end
+/// accepted it, and a move or redial names only a connection it saw), and
+/// that exchange ends within [`HELLO_WITHIN`]; twice that leaves no
+/// first exchange of it still running when its name goes.
 pub const SUPERSEDED_FOR: Duration = Duration::from_secs(2 * HELLO_WITHIN.as_secs());
 
 /// The most names of ended connections remembered per machine, and so the
-/// most a hello carries (`hello::MAX_SUPERSEDES`). Only a connection whose
-/// first exchange is still running can arrive late, and each side has at
-/// most one: its dials and moves share the key's dial turn, and each waits
-/// for the other end's answer (or [`HELLO_WITHIN`]) before the next starts.
-/// So at most two names, one per side, can still matter at once, for at
-/// most [`SUPERSEDED_FOR`]; eight keeps the four newest of each side.
+/// most a hello carries (`hello::MAX_SUPERSEDES`). No name is forgotten
+/// before [`SUPERSEDED_FOR`]: an install whose names would not fit is
+/// refused instead (`Table::fits`), so the rule never rests on this count.
+/// A pair that ends more connections than this within that time only waits
+/// to move until the oldest names age; two Hides that dial each other at the
+/// redial and climb pace end fewer.
 pub const MAX_SUPERSEDED: usize = hide_peer_protocol::hello::MAX_SUPERSEDES;
 
 /// The most machines whose ended names are remembered at once: every host

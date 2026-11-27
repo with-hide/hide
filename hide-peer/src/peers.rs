@@ -578,36 +578,73 @@ impl<C: PeerConn> Table<C> {
         names
     }
 
-    /// Remembers `name` as ended for another. A name already known keeps
-    /// the time it was first heard, so two ends that name it to each other
-    /// do not keep it alive; every machine's names are aged here, and at
-    /// most [`limits::MAX_SUPERSEDED_PEERS`] machines keep any, the one
-    /// whose newest name is oldest going first.
-    fn supersede(&mut self, key: PeerKey, name: u64) {
+    /// Forgets every name past [`limits::SUPERSEDED_FOR`], when no
+    /// connection that carries it can still be in a first exchange.
+    fn age(&mut self) {
         let now = Instant::now();
         self.superseded.retain(|_, kept| {
             kept.retain(|(_, at)| now.duration_since(*at) < limits::SUPERSEDED_FOR);
             !kept.is_empty()
         });
-        let kept = self.superseded.entry(key).or_default();
-        if kept.iter().any(|(known, _)| *known == name) {
-            return;
+    }
+
+    /// Whether `names` fit beside the names of `key` still remembered: at
+    /// most [`limits::MAX_SUPERSEDED`] per machine, and a machine not kept
+    /// yet only while fewer than [`limits::MAX_SUPERSEDED_PEERS`] are or one
+    /// with no live connection can give its place. No name is forgotten
+    /// before its time; an install whose names do not fit is refused
+    /// instead, so what [`decide`] reads never depends on how many came.
+    fn fits(&mut self, key: &PeerKey, names: &[u64]) -> bool {
+        self.age();
+        let kept = self.superseded.get(key);
+        let known = |name: &u64| kept.is_some_and(|kept| kept.iter().any(|(at, _)| at == name));
+        let mut new: Vec<u64> = names
+            .iter()
+            .copied()
+            .filter(|name| *name != 0 && !known(name))
+            .collect();
+        new.sort_unstable();
+        new.dedup();
+        if new.is_empty() {
+            return true;
         }
-        kept.push((name, now));
-        if kept.len() > limits::MAX_SUPERSEDED {
-            kept.remove(0);
+        if kept.map_or(0, Vec::len) + new.len() > limits::MAX_SUPERSEDED {
+            return false;
         }
-        while self.superseded.len() > limits::MAX_SUPERSEDED_PEERS {
+        kept.is_some()
+            || self.superseded.len() < limits::MAX_SUPERSEDED_PEERS
+            || self
+                .superseded
+                .keys()
+                .any(|peer| !self.live.contains_key(peer))
+    }
+
+    /// Remembers `names` of `key` as ended for another, once [`Table::fits`]
+    /// said they fit. A name already known keeps the time it was first
+    /// heard, so two ends that name it to each other do not keep it alive.
+    /// A machine not kept yet, with every place taken, takes the place of
+    /// the one with no live connection whose newest name is oldest.
+    fn supersede(&mut self, key: PeerKey, names: &[u64]) {
+        let now = Instant::now();
+        if !self.superseded.contains_key(&key)
+            && self.superseded.len() >= limits::MAX_SUPERSEDED_PEERS
+        {
             let oldest = self
                 .superseded
                 .iter()
-                .filter(|(peer, _)| **peer != key)
+                .filter(|(peer, _)| !self.live.contains_key(*peer))
                 .min_by_key(|(_, kept)| kept.last().map(|(_, at)| *at))
                 .map(|(peer, _)| *peer);
-            match oldest {
-                Some(peer) => self.superseded.remove(&peer),
-                None => break,
-            };
+            if let Some(peer) = oldest {
+                self.superseded.remove(&peer);
+            }
+        }
+        let kept = self.superseded.entry(key).or_default();
+        for name in names {
+            let known = kept.iter().any(|(at, _)| at == name);
+            if *name != 0 && !known && kept.len() < limits::MAX_SUPERSEDED {
+                kept.push((*name, now));
+            }
         }
     }
 }
@@ -1517,9 +1554,10 @@ impl<T: PeerTransport> Inner<T> {
             );
             if let Standing::Refuse(code) = standing {
                 // Ended here for another: dead on both ends, whenever the
-                // other hears it.
-                if named.dial != 0 {
-                    table.supersede(key, named.dial);
+                // other hears it. With no room its name goes untold; the
+                // connection is refused all the same.
+                if table.fits(&key, &[named.dial]) {
+                    table.supersede(key, &[named.dial]);
                 }
                 conn.close(code);
                 return Err(DialError::Refused(code));
@@ -1534,6 +1572,20 @@ impl<T: PeerTransport> Inner<T> {
                     conn.close(CloseCode::Busy);
                     return Err(DialError::Refused(CloseCode::Busy));
                 }
+            }
+            // Every name this install remembers fits, or it is refused: the
+            // names the dialer knew, the one it replaces and the one it
+            // pushes out here.
+            let mut names = supersedes.clone();
+            names.push(named.replaces);
+            if let Standing::Replace(_) = standing
+                && let Some(old) = table.live.get(&key)
+            {
+                names.push(old.inner.named.dial);
+            }
+            if !table.fits(&key, &names) {
+                conn.close(CloseCode::Busy);
+                return Err(DialError::Refused(CloseCode::Busy));
             }
             let granting = grants.state_of(&key, now);
             let link = Link {
@@ -1553,22 +1605,10 @@ impl<T: PeerTransport> Inner<T> {
             };
             // Read under the same lock as the install, so a predecessor
             // that arrives later always finds it.
-            // The names the dialer knew first, then the one this connection
-            // replaces, so at the cap the name row 1 needs most is kept.
-            for name in supersedes
-                .into_iter()
-                .chain(std::iter::once(named.replaces))
-            {
-                if name != 0 {
-                    table.supersede(key, name);
-                }
-            }
+            table.supersede(key, &names);
             if let Some(old) = table.live.insert(key, link.clone())
                 && let Standing::Replace(code) = standing
             {
-                if old.inner.named.dial != 0 {
-                    table.supersede(key, old.inner.named.dial);
-                }
                 old.close(code);
                 table
                     .draining
@@ -2413,49 +2453,57 @@ mod tests {
         }
     }
 
-    /// The names of ended connections are kept to their cap per machine,
-    /// the one an install adds last (the one it replaces) staying, so a
-    /// late predecessor is still refused past the cap; a name heard again
-    /// keeps the time it was first heard.
+    /// A machine's ended names are never forgotten before their time: at
+    /// the cap an install's new names do not fit (it is refused), every name
+    /// kept still refuses its late connection, and once the oldest age the
+    /// next ones fit. A name heard again keeps the time it was first heard.
     #[tokio::test(start_paused = true)]
-    async fn ended_names_past_the_cap_still_refuse_the_late_predecessor() {
+    async fn a_full_record_of_ended_names_refuses_more_and_forgets_none_early() {
         let (ours, peer) = (key(1), key(2));
         let mut table = table();
-        // More names than a hello carries, then the one replaced.
-        let replaced = limits::MAX_SUPERSEDED as u64 + 2;
-        for name in 1..=replaced {
-            table.supersede(peer, name);
-        }
-        let kept = table.superseded(&peer);
-        assert_eq!(kept.len(), limits::MAX_SUPERSEDED);
-        assert_eq!(kept.last(), Some(&replaced));
-        let late = Named {
-            dialed_by_us: false,
-            dial: replaced,
-            replaces: 0,
-        };
+        let first: Vec<u64> = (1..=limits::MAX_SUPERSEDED as u64).collect();
+        assert!(table.fits(&peer, &first));
+        table.supersede(peer, &first);
+        tokio::time::advance(limits::SUPERSEDED_FOR / 2).await;
+        let next = limits::MAX_SUPERSEDED as u64 + 1;
+        assert!(
+            !table.fits(&peer, &[next]),
+            "a full record takes no new name"
+        );
+        assert!(table.fits(&peer, &[1, 2]), "names it has fit");
+        // The oldest is still refused, however many came after it.
         let held = Named {
             dialed_by_us: false,
-            dial: replaced + 1,
-            replaces: replaced,
+            dial: next + 1,
+            replaces: limits::MAX_SUPERSEDED as u64,
         };
+        let late = Named {
+            dialed_by_us: false,
+            dial: 1,
+            replaces: 0,
+        };
+        let kept = table.superseded(&peer);
+        assert_eq!(kept, first);
         assert_eq!(
             decide(&ours, &peer, Some(held), late, &[], &kept),
             Standing::Refuse(CloseCode::Replaced)
         );
+        tokio::time::advance(limits::SUPERSEDED_FOR / 2).await;
+        assert!(table.fits(&peer, &[next]), "the aged names made room");
+        assert!(table.superseded(&peer).is_empty());
 
         // Heard again half way, a name still ends when first heard.
         let mut table = self::table();
-        table.supersede(peer, 7);
+        table.supersede(peer, &[7]);
         tokio::time::advance(limits::SUPERSEDED_FOR / 2).await;
-        table.supersede(peer, 7);
+        table.supersede(peer, &[7]);
         tokio::time::advance(limits::SUPERSEDED_FOR / 2).await;
         assert!(table.superseded(&peer).is_empty());
     }
 
-    /// Ended names are kept for at most so many machines, the one whose
-    /// newest name is oldest going first, and a machine whose names aged
-    /// is dropped when another's are kept, whether or not it is asked again.
+    /// Ended names are kept for a bounded set of machines: one more takes
+    /// the place of the machine with no live connection whose newest name
+    /// is oldest, and aged ones leave when another's are kept.
     #[tokio::test(start_paused = true)]
     async fn ended_names_are_kept_for_a_bounded_set_of_machines() {
         let mut table = table();
@@ -2463,7 +2511,8 @@ mod tests {
             .map(|_| MachineKey::generate().unwrap().public())
             .collect();
         for machine in &machines {
-            table.supersede(*machine, 1);
+            assert!(table.fits(machine, &[1]));
+            table.supersede(*machine, &[1]);
             tokio::time::advance(Duration::from_millis(1)).await;
         }
         assert_eq!(table.superseded.len(), limits::MAX_SUPERSEDED_PEERS);
@@ -2471,7 +2520,8 @@ mod tests {
         assert!(table.superseded.contains_key(machines.last().unwrap()));
 
         tokio::time::advance(limits::SUPERSEDED_FOR).await;
-        table.supersede(machines[0], 2);
+        assert!(table.fits(&machines[0], &[2]));
+        table.supersede(machines[0], &[2]);
         assert_eq!(table.superseded.len(), 1);
     }
 
