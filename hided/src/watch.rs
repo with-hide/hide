@@ -334,15 +334,12 @@ impl Watcher {
         if *current == target {
             return;
         }
-        eprintln!(
-            "{}",
-            serde_json::json!({
-                "component": "hided", "kind": "watch.target", "watch": self.kind,
-                "node": target.as_ref().map(|target| &target.node),
-                "folders": target.as_ref().map_or(0, |target| target.folders.len()),
-                "drawn": drawn,
-            })
-        );
+        hide_core::diagnostic!(serde_json::json!({
+            "component": "hided", "kind": "watch.target", "watch": self.kind,
+            "node": target.as_ref().map(|target| &target.node),
+            "folders": target.as_ref().map_or(0, |target| target.folders.len()),
+            "drawn": drawn,
+        }));
         *current = target;
         self.changed.notify_one();
     }
@@ -615,13 +612,10 @@ async fn run(
                     watching.replaced = true;
                 }
                 if failing.as_deref() != Some(message.as_str()) {
-                    eprintln!(
-                        "{}",
-                        serde_json::json!({
-                            "component": "hided", "kind": "watch.failed", "watch": kind,
-                            "node": current.node, "message": message,
-                        })
-                    );
+                    hide_core::diagnostic!(serde_json::json!({
+                        "component": "hided", "kind": "watch.failed", "watch": kind,
+                        "node": current.node, "message": message,
+                    }));
                     failing = Some(message);
                 }
                 continue;

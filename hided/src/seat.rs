@@ -185,8 +185,7 @@ impl Seat {
                 .with_graceful_shutdown(async move { graceful.notified().await })
                 .await;
             if let Err(error) = served {
-                eprintln!(
-                    "{}",
+                hide_core::diagnostic!(
                     serde_json::json!({"component":"hided","kind":"server.exit","message": error.to_string()})
                 );
             }
@@ -235,8 +234,7 @@ impl Seat {
                 .is_err()
         {
             served.abort();
-            eprintln!(
-                "{}",
+            hide_core::diagnostic!(
                 serde_json::json!({"component":"hided","kind":"server.close_unfinished","waited_ms": CLOSE_WITHIN.as_millis()})
             );
         }

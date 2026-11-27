@@ -240,16 +240,13 @@ impl Walk {
     }
 
     fn log(&self, kind: &str, message: &str) {
-        eprintln!(
-            "{}",
-            serde_json::json!({
-                "component": "hided",
-                "kind": kind,
-                "device": self.key.0,
-                "root": self.key.1,
-                "message": message,
-            })
-        );
+        hide_core::diagnostic!(serde_json::json!({
+            "component": "hided",
+            "kind": kind,
+            "device": self.key.0,
+            "root": self.key.1,
+            "message": message,
+        }));
     }
 }
 

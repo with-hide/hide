@@ -239,12 +239,20 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 fn write_stderr_line(message: &str) {
+    write_line(&mut io::stderr().lock(), message);
+}
+
+/// Writes `message` and a newline to `out` in one call, and answers nothing:
+/// a stderr that cannot be written (a full disk behind a login item's
+/// `core.log`, a closed pipe) loses the line and never unwinds the caller,
+/// which may hold a lock. `eprintln!` panics on that failure.
+fn write_line(out: &mut impl Write, message: &str) {
     // Attach children inherit stderr, so build each complete JSONL record before
     // taking the process-local lock and writing it to the shared descriptor.
     let mut line = String::with_capacity(message.len() + 1);
     line.push_str(message);
     line.push('\n');
-    let _ = io::stderr().lock().write_all(line.as_bytes());
+    let _ = out.write_all(line.as_bytes());
 }
 
 /// Mask before serialization so quotes and backslashes cannot hide values,
@@ -336,6 +344,30 @@ impl RotatingLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_the_stderr_cannot_take_is_lost_without_unwinding_the_caller() {
+        struct Full;
+        impl std::io::Write for Full {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from_raw_os_error(28))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::from_raw_os_error(28))
+            }
+        }
+        let unwound = std::panic::catch_unwind(|| {
+            write_line(&mut Full, "{\"kind\":\"x\"}");
+            write_line(&mut Full, "{\"kind\":\"y\"}");
+        });
+        assert!(unwound.is_ok(), "a failed write must not panic its caller");
+        let mut taken = Vec::new();
+        write_line(&mut taken, "{\"kind\":\"x\"}");
+        assert_eq!(
+            taken, b"{\"kind\":\"x\"}\n",
+            "a working writer still gets one whole line"
+        );
+    }
 
     /// Run the public entrypoints in a fresh process: stderr is a real pipe,
     /// and no process-global sink can interfere with another test's logs.

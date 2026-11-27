@@ -1,0 +1,17 @@
+# Clippy reads the nearest clippy.toml, so this file replaces the root one for `hided`: the two
+# `disallowed-methods` below repeat the root's (the reasons are there) and the rest is hided's own.
+#
+# Daemon code logs through `hide_core::diagnostic!`, never to stderr: `eprintln!` panics when the
+# write fails, and a login item's stderr is `Logs/core.log`, so a full disk panicked under a lock
+# on 2026-11-27 and poisoned it for every later connection event. A file that prints to a terminal
+# as its output says so in an `#![allow(clippy::disallowed_macros)]` with the reason.
+disallowed-methods = [
+    { path = "std::thread::sleep", reason = "a sleep stands in for a state: wait for the event or file the next line needs, or inject the clock (docs/TESTING.md, Writing a Rust test)" },
+    { path = "std::process::Command::env_clear", reason = "a child that must not inherit the environment gets the login variables through hide_platform::process::restrict_to_login_environment, because a Windows program does not start without SystemRoot and the rest (docs/ARCHITECTURE.md, The platform layer); a test or a system tool that needs an environment built from nothing says why in an allow" },
+    { path = "std::io::stderr", reason = "a write to stderr that is unwrapped panics when it fails; log through hide_core::diagnostic!, or ignore the write's result and say so in an allow" },
+]
+disallowed-macros = [
+    { path = "std::eprintln", reason = "eprintln! panics when stderr cannot be written; daemon code logs through hide_core::diagnostic! (docs/ARCHITECTURE.md, Diagnostics)" },
+    { path = "std::eprint", reason = "eprint! panics when stderr cannot be written; daemon code logs through hide_core::diagnostic! (docs/ARCHITECTURE.md, Diagnostics)" },
+    { path = "std::dbg", reason = "dbg! writes to stderr and panics when it cannot; daemon code logs through hide_core::diagnostic!" },
+]

@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros)] // the entry point prints its usage and its last error to the terminal that started it, before any role holds a lock and just before it exits
+
 use hided::role::Role;
 
 /// How long the process waits, once its roles ended, for blocking work

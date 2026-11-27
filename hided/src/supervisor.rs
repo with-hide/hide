@@ -36,8 +36,7 @@ pub async fn run(env: Env) -> Result<(), String> {
     // The process's records go beside its state from its start, so what
     // happens before any role runs is logged where its roles log.
     if let Err(error) = hide_core::diagnostics::install(&env.state_dir.join("core-state.json")) {
-        eprintln!(
-            "{}",
+        hide_core::diagnostic!(
             json!({"kind": "diagnostics.open_failed", "message": error.to_string()})
         );
     }
@@ -181,7 +180,9 @@ async fn stop_core(state_dir: &Path, running: RunningDaemon) {
         &state_dir.join(hide_core::node_migration::CORE_STATE),
         record,
     ) {
-        eprintln!("the unconfirmed stop could not be logged: {error}");
+        hide_core::diagnostic!(json!({
+            "kind": "diagnostics.record_failed", "record": "unconfirmed_stop", "message": error.to_string()
+        }));
     }
     // `hided.json` is left naming this process, which a crash leaves too:
     // the next start of the folder writes its own once it holds the

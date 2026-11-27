@@ -5,6 +5,8 @@
 //! protocol and daemon are not the pane's (docs/agent-hooks.md, More than one
 //! Hide on an account).
 
+#![allow(clippy::disallowed_macros)] // runs as a pane's foreground program and tells the person typing there; it holds no lock
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;

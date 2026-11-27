@@ -5,6 +5,8 @@
 //! until its input closes, its panes' credentials and commands and its
 //! terminals included.
 
+#![allow(clippy::disallowed_macros)] // the terminal is this command's output: it prints to the operator's own terminal and holds no lock
+
 use std::ffi::OsString;
 use std::io;
 

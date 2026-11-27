@@ -8,6 +8,8 @@
 //! into the pane's record at once, so a plan put up for review stops the
 //! next write in the same turn and an approval lets it through (D-30).
 
+#![allow(clippy::disallowed_macros)] // the terminal is this command's output: it prints to the operator's own terminal and holds no lock
+
 use crate::env::Env;
 use hide_core::plans::{PlanCommand, PlanInput, StepStatus, next_action};
 use serde_json::{Value, json};
