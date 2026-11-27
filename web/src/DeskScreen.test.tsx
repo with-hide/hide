@@ -337,6 +337,8 @@ describe("Desk's room", () => {
 
     await withCommands("/con");
     expect(commandRowsShown()).toEqual(["/context"]);
+    // Each opening of the menu asks the core once whether the list moved.
+    expect(sent("desk_commands_check").at(-1)).toEqual({ agent: "claude" });
     // A name that holds the words further in comes after the ones it starts.
     await withCommands("/co");
     expect(commandRowsShown()).toEqual(["/compact", "/context", "/code-review"]);

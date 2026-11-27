@@ -22,7 +22,9 @@ use hide_desk::session::{self, OpenError};
 use serde_json::{Value, json};
 
 /// The variable that puts this binary in the stand-in agent's role.
-const ROLE: &str = "HIDE_DESK_TEST_ROLE";
+pub(crate) const ROLE: &str = "HIDE_DESK_TEST_ROLE";
+/// A file the stand-in writes its pid to as it starts, when set.
+pub(crate) const PID_FILE: &str = "HIDE_DESK_TEST_PID";
 const WAIT: Duration = Duration::from_secs(30);
 
 /// The stand-in agent: answers ACP on its standard streams. Run as a test
@@ -33,6 +35,14 @@ fn stand_in_agent() {
     let Ok(role) = std::env::var(ROLE) else {
         return;
     };
+    if let Ok(file) = std::env::var(PID_FILE) {
+        std::fs::write(file, std::process::id().to_string()).unwrap();
+    }
+    if role == "stuck" {
+        // Answers nothing, until its input closes.
+        let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+        return;
+    }
     if role == "hide" {
         let at = std::env::current_exe().unwrap();
         println!("HIDE-AT {}", at.display());
@@ -49,6 +59,13 @@ fn stand_in_agent() {
     // codex-acp 2.5.0 with a login it can no longer refresh: it logs itself
     // out, says so, and refuses the open with an internal error.
     let stale_login = role == "stale-login";
+    // The agent's commands as its session opens (`available_commands_update`):
+    // after the session's answer, before it, or twice, the later list shorter.
+    let list = |names: &[&str]| {
+        json!({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s1",
+            "update": {"sessionUpdate": "available_commands_update", "availableCommands":
+                names.iter().map(|name| json!({"name": name, "description": format!("{name} it")})).collect::<Vec<_>>()}}})
+    };
     let stdout = std::io::stdout();
     let send = |value: Value| {
         let mut out = stdout.lock();
@@ -64,7 +81,40 @@ fn stand_in_agent() {
         let id = message["id"].clone();
         match message["method"].as_str() {
             Some("initialize") => send(json!({"jsonrpc": "2.0", "id": id, "result": {
-                "protocolVersion": 1, "agentCapabilities": {"loadSession": replays}}})),
+                "protocolVersion": 1, "agentCapabilities": {"loadSession": replays,
+                    "sessionCapabilities": if role.starts_with("lists") { json!({"delete": {}}) } else { json!({}) }}}})),
+            // Records the session it was asked to delete beside its pid file.
+            Some("session/delete") => {
+                if let Ok(file) = std::env::var(PID_FILE) {
+                    let session = message["params"]["sessionId"].as_str().unwrap_or_default();
+                    std::fs::write(format!("{file}.deleted"), session).unwrap();
+                }
+                send(json!({"jsonrpc": "2.0", "id": id, "result": {}}));
+            }
+            Some("session/new") if role == "sign-in" => send(json!({"jsonrpc": "2.0", "id": id,
+                "error": {"code": session::AUTH_REQUIRED, "message": "Authentication required"}})),
+            Some("session/new") if role.starts_with("lists") => {
+                let answer = json!({"jsonrpc": "2.0", "id": id, "result": {"sessionId": "s1"}});
+                match role.as_str() {
+                    "lists-early" => {
+                        send(list(&["compact", "logout"]));
+                        send(answer);
+                    }
+                    "lists-twice" => {
+                        send(answer);
+                        send(list(&["compact", "review"]));
+                        send(list(&["compact"]));
+                    }
+                    "lists-empty" => {
+                        send(answer);
+                        send(list(&["logout"]));
+                    }
+                    _ => {
+                        send(answer);
+                        send(list(&["compact", "logout"]));
+                    }
+                }
+            }
             Some("session/new") if stale_login => {
                 send(json!({"jsonrpc": "2.0", "method": "_auth/status_update",
                     "params": {"authStatus": {"kind": "none", "label": "Not logged in"}}}));
@@ -194,7 +244,7 @@ fn stand_in_agent() {
 /// The arguments that run this binary as the stand-in agent alone.
 const STAND_IN: [&str; 4] = ["--exact", "host::stand_in_agent", "-q", "--test-threads=1"];
 
-fn launch(role: &str, cwd: &Path) -> Launch {
+pub(crate) fn launch(role: &str, cwd: &Path) -> Launch {
     Launch {
         program: std::env::current_exe().unwrap(),
         args: STAND_IN.into_iter().map(OsString::from).collect(),

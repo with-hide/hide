@@ -285,6 +285,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     text: draft.text,
     caret,
     commands: agent ? { agent: agent.label, list: commandSection?.lists[agent.id] ?? null, unread: commandSection?.unread[agent.id] ?? null, opening: desk?.host.state === "starting" || desk?.host.state === "thinking" } : null,
+    onCommandsOpen: agent ? () => actions.deskCommandsCheck(agent.id) : undefined,
     mentions,
     projects: true,
     onCommand: (at, command) => writeDraft(pickCommand(draft, at, command)),

@@ -130,6 +130,22 @@ struct CatalogAgent {
     signed_in: Option<bool>,
 }
 
+/// What of the catalog decides which agents' commands are read and when:
+/// the agents switched on, and those the operator is signed out of.
+fn reading(catalog: &[CatalogAgent]) -> (BTreeSet<AdapterId>, BTreeSet<AdapterId>) {
+    let pick = |keep: fn(&CatalogAgent) -> bool| {
+        catalog
+            .iter()
+            .filter(|agent| keep(agent))
+            .map(|agent| agent.id)
+            .collect()
+    };
+    (
+        pick(|agent| agent.enabled),
+        pick(|agent| agent.signed_in == Some(false)),
+    )
+}
+
 /// Whether Hide AI's read of an agent says the operator is signed in, as
 /// Settings words it: only a read that checked the sign-in says yes, and an
 /// unread or failed read says nothing.
@@ -224,6 +240,8 @@ pub(super) enum DeskEvent {
     OpenTaken(opens::TakenPayload),
     /// ✕ on a message waiting for the turn before it: it never goes.
     QueuedRemove(QueuedPayload),
+    /// The `/` menu opened on an agent.
+    CommandsCheck(CommandsCheckPayload),
 }
 
 #[derive(Debug, Deserialize)]
@@ -294,6 +312,13 @@ pub(super) struct InstallPayload {
     agent: AdapterId,
 }
 
+/// `desk_commands_check`: the `/` menu opened on `agent`, in Desk's box or
+/// a session's.
+#[derive(Debug, Deserialize)]
+pub(super) struct CommandsCheckPayload {
+    agent: AdapterId,
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct SettingsPayload {
     enabled: Option<bool>,
@@ -313,7 +338,7 @@ fn present<'de, D: serde::Deserializer<'de>>(
 }
 
 impl DeskEvent {
-    pub(super) const KINDS: [&'static str; 17] = [
+    pub(super) const KINDS: [&'static str; 18] = [
         "desk_send",
         "desk_stop",
         "desk_approval",
@@ -331,6 +356,7 @@ impl DeskEvent {
         "desk_file_retry",
         "desk_open_taken",
         "desk_queued_remove",
+        "desk_commands_check",
     ];
 
     pub(super) fn decode(kind: &str, payload: Value) -> Option<Self> {
@@ -355,6 +381,7 @@ impl DeskEvent {
             "desk_file_retry" => Self::FileRetry(parse(payload)?),
             "desk_open_taken" => Self::OpenTaken(parse(payload)?),
             "desk_queued_remove" => Self::QueuedRemove(parse(payload)?),
+            "desk_commands_check" => Self::CommandsCheck(parse(payload)?),
             _ => return None,
         })
     }
@@ -478,6 +505,13 @@ impl Runtime {
             DeskEvent::FileRetry(payload) => self.desk_file_retry(payload.into()),
             DeskEvent::OpenTaken(payload) => self.desk_open_taken(payload),
             DeskEvent::QueuedRemove(payload) => self.desk_queued_remove(payload.id),
+            DeskEvent::CommandsCheck(payload) => {
+                // The `/` menu opened on this agent: the reader looks at
+                // what its list depends on and reads it again only when
+                // that moved, while the menu shows the list it has.
+                self.order(Order::CommandsCheck(payload.agent));
+                false
+            }
         };
         let sent = self.desk_send_queued();
         if changed || sent {
@@ -1874,33 +1908,26 @@ impl Runtime {
         if catalog == self.desk.catalog {
             return;
         }
-        let on = |catalog: &[CatalogAgent]| -> BTreeSet<AdapterId> {
-            catalog
-                .iter()
-                .filter(|agent| agent.enabled)
-                .map(|agent| agent.id)
-                .collect()
-        };
-        // An agent switched on is looked at, and its commands read.
-        let switched_on = !on(&catalog).is_subset(&on(&self.desk.catalog));
+        // An agent switched on or off, or signed in or out, is looked at
+        // again: the reader reads only the agents switched on, and a sign-in
+        // reads again a list its sign-out left unread.
+        let moved = reading(&catalog) != reading(&self.desk.catalog);
         self.compose_desk();
         self.compose_desk_commands();
-        if switched_on && self.desk.stored.settings.enabled {
+        if moved && self.desk.stored.settings.enabled {
             self.order(self.desk_check());
         }
     }
 
-    /// The look at every agent Desk orders: with the last reads ahead and
-    /// the agents switched on, whose commands are read (`desk/lists.rs`).
+    /// The look at every agent Desk orders: with the last reads ahead, the
+    /// agents switched on, whose commands are read, and those the operator
+    /// is signed out of (`desk/lists.rs`).
     fn desk_check(&self) -> Order {
+        let (on, signed_out) = reading(&self.desk_catalog());
         Order::Check {
             marks: self.desk.read_marks.clone(),
-            on: self
-                .desk_catalog()
-                .into_iter()
-                .filter(|agent| agent.enabled)
-                .map(|agent| agent.id)
-                .collect(),
+            on: on.into_iter().collect(),
+            signed_out: signed_out.into_iter().collect(),
         }
     }
 
@@ -4400,9 +4427,17 @@ mod tests {
         // read; switched on again, the next look reads it.
         let all: Vec<&str> = AdapterId::all().map(|agent| agent.catalog().id).collect();
         let without_pi: Vec<&str> = all.iter().copied().filter(|id| *id != "pi").collect();
+        while received.try_recv().is_ok() {}
         kit_on(&mut runtime, &without_pi);
         assert_eq!(unread(&runtime, AdapterId::PI), Some(Why::AgentOff));
-        while received.try_recv().is_ok() {}
+        // The look that says so takes Pi out of what the reader reads.
+        let on = std::iter::from_fn(|| received.try_recv().ok())
+            .find_map(|order| match order {
+                Order::Check { on, .. } => Some(on),
+                _ => None,
+            })
+            .expect("a look once Pi is switched off");
+        assert!(!on.contains(&AdapterId::PI) && on.contains(&AdapterId::OMP));
         kit_on(&mut runtime, &all);
         assert_eq!(unread(&runtime, AdapterId::PI), Some(Why::Reading));
         let on = std::iter::from_fn(|| received.try_recv().ok())
@@ -4425,6 +4460,25 @@ mod tests {
                 .lists
                 .contains_key(&AdapterId::GROK)
         );
+    }
+
+    /// Opening the `/` menu on an agent asks the worker to look at what its
+    /// list depends on, and changes nothing on the screen.
+    #[test]
+    fn a_slash_menu_opening_asks_the_worker_to_check_its_agent() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        while received.try_recv().is_ok() {}
+        assert!(!event(
+            &mut runtime,
+            "desk_commands_check",
+            json!({"agent": "grok"})
+        ));
+        assert!(matches!(
+            received.try_recv(),
+            Ok(Order::CommandsCheck(AdapterId::GROK))
+        ));
+        assert!(DeskEvent::decode("desk_commands_check", json!({"agent": "nobody"})).is_none());
     }
 
     /// A list read ahead is kept with what it depended on across a restart,

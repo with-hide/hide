@@ -41,7 +41,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   job: DeskJob | null;
   /** The pane whose thread this is; its card's when not given. */
   paneId?: string | null;
-  actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread" | "switchThread" | "observeCatalog" | "requestFileIndex">;
+  actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread" | "switchThread" | "observeCatalog" | "requestFileIndex" | "deskCommandsCheck">;
   mentions?: readonly DeskMention[];
   startedByDesk?: boolean;
   focused?: boolean;
@@ -147,6 +147,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
     text,
     caret,
     commands: adapter ? { agent: adapter.picker_label, list: commandSection?.lists[adapter.agent_cli as DeskAgentId] ?? null, unread: commandSection?.unread[adapter.agent_cli as DeskAgentId] ?? null } : null,
+    onCommandsOpen: adapter ? () => actions.deskCommandsCheck(adapter.agent_cli as DeskAgentId) : undefined,
     mentions: named,
     projects: false,
     files,

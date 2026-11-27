@@ -56,11 +56,21 @@ pub enum OpenError {
 
 impl OpenError {
     fn from_call(step: &str, error: CallError) -> Self {
-        match error {
-            CallError::Rejected(rejected) if rejected.code == AUTH_REQUIRED => Self::Login,
-            other => Self::Failed(format!("{step}: {other}")),
+        if signs_in(&error, false) {
+            return Self::Login;
         }
+        Self::Failed(format!("{step}: {error}"))
     }
+}
+
+/// Whether the agent refused a call until the operator signs in: ACP's
+/// `auth_required`, or any refusal from an agent that said it is signed out
+/// ([`sign_in_status`]), whatever code it carries. The one rule Desk's
+/// process and a read of an agent's commands (`crate::read_ahead`) both
+/// apply.
+pub fn signs_in(error: &CallError, signed_out: bool) -> bool {
+    matches!(error, CallError::Rejected(rejected)
+        if rejected.code == AUTH_REQUIRED || signed_out)
 }
 
 /// What Desk says of itself in `initialize`: ACP v1, and no client methods

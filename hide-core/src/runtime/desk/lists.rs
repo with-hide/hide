@@ -1,228 +1,413 @@
 //! Each agent's commands read ahead of the operator (mission-106
-//! command-lists): a thread of Desk's worker opens each agent in place
-//! without a prompt, takes the list it sends and ends it
+//! command-lists): a thread of Desk's worker opens each agent in place and
+//! switched on without a prompt, takes the list it sends and ends it
 //! ([`hide_desk::read_ahead`]), so `/` lists it at once in Desk's composer
 //! and in a session's input, for an agent Desk never talked to too.
 //!
 //! What it owns and its bounds (engineering principles 14 and 15): one
 //! thread while Desk is on, which runs one agent's process at a time, never
 //! under the runtime lock, and ends it on every path (its list, a refusal,
-//! [`hide_desk::read_ahead::READ_DEADLINE`], Desk switched off, the worker's
-//! end); dropping the [`Reader`] stops the thread within a fifth of a second.
-//! An agent is read when the worker hands it in place (Desk turned on or
-//! restarted, hided starting, its adapter installed) and again on the
-//! [`ROUND`], each time only when its list depends on something that moved
-//! since its last read ([`hide_desk::read_ahead::mark`]: the agent's
-//! program and the skills folder its definition names, file facts only), or
-//! that read is a day old; an agent that brought no list is tried again at
-//! most once an hour unless its mark moves.
+//! [`hide_desk::read_ahead::Bounds`], Desk switched off, the worker's end);
+//! dropping the [`Reader`] stops the thread and waits for it, so the next
+//! reader never runs beside it. It keeps no timer: it sleeps until the
+//! worker hands it something.
+//!
+//! It looks at an agent at three moments only: a look at every agent (Desk
+//! turned on, hided starting, `다시 시작`, and a change of the catalog: an
+//! agent switched on or off in Settings › Agents, the operator signing in to
+//! or out of one as Settings reads it), an agent's adapter installed, and
+//! the operator opening the `/` menu on that agent. Each time it digests
+//! what the agent's list depends on ([`hide_desk::read_ahead::mark`]: the
+//! agent's program and the skills folder its definition names, file facts
+//! only, and whether the operator is signed out of it) and starts the agent
+//! only when that moved since the list it has, and not when a read of that
+//! same digest already failed: a failure is tried again only once the
+//! program, the skills or the sign-in moved. The agent whose Desk session is
+//! open is not read, since that session sends its list. Each read can leave
+//! one empty session in the agents that cannot delete it (omp, Grok, agy),
+//! so a read happens only when what the list depends on moved.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
-use std::sync::Arc;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::time::{Duration, Instant};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
+use hide_agent_adapter::{AccountPath, NodeEnv, Place, Profile};
 use hide_desk::AdapterId;
-use hide_desk::read_ahead::{self, Unread};
+use hide_desk::read_ahead::{self, Bounds, Unread};
 
 use super::worker::{Order, launch_for};
 use crate::desk::{DeskPlaces, ReadMark, ReadMarks};
 
-/// How often the agents in place are looked at again.
-const ROUND: Duration = Duration::from_secs(10 * 60);
-/// A list read longer ago than this is read again whatever its mark says:
-/// what the mark does not see (a plugin, a project's command) still reaches
-/// the menu within a day.
-const STALE_MS: u64 = 24 * 60 * 60 * 1000;
-/// An agent whose read brought no list is not read again sooner, unless what
-/// it depends on moved.
-const RETRY: Duration = Duration::from_secs(60 * 60);
-
 /// What the worker hands the thread.
-struct Wanted {
-    /// The core's last reads, which replace the thread's; none keeps them.
-    marks: Option<ReadMarks>,
-    agents: Vec<AdapterId>,
+pub(super) enum Wanted {
+    /// A look at every agent: the core's last reads, the agents switched on
+    /// in Settings › Agents, those of them in place now, and those the
+    /// operator is signed out of, as Settings reads it.
+    Look {
+        marks: ReadMarks,
+        on: Vec<AdapterId>,
+        ready: Vec<AdapterId>,
+        signed_out: Vec<AdapterId>,
+    },
+    /// An agent whose adapter was just installed.
+    Ready(AdapterId),
+    /// The operator opened the `/` menu on an agent.
+    Check(AdapterId),
+}
+
+/// Which agent the thread looks at next and whether it reads it: the
+/// thread's state, with no clock and no process, so a test drives it.
+#[derive(Debug, Default)]
+struct Schedule {
+    marks: ReadMarks,
+    /// The agents switched on at the last look.
+    on: BTreeSet<AdapterId>,
+    /// The agents the operator is signed out of at the last look.
+    signed_out: BTreeSet<AdapterId>,
+    /// The agents switched on and in place.
+    in_place: BTreeSet<AdapterId>,
+    queue: VecDeque<AdapterId>,
+    /// Each agent whose last read brought no list, by what it depended on
+    /// then: the same digest is not read again.
+    failed: HashMap<AdapterId, String>,
+}
+
+impl Schedule {
+    fn take(&mut self, wanted: Wanted) {
+        match wanted {
+            Wanted::Look {
+                marks,
+                on,
+                ready,
+                signed_out,
+            } => {
+                self.marks = marks;
+                self.on = on.into_iter().collect();
+                self.signed_out = signed_out.into_iter().collect();
+                self.in_place = ready
+                    .into_iter()
+                    .filter(|agent| self.on.contains(agent))
+                    .collect();
+                self.queue.retain(|agent| self.in_place.contains(agent));
+                let agents: Vec<AdapterId> = self.in_place.iter().copied().collect();
+                self.queue_up(agents);
+            }
+            Wanted::Ready(agent) => {
+                if self.on.contains(&agent) {
+                    self.in_place.insert(agent);
+                    self.queue_up(vec![agent]);
+                }
+            }
+            Wanted::Check(agent) => {
+                if self.in_place.contains(&agent) {
+                    self.queue_up(vec![agent]);
+                }
+            }
+        }
+    }
+
+    fn queue_up(&mut self, agents: Vec<AdapterId>) {
+        for agent in agents {
+            if !self.queue.contains(&agent) {
+                self.queue.push_back(agent);
+            }
+        }
+    }
+
+    fn next(&mut self) -> Option<AdapterId> {
+        self.queue.pop_front()
+    }
+
+    /// What `agent`'s list depends on beyond its files: a sign-out and the
+    /// sign-in after it each read it again.
+    fn facts(&self, agent: AdapterId, files: String) -> String {
+        if self.signed_out.contains(&agent) {
+            files + "signed out\n"
+        } else {
+            files
+        }
+    }
+
+    /// Whether `agent`, whose list depends on what `mark` digests now, is
+    /// read: never read or moved since its list, and no read of this same
+    /// digest failed.
+    fn due(&self, agent: AdapterId, mark: &ReadMark) -> bool {
+        self.marks
+            .get(&agent)
+            .is_none_or(|last| last.mark != mark.mark)
+            && self.failed.get(&agent) != Some(&mark.mark)
+    }
+
+    /// A read of `agent` ended, with a list or without.
+    fn read(&mut self, agent: AdapterId, mark: &ReadMark, listed: bool) {
+        if listed {
+            self.failed.remove(&agent);
+            self.marks.insert(agent, mark.clone());
+        } else {
+            self.failed.insert(agent, mark.mark.clone());
+        }
+    }
+
+    /// `agent` is not in place any more: a later look finds it again.
+    fn gone(&mut self, agent: AdapterId) {
+        self.in_place.remove(&agent);
+    }
 }
 
 /// The thread that reads the agents' commands; dropping it stops the thread
-/// and the process it runs.
+/// and the process it runs, and waits for both.
 pub(super) struct Reader {
-    wanted: Sender<Wanted>,
+    wanted: Option<Sender<Wanted>>,
     stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl Reader {
-    pub(super) fn start(places: DeskPlaces, orders: Sender<Order>) -> std::io::Result<Self> {
+    /// Starts the thread; `open` is the agent whose Desk session is open,
+    /// which the worker keeps.
+    pub(super) fn start(
+        places: DeskPlaces,
+        orders: Sender<Order>,
+        open: Arc<Mutex<Option<AdapterId>>>,
+    ) -> std::io::Result<Self> {
         let (wanted, received) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let thread = Thread {
             places,
             orders,
+            open,
             stop: Arc::clone(&stop),
-            marks: ReadMarks::new(),
-            tried: HashMap::new(),
-            in_place: BTreeSet::new(),
-            queue: VecDeque::new(),
+            schedule: Schedule::default(),
         };
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("hide-core-desk-lists".into())
             .spawn(move || thread.run(&received))?;
-        Ok(Self { wanted, stop })
+        Ok(Self {
+            wanted: Some(wanted),
+            stop,
+            thread: Some(thread),
+        })
     }
 
-    /// Reads `agents` when their lists are due, in this order, after any
-    /// already waiting.
-    pub(super) fn read(&self, marks: Option<ReadMarks>, agents: Vec<AdapterId>) {
-        let _ = self.wanted.send(Wanted { marks, agents });
+    pub(super) fn read(&self, wanted: Wanted) {
+        if let Some(sender) = &self.wanted {
+            let _ = sender.send(wanted);
+        }
     }
 }
 
 impl Drop for Reader {
+    /// Stops a read under way at its next poll, and wakes a thread that
+    /// sleeps by closing its channel.
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        self.wanted = None;
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
 struct Thread {
     places: DeskPlaces,
     orders: Sender<Order>,
+    open: Arc<Mutex<Option<AdapterId>>>,
     stop: Arc<AtomicBool>,
-    marks: ReadMarks,
-    /// Each agent whose last read brought no list: what it depended on then,
-    /// and when.
-    tried: HashMap<AdapterId, (String, Instant)>,
-    /// The agents the worker said are in place, looked at each round.
-    in_place: BTreeSet<AdapterId>,
-    queue: VecDeque<AdapterId>,
+    schedule: Schedule,
 }
 
 impl Thread {
     fn run(mut self, received: &Receiver<Wanted>) {
-        let mut round = Instant::now() + ROUND;
         loop {
             if self.stop.load(Ordering::SeqCst) {
                 return;
             }
-            // An agent waiting is read before the thread sleeps again.
-            let wait = if self.queue.is_empty() {
-                round.saturating_duration_since(Instant::now())
-            } else {
-                Duration::ZERO
-            };
-            match received.recv_timeout(wait.min(Duration::from_millis(200))) {
-                Ok(wanted) => self.take(wanted),
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return,
+            // Everything waiting is taken before the next agent is read, so
+            // a look that switched an agent off comes first.
+            while let Ok(wanted) = received.try_recv() {
+                self.schedule.take(wanted);
             }
-            if Instant::now() >= round {
-                round = Instant::now() + ROUND;
-                let in_place: Vec<AdapterId> = self.in_place.iter().copied().collect();
-                self.queue_up(in_place);
-            }
-            if let Some(adapter) = self.queue.pop_front() {
-                self.read(adapter);
+            match self.schedule.next() {
+                Some(agent) => self.read(agent),
+                None => match received.recv() {
+                    Ok(wanted) => self.schedule.take(wanted),
+                    Err(_) => return,
+                },
             }
         }
     }
 
-    fn take(&mut self, wanted: Wanted) {
-        if let Some(marks) = wanted.marks {
-            self.marks = marks;
+    /// Reads `agent`'s list when it is due, and tells the worker.
+    fn read(&mut self, agent: AdapterId) {
+        let open = *self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if open == Some(agent) {
+            return;
         }
-        self.in_place.extend(wanted.agents.iter().copied());
-        self.queue_up(wanted.agents);
-    }
-
-    fn queue_up(&mut self, agents: Vec<AdapterId>) {
-        for adapter in agents {
-            if !self.queue.contains(&adapter) {
-                self.queue.push_back(adapter);
-            }
-        }
-    }
-
-    /// Reads `adapter`'s list when it is due, and tells the worker.
-    fn read(&mut self, adapter: AdapterId) {
-        let (launch, cli) = match launch_for(adapter, &self.places, None) {
+        let (launch, cli) = match launch_for(agent, &self.places, None) {
             Ok(found) => found,
-            // Gone since the worker looked: its next look says so.
-            Err(_) => {
-                self.in_place.remove(&adapter);
+            Err(why) => {
+                // Gone since the worker looked (its next look says so), or
+                // a piece of its start missing: the menu says it failed.
+                self.schedule.gone(agent);
+                self.tell(agent, Err(Unread::Failed(why)));
                 return;
             }
         };
-        let account = hide_platform::programs::account_environment();
-        let variable = |name: &str| {
-            account.as_deref().and_then(|account| {
-                account
-                    .iter()
-                    .find(|(own, _)| hide_desk::host::same_name(own, std::ffi::OsStr::new(name)))
-                    .map(|(_, value)| value.clone())
-            })
-        };
-        let home = hide_platform::host::home_dir().ok();
-        let facts = read_ahead::mark(adapter, cli.as_deref(), home.as_deref(), variable);
-        let now_ms = crate::observed::now_unix_ms();
-        let mark = ReadMark::of(&facts, now_ms);
-        if !due(self.marks.get(&adapter), &mark) {
-            return;
-        }
-        if self
-            .tried
-            .get(&adapter)
-            .is_some_and(|(tried, at)| *tried == mark.mark && at.elapsed() < RETRY)
-        {
+        let skills = skills_folder(agent);
+        let facts = self.schedule.facts(
+            agent,
+            read_ahead::mark(agent, cli.as_deref(), skills.as_deref()),
+        );
+        let mark = ReadMark::of(&facts, crate::observed::now_unix_ms());
+        if !self.schedule.due(agent, &mark) {
             return;
         }
         let cwd = hide_desk::adapter::work_dir(&self.places.desk);
-        let result = read_ahead::read(adapter, &launch, &cwd, &self.stop);
-        match &result {
-            Ok(_) => {
-                self.tried.remove(&adapter);
-                self.marks.insert(adapter, mark.clone());
-            }
-            Err(Unread::Stopped) => return,
-            Err(_) => {
-                self.tried
-                    .insert(adapter, (mark.mark.clone(), Instant::now()));
-            }
+        let result = read_ahead::read(agent, &launch, &cwd, &self.stop, Bounds::DEFAULT);
+        if matches!(result, Err(Unread::Stopped)) {
+            return;
         }
+        self.schedule.read(agent, &mark, result.is_ok());
+        self.tell(agent, result.map(|commands| (commands, mark)));
+    }
+
+    fn tell(
+        &self,
+        agent: AdapterId,
+        result: Result<(hide_desk::commands::Commands, ReadMark), Unread>,
+    ) {
         let _ = self.orders.send(Order::ListRead {
-            adapter,
-            result: result.map(|commands| (commands, mark)),
+            adapter: agent,
+            result,
         });
     }
 }
 
-/// Whether a list last read as `last` is read again, now that what it
-/// depends on reads as `now`: never read, moved, or a day old.
-fn due(last: Option<&ReadMark>, now: &ReadMark) -> bool {
-    last.is_none_or(|last| {
-        last.mark != now.mark || now.at_ms.saturating_sub(last.at_ms) >= STALE_MS
-    })
+/// The skills folder `agent`'s definition names for the account's default
+/// profile (`[account.paths] skills`), with the account's own variables as
+/// a new terminal has them; the shared folder for `"shared"`.
+fn skills_folder(agent: AdapterId) -> Option<PathBuf> {
+    let home = hide_platform::host::home_dir().ok()?;
+    let catalog = agent.catalog();
+    let account = hide_platform::programs::account_environment();
+    let variable = |name: &str| {
+        account.as_deref().and_then(|account| {
+            account
+                .iter()
+                .find(|(own, _)| hide_desk::host::same_name(own, std::ffi::OsStr::new(name)))
+                .map(|(_, value)| value.clone())
+        })
+    };
+    let resolved = catalog
+        .resolve(
+            &Profile::builtin_default(catalog.id),
+            &NodeEnv::new(Some(home.clone()))
+                .with_account_variables(catalog.account_rule(), variable),
+        )
+        .ok()?;
+    match resolved.place(AccountPath::Skills) {
+        Place::At(path) => Some(path.clone()),
+        Place::Shared => Some(hide_kit::agents::SkillDir::Shared.path(&home)),
+        Place::Absent => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const PI: AdapterId = AdapterId::PI;
+    const OMP: AdapterId = AdapterId::OMP;
+
+    fn look(on: &[AdapterId], signed_out: &[AdapterId], marks: ReadMarks) -> Wanted {
+        Wanted::Look {
+            marks,
+            on: on.to_vec(),
+            ready: vec![PI, OMP],
+            signed_out: signed_out.to_vec(),
+        }
+    }
+
+    fn drain(schedule: &mut Schedule) -> Vec<AdapterId> {
+        std::iter::from_fn(|| schedule.next()).collect()
+    }
+
+    /// An agent switched off is never looked at: the look that says so
+    /// drops it from the queue, and neither an install of its adapter nor
+    /// a `/` on it brings it back; switched on again, the next look does.
     #[test]
-    fn a_list_is_read_again_only_when_what_it_depends_on_moved_or_it_is_a_day_old() {
-        let read = ReadMark::of("cli /opt/omp 10 1\n", 1_000);
-        assert!(due(None, &read));
-        assert!(!due(
-            Some(&read),
-            &ReadMark::of("cli /opt/omp 10 1\n", 1_000 + 60_000)
-        ));
-        assert!(due(
-            Some(&read),
-            &ReadMark::of("cli /opt/omp 11 2\n", 2_000)
-        ));
-        assert!(due(
-            Some(&read),
-            &ReadMark::of("cli /opt/omp 10 1\n", 1_000 + STALE_MS)
-        ));
+    fn an_agent_switched_off_is_never_read() {
+        let mut schedule = Schedule::default();
+        schedule.take(look(&[PI, OMP], &[], ReadMarks::new()));
+        schedule.take(look(&[OMP], &[], ReadMarks::new()));
+        assert_eq!(drain(&mut schedule), [OMP]);
+        schedule.take(Wanted::Ready(PI));
+        schedule.take(Wanted::Check(PI));
+        assert_eq!(drain(&mut schedule), Vec::<AdapterId>::new());
+        schedule.take(Wanted::Check(OMP));
+        assert_eq!(drain(&mut schedule), [OMP]);
+
+        schedule.take(look(&[PI, OMP], &[], ReadMarks::new()));
+        assert_eq!(drain(&mut schedule), [PI, OMP]);
+    }
+
+    /// A `/` looks at its agent; the agent is read only when what its list
+    /// depends on moved since the list it has.
+    #[test]
+    fn a_slash_reads_its_agent_again_only_when_its_mark_moved() {
+        let mut schedule = Schedule::default();
+        schedule.take(look(&[OMP], &[], ReadMarks::new()));
+        let v1 = ReadMark::of("cli /opt/omp 10 1\n", 1_000);
+        assert!(schedule.due(OMP, &v1));
+        schedule.read(OMP, &v1, true);
+        assert_eq!(drain(&mut schedule), [OMP]);
+
+        schedule.take(Wanted::Check(OMP));
+        assert_eq!(drain(&mut schedule), [OMP]);
+        // Time alone moves nothing: a week later the same files read as the
+        // same list.
+        let later = ReadMark::of("cli /opt/omp 10 1\n", 1_000 + 7 * 24 * 3_600_000);
+        assert!(!schedule.due(OMP, &later));
+        let v2 = ReadMark::of("cli /opt/omp 11 2\n", 2_000);
+        assert!(schedule.due(OMP, &v2));
+    }
+
+    /// A read that brought no list is not tried again on the same digest,
+    /// at any later moment; a new program, skill or sign-in is a new digest,
+    /// and the sign-in moves the digest through the look that reports it.
+    #[test]
+    fn a_failed_read_is_tried_again_only_when_its_files_or_sign_in_moved() {
+        let mut schedule = Schedule::default();
+        let files = || "cli /opt/omp 10 1\n".to_owned();
+        schedule.take(look(&[OMP], &[], ReadMarks::new()));
+        let refused = ReadMark::of(&schedule.facts(OMP, files()), 1_000);
+        schedule.read(OMP, &refused, false);
+        for _ in 0..3 {
+            schedule.take(Wanted::Check(OMP));
+            schedule.take(look(&[OMP], &[], ReadMarks::new()));
+            assert!(!schedule.due(OMP, &refused));
+        }
+        // Settings reads the operator signed out, then in: each moves the
+        // digest, and so reads again.
+        schedule.take(look(&[OMP], &[OMP], ReadMarks::new()));
+        let signed_out = ReadMark::of(&schedule.facts(OMP, files()), 1_000);
+        assert!(schedule.due(OMP, &signed_out));
+        schedule.read(OMP, &signed_out, false);
+        assert!(!schedule.due(OMP, &signed_out));
+        schedule.take(look(&[OMP], &[], ReadMarks::new()));
+        let signed_in = ReadMark::of(&schedule.facts(OMP, files()), 1_000);
+        assert_eq!(signed_in.mark, refused.mark);
+        // Back to the digest whose read failed last before the sign-out:
+        // the failure kept is the sign-out's, so this one is read.
+        assert!(schedule.due(OMP, &signed_in));
+        // A new program is a new digest too.
+        let updated = ReadMark::of(&schedule.facts(OMP, "cli /opt/omp 11 2\n".into()), 1_000);
+        assert!(schedule.due(OMP, &updated));
     }
 }

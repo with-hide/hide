@@ -43,6 +43,9 @@ pub(super) enum Order {
     Check {
         marks: crate::desk::ReadMarks,
         on: Vec<AdapterId>,
+        /// The agents the operator is signed out of, as Settings reads it: a
+        /// sign-out and the sign-in after it each read the list again.
+        signed_out: Vec<AdapterId>,
     },
     /// Install `adapter`'s adapter; `asked` when the operator pressed
     /// `다시 받기`.
@@ -71,6 +74,9 @@ pub(super) enum Order {
     /// ([`session::Arrivals`]).
     Incoming(u64, Incoming),
     Installed(AdapterId, Result<(), InstallError>),
+    /// The `/` menu opened on `adapter`: its list is read again when what
+    /// it depends on moved.
+    CommandsCheck(AdapterId),
     /// A read of `adapter`'s commands ahead of the operator ended
     /// ([`super::lists`]).
     ListRead {
@@ -229,14 +235,6 @@ fn first_line(words: &str) -> Option<String> {
     Some(line.chars().take(MAX_REASON_CHARS).collect())
 }
 
-/// Whether the agent refused the call until the operator signs in: ACP's
-/// `auth_required`, or any refusal from an agent that said it is signed out
-/// ([`session::sign_in_status`]), whatever code it carries.
-fn signs_in(error: &CallError, signed_out: bool) -> bool {
-    matches!(error, CallError::Rejected(rejected)
-        if rejected.code == session::AUTH_REQUIRED || signed_out)
-}
-
 /// An open the agent refused, as Desk reads it: one from an agent that
 /// said it is signed out is a sign-in refusal (B6), whatever it answered.
 fn open_refusal(error: OpenError, signed_out: bool) -> OpenError {
@@ -279,7 +277,7 @@ pub(super) fn start(
         running: None,
         installing: Vec::new(),
         lists: None,
-        switched_on: Vec::new(),
+        open: Arc::new(Mutex::new(None)),
     };
     std::thread::Builder::new()
         .name("hide-core-desk".into())
@@ -314,9 +312,9 @@ struct Worker {
     /// The thread that reads each agent's commands ahead of the operator,
     /// one agent at a time, while Desk is on; dropping it stops it.
     lists: Option<super::lists::Reader>,
-    /// The agents switched on in Settings › Agents at the last look: Hide
-    /// starts no other agent to read its commands.
-    switched_on: Vec<AdapterId>,
+    /// The agent whose Desk session is open, which the list reader leaves
+    /// alone: that session sends its list.
+    open: Arc<Mutex<Option<AdapterId>>>,
 }
 
 /// The Desk process and its session.
@@ -365,10 +363,11 @@ impl Worker {
 
     fn handle(&mut self, order: Order) {
         match order {
-            Order::Check { marks, on } => {
-                self.switched_on = on;
-                self.check(marks);
-            }
+            Order::Check {
+                marks,
+                on,
+                signed_out,
+            } => self.check(marks, on, signed_out),
             Order::Install { adapter, asked } => self.install(adapter, asked),
             Order::Send(send) => self.send(send),
             Order::Cancel => {
@@ -422,21 +421,32 @@ impl Worker {
                     DeskAgentState::Ready,
                     None,
                 )]));
-                self.read_ahead(None, vec![adapter]);
+                self.read_ahead(super::lists::Wanted::Ready(adapter));
             }
             Order::ListRead { adapter, result } => self.list_read(adapter, result),
+            Order::CommandsCheck(adapter) => {
+                // Only a reader Desk started takes it: a `/` never starts one.
+                if let Some(reader) = &self.lists {
+                    reader.read(super::lists::Wanted::Check(adapter));
+                }
+            }
         }
     }
 
-    /// Hands `agents` to the thread that reads their commands, started on
-    /// the first; `marks` are the last reads the core keeps.
-    fn read_ahead(&mut self, marks: Option<crate::desk::ReadMarks>, mut agents: Vec<AdapterId>) {
-        agents.retain(|agent| self.switched_on.contains(agent));
-        if !self.on || agents.is_empty() {
+    /// Hands the thread that reads the agents' commands what to read,
+    /// starting it on the first; a thread that cannot start leaves each
+    /// agent it would have read failed, with why in the log.
+    fn read_ahead(&mut self, wanted: super::lists::Wanted) {
+        if !self.on {
             return;
         }
         if self.lists.is_none() {
-            match super::lists::Reader::start(self.platform.places(), self.orders.clone()) {
+            let started = super::lists::Reader::start(
+                self.platform.places(),
+                self.orders.clone(),
+                Arc::clone(&self.open),
+            );
+            match started {
                 Ok(reader) => self.lists = Some(reader),
                 Err(error) => {
                     crate::diagnostic!(json!({
@@ -444,30 +454,36 @@ impl Worker {
                         "kind": "desk.lists_start_failed",
                         "error": error.to_string(),
                     }));
+                    let agents = match wanted {
+                        super::lists::Wanted::Look { on, ready, .. } => ready
+                            .into_iter()
+                            .filter(|agent| on.contains(agent))
+                            .collect(),
+                        super::lists::Wanted::Ready(agent) | super::lists::Wanted::Check(agent) => {
+                            vec![agent]
+                        }
+                    };
+                    for adapter in agents {
+                        self.report(Report::Unread {
+                            adapter,
+                            why: crate::model::DeskCommandsUnread::Failed,
+                        });
+                    }
                     return;
                 }
             }
         }
         if let Some(reader) = &self.lists {
-            reader.read(marks, agents);
+            reader.read(wanted);
         }
     }
 
-    /// A list read ahead reaches the core; the list of an agent whose Desk
-    /// session is open is that session's to send, so a read that ended
-    /// meanwhile is not told.
+    /// A list read ahead reaches the core, with why when it brought none.
     fn list_read(
         &mut self,
         adapter: AdapterId,
         result: Result<(hide_desk::commands::Commands, crate::desk::ReadMark), Unread>,
     ) {
-        if self
-            .running
-            .as_ref()
-            .is_some_and(|running| running.adapter == adapter)
-        {
-            return;
-        }
         let why = match result {
             Ok((commands, read)) => {
                 self.report(Report::Commands {
@@ -510,7 +526,12 @@ impl Worker {
     /// Looks at every agent and installs each adapter that is not in
     /// place, all at once (D-80): an agent is never left waiting for its
     /// adapter until it is chosen.
-    fn check(&mut self, marks: crate::desk::ReadMarks) {
+    fn check(
+        &mut self,
+        marks: crate::desk::ReadMarks,
+        on: Vec<AdapterId>,
+        signed_out: Vec<AdapterId>,
+    ) {
         self.on = true;
         let places = self.platform.places();
         let node = programs::find_cli("node");
@@ -545,7 +566,14 @@ impl Worker {
         for adapter in missing {
             self.install(adapter, false);
         }
-        self.read_ahead(Some(marks), ready);
+        // Every look replaces what the reader reads, so an agent switched
+        // off since leaves it.
+        self.read_ahead(super::lists::Wanted::Look {
+            marks,
+            on,
+            ready,
+            signed_out,
+        });
     }
 
     fn install(&mut self, adapter: AdapterId, asked: bool) {
@@ -618,6 +646,10 @@ impl Worker {
                         resume_failed,
                         choices,
                     });
+                    *self
+                        .open
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(send.adapter);
                     self.running = Some(running);
                 }
                 Err(error) => {
@@ -901,7 +933,11 @@ impl Worker {
                         _ => TurnOutcome::Done,
                     },
                     Err(error)
-                        if current && signs_in(&error, self.signed_out.load(Ordering::SeqCst)) =>
+                        if current
+                            && session::signs_in(
+                                &error,
+                                self.signed_out.load(Ordering::SeqCst),
+                            ) =>
                     {
                         self.turn_failed(adapter, &error);
                         self.sign_in_needed(adapter, tag);
@@ -1037,6 +1073,10 @@ impl Worker {
         detail: Option<String>,
         last: Option<TurnEnd>,
     ) {
+        *self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         let Some(running) = self.running.take() else {
             return;
         };
@@ -1360,7 +1400,7 @@ mod tests {
             }),
             installing: Vec::new(),
             lists: None,
-            switched_on: Vec::new(),
+            open: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -1732,10 +1772,10 @@ mod tests {
                 message: "Internal error".into(),
             })
         };
-        assert!(signs_in(&rejected(session::AUTH_REQUIRED), false));
-        assert!(!signs_in(&rejected(-32603), false));
-        assert!(signs_in(&rejected(-32603), true));
-        assert!(!signs_in(&CallError::Closed("eof".into()), true));
+        assert!(session::signs_in(&rejected(session::AUTH_REQUIRED), false));
+        assert!(!session::signs_in(&rejected(-32603), false));
+        assert!(session::signs_in(&rejected(-32603), true));
+        assert!(!session::signs_in(&CallError::Closed("eof".into()), true));
         assert_eq!(
             open_refusal(
                 OpenError::Failed("session/new: rejected -32603".into()),

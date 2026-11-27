@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { DeskMention } from "../../desk";
 import { commandAt, commandRows, mentionAt, mentionTree, type MentionFile, type MentionProject, type MentionSession } from "../../deskComposer";
 import { composingKey } from "../../keys";
@@ -22,6 +22,8 @@ export type ComposerMenuSource = {
    * is on its way. None for a box with no agent.
    */
   commands: { agent: string; list: readonly DeskCommand[] | null; unread?: DeskCommandsUnread | null; opening?: boolean } | null;
+  /** Called once each time the `/` menu opens, so the core can check whether the agent's list moved. */
+  onCommandsOpen?: () => void;
   mentions: DeskMentions | null;
   /** Desk's `@` lists the projects and enters one with ⇥; a session's lists its project's files instead. */
   projects: boolean;
@@ -87,6 +89,13 @@ export function useComposerMenus(source: ComposerMenuSource): ComposerMenus {
   useEffect(() => {
     if (!inSlash && commandMenu.dismissed) setCommandMenu({ active: "", dismissed: false });
   }, [inSlash, commandMenu.dismissed]);
+  // Once per opening of the `/` word, never per key typed after it.
+  const hasCommands = commands !== null;
+  const onCommandsOpen = useRef(source.onCommandsOpen);
+  onCommandsOpen.current = source.onCommandsOpen;
+  useEffect(() => {
+    if (inSlash && hasCommands) onCommandsOpen.current?.();
+  }, [inSlash, hasCommands]);
   const menuOpen = commandOpen || (at !== null && menu.dismissed !== at.start && (values.length > 0 || tree !== null));
   const menuEmpty = commandOpen ? commandHits.length === 0 : menuOpen && values.length === 0;
   const active = values.includes(menu.active) ? menu.active : (values[0] ?? "");
