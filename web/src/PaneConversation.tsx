@@ -21,7 +21,7 @@ export function PaneConversation({ paneId, actions }: { paneId: string; actions:
     job={job} paneId={paneId} actions={actions} paneConversation focused answer={1}
     asks={row?.open_asks?.items}
     onAsk={(id, status) => { const session = row ? askingSession(row) : null; if (session) actions.setMissedStatus(session, id, status); }}
-    ask={row?.state.asking || job?.state === "asking" ? <SessionThreadAsk paneId={paneId} deviceId={row?.device_id ?? null} job={job} row={row} actions={actions} onWrite={() => document.querySelector<HTMLTextAreaElement>(`[data-pane-conversation] [data-desk-composer-input]`)?.focus()} /> : null}
+    ask={row?.state.asking || job?.state === "asking" ? <SessionThreadAsk paneId={paneId} deviceId={row?.device_id ?? null} job={job} row={row} actions={actions} onTerminal={() => actions.togglePaneConversation(paneId)} onWrite={() => document.querySelector<HTMLTextAreaElement>(`[data-pane-conversation] [data-desk-composer-input]`)?.focus()} /> : null}
     onTerminal={() => actions.togglePaneConversation(paneId)}
     outputOf={(output, viewId) => outputNamed(job?.outputs ?? [], output, location, localDeviceId(useShellStore.getState().rest), viewId)}
     onOutput={(output) => {

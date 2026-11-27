@@ -8,7 +8,7 @@ import { askIdentity, inputFailure, noticeText } from "../../mobile/protocol";
 import { useElapsed } from "../elapsed";
 import { SessionAskCard } from "./desk-session";
 
-export function SessionThreadAsk({ paneId, deviceId, job, row, actions, onWrite }: { paneId: string; deviceId: string | null; job: DeskJob | null; row: AgentRow | null; actions: Actions; onWrite: () => void }) {
+export function SessionThreadAsk({ paneId, deviceId, job, row, actions, onWrite, onTerminal }: { paneId: string; deviceId: string | null; job: DeskJob | null; row: AgentRow | null; actions: Actions; onWrite: () => void; onTerminal?: () => void }) {
   const { t } = useInterfaceTranslation();
   // The daemon does not push an ask: it is read when the panel opens and again whenever the agent's row moves (its change time or group).
   const changed = row?.changed_at_unix_ms ?? null;
@@ -55,7 +55,7 @@ export function SessionThreadAsk({ paneId, deviceId, job, row, actions, onWrite 
         if (answer === "sending" || answer === "sent" || inTerminal) return;
         setSent({ ask: identity, choice, request: actions.answerPane(deviceId, paneId, ask, choice) });
       }}
-      onTerminal={() => actions.deskTerminal()}
+      onTerminal={onTerminal ?? (() => actions.deskTerminal())}
       onWrite={onWrite}
     />
   );

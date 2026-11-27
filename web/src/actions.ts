@@ -2869,7 +2869,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         state.setDeskReturn(pane);
         return this.openAgent(pane);
       }
-      const pane = useShellStore.getState().focusedPaneId;
+      const owner = keyboardOwner();
+      const pane = owner.kind === "pane" ? owner.paneId : useShellStore.getState().focusedPaneId;
       if (pane) this.togglePaneConversation(pane);
     },
 

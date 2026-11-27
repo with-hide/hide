@@ -51,6 +51,35 @@ function ObservedPanel({ actions }: { actions: Actions }) {
   return <div data-taken={String(taken)}><span>{thread?.generation}</span><button onClick={reclaim}>Reclaim</button></div>;
 }
 
+it("opens a changed session without the previous session's taken pages", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const saved = useShellStore.getState(), local = useUiStore.getState();
+  const calls: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { calls.push(event); return true; });
+  const container = document.createElement("div"), root = createRoot(container);
+  const row = (identity: string) => [{ pane_id: "w1:p1", thread_capability: "ready", thread_identity: identity }] as never;
+  const section: SessionThreadSection = { generation: 1, pane_id: "w1:p1", machine: "local", state: "ready", failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: null, choice: {}, input: null };
+  try {
+    useShellStore.setState({ agents: row("first"), connection: "live", sessionThread: { ...section, generation: 2, pane_id: "w1:p2" } });
+    useUiStore.setState({ paneConversation: { paneId: "w1:p1", session: "first" }, threadLease: { paneId: "w1:p1", acquired: true, taken: true, thread: section, history: null } });
+    await act(async () => useShellStore.setState({ agents: row("second") }));
+    expect(useUiStore.getState().paneConversation).toBeNull();
+    expect(useUiStore.getState().threadLease).toBeNull();
+    actions.togglePaneConversation("w1:p1");
+    await act(async () => root.render(<ObservedPanel actions={actions} />));
+    expect(container.querySelector("span")?.textContent).toBe("");
+    expect(container.querySelector("[data-taken]")?.getAttribute("data-taken")).toBe("false");
+    expect(calls.filter((call) => call.kind === "session_thread_open")).toHaveLength(1);
+    await act(async () => useShellStore.setState({ sessionThread: { ...section, generation: 3 } }));
+    expect(container.querySelector("span")?.textContent).toBe("3");
+  } finally {
+    await act(async () => root.unmount());
+    useUiStore.setState(local, true);
+    useShellStore.setState(saved, true);
+    vi.unstubAllGlobals();
+  }
+});
+
 it("keeps the last thread after another pane takes it, including reconnect and remount, until explicit reclaim", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const saved = useShellStore.getState(), local = useUiStore.getState();

@@ -64,5 +64,5 @@ useShellStore.subscribe((state, previous) => {
   const selected = useUiStore.getState().paneConversation;
   if (!selected || (state.agents === previous.agents && state.rest === previous.rest)) return;
   const row = allAgents(state.agents, state.rest?.status?.remote).find((row) => row.pane_id === selected.paneId);
-  if (!row || row.thread_identity !== selected.session) useUiStore.setState({ paneConversation: null });
+  if (!row || row.thread_identity !== selected.session) useUiStore.setState({ paneConversation: null, threadLease: null });
 });
