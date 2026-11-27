@@ -57,10 +57,7 @@ fn body() -> String {
 
 /// Each `## ` section of `body` with its heading, up to the next one.
 fn sections(body: &str) -> impl Iterator<Item = (&str, &str)> {
-    let starts: Vec<usize> = body
-        .match_indices("\n## ")
-        .map(|(at, _)| at + 1)
-        .collect();
+    let starts: Vec<usize> = body.match_indices("\n## ").map(|(at, _)| at + 1).collect();
     let ends: Vec<usize> = starts.iter().skip(1).copied().chain([body.len()]).collect();
     starts.into_iter().zip(ends).map(move |(start, end)| {
         let section = &body[start..end];
@@ -142,12 +139,19 @@ mod tests {
         for topic in topics() {
             let section = section(&topic).unwrap();
             assert!(section.starts_with("## "), "{topic}");
-            assert!(!section.contains("\n## "), "{topic} runs into the next section");
+            assert!(
+                !section.contains("\n## "),
+                "{topic} runs into the next section"
+            );
             assert!(text().contains(&section), "{topic}");
         }
         let screen = section("operators-screen").unwrap();
         assert!(screen.starts_with("## The operator's screen\n"));
-        for typed in ["The operator's screen", "the-operators-screen", "OPERATORS SCREEN"] {
+        for typed in [
+            "The operator's screen",
+            "the-operators-screen",
+            "OPERATORS SCREEN",
+        ] {
             assert_eq!(section(typed).as_deref(), Some(screen.as_str()), "{typed}");
         }
         assert_eq!(section("Project Memory"), section("project-memory"));
@@ -180,7 +184,10 @@ mod tests {
     #[test]
     fn every_rule_the_session_start_dropped_lives_in_its_guide_section() {
         let rules: &[(&str, &[&str])] = &[
-            ("what-the-operator-asks", &[hide_agent_hooks::intent_table!()]),
+            (
+                "what-the-operator-asks",
+                &[hide_agent_hooks::intent_table!()],
+            ),
             (
                 "panes",
                 &[
@@ -336,10 +343,7 @@ mod tests {
     /// by `hide mission help`.
     fn taught() -> Vec<(&'static str, String)> {
         vec![
-            (
-                "session start",
-                hide_agent_hooks::START_CONTEXT.to_owned(),
-            ),
+            ("session start", hide_agent_hooks::START_CONTEXT.to_owned()),
             ("hide guide", text()),
             ("hide mission help", crate::mission_cli::HELP.to_owned()),
             ("hide issue help", crate::issue_cli::HELP.to_owned()),

@@ -4058,9 +4058,16 @@ mod tests {
             parse(&["letters"]).unwrap(),
             CommandKind::Guide(crate::guide::section("letters"))
         );
-        assert!(crate::guide::section("letters").unwrap().starts_with("## Letters\n"));
+        assert!(
+            crate::guide::section("letters")
+                .unwrap()
+                .starts_with("## Letters\n")
+        );
         let refused = parse(&["nothing-like-it"]).unwrap_err();
-        assert!(refused.contains("the topics are what-the-operator-asks,"), "{refused}");
+        assert!(
+            refused.contains("the topics are what-the-operator-asks,"),
+            "{refused}"
+        );
         assert_eq!(
             parse(&["letters", "agents"]).unwrap_err(),
             crate::guide::USAGE

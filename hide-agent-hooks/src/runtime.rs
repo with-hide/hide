@@ -91,7 +91,11 @@ pub fn session_start_context(
         .filter(|part| !part.is_empty())
     {
         if !context.is_empty() {
-            context.push_str(if context.ends_with('\n') { "\n" } else { "\n\n" });
+            context.push_str(if context.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            });
         }
         context.push_str(part);
     }
@@ -642,7 +646,11 @@ mod tests {
         // unseen-agent-views B29).
         assert!(!START_CONTEXT.contains("open <path> --beside"));
         assert!(!START_CONTEXT.contains("<url-or-path> --beside"));
-        assert!(START_CONTEXT.chars().count() < 2_000, "{}", START_CONTEXT.len());
+        assert!(
+            START_CONTEXT.chars().count() < 2_000,
+            "{}",
+            START_CONTEXT.len()
+        );
     }
 
     /// The operator's instruction and the Memory index come first, the

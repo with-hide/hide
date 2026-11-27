@@ -582,7 +582,10 @@ mod tests {
         }
         let brief = fixture.brief().unwrap();
         assert!(brief.len() <= BRIEF_LIMIT_BYTES, "{}", brief.len());
-        let lines: Vec<&str> = brief.lines().filter(|line| line.starts_with("- ")).collect();
+        let lines: Vec<&str> = brief
+            .lines()
+            .filter(|line| line.starts_with("- "))
+            .collect();
         assert!(!lines.is_empty() && lines.len() <= OPEN_LIMIT, "{brief}");
         // A line is the session, its agent and time, its mission, and its
         // topic and result, the three texts each cut to 60 characters.
