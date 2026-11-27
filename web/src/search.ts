@@ -246,6 +246,8 @@ export function peerAgentEntry(peer: PeerRow, t: TFunction<"translation">): Sear
     kind: "agent",
     group: AGENTS_GROUP,
     agentKind: row.agent_kind,
+    // The id that computer knows the pane by, so the id copied there finds it here too.
+    devicePaneId: row.id,
     deviceId,
     chip: { label: machine, local: false },
     peer,

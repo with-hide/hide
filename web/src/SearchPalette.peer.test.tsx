@@ -4,10 +4,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { DESK_ROOM_CLOSED } from "./deskRoom";
 import { clientI18n } from "./i18n/translator";
 import { NOTHING_UNDER_WAY } from "./pairing";
 import { Palette } from "./Palette";
-import type { SnapshotRest } from "./snapshot";
+import type { DeskSection, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import type { DispatchFn } from "./ws";
@@ -102,6 +103,22 @@ it("selects that computer's tile from a window that draws no screen of it", asyn
 
 it("lists no other computer's agent on a screen another computer shows of this one", async () => {
   useShellStore.setState({ pairing: null });
+  await open("login redirect");
+  expect(row("peer-agent:mini:w1:p2")).toBeNull();
+});
+
+it("finds another computer's agent by the pane id that computer knows it by", async () => {
+  await open("w1:p5");
+  expect(row("peer-agent:mini:w1:p5")).not.toBeNull();
+  expect(row("peer-agent:mini:w1:p2")).toBeNull();
+});
+
+// Desk's ⌘K opens a session beside Desk, which another computer's agent cannot be (docs/INSTALL.md, What each system supports).
+it("lists no other computer's agent on Desk, typed or not", async () => {
+  useShellStore.setState({ desk: { settings: { enabled: true } } as unknown as DeskSection });
+  useUiStore.setState({ screen: { kind: "desk" }, deskRoom: DESK_ROOM_CLOSED });
+  await open("");
+  expect(row("peer-agent:mini:w1:p2")).toBeNull();
   await open("login redirect");
   expect(row("peer-agent:mini:w1:p2")).toBeNull();
 });

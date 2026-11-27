@@ -47,7 +47,11 @@ const PEER_TAG_PREFIX = "peer:";
  * What a handed-over notice's tag names, the prefix taken off: the
  * connection it came by and, for an agent's notice, whose tag is
  * `<device id>|<pane id>` there, the pane that machine's core knows the agent
- * by; a new phone of that machine (`phone|<name>`) names no pane.
+ * by; a new phone of that machine (`phone|<name>`) names no pane. The click
+ * carries the tag alone, so the word `phone` tells the two apart: a device
+ * that runs an agent is named by its machine id, and only an SSH device not
+ * yet connected, which runs none, goes by an id its alias makes
+ * (docs/ARCHITECTURE.md, A machine has one id).
  */
 export function peerNoticePane(tag: string): { key: string; pane: string | null } {
   const bar = tag.indexOf("|");
