@@ -439,6 +439,15 @@ pub(super) struct PhoneViewingPayload {
     pub(super) pane_ids: Vec<String>,
 }
 
+/// Every paired machine whose view of this one shows now, by its key; hided
+/// sends the whole list each time a view is seated or ends, so a repeat
+/// converges (`look.rs`, `LookScreen::View`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RemoteViewsPayload {
+    pub(super) machines: Vec<String>,
+}
+
 /// Fork agent from the pane menu: where the fork goes, chosen at the press,
 /// who pressed it, and the shell's key request, which holds what is typed
 /// until the fork's agent has started.
@@ -2012,6 +2021,7 @@ pub(super) enum Event {
     OverviewRefresh(OverviewRefreshPayload),
     OverviewOpenResult(PaneTargetPayload),
     PhoneViewing(PhoneViewingPayload),
+    RemoteViews(RemoteViewsPayload),
     RequestView(RequestViewPayload),
     WindowFocus(WindowFocusPayload),
     /// The card's refresh button, opening the delete confirmation, and a
@@ -2417,6 +2427,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "overview_refresh" => decode!(OverviewRefreshPayload, OverviewRefresh),
         "overview_open_result" => decode!(PaneTargetPayload, OverviewOpenResult),
         "phone_viewing" => decode!(PhoneViewingPayload, PhoneViewing),
+        "remote_views" => decode!(RemoteViewsPayload, RemoteViews),
         "request_view" => decode!(RequestViewPayload, RequestView),
         "window_focus" => decode!(WindowFocusPayload, WindowFocus),
         "cleanup_review" => decode!(CleanupReviewPayload, CleanupReview),
@@ -3763,6 +3774,7 @@ impl Runtime {
                         // where they are now, and the fork does not take it.
                         issued_serial: self.control_lane.issued_serial(),
                         origin: payload.origin,
+                        screen: self.look.pressed_on(),
                         tab_id: None,
                         pane_id: None,
                         tab_label: tab_label.clone(),
@@ -4369,6 +4381,7 @@ impl Runtime {
             }
             Event::OverviewOpenResult(payload) => self.open_result(&payload.pane_id),
             Event::PhoneViewing(payload) => self.set_phone_viewing(payload.pane_ids),
+            Event::RemoteViews(payload) => self.set_remote_views(payload.machines),
             Event::RequestView(payload) => {
                 self.observe_request_view(payload.observing, std::time::Instant::now());
                 false

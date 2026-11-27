@@ -68,7 +68,7 @@ mod kit;
 mod kit_store;
 mod ledger_walk;
 pub(crate) mod links;
-mod look;
+pub(crate) mod look;
 mod machine_profiles;
 pub(crate) mod memory;
 pub(crate) mod memory_analysis;

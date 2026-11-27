@@ -7,7 +7,9 @@ const MAX_PHONE_VIEWED_PANES: usize = 16;
 /// The panes the operator looks at, per machine, as the read axis reads them
 /// (`Runtime::looked_at`): this machine's focus pane as the operator chose
 /// it, each device's own focus while that device is in front and its window
-/// shows the pane's tab (`remote_read_focus`), and every agent a phone has
+/// shows the pane's tab (`remote_read_focus`), both only while the screen
+/// they were chosen on shows (`LookInputs::chosen_shows`: another machine's
+/// view counts while that machine shows it), and every agent a phone has
 /// open. One value, so a move of any of its parts is one comparison
 /// (`Runtime::follow_operator_look`).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -349,6 +351,7 @@ impl Runtime {
         terminal_intent: bool,
         report: FailureReport,
     ) -> bool {
+        let selects = chooses_on_device(&payload.request);
         let target_id = payload.target_id;
         let request_id = payload.request_id;
         let focus_device = payload.focus_device;
@@ -1112,6 +1115,14 @@ impl Runtime {
         if chooses_focus {
             self.supersede_start_navigation();
         }
+        // A choice on the device in front is the operator's look chosen on
+        // this request's screen, though neither the front nor the focus moves
+        // here (`docs/status-model.md`, Hide owns the read axis). One that
+        // brings the device forward records it below; one on a device behind
+        // claims nothing of the look in front.
+        if selects && self.device_in_front(&target_id) {
+            self.choose_look_screen();
+        }
         if let Some(key) = chosen_key {
             if let Some((tab, delegated)) = focused_tab {
                 self.reveal_remote_agent_tab(&key, &tab, delegated);
@@ -1478,9 +1489,10 @@ impl Runtime {
             .collect()
     }
 
-    /// This machine's look: the focus pane the operator chose and a phone's.
+    /// This machine's look: the focus pane the operator chose, while the
+    /// screen they chose it on shows, and a phone's.
     fn local_look(&self) -> Vec<String> {
-        self.looked_at(self.look.focus())
+        self.looked_at(self.look.looking_focus())
     }
 
     /// A device's look: its own focus, as `remote_read_focus` filters it,
@@ -1553,8 +1565,9 @@ impl Runtime {
     }
 
     /// The focus a device's own server reports, counted as the operator's
-    /// look only while that device is in front and the pane is in a tab its
-    /// window shows. Hide never focuses a remote pane itself.
+    /// look only while that device is in front, brought there on a screen
+    /// that still shows (`LookInputs::chosen_shows`), and the pane is in a
+    /// tab its window shows. Hide never focuses a remote pane itself.
     fn remote_read_focus(
         &self,
         target_id: &str,
@@ -1564,7 +1577,7 @@ impl Runtime {
             if self.workspace_views.is_none() {
                 return true;
             }
-            if !self.device_in_front(target_id) {
+            if !self.device_in_front(target_id) || !self.look.chosen_shows() {
                 return false;
             }
             self.node_shown_agent_tabs(target_id).is_none_or(|shown| {
@@ -3434,11 +3447,12 @@ impl Runtime {
         }
         pending.tab_id = tab_id.map(str::to_owned);
         pending.pane_id = Some(pane_id.to_owned());
-        let (issued_serial, press, tab_label, fork_origin) = (
+        let (issued_serial, press, tab_label, fork_origin, screen) = (
             pending.issued_serial,
             pending.press,
             pending.tab_label.clone(),
             pending.origin,
+            pending.screen.clone(),
         );
         // Another fork's own focus is not the operator choosing a view: it
         // supersedes this one only when it was pressed later, or when the
@@ -3500,7 +3514,9 @@ impl Runtime {
             return true;
         }
         let prior_intent_serial = self.last_view_intent_serial;
-        self.focus_pane(pane_id.to_owned(), PaneFocusOrigin::Operator, None);
+        self.on_screen(screen, |runtime| {
+            runtime.focus_pane(pane_id.to_owned(), PaneFocusOrigin::Operator, None);
+        });
         // A focus the core refused (a waiting tab, a closing pane) moved
         // nothing: the fork does not hold the keys or count as a move.
         if self.snapshot.focused.pane_id.as_deref() != Some(pane_id) {
@@ -3675,13 +3691,14 @@ impl Runtime {
             }
             Err(message) => {
                 self.discard_input_request(&origin, "failed");
-                let (tab_id, pane_id, focused, generation) = pending
+                let (tab_id, pane_id, focused, generation, screen) = pending
                     .map(|pending| {
                         (
                             pending.tab_id,
                             pending.pane_id,
                             pending.focused,
                             Some(pending.generation),
+                            pending.screen,
                         )
                     })
                     .unwrap_or_default();
@@ -3704,7 +3721,13 @@ impl Runtime {
                     && generation == Some(self.live_generation)
                     && self.snapshot.focused.pane_id.as_deref() == Some(pane.as_str())
                 {
-                    self.focus_pane(parent_pane_id.to_owned(), PaneFocusOrigin::Operator, None);
+                    self.on_screen(screen, |runtime| {
+                        runtime.focus_pane(
+                            parent_pane_id.to_owned(),
+                            PaneFocusOrigin::Operator,
+                            None,
+                        );
+                    });
                 }
                 self.set_error(
                     "pane.fork_failed",
@@ -4634,6 +4657,26 @@ pub(super) struct ForkFocus {
     pub(super) press: u64,
 }
 
+/// Whether a device request chooses where the device's keyboard goes, by
+/// what the operator asked for and not by what the engine is asked to do for
+/// it: a pane, a tab, a Workspace (an unopened one opens its owner) or a new
+/// terminal there, as a tab or a split. Accepted for the device in front,
+/// such a request is the operator's look chosen on the screen it was sent
+/// from (`Runtime::choose_look_screen`); a zoom or a close chooses nothing.
+/// Every kind is named, so a new one is classified where it is added.
+pub(super) fn chooses_on_device(request: &RemoteControlRequest) -> bool {
+    match request {
+        RemoteControlRequest::FocusPane { .. }
+        | RemoteControlRequest::FocusTab { .. }
+        | RemoteControlRequest::FocusWorkspace { .. }
+        | RemoteControlRequest::CreateTab { .. }
+        | RemoteControlRequest::SplitPane { .. } => true,
+        RemoteControlRequest::TogglePaneZoom { .. }
+        | RemoteControlRequest::ClosePane { .. }
+        | RemoteControlRequest::CloseTab { .. } => false,
+    }
+}
+
 /// A fork the operator asked for, until its worker answers.
 #[derive(Debug)]
 pub(super) struct PendingFork {
@@ -4647,6 +4690,11 @@ pub(super) struct PendingFork {
     pub(super) issued_serial: u64,
     /// Who asked for it: only the operator's press takes the keyboard.
     pub(super) origin: super::events::ForkOrigin,
+    /// The screen the press was sent from (`LookInputs::pressed_on`): the
+    /// fork's landing takes the keyboard on that screen, so a fork pressed in
+    /// another machine's view counts only while that view shows
+    /// (`docs/status-model.md`, Hide owns the read axis).
+    pub(super) screen: Option<super::look::LookScreen>,
     /// The fork's tab once the engine named it, so a fork that fails leaves no
     /// placement or drawing waiting for a tab that was closed.
     pub(super) tab_id: Option<String>,
