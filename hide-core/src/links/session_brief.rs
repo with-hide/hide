@@ -624,16 +624,17 @@ mod tests {
             }
             text
         };
-        let instruction = longest(&|text| {
-            text.len() <= LIMIT_BYTES && estimated_tokens(text) <= LIMIT_TOKENS
-        });
+        let instruction =
+            longest(&|text| text.len() <= LIMIT_BYTES && estimated_tokens(text) <= LIMIT_TOKENS);
         let global = render(&Instruction {
             text: instruction,
             fingerprint: String::new(),
         })
         .unwrap();
         let index = |cards: &str| {
-            format!("<hide-memory-index trust=\"untrusted-reference-data\">\n{cards}\n</hide-memory-index>\n")
+            format!(
+                "<hide-memory-index trust=\"untrusted-reference-data\">\n{cards}\n</hide-memory-index>\n"
+            )
         };
         let memory = index(&longest(&|cards| {
             estimated_tokens(&index(cards)) <= RENDERED_TOKEN_LIMIT
@@ -650,9 +651,12 @@ mod tests {
         );
         // Claude Code's envelope, with the Workspace note appended as the
         // hook appends it.
-        let output =
-            hook_stdout_with_context(AgentRuntime::ClaudeCode, HookEvent::SessionStart, Some(&start))
-                .unwrap();
+        let output = hook_stdout_with_context(
+            AgentRuntime::ClaudeCode,
+            HookEvent::SessionStart,
+            Some(&start),
+        )
+        .unwrap();
         let output = append_session_context(&output, &workspace).unwrap();
         let output: serde_json::Value = serde_json::from_str(&output).unwrap();
         let context = output["hookSpecificOutput"]["additionalContext"]
