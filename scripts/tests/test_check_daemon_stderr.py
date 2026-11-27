@@ -58,6 +58,23 @@ class DaemonStderr(unittest.TestCase):
         })
         self.assertEqual(load().violations(root), ["hided/src/a.rs:1", "hided/src/b.rs:1"])
 
+    def test_a_terminal_file_may_call_the_macro_but_not_hand_it_on(self):
+        root = self.tree({
+            "src/cli.rs": "pub use std::eprintln as log;\n",
+            "src/device_cli.rs": "pub(crate) use std::{eprint, eprintln as say};\n",
+            "src/store_cli.rs": "macro_rules! say { () => { eprintln!(\"x\") }; }\n",
+            "src/server.rs": "use crate::cli::log;\nfn f() { log!(\"x\"); }\n",
+        })
+        self.assertEqual(
+            load().violations(root),
+            ["hided/src/cli.rs:1", "hided/src/device_cli.rs:1", "hided/src/store_cli.rs:1"],
+        )
+
+    def test_an_unwrapped_write_to_the_stderr_handle_is_a_print(self):
+        root = self.tree({"src/a.rs": "fn f() { writeln!(io::stderr().lock(), \"x\").unwrap(); }\n",
+                          "src/b.rs": "fn f() { let _ = writeln!(io::stderr().lock(), \"x\"); }\n"})
+        self.assertEqual(load().violations(root), ["hided/src/a.rs:1"])
+
     def test_a_comment_a_string_and_test_code_are_not_prints(self):
         root = self.tree({
             "src/server.rs": '// eprintln!("x")\nfn a() { let _ = "eprintln!(x)"; }\n'

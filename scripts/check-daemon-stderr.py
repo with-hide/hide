@@ -44,13 +44,22 @@ PANE_FILES = ("agent_exec.rs", "pane_install.rs")
 # The macro's name wherever it appears, not only as a call: `use std::eprintln as log;`
 # or a `macro_rules!` that expands to it panics the same way.
 STDERR_MACRO = re.compile(r"\b(?:eprintln|eprint|dbg)\b")
+# What a terminal-printing file may still do with the name: call it. Naming it
+# in a `use`, or defining a macro around it, would hand a daemon module a way to
+# print that the daemon scan above cannot see (`pub use std::eprintln as log;`
+# in a command file, `log!` in the daemon).
+STDERR_CALL = re.compile(r"\b(?:eprintln|eprint|dbg)\s*!\s*[(\[{]")
+# A write to the stderr handle that unwraps its result panics the same way.
+STDERR_UNWRAP = re.compile(r"\bstderr\s*\(\)[^;]*\.(?:unwrap|expect)\s*\(")
+EXPORTED_MACRO = re.compile(r"\bmacro_rules\s*!|#\s*\[\s*macro_(?:use|export)\b")
 
 ADVICE = """\
 Daemon code does not print to stderr: `eprintln!` panics when the write fails, and a panic under a
 lock poisons it for every later caller. Record the event instead:
     hide_core::diagnostic!(serde_json::json!({"component": "hided", "kind": "<area>.<what>", ...}));
 It reaches stderr and the Logs file, and a failed write loses the line. A file that prints to a terminal
-as its output is listed in scripts/check-daemon-stderr.py with the reason."""
+as its output is listed in scripts/check-daemon-stderr.py with the reason; it may call `eprintln!`, but
+not re-export or wrap it (`use ... as`, `macro_rules!`), which would let daemon code print through it."""
 
 
 def allowed(relative: str) -> bool:
@@ -69,11 +78,17 @@ def violations(root: pathlib.Path = ROOT) -> list:
     for path in sorted(sources.rglob("*.rs")):
         relative = path.relative_to(sources).as_posix()
         repo_relative = path.relative_to(root).as_posix()
-        if allowed(relative) or repo_relative in tests or rust_scan.test_file(repo_relative):
+        if repo_relative in tests or rust_scan.test_file(repo_relative):
             continue
         code = rust_scan.strip_test_items(rust_scan.strip(path.read_text()))
+        terminal = allowed(relative)
         for number, line in enumerate(code.split("\n"), 1):
-            if STDERR_MACRO.search(line):
+            if terminal:
+                named = STDERR_MACRO.sub(lambda m: "" if STDERR_CALL.match(line, m.start()) else m.group(0), line)
+                bad = STDERR_MACRO.search(named) or EXPORTED_MACRO.search(line)
+            else:
+                bad = STDERR_MACRO.search(line) or STDERR_UNWRAP.search(line)
+            if bad:
                 found.append(f"{repo_relative}:{number}")
     return found
 
