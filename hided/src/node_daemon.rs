@@ -288,12 +288,16 @@ impl NodeDaemon {
                 }
             }) as Arc<dyn Fn(u64) + Send + Sync>
         };
-        let browser_routes = BrowserRoutes::new(Arc::new(NodePages::new(
-            screen_node,
-            core_node,
-            live.clone(),
-            Arc::clone(&boundary),
-        )));
+        // No other machine views a node: its routes are its desktops'.
+        let browser_routes = BrowserRoutes::new(
+            Arc::new(NodePages::new(
+                screen_node,
+                core_node,
+                live.clone(),
+                Arc::clone(&boundary),
+            )),
+            None,
+        );
         let desktop_screens = Arc::new(AtomicUsize::new(0));
         let reaper =
             browser_routes.spawn_reaper(Arc::clone(&desktop_screens), server.shutdown.clone());

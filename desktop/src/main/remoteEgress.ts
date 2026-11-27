@@ -24,7 +24,7 @@ import { session as electronSession, type Session } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { readJsonFile, writeJsonFile } from "./jsonFile";
-import { remotePagePartition } from "./browserSync";
+import { remoteFilePartition, remotePagePartition } from "./browserSync";
 import type { HostLog } from "./log";
 
 /** This computer's daemon as the window is attached to it. */
@@ -118,7 +118,13 @@ export class RemoteEgress {
     return pairing === null ? null : remotePagePartition(device, key, pairing);
   }
 
-  /** Whether the pair's pages may make requests: their partition's proxy is the listener. */
+  /** The partition the pair's file pages load in now (`remoteFilePartition`); null before its first answer. */
+  filePartition(device: string, key: string): string | null {
+    const pairing = this.pairing(device, key);
+    return pairing === null ? null : remoteFilePartition(device, key, pairing);
+  }
+
+  /** Whether the pair's pages may make requests: their partitions' proxy is the listener. */
   ready(device: string, key: string): boolean {
     const pair = this.pairs.get(pairName(device, key));
     return pair?.listener != null && pair.proxied === this.partition(device, key);
@@ -127,8 +133,8 @@ export class RemoteEgress {
   /**
    * Asks the daemon for the pair's listener and where its requests stand.
    * The first answer, and one naming another port, secret or pairing, sets
-   * the partition's proxy and closes its connections before the pair counts
-   * as ready; one ask at a time per pair, after the release of the pair
+   * the proxy of both its partitions, the logins' and the file pages', and
+   * closes their connections before the pair counts as ready; one ask at a time per pair, after the release of the pair
    * before it has let its listener go.
    */
   ensure(device: string, key: string): Promise<EgressState> {
@@ -179,10 +185,12 @@ export class RemoteEgress {
     if (pair.listener?.port !== port || pair.listener.secret !== secret || pair.proxied !== partition) {
       pair.listener = null;
       pair.proxied = null;
-      const pages = this.sessionOf(partition);
       try {
-        await pages.setProxy({ mode: "fixed_servers", proxyRules: `http://127.0.0.1:${port}`, proxyBypassRules: "<-loopback>" });
-        await pages.closeAllConnections();
+        for (const proxied of [partition, remoteFilePartition(pair.device, pair.key, pairing)]) {
+          const pages = this.sessionOf(proxied);
+          await pages.setProxy({ mode: "fixed_servers", proxyRules: `http://127.0.0.1:${port}`, proxyBypassRules: "<-loopback>" });
+          await pages.closeAllConnections();
+        }
       } catch (error) {
         this.deps.log.event("remote.egress_failed", { detail: String(error) });
         return "not_connected";

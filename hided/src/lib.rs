@@ -567,8 +567,12 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         Arc::clone(&watch),
         Arc::clone(&index),
     ));
+    // Other machines' views of this one, which own routes to this
+    // machine's files and pages beside this machine's desktops.
+    let remote_screens = remote_screen::RemoteScreens::new();
     let browser_routes = browser_routes::BrowserRoutes::new(
-        Arc::clone(&core) as Arc<dyn browser_routes::PageSources>
+        Arc::clone(&core) as Arc<dyn browser_routes::PageSources>,
+        Some(Arc::clone(&remote_screens) as Arc<dyn browser_routes::ScreenViews>),
     );
     let desktop_renderers = Arc::new(AtomicUsize::new(0));
     let _reaper = browser_routes.spawn_reaper(Arc::clone(&desktop_renderers), shutdown.clone());
@@ -655,7 +659,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             core: Arc::clone(&core),
         }),
     );
-    let remote_screens = remote_screen::RemoteScreens::new();
     guests.serve(&peers, shutdown.clone());
     peer_core::PeerCore::serve(
         &core,

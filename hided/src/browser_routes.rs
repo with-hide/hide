@@ -3,6 +3,12 @@
 //! device's page and files ride the device's node link, whichever link the
 //! device has (`page_forward`).
 //!
+//! A route is for one owner: a desktop process of this machine, or another
+//! machine's view of this one (`remote_screen`), whose window draws this
+//! machine's displays and reaches a route through this machine's proxy
+//! (`screen_net`). A view's routes also serve this machine's own files,
+//! which its window cannot read, and live only while the view does.
+//!
 //! The same registry serves a node whose core runs on another machine
 //! (`node_pages`): there the View's source comes from the core over the
 //! link, and a page of the core's machine reaches its loopback through the
@@ -36,9 +42,15 @@ use crate::page_forward::{PageForward, PageLink};
 use crate::state_file::new_token;
 use hide_node::pane_proof::process_start;
 use hide_peer::mux::Mux;
+use hide_peer::protocol::PeerKey;
 
 const MAX_ROUTES: usize = 12;
 const MAX_ROUTE_BUILDS: usize = 4;
+/// The routes one guest's view holds at once, apart from the desktop's
+/// `MAX_ROUTES`, so a guest never takes this machine's own window's places.
+const MAX_SCREEN_ROUTES: usize = 8;
+/// The routes guests' views build at once, apart from the desktop's.
+const MAX_SCREEN_ROUTE_BUILDS: usize = 4;
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_FILE_REQUESTS: usize = 8;
 
@@ -69,6 +81,37 @@ pub enum Way {
     /// through the node's connection to its core. Its files are not read
     /// from here, so its `file:` pages are refused.
     Core(Arc<Mux>),
+    /// This machine's own node: its files, for a view of another machine,
+    /// which cannot read them.
+    Own(Arc<dyn NodeLink>),
+}
+
+/// Who a route is for.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum Owner {
+    /// A desktop process of this machine: its pid and when it started, so a
+    /// later process given the same pid owns none of its routes.
+    Process { pid: i32, started: u64 },
+    /// Another machine's view of this one: the guest's key and the seat its
+    /// view was admitted to (`remote_screen`), one per admitted view's
+    /// lifetime and never reused, so an ended view's routes never live
+    /// again whatever a later view is named.
+    Screen { guest: PeerKey, seat: u64 },
+}
+
+/// The views other machines hold of this one now (`remote_screen`).
+pub trait ScreenViews: Send + Sync + 'static {
+    /// Whether `guest` still holds seat `seat`.
+    fn live(&self, guest: &PeerKey, seat: u64) -> bool;
+}
+
+/// Whether a route's owner is still the one it was made for: the process,
+/// started when it was, or the view, still seated.
+fn owner_alive(screens: Option<&dyn ScreenViews>, owner: &Owner) -> bool {
+    match owner {
+        Owner::Process { pid, started } => process_start(*pid) == Some(*started),
+        Owner::Screen { guest, seat } => screens.is_some_and(|screens| screens.live(guest, *seat)),
+    }
 }
 
 impl PageSources for CoreHandle {
@@ -88,6 +131,12 @@ impl PageSources for CoreHandle {
     }
 
     fn way(&self, device: &str) -> Result<Way, &'static str> {
+        if device == self.node().as_str() {
+            return self
+                .node_link(device)
+                .map(Way::Own)
+                .map_err(|_| "core_unavailable");
+        }
         let route = self
             .workspace_remote_routes()
             .map_err(|_| "core_unavailable")?
@@ -107,7 +156,7 @@ impl PageSources for CoreHandle {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct Key {
-    owner_pid: i32,
+    owner: Owner,
     device: String,
     checkout: String,
     view: String,
@@ -120,7 +169,6 @@ enum RouteKind {
 }
 
 struct Route {
-    owner_started: u64,
     source: BrowserRouteSource,
     url: String,
     kind: RouteKind,
@@ -130,7 +178,6 @@ type RouteResult = Result<Resolved, &'static str>;
 
 enum RouteEntry {
     Pending {
-        owner_started: u64,
         source: BrowserRouteSource,
         result: watch::Sender<Option<RouteResult>>,
     },
@@ -142,13 +189,6 @@ impl RouteEntry {
         match self {
             Self::Pending { source, .. } => source,
             Self::Ready(route) => &route.source,
-        }
-    }
-
-    fn owner_started(&self) -> u64 {
-        match self {
-            Self::Pending { owner_started, .. } => *owner_started,
-            Self::Ready(route) => route.owner_started,
         }
     }
 
@@ -214,17 +254,27 @@ impl Resolved {
 
 pub struct BrowserRoutes {
     pages: Arc<dyn PageSources>,
+    /// Other machines' views of this one, which own their own routes; none
+    /// on a node whose core runs elsewhere.
+    screens: Option<Arc<dyn ScreenViews>>,
     routes: Mutex<HashMap<Key, RouteEntry>>,
     build_slots: Arc<Semaphore>,
+    screen_build_slots: Arc<Semaphore>,
 }
 
 impl BrowserRoutes {
-    pub fn new(pages: Arc<dyn PageSources>) -> Arc<Self> {
+    pub fn new(pages: Arc<dyn PageSources>, screens: Option<Arc<dyn ScreenViews>>) -> Arc<Self> {
         Arc::new(Self {
             pages,
+            screens,
             routes: Mutex::new(HashMap::new()),
             build_slots: Arc::new(Semaphore::new(MAX_ROUTE_BUILDS)),
+            screen_build_slots: Arc::new(Semaphore::new(MAX_SCREEN_ROUTE_BUILDS)),
         })
+    }
+
+    fn alive(&self, owner: &Owner) -> bool {
+        owner_alive(self.screens.as_deref(), owner)
     }
 
     pub async fn resolve(
@@ -235,13 +285,56 @@ impl BrowserRoutes {
         load: u64,
         owner_pid: i32,
     ) -> Result<Resolved, &'static str> {
-        let owner_started = process_start(owner_pid).ok_or("browser_owner_unavailable")?;
+        let started = process_start(owner_pid).ok_or("browser_owner_unavailable")?;
         let key = Key {
-            owner_pid,
+            owner: Owner::Process {
+                pid: owner_pid,
+                started,
+            },
             device,
             checkout,
             view,
         };
+        self.resolve_as(key, load)
+            .await
+            .map(|(resolved, _)| resolved)
+    }
+
+    /// Where display `display` loads from in a view of this machine another
+    /// machine holds (`owner`, an `Owner::Screen`: `remote_screen`,
+    /// `/page-route`), and whether it is this
+    /// machine's own page, whose loopback it may reach. A web page of this
+    /// machine loads its address; one of its files, which that machine
+    /// cannot read, loads from a route of this machine's loopback the view
+    /// owns; a device's file page from a route as this machine's window
+    /// loads it. A device's loopback page is refused
+    /// (`remote_device_page_unavailable`): that view keeps no login storage
+    /// apart for a device's pages.
+    pub async fn resolve_for_screen(
+        self: &Arc<Self>,
+        device: String,
+        checkout: String,
+        display: String,
+        load: u64,
+        owner: Owner,
+    ) -> Result<(Resolved, bool), &'static str> {
+        if !matches!(owner, Owner::Screen { .. }) || !self.alive(&owner) {
+            return Err("view_unavailable");
+        }
+        let key = Key {
+            owner,
+            device,
+            checkout,
+            view: display,
+        };
+        self.resolve_as(key, load).await
+    }
+
+    async fn resolve_as(
+        self: &Arc<Self>,
+        key: Key,
+        load: u64,
+    ) -> Result<(Resolved, bool), &'static str> {
         let pages = Arc::clone(&self.pages);
         let query = key.clone();
         let source = tokio::task::spawn_blocking(move || {
@@ -252,30 +345,69 @@ impl BrowserRoutes {
         .ok_or("view_unavailable")?;
         // The page loads on the machine its source names, which for a page
         // of Desk's desk is the session's that opened it, not the desk's.
-        if self.pages.own_node() == source.device_id {
-            return Ok(Resolved::of(&source, source.url.clone()));
+        let own = self.pages.own_node() == source.device_id;
+        let screen = matches!(key.owner, Owner::Screen { .. });
+        if screen {
+            // A view's web page loads its address through this machine's
+            // proxy; only a file, this machine's or a device's, needs a
+            // route here.
+            if !hide_platform::path::is_file_url(&source.url) {
+                if !own && loopback_page(&source.url) {
+                    return Err("remote_device_page_unavailable");
+                }
+                return Ok((Resolved::of(&source, source.url.clone()), own));
+            }
+        } else if own {
+            return Ok((Resolved::of(&source, source.url.clone()), true));
         }
         let mut routes = self.routes.lock().await;
         if let Some(entry) = routes.get(&key)
             && entry.source() == &source
-            && entry.owner_started() == owner_started
             && entry.live()
         {
             match entry {
                 RouteEntry::Ready(route) => {
-                    return Ok(Resolved::of(&source, route.url.clone()));
+                    return Ok((Resolved::of(&source, route.url.clone()), own));
                 }
                 RouteEntry::Pending { result, .. } => {
                     let waiting = result.subscribe();
                     drop(routes);
-                    return wait_for_route(waiting).await;
+                    return wait_for_route(waiting)
+                        .await
+                        .map(|resolved| (resolved, own));
                 }
             }
         }
-        if routes.len() >= MAX_ROUTES && !routes.contains_key(&key) {
+        // A guest holds one view at a time: its routes of an earlier seat
+        // reach nothing it can load any more.
+        let ended: Vec<RouteEntry> = if let Owner::Screen { guest, .. } = &key.owner {
+            let earlier: Vec<Key> = routes
+                .keys()
+                .filter(|held| {
+                    matches!(&held.owner, Owner::Screen { guest: of, .. } if of == guest)
+                        && held.owner != key.owner
+                })
+                .cloned()
+                .collect();
+            earlier
+                .iter()
+                .filter_map(|held| routes.remove(held))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for entry in ended {
+            entry.close();
+        }
+        if !routes.contains_key(&key) && full(&routes, &key.owner) {
             return Err("browser_route_limit");
         }
-        let build_permit = Arc::clone(&self.build_slots)
+        let slots = if screen {
+            &self.screen_build_slots
+        } else {
+            &self.build_slots
+        };
+        let build_permit = Arc::clone(slots)
             .try_acquire_owned()
             .map_err(|_| "browser_route_build_limit")?;
         let old = routes.remove(&key);
@@ -283,7 +415,6 @@ impl BrowserRoutes {
         routes.insert(
             key.clone(),
             RouteEntry::Pending {
-                owner_started,
                 source: source.clone(),
                 result: result.clone(),
             },
@@ -295,19 +426,18 @@ impl BrowserRoutes {
         let routes = Arc::clone(self);
         tokio::spawn(async move {
             let _build_permit = build_permit;
-            let built = routes.build_route(&key, &source, owner_started).await;
-            routes
-                .finish_route(key, source, owner_started, result, built)
-                .await;
+            let built = routes.build_route(&key, &source).await;
+            routes.finish_route(key, source, result, built).await;
         });
-        wait_for_route(waiting).await
+        wait_for_route(waiting)
+            .await
+            .map(|resolved| (resolved, own))
     }
 
     async fn build_route(
         &self,
         key: &Key,
         source: &BrowserRouteSource,
-        owner_started: u64,
     ) -> Result<Option<Route>, &'static str> {
         let pages = Arc::clone(&self.pages);
         let device = source.device_id.clone();
@@ -315,8 +445,10 @@ impl BrowserRoutes {
             .await
             .map_err(|_| "core_unavailable")??;
         let (url, kind) = if hide_platform::path::is_file_url(&source.url) {
-            let Way::Device(link) = &way else {
-                return Err("file_page_unavailable");
+            let channel: Arc<dyn NodeLink> = match &way {
+                Way::Device(link) => Arc::new(link.clone()),
+                Way::Own(link) => Arc::clone(link),
+                Way::Core(_) => return Err("file_page_unavailable"),
             };
             let (path, suffix) =
                 hide_platform::path::from_file_url(&source.url).ok_or("invalid_file_url")?;
@@ -337,10 +469,10 @@ impl BrowserRoutes {
             let secret = new_token();
             let state = FileRoute {
                 pages: Arc::clone(&self.pages),
+                screens: self.screens.clone(),
                 key: key.clone(),
-                owner_started,
                 source: source.clone(),
-                channel: Arc::new(link.clone()),
+                channel,
                 secret: secret.clone(),
                 entry: relative.clone(),
                 allowed: Arc::new(Mutex::new(HashMap::new())),
@@ -381,6 +513,8 @@ impl BrowserRoutes {
             let link = match way {
                 Way::Device(link) => PageLink::Device(link),
                 Way::Core(mux) => PageLink::Core(mux),
+                // This machine's own loopback page loads its address.
+                Way::Own(_) => return Ok(None),
             };
             let forwarded = PageForward::start(link, remote, alternate, preserve_numeric_host)
                 .await
@@ -396,7 +530,6 @@ impl BrowserRoutes {
             return Ok(None);
         };
         Ok(Some(Route {
-            owner_started,
             source: source.clone(),
             url,
             kind,
@@ -407,11 +540,10 @@ impl BrowserRoutes {
         &self,
         key: Key,
         source: BrowserRouteSource,
-        owner_started: u64,
         result: watch::Sender<Option<RouteResult>>,
         built: Result<Option<Route>, &'static str>,
     ) {
-        let current = if built.is_ok() && process_start(key.owner_pid) == Some(owner_started) {
+        let current = if built.is_ok() && self.alive(&key.owner) {
             let pages = Arc::clone(&self.pages);
             let query = key.clone();
             let load = source.load;
@@ -482,18 +614,48 @@ impl BrowserRoutes {
         load: u64,
         owner_pid: i32,
     ) {
+        // A process that is gone has its routes closed by the reaper.
+        let Some(started) = process_start(owner_pid) else {
+            return;
+        };
         let key = Key {
-            owner_pid,
+            owner: Owner::Process {
+                pid: owner_pid,
+                started,
+            },
             device: device.to_owned(),
             checkout: checkout.to_owned(),
             view: view.to_owned(),
         };
+        self.release_key(&key, load).await;
+    }
+
+    /// Lets go of the route a view (`owner`, an `Owner::Screen`) holds for
+    /// display `display` at `load`: its page in that view closed.
+    pub async fn release_for_screen(
+        &self,
+        device: &str,
+        checkout: &str,
+        display: &str,
+        load: u64,
+        owner: Owner,
+    ) {
+        let key = Key {
+            owner,
+            device: device.to_owned(),
+            checkout: checkout.to_owned(),
+            view: display.to_owned(),
+        };
+        self.release_key(&key, load).await;
+    }
+
+    async fn release_key(&self, key: &Key, load: u64) {
         let mut routes = self.routes.lock().await;
         let removed = if routes
-            .get(&key)
+            .get(key)
             .is_some_and(|entry| entry.source().load == load)
         {
-            routes.remove(&key)
+            routes.remove(key)
         } else {
             None
         };
@@ -505,7 +667,8 @@ impl BrowserRoutes {
 
     /// Closes every route whose owner, View, desktop or node link is gone,
     /// every 2 s until `shutdown`; the caller may also end it by aborting
-    /// the task.
+    /// the task. A view's routes need no desktop of this machine: they end
+    /// with the view.
     pub fn spawn_reaper(
         self: &Arc<Self>,
         desktop_renderers: Arc<AtomicUsize>,
@@ -521,21 +684,13 @@ impl BrowserRoutes {
                     .lock()
                     .await
                     .iter()
-                    .map(|(key, entry)| {
-                        (
-                            key.clone(),
-                            entry.source().clone(),
-                            entry.owner_started(),
-                            entry.live(),
-                        )
-                    })
+                    .map(|(key, entry)| (key.clone(), entry.source().clone(), entry.live()))
                     .collect();
-                for (key, source, owner_started, live) in candidates {
+                for (key, source, live) in candidates {
                     let load = source.load;
-                    let stale = if !live
-                        || desktop_renderers.load(Ordering::SeqCst) == 0
-                        || process_start(key.owner_pid) != Some(owner_started)
-                    {
+                    let desktop_gone = matches!(key.owner, Owner::Process { .. })
+                        && desktop_renderers.load(Ordering::SeqCst) == 0;
+                    let stale = if !live || desktop_gone || !routes.alive(&key.owner) {
                         true
                     } else {
                         let pages = Arc::clone(&routes.pages);
@@ -556,9 +711,7 @@ impl BrowserRoutes {
                         .unwrap_or(true)
                     };
                     if stale {
-                        routes
-                            .release(&key.device, &key.checkout, &key.view, load, key.owner_pid)
-                            .await;
+                        routes.release_key(&key, load).await;
                     }
                 }
             }
@@ -651,6 +804,30 @@ pub(crate) async fn release_answer(routes: &BrowserRoutes, request: RouteRequest
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// Whether `owner` holds as many routes as it may: this machine's desktops
+/// `MAX_ROUTES` together, and each guest's view `MAX_SCREEN_ROUTES` of its
+/// own.
+fn full(routes: &HashMap<Key, RouteEntry>, owner: &Owner) -> bool {
+    match owner {
+        Owner::Process { .. } => {
+            routes
+                .keys()
+                .filter(|held| matches!(held.owner, Owner::Process { .. }))
+                .count()
+                >= MAX_ROUTES
+        }
+        Owner::Screen { guest, .. } => {
+            routes
+                .keys()
+                .filter(
+                    |held| matches!(&held.owner, Owner::Screen { guest: of, .. } if of == guest),
+                )
+                .count()
+                >= MAX_SCREEN_ROUTES
+        }
+    }
+}
+
 async fn wait_for_route(mut result: watch::Receiver<Option<RouteResult>>) -> RouteResult {
     loop {
         if let Some(outcome) = result.borrow_and_update().clone() {
@@ -712,8 +889,8 @@ fn forwarded_url(scheme: &str, host: &str, local_addr: SocketAddr, tail: &str) -
 #[derive(Clone)]
 struct FileRoute {
     pages: Arc<dyn PageSources>,
+    screens: Option<Arc<dyn ScreenViews>>,
     key: Key,
-    owner_started: u64,
     source: BrowserRouteSource,
     channel: Arc<dyn NodeLink>,
     secret: String,
@@ -748,16 +925,20 @@ async fn serve_file(State(route): State<FileRoute>, uri: Uri) -> Response {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     };
     let check = Arc::clone(&route.pages);
+    let screens = route.screens.clone();
     let source = route.source.clone();
     let key = route.key.clone();
-    let owner_started = route.owner_started;
     let channel = Arc::clone(&route.channel);
     let decoded = decoded.into_owned();
     let entry = route.entry.clone();
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        if process_start(key.owner_pid) != Some(owner_started) {
-            return Err("browser_owner_unavailable");
+        if !owner_alive(screens.as_deref(), &key.owner) {
+            // A view that ended has nothing more of this machine's.
+            return Err(match key.owner {
+                Owner::Process { .. } => "browser_owner_unavailable",
+                Owner::Screen { .. } => "view_unavailable",
+            });
         }
         if check
             .source(&key.device, &key.checkout, &key.view, source.load)
@@ -920,5 +1101,548 @@ mod tests {
             ),
             "https://127.0.0.2:49152/"
         );
+    }
+
+    /// A machine whose own node is `host`, whose display `source` names
+    /// is `source`, read off disk through this process's own node; every
+    /// other display is `others`' by its id. Device `device-c`'s files are
+    /// read the same way, standing in for its node link.
+    struct OneDisplay {
+        source: std::sync::Mutex<Option<BrowserRouteSource>>,
+        others: std::sync::Mutex<HashMap<String, BrowserRouteSource>>,
+    }
+
+    impl PageSources for OneDisplay {
+        fn own_node(&self) -> &str {
+            "host"
+        }
+
+        fn source(
+            &self,
+            _device: &str,
+            _checkout: &str,
+            view: &str,
+            load: u64,
+        ) -> Result<Option<BrowserRouteSource>, &'static str> {
+            let source = self
+                .others
+                .lock()
+                .unwrap()
+                .get(view)
+                .cloned()
+                .or_else(|| self.source.lock().unwrap().clone());
+            Ok(source.filter(|source| source.load == load))
+        }
+
+        fn way(&self, device: &str) -> Result<Way, &'static str> {
+            if device == "host" || device == "device-c" {
+                Ok(Way::Own(Arc::new(hide_node::Local::of_process())))
+            } else {
+                Err("host_unavailable")
+            }
+        }
+    }
+
+    /// The seats held now.
+    #[derive(Default)]
+    struct Views(std::sync::Mutex<std::collections::HashSet<u64>>);
+
+    impl ScreenViews for Views {
+        fn live(&self, _guest: &PeerKey, seat: u64) -> bool {
+            self.0.lock().unwrap().contains(&seat)
+        }
+    }
+
+    fn guest(byte: u8) -> PeerKey {
+        PeerKey::from_bytes([byte; 32])
+    }
+
+    /// Guest `byte`'s view seated at `seat`.
+    fn screen(byte: u8, seat: u64) -> Owner {
+        Owner::Screen {
+            guest: guest(byte),
+            seat,
+        }
+    }
+
+    fn display(device: &str, checkout: &str, url: &str, load: u64) -> BrowserRouteSource {
+        BrowserRouteSource {
+            device_id: device.to_owned(),
+            checkout_path: checkout.to_owned(),
+            url: url.to_owned(),
+            load,
+        }
+    }
+
+    /// A registry over `source`, with the seats `open` held.
+    fn registry(
+        source: BrowserRouteSource,
+        open: &[u64],
+    ) -> (Arc<BrowserRoutes>, Arc<OneDisplay>, Arc<Views>) {
+        let pages = Arc::new(OneDisplay {
+            source: std::sync::Mutex::new(Some(source)),
+            others: std::sync::Mutex::default(),
+        });
+        let views = Arc::new(Views::default());
+        views.0.lock().unwrap().extend(open.iter().copied());
+        let routes = BrowserRoutes::new(
+            Arc::clone(&pages) as Arc<dyn PageSources>,
+            Some(Arc::clone(&views) as Arc<dyn ScreenViews>),
+        );
+        (routes, pages, views)
+    }
+
+    /// The status a GET of `url`'s `path` (the route's own prefix and on)
+    /// answers, with the body and its policy header.
+    async fn fetch(url: &str, path: &str) -> (u16, Vec<u8>, Option<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let address = url
+            .strip_prefix("http://")
+            .and_then(|rest| rest.split('/').next())
+            .expect("an http route");
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        stream
+            .write_all(
+                format!("GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut answer = Vec::new();
+        stream.read_to_end(&mut answer).await.unwrap();
+        let end = answer
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("a head");
+        let head = String::from_utf8_lossy(&answer[..end]).into_owned();
+        let status = head
+            .split(' ')
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .unwrap();
+        let policy = head
+            .lines()
+            .find_map(|line| line.strip_prefix("content-security-policy: "))
+            .map(str::to_owned);
+        (status, answer[end + 4..].to_vec(), policy)
+    }
+
+    /// The route's own prefix, `/<secret>/`.
+    fn prefix(url: &str) -> String {
+        let path = url.split_once("://").unwrap().1;
+        let secret = path.split('/').nth(1).unwrap();
+        format!("/{secret}/")
+    }
+
+    // docs/BROWSER_DISPLAYS.md, Its checkout files: a file page of this
+    // machine that another machine's view draws loads from a route on this
+    // machine's loopback the view owns, read through this machine's own node
+    // from the checkout that holds it: the page and the files its HTML and
+    // CSS declare, under the same policy as a device's file page. A file the
+    // page does not declare (`.env` beside it), a path out of the checkout,
+    // and a declared file that is a link out of it are refused; once the
+    // view ends the route answers nothing more (TF5).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_view_s_file_route_serves_its_page_and_declared_files_alone() {
+        let place = tempfile::tempdir().unwrap();
+        let checkout = place.path().join("repo");
+        std::fs::create_dir_all(checkout.join("img")).unwrap();
+        std::fs::write(
+            checkout.join("report.html"),
+            r#"<link rel="stylesheet" href="style.css"><img src="img/chart.png"><img src="leak.png">"#,
+        )
+        .unwrap();
+        std::fs::write(
+            checkout.join("style.css"),
+            "body { background: url(img/bg.png) }",
+        )
+        .unwrap();
+        std::fs::write(checkout.join("img/chart.png"), b"png").unwrap();
+        std::fs::write(checkout.join("img/bg.png"), b"bg").unwrap();
+        std::fs::write(checkout.join(".env"), "SECRET=1").unwrap();
+        std::fs::write(place.path().join("outside.txt"), "outside").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(place.path().join("outside.txt"), checkout.join("leak.png"))
+            .unwrap();
+        let root = hide_platform::path::to_wire_lossy(&checkout);
+        let page = hide_platform::path::to_file_url(&format!("{root}/report.html"), "");
+        let (routes, pages, views) = registry(display("host", &root, &page, 3), &[1]);
+
+        let (resolved, own) = routes
+            .resolve_for_screen("host".into(), root.clone(), "d1".into(), 3, screen(1, 1))
+            .await
+            .expect("a route for the view");
+        assert!(own, "this machine's own file page");
+        assert!(
+            resolved.url.starts_with("http://127.0.0.1:"),
+            "{}",
+            resolved.url
+        );
+        assert!(resolved.url.ends_with("/report%2Ehtml"), "{}", resolved.url);
+        assert_eq!(resolved.source_url, page);
+        assert_eq!(resolved.root.as_deref(), Some(root.as_str()));
+        let at = prefix(&resolved.url);
+
+        let (status, body, policy) = fetch(&resolved.url, &format!("{at}report.html")).await;
+        assert_eq!(status, 200);
+        assert!(body.starts_with(b"<link"));
+        assert!(policy.is_some_and(|policy| policy.contains("connect-src 'none'")));
+        assert_eq!(fetch(&resolved.url, &format!("{at}style.css")).await.0, 200);
+        assert_eq!(
+            fetch(&resolved.url, &format!("{at}img/chart.png")).await.0,
+            200
+        );
+        // Declared by the stylesheet, once it was read.
+        assert_eq!(
+            fetch(&resolved.url, &format!("{at}img/bg.png")).await.0,
+            200
+        );
+        assert_eq!(fetch(&resolved.url, &format!("{at}.env")).await.0, 403);
+        assert_eq!(
+            fetch(&resolved.url, &format!("{at}../outside.txt")).await.0,
+            403
+        );
+        assert_eq!(
+            fetch(&resolved.url, &format!("{at}%2e%2e/outside.txt"))
+                .await
+                .0,
+            403
+        );
+        assert_eq!(
+            fetch(&resolved.url, "/report.html").await.0,
+            404,
+            "no secret, no page"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            fetch(&resolved.url, &format!("{at}leak.png")).await.0,
+            403,
+            "a declared link out of the checkout"
+        );
+
+        // The View's next load: the route answers nothing of the last.
+        pages.source.lock().unwrap().as_mut().unwrap().load = 4;
+        assert_eq!(
+            fetch(&resolved.url, &format!("{at}report.html")).await.0,
+            410
+        );
+        pages.source.lock().unwrap().as_mut().unwrap().load = 3;
+        assert_eq!(
+            fetch(&resolved.url, &format!("{at}report.html")).await.0,
+            200
+        );
+        // The view ends (its tile hid): nothing more, and no new route.
+        views.0.lock().unwrap().clear();
+        assert_eq!(
+            fetch(&resolved.url, &format!("{at}report.html")).await.0,
+            410
+        );
+        assert_eq!(
+            routes
+                .resolve_for_screen("host".into(), root, "d1".into(), 3, screen(1, 1))
+                .await
+                .err(),
+            Some("view_unavailable")
+        );
+    }
+
+    // A view's pages: this machine's web pages load their address as its
+    // own; a device's loopback page is refused, since the view keeps no
+    // login storage apart for a device's pages; a file outside the checkout
+    // that names it gets no route. A guest's next view takes its earlier
+    // view's routes with it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_view_s_pages_load_from_this_machine_or_are_refused() {
+        let place = tempfile::tempdir().unwrap();
+        let root = hide_platform::path::to_wire_lossy(place.path());
+        let (routes, pages, _views) =
+            registry(display("host", &root, "http://localhost:5173/", 1), &[1, 2]);
+        let ask = |load: u64, view: u64| {
+            routes.resolve_for_screen(
+                "host".into(),
+                root.clone(),
+                "d1".into(),
+                load,
+                screen(1, view),
+            )
+        };
+        let (resolved, own) = ask(1, 1).await.unwrap();
+        assert_eq!(
+            (resolved.url.as_str(), own),
+            ("http://localhost:5173/", true)
+        );
+
+        // Every spelling that reaches a device's own loopback, the
+        // unspecified addresses included.
+        for url in [
+            "http://127.0.0.1:3000/",
+            "http://localhost:5173/",
+            "http://0.0.0.0:8080/",
+            "http://[::]:8080/",
+            "http://[::1]:8080/",
+        ] {
+            *pages.source.lock().unwrap() = Some(display("device-c", &root, url, 2));
+            assert_eq!(
+                ask(2, 1).await.err(),
+                Some("remote_device_page_unavailable"),
+                "{url}"
+            );
+        }
+        *pages.source.lock().unwrap() = Some(display("device-c", &root, "https://example.com/", 3));
+        let (resolved, own) = ask(3, 1).await.unwrap();
+        assert_eq!(
+            (resolved.url.as_str(), own),
+            ("https://example.com/", false)
+        );
+
+        let outside = hide_platform::path::to_file_url("/etc/hosts", "");
+        *pages.source.lock().unwrap() = Some(display("host", &root, &outside, 4));
+        assert_eq!(ask(4, 1).await.err(), Some("outside_checkout"));
+
+        std::fs::write(place.path().join("a.html"), "a").unwrap();
+        let page = hide_platform::path::to_file_url(&format!("{root}/a.html"), "");
+        *pages.source.lock().unwrap() = Some(display("host", &root, &page, 5));
+        let (first, _) = ask(5, 1).await.unwrap();
+        assert_eq!(
+            fetch(&first.url, &format!("{}a.html", prefix(&first.url)))
+                .await
+                .0,
+            200
+        );
+        let (second, _) = ask(5, 2).await.unwrap();
+        assert_ne!(first.url, second.url);
+        assert_eq!(
+            fetch(&second.url, &format!("{}a.html", prefix(&second.url)))
+                .await
+                .0,
+            200
+        );
+        assert_eq!(
+            routes.routes.lock().await.len(),
+            1,
+            "the guest's earlier view's route went when its next view asked"
+        );
+    }
+
+    /// A registry over the file displays `d0`..`d{count}` of device
+    /// `device-c`, each its own HTML file in a new checkout, with the seats
+    /// `open` held.
+    fn many(count: usize, open: &[u64]) -> (Arc<BrowserRoutes>, String, tempfile::TempDir) {
+        let place = tempfile::tempdir().unwrap();
+        let root = hide_platform::path::to_wire_lossy(place.path());
+        let (routes, pages, _) = registry(display("device-c", &root, "about:blank", 0), open);
+        for n in 0..count {
+            std::fs::write(place.path().join(format!("f{n}.html")), "page").unwrap();
+            let page = hide_platform::path::to_file_url(&format!("{root}/f{n}.html"), "");
+            pages
+                .others
+                .lock()
+                .unwrap()
+                .insert(format!("d{n}"), display("device-c", &root, &page, 1));
+        }
+        (routes, root, place)
+    }
+
+    // TF4, through the registry's own admission: this machine's desktops
+    // hold twelve routes and a thirteenth is refused, while a guest's view
+    // still gets eight of its own and a ninth is refused, and another
+    // guest's view eight more; neither takes the other's places.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_view_holds_eight_routes_and_this_machine_s_desktops_twelve_apart() {
+        let (routes, root, _place) = many(30, &[1, 2]);
+        let pid = i32::try_from(std::process::id()).unwrap();
+        let desktop =
+            |n: usize| routes.resolve("device-c".into(), root.clone(), format!("d{n}"), 1, pid);
+        let view = |byte: u8, n: usize| {
+            routes.resolve_for_screen(
+                "device-c".into(),
+                root.clone(),
+                format!("d{n}"),
+                1,
+                screen(byte, u64::from(byte)),
+            )
+        };
+        for n in 0..12 {
+            let resolved = desktop(n).await.expect("a desktop's route");
+            assert_ne!(resolved.url, resolved.source_url, "a routed device file");
+        }
+        assert_eq!(desktop(12).await.err(), Some("browser_route_limit"));
+        for n in 12..20 {
+            let (resolved, own) = view(1, n).await.expect("a view's route");
+            assert!(!own && resolved.url.starts_with("http://127.0.0.1:"));
+        }
+        assert_eq!(view(1, 20).await.err(), Some("browser_route_limit"));
+        // Another guest's view has places of its own.
+        assert!(view(2, 21).await.is_ok());
+        assert_eq!(desktop(22).await.err(), Some("browser_route_limit"));
+    }
+
+    // A guest's view builds its routes with slots of its own: with this
+    // machine's desktops' four builds all running, a view's route is still
+    // built, and the reverse.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_view_s_builds_leave_the_desktop_s_slots_free() {
+        let (routes, root, _place) = many(4, &[1]);
+        let pid = i32::try_from(std::process::id()).unwrap();
+        let held = Arc::clone(&routes.build_slots)
+            .acquire_many_owned(4)
+            .await
+            .unwrap();
+        assert_eq!(
+            routes
+                .resolve("device-c".into(), root.clone(), "d0".into(), 1, pid)
+                .await
+                .err(),
+            Some("browser_route_build_limit")
+        );
+        assert!(
+            routes
+                .resolve_for_screen(
+                    "device-c".into(),
+                    root.clone(),
+                    "d1".into(),
+                    1,
+                    screen(1, 1)
+                )
+                .await
+                .is_ok()
+        );
+        drop(held);
+        let held = Arc::clone(&routes.screen_build_slots)
+            .acquire_many_owned(4)
+            .await
+            .unwrap();
+        assert_eq!(
+            routes
+                .resolve_for_screen(
+                    "device-c".into(),
+                    root.clone(),
+                    "d2".into(),
+                    1,
+                    screen(1, 1)
+                )
+                .await
+                .err(),
+            Some("browser_route_build_limit")
+        );
+        assert!(
+            routes
+                .resolve("device-c".into(), root, "d3".into(), 1, pid)
+                .await
+                .is_ok()
+        );
+        drop(held);
+    }
+
+    // A page closed in the screen lets its route go (`DELETE /page-route`):
+    // a release naming another load or another seat leaves it, the right one
+    // closes it, and the display's next question builds a new one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_view_s_route_goes_when_its_page_closes() {
+        let (routes, root, _place) = many(1, &[1, 2]);
+        let ask = || {
+            routes.resolve_for_screen(
+                "device-c".into(),
+                root.clone(),
+                "d0".into(),
+                1,
+                screen(1, 1),
+            )
+        };
+        let (first, _) = ask().await.unwrap();
+        let at = prefix(&first.url);
+        assert_eq!(fetch(&first.url, &format!("{at}f0.html")).await.0, 200);
+        routes
+            .release_for_screen("device-c", &root, "d0", 2, screen(1, 1))
+            .await;
+        routes
+            .release_for_screen("device-c", &root, "d0", 1, screen(2, 2))
+            .await;
+        assert_eq!(
+            routes.routes.lock().await.len(),
+            1,
+            "another load's or seat's release"
+        );
+        routes
+            .release_for_screen("device-c", &root, "d0", 1, screen(1, 1))
+            .await;
+        assert!(routes.routes.lock().await.is_empty());
+        let (again, _) = ask().await.unwrap();
+        assert_ne!(again.url, first.url, "a new route for the next question");
+    }
+
+    // TF5 with this machine's real views (`RemoteScreens`): a route is owned
+    // by the seat the guest's view was admitted to. With no seat (a bulk
+    // stream alone) there is none; the same view named under another
+    // generation is admitted nowhere; a fifth guest is seated nowhere; once
+    // the seat ends its route answers nothing, and a later view under the
+    // same name and generation gets a seat of its own, which never makes the
+    // ended one's route live again.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_route_lives_with_the_seat_that_owns_it() {
+        let place = tempfile::tempdir().unwrap();
+        let root = hide_platform::path::to_wire_lossy(place.path());
+        std::fs::write(place.path().join("a.html"), "a").unwrap();
+        let page = hide_platform::path::to_file_url(&format!("{root}/a.html"), "");
+        let pages = Arc::new(OneDisplay {
+            source: std::sync::Mutex::new(Some(display("host", &root, &page, 1))),
+            others: std::sync::Mutex::default(),
+        });
+        let screens = crate::remote_screen::RemoteScreens::new();
+        let routes = BrowserRoutes::new(
+            pages as Arc<dyn PageSources>,
+            Some(Arc::clone(&screens) as Arc<dyn ScreenViews>),
+        );
+        let viewer = |byte: u8| crate::remote_screen::Viewer {
+            key: guest(byte),
+            device: format!("device-{byte}"),
+            grant: format!("grant-{byte}"),
+            generation: 1,
+            view: "v".to_owned(),
+        };
+        let admitted = |byte: u8, generation: u64| screens.admitted(&guest(byte), "v", generation);
+        let ask = |byte: u8, seat: u64| {
+            routes.resolve_for_screen(
+                "host".into(),
+                root.clone(),
+                "d1".into(),
+                1,
+                screen(byte, seat),
+            )
+        };
+        assert_eq!(
+            admitted(1, 1),
+            None,
+            "a bulk stream alone is seated nowhere"
+        );
+        let first = screens.seat(viewer(1)).unwrap();
+        let seat = admitted(1, 1).expect("the seated view");
+        assert_eq!(
+            admitted(1, 2),
+            None,
+            "the same view under another generation"
+        );
+        let (resolved, _) = ask(1, seat).await.expect("the seat's route");
+        let at = prefix(&resolved.url);
+        assert_eq!(fetch(&resolved.url, &format!("{at}a.html")).await.0, 200);
+        let others: Vec<_> = (2..=4)
+            .map(|byte| screens.seat(viewer(byte)).unwrap())
+            .collect();
+        assert!(screens.seat(viewer(5)).is_err(), "a fifth view");
+        assert_eq!(admitted(5, 1), None);
+        drop(first);
+        assert_eq!(fetch(&resolved.url, &format!("{at}a.html")).await.0, 410);
+        assert_eq!(ask(1, seat).await.err(), Some("view_unavailable"));
+        let again = screens.seat(viewer(1)).unwrap();
+        let later = admitted(1, 1).expect("the later view");
+        assert_ne!(later, seat, "a seat is never reused");
+        assert_eq!(
+            fetch(&resolved.url, &format!("{at}a.html")).await.0,
+            410,
+            "the ended seat's route stays ended"
+        );
+        let (renewed, _) = ask(1, later).await.expect("the later seat's own route");
+        assert_ne!(renewed.url, resolved.url);
+        drop((again, others));
     }
 }
