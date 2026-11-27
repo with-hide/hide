@@ -300,7 +300,7 @@ fn the_first_prompt_of_a_conversation_is_given_hides_guidance() {
     );
 
     assert!(
-        injected(&run).contains("hide browser help"),
+        injected(&run).contains(hide_agent_hooks::START_CONTEXT),
         "{}",
         run.stdout
     );
