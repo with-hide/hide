@@ -103,3 +103,7 @@ any = [
 model = "/model {model}"
 effort = "/thinking {effort}"
 efforts = ["off", "low", "medium", "high", "xhigh", "max"]
+
+# Esc aborts the turn under way.
+[interrupt]
+keys = ["esc"]

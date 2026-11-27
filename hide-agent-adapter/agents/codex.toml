@@ -243,3 +243,7 @@ model = "/model {model}"
 effort = "/model --reasoning={effort}"
 efforts = ["minimal", "low", "medium", "high", "xhigh"]
 model_resets_effort = true
+
+# Esc interrupts a turn, as its working line says (`esc to interrupt`).
+[interrupt]
+keys = ["esc"]

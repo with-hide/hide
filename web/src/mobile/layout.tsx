@@ -4,7 +4,7 @@
 // conversation that says what the agent does now, and the field a reply is
 // written in. Each screen composes these; none draws its own copy.
 
-import { ArrowUpIcon, ChevronLeftIcon, TerminalIcon } from "lucide-react";
+import { ArrowUpIcon, ChevronLeftIcon, SquareIcon, TerminalIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { Elapsed, useRunningClock } from "../components/elapsed";
 import { Button } from "../components/ui/button";
@@ -132,7 +132,7 @@ const COMPOSER_LINES = 4;
  * lines (the keyboard's return key writes one; only the send sends) and grows to four lines, its corners then those of a box.
  * `input` and `send` carry each screen's own name, limit and test marks.
  */
-export function Composer({ value, onChange, onSubmit, placeholder, disabled, sendDisabled, lines = false, lead, input, send }: {
+export function Composer({ value, onChange, onSubmit, placeholder, disabled, sendDisabled, lines = false, lead, input, send, onStop }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
@@ -144,6 +144,8 @@ export function Composer({ value, onChange, onSubmit, placeholder, disabled, sen
   lead?: ReactNode;
   input?: Omit<ComponentProps<typeof Input>, "value" | "onChange" | "placeholder" | "disabled"> & DataProps;
   send?: DataProps;
+  /** ■ beside send while the agent works (PRD desk-queue B33); send then puts the words in the waiting line (B32). */
+  onStop?: () => void;
 }) {
   const { t } = useInterfaceTranslation();
   const tall = useGrowingField(lines ? value : null);
@@ -179,6 +181,11 @@ export function Composer({ value, onChange, onSubmit, placeholder, disabled, sen
           className={cn(field, "h-(--size-touch-target)")}
         />
       )}
+      {onStop ? (
+        <Button variant="secondary" size="icon" type="button" aria-label={t("desk.composer.stop")} disabled={disabled} onClick={onStop} className="size-(--size-touch-target) shrink-0 rounded-full" data-phone-stop="true">
+          <SquareIcon aria-hidden="true" className="size-(--size-icon) fill-current" />
+        </Button>
+      ) : null}
       <Button {...send} variant="secondary" size="icon" type="submit" aria-label={t("mobile.send")} disabled={sendDisabled} className="size-(--size-touch-target) shrink-0 rounded-full">
         <ArrowUpIcon aria-hidden="true" className="size-(--size-icon-lg)" />
       </Button>

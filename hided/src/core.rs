@@ -251,6 +251,30 @@ enum Command {
     DeskFilesInUse {
         reply: Sender<Vec<String>>,
     },
+    InputFilesInUse {
+        reply: Sender<Vec<String>>,
+    },
+    InputWaits {
+        pane_id: String,
+        reply: Sender<bool>,
+    },
+    InputQueue {
+        pane_id: String,
+        reply: Sender<Option<serde_json::Value>>,
+    },
+    QueueInput {
+        pane_id: String,
+        text: String,
+        paths: Vec<String>,
+        bytes: u64,
+        stage_id: String,
+        reply: Sender<Result<u64, String>>,
+    },
+    Interrupt {
+        pane_id: String,
+        step: hide_core::InterruptStep,
+        reply: Sender<Result<Vec<String>, String>>,
+    },
     DeviceEngine {
         device_id: String,
         reply: Sender<Option<EngineHandle>>,
@@ -1314,6 +1338,85 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped desk-files reply".to_owned())
     }
 
+    /// The files the operator's waiting words name; see
+    /// `Core::input_files_in_use`.
+    pub fn input_files_in_use(&self) -> Result<Vec<String>, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::InputFilesInUse { reply })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped input-files reply".to_owned())
+    }
+
+    /// Whether words to `pane_id` wait now; see `Core::input_waits`.
+    pub fn input_waits(&self, pane_id: &str) -> Result<bool, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::InputWaits {
+                pane_id: pane_id.to_owned(),
+                reply,
+            })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped input-waits reply".to_owned())
+    }
+
+    /// `pane_id`'s waiting words; see `Core::input_queue`.
+    pub fn input_queue(&self, pane_id: &str) -> Result<Option<serde_json::Value>, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::InputQueue {
+                pane_id: pane_id.to_owned(),
+                reply,
+            })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped input-queue reply".to_owned())
+    }
+
+    /// Holds words in `pane_id`'s line; see `Core::queue_input`.
+    pub fn queue_input(
+        &self,
+        pane_id: &str,
+        text: String,
+        paths: Vec<String>,
+        bytes: u64,
+        stage_id: String,
+    ) -> Result<u64, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::QueueInput {
+                pane_id: pane_id.to_owned(),
+                text,
+                paths,
+                bytes,
+                stage_id,
+                reply,
+            })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped queue-input reply".to_owned())?
+    }
+
+    /// A step of ■ in `pane_id`; see `Core::interrupt`.
+    pub fn interrupt(
+        &self,
+        pane_id: &str,
+        step: hide_core::InterruptStep,
+    ) -> Result<Vec<String>, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::Interrupt {
+                pane_id: pane_id.to_owned(),
+                step,
+                reply,
+            })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped interrupt reply".to_owned())?
+    }
+
     pub fn workspace_remote_routes(&self) -> Result<Vec<hide_core::WorkspaceRemoteRoute>, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
@@ -2189,6 +2292,32 @@ fn owner_loop(
             }
             Command::DeskFilesInUse { reply } => {
                 let _ = reply.send(core.desk_files_in_use());
+            }
+            Command::InputFilesInUse { reply } => {
+                let _ = reply.send(core.input_files_in_use());
+            }
+            Command::InputWaits { pane_id, reply } => {
+                let _ = reply.send(core.input_waits(&pane_id));
+            }
+            Command::InputQueue { pane_id, reply } => {
+                let _ = reply.send(core.input_queue(&pane_id));
+            }
+            Command::QueueInput {
+                pane_id,
+                text,
+                paths,
+                bytes,
+                stage_id,
+                reply,
+            } => {
+                let _ = reply.send(core.queue_input(&pane_id, text, paths, bytes, stage_id));
+            }
+            Command::Interrupt {
+                pane_id,
+                step,
+                reply,
+            } => {
+                let _ = reply.send(core.interrupt(&pane_id, step));
             }
             Command::WorkspaceRemoteRoutes { reply } => {
                 let _ = reply.send(core.workspace_remote_routes());

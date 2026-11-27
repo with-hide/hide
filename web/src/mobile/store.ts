@@ -7,6 +7,7 @@ import type { ComposerFile, FileNotice } from "./uploads";
 import type { SentReply } from "./sentReplies";
 import { create } from "zustand";
 import type { PressedAnswer } from "../missionAnswer";
+import type { InputQueue } from "../snapshot";
 import type { AgentGroup, AgentKey, AutomationAction, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, OtherMachine, PairPayload, PhoneAgent, PhoneAsk, PhoneDevice, PhoneAutomation, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, Running, ServerFrame, StartCatalog } from "./protocol";
 import { askOf, keyTag, listedAgents, mergeConversation, missionsOnWire, sameKey } from "./protocol";
 import { resultContent, type LookContent } from "./lookContent";
@@ -101,6 +102,8 @@ export type Detail = {
   ask: PhoneAsk | null;
   /** What the agent runs now, from a computer that answers; null otherwise. */
   running: Running | null;
+  /** The pane's waiting words, from a computer that holds them (PRD desk-queue D-11); null while none wait. */
+  queue: InputQueue | null;
 };
 
 /**
@@ -118,7 +121,7 @@ export type StartSheet = {
 
 export const CLOSED_SHEET: StartSheet = { open: false, text: "", choice: NO_CHOICE, pending: null, error: null };
 
-export type PendingInput = { requestId: string; kind: "text" | "key" | "choice" };
+export type PendingInput = { requestId: string; kind: "text" | "key" | "choice" | "interrupt" };
 
 /**
  * A choice picked on an agent's ask (`askIdentity`): sending, sent, or refused with why. `inTerminal` says nothing more is sent
@@ -221,6 +224,8 @@ type PhoneState = {
   answer: boolean;
   /** Whether the open computer takes files attached to a reply (`attachments` in its hello on this page); false until it says so, so a computer before it shows no `+`. */
   takesFiles: boolean;
+  /** Whether the open computer holds a pane's waiting words and takes ■ (`queue` in its hello on this page); false until it says so. */
+  queues: boolean;
   /** The files on the reply bar of the open detail (`uploads.ts`), in the order they were picked. */
   files: ComposerFile[];
   /** The one line under them: what was left out, or why an upload stopped. */
@@ -324,6 +329,7 @@ const initial: PhoneState = {
   deviceConnect: null,
   answer: false,
   takesFiles: false,
+  queues: false,
   files: [],
   fileNotice: null,
   sent: [],
@@ -401,7 +407,12 @@ export function applyFrame(frame: ServerFrame): void {
         deviceConnect: frame.device_connect === true,
         answer: frame.answer === true,
         takesFiles: frame.attachments === true,
+        queues: frame.queue === true,
       });
+      return;
+    case "queue":
+      // Only the open detail's: a frame for one that closed since is not this one's.
+      if (state.detail && sameKey(state.detail.key, frame)) patch({ detail: { ...state.detail, queue: frame.queue } });
       return;
     case "meta":
       patch({ otherPhones: frame.other_phones, otherMachines: frame.machines ?? [] });

@@ -313,3 +313,7 @@ left_out = ["remote-control", "config", "auto-mode-setup"]
 model = "/model {model}"
 effort = "/effort {effort}"
 efforts = ["low", "medium", "high", "xhigh", "max"]
+
+# Esc interrupts a turn, as its working line says (`esc to interrupt`).
+[interrupt]
+keys = ["esc"]

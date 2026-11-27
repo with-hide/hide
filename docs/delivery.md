@@ -180,6 +180,10 @@ Whether the pane takes input now is apart from the turn, and a row shown at rest
   The engine ends a pending start itself, at its settle (3 s after the start, once the program takes input and its screen rests) or at its 120 s deadline, and the coordinator reads the session again at that moment, so the core reads the start settled and the letter is judged again ([ARCHITECTURE.md](ARCHITECTURE.md#agents-on-the-cores-own-engine)).
   A start whose screen asks a question (a trust or login prompt at launch) stays pending past the deadline until the question is answered, and its letter waits until then; answered past the deadline, the start ends at once and the agent reads not ready for the 3 s its next screen takes to draw.
 
+The operator's own waiting words go at the same rest, before any letter ([ARCHITECTURE.md: The operator's waiting line](ARCHITECTURE.md#the-operators-waiting-line); PRD desk-queue D-02, D-13).
+Each pass sends the pane's next waiting line on this verdict without the kind a bell targets, the wait over a working turn and the 30-second quiet (`doorbell::judge_operator`), since the words are the operator's and every agent with a session input takes them, and while a line waits there and the pane rests by that verdict, a letter's verdict is `operator_line_first` (`Hold::Queued`), so its bell rings at the rest after the turn the line opened; a bell the doorbell lets into a working turn (five minutes, `--now`) rings as before.
+A letter's own verdict, its working-turn bell and a `--now` letter are otherwise as they were, and `hide pane send` and `hide request send --force` never enter the line.
+
 The engine's `blocked` status holds every permission or selection menu it reports that way.
 For a menu it reports as idle or done, a bell target also needs Hide's draft record or a native session wait to hold the bell.
 Claude Code and Codex can be rung at rest and while working; Grok can be rung only at rest, with Hide's draft guard and the native-session wait guard below; Antigravity can be rung only at rest, and only when the composer read right before the bell shows its empty prompt (below).

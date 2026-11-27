@@ -4129,11 +4129,20 @@ fn handle_thread_input(state: &AppState, event: &Value) -> Vec<Message> {
                 .collect()
         })
         .unwrap_or_default();
-    let paths = if stages.is_empty() {
-        Vec::new()
+    // Kept where the words that wait for the agent keep them (PRD
+    // desk-queue D-12): whether these words go now or wait is the core's.
+    let (paths, bytes) = if stages.is_empty() {
+        (Vec::new(), 0)
     } else {
-        match state.attachments.commit(&stages, false) {
-            Ok(paths) => paths,
+        let in_use = match state.core.input_files_in_use() {
+            Ok(in_use) => in_use,
+            Err(error) => {
+                log_snapshot_failure("input_files_in_use", &error);
+                return refuse("forward_failed");
+            }
+        };
+        match state.attachments.commit_held(&stages, &in_use) {
+            Ok(kept) => kept,
             Err(reason) => return refuse(reason),
         }
     };
@@ -4146,6 +4155,7 @@ fn handle_thread_input(state: &AppState, event: &Value) -> Vec<Message> {
             "request_id": request_id,
             "text": text,
             "paths": paths,
+            "bytes": bytes,
         },
     });
     if let Err(error) = state

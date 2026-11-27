@@ -116,3 +116,7 @@ permission = { allow = ["enter"], deny = ["down", "down", "down", "enter"] }
 model = "/model {model}"
 effort = "/effort {effort}"
 efforts = ["low", "medium", "high", "xhigh", "max"]
+
+# Esc cancels the turn under way, as its working line says (`esc to cancel`).
+[interrupt]
+keys = ["esc"]

@@ -42,11 +42,11 @@ const rest = {
 
 const claude = (state: DeskAgent["state"], signedIn: boolean | null): DeskAgent => ({ id: "claude", label: "Claude Code", state, detail: null, signed_in: signedIn, login_command: "claude /login", models: [], efforts: [] });
 
-const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: boolean | null = true, queued: DeskSection["conversation"]["queued"] = [], held = false): DeskSection => ({
+const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: boolean | null = true, queued: DeskSection["conversation"]["queued"] = [], held = false, line: Partial<DeskSection["conversation"]> = {}): DeskSection => ({
   selection: { agent: "claude", model: null, effort: null },
   agents: [claude(state, signedIn)],
   host: { state: "ready", detail: null },
-  conversation: { generation: 1, items, dropped: 0, queued, queued_max: 8, queued_full: queued.length >= 8, queued_held: held },
+  conversation: { generation: 1, items, dropped: 0, queued, queued_max: 8, queued_full: queued.length >= 8, queued_held: held, queued_paused: false, ...line },
   approvals_waiting: 0,
   settings: { enabled: true, default_agent: "claude", location: "worktree", cap: 8, permission: "allow_all" },
   lane: { view_width: null, session_width: null },
@@ -157,7 +157,7 @@ describe("Desk's room", () => {
     // The core refused the open, said how to sign in and put the message first in the waiting line.
     await show(desk([{ kind: "notice", id: 2, notice: "login_needed", agent: "claude", detail: "claude /login" }], "ready", false, [{ id: 3, text: "ask @session(w1:p2 fixer)", at_ms: 0, mentions: [fixer] }]));
     expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
-    expect(document.body.querySelectorAll("[data-desk-queued]")).toHaveLength(1);
+    expect(document.body.querySelectorAll("[data-queue-line]")).toHaveLength(1);
   });
 
   it("sends the operator's last message again as they wrote it on 다시 시도", async () => {
@@ -216,10 +216,10 @@ describe("Desk's room", () => {
     await show(desk([{ kind: "notice", id: 2, notice: "login_needed", agent: "claude", detail: "claude /login" }], "ready", true, [{ id: 3, text: "이거 봐 줘", at_ms: 0, mentions: [], attachments: [file] }], true));
     expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
     expect(tiles()).toEqual([]);
-    const held = document.body.querySelector("[data-desk-queued='3']");
+    const held = document.body.querySelector("[data-queue-line='3']");
     expect(held?.textContent).toContain("이거 봐 줘");
-    expect(held?.textContent).toContain("Sent after you restart");
-    expect(held?.querySelector("[data-desk-sent-attachments]")?.textContent).toContain("shot.png");
+    expect(document.body.querySelector("[data-queue-group='held']")?.textContent).toContain("Sent after you restart · 1");
+    expect(held?.querySelector("[data-queue-line-files]")?.textContent).toBe("shot.png");
   });
 
   // letter-47596: a message whose file is gone stays in the conversation, unsent, and is not offered again.
@@ -238,7 +238,7 @@ describe("Desk's room", () => {
     expect(tiles()).toEqual([]);
     expect(document.body.querySelector("[data-desk-notice='attachments_gone']")?.textContent).toContain("The file is gone, so this wasn't sent");
     expect(document.body.querySelector("[data-desk-notice='attachments_gone'] [data-desk-notice-action]")).toBeNull();
-    expect(document.body.querySelectorAll("[data-desk-queued]")).toHaveLength(0);
+    expect(document.body.querySelectorAll("[data-queue-line]")).toHaveLength(0);
   });
 
   it("draws only a failed turn in the failed colour: a stopped host is neutral words, a failed install keeps the warning colour", async () => {
@@ -549,12 +549,12 @@ describe("Desk's room", () => {
       },
       status: { remote: [{ target_id: "deepbox", state: "connected" }] },
     } as unknown as SnapshotRest;
-    const row = { pane_id: "d:p1", identity_label: "remote worker", agent_kind: "claude", mark: "going", device_id: "deepbox" } as never;
+    const row = { pane_id: "d:p1", identity_label: "remote worker", agent_kind: "claude", mark: "going", device_id: "deepbox", state: { working: false, asking: false } } as never;
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([]));
     const calls = shown.map((path, index) => ({ sessionUpdate: "tool_call", toolCallId: `v${index}`, title: "Bash", kind: "execute", rawInput: { command: `hide file open ${path}` } }));
     const parts = Object.fromEntries(shown.map((path, index) => [`v${index}`, { kind: "view", view: "file", target: path }]));
-    const thread = { generation: 1, state: "ready", pane_id: "d:p1", machine: "deepbox", failure: null, pane: "same", connected: true, has_older: false, older: "idle", input: null,
+    const thread = { generation: 1, state: "ready", pane_id: "d:p1", machine: "deepbox", failure: null, pane: "same", connected: true, has_older: false, older: "idle", input: null, queue: null,
       tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "보여줘" } }, ...calls], parts, sessions: {} } };
     await act(async () => {
       const card: DeskJob = { id: "pane:d:p1", pane_id: "d:p1", title: "remote worker", agent_kind: "claude", project: { workspace_id: "w-deep", label: "deep" }, location: { kind: "checkout", label: "main" },
@@ -679,7 +679,7 @@ describe("Desk's room", () => {
     const writing = () => act(async () => useShellStore.setState({ deskLive: { text: "답을 쓰는 중", started_at_ms: 1 } }));
     const waiting = (id: number, text: string) => ({ id, text, at_ms: 0, mentions: [] });
 
-    it("goes with ↵ and waits as a bubble with 대기 중, the stop button staying", async () => {
+    it("goes with ↵ and waits over the box under 대기 중, the stop button staying (PRD desk-queue B30)", async () => {
       useUiStore.setState({ deskDraft: { text: "끝나면 알려줘", mentions: [] } });
       await render(desk([]));
       await writing();
@@ -690,7 +690,10 @@ describe("Desk's room", () => {
       expect(useUiStore.getState().deskDraft.text).toBe("끝나면 알려줘");
       await show(desk([], "ready", true, [waiting(5, "끝나면 알려줘")]));
       expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
-      expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).toContain("Waiting for the reply");
+      expect(document.body.querySelector("[data-queue-group='waiting']")?.textContent).toContain("Waiting · 1");
+      expect(document.body.querySelector("[data-queue-line='5']")?.textContent).toContain("끝나면 알려줘");
+      // Over the box, not in the conversation.
+      expect(document.body.querySelector("[data-desk-chat] [data-queue-line]")).toBeNull();
       expect(document.body.textContent).not.toContain("The waiting line is full");
     });
 
@@ -698,8 +701,7 @@ describe("Desk's room", () => {
       const login: DeskItem = { kind: "notice", id: 2, notice: "login_needed", agent: "claude", detail: "claude /login" };
       const full = Array.from({ length: 9 }, (_, index) => waiting(10 + index, `말 ${index}`));
       await render(desk([login], "ready", false, [waiting(5, "로그인 뒤에 보낼 말")], true));
-      expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).toContain("Sent after you restart");
-      expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).not.toContain("Waiting for the reply");
+      expect(document.body.querySelector("[data-queue-group='held']")?.textContent).toContain("Sent after you restart · 1");
       expect(document.body.querySelector("[data-desk-notice-action='restart']")?.textContent).toBe("Signed in · Restart");
       await press("[data-desk-notice-action='restart']");
       expect(sent("desk_restart")).toEqual([{}]);
@@ -716,7 +718,7 @@ describe("Desk's room", () => {
       expect(document.body.querySelector("[data-desk-notice-action]")).toBeNull();
       // A line that is not stopped keeps its 대기 중.
       await show(desk([], "ready", true, [waiting(5, "그냥 기다려요")], false));
-      expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).toContain("Waiting for the reply");
+      expect(document.body.querySelector("[data-queue-group='waiting']")?.textContent).toContain("Waiting · 1");
     });
 
     it("keeps the words in the box and sends nothing while eight messages already wait", async () => {
@@ -736,8 +738,31 @@ describe("Desk's room", () => {
 
     it("is taken out with its ✕, which sends the core's one event", async () => {
       await render(desk([], "ready", true, [waiting(5, "하나"), waiting(6, "둘")]));
-      await press("[data-desk-queued='6'] [data-desk-queued-remove]");
+      await press("[data-queue-remove='6']");
       expect(sent("desk_queued_remove")).toEqual([{ id: 6 }]);
+    });
+
+    it("stops with ■ as a session's line does: 멈춤 offers 모두 지우기, 이어 보내기 and each message's 보내기 once Desk rests (B31)", async () => {
+      const two = [waiting(5, "하나"), waiting(6, "둘")];
+      await render(desk([], "ready", true, two));
+      await writing();
+      await press("[data-desk-composer-stop]");
+      expect(sent("desk_stop")).toEqual([{}]);
+      // The core paused the line; Desk still answers, so a message's 보내기 waits.
+      await show(desk([], "ready", true, two, false, { queued_paused: true }));
+      expect(document.body.querySelector("[data-queue-group='paused']")?.textContent).toContain("Paused · 2");
+      expect(document.body.querySelector<HTMLButtonElement>("[data-queue-send='5']")?.disabled).toBe(true);
+      await act(async () => useShellStore.setState({ deskLive: null }));
+      expect(document.body.querySelector<HTMLButtonElement>("[data-queue-send='5']")?.disabled).toBe(false);
+      await press("[data-queue-send='6']");
+      await press("[data-queue-resume]");
+      await press("[data-queue-clear]");
+      expect([sent("desk_queued_send"), sent("desk_queued_resume"), sent("desk_queued_clear")]).toEqual([[{ id: 6 }], [{}], [{}]]);
+      // Cleared: 되돌리기 stands for its ten seconds and brings the line back.
+      await show(desk([], "ready", true, [], false, { queued_cleared: { count: 2, until_unix_ms: Date.now() + 10_000 } }));
+      expect(document.body.querySelector("[data-queue-cleared]")?.textContent).toContain("Cleared 2");
+      await press("[data-queue-restore]");
+      expect(sent("desk_queued_restore")).toEqual([{}]);
     });
   });
 
@@ -913,7 +938,7 @@ describe("Desk's room", () => {
 
   it("opens a session a chip names beside Desk, stays in Desk, and closes Desk's desk before the session on Escape (D-09, B2, B21)", async () => {
     // `fixer` runs in the sidebar but Desk did not start it: it has no card until its conversation opens.
-    const row = { pane_id: "w1:p2", identity_label: "fixer", agent_kind: "claude", mark: "going" } as never;
+    const row = { pane_id: "w1:p2", identity_label: "fixer", agent_kind: "claude", mark: "going", state: { working: false, asking: false } } as never;
     const card: DeskJob = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
       state: "working", queue_position: null, now: "고치는 중", plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
       mark: "going", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null };
@@ -1034,7 +1059,7 @@ describe("Desk's room", () => {
     expect(document.body.querySelector("[data-desk-session-head]")?.getAttribute("data-desk-session-head")).toBe("ended");
 
     // The core found the same session running in w1:p20 (its record is no longer sent).
-    const row = { pane_id: "w1:p20", device_id: "local", identity_label: "후보 빌드 이어서", agent_kind: "codex", mark: "going" } as never;
+    const row = { pane_id: "w1:p20", device_id: "local", identity_label: "후보 빌드 이어서", agent_kind: "codex", mark: "going", state: { working: false, asking: false } } as never;
     await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [], workers: [], named: [], records: [], moved: [{ pane_id: "w1:p9", live_pane_id: "w1:p20" }], glance: NO_GLANCE } }));
     const chip = document.body.querySelector<HTMLElement>('[data-desk-session-chip="후보 빌드 이어서"]');
     expect(chip).not.toBeNull();
@@ -1081,7 +1106,7 @@ describe("Desk's room", () => {
     await render(desk([{ kind: "user", id: 1, text: "@session(d:p4 agent-4) 어떻게 됐어?", at_ms: 0, mentions: [{ kind: "session", id: "d:p4", name: "agent-4" }] }]));
     await act(async () => useShellStore.setState({ rest: remoteRest, agents: [], deskJobs: { jobs: [], workers: [], named: [], records: [record], moved: [], glance: NO_GLANCE } }));
     await press(`[data-desk-session-chip="${record.title}"]`);
-    const thread = { generation: 1, state: "ready", pane_id: "d:p4", machine: "deepbox", failure: null, pane: "gone", connected: true, has_older: false, older: "idle", input: null,
+    const thread = { generation: 1, state: "ready", pane_id: "d:p4", machine: "deepbox", failure: null, pane: "gone", connected: true, has_older: false, older: "idle", input: null, queue: null,
       tail: { updates: [
         { sessionUpdate: "user_message_chunk", content: { type: "text", text: "보고서 써 줘" } },
         { sessionUpdate: "tool_call", toolCallId: "v1", title: "Bash", kind: "execute", rawInput: { command: "hide file open report.md" } },
@@ -1109,7 +1134,7 @@ describe("Desk's room", () => {
   });
 
   it("reads what the session beside Desk asks and answers it as the phone does, once (B14)", async () => {
-    const row = { pane_id: "w1:p2", device_id: "local", identity_label: "fixer", agent_kind: "claude", mark: "turn" } as never;
+    const row = { pane_id: "w1:p2", device_id: "local", identity_label: "fixer", agent_kind: "claude", mark: "turn", state: { working: false, asking: true } } as never;
     const card: DeskJob = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
       state: "asking", queue_position: null, now: null, plan: null, question: "Delete the old captures?", summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: "question",
       mark: "turn", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 5, read: true, mission: null, workers: [], agent_id: null };

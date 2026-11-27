@@ -66,6 +66,9 @@ const LOCAL_ISSUES: &str = "local-issues.json";
 /// that have node ids; a device's pane is named by its device id.
 const COMPOSER_MARKS: &str = "composer-marks.json";
 const HOOK_FACTS: &str = "hook-facts.json";
+/// The operator's words waiting for each pane's agent (`input_queue`), by
+/// the pane's id as the core names it.
+const INPUT_QUEUE: &str = hide_kit::layout::INPUT_QUEUE;
 /// The Conductors' missions (`hide_kit::layout::missions`). Written only by
 /// builds that have node ids, so the layer-1 conversion has nothing in it to
 /// rewrite; a change of a machine's id maps its machines, panes and projects.
@@ -1149,6 +1152,7 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Moves::Stays,
     ),
     (HOOK_FACTS, "/panes/{key}", Mechanism::Owned, Moves::Pane),
+    (INPUT_QUEUE, "/panes/{key}", Mechanism::Owned, Moves::Pane),
 ];
 
 /// The rest of a state folder, which names no machine: the daemon's own
@@ -1168,6 +1172,7 @@ pub const UNBOUND: &[&str] = &[
     "pane-capabilities",
     hide_kit::layout::SCREEN_ATTACHMENTS,
     hide_kit::layout::DESK_ATTACHMENTS,
+    hide_kit::layout::INPUT_ATTACHMENTS,
     "TerminalClipboard",
     // Device generator locks before they moved to each device's node.
     "label-generators",
@@ -2183,6 +2188,11 @@ mod tests {
         write(
             HOOK_FACTS,
             json!({"schema_version": 1, "panes": {"w1:p1": {"sessions": [], "seen_agent": true}}}),
+        );
+        write(
+            INPUT_QUEUE,
+            json!({"schema_version": 1, "next_id": 1, "panes": {"w1:p1": {"kind": "claude",
+                   "paused": false, "lines": [{"id": 1, "text": "next", "stage_id": "s", "at_ms": 1}]}}}),
         );
         // A ledger the core loads, so its first start imports it into its
         // store: records of a released ledger's shape, given a value at every

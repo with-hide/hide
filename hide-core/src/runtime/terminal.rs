@@ -326,6 +326,8 @@ impl Runtime {
             .collect::<HashSet<_>>();
         self.panes_closing
             .retain(|pane_id| keep(pane_id) || close_held_panes.contains(pane_id));
+        // A closed pane's waiting words go with it (PRD desk-queue B27).
+        self.input_queue_follow_panes(&keep);
         before != self.terminal_state_len()
     }
     /// Every pane-keyed terminal map, counted together so a retain pass can

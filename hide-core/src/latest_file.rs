@@ -6,10 +6,15 @@
 //! owned value and the thread serializes and replaces the file. One thread
 //! and one pending slot per file, so a burst of values writes the newest and
 //! skips the rest, and the thread is joined when the file is dropped.
+//!
+//! Each save has a ticket, and an owner whose next step must not happen
+//! before a value is on disk waits for its ticket off the lock
+//! ([`Written::wait`]): the write that answers it may carry a newer value.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 pub(crate) struct LatestFile<T: Send + 'static> {
     path: PathBuf,
@@ -19,13 +24,64 @@ pub(crate) struct LatestFile<T: Send + 'static> {
     component: &'static str,
     subject: &'static str,
     encode: fn(&T) -> Result<Vec<u8>, String>,
-    slot: Arc<Mutex<Slot<T>>>,
+    slot: Arc<Shared<T>>,
     worker: Mutex<Option<JoinHandle<()>>>,
+}
+
+struct Shared<T> {
+    slot: Mutex<Slot<T>>,
+    /// Rung each time a write ends, for [`Written::wait`].
+    ended: Condvar,
 }
 
 struct Slot<T> {
     latest: Option<T>,
     active: bool,
+    /// The ticket of the newest value handed over, which `latest` holds
+    /// while it waits.
+    handed: u64,
+    /// The newest ticket whose value, or a newer one, reached the disk.
+    written: u64,
+    /// The newest ticket whose write failed, so its waiters are told.
+    failed: u64,
+}
+
+/// A wait for one save to reach the disk, held off the owner's lock.
+pub(crate) struct Written {
+    shared: Arc<dyn Ticketed + Send + Sync>,
+    ticket: u64,
+}
+
+trait Ticketed {
+    fn wait(&self, ticket: u64, limit: Duration) -> Result<(), &'static str>;
+}
+
+impl<T: Send> Ticketed for Shared<T> {
+    fn wait(&self, ticket: u64, limit: Duration) -> Result<(), &'static str> {
+        let slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        let (slot, waited) = self
+            .ended
+            .wait_timeout_while(slot, limit, |slot| {
+                slot.written < ticket && slot.failed < ticket
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot.written >= ticket {
+            Ok(())
+        } else if waited.timed_out() {
+            Err("save_timeout")
+        } else {
+            Err("save_failed")
+        }
+    }
+}
+
+impl Written {
+    /// Blocks until the value this ticket stands for, or a newer one, is on
+    /// disk; refused when its write failed or took past `limit`. Never under
+    /// the owner's lock.
+    pub(crate) fn wait(&self, limit: Duration) -> Result<(), &'static str> {
+        self.shared.wait(self.ticket, limit)
+    }
 }
 
 impl<T: Send + 'static> LatestFile<T> {
@@ -42,10 +98,16 @@ impl<T: Send + 'static> LatestFile<T> {
             component,
             subject,
             encode,
-            slot: Arc::new(Mutex::new(Slot {
-                latest: None,
-                active: false,
-            })),
+            slot: Arc::new(Shared {
+                slot: Mutex::new(Slot {
+                    latest: None,
+                    active: false,
+                    handed: 0,
+                    written: 0,
+                    failed: 0,
+                }),
+                ended: Condvar::new(),
+            }),
             worker: Mutex::new(None),
         }
     }
@@ -53,10 +115,29 @@ impl<T: Send + 'static> LatestFile<T> {
     /// Queues `value` to replace the file. A value still waiting when a newer
     /// one arrives is dropped.
     pub(crate) fn save(&self, value: T) {
-        let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        self.hand(value);
+    }
+
+    /// [`Self::save`], with the wait for that value to reach the disk.
+    pub(crate) fn save_written(&self, value: T) -> Written {
+        let ticket = self.hand(value);
+        Written {
+            shared: Arc::clone(&self.slot) as Arc<dyn Ticketed + Send + Sync>,
+            ticket,
+        }
+    }
+
+    fn hand(&self, value: T) -> u64 {
+        let mut slot = self
+            .slot
+            .slot
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        slot.handed += 1;
+        let ticket = slot.handed;
         slot.latest = Some(value);
         if slot.active {
-            return;
+            return ticket;
         }
         let mut worker = self.worker.lock().unwrap_or_else(PoisonError::into_inner);
         // The previous worker has cleared `active` and is returning.
@@ -74,12 +155,18 @@ impl<T: Send + 'static> LatestFile<T> {
                 slot.active = true;
                 *worker = Some(handle);
             }
-            Err(error) => crate::diagnostic!(serde_json::json!({
-                "component": self.component,
-                "kind": format!("{}.save_failed", self.subject),
-                "message": format!("worker could not start: {error}"),
-            })),
+            Err(error) => {
+                // Nothing will write it: its waiters are told now.
+                slot.failed = ticket;
+                self.slot.ended.notify_all();
+                crate::diagnostic!(serde_json::json!({
+                    "component": self.component,
+                    "kind": format!("{}.save_failed", self.subject),
+                    "message": format!("worker could not start: {error}"),
+                }));
+            }
         }
+        ticket
     }
 }
 
@@ -103,24 +190,33 @@ impl<T: Send + 'static> Drop for LatestFile<T> {
 }
 
 fn write_latest<T>(
-    slot: &Mutex<Slot<T>>,
+    shared: &Shared<T>,
     path: &Path,
     component: &str,
     subject: &str,
     encode: fn(&T) -> Result<Vec<u8>, String>,
 ) {
     loop {
-        let value = {
-            let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        let (value, ticket) = {
+            let mut slot = shared.slot.lock().unwrap_or_else(PoisonError::into_inner);
             match slot.latest.take() {
-                Some(value) => value,
+                Some(value) => (value, slot.handed),
                 None => {
                     slot.active = false;
                     return;
                 }
             }
         };
-        if let Err(reason) = write(path, &value, encode) {
+        let written = write(path, &value, encode);
+        {
+            let mut slot = shared.slot.lock().unwrap_or_else(PoisonError::into_inner);
+            match &written {
+                Ok(()) => slot.written = slot.written.max(ticket),
+                Err(_) => slot.failed = slot.failed.max(ticket),
+            }
+        }
+        shared.ended.notify_all();
+        if let Err(reason) = written {
             crate::diagnostic!(serde_json::json!({
                 "component": component,
                 "kind": format!("{subject}.save_failed"),
@@ -193,4 +289,41 @@ pub(crate) fn read_capped(path: &Path, cap: u64) -> Result<Option<Vec<u8>>, Stri
     std::io::Read::read_to_end(&mut std::io::Read::take(file, cap), &mut bytes)
         .map_err(|error| format!("could not be read: {error}"))?;
     Ok(Some(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encode(value: &String) -> Result<Vec<u8>, String> {
+        Ok(value.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn a_saved_value_is_on_disk_once_its_wait_returns() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("value.txt");
+        let file = LatestFile::new(path.clone(), "test-save", "test", "test", encode);
+        file.save("first".to_owned());
+        let written = file.save_written("second".to_owned());
+        assert_eq!(written.wait(Duration::from_secs(10)), Ok(()));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
+    }
+
+    #[test]
+    fn a_wait_whose_write_failed_is_refused_at_once() {
+        let root = tempfile::tempdir().unwrap();
+        // A file where the folder would be: nothing can be written under it.
+        let blocked = root.path().join("blocked");
+        std::fs::write(&blocked, b"").unwrap();
+        let file = LatestFile::new(
+            blocked.join("value.txt"),
+            "test-save",
+            "test",
+            "test",
+            encode,
+        );
+        let written = file.save_written("lost".to_owned());
+        assert_eq!(written.wait(Duration::from_secs(10)), Err("save_failed"));
+    }
 }

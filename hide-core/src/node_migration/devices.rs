@@ -37,9 +37,9 @@ use serde_json::{Map, Value};
 
 use super::id_map::{self, Change, IdTable};
 use super::{
-    BACKUP_DIR, Backup, COMPOSER_MARKS, CORE_STATE, DELIVERY_LEDGER, HOOK_FACTS, KEYS, LABELS,
-    LINKS, LOCAL_ISSUES, MISSIONS, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS,
-    mission_files, read_json, read_store, store_path, write, write_store,
+    BACKUP_DIR, Backup, COMPOSER_MARKS, CORE_STATE, DELIVERY_LEDGER, HOOK_FACTS, INPUT_QUEUE, KEYS,
+    LABELS, LINKS, LOCAL_ISSUES, MISSIONS, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH,
+    WORKSPACE_VIEWS, mission_files, read_json, read_store, store_path, write, write_store,
 };
 use crate::address::{Kind, Scoped};
 use crate::node::NodeId;
@@ -57,6 +57,7 @@ const STORES: &[&str] = &[
     LOCAL_ISSUES,
     COMPOSER_MARKS,
     HOOK_FACTS,
+    INPUT_QUEUE,
 ];
 
 /// What a start's renaming did, for the daemon's diagnostic record.
@@ -1097,6 +1098,12 @@ mod tests {
             HOOK_FACTS,
             json!({"schema_version": 1, "panes": {pane(ALIAS): {"sessions": [], "seen_agent": true}}}),
         );
+        write_json(
+            state,
+            INPUT_QUEUE,
+            json!({"schema_version": 1, "next_id": 1, "panes": {pane(ALIAS): {"kind": "claude",
+                   "paused": false, "lines": [{"id": 1, "text": "next", "stage_id": "s", "at_ms": 1}]}}}),
+        );
 
         let mut memory = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
         memory
@@ -1392,6 +1399,12 @@ mod tests {
         assert_eq!(
             read(state, HOOK_FACTS)["panes"],
             json!({pane(MACHINE): {"sessions": [], "seen_agent": true}})
+        );
+        assert!(
+            read(state, INPUT_QUEUE)["panes"]
+                .get(pane(MACHINE))
+                .is_some(),
+            "a device's waiting words follow its new id"
         );
 
         // The cards keep their numbers, text and state under the new id.

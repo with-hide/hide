@@ -67,7 +67,8 @@ pub(crate) fn held_for(hold: Hold) -> Option<HeldFor> {
         | Hold::Input
         | Hold::Letter
         | Hold::ComposerUnread
-        | Hold::Rides => None,
+        | Hold::Rides
+        | Hold::Queued => None,
     }
 }
 

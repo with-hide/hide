@@ -1,4 +1,4 @@
-import { ArrowLeftRightIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSearchIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon, XIcon } from "lucide-react";
+import { ArrowLeftRightIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSearchIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { ApprovalButton, ApprovalWord, DeskAgent, DeskApproval, DeskItem, DeskJob, DeskMention, DeskMissionMention, DeskNoticeKind, WorkingPhase, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
@@ -68,26 +68,6 @@ export function DeskUserMessage({ text, mentions, attachments = [], onMention }:
     <div className="flex min-w-0 flex-col items-end gap-xs" data-desk-item="user">
       <SentAttachments files={files} />
       {bubble}
-    </div>
-  );
-}
-
-/**
- * A message sent while a reply was being written, waiting for the turn before
- * it (stopped, with `다시 시작하면 보내요`, while the agent refused the line's first one): the operator's bubble, its files
- * with it, with `대기 중` and `✕`, which takes it out before it goes (it is not in the conversation until its turn starts).
- */
-export function DeskQueuedBubble({ message, held = false, onRemove, onMention }: { message: DeskQueuedMessage; held?: boolean; onRemove: () => void; onMention?: (mention: DeskMention) => void }) {
-  const { t } = useInterfaceTranslation();
-  return (
-    <div className="flex min-w-0 flex-col items-end gap-xxs" data-desk-queued={message.id}>
-      <div className="opacity-(--opacity-dimmed)"><DeskUserMessage text={message.text} mentions={message.mentions} attachments={message.attachments} onMention={onMention} /></div>
-      <span className="flex items-center gap-xxs text-micro text-muted-foreground">
-        {t(held ? "desk.queued.held" : "desk.queued.waiting")}
-        <Hint label={t("desk.queued.remove")}>
-          <Button variant="ghost" size="icon-xs" aria-label={t("desk.queued.remove")} data-desk-queued-remove="true" onClick={onRemove}><XIcon /></Button>
-        </Hint>
-      </span>
     </div>
   );
 }
@@ -476,7 +456,6 @@ export function DeskHandedLine({ session, handed, line, read, onOpen }: { sessio
 export type DeskChatActions = DeskJobCardActions & {
   /** The agent's option pressed on card `id`, with `거절…`'s line for a refusal. */
   onApproval: (id: number, option: string | null, text?: string) => void;
-  onQueuedRemove: (id: number) => void;
   onNoticeAction: (action: DeskNoticeAction, notice: Extract<DeskItem, { kind: "notice" }>) => void;
   /** Puts words on the clipboard: a sign-in command, a message, a code block. */
   onCopy: CopyText;
@@ -560,7 +539,6 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
       ))}
       {live !== null ? <li className="flex min-w-0 flex-col"><DeskLiveReply live={live} onMention={actions.onMention} onMission={actions.onMission} onFile={actions.onFile} /></li> : null}
       {working ? <li data-desk-item="working"><WorkingLine phase={working.phase} since={working.since} /></li> : null}
-      {queued.map((message) => <li key={`queued-${message.id}`} className="flex min-w-0 flex-col"><DeskQueuedBubble message={message} held={held} onRemove={() => actions.onQueuedRemove(message.id)} onMention={actions.onMention} /></li>)}
     </ol>
   );
 }

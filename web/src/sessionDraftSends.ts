@@ -12,7 +12,8 @@ import { useUiStore } from "./ui";
 useShellStore.subscribe((state, previous) => {
   const input = state.sessionThread?.input;
   if (input && input !== previous.sessionThread?.input && input.state !== "sending") {
-    useUiStore.getState().settleSessionSend(input.request_id, input.state === "sent");
+    // Words the pane's waiting line took are as taken as typed ones: the draft is cleared the same way (PRD desk-queue B1).
+    useUiStore.getState().settleSessionSend(input.request_id, input.state === "sent" || input.state === "queued");
   }
   // A refusal hided makes before the core (a file it never staged) names the input's request too.
   const refusal = state.composerRefusal;

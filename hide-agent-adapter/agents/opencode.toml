@@ -108,3 +108,8 @@ regex = ['┃ +\S[^\n]* · \S[^\n]*\n *╹▀']
 # down and enter on a question and right, enter or esc on a permission, but it
 # shows the highlighted row by colour alone, so the core cannot see where those
 # keys start: both are answered in the terminal until its screen marks the row.
+
+# Esc interrupts a turn only when pressed again while its working line says
+# `esc again to interrupt`, so ■ presses it twice.
+[interrupt]
+keys = ["esc", "esc"]
