@@ -51,7 +51,7 @@ pub(super) enum Order {
         retry: bool,
     },
     /// The agents switched on or signed in moved in the catalog: only the
-    /// list reader is told, with the agents in place at the last look.
+    /// list reader is told, which keeps the agents in place itself.
     Lists {
         marks: crate::desk::ReadMarks,
         on: Vec<AdapterId>,
@@ -288,7 +288,6 @@ pub(super) fn start(
         installing: Vec::new(),
         lists: None,
         open: Arc::new(Mutex::new(None)),
-        ready: Vec::new(),
     };
     std::thread::Builder::new()
         .name("hide-core-desk".into())
@@ -326,9 +325,6 @@ struct Worker {
     /// The agent whose Desk session is open, which the list reader leaves
     /// alone: that session sends its list.
     open: Arc<Mutex<Option<AdapterId>>>,
-    /// The agents in place at the last look, which a catalog change hands
-    /// the list reader without looking at every agent again.
-    ready: Vec<AdapterId>,
 }
 
 /// The Desk process and its session.
@@ -387,12 +383,10 @@ impl Worker {
                 marks,
                 on,
                 signed_out,
-            } => self.read_ahead(super::lists::Wanted::Look {
+            } => self.read_ahead(super::lists::Wanted::Catalog {
                 marks,
                 on,
-                ready: self.ready.clone(),
                 signed_out,
-                retry: false,
             }),
             Order::Install { adapter, asked } => self.install(adapter, asked),
             Order::Send(send) => self.send(send),
@@ -488,6 +482,8 @@ impl Worker {
                         super::lists::Wanted::Ready(agent) | super::lists::Wanted::Check(agent) => {
                             vec![agent]
                         }
+                        // Which agents are in place is the reader's to know.
+                        super::lists::Wanted::Catalog { .. } => Vec::new(),
                     };
                     for adapter in agents {
                         self.report(Report::Unread {
@@ -584,12 +580,11 @@ impl Worker {
                 }
             })
             .collect();
-        let ready: Vec<AdapterId> = states
+        let ready = states
             .iter()
             .filter(|(_, state, _)| *state == DeskAgentState::Ready)
             .map(|(adapter, _, _)| *adapter)
             .collect();
-        self.ready = ready.clone();
         self.report(Report::Availability(states));
         for adapter in missing {
             self.install(adapter, false);
@@ -1430,7 +1425,6 @@ mod tests {
             installing: Vec::new(),
             lists: None,
             open: Arc::new(Mutex::new(None)),
-            ready: Vec::new(),
         }
     }
 

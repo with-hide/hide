@@ -47,8 +47,8 @@ use crate::desk::{DeskPlaces, ReadMark, ReadMarks};
 /// What the worker hands the thread.
 pub(super) enum Wanted {
     /// A look at every agent: the core's last reads, the agents switched on
-    /// in Settings › Agents, those of them in place now, and those the
-    /// operator is signed out of, as Settings reads it.
+    /// in Settings › Agents, the agents in place now, and those the operator
+    /// is signed out of, as Settings reads it.
     Look {
         marks: ReadMarks,
         on: Vec<AdapterId>,
@@ -56,6 +56,14 @@ pub(super) enum Wanted {
         signed_out: Vec<AdapterId>,
         /// The operator asked for it (`다시 시작`): failures are forgotten.
         retry: bool,
+    },
+    /// The catalog moved (an agent switched on or off, a sign-in): the same
+    /// as a look but for the agents in place, which stay as the reader knows
+    /// them.
+    Catalog {
+        marks: ReadMarks,
+        on: Vec<AdapterId>,
+        signed_out: Vec<AdapterId>,
     },
     /// An agent whose adapter was just installed.
     Ready(AdapterId),
@@ -73,8 +81,10 @@ struct Schedule {
     on: BTreeSet<AdapterId>,
     /// The agents the operator is signed out of at the last look.
     signed_out: BTreeSet<AdapterId>,
-    /// The agents switched on and in place.
-    in_place: BTreeSet<AdapterId>,
+    /// The agents in place, switched on or not: the one record of them, so
+    /// an adapter installed since the last look stays in place through a
+    /// catalog change.
+    ready: BTreeSet<AdapterId>,
     queue: VecDeque<AdapterId>,
     /// Each agent whose last read brought no list, by what it depended on
     /// then: the same digest is not read again.
@@ -82,6 +92,11 @@ struct Schedule {
 }
 
 impl Schedule {
+    /// Whether `agent` is read at all: in place and switched on.
+    fn reads(&self, agent: AdapterId) -> bool {
+        self.ready.contains(&agent) && self.on.contains(&agent)
+    }
+
     fn take(&mut self, wanted: Wanted) {
         match wanted {
             Wanted::Look {
@@ -94,30 +109,42 @@ impl Schedule {
                 if retry {
                     self.failed.clear();
                 }
-                self.marks = marks;
-                self.on = on.into_iter().collect();
-                self.signed_out = signed_out.into_iter().collect();
-                self.in_place = ready
-                    .into_iter()
-                    .filter(|agent| self.on.contains(agent))
-                    .collect();
-                self.queue.retain(|agent| self.in_place.contains(agent));
-                let agents: Vec<AdapterId> = self.in_place.iter().copied().collect();
-                self.queue_up(agents);
+                self.ready = ready.into_iter().collect();
+                self.catalog(marks, on, signed_out);
             }
+            Wanted::Catalog {
+                marks,
+                on,
+                signed_out,
+            } => self.catalog(marks, on, signed_out),
             Wanted::Ready(agent) => {
-                if self.on.contains(&agent) {
-                    self.in_place.insert(agent);
+                self.ready.insert(agent);
+                if self.reads(agent) {
                     self.queue_up(vec![agent]);
                 }
             }
             Wanted::Check(agent) => {
-                if self.in_place.contains(&agent) {
+                if self.reads(agent) {
                     self.failed.remove(&agent);
                     self.queue_up(vec![agent]);
                 }
             }
         }
+    }
+
+    /// Takes what the catalog says and looks at every agent it reads.
+    fn catalog(&mut self, marks: ReadMarks, on: Vec<AdapterId>, signed_out: Vec<AdapterId>) {
+        self.marks = marks;
+        self.on = on.into_iter().collect();
+        self.signed_out = signed_out.into_iter().collect();
+        let reads: Vec<AdapterId> = self
+            .ready
+            .iter()
+            .copied()
+            .filter(|agent| self.on.contains(agent))
+            .collect();
+        self.queue.retain(|agent| reads.contains(agent));
+        self.queue_up(reads);
     }
 
     fn queue_up(&mut self, agents: Vec<AdapterId>) {
@@ -164,7 +191,7 @@ impl Schedule {
 
     /// `agent` is not in place any more: a later look finds it again.
     fn gone(&mut self, agent: AdapterId) {
-        self.in_place.remove(&agent);
+        self.ready.remove(&agent);
     }
 }
 
@@ -366,6 +393,41 @@ mod tests {
         assert_eq!(drain(&mut schedule), [OMP]);
 
         schedule.take(look(&[PI, OMP], &[], ReadMarks::new()));
+        assert_eq!(drain(&mut schedule), [PI, OMP]);
+    }
+
+    /// An adapter installed after the last look stays in place through a
+    /// catalog change: `/` and a sign-in still read it, and switching it off
+    /// and on again brings it back without another look.
+    #[test]
+    fn an_adapter_installed_since_the_last_look_survives_a_catalog_change() {
+        let catalog = |on: &[AdapterId], signed_out: &[AdapterId]| Wanted::Catalog {
+            marks: ReadMarks::new(),
+            on: on.to_vec(),
+            signed_out: signed_out.to_vec(),
+        };
+        let mut schedule = Schedule::default();
+        schedule.take(Wanted::Look {
+            marks: ReadMarks::new(),
+            on: vec![PI, OMP],
+            ready: vec![OMP],
+            signed_out: Vec::new(),
+            retry: false,
+        });
+        assert_eq!(drain(&mut schedule), [OMP]);
+        schedule.take(Wanted::Ready(PI));
+        assert_eq!(drain(&mut schedule), [PI]);
+
+        // A sign-out of Pi reaches the reader as a catalog change.
+        schedule.take(catalog(&[PI, OMP], &[PI]));
+        assert_eq!(drain(&mut schedule), [PI, OMP]);
+        schedule.take(Wanted::Check(PI));
+        assert_eq!(drain(&mut schedule), [PI]);
+
+        schedule.take(catalog(&[OMP], &[]));
+        schedule.take(Wanted::Check(PI));
+        assert_eq!(drain(&mut schedule), [OMP]);
+        schedule.take(catalog(&[PI, OMP], &[]));
         assert_eq!(drain(&mut schedule), [PI, OMP]);
     }
 
