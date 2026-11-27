@@ -848,6 +848,10 @@ impl<'g> Engine for FakeEngine<'g> {
         )
     }
 
+    fn interrupt_agent(&self, _wait: Wait, target: &str, keys: &[&str]) -> Answer<()> {
+        self.ask("interrupt_agent", json!({"target": target, "keys": keys}))
+    }
+
     fn create_worktree(
         &self,
         _wait: Wait,

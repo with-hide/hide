@@ -168,6 +168,10 @@ pub struct InputQueueSnapshot {
     pub max: usize,
     /// The line holds `max`: a send now is refused.
     pub full: bool,
+    /// The line typed last opened no turn the doorbell could see, so the
+    /// next waits for `▶ 이어 보내기` or the agent's next move.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stalled: bool,
     /// What `모두 지우기` took, while `되돌리기` can bring it back.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cleared: Option<InputQueueCleared>,
@@ -191,6 +195,10 @@ pub struct InputQueueCleared {
     pub count: usize,
     /// When `되돌리기` stops being offered.
     pub until_unix_ms: u64,
+    /// Why the last `되돌리기` could not bring them back now (`queue_full`,
+    /// `queue_files_full`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]

@@ -29,11 +29,6 @@ pub const FILES_MAX: usize = hide_node_link::attachments::MAX_FILES;
 pub const FILE_BYTES_MAX: u64 = hide_node_link::attachments::MAX_REQUEST_BYTES;
 /// How long `모두 지우기` can be taken back (`되돌리기`, D-17).
 pub const UNDO_MS: u64 = 10_000;
-/// How long a typed line has to show the turn it started: a line whose
-/// agent's state moved, or rested this long since, has been taken, and the
-/// next may go. A line that starts no turn, such as a command the agent
-/// runs at once, moves no state, and would hold the rest otherwise.
-pub const SETTLE_MS: u64 = 5_000;
 
 /// Why a line did not go, drawn under it while the line is paused (B23,
 /// B24); `contracts/snapshot-wire-enums.json`: `input_queue_failure`.
@@ -81,6 +76,10 @@ pub struct Line {
     pub at_ms: u64,
     #[serde(default)]
     pub failure: Option<Failure>,
+    /// What it takes in the file at most, for the file's cap
+    /// (`SAVED_BYTES_MAX`); counted again when the file is read.
+    #[serde(skip)]
+    pub size: usize,
 }
 
 /// One pane's line.
@@ -95,12 +94,26 @@ pub struct Queue {
     /// turn interrupted at or before it was seen already and pauses nothing.
     #[serde(default)]
     pub baseline_seq: Option<u64>,
-    /// The line on its way to the pane.
-    #[serde(skip)]
+    /// The line on its way to the pane, kept in the file before it is
+    /// typed: a restart that finds it there does not know whether it landed,
+    /// so the line comes back paused as uncertain and is not typed again
+    /// (D-14, B23).
+    #[serde(default, rename = "sending", skip_serializing_if = "Option::is_none")]
     pub typing: Option<u64>,
-    /// The last line typed, until the agent shows its turn (`SETTLE_MS`).
+    /// The last line typed, until the agent's state moves past the one it
+    /// was typed under: the next goes at the rest after that turn (D-02, B3).
     #[serde(skip)]
     pub typed: Option<Typed>,
+    /// The typed line moved nothing: the doorbell found the agent at rest,
+    /// its composer empty, on a pass laid after the line landed, under the
+    /// state it was typed under. The next waits for ▶ or the agent's next
+    /// move (a line that opens no turn).
+    #[serde(skip)]
+    pub stalled: bool,
+    /// ■ is on its way: the line neither goes nor pauses until the keys'
+    /// answer (D-24).
+    #[serde(skip)]
+    pub interrupting: bool,
     /// What `모두 지우기` took, while it can be put back.
     #[serde(skip)]
     pub cleared: Option<Cleared>,
@@ -111,14 +124,19 @@ pub struct Queue {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Typed {
+    /// The engine's state sequence it was typed under.
     pub seq: Option<u64>,
-    pub at_ms: u64,
+    /// The observe pass that was laid when it landed.
+    pub observed: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cleared {
     pub lines: Vec<Line>,
     pub until_ms: u64,
+    /// Why the last `되돌리기` could not bring them back (`queue_full`,
+    /// `queue_files_full`): they stay, for one once there is room.
+    pub refused: Option<&'static str>,
 }
 
 /// What the agent in a pane does now, as far as where new words go.
@@ -137,6 +155,21 @@ pub enum Route {
     Now,
     /// Held at the end of the pane's line.
     Queue,
+}
+
+/// ■'s steps, for a caller that types its keys off the lock (a phone's
+/// reply): the keys, the last look before they are typed, and their answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InterruptStep {
+    /// The agent's keys, the pane's line held meanwhile.
+    Start,
+    /// The agent still works and asks nothing, looked at last before the
+    /// keys are typed (D-24).
+    Ready,
+    /// The keys' answer: `landed` when they may have reached the agent,
+    /// which pauses the line; a refusal that typed nothing leaves it as it
+    /// was (B12).
+    Answered { landed: bool },
 }
 
 /// How a typed line ended.
@@ -172,11 +205,14 @@ impl Queues {
     /// to an agent at rest at once (D-09), and to a working one at the end
     /// of the paused line. An agent that asks takes them as its answer
     /// (D-23) unless a line waits ahead of them.
-    pub fn route(&self, pane: &str, agent: Agent, seq: Option<u64>, now: u64) -> Route {
+    pub fn route(&self, pane: &str, agent: Agent, seq: Option<u64>) -> Route {
         let queue = self.panes.get(pane);
         let waiting = queue.is_some_and(|queue| {
             !queue.paused
-                && (!queue.lines.is_empty() || queue.typing.is_some() || queue.settling(seq, now))
+                && (!queue.lines.is_empty()
+                    || queue.typing.is_some()
+                    || queue.interrupting
+                    || queue.settling(seq))
         });
         if waiting || agent == Agent::Working {
             Route::Queue
@@ -199,6 +235,34 @@ impl Queues {
         seq: Option<u64>,
         now: u64,
     ) -> Result<u64, &'static str> {
+        let mut line = Line {
+            id: 0,
+            text,
+            paths,
+            bytes,
+            stage_id,
+            at_ms: now,
+            failure: None,
+            size: 0,
+        };
+        line.size = line_size(&line);
+        let held = self.panes.get(pane);
+        let (count, files, held_bytes) = held.map_or((0, 0, 0), |queue| {
+            let (files, bytes) = files_of(&queue.lines);
+            (queue.lines.len(), files, bytes)
+        });
+        if count >= LINES_MAX {
+            return Err(FULL);
+        }
+        if files + line.paths.len() > FILES_MAX
+            || held_bytes.saturating_add(line.bytes) > FILE_BYTES_MAX
+        {
+            return Err(FILES_FULL);
+        }
+        let room = if held.is_some() { 0 } else { pane_size(pane) };
+        if self.saved_bytes() + room + line.size > SAVED_BYTES_MAX {
+            return Err(FULL);
+        }
         let queue = self.panes.entry(pane.to_owned()).or_insert_with(|| Queue {
             kind: kind.to_owned(),
             paused: false,
@@ -206,32 +270,31 @@ impl Queues {
             baseline_seq: seq,
             typing: None,
             typed: None,
+            stalled: false,
+            interrupting: false,
             cleared: None,
             hold: None,
         });
-        if queue.lines.len() >= LINES_MAX {
-            return Err(FULL);
-        }
-        let (files, held) = queue.files();
-        if files + paths.len() > FILES_MAX || held.saturating_add(bytes) > FILE_BYTES_MAX {
-            return Err(FILES_FULL);
-        }
         if queue.lines.is_empty() && !queue.paused {
             queue.kind = kind.to_owned();
             queue.baseline_seq = seq;
         }
         self.next_id += 1;
-        let id = self.next_id;
-        queue.lines.push(Line {
-            id,
-            text,
-            paths,
-            bytes,
-            stage_id,
-            at_ms: now,
-            failure: None,
-        });
-        Ok(id)
+        line.id = self.next_id;
+        queue.lines.push(line);
+        Ok(self.next_id)
+    }
+
+    /// What the file takes at most for every line it would keep now, the
+    /// envelope and each pane's own fields counted (`SAVED_BYTES_MAX`).
+    fn saved_bytes(&self) -> usize {
+        self.panes
+            .iter()
+            .map(|(pane, queue)| {
+                pane_size(pane) + queue.lines.iter().map(|line| line.size).sum::<usize>()
+            })
+            .sum::<usize>()
+            + ENVELOPE_SIZE
     }
 
     /// ✕ on a line: it never goes. A line on its way has no ✕ (B7).
@@ -265,9 +328,18 @@ impl Queues {
     /// sequence `seq`, so the interruption that paused it pauses it no more
     /// (B15). Each line's failure goes with the pause.
     pub fn resume(&mut self, pane: &str, kind: &str, seq: Option<u64>) -> bool {
-        let Some(queue) = self.panes.get_mut(pane).filter(|queue| queue.paused) else {
+        let Some(queue) = self.panes.get_mut(pane) else {
             return false;
         };
+        if !queue.paused {
+            // ▶ behind a line that opened no turn: the next goes at the rest.
+            if queue.stalled && !queue.lines.is_empty() {
+                queue.typed = None;
+                queue.stalled = false;
+                return true;
+            }
+            return false;
+        }
         queue.paused = false;
         queue.kind = kind.to_owned();
         queue.baseline_seq = seq;
@@ -294,6 +366,7 @@ impl Queues {
         queue.cleared = Some(Cleared {
             lines: taken,
             until_ms: now + UNDO_MS,
+            refused: None,
         });
         // With the group gone, words sent next wait as a new line does.
         if queue.lines.is_empty() {
@@ -302,22 +375,46 @@ impl Queues {
         true
     }
 
+    /// A `되돌리기` refused for `reason`: the screen says so beside it.
+    pub fn refuse_restore(&mut self, pane: &str, reason: &'static str) {
+        if let Some(cleared) = self
+            .panes
+            .get_mut(pane)
+            .and_then(|queue| queue.cleared.as_mut())
+        {
+            cleared.refused = Some(reason);
+        }
+    }
+
     /// `되돌리기`: the cleared lines come back first, in their order, paused
     /// (B17); refused once the line could not hold them.
     pub fn restore(&mut self, pane: &str, now: u64) -> Result<bool, &'static str> {
+        let saved = self.saved_bytes();
         let Some(queue) = self.panes.get_mut(pane) else {
             return Ok(false);
         };
+        let Some(waiting) = queue.cleared.as_ref() else {
+            return Ok(false);
+        };
+        if now >= waiting.until_ms {
+            return Ok(false);
+        }
+        // Refused before anything moves: what was cleared stays to be put
+        // back once there is room (B17).
+        if waiting.lines.len() + queue.lines.len() > LINES_MAX {
+            return Err(FULL);
+        }
+        let (files, bytes) = files_of(&queue.lines);
+        let (more_files, more_bytes) = files_of(&waiting.lines);
+        if files + more_files > FILES_MAX || bytes.saturating_add(more_bytes) > FILE_BYTES_MAX {
+            return Err(FILES_FULL);
+        }
+        if saved + waiting.lines.iter().map(|line| line.size).sum::<usize>() > SAVED_BYTES_MAX {
+            return Err(FULL);
+        }
         let Some(cleared) = queue.cleared.take() else {
             return Ok(false);
         };
-        if now >= cleared.until_ms {
-            return Ok(false);
-        }
-        if cleared.lines.len() + queue.lines.len() > LINES_MAX {
-            queue.cleared = Some(cleared);
-            return Err(FULL);
-        }
         let mut lines = cleared.lines;
         lines.append(&mut queue.lines);
         queue.lines = lines;
@@ -328,20 +425,14 @@ impl Queues {
     /// The line due to go now in `pane`: `id` when the operator pressed a
     /// paused line's `보내기`, else the head of a line that waits, once the
     /// last typed line showed its turn. Marks it on its way.
-    pub fn take(
-        &mut self,
-        pane: &str,
-        id: Option<u64>,
-        seq: Option<u64>,
-        now: u64,
-    ) -> Option<Line> {
+    pub fn take(&mut self, pane: &str, id: Option<u64>, seq: Option<u64>) -> Option<Line> {
         let queue = self.panes.get_mut(pane)?;
-        if queue.typing.is_some() {
+        if queue.typing.is_some() || queue.interrupting {
             return None;
         }
         let line = match id {
             Some(id) => queue.lines.iter().find(|line| line.id == id)?,
-            None if queue.paused || queue.settling(seq, now) => return None,
+            None if queue.paused || queue.settling(seq) => return None,
             None => queue.lines.first()?,
         }
         .clone();
@@ -350,18 +441,65 @@ impl Queues {
     }
 
     /// Whether `pane` has a line due at its next rest, without taking it.
-    pub fn due(&self, pane: &str, seq: Option<u64>, now: u64) -> bool {
+    pub fn due(&self, pane: &str, seq: Option<u64>) -> bool {
         self.panes.get(pane).is_some_and(|queue| {
             !queue.paused
+                && !queue.interrupting
                 && queue.typing.is_none()
                 && !queue.lines.is_empty()
-                && !queue.settling(seq, now)
+                && !queue.settling(seq)
         })
+    }
+
+    /// Follows the agent after a typed line (D-02): a state past the one the
+    /// line was typed under shows its turn, and the next goes at the rest
+    /// after it. Under that same state, a pass laid at least two after the
+    /// one the line landed in (the pass in flight then may have read the
+    /// pane before it) that finds the agent at rest with its composer empty
+    /// (`at_rest`, the doorbell's verdict) found a line that opens no turn:
+    /// the group offers ▶ (`stalled`). Whether what the group shows changed.
+    pub fn follow_typed(
+        &mut self,
+        pane: &str,
+        seq: Option<u64>,
+        observed: u64,
+        at_rest: bool,
+    ) -> bool {
+        let Some(queue) = self.panes.get_mut(pane) else {
+            return false;
+        };
+        let Some(typed) = queue.typed else {
+            return false;
+        };
+        let stalled = if typed.seq == seq {
+            at_rest && observed >= typed.observed.saturating_add(2)
+        } else {
+            queue.typed = None;
+            false
+        };
+        let changed = queue.stalled != stalled;
+        queue.stalled = stalled;
+        changed
+    }
+
+    /// ■ is on its way to `pane` (`true`), or answered: its line holds
+    /// meanwhile, and pauses only when the keys may have landed (D-24).
+    pub fn interrupting(&mut self, pane: &str, on: bool) {
+        if let Some(queue) = self.panes.get_mut(pane) {
+            queue.interrupting = on;
+        }
     }
 
     /// How the line `id` on its way to `pane` ended; the engine's sequence
     /// `seq` is the one it was typed under. Whether anything changed.
-    pub fn settle(&mut self, pane: &str, id: u64, sent: Sent, seq: Option<u64>, now: u64) -> bool {
+    pub fn settle(
+        &mut self,
+        pane: &str,
+        id: u64,
+        sent: Sent,
+        seq: Option<u64>,
+        observed: u64,
+    ) -> bool {
         let Some(queue) = self
             .panes
             .get_mut(pane)
@@ -373,7 +511,8 @@ impl Queues {
         match sent {
             Sent::Taken => {
                 queue.lines.retain(|line| line.id != id);
-                queue.typed = Some(Typed { seq, at_ms: now });
+                queue.typed = Some(Typed { seq, observed });
+                queue.stalled = false;
             }
             Sent::NotNow => {}
             Sent::Failed(failure) => {
@@ -487,9 +626,11 @@ impl Queues {
                 .collect(),
             max: LINES_MAX,
             full: queue.lines.len() >= LINES_MAX,
+            stalled: queue.stalled && !queue.paused && !queue.lines.is_empty(),
             cleared: queue.cleared.as_ref().map(|cleared| InputQueueCleared {
                 count: cleared.lines.len(),
                 until_unix_ms: cleared.until_ms,
+                refused: cleared.refused,
             }),
         })
     }
@@ -502,14 +643,24 @@ impl Queues {
         self.panes.len() != before
     }
 
-    /// The lines as the file keeps them: a line on its way is kept, since
-    /// whether it landed is not known until its answer.
+    /// The lines as a restart takes them from the file: a line that was on
+    /// its way may have landed, so it comes back paused as uncertain and is
+    /// never typed again on its own (D-14, B23).
     fn bounded(mut self) -> Self {
         self.panes.retain(|pane, queue| {
             queue
                 .lines
                 .retain(|line| !line.text.trim().is_empty() || !line.paths.is_empty());
             queue.lines.truncate(LINES_MAX);
+            if let Some(id) = queue.typing.take()
+                && let Some(line) = queue.lines.iter_mut().find(|line| line.id == id)
+            {
+                line.failure = Some(Failure::Uncertain);
+                queue.paused = true;
+            }
+            for line in &mut queue.lines {
+                line.size = line_size(line);
+            }
             pane.len() <= 512 && !queue.lines.is_empty()
         });
         self
@@ -517,18 +668,36 @@ impl Queues {
 }
 
 impl Queue {
-    /// Whether the last typed line has not shown its turn yet.
-    fn settling(&self, seq: Option<u64>, now: u64) -> bool {
-        self.typed
-            .is_some_and(|typed| typed.seq == seq && now.saturating_sub(typed.at_ms) < SETTLE_MS)
+    /// Whether the last typed line has not shown its turn yet: the agent's
+    /// state has not moved past the one it was typed under (D-02).
+    fn settling(&self, seq: Option<u64>) -> bool {
+        self.typed.is_some_and(|typed| typed.seq == seq)
     }
+}
 
-    /// The files the lines attach, and their bytes.
-    fn files(&self) -> (usize, u64) {
-        self.lines.iter().fold((0, 0), |(files, bytes), line| {
-            (files + line.paths.len(), bytes.saturating_add(line.bytes))
-        })
-    }
+/// The files `lines` attach, and their bytes.
+fn files_of(lines: &[Line]) -> (usize, u64) {
+    lines.iter().fold((0, 0), |(files, bytes), line| {
+        (files + line.paths.len(), bytes.saturating_add(line.bytes))
+    })
+}
+
+/// Room a line's id and a failure written later take beyond what it encodes
+/// to when held.
+const LINE_ROOM: usize = 96;
+/// What a pane's own fields take in the file beside its key and lines.
+const PANE_ROOM: usize = 256;
+/// The file's own fields.
+const ENVELOPE_SIZE: usize = 128;
+
+/// What `line` takes in the file at most: its JSON, escapes included.
+fn line_size(line: &Line) -> usize {
+    serde_json::to_vec(line).map_or(usize::MAX / 4, |bytes| bytes.len()) + LINE_ROOM
+}
+
+/// What a pane's key and fields take in the file, its lines apart.
+fn pane_size(pane: &str) -> usize {
+    serde_json::to_vec(pane).map_or(usize::MAX / 4, |bytes| bytes.len()) + PANE_ROOM
 }
 
 /// The name a file had, from its kept path: hided keeps a file as
@@ -548,7 +717,13 @@ fn file_name(path: &str) -> String {
 }
 
 const SCHEMA_VERSION: u32 = 1;
+/// What a restart reads of the file at most.
 const READ_CAP: u64 = 4 * 1024 * 1024;
+/// What every pane's lines take in the file together at most, counted as
+/// their encoded JSON (PRD desk-queue D-03): kept under `READ_CAP`, so a
+/// file Hide wrote is always read back whole. A send or a `되돌리기` past it
+/// is refused as a full line is, its words staying in the box.
+pub const SAVED_BYTES_MAX: usize = 3 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
 struct File {
@@ -619,6 +794,11 @@ impl InputQueueStore {
     pub(crate) fn save(&self, queues: Queues) {
         self.file.save(queues);
     }
+
+    /// [`Self::save`], with the wait for it to reach the disk.
+    pub(crate) fn save_written(&self, queues: Queues) -> crate::latest_file::Written {
+        self.file.save_written(queues)
+    }
 }
 
 #[cfg(test)]
@@ -655,45 +835,44 @@ mod tests {
     #[test]
     fn words_wait_behind_a_turn_or_a_waiting_line_and_go_now_otherwise() {
         let mut queues = Queues::default();
-        assert_eq!(queues.route(PANE, Agent::AtRest, Some(1), 0), Route::Now);
-        assert_eq!(queues.route(PANE, Agent::Asking, Some(1), 0), Route::Now);
-        assert_eq!(queues.route(PANE, Agent::Working, Some(1), 0), Route::Queue);
+        assert_eq!(queues.route(PANE, Agent::AtRest, Some(1)), Route::Now);
+        assert_eq!(queues.route(PANE, Agent::Asking, Some(1)), Route::Now);
+        assert_eq!(queues.route(PANE, Agent::Working, Some(1)), Route::Queue);
         push(&mut queues, "first").unwrap();
-        assert_eq!(queues.route(PANE, Agent::Asking, Some(1), 0), Route::Queue);
-        assert_eq!(queues.route(PANE, Agent::AtRest, Some(1), 0), Route::Queue);
+        assert_eq!(queues.route(PANE, Agent::Asking, Some(1)), Route::Queue);
+        assert_eq!(queues.route(PANE, Agent::AtRest, Some(1)), Route::Queue);
         assert!(queues.pause(PANE));
-        assert_eq!(queues.route(PANE, Agent::AtRest, Some(1), 0), Route::Now);
-        assert_eq!(queues.route(PANE, Agent::Working, Some(1), 0), Route::Queue);
+        assert_eq!(queues.route(PANE, Agent::AtRest, Some(1)), Route::Now);
+        assert_eq!(queues.route(PANE, Agent::Working, Some(1)), Route::Queue);
     }
 
     /// B3: the head goes first, one at a time; the next waits until the
-    /// typed line shows its turn, or `SETTLE_MS` passed with none.
+    /// typed line shows its turn, however long that takes (D-02).
     #[test]
     fn lines_go_one_at_a_time_in_order_after_the_turn_before_shows() {
         let mut queues = Queues::default();
         let first = push(&mut queues, "first").unwrap();
         let second = push(&mut queues, "second").unwrap();
-        let line = queues.take(PANE, None, Some(1), 100).unwrap();
+        let line = queues.take(PANE, None, Some(1)).unwrap();
         assert_eq!(line.id, first);
         assert!(
-            queues.take(PANE, None, Some(1), 100).is_none(),
+            queues.take(PANE, None, Some(1)).is_none(),
             "one on its way at a time"
         );
-        assert!(queues.settle(PANE, first, Sent::Taken, Some(1), 100));
+        assert!(queues.settle(PANE, first, Sent::Taken, Some(1), 10));
         assert_eq!(texts(&queues), ["second"]);
         assert!(
-            !queues.due(PANE, Some(1), 200),
+            !queues.due(PANE, Some(1)),
             "the turn it started has not shown"
         );
         assert_eq!(
-            queues.route(PANE, Agent::AtRest, Some(1), 200),
+            queues.route(PANE, Agent::AtRest, Some(1)),
             Route::Queue,
             "new words wait behind it too"
         );
-        assert!(queues.due(PANE, Some(3), 200), "the agent's state moved");
-        assert!(queues.due(PANE, Some(1), 100 + SETTLE_MS), "or it settled");
-        assert_eq!(queues.take(PANE, None, Some(3), 200).unwrap().id, second);
-        assert!(queues.settle(PANE, second, Sent::Taken, Some(3), 200));
+        assert!(queues.due(PANE, Some(3)), "the agent's state moved");
+        assert_eq!(queues.take(PANE, None, Some(3)).unwrap().id, second);
+        assert!(queues.settle(PANE, second, Sent::Taken, Some(3), 20));
         assert!(
             queues.snapshot(PANE).is_none(),
             "the last line gone, the group goes"
@@ -762,7 +941,7 @@ mod tests {
         let mut queues = Queues::default();
         let first = push(&mut queues, "first").unwrap();
         let second = push(&mut queues, "second").unwrap();
-        queues.take(PANE, None, Some(1), 0).unwrap();
+        queues.take(PANE, None, Some(1)).unwrap();
         assert!(!queues.remove(PANE, first));
         assert!(queues.remove(PANE, second));
         assert_eq!(texts(&queues), ["first"]);
@@ -782,7 +961,7 @@ mod tests {
         assert!(queues.follow(PANE, Some("claude"), Some(2)));
         assert!(queues.panes[PANE].paused);
         assert!(
-            queues.take(PANE, None, Some(2), 0).is_none(),
+            queues.take(PANE, None, Some(2)).is_none(),
             "a paused line does not go"
         );
         assert!(queues.resume(PANE, "claude", Some(2)));
@@ -800,7 +979,7 @@ mod tests {
         push(&mut queues, "first").unwrap();
         let second = push(&mut queues, "second").unwrap();
         queues.pause(PANE);
-        let line = queues.take(PANE, Some(second), Some(1), 0).unwrap();
+        let line = queues.take(PANE, Some(second), Some(1)).unwrap();
         assert_eq!(line.text, "second");
         queues.settle(PANE, second, Sent::Taken, Some(1), 0);
         assert_eq!(texts(&queues), ["first"]);
@@ -814,15 +993,15 @@ mod tests {
     fn a_line_not_typed_stays_first_and_a_failure_pauses_with_its_reason() {
         let mut queues = Queues::default();
         let first = push(&mut queues, "first").unwrap();
-        queues.take(PANE, None, Some(1), 0).unwrap();
+        queues.take(PANE, None, Some(1)).unwrap();
         queues.settle(PANE, first, Sent::NotNow, Some(1), 0);
         assert!(!queues.panes[PANE].paused);
-        assert_eq!(queues.take(PANE, None, Some(1), 0).unwrap().id, first);
+        assert_eq!(queues.take(PANE, None, Some(1)).unwrap().id, first);
         queues.settle(PANE, first, Sent::Failed(Failure::Uncertain), Some(1), 0);
         let snapshot = queues.snapshot(PANE).unwrap();
         assert_eq!(snapshot.state, InputQueueState::Paused);
         assert_eq!(snapshot.lines[0].failure, Some(Failure::Uncertain));
-        assert!(queues.take(PANE, None, Some(5), 0).is_none());
+        assert!(queues.take(PANE, None, Some(5)).is_none());
         queues.resume(PANE, "claude", Some(5));
         assert_eq!(queues.snapshot(PANE).unwrap().lines[0].failure, None);
     }
@@ -847,20 +1026,163 @@ mod tests {
         assert_eq!(queues.restore(PANE, 2_000 + UNDO_MS), Ok(false));
     }
 
-    /// B21: the file keeps the lines and whether they were paused; what was
-    /// on its way is kept too, since its landing is not known.
+    /// B21, B23: the file keeps the lines and whether they were paused; a
+    /// line that was on its way may have landed, so a restart brings it back
+    /// paused as uncertain and never types it on its own.
     #[test]
-    fn the_file_keeps_the_lines_and_their_state() {
+    fn the_file_keeps_the_lines_and_a_line_on_its_way_comes_back_uncertain() {
         let mut queues = Queues::default();
-        push(&mut queues, "first").unwrap();
+        let first = push(&mut queues, "first").unwrap();
         push(&mut queues, "second").unwrap();
-        queues.pause(PANE);
-        queues.take(PANE, Some(1), Some(1), 0);
-        let read = decode(&encode(&queues).unwrap()).unwrap();
-        assert_eq!(read.panes[PANE].lines, queues.panes[PANE].lines);
-        assert!(read.panes[PANE].paused);
-        assert_eq!(read.panes[PANE].typing, None);
+        queues.take(PANE, None, Some(1)).unwrap();
+        let mut read = decode(&encode(&queues).unwrap()).unwrap();
         assert_eq!(read.next_id, queues.next_id);
+        assert_eq!(texts(&read), ["first", "second"]);
+        assert!(read.panes[PANE].paused, "nothing goes on its own");
+        assert_eq!(read.panes[PANE].typing, None);
+        assert_eq!(
+            read.panes[PANE].lines[0].failure,
+            Some(Failure::Uncertain),
+            "보냈는지 확인하지 못했어요"
+        );
+        assert_eq!(read.panes[PANE].lines[1].failure, None);
+        assert!(read.take(PANE, None, Some(1)).is_none());
+        assert_eq!(read.take(PANE, Some(first), Some(1)).unwrap().id, first);
+    }
+
+    /// The Conductor's call for R8 (D-02): a typed line whose turn shows
+    /// lets the next go at the rest after it, with no ▶; one that moves
+    /// nothing, found at rest two passes after it landed, offers ▶, and the
+    /// next waits for it or for the agent's next move.
+    #[test]
+    fn a_line_that_opens_no_turn_offers_resume_and_one_that_does_never_does() {
+        let mut queues = Queues::default();
+        let first = push(&mut queues, "first").unwrap();
+        push(&mut queues, "second").unwrap();
+        queues.take(PANE, None, Some(1)).unwrap();
+        queues.settle(PANE, first, Sent::Taken, Some(1), 10);
+        assert!(
+            !queues.follow_typed(PANE, Some(1), 11, true),
+            "the pass in flight"
+        );
+        assert!(!queues.snapshot(PANE).unwrap().stalled);
+        assert!(queues.follow_typed(PANE, Some(1), 12, true));
+        assert!(queues.snapshot(PANE).unwrap().stalled, "▶ 이어 보내기");
+        assert!(!queues.due(PANE, Some(1)), "the next waits for it");
+        assert!(queues.resume(PANE, "claude", Some(1)));
+        assert!(!queues.snapshot(PANE).unwrap().stalled);
+        assert!(queues.due(PANE, Some(1)), "▶ let it go");
+
+        let mut queues = Queues::default();
+        let first = push(&mut queues, "first").unwrap();
+        push(&mut queues, "second").unwrap();
+        queues.take(PANE, None, Some(1)).unwrap();
+        queues.settle(PANE, first, Sent::Taken, Some(1), 10);
+        assert!(
+            !queues.follow_typed(PANE, Some(1), 12, false),
+            "at work, no ▶"
+        );
+        assert!(
+            !queues.follow_typed(PANE, Some(2), 13, true),
+            "its turn showed"
+        );
+        assert!(!queues.snapshot(PANE).unwrap().stalled);
+        assert!(queues.due(PANE, Some(2)));
+        assert!(!queues.resume(PANE, "claude", Some(2)), "nothing to resume");
+    }
+
+    /// D-03, B9, B17: `되돌리기` past one send's files is refused, what was
+    /// cleared stays with the reason beside it, and comes back once the new
+    /// line is gone.
+    #[test]
+    fn a_restore_past_the_caps_keeps_what_was_cleared_until_there_is_room() {
+        let mut queues = Queues::default();
+        let paths = |name: &str| -> Vec<String> {
+            (0..FILES_MAX)
+                .map(|index| format!("/{name}{index}"))
+                .collect()
+        };
+        queues
+            .push(
+                PANE,
+                "claude",
+                "a".into(),
+                paths("a"),
+                10,
+                STAGE.into(),
+                None,
+                0,
+            )
+            .unwrap();
+        assert!(queues.clear(PANE, 0));
+        let second = queues
+            .push(
+                PANE,
+                "claude",
+                "b".into(),
+                paths("b"),
+                10,
+                STAGE.into(),
+                None,
+                0,
+            )
+            .unwrap();
+        assert_eq!(queues.restore(PANE, 1), Err(FILES_FULL));
+        queues.refuse_restore(PANE, FILES_FULL);
+        let cleared = queues.snapshot(PANE).unwrap().cleared.unwrap();
+        assert_eq!((cleared.count, cleared.refused), (1, Some(FILES_FULL)));
+        assert!(queues.remove(PANE, second));
+        assert_eq!(queues.restore(PANE, 2), Ok(true));
+        assert_eq!(texts(&queues), ["a"]);
+    }
+
+    /// D-03 (the Conductor's call for R5): every pane's lines together stay
+    /// under the saved-size cap, which stays under the read cap, so a file
+    /// Hide wrote at its fullest, every text escaped and every line on its
+    /// way or failed, is read back whole.
+    #[test]
+    fn the_fullest_file_the_caps_allow_is_read_back_whole() {
+        const _: () = assert!((SAVED_BYTES_MAX as u64) < READ_CAP);
+        let text = "\u{1}\"".repeat(16 * 1024 / 2);
+        let mut queues = Queues::default();
+        let mut refused = false;
+        'panes: for pane in 0.. {
+            let key = format!("remote:{}:pane:{pane}", "d".repeat(400));
+            for _ in 0..LINES_MAX {
+                let paths = (0..FILES_MAX)
+                    .map(|index| format!("/{}/{index}", "f".repeat(200)))
+                    .collect();
+                match queues.push(
+                    &key,
+                    "claude",
+                    text.clone(),
+                    paths,
+                    0,
+                    STAGE.into(),
+                    Some(u64::MAX),
+                    u64::MAX,
+                ) {
+                    Ok(_) => {}
+                    Err(FULL) => {
+                        refused = true;
+                        break 'panes;
+                    }
+                    Err(other) => panic!("{other}"),
+                }
+            }
+        }
+        assert!(refused, "the cap refuses before the file outgrows the read");
+        for queue in queues.panes.values_mut() {
+            queue.typing = queue.lines.first().map(|line| line.id);
+            queue.paused = true;
+            queue.baseline_seq = Some(u64::MAX);
+            for line in &mut queue.lines {
+                line.failure = Some(Failure::DeviceUnreachable);
+            }
+        }
+        let bytes = encode(&queues).unwrap();
+        assert!(bytes.len() <= SAVED_BYTES_MAX, "{}", bytes.len());
+        assert_eq!(decode(&bytes).unwrap().panes.len(), queues.panes.len());
     }
 
     #[test]

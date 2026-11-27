@@ -91,9 +91,9 @@ pub(super) struct Desk {
     /// operator's next send, `다시 시작` or a session that opens, rather
     /// than meet the same refusal one after another.
     held: bool,
-    /// What `모두 지우기` took from the waiting line, and until when
-    /// `되돌리기` brings it back (PRD desk-queue D-17); never stored.
-    cleared: Option<(Vec<DeskQueuedMessage>, u64)>,
+    /// What `모두 지우기` took from the waiting line, while `되돌리기` can
+    /// bring it back (PRD desk-queue D-17); never stored.
+    cleared: Option<DeskCleared>,
     /// Agents that refused Desk for their sign-in since their last session
     /// opened: their word reads signed out whatever Hide AI's read of the
     /// login says, since a login file can outlive its sign-in.
@@ -127,6 +127,15 @@ pub(super) struct Desk {
     /// them themselves.
     #[cfg(test)]
     launched: Vec<String>,
+}
+
+/// What `모두 지우기` took from Desk's waiting line.
+struct DeskCleared {
+    messages: Vec<DeskQueuedMessage>,
+    /// Until when `되돌리기` brings them back.
+    until: u64,
+    /// Why the last `되돌리기` could not (`queue_full`).
+    refused: Option<&'static str>,
 }
 
 /// One of Desk's agents as Hide's catalog says it on the core's own
@@ -833,11 +842,14 @@ impl Runtime {
                 } if Some(*id) == turn => Some(attachments),
                 _ => None,
             });
+        // Once `되돌리기` is no longer offered, its files are let go.
+        let now = crate::links::now_ms();
         let cleared = self
             .desk
             .cleared
             .iter()
-            .flat_map(|(messages, _)| messages.iter());
+            .filter(|cleared| now < cleared.until)
+            .flat_map(|cleared| cleared.messages.iter());
         self.desk
             .stored
             .queued
@@ -898,23 +910,35 @@ impl Runtime {
             return false;
         }
         let until = crate::links::now_ms() + crate::input_queue::UNDO_MS;
-        self.desk.cleared = Some((std::mem::take(&mut self.desk.stored.queued), until));
+        self.desk.cleared = Some(DeskCleared {
+            messages: std::mem::take(&mut self.desk.stored.queued),
+            until,
+            refused: None,
+        });
         self.desk.stored.queued_paused = false;
         true
     }
 
     /// `되돌리기`: the cleared messages come back first, in their order,
-    /// stopped; refused while the line could not hold them.
+    /// stopped. Refused while the line could not hold them, with nothing
+    /// moved: they stay to be put back once there is room, and the screen
+    /// says why (B17).
     fn desk_queued_restore(&mut self) -> bool {
-        let Some((messages, until)) = self.desk.cleared.take() else {
+        let Some(cleared) = self.desk.cleared.as_mut() else {
             return false;
         };
-        if crate::links::now_ms() >= until
-            || messages.len() + self.desk.stored.queued.len() > DESK_QUEUED_MAX
-        {
-            return false;
+        if crate::links::now_ms() >= cleared.until {
+            self.desk.cleared = None;
+            return true;
         }
-        let mut queued = messages;
+        if cleared.messages.len() + self.desk.stored.queued.len() > DESK_QUEUED_MAX {
+            cleared.refused = Some(crate::input_queue::FULL);
+            return true;
+        }
+        let Some(cleared) = self.desk.cleared.take() else {
+            return false;
+        };
+        let mut queued = cleared.messages;
         queued.append(&mut self.desk.stored.queued);
         self.desk.stored.queued = queued;
         self.desk.stored.queued_paused = true;
@@ -2008,10 +2032,11 @@ impl Runtime {
                 queued_full: desk.stored.queued.len() >= DESK_QUEUED_MAX,
                 queued_held: desk.held && !desk.stored.queued.is_empty(),
                 queued_paused: desk.stored.queued_paused && !desk.stored.queued.is_empty(),
-                queued_cleared: desk.cleared.as_ref().map(|(messages, until)| {
+                queued_cleared: desk.cleared.as_ref().map(|cleared| {
                     crate::model::InputQueueCleared {
-                        count: messages.len(),
-                        until_unix_ms: *until,
+                        count: cleared.messages.len(),
+                        until_unix_ms: cleared.until,
+                        refused: cleared.refused,
                     }
                 }),
             },
@@ -3848,6 +3873,51 @@ mod tests {
             json!({"text": "one too many"})
         ));
         assert_eq!(queued(&runtime).len(), DESK_QUEUED_MAX);
+    }
+
+    /// PRD desk-queue B17: `되돌리기` while the line could not hold what was
+    /// cleared moves nothing: it stays, the screen says the line is full,
+    /// and it comes back once there is room.
+    #[test]
+    fn a_restore_desk_cannot_hold_keeps_what_was_cleared_until_there_is_room() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _received, _) = talking(root.path());
+        for index in 0..DESK_QUEUED_MAX {
+            assert!(event(
+                &mut runtime,
+                "desk_send",
+                json!({"text": format!("old {index}")})
+            ));
+        }
+        assert!(event(&mut runtime, "desk_queued_clear", json!({})));
+        assert!(event(&mut runtime, "desk_send", json!({"text": "new"})));
+        assert!(event(&mut runtime, "desk_queued_restore", json!({})));
+        let cleared = |runtime: &Runtime| {
+            runtime
+                .snapshot
+                .desk
+                .as_ref()
+                .unwrap()
+                .conversation
+                .queued_cleared
+                .clone()
+        };
+        let refused = cleared(&runtime).unwrap();
+        assert_eq!(
+            (refused.count, refused.refused),
+            (DESK_QUEUED_MAX, Some(crate::input_queue::FULL))
+        );
+        assert_eq!(queued(&runtime).len(), 1);
+        let new = queued(&runtime)[0].0;
+        assert!(event(
+            &mut runtime,
+            "desk_queued_remove",
+            json!({"id": new})
+        ));
+        assert!(event(&mut runtime, "desk_queued_restore", json!({})));
+        assert_eq!(queued(&runtime).len(), DESK_QUEUED_MAX);
+        assert_eq!(queued(&runtime)[0].1, "old 0");
+        assert!(cleared(&runtime).is_none());
     }
 
     /// A queued message is kept with Desk's store, so after hided starts

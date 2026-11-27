@@ -173,6 +173,10 @@ pub enum Typed<'a> {
     /// Keys in order, each an engine key name (`down`, `enter`, `esc`) or
     /// one character typed as a key press, never pasted.
     Keys(&'a [&'a str]),
+    /// ■'s keys, typed only while the engine reads the agent at work where
+    /// it types them (PRD desk-queue D-24): refused, typing nothing, once
+    /// the agent asks or rests.
+    Interrupt(&'a [&'a str]),
     /// A choice's keys, each typed only while the screen shows what `screen`
     /// expects there.
     Choice {
@@ -188,7 +192,9 @@ impl Typed<'_> {
     fn reserved(&self) -> usize {
         match self {
             Self::Words(text) | Self::AtRest(text) => text.len() + 1,
-            Self::Keys(keys) | Self::Choice { keys, .. } => keys.len() * KEY_BYTES,
+            Self::Keys(keys) | Self::Interrupt(keys) | Self::Choice { keys, .. } => {
+                keys.len() * KEY_BYTES
+            }
         }
     }
 }
@@ -242,6 +248,9 @@ impl Unwritten {
             EngineError::Refused { code, .. } if code == "agent_not_ready" => {
                 Self::Busy("agent_busy")
             }
+            EngineError::Refused { code, .. } if code == "agent_not_working" => {
+                Self::Busy("agent_not_working")
+            }
             EngineError::Refused { .. } => Self::Refused,
             EngineError::NotRunning(_) | EngineError::Transport(_) | EngineError::Request(_) => {
                 Self::Unavailable
@@ -278,7 +287,7 @@ pub fn write(
     // interleave between a row read and the key after it.
     let _keys = match typed {
         Typed::Words(_) | Typed::AtRest(_) => None,
-        Typed::Keys(_) | Typed::Choice { .. } => Some(
+        Typed::Keys(_) | Typed::Interrupt(_) | Typed::Choice { .. } => Some(
             gate.hold_keys(core_pane)
                 .ok_or(Unwritten::Unready(IN_FLIGHT))?,
         ),
@@ -292,6 +301,9 @@ pub fn write(
             .prompt_agent(raw_pane, text, PromptBy::Letter, STEP_TIMEOUT)
             .map_err(|error| Unwritten::of(&error)),
         Typed::Keys(keys) => press(&engine, raw_pane, keys, None),
+        Typed::Interrupt(keys) => engine
+            .interrupt_agent(raw_pane, keys, STEP_TIMEOUT)
+            .map_err(|error| Unwritten::of(&error)),
         Typed::Choice { keys, screen } => press(&engine, raw_pane, keys, Some(screen)),
     }
 }

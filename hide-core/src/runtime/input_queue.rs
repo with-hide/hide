@@ -12,11 +12,16 @@
 
 use super::*;
 use crate::delivery::doorbell::Hold;
-use crate::input_queue::{Agent, Failure, InputQueueStore, Queues, Route, Sent};
+use crate::input_queue::{Agent, Failure, InputQueueStore, InterruptStep, Queues, Route, Sent};
 
 /// How long a line the pane could not take now waits before it is tried
-/// again (the agent moved, the pane's machine did not answer).
+/// again (the agent moved, the pane's machine did not answer, its file could
+/// not be saved).
 const RETRY_MS: u64 = 2_000;
+/// How long a line waits for the file that marks it on its way to reach the
+/// disk before it is typed (D-14): past it, nothing is typed and the line is
+/// tried again.
+const SAVE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Default)]
 pub(crate) struct InputQueueWork {
@@ -114,6 +119,15 @@ impl Runtime {
         }
     }
 
+    /// Saves the lines now, with the wait for them to reach the disk; none
+    /// for a runtime that keeps no file (a test's).
+    pub(super) fn save_input_queue_written(&self) -> Option<crate::latest_file::Written> {
+        self.input_queue
+            .store
+            .as_ref()
+            .map(|store| store.save_written(self.input_queue.queues.clone()))
+    }
+
     /// The lines changed: saved, and the open thread's section redrawn.
     fn input_queue_changed(&mut self) -> bool {
         self.save_input_queue();
@@ -142,6 +156,15 @@ impl Runtime {
     /// (D-13).
     pub(crate) fn input_queue_waits(&self, pane: &str) -> bool {
         self.input_queue.queues.waits(pane)
+    }
+
+    /// Whether the operator's waiting words hold a letter's bell for the
+    /// pane `observation` shows: only at the rest those words wait for, so
+    /// they go first then; a bell the doorbell lets into a turn (five
+    /// minutes, `--now`) rings as it did (D-13).
+    pub(crate) fn input_queue_holds_bell(&self, observation: &delivery::Observation) -> bool {
+        self.input_queue_waits(&observation.actor.pane_id)
+            && crate::delivery::doorbell::judge_operator(observation).is_ok()
     }
 
     /// Every pane where the operator's words wait: none of their agents is
@@ -193,9 +216,7 @@ impl Runtime {
     /// Where the operator's words to `pane` go now (D-01, D-09, D-23).
     pub(crate) fn input_route(&self, pane: &str) -> Route {
         let (agent, seq) = self.queue_agent(pane);
-        self.input_queue
-            .queues
-            .route(pane, agent, seq, unix_milliseconds())
+        self.input_queue.queues.route(pane, agent, seq)
     }
 
     /// Holds `text` with the files at `paths` (kept by hided, `bytes`
@@ -239,7 +260,7 @@ impl Runtime {
             Err(reason) => {
                 crate::diagnostic!(serde_json::json!({
                     "component": "input_queue", "kind": "input_queue.refused",
-                    "pane_id": pane, "reason": reason,
+                    "pane_id": pane, "reason": reason, "files": files,
                 }));
                 Err(reason)
             }
@@ -248,10 +269,10 @@ impl Runtime {
 
     pub(super) fn input_queue_event(&mut self, event: QueueEvent) -> bool {
         let now = unix_milliseconds();
-        let (pane, changed, action) = match event {
+        let (pane, line_id, changed, action) = match event {
             QueueEvent::Remove(line) => {
                 let changed = self.input_queue.queues.remove(&line.pane_id, line.id);
-                (line.pane_id, changed, "removed")
+                (line.pane_id, Some(line.id), changed, "removed")
             }
             QueueEvent::Send(line) => {
                 // Only a paused line's own `보내기`, while the agent rests:
@@ -269,8 +290,8 @@ impl Runtime {
                             crate::delivery::doorbell::judge_operator(observation).is_ok()
                         });
                 let changed =
-                    paused && resting && self.start_queued_line(&line.pane_id, Some(line.id), now);
-                (line.pane_id, changed, "send_pressed")
+                    paused && resting && self.start_queued_line(&line.pane_id, Some(line.id));
+                (line.pane_id, Some(line.id), changed, "send_pressed")
             }
             QueueEvent::Resume(pane) => {
                 let (kind, seq) = self
@@ -290,19 +311,28 @@ impl Runtime {
                     // No agent to send to: the line stays paused (B26).
                     None => false,
                 };
-                (pane.pane_id, changed, "resumed")
+                (pane.pane_id, None, changed, "resumed")
             }
             QueueEvent::Clear(pane) => {
                 let changed = self.input_queue.queues.clear(&pane.pane_id, now);
-                (pane.pane_id, changed, "cleared")
+                (pane.pane_id, None, changed, "cleared")
             }
             QueueEvent::Restore(pane) => {
-                let changed = self
-                    .input_queue
-                    .queues
-                    .restore(&pane.pane_id, now)
-                    .unwrap_or(false);
-                (pane.pane_id, changed, "restored")
+                match self.input_queue.queues.restore(&pane.pane_id, now) {
+                    Ok(changed) => (pane.pane_id, None, changed, "restored"),
+                    // What was cleared stays to be put back; the screen says why
+                    // it could not come back now (B17, engineering 10).
+                    Err(reason) => {
+                        crate::diagnostic!(serde_json::json!({
+                            "component": "input_queue", "kind": "input_queue.restore_refused",
+                            "pane_id": pane.pane_id, "reason": reason,
+                        }));
+                        self.input_queue
+                            .queues
+                            .refuse_restore(&pane.pane_id, reason);
+                        return self.input_queue_changed();
+                    }
+                }
             }
             QueueEvent::Interrupt(payload) => return self.interrupt_session_thread(payload),
         };
@@ -311,23 +341,47 @@ impl Runtime {
         }
         crate::diagnostic!(serde_json::json!({
             "component": "input_queue", "kind": format!("input_queue.{action}"),
-            "pane_id": pane,
+            "pane_id": pane, "line_id": line_id,
         }));
         self.input_queue_changed()
     }
 
-    /// ■: the keys the agent's definition names to interrupt a turn
-    /// (`[interrupt]`), for `pane` while its agent works, and its line paused
-    /// (D-08, D-24). Refused, with nothing typed and nothing paused, while
-    /// the agent asks (an Esc would refuse a permission), rests, or has no
-    /// keys declared. The caller types the keys off the lock.
-    pub(crate) fn interrupt_keys(&mut self, pane: &str) -> Result<Vec<String>, &'static str> {
-        let (agent, _) = self.queue_agent(pane);
-        match agent {
-            Agent::Asking => return Err(INTERRUPT_ASKING),
-            Agent::AtRest => return Err(INTERRUPT_NOT_WORKING),
-            Agent::Working => {}
+    /// ■ for a caller that types the keys off the lock (`InterruptStep`):
+    /// the keys on `Start`, nothing on the others.
+    pub(crate) fn interrupt_step(
+        &mut self,
+        pane: &str,
+        step: InterruptStep,
+    ) -> Result<Vec<String>, &'static str> {
+        match step {
+            InterruptStep::Start => self.interrupt_keys(pane),
+            InterruptStep::Ready => self.interrupt_still(pane).map(|()| Vec::new()),
+            InterruptStep::Answered { landed } => {
+                self.interrupt_answered(pane, landed);
+                Ok(Vec::new())
+            }
         }
+    }
+
+    /// Whether ■ may type into `pane` now: its agent works and asks nothing
+    /// (D-24, B12).
+    fn interrupt_still(&self, pane: &str) -> Result<(), &'static str> {
+        match self.queue_agent(pane).0 {
+            Agent::Working => Ok(()),
+            Agent::Asking => Err(INTERRUPT_ASKING),
+            Agent::AtRest => Err(INTERRUPT_NOT_WORKING),
+        }
+    }
+
+    /// ■: the keys the agent's definition names to interrupt a turn
+    /// (`[interrupt]`), for `pane` while its agent works. Refused, with
+    /// nothing typed and nothing paused, while the agent asks (an Esc would
+    /// refuse a permission), rests, or has no keys declared. Its line holds
+    /// until the keys' answer (`interrupt_answered`), so none of it goes
+    /// into the rest the keys may bring. The caller types the keys off the
+    /// lock, through `Typed::Interrupt`, the engine's last look.
+    fn interrupt_keys(&mut self, pane: &str) -> Result<Vec<String>, &'static str> {
+        self.interrupt_still(pane)?;
         let kind = self
             .delivery_observations
             .get(pane)
@@ -338,9 +392,7 @@ impl Runtime {
                 .and_then(|definition| definition.interrupt.as_ref())
                 .map(|interrupt| interrupt.keys.clone())
                 .ok_or(INTERRUPT_UNSUPPORTED)?;
-        if self.input_queue.queues.pause(pane) {
-            self.input_queue_changed();
-        }
+        self.input_queue.queues.interrupting(pane, true);
         crate::diagnostic!(serde_json::json!({
             "component": "input_queue", "kind": "input_queue.interrupt",
             "pane_id": pane, "agent": kind,
@@ -349,6 +401,19 @@ impl Runtime {
         // doorbell must not judge the pane while they land.
         self.note_hide_typing(pane);
         Ok(keys)
+    }
+
+    /// ■'s answer in `pane`: keys that may have reached the agent pause its
+    /// line (D-08); a refusal that typed nothing lets it go on as it was.
+    fn interrupt_answered(&mut self, pane: &str, landed: bool) {
+        self.input_queue.queues.interrupting(pane, false);
+        if landed && self.input_queue.queues.pause(pane) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "input_queue", "kind": "input_queue.paused",
+                "pane_id": pane, "reason": "stopped",
+            }));
+        }
+        self.input_queue_changed();
     }
 
     /// ■ under the open thread's box: the keys are typed through the thread's
@@ -370,15 +435,15 @@ impl Runtime {
         else {
             return self.settle_thread_input(&payload.request_id, Err("closed"));
         };
-        let keys = match self.interrupt_keys(&payload.pane_id) {
-            Ok(keys) => keys,
-            Err(reason) => return self.settle_thread_input(&payload.request_id, Err(reason)),
-        };
         let Some(engine) = self
             .delivery_engine(&device)
             .map(crate::engine::EngineHandle::new)
         else {
             return self.settle_thread_input(&payload.request_id, Err("device_unreachable"));
+        };
+        let keys = match self.interrupt_keys(&payload.pane_id) {
+            Ok(keys) => keys,
+            Err(reason) => return self.settle_thread_input(&payload.request_id, Err(reason)),
         };
         let terminals: Arc<dyn hide_node_link::terminal::TerminalRoutes> =
             Arc::clone(&self.terminals);
@@ -392,37 +457,57 @@ impl Runtime {
                 reason: None,
             });
         });
-        let press = move || {
+        // The keys' answer: whether they may have landed, which pauses the
+        // line, and what the box says.
+        let press = move |still: &dyn Fn() -> Result<(), &'static str>| {
             let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
-            crate::operator_input::write(
+            let written = crate::operator_input::write(
                 terminals.as_ref(),
                 &gate,
                 &pane,
                 &raw_pane,
-                crate::operator_input::Typed::Keys(&keys),
-                &|| Ok(engine.clone()),
+                crate::operator_input::Typed::Interrupt(&keys),
+                &|| still().map(|()| engine.clone()),
+            );
+            let landed = written
+                .as_ref()
+                .map_or_else(|unwritten| !unwritten.certain(), |_| true);
+            (
+                landed,
+                written.map_err(crate::operator_input::Unwritten::reason),
             )
-            .map_err(crate::operator_input::Unwritten::reason)
         };
+        let pane_id = payload.pane_id.clone();
         let Some(context) = self.worker_context.clone() else {
-            let pressed = press();
+            let still = self.interrupt_still(&pane_id);
+            let (landed, pressed) = press(&|| still);
+            self.interrupt_answered(&pane_id, landed);
             return self.settle_thread_input(&request_id, pressed);
         };
         let spawned = thread::Builder::new()
             .name("hide-interrupt".to_owned())
             .spawn(move || {
-                let pressed = press();
+                // The agent may have turned to a question since the press:
+                // the write looks once more, last, that it still works.
+                let still = || {
+                    let runtime = context.runtime.upgrade().ok_or("closed")?;
+                    let runtime = runtime.lock().map_err(|_| "unavailable")?;
+                    runtime.interrupt_still(&pane_id)
+                };
+                let (landed, pressed) = press(&still);
                 if let Err(reason) = pressed {
                     crate::diagnostic!(serde_json::json!({
                         "component": "input_queue", "kind": "input_queue.interrupt_failed",
-                        "reason": reason,
+                        "pane_id": pane_id, "request_id": request_id, "reason": reason,
                     }));
                 }
                 apply_queue(&context, move |runtime| {
+                    runtime.interrupt_answered(&pane_id, landed);
                     runtime.settle_thread_input(&request_id, pressed)
                 });
             });
         if spawned.is_err() {
+            self.interrupt_answered(&payload.pane_id, false);
             return self.settle_thread_input(&payload.request_id, Err("unavailable"));
         }
         true
@@ -461,23 +546,29 @@ impl Runtime {
             let Some(observation) = self.delivery_observations.get(&pane) else {
                 continue;
             };
+            let hold = crate::delivery::doorbell::judge_operator(observation);
+            let seq = observation.state_change_seq;
+            let actor = observation.actor.clone();
+            // The line typed last: its turn seen, or a line that opened none
+            // (D-02, the Conductor's call for a line that moves nothing).
+            changed |= self.input_queue.queues.follow_typed(
+                &pane,
+                seq,
+                observation.observed_generation,
+                hold.is_ok(),
+            );
             if self
                 .input_queue
                 .not_before
                 .get(&pane)
                 .is_some_and(|at| now < *at)
-                || !self
-                    .input_queue
-                    .queues
-                    .due(&pane, observation.state_change_seq, now)
+                || !self.input_queue.queues.due(&pane, seq)
             {
                 continue;
             }
-            let hold = crate::delivery::doorbell::judge_operator(observation);
-            let actor = observation.actor.clone();
             self.note_queue_hold(&pane, hold.err());
             match hold {
-                Ok(()) => changed |= self.start_queued_line(&pane, None, now),
+                Ok(()) => changed |= self.start_queued_line(&pane, None),
                 Err(Hold::Draft) => drafts.push(actor),
                 Err(_) => {}
             }
@@ -504,22 +595,26 @@ impl Runtime {
                 crate::diagnostic!(serde_json::json!({
                     "component": "input_queue", "kind": "input_queue.held",
                     "pane_id": pane, "reason": code,
+                    "line_id": queue.lines.first().map(|line| line.id),
                 }));
             }
         }
     }
 
-    /// Types the line `id` of `pane` (its head when none) on a worker: its
-    /// files staged on the pane's machine first, then its words, as a
-    /// letter's bell is typed. Whether a line went on its way.
-    fn start_queued_line(&mut self, pane: &str, id: Option<u64>, now: u64) -> bool {
+    /// Types the line `id` of `pane` (its head when none) on a worker: the
+    /// file marking it on its way written first, so a restart never types
+    /// it again (D-14, B23), then its files staged on the pane's machine,
+    /// then its words, as a letter's bell is typed. Whether a line went on
+    /// its way.
+    fn start_queued_line(&mut self, pane: &str, id: Option<u64>) -> bool {
         let Some(observation) = self.delivery_observations.get(pane).cloned() else {
             return false;
         };
         let seq = observation.state_change_seq;
-        let Some(line) = self.input_queue.queues.take(pane, id, seq, now) else {
+        let Some(line) = self.input_queue.queues.take(pane, id, seq) else {
             return false;
         };
+        let saved = self.save_input_queue_written();
         let device = observation.actor.device_id.clone();
         let Some(engine) = self
             .delivery_engine(&device)
@@ -549,6 +644,17 @@ impl Runtime {
         let actor = observation.actor.clone();
         let line_id = line.id;
         let write = move |still: &dyn Fn() -> Result<(), &'static str>| -> Sent {
+            // Off the lock: nothing is typed before the file says the line
+            // is on its way; a save that failed types nothing.
+            if let Some(saved) = &saved
+                && let Err(reason) = saved.wait(SAVE_WAIT)
+            {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "input_queue", "kind": "input_queue.save_unconfirmed",
+                    "line_id": line_id, "reason": reason,
+                }));
+                return Sent::NotNow;
+            }
             let words = match attach.words(&line.text, &line.paths, &line.stage_id) {
                 Ok(words) => words,
                 Err("device_unreachable") => return Sent::Failed(Failure::DeviceUnreachable),
@@ -601,7 +707,15 @@ impl Runtime {
     /// ended.
     fn ingest_queued_line(&mut self, pane: &str, id: u64, sent: Sent, seq: Option<u64>) -> bool {
         let now = unix_milliseconds();
-        if !self.input_queue.queues.settle(pane, id, sent, seq, now) {
+        let observed = self
+            .delivery_observations
+            .get(pane)
+            .map_or(0, |observation| observation.observed_generation);
+        if !self
+            .input_queue
+            .queues
+            .settle(pane, id, sent, seq, observed)
+        {
             return false;
         }
         match sent {

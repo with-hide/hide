@@ -270,8 +270,9 @@ enum Command {
         stage_id: String,
         reply: Sender<Result<u64, String>>,
     },
-    InterruptKeys {
+    Interrupt {
         pane_id: String,
+        step: hide_core::InterruptStep,
         reply: Sender<Result<Vec<String>, String>>,
     },
     DeviceEngine {
@@ -1398,12 +1399,17 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped queue-input reply".to_owned())?
     }
 
-    /// ■'s keys for `pane_id`; see `Core::interrupt_keys`.
-    pub fn interrupt_keys(&self, pane_id: &str) -> Result<Vec<String>, String> {
+    /// A step of ■ in `pane_id`; see `Core::interrupt`.
+    pub fn interrupt(
+        &self,
+        pane_id: &str,
+        step: hide_core::InterruptStep,
+    ) -> Result<Vec<String>, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
-            .send(Command::InterruptKeys {
+            .send(Command::Interrupt {
                 pane_id: pane_id.to_owned(),
+                step,
                 reply,
             })
             .map_err(|_| "core owner thread is gone".to_owned())?;
@@ -2306,8 +2312,12 @@ fn owner_loop(
             } => {
                 let _ = reply.send(core.queue_input(&pane_id, text, paths, bytes, stage_id));
             }
-            Command::InterruptKeys { pane_id, reply } => {
-                let _ = reply.send(core.interrupt_keys(&pane_id));
+            Command::Interrupt {
+                pane_id,
+                step,
+                reply,
+            } => {
+                let _ = reply.send(core.interrupt(&pane_id, step));
             }
             Command::WorkspaceRemoteRoutes { reply } => {
                 let _ = reply.send(core.workspace_remote_routes());

@@ -2995,7 +2995,10 @@ mod tests {
         let mut runtime = runtime(node);
         runtime.set_terminals(Arc::new(GrantingTerminals::default()) as _);
         let fake = crate::engine::fake::FakeEngine::start(|method, _| {
-            assert!(matches!(method, "prompt_agent" | "send_keys"), "{method}");
+            assert!(
+                matches!(method, "prompt_agent" | "interrupt_agent"),
+                "{method}"
+            );
             crate::engine::fake::reply(())
         });
         crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
@@ -3048,6 +3051,10 @@ mod tests {
             1,
             "the next waits for the turn the first starts"
         );
+        assert!(
+            !thread(&runtime).queue.unwrap().stalled,
+            "a line whose turn is coming offers no ▶"
+        );
 
         moved(&mut runtime, &node, "working", 3);
         runtime.send_queued_lines(unix_milliseconds());
@@ -3078,7 +3085,7 @@ mod tests {
                 request_id: INPUT.to_owned(),
             },
         ));
-        let keys = fake.calls_of("send_keys");
+        let keys = fake.calls_of("interrupt_agent");
         assert_eq!(keys.len(), 1, "{keys:?}");
         assert_eq!(keys[0]["keys"], json!(["esc"]));
         assert_eq!(
@@ -3142,7 +3149,7 @@ mod tests {
                 request_id: SECOND.to_owned(),
             },
         ));
-        assert!(fake.calls_of("send_keys").is_empty());
+        assert!(fake.calls_of("interrupt_agent").is_empty());
         assert_eq!(
             thread(&runtime).input.and_then(|input| input.reason),
             Some("agent_asking".to_owned())
@@ -3153,5 +3160,227 @@ mod tests {
         assert_eq!(sent.len(), 1, "{sent:?}");
         assert_eq!(sent[0]["by"], "Operator");
         assert!(thread(&runtime).queue.is_none());
+    }
+
+    /// One line waiting behind a working Claude, typed by `respond`'s
+    /// engine, with the runtime's lines kept in `file` when given.
+    fn one_waiting(
+        node: &Arc<ScriptedNode>,
+        file: Option<std::path::PathBuf>,
+        respond: impl FnMut(&'static str, &serde_json::Value) -> crate::engine::fake::Reply
+        + Send
+        + 'static,
+    ) -> (Runtime, Arc<crate::engine::fake::FakeEngine<'static>>, u64) {
+        let mut runtime = runtime(node);
+        runtime.set_terminals(Arc::new(GrantingTerminals::default()) as _);
+        if let Some(file) = file {
+            runtime.install_input_queue(
+                crate::input_queue::InputQueueStore::new(file),
+                crate::input_queue::Queues::default(),
+            );
+        }
+        let fake = crate::engine::fake::FakeEngine::start(respond);
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
+        observe(&mut runtime, "working", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("일하는 중")])));
+        open(&mut runtime);
+        let generation = thread(&runtime).generation;
+        send_words(&mut runtime, generation, INPUT, "테스트도 돌려 줘");
+        assert_eq!(waiting(&runtime), ["테스트도 돌려 줘"]);
+        (runtime, fake, generation)
+    }
+
+    /// PRD desk-queue D-14, B22: an agent that moved before the words went
+    /// leaves them first in line, waiting, not paused, for the next rest.
+    #[test]
+    fn a_line_the_engine_refuses_stays_first_and_waits() {
+        let node = Arc::new(ScriptedNode::default());
+        let (mut runtime, fake, _) = one_waiting(&node, None, |method, _| match method {
+            "prompt_agent" => crate::engine::fake::refused("agent_not_ready", "not ready"),
+            _ => crate::engine::fake::reply(()),
+        });
+        moved(&mut runtime, &node, "idle", 2);
+        runtime.send_queued_lines(unix_milliseconds());
+        assert_eq!(fake.calls_of("prompt_agent").len(), 1, "it was tried");
+        assert_eq!(waiting(&runtime), ["테스트도 돌려 줘"]);
+        let queue = thread(&runtime).queue.unwrap();
+        assert_eq!(queue.state, crate::model::InputQueueState::Waiting);
+        assert_eq!(queue.lines[0].failure, None);
+    }
+
+    /// PRD desk-queue D-08, B13: a turn the agent's record reports
+    /// interrupted in its terminal pauses the line, and nothing goes at the
+    /// rest it leaves.
+    #[test]
+    fn a_turn_interrupted_in_the_terminal_pauses_the_line() {
+        let node = Arc::new(ScriptedNode::default());
+        let (mut runtime, fake, _) =
+            one_waiting(&node, None, |_, _| crate::engine::fake::reply(()));
+        moved(&mut runtime, &node, "idle", 2);
+        runtime
+            .delivery_observations
+            .get_mut("w1:p1")
+            .unwrap()
+            .projected
+            .as_mut()
+            .unwrap()
+            .turn
+            .interrupted = true;
+        runtime.send_queued_lines(unix_milliseconds());
+        assert!(fake.calls_of("prompt_agent").is_empty());
+        assert_eq!(
+            thread(&runtime).queue.map(|queue| queue.state),
+            Some(crate::model::InputQueueState::Paused)
+        );
+    }
+
+    /// PRD desk-queue B12, D-24: an agent that turned to a permission
+    /// between the press of ■ and its keys takes none: the engine refuses
+    /// where it types them, the box says the agent asks, and the line is
+    /// neither paused nor held.
+    #[test]
+    fn a_stop_the_engine_finds_asking_types_nothing_and_pauses_nothing() {
+        let node = Arc::new(ScriptedNode::default());
+        let (mut runtime, fake, generation) = one_waiting(&node, None, |method, _| match method {
+            "interrupt_agent" => crate::engine::fake::refused("agent_blocked", "blocked"),
+            _ => crate::engine::fake::reply(()),
+        });
+        runtime.input_queue_event(crate::runtime::input_queue::QueueEvent::Interrupt(
+            crate::runtime::input_queue::ThreadInterruptPayload {
+                generation,
+                pane_id: "w1:p1".to_owned(),
+                request_id: SECOND.to_owned(),
+            },
+        ));
+        assert_eq!(fake.calls_of("interrupt_agent").len(), 1);
+        assert_eq!(
+            thread(&runtime).input.and_then(|input| input.reason),
+            Some("agent_asking".to_owned())
+        );
+        assert_eq!(
+            thread(&runtime).queue.map(|queue| queue.state),
+            Some(crate::model::InputQueueState::Waiting)
+        );
+        moved(&mut runtime, &node, "idle", 2);
+        runtime.send_queued_lines(unix_milliseconds());
+        assert_eq!(
+            fake.calls_of("prompt_agent").len(),
+            1,
+            "the line goes at the next rest as before"
+        );
+    }
+
+    /// PRD desk-queue D-13: the operator's waiting words hold a letter's
+    /// bell at the rest they go at, and never a bell the doorbell lets into
+    /// a turn (five minutes, `--now`).
+    #[test]
+    fn waiting_words_hold_a_bell_at_rest_and_never_one_rung_into_a_turn() {
+        let node = Arc::new(ScriptedNode::default());
+        let (mut runtime, _, _) = one_waiting(&node, None, |_, _| crate::engine::fake::reply(()));
+        let working = runtime.delivery_observations["w1:p1"].clone();
+        assert!(!runtime.input_queue_holds_bell(&working));
+        moved(&mut runtime, &node, "idle", 2);
+        let resting = runtime.delivery_observations["w1:p1"].clone();
+        assert!(runtime.input_queue_holds_bell(&resting));
+    }
+
+    /// The Conductor's call for R8 (PRD desk-queue D-02): a line that moved
+    /// nothing, found at rest two passes after it landed, offers ▶, and the
+    /// next waits for it.
+    #[test]
+    fn a_line_that_opens_no_turn_offers_resume_and_the_next_waits_for_it() {
+        let node = Arc::new(ScriptedNode::default());
+        let (mut runtime, fake, _) = queued_runtime(&node);
+        moved(&mut runtime, &node, "idle", 2);
+        runtime.send_queued_lines(unix_milliseconds());
+        assert_eq!(fake.calls_of("prompt_agent").len(), 1);
+        for _ in 0..2 {
+            moved(&mut runtime, &node, "idle", 2);
+            runtime.send_queued_lines(unix_milliseconds());
+        }
+        assert!(thread(&runtime).queue.unwrap().stalled, "▶ 이어 보내기");
+        assert_eq!(fake.calls_of("prompt_agent").len(), 1, "the next waits");
+        runtime.input_queue_event(crate::runtime::input_queue::QueueEvent::Resume(
+            serde_json::from_value(json!({"pane_id": "w1:p1"})).unwrap(),
+        ));
+        runtime.send_queued_lines(unix_milliseconds());
+        let sent = fake.calls_of("prompt_agent");
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[1]["text"], "끝나면 PR 열어 줘");
+    }
+
+    /// PRD desk-queue D-14, B21, B23: the file says a line is on its way
+    /// before it is typed, so hided stopping after the engine took it and
+    /// before its answer brings it back paused as uncertain, never typed
+    /// again on its own; a save that fails types nothing.
+    #[test]
+    fn a_line_on_its_way_when_hided_stops_comes_back_uncertain_and_untyped() {
+        let node = Arc::new(ScriptedNode::default());
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("input-queue.json");
+        let (mut runtime, _, _) = one_waiting(&node, Some(file.clone()), |_, _| {
+            crate::engine::fake::reply(())
+        });
+        moved(&mut runtime, &node, "idle", 2);
+        runtime
+            .input_queue
+            .queues
+            .take("w1:p1", None, Some(2))
+            .unwrap();
+        runtime
+            .save_input_queue_written()
+            .unwrap()
+            .wait(std::time::Duration::from_secs(10))
+            .unwrap();
+        drop(runtime);
+
+        let restored = crate::input_queue::InputQueueStore::new(file.clone()).restore();
+        let (mut again, fake, _) = one_waiting(&node, None, |_, _| crate::engine::fake::reply(()));
+        again.install_input_queue(crate::input_queue::InputQueueStore::new(file), restored);
+        moved(&mut again, &node, "idle", 2);
+        again.send_queued_lines(unix_milliseconds());
+        assert!(
+            fake.calls_of("prompt_agent").is_empty(),
+            "never typed again"
+        );
+        let queue = again.input_queue_snapshot("w1:p1").unwrap();
+        assert_eq!(queue.state, crate::model::InputQueueState::Paused);
+        assert_eq!(
+            queue.lines[0].failure,
+            Some(crate::input_queue::Failure::Uncertain)
+        );
+
+        // A file that cannot be written: the line is not typed.
+        let blocked = root.path().join("blocked");
+        std::fs::write(&blocked, b"").unwrap();
+        let (mut runtime, fake, _) =
+            one_waiting(&node, Some(blocked.join("input-queue.json")), |_, _| {
+                crate::engine::fake::reply(())
+            });
+        moved(&mut runtime, &node, "idle", 2);
+        runtime.send_queued_lines(unix_milliseconds());
+        assert!(fake.calls_of("prompt_agent").is_empty());
+        assert_eq!(waiting(&runtime), ["테스트도 돌려 줘"]);
+    }
+
+    /// PRD desk-queue B27: a closed pane's line goes with it, and its files
+    /// are no longer held.
+    #[test]
+    fn a_closed_panes_line_and_files_go_with_it() {
+        let node = Arc::new(ScriptedNode::default());
+        let (mut runtime, _, generation) =
+            one_waiting(&node, None, |_, _| crate::engine::fake::reply(()));
+        runtime.send_session_thread_input(ThreadInputPayload {
+            generation,
+            pane_id: "w1:p1".to_owned(),
+            request_id: SECOND.to_owned(),
+            text: "이 파일도 봐 줘".to_owned(),
+            paths: vec!["/held/notes.md".to_owned()],
+            bytes: 10,
+        });
+        assert_eq!(runtime.input_queue_files_in_use(), ["/held/notes.md"]);
+        runtime.input_queue_follow_panes(&|pane| pane != "w1:p1");
+        assert!(runtime.input_queue_files_in_use().is_empty());
+        assert!(runtime.input_queue_snapshot("w1:p1").is_none());
     }
 }

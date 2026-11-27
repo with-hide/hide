@@ -2532,20 +2532,15 @@ async fn input(
             let interrupt_keys: Vec<&str>;
             let typed = match (&text, engine_key, &chosen) {
                 (None, None, None) if interrupt => {
-                    interrupting =
-                        writer
-                            .config
-                            .core
-                            .interrupt_keys(&core_pane_id)
-                            .map_err(|reason| match reason.as_str() {
-                                "agent_asking" => "agent_asking",
-                                "agent_not_working" => "agent_not_working",
-                                "interrupt_unsupported" => "interrupt_unsupported",
-                                "pane_gone" => "gone",
-                                _ => "unavailable",
-                            })?;
+                    interrupting = writer
+                        .config
+                        .core
+                        .interrupt(&core_pane_id, hide_core::InterruptStep::Start)
+                        .map_err(interrupt_refusal)?;
                     interrupt_keys = interrupting.iter().map(String::as_str).collect();
-                    Typed::Keys(&interrupt_keys)
+                    // Typed only while the engine still reads the agent at
+                    // work where it types them (D-24).
+                    Typed::Interrupt(&interrupt_keys)
                 }
                 // While the agent works, or words wait ahead of these, the
                 // reply waits in the pane's line as a session input's does
@@ -2577,6 +2572,7 @@ async fn input(
                 (None, None, None) => unreachable!("validated above"),
             };
             let reply = matches!(typed, Typed::Words(_));
+            let stopping = matches!(typed, Typed::Interrupt(_));
             // The one operator write the desktop conversation takes too: the
             // node's permit, then the gate's admission, asked here, at the
             // write, and held until it returns, so a reply queued while the
@@ -2595,6 +2591,15 @@ async fn input(
                     {
                         return Err("stale");
                     }
+                }
+                // ■ looks last that the agent still works and asks nothing:
+                // it may have turned to a question since the press (B12).
+                if stopping {
+                    writer
+                        .config
+                        .core
+                        .interrupt(&core_pane_id, hide_core::InterruptStep::Ready)
+                        .map_err(interrupt_refusal)?;
                 }
                 let engine = writer.engine(&device_id).map_err(|error| match error {
                     PaneError::DeviceUnreachable => "device_unreachable",
@@ -2616,6 +2621,23 @@ async fn input(
             );
             if reply && sent.is_ok() {
                 writer.note_submit(&core_pane_id);
+            }
+            // ■'s answer: keys that may have landed pause the pane's waiting
+            // words; a refusal that typed nothing leaves them as they were.
+            if stopping {
+                let landed = sent
+                    .as_ref()
+                    .map_or_else(|unwritten| !unwritten.certain(), |_| true);
+                if let Err(message) = writer
+                    .config
+                    .core
+                    .interrupt(&core_pane_id, hide_core::InterruptStep::Answered { landed })
+                {
+                    hide_core::diagnostic!(json!({
+                        "component": "mobile_phone", "kind": "input.interrupt_unsettled",
+                        "pane_id": core_pane_id, "message": message,
+                    }));
+                }
             }
             sent.map(|()| Written::Typed).map_err(|unwritten| {
                 if unwritten.certain() {
@@ -2673,6 +2695,17 @@ async fn input(
             }));
             answer(false, Some(reason))
         }
+    }
+}
+
+/// What the phone is told of a refused ■ (PRD desk-queue B12).
+fn interrupt_refusal(reason: String) -> &'static str {
+    match reason.as_str() {
+        "agent_asking" => "agent_asking",
+        "agent_not_working" => "agent_not_working",
+        "interrupt_unsupported" => "interrupt_unsupported",
+        "pane_gone" => "gone",
+        _ => "unavailable",
     }
 }
 

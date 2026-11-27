@@ -2908,8 +2908,10 @@ impl Runtime {
         if !current.actor.same_identity(recipient) {
             return Err(Hold::Session);
         }
-        // The operator's own words that wait for this rest go before it.
-        if self.input_queue_waits(&recipient.pane_id) {
+        // The operator's own words that wait for this rest go before it; a
+        // bell the doorbell lets into a turn (five minutes, `--now`) rings
+        // as it did (PRD desk-queue D-13).
+        if self.input_queue_holds_bell(current) {
             return Err(Hold::Queued);
         }
         crate::delivery::doorbell::judge(current, patience, now)?;
@@ -2971,7 +2973,7 @@ impl Runtime {
     ) -> Result<(), crate::delivery::doorbell::Hold> {
         use crate::delivery::doorbell::Hold;
         let current = self.delivery_pane_unmoved(observed)?;
-        if self.input_queue_waits(&observed.actor.pane_id) {
+        if self.input_queue_holds_bell(current) {
             return Err(Hold::Queued);
         }
         let now = unix_milliseconds();

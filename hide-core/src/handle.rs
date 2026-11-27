@@ -1487,15 +1487,21 @@ impl Core {
         queued
     }
 
-    /// ■: the keys that interrupt `pane_id`'s agent's turn, its waiting
-    /// words paused; refused while the agent asks or rests (PRD desk-queue
-    /// D-08, D-24). The caller types the keys.
-    pub fn interrupt_keys(&self, pane_id: &str) -> Result<Vec<String>, String> {
-        if !check_owner_thread(self, "interrupt_keys") {
+    /// A step of ■ in `pane_id` (PRD desk-queue D-08, D-24), whose keys the
+    /// caller types off the lock: `Start` answers the keys, refused while the
+    /// agent asks or rests, and holds its waiting words; `Ready` looks once
+    /// more, right before the keys go; `Answered` pauses the words when the
+    /// keys may have landed.
+    pub fn interrupt(
+        &self,
+        pane_id: &str,
+        step: crate::InterruptStep,
+    ) -> Result<Vec<String>, String> {
+        if !check_owner_thread(self, "interrupt") {
             return Err("core_unavailable".to_owned());
         }
         let keys = lock_recover(&self.runtime)
-            .interrupt_keys(pane_id)
+            .interrupt_step(pane_id, step)
             .map_err(str::to_owned);
         self.notifier.notify();
         keys
