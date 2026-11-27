@@ -600,6 +600,17 @@ describe("a remote screen's file pages", () => {
     expect(events().filter((event) => event.kind === "state").at(-1)?.state).toMatchObject({ url: "file:///C:/repo/a%20b/100%25.html?v=2" });
   });
 
+  it("report a moved page of a Windows share under the share's own address", async () => {
+    const { sync, display, views, route, events, settle } = screen();
+    const share = "file:////server/share/repo/report.html";
+    route.mockImplementation(async (_workspace, _id, load) => ({ url: ROUTE, source_url: share, load, own: true, root: "//server/share/repo" }));
+    sync([display("f1", true, RECT, share)]);
+    await settle();
+    views[0]!.contents.emit("did-navigate-in-page", {}, `${ROUTE}#section`, true);
+    await settle();
+    expect(events().filter((event) => event.kind === "state").at(-1)?.state).toMatchObject({ url: "file:////server/share/repo/report.html#section" });
+  });
+
   // A route answered after its page closed is let go by that answer, unless
   // a page made again for the same display at the same load took it.
   it("let go of a route answered after its page closed, and keep one a page made again holds", async () => {

@@ -203,17 +203,16 @@ describe("a link of an SSH device's pane", () => {
       expect(opened.mock.calls.map(([url]) => url)).toEqual(["http://192.168.0.4:8080/", "http://printer.local/", "https://github.com/with-hide/hide", "http://localhost:5173/"]);
       expect(sent.filter((event) => event.kind === "browser_open")).toHaveLength(3);
 
-      // In Desk's room the page opens on Desk's desk, for the device's session
-      // there; with neither a Workspace nor Desk in front it goes nowhere,
-      // never to this machine's default browser.
+      // In Desk's room a page of its desk opened from here would load this
+      // machine's loopback, and on another screen there is no Workspace to
+      // show one: the link opens nothing, never this machine's default
+      // browser.
       useShellStore.setState({ rest: { workspace_view: { device_id: "devbox", path: "/srv/web", layout: null }, desk_view: { device_id: "mac", path: "hide:desk", layout: null }, status: { remote: [device] } } as never });
-      useUiStore.setState({ screen: { kind: "desk" } as never });
-      for (const external of [true, false]) actions.openLink("http://localhost:5173/", external, "w2:p1");
-      const desk = sent.filter((event) => event.kind === "browser_open").slice(3).map((event) => event.payload as { workspace: { path: string }; opener_pane?: string });
-      expect(desk.map((page) => [page.workspace.path, page.opener_pane])).toEqual([["hide:desk", "w2:p1"], ["hide:desk", "w2:p1"]]);
-      useUiStore.setState({ screen: { kind: "missions" } as never });
-      actions.openLink("http://localhost:5173/", true, "w2:p1");
-      expect(sent.filter((event) => event.kind === "browser_open")).toHaveLength(5);
+      for (const screen of ["desk", "missions"]) {
+        useUiStore.setState({ screen: { kind: screen } as never });
+        for (const external of [true, false]) actions.openLink("http://localhost:5173/", external, "w2:p1");
+      }
+      expect(sent.filter((event) => event.kind === "browser_open")).toHaveLength(3);
       expect(opened).toHaveBeenCalledTimes(4);
     } finally {
       useShellStore.setState(saved, true);

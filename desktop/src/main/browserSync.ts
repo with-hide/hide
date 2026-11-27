@@ -412,15 +412,20 @@ export function fileLink(route: PageRoute | null, raw: string): "follow" | "besi
 /**
  * The `file:` address of `relative` (a path of `/`-separated names) under
  * `root`, a checkout's root in the wire spelling of the machine that holds
- * it (`/Users/me/repo`, or `C:/repo` on Windows), with `search` and `hash` as
- * a URL spells them; null when either names no file under the root. Built as
- * URL text, each name escaped as a URL path needs, never through this
- * machine's own path rules, since the file may be on another system.
+ * it (`/Users/me/repo`, `C:/repo`, or a Windows share `//server/share/repo`),
+ * with `search` and `hash` as a URL spells them; null when either names no
+ * file under the root. Spelled as that machine spells its file addresses
+ * (`hide_platform::path::to_file_url`): `file://`, then the root as it is,
+ * its leading slashes kept (a share's two, under an empty host) and one
+ * added for a root with none, each name escaped as a URL path needs; never
+ * through this machine's own path rules, since the file may be on another
+ * system.
  */
 export function wireFileAddress(root: string, relative: string, search = "", hash = ""): string | null {
-  const names = `${root.replace(/^\/+/, "").replace(/\/+$/, "")}/${relative}`.split("/");
+  const lead = /^\/*/.exec(root)?.[0] ?? "";
+  const names = `${root.slice(lead.length).replace(/\/+$/, "")}/${relative}`.split("/");
   if (names.some((name) => name === "" || name === "." || name === "..")) return null;
-  return `file:///${names.map((name) => encodeURIComponent(name).replace(/%3A/gi, ":")).join("/")}${search}${hash}`;
+  return `file://${lead === "" ? "/" : lead}${names.map((name) => encodeURIComponent(name).replace(/%3A/gi, ":")).join("/")}${search}${hash}`;
 }
 
 /**

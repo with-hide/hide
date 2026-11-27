@@ -4365,15 +4365,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       // local name has no way through the device yet, so it keeps the
       // default browser (docs/BROWSER_DISPLAYS.md, A page in another
       // computer's screen; Open in default browser).
-      // Desk's room shows a device session's pages too, as a page of its
-      // desk whose machine is the session's; with neither in front the link
-      // goes nowhere rather than to this machine's browser.
+      // Only a Workspace in front opens such a page as that machine's: a
+      // page of Desk's desk opened from here would be this machine's (its
+      // machine comes from a session's own View alone), so in Desk's room and
+      // with no Workspace in front the link goes nowhere rather than to this
+      // machine's browser or loopback.
       const onDevice = openerPane !== undefined && remoteTargetOfPane(rest(), openerPane) !== null;
       const throughThatMachine = isRemoteView() ? localNetworkLink(url) : onDevice && loopbackLink(url);
       if (throughThatMachine) {
-        const target = inFront ?? (ui().screen?.kind === "desk" ? frontViewWorkspace() : null);
-        if (!target) return diagnostic("open link: another machine's local address with no Workspace or Desk in front");
-        this.openBrowser(url, target, undefined, undefined, openerPane);
+        if (!inFront) return diagnostic("open link: another machine's local address with no Workspace in front");
+        this.openBrowser(url, inFront, undefined, undefined, openerPane);
         return;
       }
       if (external || !inFront) {

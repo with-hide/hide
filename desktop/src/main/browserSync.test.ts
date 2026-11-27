@@ -1,7 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { appScheme, browserPartition, deviceEmulation, isLocalNetworkHost, localNetworkReach, localPageRequest, isPopup, loadable, parseRemoteSync, placeIn, popupBounds, MAX_AUTHORIZED_SCOPES, MAX_SYNCED_DISPLAYS, offScreenBounds, overCap, parseCommand, parseSync, parseTarget, REMOTE_BOUNDS, remoteFilePartition, remotePagePartition, remoteRequest, remoteRouteAddress, toBounds, wireFileAddress } from "./browserSync";
+import { appScheme, browserPartition, deviceEmulation, isLocalNetworkHost, localNetworkReach, localPageRequest, isPopup, loadable, parseRemoteSync, placeIn, popupBounds, MAX_AUTHORIZED_SCOPES, MAX_SYNCED_DISPLAYS, offScreenBounds, overCap, parseCommand, parseSync, parseTarget, REMOTE_BOUNDS, remoteFilePartition, remotePagePartition, remoteRequest, remoteRouteAddress, sameFileAddress, toBounds, wireFileAddress } from "./browserSync";
 
 const rect = { x: 0, y: 40, width: 800, height: 600 };
 const display = { id: "d1", area_id: "a1", url: "https://a.test/", load: 3, rect, visible: true };
@@ -355,6 +355,13 @@ describe("another computer's screen's pages", () => {
     expect(wireFileAddress("/srv/문서", "보고서.html")).toBe(`file:///srv/${encodeURIComponent("문서")}/${encodeURIComponent("보고서.html")}`);
     for (const relative of ["../secret.html", "a/../../b.html", "", "a//b.html"]) expect(wireFileAddress("/srv/repo", relative), relative).toBeNull();
     expect(wireFileAddress("", "a.html")).toBeNull();
+    // A Windows share keeps its two slashes under an empty host, as that
+    // machine spells it (`to_file_url`), never `file://server/`.
+    expect(wireFileAddress("//server/share/repo", "report.html", "?v=2", "#section")).toBe("file:////server/share/repo/report.html?v=2#section");
+    expect(wireFileAddress("//server/share/repo/", "docs/a b.html")).toBe("file:////server/share/repo/docs/a%20b.html");
+    expect(new URL(wireFileAddress("//server/share/repo", "r.html")!).host).toBe("");
+    expect(sameFileAddress("file:////server/share/repo/r.html#a", "file:////server/share/repo/r.html?b")).toBe(true);
+    expect(sameFileAddress("file:////server/share/repo/r.html", "file:///server/share/repo/r.html")).toBe(false);
   });
 
   // TF1: a file page of that computer loads only from its own loopback over
