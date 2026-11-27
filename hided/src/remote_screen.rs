@@ -118,13 +118,22 @@ impl Seat {
 impl Drop for Seat {
     fn drop(&mut self) {
         let mut seats = lock(&self.screens.seats);
-        if seats.get(&self.key).is_some_and(|held| held.0 == self.id) {
+        if seats.get(&self.key).is_some_and(|held| held.id == self.id) {
             seats.remove(&self.key);
             // Its machine shows this one no more: a look chosen there ends.
             self.screens.tell_core(&seats);
         }
         self.screens.views.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+/// A guest's view seated now: the one view its machine admitted, under the
+/// grant's generation it attached with.
+struct Seated {
+    id: u64,
+    taken: Arc<Notify>,
+    view: String,
+    generation: u64,
 }
 
 /// Why a view was not seated.
@@ -187,7 +196,7 @@ impl AssetCache {
 /// Both sides of other machines' views.
 pub struct RemoteScreens {
     /// The view each guest holds now, by its seat's id.
-    seats: Mutex<HashMap<PeerKey, (u64, Arc<Notify>)>>,
+    seats: Mutex<HashMap<PeerKey, Seated>>,
     /// Every view seated now.
     views: AtomicUsize,
     next: AtomicU64,
@@ -244,6 +253,17 @@ impl RemoteScreens {
             .ok()
     }
 
+    /// The seat `guest`'s view `view` holds now under the grant's
+    /// `generation`: the one view this machine admitted (`seat`). A bulk
+    /// stream with no seated view, an ended view, or the same view named
+    /// under another generation has none.
+    pub fn admitted(&self, guest: &PeerKey, view: &str, generation: u64) -> Option<u64> {
+        lock(&self.seats)
+            .get(guest)
+            .filter(|seated| seated.view == view && seated.generation == generation)
+            .map(|seated| seated.id)
+    }
+
     pub fn seated(&self) -> usize {
         self.views.load(Ordering::SeqCst)
     }
@@ -267,7 +287,7 @@ impl RemoteScreens {
 
     /// The machines whose view is seated now, by key, sorted: what the core
     /// is told of them (`remote_views`).
-    fn showing(seats: &HashMap<PeerKey, (u64, Arc<Notify>)>) -> Vec<String> {
+    fn showing(seats: &HashMap<PeerKey, Seated>) -> Vec<String> {
         let mut machines = seats.keys().map(PeerKey::to_hex).collect::<Vec<_>>();
         machines.sort();
         machines
@@ -278,7 +298,7 @@ impl RemoteScreens {
     /// Hide owns the read axis). Called under the seats' lock, so two changes
     /// reach the core in the order they happened; before the daemon's state
     /// is built there is no view and no core to tell.
-    fn tell_core(&self, seats: &HashMap<PeerKey, (u64, Arc<Notify>)>) {
+    fn tell_core(&self, seats: &HashMap<PeerKey, Seated>) {
         let Some(state) = self.state.get() else {
             return;
         };
@@ -305,12 +325,20 @@ impl RemoteScreens {
             return Err(SeatRefused::Full);
         }
         let shown = replacing.is_none();
-        if let Some((_, taken)) = replacing {
-            taken.notify_one();
+        if let Some(replaced) = replacing {
+            replaced.taken.notify_one();
         }
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let taken = Arc::new(Notify::new());
-        seats.insert(viewer.key, (id, Arc::clone(&taken)));
+        seats.insert(
+            viewer.key,
+            Seated {
+                id,
+                taken: Arc::clone(&taken),
+                view: viewer.view.clone(),
+                generation: viewer.generation,
+            },
+        );
         self.views.fetch_add(1, Ordering::SeqCst);
         // Its machine shows this one again: a look chosen there counts again.
         // A view taking its own machine's earlier place changes nothing.
@@ -359,7 +387,10 @@ impl RemoteScreens {
                 .route("/", get(view_asset))
                 .route("/assets/{*path}", get(view_asset))
                 .route("/ws/bulk", get(bulk_upgrade))
-                .route("/page-route", axum::routing::post(page_route)),
+                .route(
+                    "/page-route",
+                    axum::routing::post(page_route).delete(page_route_release),
+                ),
             _ => Router::new().route("/ws", get(view_upgrade)),
         }
         .fallback(|| async { StatusCode::NOT_FOUND })
@@ -370,6 +401,16 @@ impl RemoteScreens {
             .serve_connection(hyper_util::rt::TokioIo::new(io), service)
             .with_upgrades()
             .await;
+    }
+}
+
+/// The routes this machine makes for a guest's view live while the guest
+/// holds the seat that view was admitted to (`browser_routes::Owner::Screen`).
+impl crate::browser_routes::ScreenViews for RemoteScreens {
+    fn live(&self, guest: &PeerKey, seat: u64) -> bool {
+        lock(&self.seats)
+            .get(guest)
+            .is_some_and(|seated| seated.id == seat)
     }
 }
 
@@ -416,81 +457,116 @@ fn refusal(status: StatusCode, reason: &str) -> Response {
 
 /// `POST /page-route` on a view's bulk stream: where a browser display
 /// the guest draws in its view of this machine loads from, decided by this
-/// core as it decides it for its own window (`browser_route_source`). A
-/// page of another of this machine's devices on its loopback or its files
-/// is refused, since only that device reaches them; this machine's own
-/// files are not served to a view yet; every other page loads its address,
-/// and the answer says whether it is this machine's own, whose loopback the
-/// page may reach through this machine.
+/// core as it decides it for its own window (`browser_route_source`), with
+/// a route of this machine's loopback, which the guest reaches through this
+/// machine's proxy, for a page its window cannot reach otherwise: this
+/// machine's files, and a device's (`BrowserRoutes::resolve_for_screen`).
+/// The answer says whether the page is this machine's own, whose loopback
+/// the page may reach through this machine.
 async fn page_route(headers: HeaderMap, State(route): State<ViewRoute>, body: Bytes) -> Response {
-    let live = view_of(&headers)
-        .map(|view| lock(&route.screens.bulks).contains_key(&(route.viewer.key, view)));
-    let core = Arc::clone(&route.state.core);
-    answer_page_route(live, &body, move |ask| {
-        let own = core.node().as_str().to_owned();
-        core.browser_route_source(&ask.device, &ask.checkout, &ask.view, ask.load)
-            .map(|source| (source, own))
+    let Some(view) = view_of(&headers) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let routes = Arc::clone(&route.state.browser_routes);
+    let guest = route.viewer.key;
+    let owner = route
+        .screens
+        .admitted(&guest, &view, route.viewer.generation)
+        .map(|seat| crate::browser_routes::Owner::Screen { guest, seat });
+    answer_page_route(owner.is_some(), &body, move |ask| async move {
+        let owner = owner.ok_or("view_unavailable")?;
+        routes
+            .resolve_for_screen(ask.device, ask.checkout, ask.view, ask.load, owner)
+            .await
     })
     .await
 }
 
-/// The core's answer to where a display loads from, with the core's own
-/// node id.
-type RouteSourceOf = Result<
-    (
-        Option<hide_core::workspace_control::BrowserRouteSource>,
-        String,
-    ),
-    String,
->;
+/// `DELETE /page-route`: the guest closed a page of its view, whose route
+/// goes with it.
+async fn page_route_release(
+    headers: HeaderMap,
+    State(route): State<ViewRoute>,
+    body: Bytes,
+) -> Response {
+    let Some(view) = view_of(&headers) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let Some(ask) = read_route_ask(&body) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let guest = route.viewer.key;
+    // A view no longer seated has no routes left to let go.
+    if let Some(seat) = route
+        .screens
+        .admitted(&guest, &view, route.viewer.generation)
+    {
+        let owner = crate::browser_routes::Owner::Screen { guest, seat };
+        route
+            .state
+            .browser_routes
+            .release_for_screen(&ask.device, &ask.checkout, &ask.view, ask.load, owner)
+            .await;
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// A route question read and bounded.
+fn read_route_ask(body: &[u8]) -> Option<PageRouteAsk> {
+    let ask = serde_json::from_slice::<PageRouteAsk>(body).ok()?;
+    [&ask.device, &ask.checkout, &ask.view]
+        .iter()
+        .all(|field| !field.is_empty() && field.len() <= MAX_ROUTE_FIELD)
+        .then_some(ask)
+}
 
 /// `/page-route`'s whole answer once the view the request named is judged
-/// (`None`: it named none; `Some(false)`: not one of this guest's live
-/// views): the question read and bounded, the core asked through
-/// `source_of` on a blocking task, and its source decided.
-async fn answer_page_route<F>(view_live: Option<bool>, body: &[u8], source_of: F) -> Response
+/// live (one of this guest's views) or not: the question read and bounded,
+/// the route asked of `resolve`, and its refusal put in the words the
+/// guest reads. A route that could not be made for another reason is
+/// logged here and answered `route_unavailable`.
+async fn answer_page_route<F, R>(view_live: bool, body: &[u8], resolve: F) -> Response
 where
-    F: FnOnce(PageRouteAsk) -> RouteSourceOf + Send + 'static,
+    F: FnOnce(PageRouteAsk) -> R,
+    R: std::future::Future<Output = Result<(crate::browser_routes::Resolved, bool), &'static str>>,
 {
-    match view_live {
-        None => return StatusCode::BAD_REQUEST.into_response(),
-        Some(false) => return refusal(StatusCode::GONE, "view_unavailable"),
-        Some(true) => {}
-    }
-    let Ok(ask) = serde_json::from_slice::<PageRouteAsk>(body) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    if [&ask.device, &ask.checkout, &ask.view]
-        .iter()
-        .any(|field| field.is_empty() || field.len() > MAX_ROUTE_FIELD)
-    {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    let load = ask.load;
-    let (source, own_node) = match tokio::task::spawn_blocking(move || source_of(ask)).await {
-        Ok(Ok(found)) => found,
-        _ => return refusal(StatusCode::SERVICE_UNAVAILABLE, "core_unavailable"),
-    };
-    let Some(source) = source else {
+    if !view_live {
         return refusal(StatusCode::GONE, "view_unavailable");
+    }
+    let Some(ask) = read_route_ask(body) else {
+        return StatusCode::BAD_REQUEST.into_response();
     };
-    let own = source.device_id == own_node;
-    let file = source
-        .url
-        .get(..5)
-        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"));
-    if !own && (file || crate::browser_routes::loopback_page(&source.url)) {
-        return refusal(StatusCode::FORBIDDEN, "remote_device_page_unavailable");
+    match resolve(ask).await {
+        Ok((resolved, own)) => {
+            let mut answer = json!({
+                "url": resolved.url, "source_url": resolved.source_url,
+                "load": resolved.load, "own": own,
+            });
+            if let Some(root) = resolved.root {
+                answer["root"] = json!(root);
+            }
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/json")],
+                answer.to_string(),
+            )
+                .into_response()
+        }
+        Err("view_unavailable") => refusal(StatusCode::GONE, "view_unavailable"),
+        Err("remote_device_page_unavailable") => {
+            refusal(StatusCode::FORBIDDEN, "remote_device_page_unavailable")
+        }
+        Err("browser_route_limit") => refusal(StatusCode::TOO_MANY_REQUESTS, "browser_route_limit"),
+        // Every guest's builds are under way: a passing state, not a full view.
+        Err("browser_route_build_limit") => refusal(StatusCode::SERVICE_UNAVAILABLE, "route_busy"),
+        Err("core_unavailable") => refusal(StatusCode::SERVICE_UNAVAILABLE, "core_unavailable"),
+        Err(reason) => {
+            hide_core::diagnostic!(json!({
+                "component": "remote_screen", "kind": "page_route.refused", "reason": reason,
+            }));
+            refusal(StatusCode::CONFLICT, "route_unavailable")
+        }
     }
-    if file {
-        return refusal(StatusCode::FORBIDDEN, "remote_file_unavailable");
-    }
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        json!({"url": source.url, "source_url": source.url, "load": load, "own": own}).to_string(),
-    )
-        .into_response()
 }
 
 async fn view_upgrade(
@@ -886,8 +962,11 @@ fn json_answer(status: StatusCode, body: Bytes) -> Response {
 /// `POST /peer-screen/<device>/page-route?key=<host key>`: the desktop
 /// asks, before each load of a browser display it draws in that machine's
 /// screen, where it loads from; the host's core answers through the view
-/// open now, and nothing loads without its answer.
+/// open now, and nothing loads without its answer. `DELETE` tells the host
+/// the page closed, so the route it made for the view's page goes; with no
+/// view open there is none to let go.
 pub async fn guest_page_route(
+    method: axum::http::Method,
     State(state): State<AppState>,
     Path(device): Path<String>,
     RawQuery(query): RawQuery,
@@ -909,9 +988,14 @@ pub async fn guest_page_route(
         Ok((link, _)) => link,
         Err(reason) => return unavailable(reason),
     };
+    let release = method == axum::http::Method::DELETE;
     let screens = Arc::clone(&state.remote_screens);
     let Some(view) = lock(&screens.open_views).get(&(device, host)).cloned() else {
-        return unavailable("not_shown");
+        return if release {
+            StatusCode::NO_CONTENT.into_response()
+        } else {
+            unavailable("not_shown")
+        };
     };
     let Some(_place) = screens.asset_place(host).await else {
         return unavailable("not_connected");
@@ -920,7 +1004,7 @@ pub async fn guest_page_route(
         Ok(io) => io,
         Err(reason) => return unavailable(reason),
     };
-    match ask(io, "/page-route", &view, body).await {
+    match ask(io, method, "/page-route", &view, body).await {
         Ok((status, answer)) => json_answer(status, answer),
         Err(()) => unavailable("not_connected"),
     }
@@ -963,8 +1047,15 @@ pub async fn guest_net(
     }
 }
 
-/// One POST of JSON over a host's bulk stream, naming the view it asks for.
-async fn ask<IO>(io: IO, path: &str, view: &str, body: Bytes) -> Result<(StatusCode, Bytes), ()>
+/// One request of JSON over a host's bulk stream, naming the view it asks
+/// for.
+async fn ask<IO>(
+    io: IO,
+    method: axum::http::Method,
+    path: &str,
+    view: &str,
+    body: Bytes,
+) -> Result<(StatusCode, Bytes), ()>
 where
     IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
@@ -979,7 +1070,9 @@ where
         })
         .abort_handle(),
     );
-    let request = hyper::Request::post(path)
+    let request = hyper::Request::builder()
+        .method(method)
+        .uri(path)
         .header(header::HOST, "hide")
         .header(header::CONTENT_TYPE, "application/json")
         .header(VIEW_HEADER, view)
@@ -1039,26 +1132,19 @@ async fn open_view_socket(
 mod tests {
     use super::*;
 
-    /// The answer `/page-route` gives a question for `url`, the core naming
-    /// `device` as the page's machine and `host` as its own.
-    async fn routed(device: &str, url: &str) -> (StatusCode, serde_json::Value) {
+    /// The status and body of `/page-route`'s answer when the registry
+    /// answers `outcome`.
+    async fn answered(
+        outcome: Result<(crate::browser_routes::Resolved, bool), &'static str>,
+    ) -> (StatusCode, serde_json::Value) {
         let body =
             json!({"device": "host", "checkout": "/web", "view": "d1", "load": 7}).to_string();
-        let (device, url) = (device.to_owned(), url.to_owned());
-        let answer = answer_page_route(Some(true), body.as_bytes(), move |ask| {
+        let answer = answer_page_route(true, body.as_bytes(), move |ask| async move {
             assert_eq!(
                 (ask.device.as_str(), ask.view.as_str(), ask.load),
                 ("host", "d1", 7)
             );
-            Ok((
-                Some(hide_core::workspace_control::BrowserRouteSource {
-                    device_id: device,
-                    checkout_path: "/web".to_owned(),
-                    url,
-                    load: 7,
-                }),
-                "host".to_owned(),
-            ))
+            outcome
         })
         .await;
         let status = answer.status();
@@ -1072,74 +1158,104 @@ mod tests {
         )
     }
 
-    // Where a display the guest draws loads from is the host core's answer:
-    // a page of a third device on that device's loopback, the unspecified
-    // address that reaches it included, or in its files is refused, since
-    // only that device reaches it; the host's own file page is not served to
-    // a screen yet; a public page of another device loads through the host as
-    // not its own, and the host's own loopback page as its own.
+    // A route the registry made is answered with its folder for a file page
+    // and whether the page is this machine's own; each refusal in the words
+    // the guest reads, a route that could not be made for any other reason as
+    // `route_unavailable`, its cause kept in this machine's log.
     #[tokio::test]
-    async fn a_screen_s_page_route_refuses_a_third_device_s_loopback_and_files() {
-        for url in [
-            "http://localhost:5173/",
-            "http://127.0.0.1:3000/a",
-            "http://[::]:8080/",
-            "http://0.0.0.0:8080/",
-            "file:///srv/device-c/report.html",
+    async fn a_screen_s_page_route_answers_the_registry_s_route_or_why_not() {
+        let file = crate::browser_routes::Resolved {
+            url: "http://127.0.0.1:5000/secret/report.html".to_owned(),
+            source_url: "file:///srv/host/report.html".to_owned(),
+            load: 7,
+            root: Some("/srv/host".to_owned()),
+        };
+        let (status, body) = answered(Ok((file, true))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            json!({"url": "http://127.0.0.1:5000/secret/report.html",
+                "source_url": "file:///srv/host/report.html", "load": 7, "own": true,
+                "root": "/srv/host"})
+        );
+        let web = crate::browser_routes::Resolved {
+            url: "https://example.com/".to_owned(),
+            source_url: "https://example.com/".to_owned(),
+            load: 7,
+            root: None,
+        };
+        let (status, body) = answered(Ok((web, false))).await;
+        assert_eq!(
+            (status, body["own"].as_bool(), body.get("root")),
+            (StatusCode::OK, Some(false), None)
+        );
+        for (outcome, status, reason) in [
+            ("view_unavailable", StatusCode::GONE, "view_unavailable"),
+            (
+                "remote_device_page_unavailable",
+                StatusCode::FORBIDDEN,
+                "remote_device_page_unavailable",
+            ),
+            (
+                "browser_route_limit",
+                StatusCode::TOO_MANY_REQUESTS,
+                "browser_route_limit",
+            ),
+            (
+                "browser_route_build_limit",
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_busy",
+            ),
+            (
+                "core_unavailable",
+                StatusCode::SERVICE_UNAVAILABLE,
+                "core_unavailable",
+            ),
+            (
+                "outside_checkout",
+                StatusCode::CONFLICT,
+                "route_unavailable",
+            ),
+            (
+                "host_unavailable",
+                StatusCode::CONFLICT,
+                "route_unavailable",
+            ),
         ] {
-            let (status, body) = routed("device-c", url).await;
+            let (answer, body) = answered(Err(outcome)).await;
             assert_eq!(
-                (status, body["reason"].as_str()),
-                (
-                    StatusCode::FORBIDDEN,
-                    Some("remote_device_page_unavailable")
-                ),
-                "{url}"
+                (answer, body["reason"].as_str()),
+                (status, Some(reason)),
+                "{outcome}"
             );
         }
-        let (status, body) = routed("host", "file:///srv/host/report.html").await;
-        assert_eq!(
-            (status, body["reason"].as_str()),
-            (StatusCode::FORBIDDEN, Some("remote_file_unavailable"))
-        );
-        let (status, body) = routed("device-c", "https://example.com/").await;
-        assert_eq!(
-            (status, body["own"].as_bool(), body["url"].as_str()),
-            (StatusCode::OK, Some(false), Some("https://example.com/"))
-        );
-        let (status, body) = routed("host", "http://localhost:5173/").await;
-        assert_eq!(
-            (status, body["own"].as_bool(), body["load"].as_u64()),
-            (StatusCode::OK, Some(true), Some(7))
-        );
     }
 
-    // A view that is not this guest's live one is answered before the core
-    // is asked, and a question out of shape is refused.
+    // A view that is not this guest's live one is answered before any route
+    // is asked for, and a question out of shape is refused.
     #[tokio::test]
     async fn a_page_route_answers_only_a_live_view_of_its_guest() {
-        let never = |_: PageRouteAsk| -> RouteSourceOf { panic!("the core is not asked") };
+        type Never =
+            std::future::Ready<Result<(crate::browser_routes::Resolved, bool), &'static str>>;
+        let never = |_: PageRouteAsk| -> Never { panic!("no route is asked for") };
         assert_eq!(
-            answer_page_route(Some(false), b"{}", never).await.status(),
+            answer_page_route(false, b"{}", never).await.status(),
             StatusCode::GONE
         );
         assert_eq!(
-            answer_page_route(None, b"{}", never).await.status(),
+            answer_page_route(true, b"not json", never).await.status(),
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            answer_page_route(Some(true), b"not json", never)
-                .await
-                .status(),
+            answer_page_route(
+                true,
+                br#"{"device":"","checkout":"/w","view":"d1","load":1}"#,
+                never
+            )
+            .await
+            .status(),
             StatusCode::BAD_REQUEST
         );
-        let gone = answer_page_route(
-            Some(true),
-            br#"{"device":"h","checkout":"/w","view":"d1","load":1}"#,
-            |_| Ok((None, "h".to_owned())),
-        )
-        .await;
-        assert_eq!(gone.status(), StatusCode::GONE);
     }
 
     fn viewer(byte: u8) -> Viewer {

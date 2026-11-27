@@ -171,6 +171,57 @@ describe("a link of another computer's screen", () => {
   });
 });
 
+// A ⌘-click (Ctrl off macOS) on an SSH device's `localhost` in its pane opens
+// a page in the Workspace in front, whose loopback page reaches the device
+// through its link, never this machine's default browser, which would read
+// `localhost` as this machine's. The device's LAN and local names have no
+// way through the device yet (#3086), so they keep the default browser, as
+// a public link of the device's pane and a link of this machine's own pane
+// do.
+describe("a link of an SSH device's pane", () => {
+  it("opens the device's loopback as a page in front, and its LAN, a public or this machine's link in the default browser", () => {
+    const saved = useShellStore.getState();
+    const savedUi = useUiStore.getState();
+    const opened = vi.fn();
+    vi.spyOn(window, "open").mockImplementation((...args) => { opened(...args); return null; });
+    try {
+      const device = { session: { agents: [], workspaces: [{ checkouts: [{ tabs: [{ panes: [{ id: "w2:p1", device_id: "devbox" }] }] }] }] } };
+      useShellStore.setState({ rest: { workspace_view: { device_id: "devbox", path: "/srv/web", layout: null }, status: { remote: [device] } } as never });
+      useUiStore.setState({ screen: { kind: "workspace" } as never });
+      const sent: Parameters<DispatchFn>[0][] = [];
+      const actions = createActions((event) => { sent.push(event); return true; });
+      for (const url of ["http://localhost:5173/", "http://127.0.0.1:8080/x", "http://[::1]:3000/"]) actions.openLink(url, true, "w2:p1");
+      const pages = sent.filter((event) => event.kind === "browser_open").map((event) => event.payload as { url: string; workspace: { device_id: string }; opener_pane?: string });
+      expect(pages.map((page) => [page.url, page.workspace.device_id, page.opener_pane])).toEqual([
+        ["http://localhost:5173/", "devbox", "w2:p1"],
+        ["http://127.0.0.1:8080/x", "devbox", "w2:p1"],
+        ["http://[::1]:3000/", "devbox", "w2:p1"],
+      ]);
+      expect(opened).not.toHaveBeenCalled();
+      for (const url of ["http://192.168.0.4:8080/", "http://printer.local/", "https://github.com/with-hide/hide"]) actions.openLink(url, true, "w2:p1");
+      actions.openLink("http://localhost:5173/", true, "w1:p1");
+      expect(opened.mock.calls.map(([url]) => url)).toEqual(["http://192.168.0.4:8080/", "http://printer.local/", "https://github.com/with-hide/hide", "http://localhost:5173/"]);
+      expect(sent.filter((event) => event.kind === "browser_open")).toHaveLength(3);
+
+      // In Desk's room a page of its desk opened from here would load this
+      // machine's loopback, and on another screen there is no Workspace to
+      // show one: the link opens nothing, never this machine's default
+      // browser.
+      useShellStore.setState({ rest: { workspace_view: { device_id: "devbox", path: "/srv/web", layout: null }, desk_view: { device_id: "mac", path: "hide:desk", layout: null }, status: { remote: [device] } } as never });
+      for (const screen of ["desk", "missions"]) {
+        useUiStore.setState({ screen: { kind: screen } as never });
+        for (const external of [true, false]) actions.openLink("http://localhost:5173/", external, "w2:p1");
+      }
+      expect(sent.filter((event) => event.kind === "browser_open")).toHaveLength(3);
+      expect(opened).toHaveBeenCalledTimes(4);
+    } finally {
+      useShellStore.setState(saved, true);
+      useUiStore.setState(savedUi, true);
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 describe("Find while an agent answers its own search request", () => {
   it.each([false, true])("follows the answer only while the keyboard stays at its origin (moved: %s)", async (moved) => {
     const { act, createElement } = await import("react");
