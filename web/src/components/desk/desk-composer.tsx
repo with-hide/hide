@@ -118,7 +118,7 @@ export function SentAttachments({ files }: { files: readonly SentAttachment[] })
  * mentions stand as chips (D-85) and `value` is the draft's text; without,
  * it is a plain text box.
  */
-export function DeskComposer({ value, draft, inputRef, textRef, label, placeholder, tray, answering = false, stopHint, focused = false, held = false, notice = null, menu = null, menuOpen = false, menuEmpty = false, onChange, onCaret, onKeyDown, onSend, onStop, onMenuOpenChange, children }: {
+export function DeskComposer({ value, draft, inputRef, textRef, label, placeholder, tray, answering = false, stopHint, focused = false, held = false, notice = null, menu = null, menuOpen = false, menuEmpty = false, onChange, onCaret, onKeyDown, onSend, onHeld, onStop, onMenuOpenChange, children }: {
   value: string;
   /** Desk's draft: its mentions are drawn as chips in the box. */
   draft?: DeskDraft;
@@ -150,6 +150,8 @@ export function DeskComposer({ value, draft, inputRef, textRef, label, placehold
   /** The box's keys before it takes them, such as the `@` menu's moves; one it prevents is not sent. */
   onKeyDown?: (event: KeyboardEvent<HTMLElement>) => void;
   onSend: () => void;
+  /** ↵ with words or files while send waits: nothing is sent and the words stay. */
+  onHeld?: () => void;
   onStop?: () => void;
   onMenuOpenChange?: (open: boolean) => void;
   children?: ReactNode;
@@ -165,6 +167,7 @@ export function DeskComposer({ value, draft, inputRef, textRef, label, placehold
     if (event.defaultPrevented || event.key !== "Enter" || event.shiftKey || composingKey(event) || (menuOpen && !menuEmpty)) return;
     event.preventDefault();
     if (!blocked) onSend();
+    else if (!empty && held) onHeld?.();
   };
   const over = useFileDropOver();
   // A paste that carries files attaches them; words paste as words.

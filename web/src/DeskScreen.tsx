@@ -197,10 +197,12 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const queuedHeld = desk?.conversation.queued_held ?? false;
   const queuedPaused = desk?.conversation.queued_paused ?? false;
   const canSend = agent?.state === "ready" && !queuedFull;
-  // Why the box holds what it holds, in the one line under it: a full waiting line, or no agent to send to. With no agent
-  // chosen (no default, or one Desk no longer lists) ↵ keeps the words and the line says to pick one, once there is
-  // something to send.
-  const unpicked = agent === undefined && (draft.text.trim() !== "" || tray.files.length > 0);
+  // A ↵ that found no agent to send to (no default, or one Desk no longer lists): the words stay, and the line under the
+  // box says to pick one until one is picked or the box is emptied; typing alone says nothing.
+  const [unpicked, setUnpicked] = useState(false);
+  const holds = draft.text.trim() !== "" || tray.files.length > 0;
+  if (unpicked && (agent !== undefined || !holds)) setUnpicked(false);
+  // Why the box holds what it holds, in the one line under it: a full waiting line, or a ↵ with no agent to send to.
   const heldLine = queuedFull ? t("desk.queued.full") : unpicked ? t("desk.composer.pickAgent") : null;
 
   const lastUserId = (list: readonly DeskItem[]) => list.reduce((last, item) => (item.kind === "user" ? item.id : last), -1);
@@ -393,6 +395,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       onCaret={setCaret}
       onKeyDown={menus.onKeyDown}
       onSend={() => send()}
+      onHeld={() => setUnpicked(agent === undefined)}
       onStop={() => actions.deskStop()}
     >
       <DeskPermissionMenu permission={desk.settings.permission} agent={desk.agents.find((agent) => agent.id === desk.selection.agent)?.label ?? null} onPermission={(permission) => actions.deskPermission(permission)} />
