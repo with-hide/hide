@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { agentIn, withControl } from "../../web/e2e/daemon-actions";
 import { continueFixtureTranscript } from "../../web/e2e/pane-fixture";
-import { countSent, enterWorkspace, sendEvent } from "../../web/e2e/wire";
+import { countSent, enterWorkspace, sendEvent, showExplorer } from "../../web/e2e/wire";
 import { animationsFinished, compositorPresents } from "../../web/e2e/wait";
 import { fitWindow, launchShell, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
@@ -60,6 +60,17 @@ test("a pane conversation with Desk off replies in place and keeps its terminal 
     expect(await page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id), paneId)).toEqual(grid);
     expect(counts.get("terminal_resize")).toBe(resized);
     expect(counts.get("terminal_viewport")).toBe(viewed);
+    // Returning from a tool gives the visible conversation the keyboard;
+    // ordinary typing must stay in its draft until the operator sends it.
+    await toggle.click();
+    await showExplorer(page);
+    await page.locator("[data-explorer-tree]").focus();
+    await page.keyboard.press("Escape");
+    await expect(composer).toBeFocused();
+    await page.keyboard.type("focus-probe-before-enter");
+    await expect(composer).toHaveValue("focus-probe-before-enter");
+    expect(fs.readFileSync(fixture.inputLogs[0]!, "utf8")).not.toContain("focus-probe-before-enter");
+    await toggle.click();
     await sendEvent(page, daemon, "interface_language_set", { language: "ko" });
     await sendEvent(page, daemon, "ui_state_update", { font_size: 17 });
     await fitWindow(app, { width: 1000, height: 800 });

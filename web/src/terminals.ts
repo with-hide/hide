@@ -436,8 +436,8 @@ export function focusTerminal(paneId: string) {
   const cover = document.querySelector<HTMLElement>("[data-pane-conversation]");
   if (cover?.dataset.paneConversation === paneId) {
     const composer = cover.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]:not(:disabled)");
-    if (composer) composer.focus();
-    else cover.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    if (composer && !composer.closest("[inert]")) composer.focus();
+    else (cover.querySelector<HTMLButtonElement>("[data-thread-reclaim]") ?? cover).focus();
     return;
   }
   const instance = instances.get(paneId);

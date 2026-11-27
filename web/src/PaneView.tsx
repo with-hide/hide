@@ -229,10 +229,6 @@ export const PaneView = memo(function PaneView({
   const onScreen = useUiStore((s) => s.screen?.kind === "workspace" && !s.overviewOpen);
   const conversation = selected && onScreen;
   const conversationChord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state));
-  const focusBody = () => {
-    if (conversation) document.querySelector<HTMLTextAreaElement>("[data-pane-conversation] [data-desk-composer-input]")?.focus();
-    else focusTerminal(paneId);
-  };
   // The logo's name, with the profile its badge marks (PRD agent-profiles B17).
   const agentName = agentKind ? agentWithProfile(t, { agent_kind: agentKind, profile: recordAgent?.profile, tool: recordAgent?.tool }) : "";
   const look = markSymbol === "look" ? recordAgent?.look ?? null : null;
@@ -349,7 +345,7 @@ export const PaneView = memo(function PaneView({
     if (entryInput !== null && keyboardInputRevision() !== entryInput) return;
     // A View's chip asked for focus mode on that View, which takes the keys itself (`viewFocusRequest`).
     if (entryKeys === "desk") return;
-    focusBody();
+    focusTerminal(paneId);
   }, [paneId, focused, snapshotIncludesLastClick, keysStayOnDesk, entryInput, entryKeys, conversation]);
 
   // Every paste into the pane is the shell's, before xterm's textarea sees it
@@ -425,7 +421,7 @@ export const PaneView = memo(function PaneView({
         onClick={(event) => {
           if (!paneHeadPicksPane(event.currentTarget, event.target)) return;
           actions.focusPane(paneId);
-          focusBody();
+          focusTerminal(paneId);
         }}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -599,7 +595,7 @@ export const PaneView = memo(function PaneView({
             {caption.text}
           </button>
         ) : null}
-        {conversation ? <div className="absolute inset-0 z-10 flex min-h-0 min-w-0 bg-card" data-pane-conversation={paneId}><PaneConversation paneId={paneId} actions={actions} /></div> : null}
+        {conversation ? <div tabIndex={-1} className="absolute inset-0 z-10 flex min-h-0 min-w-0 bg-card" data-pane-conversation={paneId}><PaneConversation paneId={paneId} actions={actions} /></div> : null}
       </div>
       {input ? (
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-10 border-2 border-primary" data-pane-focus-outline="true" />
