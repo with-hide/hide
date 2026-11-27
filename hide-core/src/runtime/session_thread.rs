@@ -2497,6 +2497,67 @@ mod tests {
         );
     }
 
+    /// Words on their way when their thread closes are answered on the
+    /// closed thread section, by their request id (mission-109 review round
+    /// 3).
+    #[test]
+    fn an_input_answered_after_its_thread_closed_reaches_the_closed_thread() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        let terminals = Arc::new(GrantingTerminals::default());
+        terminals
+            .hold
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        runtime.set_terminals(Arc::clone(&terminals) as _);
+        let fake = crate::engine::fake::FakeEngine::start(|method, _| {
+            panic!("nothing reaches the engine, asked {method}");
+        });
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
+        open(&mut runtime);
+        let generation = thread(&runtime).generation;
+        let shared = crate::runtime::tests::SharedRuntime::new(runtime);
+        {
+            let mut runtime = shared.lock().unwrap();
+            runtime.worker_context = Some(RuntimeWorkerContext {
+                runtime: shared.weak(),
+                notifier: crate::handle::ChangeNotifier::noop(),
+            });
+            runtime.send_session_thread_input(ThreadInputPayload {
+                generation,
+                pane_id: "w1:p1".to_owned(),
+                request_id: INPUT.to_owned(),
+                text: "계속".to_owned(),
+                paths: Vec::new(),
+            });
+        }
+        crate::runtime::tests::wait_for("the input's permit ask", || {
+            terminals.held.lock().unwrap().is_some()
+        });
+        shared.lock().unwrap().close_session_thread();
+        let grant = terminals.held.lock().unwrap().take().unwrap();
+        grant(Ok(()));
+        crate::runtime::tests::wait_for("the input's answer", || {
+            thread(&shared.lock().unwrap())
+                .input
+                .is_some_and(|input| input.state != ThreadInputState::Sending)
+        });
+        let runtime = shared.lock().unwrap();
+        assert_eq!(thread(&runtime).state, ThreadState::Closed);
+        assert_eq!(
+            thread(&runtime)
+                .input
+                .map(|input| (input.request_id, input.state, input.reason)),
+            Some((
+                INPUT.to_owned(),
+                ThreadInputState::Refused,
+                Some("closed".to_owned())
+            ))
+        );
+        assert!(fake.calls_of("prompt_agent").is_empty());
+    }
+
     /// Words on their way when their thread closes and opens again are
     /// answered through the thread that stands then, by their request id,
     /// and the answer stays across the next close and open, so the box that
