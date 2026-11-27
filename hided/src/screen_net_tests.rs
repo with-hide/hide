@@ -1412,7 +1412,7 @@ async fn a_host_streaming_into_sixteen_mux_tunnels_passes_the_budget_by_at_most_
         let far = Arc::clone(&far);
         PipeTransport::dialing(MachineKey::generate().unwrap(), move |_| {
             let (near, other) = LocalStream::pair().unwrap();
-            far.arrived(other.into());
+            far.arrived(other.into(), PathKind::Local);
             async move { Ok(Carrier::from(near)) }
         })
     };
