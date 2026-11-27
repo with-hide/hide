@@ -157,7 +157,7 @@ it("says the Tailscale tip only on a row connected through the relay, and keeps 
   await unmount();
 });
 
-it("says on a relayed row why the SSH route waits, naming the machine and never the alias, and Retry sends the machine's retry (mission-107)", async () => {
+it("says on a relayed row why the SSH route waits, naming the machine and never the alias, and Retry sends the machine's retry", async () => {
   const parked = peer({ key: "cd".repeat(32), device_id: "office", name: "Office Linux", path: "relay", ssh: { blocked: "update_there" } });
   const { q, press, events, unmount } = await mount(idle, [parked]);
   const tip = q('[data-peer-relay-tip="office"]');

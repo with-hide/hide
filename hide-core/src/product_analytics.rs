@@ -13,7 +13,7 @@ pub enum Event {
         outcome: DeviceOutcome,
         platform: DevicePlatform,
         /// The path a paired machine's connection came up on, sent with a
-        /// ready outcome of that machine's device only (mission-107, 12.1);
+        /// ready outcome of that machine's device only;
         /// none for an SSH or WSL helper device, whose link is its own, and
         /// for every failure.
         path: Option<DevicePath>,

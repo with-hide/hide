@@ -130,7 +130,7 @@ impl Runtime {
             }));
         }
         // A paired machine's device names the path its connection came up
-        // on, as the core holds it for that machine now (mission-107, 12.1).
+        // on, as the core holds it for that machine now.
         let path = match (outcome, self.link_origin(device)) {
             (DeviceOutcome::Ready, Some(crate::model::LinkOrigin::Peer { key, .. })) => self
                 .snapshot

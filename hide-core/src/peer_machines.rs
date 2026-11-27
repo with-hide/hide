@@ -60,7 +60,7 @@ pub struct PeerMachine {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helper_device: Option<String>,
     /// Where this machine's SSH route to it stands, when the route is
-    /// parked until the operator acts (mission-107): what the relay tip
+    /// parked until the operator acts: what the relay tip
     /// says instead of its usual line. Never the alias, which is this
     /// machine's own fact, so the row is the same for every connection
     /// that reads the snapshot.
@@ -130,7 +130,7 @@ pub enum PeerPath {
     Relay,
     /// Inside one machine: a WSL distribution and its PC.
     Local,
-    /// Through the system `ssh` (mission-107).
+    /// Through the system `ssh`.
     Ssh,
 }
 

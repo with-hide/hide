@@ -2947,7 +2947,7 @@ fn device_connect_statistics_count_a_ready_device_once_across_reconnects() {
 
 /// A paired machine's device says the path its connection came up on, once:
 /// a ready over SSH sends `path` `ssh`, and a later move of that connection
-/// sends nothing, since the outcome is the same (mission-107, 12.1).
+/// sends nothing, since the outcome is the same.
 #[test]
 fn a_paired_machine_ready_over_ssh_sends_path_ssh_once() {
     use crate::peer_machines::{PeerMachine, PeerOpens, PeerPath};

@@ -30,7 +30,7 @@ describe("a paired machine's row (PRD device-connect-iroh B21, B24-B27, B50, B51
     expect(relayTip(peer({ path: "relay", update: "there" }))).toBeNull();
   });
 
-  it("names the SSH path in one word, and says on a relayed row why the SSH route waits, with Retry where a retry helps (mission-107)", () => {
+  it("names the SSH path in one word, and says on a relayed row why the SSH route waits, with Retry where a retry helps", () => {
     expect(peerRouteKey(peer({ path: "ssh" }))).toBe("pairing.state.ssh");
     const parked = (blocked: NonNullable<Peer["ssh"]>["blocked"]) => relayTip(peer({ path: "relay", ssh: { blocked } }));
     expect(parked("sign_in")).toEqual({ key: "devices.relayTip.ssh.signIn", retry: true });
