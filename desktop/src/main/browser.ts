@@ -22,20 +22,25 @@
 // window that keeps its opener, belongs to that page and closes with it; a
 // link to another app leaves only after the operator agrees.
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, screen, session, shell, WebContentsView, type BrowserWindowConstructorOptions, type Input, type IpcMainEvent, type IpcMainInvokeEvent, type MenuItem, type Session, type WebContents, type WindowOpenHandlerResponse } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, screen, session, shell, webContents as allContents, WebContentsView, type BrowserWindowConstructorOptions, type Input, type IpcMainEvent, type IpcMainInvokeEvent, type MenuItem, type Session, type WebContents, type WindowOpenHandlerResponse } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import type { TFunction } from "i18next";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { BrowserDevicePlacement, BrowserHostEvent, BrowserPageState, BrowserPlacement, BrowserRect, BrowserSync } from "../../../web/src/host";
 import { hostChord, isCycleCommand, keySystemOf, matchHost, releaseModifier, systemRegistry, type Command, type CommandId } from "../../../web/src/shortcuts";
-import { BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL } from "../channel";
-import { appScheme, browserPartition, deviceEmulation, fileLink, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, offScreenBounds, offScreenEmulation, overCap, parseCommand, parseSync, parseTarget, popupBounds, protocolOf, remoteRequest, routed, toBounds, viewKey } from "./browserSync";
+import { BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL, REMOTE_BROWSER_EVENT_CHANNEL } from "../channel";
+import { appScheme, browserPartition, deviceEmulation, fileLink, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localNetworkReach, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, offScreenBounds, offScreenEmulation, overCap, parseCommand, parseRemoteSync, parseSync, parseTarget, placeIn, popupBounds, PRESS_WITHIN_MS, protocolOf, REMOTE_BOUNDS, remoteRequest, routed, toBounds, viewKey } from "./browserSync";
+import { isLoopbackHost } from "../../../web/src/loopbackHost";
 import { nextZoomFactor, type PageZoom } from "../../../web/src/zoomSteps";
 import type { HostLog } from "./log";
 import type { CdpPage, CdpRetirement, CdpScope } from "./browserCdp";
 import { accelerator } from "./menu";
 import { errorCode, externalPartition, type ExternalFiles } from "./externalFiles";
+import { egressWords } from "./remoteEgress";
+
+/** The name every remote screen's login storage starts with (`remotePagePartition`). */
+const REMOTE_PAGE_PARTITION = "persist:hide-remote-page-";
 
 /** Page state reports coalesce to one per view in this window, so a title ticking every frame costs one event. */
 const REPORT_COALESCE_MS = 100;
@@ -64,6 +69,8 @@ const PRESSES = new Set(["mouseDown", "touchStart", "gestureTapDown"]);
 
 type Page = {
   key: string;
+  /** Who placed it: this window's shell, or another computer's screen in it. */
+  readonly source: Source;
   workspace: string;
   id: string;
   view: WebContentsView;
@@ -121,6 +128,21 @@ type Page = {
   /** Its document navigation in flight that began while something else held the keyboard. */
   grab: NavigationGrab | null;
   /**
+   * A page of another computer's screen: whether its route said it is that
+   * computer's own page, whose loopback it may reach through that computer,
+   * and the last time the operator pressed in it or its popups, which a
+   * window it opens needs (docs/BROWSER_DISPLAYS.md, A page in another
+   * computer's screen).
+   */
+  own?: boolean;
+  pressedAt?: number;
+  /** The window's count of views added when this page was added last, so it is raised only above a view added after it. */
+  addedAt: number;
+  /** A download this generation refused, logged once. */
+  downloadRefused?: boolean;
+  /** The reasons a remote screen's page had a request refused, each logged once. */
+  readonly remoteRefusals: Set<string>;
+  /**
    * Laid out at `bounds` by emulation because no slot has shown it since its
    * contents were made: Chromium gives a page it never showed no viewport, so
    * an agent's clicks would land nowhere (PRD lane-desk-pair-view B32). Its
@@ -174,6 +196,95 @@ export type IdleClock = { bound: number; every: number; now: () => number };
 /** A popup window a page opened, under the page that owns it (for a popup's own popup, the same page). */
 type Popup = { window: BrowserWindow; owner: Page };
 
+/**
+ * Where a page of another computer's screen loads from, as that computer's
+ * core answers (`/page-route`): its address and whether it is that
+ * computer's own page, or why it does not load here.
+ */
+export type RemoteRoute = { url: string; source_url: string; load: number; own: boolean } | { refused: string };
+
+/**
+ * Another computer's screen in this window, as its pages need it
+ * (docs/BROWSER_DISPLAYS.md, A page in another computer's screen): its page
+ * places the browser displays of that computer, which this window draws in
+ * the screen's tile with every request leaving through that computer.
+ */
+export type RemoteSource = {
+  readonly device: string;
+  readonly key: string;
+  /** The screen's view contents: its page hears its pages' events, and the keyboard goes back to it. */
+  contents(): WebContents | null;
+  /** The tile in the window, with the zoom its page lays out at, while it shows its loaded page; null otherwise. */
+  area(): { bounds: BrowserRect; zoom: number } | null;
+  /** Whether the screen's own view holds the keyboard. */
+  focused(): boolean;
+  /** Whether its pages' requests may leave now: their proxy is set. */
+  ready(): boolean;
+  /** Asks for its proxy: `ready`, or why its pages cannot load now. */
+  ensure(): Promise<string>;
+  /** The partition its pages keep their logins in now (`remotePagePartition`); null before its proxy's first answer. */
+  partition(): string | null;
+  /** Whether its login storage may hold pages now; `waiting` until it can be judged, `unrecorded` when its row could not be written. */
+  storage(): "live" | "clearing" | "full" | "waiting" | "unrecorded";
+  route(workspace: string, id: string, load: number): Promise<RemoteRoute>;
+};
+
+/** Whose pages a page is among: this window's shell, or one remote screen. */
+type Source = {
+  readonly id: string;
+  readonly remote: RemoteSource | null;
+  /** The core's own node id as this source's shell last named it. */
+  node: string | null;
+  /**
+   * The newest load stamp of the core's inventory this source's shell has
+   * sent, or null before its first inventory. The core gives each load a
+   * stamp later than every earlier one, so a retained page with no live page
+   * here and a newer stamp is one the core asked to load after this shell saw
+   * it (B32). The first inventory sets it and asks nothing, so a relaunch, a
+   * reload or a checkout that comes back loads none of the pages it already
+   * had. Only this window's shell's pages load off screen.
+   */
+  newestLoad: number | null;
+  /** A remote screen's last sync, applied while it shows and at most every `syncEveryMs`. */
+  latest: BrowserSync | null;
+  syncTimer: NodeJS.Timeout | null;
+  syncedAt: number;
+  /** When each of its recent pages was made, and the wait for the next place. */
+  created: number[];
+  createTimer: NodeJS.Timeout | null;
+  capturing: boolean;
+  captured: number[];
+  commanded: number[];
+  commandsRefused: boolean;
+  /** When its pages last opened a popup. */
+  popupAt: number;
+  /** The proxy is being asked for; its next sync applies once it answers. */
+  egressAsked: boolean;
+  /** The reasons a request with no page (a service worker) was refused, each logged once. */
+  readonly refusals: Set<string>;
+  /** The screen hid or failed: its popups are hidden until it shows again. */
+  hidden: boolean;
+};
+
+function newSource(id: string, remote: RemoteSource | null): Source {
+  return { id, remote, node: null, newestLoad: null, latest: null, syncTimer: null, syncedAt: 0, created: [], createTimer: null, capturing: false, captured: [], commanded: [], commandsRefused: false, popupAt: 0, egressAsked: false, refusals: new Set(), hidden: false };
+}
+
+/** A remote source's id, from its machine and key. */
+function remoteId(remote: { device: string; key: string }): string {
+  return `${remote.device}\u0000${remote.key}`;
+}
+
+/** The key a page lives under: this window's by its display (`viewKey`), a remote screen's apart from it. */
+function pageKey(source: Source, workspace: string, id: string): string {
+  return source.remote ? `\u0001${source.id}\u0001${viewKey(workspace, id)}` : viewKey(workspace, id);
+}
+
+/** Entries of a list of times newer than `within` before `now`. */
+function recent(times: number[], now: number, within: number): number[] {
+  return times.filter((time) => now - time < within);
+}
+
 /** The most pixels of a phone's still of a page; a larger one is scaled down, so it stays well under the phone's 10 MiB image cap. */
 const STILL_PIXELS = 1_500_000;
 const STILL_QUALITY = 70;
@@ -188,15 +299,6 @@ export class BrowserViews {
   private readonly pages = new Map<string, Page>();
   /** Unloaded web pages by key, until their display closes or they show again. */
   private readonly unloaded = new Map<string, Unloaded>();
-  /**
-   * The newest load stamp of the core's inventory this shell has sent, or
-   * null before its first inventory. The core gives each load a stamp later
-   * than every earlier one, so a retained page with no live page here and a
-   * newer stamp is one the core asked to load after this shell saw it (B32).
-   * The first inventory sets it and asks nothing, so a relaunch, a reload or
-   * a checkout that comes back loads none of the pages it already had.
-   */
-  private newestLoad: number | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   /** Area membership comes from the core's retained inventory, including hidden workspaces. */
   private cdpAreas = new Map<string, string>();
@@ -204,8 +306,12 @@ export class BrowserViews {
   private cdpObserved: { key: string; area: string; contents: number; url: string; title: string }[] = [];
   private readonly cdpLeases = new Map<number, CdpPage>();
   private attachmentEpoch: string | null = null;
-  /** The core's own node id as the shell last named it; its pages load this computer's loopback directly. */
-  private node: string | null = null;
+  /** This window's shell's pages; its `node` is the core's own node id, whose pages load this computer's loopback directly. */
+  private readonly local: Source = newSource("", null);
+  /** Each remote screen's pages, by `remoteId`. */
+  private readonly sources = new Map<string, Source>();
+  /** Views added to the window by another owner (a remote screen); a page added before the latest is raised when placed. */
+  private viewsAdded = 0;
   /** Positive core authority is independent of whether an area has pages. */
   private cdpScopes = new Map<string, number>();
   private cdpScopesRevision = 0;
@@ -227,7 +333,8 @@ export class BrowserViews {
   private reportWindowFocus(focused: boolean): void {
     if (this.reportedWindowFocus === focused) return;
     this.reportedWindowFocus = focused;
-    this.emit({ kind: "window-focus", focused });
+    this.emit(this.local, { kind: "window-focus", focused });
+    for (const source of this.sources.values()) this.emit(source, { kind: "window-focus", focused });
   }
   /**
    * Whether the window has had its `focus` event since its last `blur`. On
@@ -236,8 +343,8 @@ export class BrowserViews {
    * yet back would hand that restore the keyboard a page was just given.
    */
   private windowBack = true;
-  /** What took the keyboard in the window last on purpose: a page, or the shell (null). */
-  private keyboard: Page | null = null;
+  /** What took the keyboard in the window last on purpose: a page, a remote screen's view, or the shell (null). */
+  private keyboard: Page | WebContents | null = null;
 
   setRegistry(registry: readonly Command[]): void { this.registry = registry; }
 
@@ -265,7 +372,8 @@ export class BrowserViews {
       const contents = page.view.webContents;
       // An outside file is the operator's alone: no capability, Comment's
       // included, ever reaches it (B18).
-      if (!area_id || contents.isDestroyed() || page.grant) continue;
+      // A remote screen's page is that computer's: no capability here reaches it.
+      if (!area_id || contents.isDestroyed() || page.grant || page.source.remote) continue;
       if (!page.fileRestricted) result.push({ workspace: page.workspace, area_id, id: page.id, local: true, contents });
       else if (!isFileAddress(page.state.url) && !isFileAddress(page.route?.source_url ?? "") && !isFileAddress(contents.getURL())
         && !page.cdpFileFrame) {
@@ -321,7 +429,7 @@ export class BrowserViews {
   private cancelCycle(): void {
     const held = this.cycleInput;
     this.cycleInput = null;
-    if (held) this.emit({ kind: "cycle-cancel", cycleId: held.cycleId, workspace: held.page.workspace, id: held.page.id });
+    if (held) this.emit(held.page.source, { kind: "cycle-cancel", cycleId: held.cycleId, workspace: held.page.workspace, id: held.page.id });
   }
 
   constructor(
@@ -346,7 +454,7 @@ export class BrowserViews {
       if (!this.trusted(event)) return this.log.event("browser.ipc_refused", { channel: "sync" });
       const sync = parseSync(value);
       if (!sync) return this.log.event("browser.sync_invalid", {});
-      if (sync.node) this.node = sync.node;
+      if (sync.node) this.local.node = sync.node;
       // UI owns this optional wire field. Its parser forwards it after the
       // shared contract lands; older shells have no replay epoch.
       const authority = sync as typeof sync & { attachment_epoch?: string; authorized_scopes?: { workspace: string; area_id: string; incarnation?: number }[] };
@@ -355,45 +463,344 @@ export class BrowserViews {
     });
     ipcMain.handle(BROWSER_CAPTURE_CHANNEL, async (event, value: unknown) => {
       if (!this.trusted(event)) return null;
-      const target = parseTarget(value);
-      const page = target ? this.pages.get(viewKey(target.workspace, target.id)) : undefined;
-      // A covered page's still: the shell asks while the page still shows,
-      // ahead of the sync that hides it, and again for a page it keeps covered
-      // in the front Workspace whose zoom moved under the zoom popover.
-      if (!page || (!page.visible && !page.placed)) {
-        this.log.event("browser.capture_refused", { id: target?.id ?? null, reason: page ? "hidden" : "missing" });
-        return null;
-      }
-      try {
-        const image = await page.view.webContents.capturePage();
-        if (!image.isEmpty()) return image.toDataURL();
-        this.log.event("browser.capture_empty", { id: page.id });
-        return null;
-      } catch (error) {
-        this.log.event("browser.capture_failed", { id: page.id, detail: String(error) });
-        return null;
-      }
+      return this.capture(this.local, value);
     });
     ipcMain.on(BROWSER_COMMAND_CHANNEL, (event, value: unknown, name: unknown) => {
       if (!this.trusted(event)) return this.log.event("browser.ipc_refused", { channel: "command" });
-      const target = parseTarget(value);
-      const command = parseCommand(name);
-      const page = target ? this.pages.get(viewKey(target.workspace, target.id)) : undefined;
-      if (!page || !command) return;
-      const contents = page.view.webContents;
-      const zoom = SHELL_ZOOM_COMMANDS[command];
-      if (zoom) this.zoom(page, zoom);
-      else if (command === "focus") {
-        if (page.visible && this.window?.isFocused()) this.focusPage(page);
-      } else if (command === "back" && contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
-      else if (command === "forward" && contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
-      else if (command === "stop") contents.stop();
-      else if (command === "reload") {
-        // A page that failed to load has nothing to reload; its address loads again.
-        if (page.state.failure) this.load(page, page.state.url);
-        else contents.reload();
-      }
+      this.command(this.local, value, name);
     });
+  }
+
+  /**
+   * A still of one of `source`'s pages for its shell. A covered page's still:
+   * the shell asks while the page still shows, ahead of the sync that hides
+   * it, and again for a page it keeps covered in the front Workspace whose
+   * zoom moved under the zoom popover. A remote screen's page answers only
+   * while it is drawn, one capture at a time and a few a second.
+   */
+  private async capture(source: Source, value: unknown): Promise<string | null> {
+    const target = parseTarget(value);
+    const page = target ? this.pages.get(pageKey(source, target.workspace, target.id)) : undefined;
+    if (!page || (!page.visible && (source.remote || !page.placed))) {
+      this.log.event("browser.capture_refused", { id: target?.id ?? null, reason: page ? "hidden" : "missing" });
+      return null;
+    }
+    if (source.remote) {
+      const now = this.idle.now();
+      source.captured = recent(source.captured, now, 1_000);
+      if (source.capturing || source.captured.length >= REMOTE_BOUNDS.capturesPerSecond) {
+        this.log.event("browser.capture_refused", { id: page.id, reason: "remote_bound" });
+        return null;
+      }
+      source.captured.push(now);
+      source.capturing = true;
+    }
+    try {
+      const image = await page.view.webContents.capturePage();
+      if (!image.isEmpty()) return image.toDataURL();
+      this.log.event("browser.capture_empty", { id: page.id });
+      return null;
+    } catch (error) {
+      this.log.event("browser.capture_failed", { id: page.id, detail: String(error) });
+      return null;
+    } finally {
+      source.capturing = false;
+    }
+  }
+
+  /** A toolbar command for one of `source`'s pages; a remote screen's at most `commandsPerSecond`. */
+  private command(source: Source, value: unknown, name: unknown): void {
+    const target = parseTarget(value);
+    const command = parseCommand(name);
+    if (!target || !command) return;
+    const page = this.pages.get(pageKey(source, target.workspace, target.id));
+    if (!page && !(source.remote && command === "reload")) return;
+    if (source.remote) {
+      const now = this.idle.now();
+      source.commanded = recent(source.commanded, now, 1_000);
+      if (source.commanded.length >= REMOTE_BOUNDS.commandsPerSecond) {
+        if (!source.commandsRefused) this.log.event("browser.command_refused", { reason: "remote_bound" });
+        source.commandsRefused = true;
+        return;
+      }
+      source.commandsRefused = false;
+      source.commanded.push(now);
+      // A slot that failed before its page was made (its proxy, its storage,
+      // the page bound) has its Reload apply the screen's last sync again.
+      if (!page) return this.applyRemote(source);
+    }
+    if (!page) return;
+    const contents = page.view.webContents;
+    const zoom = SHELL_ZOOM_COMMANDS[command];
+    if (zoom) this.zoom(page, zoom);
+    else if (command === "focus") {
+      // A remote screen's page takes the keyboard only from inside that screen.
+      const inside = !source.remote || source.remote.focused() || this.focused()?.source === source;
+      if (page.visible && this.window?.isFocused() && inside) this.focusPage(page);
+    } else if (command === "back" && contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
+    else if (command === "forward" && contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
+    else if (command === "stop") contents.stop();
+    else if (command === "reload") {
+      // A page that failed to load has nothing to reload; its address loads
+      // again. A remote screen's page asks that computer's core again for the
+      // address it last routed, the display's, not a link that failed in it.
+      if (page.state.failure) this.load(page, source.remote ? (page.route?.url ?? page.state.url) : page.state.url);
+      else contents.reload();
+    }
+  }
+
+  // --- another computer's screen ---------------------------------------------
+
+  /**
+   * A remote screen whose page may place that computer's browser displays
+   * here. One per machine and key at a time: a screen made again takes the
+   * place of the one before, whose pages close with it.
+   */
+  addRemote(remote: RemoteSource): void {
+    const id = remoteId(remote);
+    const earlier = this.sources.get(id);
+    if (earlier?.remote) this.removeRemote(earlier.remote);
+    const source = newSource(id, remote);
+    this.sources.set(id, source);
+  }
+
+  /** The screen is gone (trimmed, another key, unpaired, every screen closed): its pages and popups close with it. */
+  removeRemote(remote: RemoteSource): void {
+    const source = this.sourceOf(remote);
+    if (!source) return;
+    for (const page of [...this.pages.values()]) if (page.source === source) this.destroy(page, "closed");
+    this.forgetSource(source);
+    this.sources.delete(source.id);
+  }
+
+  /**
+   * Every page of the machine `device` under `key` closes now, its popups
+   * with it: its storage is about to be cleared, or its pair ended. The
+   * screen, which may still show, keeps its place and its last sync, and
+   * makes its pages again once its storage may hold them (`remoteRetry`).
+   */
+  closeRemotePages(device: string, key: string): void {
+    const source = this.sources.get(remoteId({ device, key }));
+    if (!source) return;
+    for (const page of [...this.pages.values()]) if (page.source === source) this.destroy(page, "closed");
+  }
+
+  /**
+   * Every page of a remote screen on `partition` closes, its popups with it:
+   * that partition's storage is about to be cleared. A page of the same
+   * machine on another pairing's partition stays.
+   */
+  closeRemotePartition(partition: string): void {
+    for (const page of [...this.pages.values()]) if (page.source.remote && page.partition === partition) this.destroy(page, "closed");
+  }
+
+  /** The machine's storage was cleared: its screen places its pages again, empty. */
+  remoteRetry(device: string, key: string): void {
+    const source = this.sources.get(remoteId({ device, key }));
+    if (source) this.applyRemote(source);
+  }
+
+  /** The remote source whose pages keep their logins in `partition` now; none for an ended pairing's. */
+  private remoteSourceOf(partition: string): Source | null {
+    for (const source of this.sources.values()) if (source.remote?.partition() === partition) return source;
+    return null;
+  }
+
+  private sourceOf(remote: RemoteSource): Source | null {
+    const source = this.sources.get(remoteId(remote));
+    return source?.remote === remote ? source : null;
+  }
+
+  private forgetSource(source: Source): void {
+    if (source.syncTimer) clearTimeout(source.syncTimer);
+    if (source.createTimer) clearTimeout(source.createTimer);
+    source.syncTimer = source.createTimer = null;
+    source.latest = null;
+  }
+
+  /** A sync from the screen's page, checked as this window's shell's is with that screen's bounds, applied while it shows. */
+  remoteSync(remote: RemoteSource, value: unknown): void {
+    const source = this.sourceOf(remote);
+    if (!source) return;
+    const sync = parseRemoteSync(value);
+    if (!sync) return this.log.event("browser.sync_invalid", { source: "remote" });
+    if (sync.node) source.node = sync.node;
+    source.latest = sync;
+    this.applyRemote(source);
+  }
+
+  remoteCapture(remote: RemoteSource, value: unknown): Promise<string | null> {
+    const source = this.sourceOf(remote);
+    return source ? this.capture(source, value) : Promise.resolve(null);
+  }
+
+  remoteCommand(remote: RemoteSource, value: unknown, name: unknown): void {
+    const source = this.sourceOf(remote);
+    if (source) this.command(source, value, name);
+  }
+
+  remoteCycleEnd(remote: RemoteSource, cycleId: unknown): void {
+    const source = this.sourceOf(remote);
+    if (source && this.cycleInput?.page.source === source && this.cycleInput.cycleId === cycleId) this.cycleInput = null;
+  }
+
+  /** A key the screen's own view takes while a hold started in one of its pages runs: the hold's release or Escape ends it there. */
+  remoteInput(remote: RemoteSource, event: { preventDefault(): void }, input: Input): void {
+    const source = this.sourceOf(remote);
+    if (source && this.cycleInput?.page.source === source) this.routeCycleInput(event, input);
+  }
+
+  /** The screen shows again: its pages take their places from its last sync, and its popups show. */
+  remoteShown(remote: RemoteSource): void {
+    const source = this.sourceOf(remote);
+    if (!source) return;
+    // Shown again after it hid; a show that only moves the tile re-shows nothing.
+    if (source.hidden) for (const popup of this.popups.values()) if (popup.owner.source === source && !popup.window.isDestroyed()) popup.window.showInactive();
+    source.hidden = false;
+    this.applyRemote(source);
+  }
+
+  /** The screen hid or failed: its pages and popups hide and stay, and its syncs wait until it shows. */
+  remoteHidden(remote: RemoteSource): void {
+    const source = this.sourceOf(remote);
+    if (!source) return;
+    const now = this.idle.now();
+    source.hidden = true;
+    for (const page of this.pages.values()) {
+      if (page.source !== source) continue;
+      if (page.placed || page.visible) page.idleSince = now;
+      page.placed = false;
+      this.show(page, false);
+    }
+    for (const popup of this.popups.values()) if (popup.owner.source === source && !popup.window.isDestroyed()) popup.window.hide();
+  }
+
+  /** The screen's page starts a new document: nothing is placed until it says where. */
+  remoteReset(remote: RemoteSource): void {
+    const source = this.sourceOf(remote);
+    if (!source) return;
+    this.remoteHidden(remote);
+    source.latest = null;
+    source.newestLoad = null;
+  }
+
+  /** Another owner added a view to the window; a page added before it is raised when next placed. */
+  viewAdded(): void {
+    this.viewsAdded++;
+  }
+
+  /** A remote screen's view took the keyboard: a page's navigation gives it back there. */
+  viewFocused(contents: WebContents): void {
+    this.keyboard = contents;
+  }
+
+  /**
+   * A remote screen's last sync, applied while it shows: at most one every
+   * `syncEveryMs`, nothing made before its pages' proxy is set or while its
+   * storage is being cleared, at most `REMOTE_BOUNDS.pages` live pages and
+   * `REMOTE_BOUNDS.creations` made in `creationWindowMs`, and every page cut
+   * to the screen's tile. No page is loaded off screen.
+   */
+  private applyRemote(source: Source): void {
+    const remote = source.remote;
+    const window = this.window;
+    const sync = source.latest;
+    if (!remote || !window || window.isDestroyed() || !sync) return;
+    const area = remote.area();
+    if (!area) return;
+    const now = this.idle.now();
+    const wait = source.syncedAt + REMOTE_BOUNDS.syncEveryMs - now;
+    if (wait > 0) {
+      source.syncTimer ??= setTimeout(() => {
+        source.syncTimer = null;
+        this.applyRemote(source);
+      }, wait);
+      return;
+    }
+    source.syncedAt = now;
+    const workspace = sync.workspace ?? "";
+    const listed = new Set(sync.retained.map((row) => pageKey(source, row.workspace, row.id)));
+    const placed = new Set(sync.displays.filter((display) => display.rect).map((display) => pageKey(source, workspace, display.id)));
+    for (const page of [...this.pages.values()]) {
+      if (page.source !== source) continue;
+      if (!listed.has(page.key)) this.destroy(page, "closed");
+      else if (page.workspace !== workspace || !placed.has(page.key)) {
+        if (page.placed || page.visible) page.idleSince = now;
+        page.placed = false;
+        this.show(page, false);
+      }
+    }
+    if (!remote.ready()) {
+      // The proxy goes first; nothing of the screen's is made before it is set.
+      if (source.egressAsked) return;
+      source.egressAsked = true;
+      void remote.ensure().then((state) => {
+        source.egressAsked = false;
+        if (this.sources.get(source.id) !== source) return;
+        if (remote.ready()) this.applyRemote(source);
+        else if (source.latest) this.failSlots(source, source.latest, egressWords(state));
+      });
+      return;
+    }
+    // The storage is the pairing's, which the proxy's answer named.
+    const storage = remote.storage();
+    if (storage === "waiting") return;
+    if (storage !== "live") return this.failSlots(source, sync, storage === "full" ? "remoteStorageFull" : storage === "unrecorded" ? "remoteStorageUnrecorded" : "remoteStorageClearing");
+    source.created = recent(source.created, now, REMOTE_BOUNDS.creationWindowMs);
+    for (const display of sync.displays) {
+      if (!display.rect) continue;
+      const key = pageKey(source, workspace, display.id);
+      let page = this.pages.get(key);
+      if (!page) {
+        if (source.created.length >= REMOTE_BOUNDS.creations) {
+          // It loads once the window has room again; no hidden page closes for it before then.
+          source.createTimer ??= setTimeout(() => {
+            source.createTimer = null;
+            this.applyRemote(source);
+          }, REMOTE_BOUNDS.creationWindowMs - (now - source.created[0]!));
+          continue;
+        }
+        this.evictOverCap(source);
+        if ([...this.pages.values()].filter((live) => live.source === source).length >= REMOTE_BOUNDS.pages && !this.evictHidden(source, placed)) {
+          this.failSlot(source, workspace, display, "remotePageLimit");
+          continue;
+        }
+        source.created.push(now);
+      }
+      page = this.refresh(source, window, workspace, display).page;
+      const bounds = placeIn(display.rect, area.zoom, area.bounds);
+      page.offScreen = false;
+      page.placed = true;
+      page.device = display.device ?? null;
+      page.shownAt = now;
+      page.idleSince = now;
+      if (!bounds) {
+        this.show(page, false);
+        continue;
+      }
+      // Above the screen's view, which may have been added after it.
+      if (page.addedAt < this.viewsAdded) {
+        window.contentView.addChildView(page.view);
+        page.addedAt = this.viewsAdded;
+      }
+      page.view.setBounds(bounds);
+      page.bounds = bounds;
+      this.emulate(page);
+      this.show(page, display.visible);
+    }
+    this.evictOverCap(source);
+  }
+
+  /** Every display a sync places says why it has no page. */
+  private failSlots(source: Source, sync: BrowserSync, words: string): void {
+    for (const display of sync.displays) if (display.rect) this.failSlot(source, sync.workspace ?? "", display, words);
+  }
+
+  /** A display of a remote screen that gets no page: its slot says why, never a blank. */
+  private failSlot(source: Source, workspace: string, display: BrowserPlacement, words: string): void {
+    if (this.pages.has(pageKey(source, workspace, display.id))) return;
+    const failure = this.words()(`native.browser.${words}`);
+    this.emit(source, { kind: "state", workspace, id: display.id, load: display.load, state: { url: display.url, title: "", loading: false, canGoBack: false, canGoForward: false, failure, zoom: 1 } });
   }
 
   /** The window the pages are drawn in. A new window starts with no pages. */
@@ -409,8 +816,8 @@ export class BrowserViews {
     // anything yet: its pages hide until it says where they go.
     window.webContents.on("did-start-navigation", (details) => {
       if (!details.isMainFrame || details.isSameDocument) return;
-      this.hideAll();
-      this.newestLoad = null;
+      this.hideAll(this.local);
+      this.local.newestLoad = null;
     });
     window.on("blur", () => {
       this.reportWindowFocus(false);
@@ -446,7 +853,9 @@ export class BrowserViews {
       if (this.window === window) {
         this.window = null;
         this.unloaded.clear();
-        this.newestLoad = null;
+        this.local.newestLoad = null;
+        for (const source of this.sources.values()) this.forgetSource(source);
+        this.sources.clear();
         if (this.idleTimer) clearInterval(this.idleTimer);
         this.idleTimer = null;
       }
@@ -456,6 +865,17 @@ export class BrowserViews {
   /** Whether a page holds the keyboard, so an app-menu command gives it back to the shell first. */
   hasFocus(): boolean {
     return this.focused() !== undefined;
+  }
+
+  /**
+   * What an app-menu command gives the keyboard back to while a page holds
+   * it: the shell that placed the page, this window's or a remote screen's
+   * view, which then takes the command; null while no page holds it.
+   */
+  focusHolder(): WebContents | null {
+    const page = this.focused();
+    if (!page) return null;
+    return page.source.remote ? page.source.remote.contents() : (this.window?.webContents ?? null);
   }
 
   /**
@@ -561,6 +981,7 @@ export class BrowserViews {
     for (const key of this.unloaded.keys()) if (!listed.has(key)) this.unloaded.delete(key);
     const placed = new Set(displays.map((display) => viewKey(workspace ?? "", display.id)));
     for (const page of [...this.pages.values()]) {
+      if (page.source !== this.local) continue;
       if (!listed.has(page.key)) this.destroy(page, "closed");
       else if (page.workspace !== workspace || !placed.has(page.key)) {
         // A retained page outside the front presentation stays alive and hidden.
@@ -585,7 +1006,7 @@ export class BrowserViews {
         continue;
       }
       onSlot.add(key);
-      page = this.refresh(window, workspace ?? "", display).page;
+      page = this.refresh(this.local, window, workspace ?? "", display).page;
       const bounds = toBounds(display.rect, zoom);
       page.offScreen = false;
       page.view.setBounds(bounds);
@@ -599,14 +1020,14 @@ export class BrowserViews {
       this.unloaded.delete(key);
     }
     // Only a sync that carries the core's inventory asks or moves the baseline.
-    const baseline = inventoried ? this.newestLoad : null;
+    const baseline = inventoried ? this.local.newestLoad : null;
     for (const row of retained) if (!onSlot.has(viewKey(row.workspace, row.id))) this.offScreen(window, row, now, baseline);
-    if (inventoried) this.newestLoad = retained.reduce((newest, row) => Math.max(newest, row.load ?? 0), this.newestLoad ?? 0);
-    this.evictOverCap();
+    if (inventoried) this.local.newestLoad = retained.reduce((newest, row) => Math.max(newest, row.load ?? 0), this.local.newestLoad ?? 0);
+    this.evictOverCap(this.local);
     this.publishCdp();
     if (attachmentEpoch && /^[A-Za-z0-9-]{1,64}$/.test(attachmentEpoch) && attachmentEpoch !== this.attachmentEpoch) {
       this.attachmentEpoch = attachmentEpoch;
-      for (const page of this.pages.values()) this.sendCdpAttached(page, this.cdpLeases.has(page.contentsId));
+      for (const page of this.pages.values()) if (page.source === this.local) this.sendCdpAttached(page, this.cdpLeases.has(page.contentsId));
     }
   }
 
@@ -633,7 +1054,7 @@ export class BrowserViews {
       else if (!isFileAddress(row.url)) this.unloaded.set(key, { workspace: row.workspace, id: row.id, area_id: row.area_id, url: row.url, load: row.load, device: null, bounds: null });
       return;
     }
-    const { page, changed } = this.refresh(window, row.workspace, { id: row.id, area_id: row.area_id, url: row.url, load: row.load, rect: null, visible: false });
+    const { page, changed } = this.refresh(this.local, window, row.workspace, { id: row.id, area_id: row.area_id, url: row.url, load: row.load, rect: null, visible: false });
     if (!changed) return;
     if (page !== live) {
       // A new page, or one in another partition, has had no slot show it.
@@ -654,12 +1075,12 @@ export class BrowserViews {
    * needs another partition, or loaded again when its stamp is newer than the
    * one it loaded. `changed` is whether any of these happened.
    */
-  private refresh(window: BrowserWindow, workspace: string, display: BrowserPlacement): { page: Page; changed: boolean } {
-    const page = this.pages.get(viewKey(workspace, display.id));
-    if (!page) return { page: this.create(window, workspace, display), changed: true };
-    if (page.partition !== this.partitionOf(workspace, display)) {
+  private refresh(source: Source, window: BrowserWindow, workspace: string, display: BrowserPlacement): { page: Page; changed: boolean } {
+    const page = this.pages.get(pageKey(source, workspace, display.id));
+    if (!page) return { page: this.create(source, window, workspace, display), changed: true };
+    if (page.partition !== this.partitionOf(source, workspace, display)) {
       this.destroy(page, "replaced");
-      return { page: this.create(window, workspace, display), changed: true };
+      return { page: this.create(source, window, workspace, display), changed: true };
     }
     if (display.load <= page.applied) return { page, changed: false };
     page.applied = display.load;
@@ -671,8 +1092,13 @@ export class BrowserViews {
    * An outside file's own session, kept in memory and shared with no other
    * page (B4); every other page's from its address (`browserPartition`).
    */
-  private partitionOf(workspace: string, display: BrowserPlacement): string {
-    return display.grant ? (this.externals.partition(display.grant) ?? GONE_GRANT_PARTITION) : browserPartition(workspace, display.url, this.node);
+  private partitionOf(source: Source, workspace: string, display: BrowserPlacement): string {
+    // Every page of a remote screen keeps that machine's login storage, its
+    // file pages included, which load nothing here yet.
+    // None is made before its proxy's answer named one (`ready`); were one
+    // asked for, its session belongs to no source and refuses every request.
+    if (source.remote) return source.remote.partition() ?? `${REMOTE_PAGE_PARTITION}unproxied`;
+    return display.grant ? (this.externals.partition(display.grant) ?? GONE_GRANT_PARTITION) : browserPartition(workspace, display.url, source.node);
   }
 
   /** What a display loads: its address, or the file its grant names, which only this process knows. */
@@ -708,19 +1134,25 @@ export class BrowserViews {
     }
   }
 
-  private create(window: BrowserWindow, workspace: string, display: BrowserPlacement): Page {
-    const page = this.construct(window, workspace, display, this.partitionOf(workspace, display));
+  private create(source: Source, window: BrowserWindow, workspace: string, display: BrowserPlacement): Page {
+    const page = this.construct(source, window, workspace, display, this.partitionOf(source, workspace, display));
     this.load(page, this.addressOf(display));
     return page;
   }
 
   /** A page for `display` in its own new contents, added to the window hidden and not loaded. */
-  private construct(window: BrowserWindow, workspace: string, display: Pick<BrowserPlacement, "id" | "url" | "load" | "grant">, partition: string): Page {
+  private construct(source: Source, window: BrowserWindow, workspace: string, display: Pick<BrowserPlacement, "id" | "url" | "load" | "grant">, partition: string): Page {
+    // A remote screen's page shows no sheet over this window and downloads
+    // no dictionary; its contents send no UDP of their own around the proxy.
+    const remote = source.remote ? { disableDialogs: true, spellcheck: false } : {};
     const view = new WebContentsView({
-      webPreferences: { session: this.sessionFor(partition), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true },
+      webPreferences: { session: this.sessionFor(partition), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, ...remote },
     });
+    if (source.remote) view.webContents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
     const page: Page = {
-      key: viewKey(workspace, display.id),
+      key: pageKey(source, workspace, display.id),
+      source,
+      addedAt: this.viewsAdded,
       workspace,
       id: display.id,
       view,
@@ -746,6 +1178,7 @@ export class BrowserViews {
       cdpDownloadRefused: false,
       cdpFileFrame: false,
       fileRefusals: new Set(),
+      remoteRefusals: new Set(),
       grab: null,
       hostVerdicts: new Map(),
       ...(display.grant ? { grant: display.grant } : {}),
@@ -771,7 +1204,7 @@ export class BrowserViews {
     this.destroy(page, "closed");
     const window = this.window;
     if (!window || window.isDestroyed()) return;
-    const fresh = this.construct(window, page.workspace, { id: page.id, url: page.state.url, load: page.applied, grant: page.grant }, page.partition);
+    const fresh = this.construct(page.source, window, page.workspace, { id: page.id, url: page.state.url, load: page.applied, grant: page.grant }, page.partition);
     Object.assign(fresh, { placed: page.placed, shownAt: page.shownAt, idleSince: page.idleSince, device: page.device, bounds: page.bounds });
     if (fresh.bounds) fresh.view.setBounds(fresh.bounds);
     this.emulate(fresh);
@@ -783,6 +1216,8 @@ export class BrowserViews {
     const pageSession = session.fromPartition(partition);
     if (this.configuredSessions.has(partition)) return pageSession;
     this.configuredSessions.add(partition);
+    // A remote screen's login storage, whichever screen of its machine uses it now.
+    const remote = partition.startsWith(REMOTE_PAGE_PARTITION);
     pageSession.setPermissionRequestHandler((contents, permission, callback, details) => {
       // A link to another app that no navigation guard saw (a frame's, say)
       // reaches Chromium's external protocol handler, which asks here. The
@@ -797,6 +1232,16 @@ export class BrowserViews {
     pageSession.setPermissionCheckHandler((_contents, permission) => PAGE_PERMISSIONS.has(permission));
     pageSession.on("will-download", (event, item, contents) => {
       const page = this.ownerOf(contents.id);
+      // A file a remote screen's page downloads would be that computer's,
+      // which this computer has no place for: refused, and logged once.
+      if (remote) {
+        event.preventDefault();
+        if (page && !page.downloadRefused) {
+          page.downloadRefused = true;
+          this.log.event("browser.download_refused", { reason: "remote_screen", display_id: page.id });
+        }
+        return;
+      }
       if (page?.cdpRestricted) {
         event.preventDefault();
         if (!page.cdpDownloadRefused) {
@@ -814,6 +1259,7 @@ export class BrowserViews {
     });
     pageSession.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
       const page = this.ownerOf(details.webContentsId);
+      if (remote) return callback(this.remoteRequest(partition, page, details));
       if (page?.fileRestricted && isFileAddress(details.url)) {
         this.fileRefused(page, "request", details.resourceType);
         callback({ cancel: true });
@@ -826,11 +1272,45 @@ export class BrowserViews {
       const outcome = !page
         ? partition === "persist:hide-browser-web" ? remoteRequest({ source_url: details.url, url: details.url }, details.url) : { cancel: true }
         : !page.route ? { cancel: true }
-        : this.node !== null && page.workspace.startsWith(`${this.node}\u0000`) ? {}
+        : this.local.node !== null && page.workspace.startsWith(`${this.local.node}\u0000`) ? {}
         : remoteRequest(page.route, details.url);
       callback(outcome);
     });
     return pageSession;
+  }
+
+  /**
+   * A request of a remote screen's page, which its session's proxy carries
+   * to that computer: none before the proxy is set or once its source is
+   * gone, no file of this computer, nothing on that computer's loopback from
+   * a page its route did not call its own, and nothing on a local network
+   * from a public document (`localNetworkReach`). Each refusal is logged once
+   * per page and reason, with its scheme alone.
+   */
+  private remoteRequest(partition: string, page: Page | undefined, details: Electron.OnBeforeRequestListenerDetails): { cancel: boolean } {
+    const source = this.remoteSourceOf(partition);
+    const mainFrame = details.resourceType === "mainFrame";
+    let host: string | null = null;
+    try { host = new URL(details.url).hostname; } catch { /* refused below */ }
+    const reason = !source?.remote?.ready() || (page && page.source !== source) ? "not_ready"
+      : isFileAddress(details.url) || host === null ? "file"
+      : page?.own === false && isLoopbackHost(host) ? "not_own"
+      : !localNetworkReach(details.url, mainFrame ? null : this.topOf(details.webContentsId), mainFrame) ? "local_network"
+      : null;
+    if (reason === null) return { cancel: false };
+    const seen = page?.remoteRefusals ?? source?.refusals;
+    if (seen && !seen.has(reason)) {
+      seen.add(reason);
+      this.log.event("browser.request_refused", { reason: `remote_${reason}`, protocol: protocolOf(details.url), ...(page ? { display_id: page.id } : {}), resource_type: details.resourceType });
+    }
+    return { cancel: true };
+  }
+
+  /** The address of the document a request comes from; null when it has none (a service worker). */
+  private topOf(contentsId: number | undefined): string | null {
+    if (contentsId === undefined) return null;
+    const contents = allContents.fromId(contentsId);
+    return contents && !contents.isDestroyed() ? contents.getURL() || null : null;
   }
 
   /**
@@ -903,15 +1383,19 @@ export class BrowserViews {
     const owned: CoreLoad = { load: stamp, at: this.idle.now(), native: false, committed: false };
     page.loading = owned;
     this.update(page, { url, loading: true, failure: null });
-    // An outside file's route is its own file, which no daemon may name.
-    const resolved = page.grant ? Promise.resolve<ResolvedPage>({ url, source_url: url, load: stamp }) : this.resolve(page.workspace, page.id, stamp);
+    // An outside file's route is its own file, which no daemon may name; a
+    // remote screen's page asks that computer's core.
+    const resolved = page.grant ? Promise.resolve<ResolvedPage>({ url, source_url: url, load: stamp })
+      : page.source.remote ? this.remoteRoute(page, page.source.remote, url, stamp)
+      : this.resolve(page.workspace, page.id, stamp);
     void resolved.then((route) => {
       // The core can canonicalize a checked file address while the loading
       // report is in flight. The load stamp binds this answer to its intent;
       // spelling changes within that generation must not strand the load.
       if (this.pages.get(page.key) !== page || page.applied !== stamp || route.load !== stamp) return;
       if (!loadable(route.url)) throw new Error("Resolved page address cannot be loaded");
-      if (!page.grant && browserPartition(page.workspace, route.source_url, this.node) !== page.partition) throw new Error("Resolved page requires a different browser partition");
+      if (!page.grant && !page.source.remote && browserPartition(page.workspace, route.source_url, this.local.node) !== page.partition) throw new Error("Resolved page requires a different browser partition");
+      if (page.source.remote) page.own = (route as ResolvedPage & { own?: boolean }).own === true;
       page.route = route;
       page.checkoutRoot = undefined;
       this.loadStage(page, owned, "browser.load_routed");
@@ -932,9 +1416,28 @@ export class BrowserViews {
     }).catch((error: unknown) => {
       if (page.loading === owned) page.loading = null;
       if (this.pages.get(page.key) !== page || page.applied !== stamp) return;
-      this.log.event("browser.route_failed", { detail: String(error) });
-      this.update(page, { url, loading: false, failure: this.words()("native.browser.routeUnavailable") });
+      const words = error instanceof RemoteRefusal ? error.words : "routeUnavailable";
+      this.log.event("browser.route_failed", { detail: error instanceof RemoteRefusal ? error.reason : String(error) });
+      this.update(page, { url, loading: false, failure: this.words()(`native.browser.${words}`) });
     });
+  }
+
+  /**
+   * Where a remote screen's page loads from: its proxy's state first, then
+   * that computer's core's answer for this load (`/page-route`), whose web
+   * address must be the display's own; nothing loads before the answer, and
+   * a refusal loads nothing. A file of that computer is not served to this
+   * window yet.
+   */
+  private async remoteRoute(page: Page, remote: RemoteSource, url: string, stamp: number): Promise<ResolvedPage & { own: boolean }> {
+    if (isFileAddress(url)) throw new RemoteRefusal("remote_file_unavailable", "remoteFile");
+    if (url === "about:blank") return { url, source_url: url, load: stamp, own: false };
+    const state = await remote.ensure();
+    if (state !== "ready") throw new RemoteRefusal(state, egressWords(state));
+    const route = await remote.route(page.workspace, page.id, stamp);
+    if ("refused" in route) throw new RemoteRefusal(route.refused, routeWords(route.refused));
+    if (route.load !== stamp || route.url !== url || route.source_url !== url) throw new RemoteRefusal("remote_route_invalid", "routeUnavailable");
+    return route;
   }
 
   /**
@@ -967,6 +1470,7 @@ export class BrowserViews {
     // A press in a loading page is the operator choosing it: its keyboard stays.
     contents.on("input-event", (_event, input) => {
       if (page.grab && PRESSES.has(input.type)) page.grab.claimed = true;
+      if (PRESSES.has(input.type)) page.pressedAt = this.idle.now();
     });
     contents.on("did-navigate", (_event, url) => {
       // Electron emits this as the navigation finishes, so a commit before
@@ -986,6 +1490,7 @@ export class BrowserViews {
       void contents.setVisualZoomLevelLimits(...PINCH_ZOOM_LIMITS).catch((error: unknown) => this.log.event("browser.pinch_zoom_failed", { detail: String(error) }));
     });
     contents.on("before-input-event", (event, input) => {
+      if (pressKey(input)) page.pressedAt = this.idle.now();
       if (this.routeCycleInput(event, input, page)) return;
       // ⌘+ reaches no menu item (the menu's zoom in is ⌘=), so the page
       // answers it here unless the operator bound that chord to a command.
@@ -1055,7 +1560,7 @@ export class BrowserViews {
       }
       if (link === "beside") {
         event.preventDefault();
-        this.emit({ kind: "open", workspace: page.workspace, id: page.id, url });
+        this.emit(page.source, { kind: "open", workspace: page.workspace, id: page.id, url });
         return;
       }
       if (loadable(url)) return;
@@ -1097,7 +1602,7 @@ export class BrowserViews {
     // A local file page's web address, a sized popup's too, is a display
     // beside it: the file partition holds no web page.
     if (link === "beside") {
-      this.emit({ kind: "open", workspace: page.workspace, id: page.id, url });
+      this.emit(page.source, { kind: "open", workspace: page.workspace, id: page.id, url });
       return { action: "deny" };
     }
     if (!loadable(url)) {
@@ -1107,7 +1612,7 @@ export class BrowserViews {
       return { action: "deny" };
     }
     if (popup) return this.popup(page, contents);
-    if (url !== "about:blank") this.emit({ kind: "open", workspace: page.workspace, id: page.id, url: this.sourceAddress(page, url) });
+    if (url !== "about:blank") this.emit(page.source, { kind: "open", workspace: page.workspace, id: page.id, url: this.sourceAddress(page, url) });
     else this.log.event("browser.window_open_refused", { protocol: "about:" });
     return { action: "deny" };
   }
@@ -1131,12 +1636,16 @@ export class BrowserViews {
       this.log.event("browser.popup_refused", { reason: "cap", live: this.popups.size });
       return { action: "deny" };
     }
+    const tile = page.source.remote ? this.popupTile(page, contents, parent) : null;
+    if (tile === undefined) return { action: "deny" };
     return {
       action: "allow",
       createWindow: (options) => {
         const bounds = parent.getBounds();
+        const asked = { width: options.width, height: options.height };
         const window = new BrowserWindow({
-          ...popupBounds({ width: options.width, height: options.height }, bounds, screen.getDisplayMatching(bounds).workArea),
+          // A remote screen's popup opens inside its tile, held to it.
+          ...(tile ? popupBounds(asked, tile, tile) : popupBounds(asked, bounds, screen.getDisplayMatching(bounds).workArea)),
           parent,
           show: false,
           minimizable: false,
@@ -1153,10 +1662,51 @@ export class BrowserViews {
     };
   }
 
+  /**
+   * Where a remote screen's page may open a popup (docs/BROWSER_DISPLAYS.md,
+   * A page in another computer's screen): only right after the operator
+   * pressed in it, while the screen shows and that page holds the keyboard,
+   * one a second, at most `REMOTE_BOUNDS.popups` of the screen's, inside the
+   * screen's tile on the screen; none in a tile smaller than a popup's
+   * least size. `undefined` refuses it, and says why in the log.
+   */
+  private popupTile(page: Page, contents: WebContents, parent: BrowserWindow): BrowserRect | undefined {
+    const source = page.source;
+    const area = source.remote?.area();
+    const now = this.idle.now();
+    const refuse = (reason: string) => {
+      this.log.event("browser.popup_refused", { reason });
+      return undefined;
+    };
+    if (!area || page.pressedAt === undefined || now - page.pressedAt > PRESS_WITHIN_MS || !contents.isFocused() || !parent.isFocused() || now - source.popupAt < PRESS_WITHIN_MS) return refuse("no_press");
+    if ([...this.popups.values()].filter((popup) => popup.owner.source === source).length >= REMOTE_BOUNDS.popups) return refuse("cap");
+    const content = parent.getContentBounds();
+    const tile = { x: content.x + area.bounds.x, y: content.y + area.bounds.y, width: area.bounds.width, height: area.bounds.height };
+    if (tile.width < POPUP_LEAST.width || tile.height < POPUP_LEAST.height) return refuse("no_room");
+    source.popupAt = now;
+    return tile;
+  }
+
   /** A popup takes the keyboard only from a page that held it, so a page cannot pull focus from the operator's typing. */
   private adopt(owner: Page, window: BrowserWindow, focus: boolean): void {
     const id = window.webContents.id;
     this.popups.set(id, { window, owner });
+    if (owner.source.remote) {
+      // Its page moves or sizes nothing: only the operator's own drag takes it out of its tile.
+      let logged = false;
+      window.webContents.on("content-bounds-updated", (event) => {
+        event.preventDefault();
+        if (!logged) this.log.event("browser.popup_move_refused", {});
+        logged = true;
+      });
+      window.webContents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
+      window.webContents.on("input-event", (_event, input) => {
+        if (PRESSES.has(input.type)) owner.pressedAt = this.idle.now();
+      });
+      window.webContents.on("before-input-event", (_event, input) => {
+        if (pressKey(input)) owner.pressedAt = this.idle.now();
+      });
+    }
     window.once("closed", () => {
       this.popups.delete(id);
       this.log.event("browser.popup_closed", { live: this.popups.size });
@@ -1268,10 +1818,10 @@ export class BrowserViews {
     if (!cycle) return false;
     if (ends) this.cycleInput = null;
     event.preventDefault();
-    this.emit({ kind: "cycle-input", cycleId: cycle.cycleId, workspace: cycle.page.workspace, id: cycle.page.id, type: input.type as "keyDown" | "keyUp", key: input.key, code: input.code, control: input.control, alt: input.alt, meta: input.meta, shift: input.shift });
+    this.emit(cycle.page.source, { kind: "cycle-input", cycleId: cycle.cycleId, workspace: cycle.page.workspace, id: cycle.page.id, type: input.type as "keyDown" | "keyUp", key: input.key, code: input.code, control: input.control, alt: input.alt, meta: input.meta, shift: input.shift });
     // The overlay can be outside the originating page. Transfer its native
     // response at the start, while its logical owner stays frozen in the shell.
-    if (starts && this.window?.isFocused()) this.window.webContents.focus();
+    if (starts && this.window?.isFocused()) this.holder(cycle.page.source)?.focus();
     return true;
   }
 
@@ -1282,7 +1832,7 @@ export class BrowserViews {
     page.report = setTimeout(() => {
       page.report = null;
       if (this.pages.get(page.key) !== page) return;
-      this.emit({ kind: "state", workspace: page.workspace, id: page.id, load: page.applied, state: page.state, ...(page.grant ? { external: true as const } : {}) });
+      this.emit(page.source, { kind: "state", workspace: page.workspace, id: page.id, load: page.applied, state: page.state, ...(page.grant ? { external: true as const } : {}) });
       this.publishCdp();
     }, REPORT_COALESCE_MS);
   }
@@ -1309,9 +1859,16 @@ export class BrowserViews {
     } catch { return raw; }
   }
 
-  private emit(event: BrowserHostEvent): void {
-    const contents = this.window?.webContents;
-    if (contents && !contents.isDestroyed()) contents.send(BROWSER_EVENT_CHANNEL, event);
+  /** Tells the shell that placed a source's pages: this window's, or a remote screen's page. */
+  private emit(source: Source, event: BrowserHostEvent): void {
+    const contents = this.holder(source);
+    if (contents && !contents.isDestroyed()) contents.send(source.remote ? REMOTE_BROWSER_EVENT_CHANNEL : BROWSER_EVENT_CHANNEL, event);
+  }
+
+  /** The contents of the shell that placed a source's pages, which hears them and takes the keyboard back from them. */
+  private holder(source: Source): WebContents | null {
+    const contents = source.remote ? source.remote.contents() : (this.window?.webContents ?? null);
+    return contents && !contents.isDestroyed() ? contents : null;
   }
 
   private show(page: Page, visible: boolean): void {
@@ -1326,7 +1883,7 @@ export class BrowserViews {
     page.view.setVisible(visible);
     this.log.event("browser.page_visible", { id: page.id, visible, owed_page: this.returnTo === page, held: this.cycleInput?.page === page });
     if (visible && this.returnTo === page) this.giveBack();
-    if (!visible && (keyboard || this.cycleInput?.page === page) && this.window?.isFocused()) this.window.webContents.focus();
+    if (!visible && (keyboard || this.cycleInput?.page === page) && this.window?.isFocused()) this.holder(page.source)?.focus();
   }
 
   /** The host gives `page` the keyboard on purpose, so a navigation in flight keeps it there. */
@@ -1339,7 +1896,7 @@ export class BrowserViews {
     this.keyboard = page;
     // Another page holding the keyboard settles the debt: it is not the page the hold began on.
     if (this.returnTo && this.returnTo !== page) this.returnTo = null;
-    if (page.visible) this.emit({ kind: "focus", workspace: page.workspace, id: page.id });
+    if (page.visible) this.emit(page.source, { kind: "focus", workspace: page.workspace, id: page.id });
   }
 
   /**
@@ -1351,22 +1908,43 @@ export class BrowserViews {
    * focus it stored on blur when it returns, and focusing contents there
    * would bring the window forward.
    */
-  private undoGrab(page: Page, grab: NavigationGrab, from: Page | null): void {
+  private undoGrab(page: Page, grab: NavigationGrab, from: Page | WebContents | null): void {
     setImmediate(() => {
       if (this.pages.get(page.key) !== page || page.view.webContents.isDestroyed() || !page.view.webContents.isFocused()) return;
       if (grab.claimed) return this.tookKeyboard(page);
       const window = this.window;
       if (!window?.isFocused() || window.webContents.isDestroyed()) return;
-      const holder = from && this.pages.get(from.key) === from && from.visible ? from : null;
-      if (holder) holder.view.webContents.focus();
-      else window.webContents.focus();
-      this.log.event("browser.navigation_focus_returned", { id: page.id, to: holder?.id ?? "shell" });
+      // The keyboard goes back to whoever held it: a page, a remote screen's view, or this window's shell.
+      const held = from && "view" in from ? (this.pages.get(from.key) === from && from.visible ? from.view.webContents : null) : from && !from.isDestroyed() ? from : null;
+      (held ?? window.webContents).focus();
+      const to = from && "view" in from ? (held ? from.id : "shell") : held ? "remote_screen" : "shell";
+      this.log.event("browser.navigation_focus_returned", { id: page.id, to });
     });
   }
 
-  /** Closes the hidden pages past `MAX_LIVE_VIEWS`, least recently shown first, whatever holds them (B2). */
-  private evictOverCap(): void {
-    for (const key of overCap([...this.pages.values()], MAX_LIVE_VIEWS)) {
+  /** Closes a source's hidden pages past its bound, least recently shown first, whatever holds them (B2). */
+  /**
+   * A remote source at its bound with a display it places needing a page:
+   * the source's page shown longest ago among those this sync does not place
+   * (`placed`, the sync's own set, never `page.placed`, which a display placed
+   * later in the same sync has not set yet) closes, as a page past its bound
+   * does, so only displays all on screen at once are refused. False when
+   * every page is placed.
+   */
+  private evictHidden(source: Source, placed: ReadonlySet<string>): boolean {
+    let oldest: Page | null = null;
+    for (const page of this.pages.values()) {
+      if (page.source !== source || placed.has(page.key)) continue;
+      if (!oldest || page.shownAt < oldest.shownAt) oldest = page;
+    }
+    if (!oldest) return false;
+    this.destroy(oldest, "evicted");
+    return true;
+  }
+
+  private evictOverCap(source: Source): void {
+    const cap = source.remote ? REMOTE_BOUNDS.pages : MAX_LIVE_VIEWS;
+    for (const key of overCap([...this.pages.values()].filter((page) => page.source === source), cap)) {
       const page = this.pages.get(key);
       if (page) this.destroy(page, "evicted");
     }
@@ -1455,7 +2033,7 @@ export class BrowserViews {
     if (!page || page.state.failure) {
       if (page) this.load(page, record.url);
       else {
-        page = this.create(window, record.workspace, { id: record.id, area_id: record.area_id, url: record.url, load: record.load, rect: null, visible: false });
+        page = this.create(this.local, window, record.workspace, { id: record.id, area_id: record.area_id, url: record.url, load: record.load, rect: null, visible: false });
         page.device = record.device;
         // A page never shown here lays out where an off-screen load would (B32).
         page.bounds = record.bounds ?? offScreenBounds(window.getContentBounds());
@@ -1466,7 +2044,7 @@ export class BrowserViews {
       // Loaded again counts as seen, so the next check does not close it at once.
       page.shownAt = page.idleSince = this.idle.now();
       this.log.event("browser.reloaded_for_agent", { id: page.id });
-      this.evictOverCap();
+      this.evictOverCap(this.local);
       this.publishCdp();
     }
     await this.waitSettled(page);
@@ -1490,15 +2068,15 @@ export class BrowserViews {
     });
   }
 
-  private hideAll(): void {
-    for (const page of this.pages.values()) this.show(page, false);
+  private hideAll(source: Source): void {
+    for (const page of this.pages.values()) if (page.source === source) this.show(page, false);
   }
 
   private destroy(page: Page, reason: Closing): void {
     const unloading = reason === "evicted" || reason === "idle";
     if (unloading) {
       // The core reports the page `unloaded` until it shows or an agent drives it again.
-      this.emit({ kind: "gone", workspace: page.workspace, id: page.id, load: page.applied, url: page.state.url, ...(page.grant ? { external: true as const } : {}) });
+      this.emit(page.source, { kind: "gone", workspace: page.workspace, id: page.id, load: page.applied, url: page.state.url, ...(page.grant ? { external: true as const } : {}) });
       const area_id = this.cdpAreas.get(page.key);
       // Only a web page enters CDP, so only it can be loaded again for an agent.
       if (area_id && page.fileRestricted && !page.grant && !isFileAddress(page.state.url)) {
@@ -1511,9 +2089,11 @@ export class BrowserViews {
     if (this.returnTo === page) this.returnTo = null;
     if (this.keyboard === page) this.keyboard = null;
     this.pages.delete(page.key);
-    this.publishCdp({ contentsId: page.contentsId, reason: reason === "idle" ? "evicted" : reason });
-    // An outside file's page resolved no route, so the daemon has none to let go.
-    if (!page.grant) this.release(page.workspace, page.id, page.applied);
+    // A remote screen's page was never a CDP target.
+    if (!page.source.remote) this.publishCdp({ contentsId: page.contentsId, reason: reason === "idle" ? "evicted" : reason });
+    // An outside file's page resolved no route, so the daemon has none to let
+    // go, nor does a remote screen's, whose route is that computer's answer.
+    if (!page.grant && !page.source.remote) this.release(page.workspace, page.id, page.applied);
     if (page.report) clearTimeout(page.report);
     const window = this.window;
     if (window && !window.isDestroyed()) window.contentView.removeChildView(page.view);
@@ -1523,6 +2103,14 @@ export class BrowserViews {
     if (contents && !contents.isDestroyed()) contents.close();
     this.log.event("browser.view_closed", { reason, live: this.pages.size });
   }
+}
+
+/** A popup's least size, as `popupBounds` holds one: a tile smaller than it has no room for one. */
+const POPUP_LEAST = { width: 320, height: 240 };
+
+/** Whether a key is the operator's press, as a click is: Enter or Space going down. */
+function pressKey(input: Input): boolean {
+  return input.type === "keyDown" && !input.isAutoRepeat && (input.key === "Enter" || input.key === " ");
 }
 
 function zoomContents(contents: WebContents, zoom: PageZoom): void {
@@ -1553,3 +2141,26 @@ function isFileAddress(url: string): boolean {
 
 /** The session of a page whose grant is gone, which loads nothing and shares nothing (a grant's own come from `ExternalFiles.partition`). */
 const GONE_GRANT_PARTITION = "hide-browser-external-gone";
+
+/** Why a remote screen's page does not load, with the words (`native.browser.*`) its slot shows. */
+class RemoteRefusal extends Error {
+  constructor(readonly reason: string, readonly words: string) {
+    super(reason);
+  }
+}
+
+/** The words of a refused route answer. */
+function routeWords(reason: string): string {
+  switch (reason) {
+    case "remote_device_page_unavailable":
+      return "remoteDevicePage";
+    case "remote_file_unavailable":
+      return "remoteFile";
+    case "remote_update_there":
+      return "remoteUpdateThere";
+    case "view_unavailable":
+      return "routeUnavailable";
+    default:
+      return egressWords(reason);
+  }
+}

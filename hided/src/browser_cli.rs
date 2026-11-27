@@ -62,7 +62,10 @@ fn is_loopback(text: &str) -> bool {
 }
 
 /// One classification for the CLI and SSH Browser route, so an admitted
-/// loopback address can never fall through to a Mac-local page load.
+/// loopback address can never fall through to a Mac-local page load: the
+/// loopback names and ranges, and the unspecified addresses (`0.0.0.0`,
+/// `[::]`, `[::ffff:0.0.0.0]`), which a dial on a machine connects to that
+/// machine itself, each answered as the loopback address it reaches.
 pub(crate) fn loopback_ip(host: &str) -> Option<IpAddr> {
     let host = host.trim_end_matches('.');
     if host.eq_ignore_ascii_case("localhost") || host == "0.0.0.0" {
@@ -79,15 +82,37 @@ pub(crate) fn loopback_ip(host: &str) -> Option<IpAddr> {
     if address.is_loopback() {
         return Some(IpAddr::V6(address));
     }
-    address
-        .to_ipv4()
-        .filter(Ipv4Addr::is_loopback)
-        .map(IpAddr::V4)
+    if address.is_unspecified() {
+        return Some(IpAddr::V6(Ipv6Addr::LOCALHOST));
+    }
+    match address.to_ipv4_mapped().or_else(|| address.to_ipv4()) {
+        Some(mapped) if mapped.is_unspecified() => Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        Some(mapped) if mapped.is_loopback() => Some(IpAddr::V4(mapped)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // An unspecified address reaches the machine that dials it, so it is
+    // that machine's loopback, as `0.0.0.0` always was.
+    #[test]
+    fn the_unspecified_addresses_are_the_machine_itself() {
+        for host in ["0.0.0.0", "[::]", "::", "[::ffff:0.0.0.0]", "[::ffff:0:0]"] {
+            assert!(
+                loopback_ip(host).is_some_and(|ip| ip.is_loopback()),
+                "{host}"
+            );
+        }
+        for host in ["127.0.0.1", "[::1]", "localhost", "[::ffff:127.0.0.1]"] {
+            assert!(loopback_ip(host).is_some(), "{host}");
+        }
+        for host in ["10.0.0.1", "[fe80::1]", "example.com", "[::ffff:10.0.0.1]"] {
+            assert_eq!(loopback_ip(host), None, "{host}");
+        }
+    }
 
     #[test]
     fn an_argument_becomes_the_address_it_names() {

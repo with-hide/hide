@@ -84,6 +84,8 @@ import {
   type LookAt,
   type RecentPlace,
   type SignInReply,
+  type GlanceGroupKey,
+  type GlanceTab,
 } from "./snapshot";
 import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
@@ -100,7 +102,8 @@ import { deskOpenSend, deskTabCount, deskViewOf, deskWorkspaceOf, DESK_SCREEN, i
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type ExplorerTarget, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
-import { remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
+import { isRemoteView, remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
+import { isLocalNetworkHost } from "./loopbackHost";
 import type { PairingVerb } from "./pairing";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
@@ -2886,9 +2889,19 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().setDeskRoom(closeDeskSession);
     },
 
-    /** `⟩` on 한눈에, or its button in Desk's head: 한눈에 folds or unfolds, which the core keeps with the panels' widths. */
+    /** `▯|` on 한눈에, or the same icon in Desk's head: 한눈에 folds or unfolds, which the core keeps with the panels' widths. */
     deskGlanceFold(folded: boolean) {
       dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_folded: folded } });
+    },
+
+    /** 한눈에's `세션` or `파일` tab, which the core keeps, the same in every window. */
+    deskGlanceTab(tab: GlanceTab) {
+      dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_tab: tab } });
+    },
+
+    /** A session group's head on 한눈에: the group folds or unfolds, which the core keeps. */
+    deskGlanceGroup(group: GlanceGroupKey, folded: boolean) {
+      dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_group: { group, folded } } });
     },
 
     /** `‹ 한눈에` above the session beside Desk: the session closes, kept for ⌘E, and 한눈에 stands there again, unfolded. */
@@ -4344,6 +4357,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       // The core keeps a Workspace in front while the page shows All projects
       // or an Overview; a display opened there would land out of sight.
       const inFront = ui().screen?.kind === "workspace" ? frontViewWorkspace() : null;
+      // In another computer's screen the default browser is the showing
+      // window's, which never opens this machine's loopback, LAN or local
+      // names; such a link opens as a page here, which reaches them through
+      // this machine (docs/BROWSER_DISPLAYS.md, A page in another computer's screen).
+      if (external && inFront && isRemoteView() && localNetworkLink(url)) {
+        this.openBrowser(url, undefined, undefined, undefined, openerPane);
+        return;
+      }
       if (external || !inFront) {
         window.open(url, "_blank", "noopener,noreferrer");
         return;
@@ -4621,4 +4642,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       });
     },
   };
+}
+
+/** Whether `url` is a web address on its machine's loopback, its LAN or a local name. */
+export function localNetworkLink(url: string): boolean {
+  try {
+    const address = new URL(url);
+    return (address.protocol === "http:" || address.protocol === "https:") && isLocalNetworkHost(address.hostname);
+  } catch {
+    return false;
+  }
 }

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { appScheme, browserPartition, deviceEmulation, isLocalNetworkHost, localPageRequest, isPopup, loadable, popupBounds, MAX_AUTHORIZED_SCOPES, MAX_SYNCED_DISPLAYS, offScreenBounds, overCap, parseCommand, parseSync, parseTarget, remoteRequest, toBounds } from "./browserSync";
+import { appScheme, browserPartition, deviceEmulation, isLocalNetworkHost, localNetworkReach, localPageRequest, isPopup, loadable, parseRemoteSync, placeIn, popupBounds, MAX_AUTHORIZED_SCOPES, MAX_SYNCED_DISPLAYS, offScreenBounds, overCap, parseCommand, parseSync, parseTarget, REMOTE_BOUNDS, remotePagePartition, remoteRequest, toBounds } from "./browserSync";
 
 const rect = { x: 0, y: 40, width: 800, height: 600 };
 const display = { id: "d1", area_id: "a1", url: "https://a.test/", load: 3, rect, visible: true };
@@ -299,5 +299,62 @@ describe("pages no slot shows (PRD lane-desk-pair-view B32)", () => {
     expect(offScreenBounds({ width: 1400, height: 820 })).toEqual({ x: 0, y: 0, width: 900, height: 820 });
     expect(offScreenBounds({ width: 720.4, height: 600 })).toEqual({ x: 0, y: 0, width: 720, height: 600 });
     expect(offScreenBounds({ width: 0, height: 0 })).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+  });
+});
+
+// docs/BROWSER_DISPLAYS.md, A page in another computer's screen.
+describe("another computer's screen's pages", () => {
+  const workspace = "mini\u0000/web";
+  const display = (id: string, extra: Record<string, unknown> = {}) => ({ id, area_id: "a1", url: `https://${id}.example/`, load: 1, rect: null, visible: false, ...extra });
+  const retained = (ids: string[]) => ids.map((id) => ({ workspace, id, area_id: "a1" }));
+
+  it("take a sync that names no grant, scope or epoch, within the screen's bounds", () => {
+    const parsed = parseRemoteSync({ workspace, displays: [display("d1")], retained: retained(["d1"]), node: "mini", authorized_scopes: [{ workspace, area_id: "a1", incarnation: 1 }], attachment_epoch: "e1", external_grants: ["0".repeat(32)] });
+    expect(parsed).toEqual({ workspace, displays: [display("d1")], retained: retained(["d1"]), node: "mini" });
+    expect(parseRemoteSync({ workspace, displays: [display("g1", { url: "", grant: "0".repeat(32) })], retained: retained(["g1"]) })).toBeNull();
+    const many = Array.from({ length: REMOTE_BOUNDS.placements + 1 }, (_, n) => `d${n}`);
+    expect(parseRemoteSync({ workspace, displays: many.map((id) => display(id)), retained: retained(many) })).toBeNull();
+    expect(parseRemoteSync({ workspace: null, displays: [], retained: retained(Array.from({ length: REMOTE_BOUNDS.retained + 1 }, (_, n) => `r${n}`)) })).toBeNull();
+  });
+
+  it("keep one login storage per machine, key and pairing, never one of this window's", () => {
+    const key = "ab".repeat(32);
+    const pairing = "11".repeat(16);
+    const partition = remotePagePartition("mini", key, pairing);
+    expect(partition).toMatch(/^persist:hide-remote-page-[0-9a-f]{32}$/);
+    expect(remotePagePartition("mini", key, pairing)).toBe(partition);
+    expect(remotePagePartition("mini", "cd".repeat(32), pairing)).not.toBe(partition);
+    expect(remotePagePartition("pc", key, pairing)).not.toBe(partition);
+    expect(remotePagePartition("mini", key, "22".repeat(16))).not.toBe(partition);
+    for (const url of ["https://mini.example/", "http://localhost:3000/", "file:///Users/me/a.html"]) {
+      expect(browserPartition(workspace, url, null)).not.toBe(partition);
+      expect(browserPartition(workspace, url, "mini")).not.toBe(partition);
+    }
+  });
+
+  it("are cut to the screen's tile, scaled by its zoom, and hidden when nothing of them is inside", () => {
+    const tile = { x: 100, y: 50, width: 800, height: 600 };
+    expect(placeIn({ x: 10, y: 20, width: 300, height: 200 }, 1, tile)).toEqual({ x: 110, y: 70, width: 300, height: 200 });
+    expect(placeIn({ x: 10, y: 20, width: 300, height: 200 }, 2, tile)).toEqual({ x: 120, y: 90, width: 600, height: 400 });
+    expect(placeIn({ x: 700, y: -40, width: 400, height: 300 }, 1, tile)).toEqual({ x: 800, y: 50, width: 100, height: 260 });
+    expect(placeIn({ x: -500, y: 0, width: 400, height: 300 }, 1, tile)).toBeNull();
+    expect(placeIn({ x: 900, y: 0, width: 400, height: 300 }, 1, tile)).toBeNull();
+  });
+
+  it("reach a local network only from a document on one, and only a top-level navigation decides its own", () => {
+    const rows: [string, string | null, boolean, boolean][] = [
+      ["https://cdn.example/app.js", "https://app.example/", false, true],
+      ["http://127.0.0.1:5173/api", "https://app.example/", false, false],
+      ["ws://localhost:5173/hmr", "https://app.example/", false, false],
+      ["http://192.168.0.4/", "https://app.example/", false, false],
+      ["http://printer.local/", "https://app.example/", false, false],
+      ["http://localhost:5173/app.js", "http://localhost:5173/", false, true],
+      ["http://10.0.0.2/api", "http://192.168.0.4/", false, true],
+      ["http://127.0.0.1:5173/", null, false, false],
+      ["https://cdn.example/a.js", null, false, true],
+      ["http://localhost:5173/", "https://app.example/", true, true],
+      ["data:text/plain,x", "https://app.example/", false, true],
+    ];
+    for (const [url, top, mainFrame, allowed] of rows) expect(localNetworkReach(url, top, mainFrame), `${url} from ${top}`).toBe(allowed);
   });
 });

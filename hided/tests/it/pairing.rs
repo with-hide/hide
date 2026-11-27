@@ -71,6 +71,7 @@ fn host_env(root: &Path) -> Env {
         peer_direct: Some("127.0.0.1:0".parse().unwrap()),
         peer_relay: None,
         peer_relay_only: false,
+        screen_net_hosts: Default::default(),
         search_path: None,
     }
 }
@@ -85,6 +86,15 @@ impl Window {
 
     /// A screen of `kind` on the daemon that listens on `port`.
     async fn open_at(port: u16, token: &str, kind: &str) -> Self {
+        Self::open_saying(port, token, json!({"client_kind": kind})).await
+    }
+
+    /// A screen whose handshake carries `fields` beside its token.
+    async fn open_saying(port: u16, token: &str, fields: Value) -> Self {
+        let mut handshake = json!({"token": token, "schema_version": 2});
+        for (name, value) in fields.as_object().unwrap() {
+            handshake[name] = value.clone();
+        }
         let mut request = format!("ws://127.0.0.1:{port}/ws")
             .into_client_request()
             .unwrap();
@@ -93,11 +103,7 @@ impl Window {
             .insert(ORIGIN, format!("http://127.0.0.1:{port}").parse().unwrap());
         let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
         socket
-            .send(Message::Text(
-                json!({"token": token, "schema_version": 2, "client_kind": kind})
-                    .to_string()
-                    .into(),
-            ))
+            .send(Message::Text(handshake.to_string().into()))
             .await
             .unwrap();
         Self(socket)

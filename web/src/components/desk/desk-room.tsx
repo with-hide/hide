@@ -1,4 +1,4 @@
-import { PanelRightOpenIcon } from "lucide-react";
+import { ChevronLeftIcon, FilesIcon, PanelRightIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { DividerGrip } from "../../LaneDivider";
 import { holdShellDrag } from "../../shellDrag";
@@ -16,7 +16,7 @@ import { FileDropZone } from "./file-drop";
 const EDGE_STEP = 32;
 
 /**
- * The chat column's head: Desk's own mark and name, and 한눈에's unfold while it is folded. Leaving Desk is the
+ * The chat column's head: Desk's own mark and name, and 한눈에's unfold while it is folded, the `▯|` 한눈에 folds with. Leaving Desk is the
  * sidebar's Desk row and the recent-tab chord; a new conversation has no entry on screen until one is decided
  * (operator decision 2026-11-27).
  */
@@ -27,7 +27,7 @@ export function DeskChatHead({ onGlance = null }: { /** 한눈에 is folded with
       <span className="flex flex-1 items-center gap-xs font-semibold text-foreground"><DeskMark />{t("desk.name")}</span>
       {onGlance ? (
         <Hint label={t("desk.glance.unfold")}>
-          <Button variant="ghost" size="icon-sm" className="text-subtle-foreground" aria-label={t("desk.glance.unfold")} data-desk-glance-unfold="true" onClick={onGlance}><PanelRightOpenIcon /></Button>
+          <Button variant="ghost" size="icon-sm" className="text-subtle-foreground" aria-label={t("desk.glance.unfold")} data-desk-glance-unfold="true" onClick={onGlance}><PanelRightIcon /></Button>
         </Hint>
       ) : null}
     </>
@@ -159,7 +159,7 @@ function useRoomWidth() {
  * chat and the sidebar dim and a press there hides it. The two edges drag
  * the desk's and the session's widths.
  */
-export function DeskRoom({ chat, session = null, glance = false, panel = null, expanded = false, widths, onDim, onWidth }: {
+export function DeskRoom({ chat, session = null, glance = false, panel = null, expanded = false, widths, opener = null, openerChord = null, onOpener, onDim, onWidth }: {
   chat: ReactNode;
   /** What stands at the right: the session beside Desk, or 한눈에 while none is open (`glance`), at the session's width. */
   session?: ReactNode;
@@ -169,6 +169,10 @@ export function DeskRoom({ chat, session = null, glance = false, panel = null, e
   expanded?: boolean;
   /** The widths the core keeps; null until the operator drags one. */
   widths: { view_width: number | null; session_width: number | null };
+  /** Desk's desk is folded and holds this many tabs: `‹ 뷰 n` stands where it opens (`deskOpener`). */
+  opener?: number | null;
+  openerChord?: string | null;
+  onOpener?: () => void;
   onDim: () => void;
   onWidth: (panel: "view_width" | "session_width", width: number) => void;
 }) {
@@ -211,6 +215,19 @@ export function DeskRoom({ chat, session = null, glance = false, panel = null, e
           </section>
           {placed.panelCovers || expanded ? null : <DeskEdge kind="view" label={t("desk.room.viewWidth")} right={placed.session} width={placed.view} min={DESK_WIDTHS.viewMin} max={Math.max(DESK_WIDTHS.viewMin, placed.viewMax)} onGuide={setGuide} onLand={(width) => onWidth("view_width", width)} />}
         </>
+      ) : null}
+      {opener !== null && panel === null ? (
+        // On the right side's left edge, where Desk's desk opens: the window's right edge with that side folded.
+        <div className="pointer-events-none absolute inset-y-0 z-30 flex items-center" style={{ right: placed.session }} data-desk-opener={opener}>
+          <Hint label={t("desk.glance.openerHint")} shortcut={openerChord ?? undefined} side="left">
+            <Button variant="outline" size="sm" className="pointer-events-auto h-auto gap-xxs rounded-r-none border-r-0 bg-popover px-xxs py-sm text-caption font-normal text-subtle-foreground shadow-raised [text-orientation:upright] [writing-mode:vertical-rl]" aria-label={t("desk.glance.opener", { count: opener })} data-desk-opener-button="true" onClick={onOpener}>
+              <ChevronLeftIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+              <FilesIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+              {/* Each word stands on its own line of the upright column, so a space takes no line of its own. */}
+              {t("desk.glance.opener", { count: opener }).split(" ").map((word, at) => <span key={at}>{word}</span>)}
+            </Button>
+          </Hint>
+        </div>
       ) : null}
       {session !== null ? <DeskEdge kind="session" label={t("desk.room.sessionWidth")} right={0} width={placed.session} min={DESK_WIDTHS.sessionMin} max={Math.max(DESK_WIDTHS.sessionMin, available - (panel !== null ? DESK_WIDTHS.viewMin : DESK_WIDTHS.chatMin))} onGuide={setGuide} onLand={(width) => onWidth("session_width", width)} /> : null}
       {guide !== null ? (

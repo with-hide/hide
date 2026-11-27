@@ -60,6 +60,10 @@ pub const HIDE_PEER_RELAY_ONLY: &str = "HIDE_PEER_RELAY_ONLY";
 /// panes then do too. A node's own word to its child, read at the node's
 /// start and taken out of its environment, so no pane inherits it.
 pub const HIDE_PANES_ANSWER_AS_APP: &str = "HIDE_PANES_ANSWER_AS_APP";
+/// Development and tests: names only this machine's half of a remote
+/// screen's page proxy answers, as `name=ip` pairs (`screen_net`), so a
+/// check on one computer tells the two machines' resolvers apart.
+pub const HIDE_TEST_SCREEN_NET_HOSTS: &str = "HIDE_TEST_SCREEN_NET_HOSTS";
 /// Test-only: how a core is started on a machine for another one's sake.
 pub const HIDE_CORE_STARTER: &str = "HIDE_CORE_STARTER";
 /// Test-only: a file in a fixture HOME naming a build whose daemon exits at
@@ -217,6 +221,12 @@ pub const REGISTRY: &[EnvKey] = &[
         absent_behavior: "The endpoint binds every interface, attaches to the device relay and finds machines on the local network; it is opened only on a machine that is paired, or is sharing itself or adding a machine",
     },
     EnvKey {
+        key: HIDE_TEST_SCREEN_NET_HOSTS,
+        required: false,
+        format: "comma-separated name=ip pairs for development or tests, such as only-host.test=127.0.0.1: the proxy that carries another computer's view of this one's browser pages answers each name with its address before asking the system's resolver",
+        absent_behavior: "Every name a page asks for is resolved by this computer's own resolver",
+    },
+    EnvKey {
         key: HIDE_PEER_RELAY,
         required: false,
         format: "an iroh relay URL for development or tests: https, or http on loopback only; no credentials, query or fragment; the endpoint binds every interface as the product's does, attaches to that relay and does no local network search; not with HIDE_PEER_DIRECT",
@@ -328,6 +338,8 @@ pub struct Env {
     pub peer_relay_only: bool,
     /// PATH as the daemon received it, searched for `tailscale` at each check.
     pub search_path: Option<String>,
+    /// Names the page proxy answers itself (`HIDE_TEST_SCREEN_NET_HOSTS`).
+    pub screen_net_hosts: std::collections::HashMap<String, std::net::IpAddr>,
 }
 
 #[derive(Debug)]
@@ -606,6 +618,16 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         }
     };
     let search_path = read(PATH).filter(|value| !value.is_empty());
+    let screen_net_hosts = match read(HIDE_TEST_SCREEN_NET_HOSTS) {
+        None => std::collections::HashMap::new(),
+        Some(value) => crate::screen_net::parse_hosts(&value).unwrap_or_else(|| {
+            errors.push(EnvError {
+                key: HIDE_TEST_SCREEN_NET_HOSTS,
+                kind: "invalid",
+            });
+            std::collections::HashMap::new()
+        }),
+    };
     let env = Env {
         home,
         state_dir,
@@ -629,6 +651,7 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         peer_relay,
         peer_relay_only,
         search_path,
+        screen_net_hosts,
     };
     (env, errors)
 }

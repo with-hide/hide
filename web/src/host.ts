@@ -11,7 +11,7 @@ import type { RecordUpdate, ReleaseFeed, WhatsNewRecord } from "./releases";
 import { revealLabel, type RevealHost } from "./revealExternal";
 import { holdsFieldModifier, keySystemOf, type KeySystem } from "./shortcuts";
 import type { DisplayPreferences } from "./displayPreferences";
-import type { RemoteWork, RemoteWorkResult } from "./remoteView";
+import { remoteBridge, type RemoteWork, type RemoteWorkResult } from "./remoteView";
 
 export type HostKind = "browser" | "electron";
 
@@ -374,6 +374,14 @@ export type RemoteScreensBridge = {
    */
   go?(request: { device: string; key: string; work: RemoteWork }): void;
   /**
+   * The machines this window's core (`core`, its own machine's id) holds
+   * pairings with, each by its device and the key it was paired under, sent
+   * once the shell holds a snapshot with its device list and again when the
+   * list changes: a screen's login storage here lives while its pair does.
+   * Absent on an older desktop app.
+   */
+  paired?(paired: { core: string; pairs: { device: string; key: string }[] }): void;
+  /**
    * Settings from this window's chrome (the rail's gear): the Settings of
    * the screen in front, as ⌘, opens (B20), else this window's own. Absent
    * on an older desktop app.
@@ -459,7 +467,12 @@ export function hostKind(): HostKind {
   return hostBridge() ? "electron" : "browser";
 }
 
-/** The host's browser views, or null in a plain browser tab, which cannot draw a page in a View area. */
+/**
+ * The host's browser views, or null in a plain browser tab, which cannot
+ * draw a page in a View area. In another computer's screen they are the
+ * showing window's, which draws this machine's pages there; an older
+ * desktop app there gives none.
+ */
 export function browserBridge(): BrowserBridge | null {
-  return hostBridge()?.browser ?? null;
+  return hostBridge()?.browser ?? remoteBridge()?.browser ?? null;
 }

@@ -173,6 +173,10 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
           schema_version: 2,
           snapshot_format: "semantic-rest-v1",
           client_kind: hostKind() === "electron" ? "desktop" : "web",
+          // Another computer's screen whose window draws this machine's
+          // browser displays says so, so an agent here may open one with no
+          // desktop window of this machine (docs/BROWSER_DISPLAYS.md).
+          ...(bridge?.browser ? { draws_pages: true } : {}),
           have_revision: revision,
           have_core: revisionCore ?? undefined,
           // A client with no cursor names none and has its kept terminals
