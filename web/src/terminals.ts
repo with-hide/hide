@@ -35,7 +35,7 @@ import { keySystem } from "./host";
 import { terminalKey } from "./keys";
 import { noteWriteComplete, probeEnabled } from "./probe";
 import { loadTerminalRenderer } from "./terminalRenderer";
-import { cellWidth, holdTerminalFont, setTerminalFontFamily, watchPixelRatio, type TerminalFont } from "./terminalFonts";
+import { cellWidth, holdTerminalFont, setTerminalFontFamily, terminalFontFamily, watchPixelRatio, type TerminalFont } from "./terminalFonts";
 import { remoteControl, remoteTargetOfPane } from "./remote";
 import { keyPayload, noteTerminalFocus } from "./keyTarget";
 import { autoscrollRows, bufferRow, drawnSelection, orderPoints, selectionToText, type CellRow, type HistoryPoint } from "./selection";
@@ -83,6 +83,8 @@ type Instance = {
   stale: boolean;
   /** The grid the core last got from this instance, so a host resize that keeps it sends nothing; null when the core may not have one. */
   grid: { cols: number; rows: number } | null;
+  /** What the core last got measured with that grid (`floorMeasure`), as sent. */
+  floor: string | null;
   /** Wheel rows accumulated toward the next flush, and the pending flush. */
   wheel: { rows: number; remainder: number; column: number; row: number; modifiers: number; frame: number | null };
   /** The drag selection, in history rows, with every row it covers as last shown. */
@@ -301,18 +303,6 @@ function sizeAt(base: number | null, scale: number): number {
 }
 
 /**
- * A terminal cell's width, in CSS pixels, for a pane at `scale`, with
- * Appearance's Terminal text size `base` (null for the token's) and
- * General's Terminal font `family` ("" for the token's): what the pane
- * floor's pixel width is counted in (`paneFloor.ts`). Taken from the
- * settings themselves rather than from a terminal drawn, so a tab is laid
- * out before its terminals are.
- */
-export function terminalCellWidth(base: number | null, family: string, scale: number): number {
-  return cellWidth(sizeAt(base, scale), family, token("--font-mono"));
-}
-
-/**
  * Applies Appearance's Terminal text size to every terminal, each still
  * multiplied by its own pane's scale; a pane whose size moved sends its new
  * fit as `terminal_resize`, as a pane's own zoom does.
@@ -514,6 +504,32 @@ function disposeInstance(paneId: string, instance: Instance) {
  * layout the engine draws differently only moves the host once more and the
  * observer sends that fit too.
  */
+/**
+ * What the core's pane floor judges this pane's tab by (docs/UI_BEHAVIOR.md,
+ * The pane floor), in CSS pixels: the pane's own cell, and the width of the
+ * tab's canvas its panes are laid out in, the inset a terminal stands from
+ * each side of its pane and the cell at no per-pane scale. Null for a pane
+ * drawn outside a tab's canvas, a pair view's, and where a cell cannot be
+ * measured; the core then takes the tab as not measured, which refuses a
+ * split right rather than allowing one it cannot judge.
+ */
+function floorMeasure(instance: Instance): { cell_px: number; canvas_px: number; inset_px: number; base_cell_px: number } | null {
+  const canvas = instance.host?.closest<HTMLElement>("[data-canvas]");
+  if (!canvas || canvas.dataset.pairedCanvas === "true" || canvas.clientWidth <= 0) return null;
+  try {
+    const family = terminalFontFamily();
+    const mono = token("--font-mono");
+    return {
+      cell_px: cellWidth(fontSizeAt(instance.scale), family, mono),
+      canvas_px: canvas.clientWidth,
+      inset_px: tokenPx("--spacing-sm"),
+      base_cell_px: cellWidth(fontSizeAt(1), family, mono),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function sendGrid(paneId: string, instance: Instance, newView: boolean, onlyChanged = false) {
   if (!instance.host) return;
   instance.fit.fit();
@@ -523,7 +539,12 @@ function sendGrid(paneId: string, instance: Instance, newView: boolean, onlyChan
     instance.grid = null;
     return;
   }
-  if (onlyChanged && instance.grid?.cols === term.cols && instance.grid.rows === term.rows) return;
+  // The measure goes with the grid even when the grid kept its size, since a
+  // wider canvas or another cell moves what the floor says without moving it.
+  const measured = isGuestPaneId(paneId) ? null : floorMeasure(instance);
+  const floor = measured ? JSON.stringify(measured) : null;
+  if (onlyChanged && instance.grid?.cols === term.cols && instance.grid.rows === term.rows && instance.floor === floor) return;
+  instance.floor = floor;
   instance.grid = { cols: term.cols, rows: term.rows };
   instance.dispatch({
     schema_version: 2,
@@ -536,14 +557,10 @@ function sendGrid(paneId: string, instance: Instance, newView: boolean, onlyChan
   instance.dispatch({
     schema_version: 2,
     kind: "terminal_resize",
-    payload: { pane_id: paneId, cols: term.cols, rows: term.rows },
+    payload: { pane_id: paneId, cols: term.cols, rows: term.rows, ...(measured ? { floor: measured } : {}) },
   });
 }
 
-/** The columns the pane's terminal was last fitted to, the grid its view reported to the core; null while it is not drawn. */
-export function terminalCols(paneId: string): number | null {
-  return instances.get(paneId)?.grid?.cols ?? null;
-}
 
 /** Asks the core for a full frame of the pane; used after every self-contained snapshot. */
 export function requestView(paneId: string) {
@@ -1223,6 +1240,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
     observer: null,
     stale: false,
     grid: null,
+    floor: null,
     wheel: { rows: 0, remainder: 0, column: 0, row: 0, modifiers: 0, frame: null },
     selection: null,
     gesture: null,

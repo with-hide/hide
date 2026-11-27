@@ -120,6 +120,7 @@ const KEYS = new Map<string, MessageKey>([
   ["pane.focus_target_unavailable", "coreError.pane.gone"],
   ["pane.control_unavailable", "coreError.engineNotConnected"],
   ["pane.too_narrow", "panes.menu.splitTooNarrow"],
+  ["pane.unmeasured", "panes.menu.splitUnmeasured"],
   ["agent_group.start_pending", "coreError.group.startPending"],
   ["agent_group.checkout_missing", "coreError.group.checkoutGone"],
   ["agent_group.workspace_unavailable", "coreError.group.checkoutGone"],

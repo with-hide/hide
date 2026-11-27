@@ -243,6 +243,11 @@ export type TerminalFont = {
 let chosenFamily = "";
 
 /** Sets the operator's Terminal font; true when it changed, so the caller re-fonts its terminals. */
+/** The operator's Terminal font, "" for none. */
+export function terminalFontFamily(): string {
+  return chosenFamily;
+}
+
 export function setTerminalFontFamily(chosen: string): boolean {
   if (chosenFamily === chosen) return false;
   chosenFamily = chosen;

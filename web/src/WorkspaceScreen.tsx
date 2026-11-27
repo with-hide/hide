@@ -7,7 +7,7 @@ import { Button } from "./components/ui/button";
 import { escapeConsumed, Hint } from "./components/ui/tooltip";
 import { RemotePaneCanvas } from "./PaneGrid";
 import { remoteTabView, remoteView } from "./remote";
-import { canRetryDevice, deviceAwayLine, deviceLine, usableTerminalFontFamily, usableTerminalFontSize } from "./settings";
+import { canRetryDevice, deviceAwayLine, deviceLine } from "./settings";
 import { catalogWorkspaces, focusedRemoteDevice, frontCheckout, type Checkout } from "./snapshot";
 import { awayDevice, machineName, windowDeviceId, wslPlace } from "./screenMachine";
 import { useShellStore } from "./store";
@@ -24,8 +24,8 @@ import { drawnPair, pairBesideDesk } from "./pairView";
 import { laneFrame, laneViewOf, pageLaneWidth, workspaceViewOf, type LaneFrame, type LaneInput, type LaneSizes, type PairView, type WorkspaceView } from "./workspace";
 import { keyboardOwner, noteKeyboardOwner } from "./viewFocus";
 import { areasOf } from "./areaLayout";
-import { areaTreeWidth, PANE_FLOOR, paneFramesWidth, paneTreeWidth } from "./paneFloor";
-import { focusTerminal, terminalCellWidth } from "./terminals";
+import { areaTreeWidth } from "./paneFloor";
+import { focusTerminal } from "./terminals";
 import { cn } from "./lib/utils";
 import { useInterfaceTranslation } from "./i18n/client";
 import "./laneCalls";
@@ -252,41 +252,16 @@ function laneEscape(event: React.KeyboardEvent<HTMLElement>, frame: LaneFrame, a
 /**
  * The width Agent Views needs for every pane the front tab of each Agent
  * area shows to keep the pane floor (docs/UI_BEHAVIOR.md, The pane floor):
- * the floor's columns at each pane's own cell width, through the tab's
- * split tree and the areas' own. A standing desk gives way down to its
+ * each tab's least width as the core judged it (`pane_floor.min_width_px`),
+ * through the areas' own split tree. A standing desk gives way down to its
  * minimum to leave this, and floats over the panes when even that does not
- * (`laneFrame`). Zero while nothing is measured yet, and when `counted` is
- * false.
+ * (`laneFrame`). Zero for a tab the core has no width for yet, and when
+ * `counted` is false.
  */
 function useAgentViewsFloor(checkout: Checkout | null, view: WorkspaceView | null, counted: boolean): number {
-  const paneLayouts = useShellStore((s) => s.rest?.pane_layouts);
-  const remote = useShellStore((s) => s.rest?.status?.remote);
-  const scales = useShellStore((s) => s.rest?.ui_state?.pane_text_scales);
-  const base = useShellStore((s) => usableTerminalFontSize(s.rest?.ui_state?.terminal_font_size));
-  const family = useShellStore((s) => usableTerminalFontFamily(s.rest?.ui_state?.terminal_font_family));
-  // Each pane's text scale draws its own cell; measured after the render,
-  // since a cell is measured on a canvas of the page.
-  const scaleList = [...new Set([1, ...Object.values(scales ?? {})])].sort().join(",");
-  const [cells, setCells] = useState<Map<number, number> | null>(null);
-  useLayoutEffect(() => {
-    try {
-      setCells(new Map(scaleList.split(",").map(Number).map((scale) => [scale, terminalCellWidth(base, family, scale)])));
-    } catch (error) {
-      // A page that cannot measure a cell keeps Agent Views' own minimum, as
-      // before the floor; why is the diagnostic log's.
-      useShellStore.getState().noteDiagnostic(`pane_floor.cell_unmeasured reason=${error instanceof Error ? error.message : String(error)}`);
-      setCells(new Map());
-    }
-  }, [base, family, scaleList]);
-  if (!counted || !checkout || !cells) return 0;
-  const floor = (paneId: string) => PANE_FLOOR.columns * (cells.get(scales?.[paneId] ?? 1) ?? 0);
-  const tabWidth = (tabId: string | null) => {
-    if (!tabId) return 0;
-    const local = paneLayouts?.find((layout) => layout.tab_id === tabId);
-    if (local) return paneTreeWidth(local, floor);
-    const device = remote?.flatMap((row) => row.session?.pane_layouts ?? []).find((layout) => layout.tab_id === tabId);
-    return device ? paneFramesWidth(device, floor) : 0;
-  };
+  const widths = useShellStore((s) => s.rest?.pane_floor?.min_width_px);
+  if (!counted || !checkout) return 0;
+  const tabWidth = (tabId: string | null) => (tabId ? Math.ceil(widths?.[tabId] ?? 0) : 0);
   const layout = view?.agent_layout;
   if (!layout) return tabWidth(checkout.active_tab_id);
   const shown = new Map(areasOf(layout.root).map((area) => [area.id, layout.canvases[area.id] ?? area.active]));
