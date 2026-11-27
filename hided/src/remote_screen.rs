@@ -1049,7 +1049,7 @@ mod tests {
             "http://127.0.0.1:3000/a",
             "http://[::]:8080/",
             "http://0.0.0.0:8080/",
-            "file:///Users/remote/report.html",
+            "file:///srv/device-c/report.html",
         ] {
             let (status, body) = routed("device-c", url).await;
             assert_eq!(
@@ -1061,7 +1061,7 @@ mod tests {
                 "{url}"
             );
         }
-        let (status, body) = routed("host", "file:///Users/me/report.html").await;
+        let (status, body) = routed("host", "file:///srv/host/report.html").await;
         assert_eq!(
             (status, body["reason"].as_str()),
             (StatusCode::FORBIDDEN, Some("remote_file_unavailable"))
