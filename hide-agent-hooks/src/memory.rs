@@ -94,8 +94,12 @@ pub fn project_memory_output_until(
             Err(_) => MemoryContext::without(HookMemoryOutcome::Unavailable),
         }
     };
+    let context = match event {
+        HookEvent::SessionStart => Some(projected.session_start()),
+        _ => projected.joined(),
+    };
     HookMemoryResult {
-        stdout: match &projected.joined() {
+        stdout: match &context {
             Some(context) => hook_stdout_with_context(runtime, event, Some(context)),
             None => crate::runtime::hook_stdout(runtime, event),
         },
@@ -143,6 +147,17 @@ impl MemoryContext {
             asks: None,
             sessions: None,
         }
+    }
+
+    /// A session start's whole context: the global instruction and Memory's
+    /// index around the start text, the open sessions after it
+    /// ([`crate::runtime::session_start_context`]).
+    pub fn session_start(&self) -> String {
+        crate::runtime::session_start_context(
+            self.global.as_deref(),
+            self.context.as_deref(),
+            self.sessions.as_deref(),
+        )
     }
 
     /// The global instruction first, then Memory's context, then the
@@ -515,7 +530,7 @@ mod tests {
             serde_json::from_str(result.stdout.as_ref().unwrap()).unwrap();
         assert_eq!(
             output["hookSpecificOutput"]["additionalContext"],
-            crate::runtime::PURPOSE_CONTEXT
+            crate::runtime::START_CONTEXT
         );
     }
 }

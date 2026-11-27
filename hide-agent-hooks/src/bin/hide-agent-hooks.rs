@@ -282,7 +282,10 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
         HookEvent::SessionStart => (
             guidance::stdout(
                 agent,
-                &guidance::session_context(workspace_context::live_context().as_deref()),
+                &guidance::session_context(
+                    hide_agent_hooks::START_CONTEXT,
+                    workspace_context::live_context().as_deref(),
+                ),
             ),
             None,
         ),
@@ -559,15 +562,7 @@ fn antigravity_event(event: HookEvent, started: Instant) {
                 };
                 (index, workspace)
             });
-            let mut context = guidance::session_context(workspace.as_deref());
-            if let Some(index) = index {
-                context.push_str(
-                    "
-
-",
-                );
-                context.push_str(&index);
-            }
+            let context = guidance::session_context(&index.session_start(), workspace.as_deref());
             if let Some(answer) = antigravity::inject(&context) {
                 print_line(&answer);
             }
@@ -647,6 +642,7 @@ fn antigravity_prompt(
                     prompt.clone(),
                     memory_deadline,
                 )
+                .joined()
             });
         let intake = hide_agent_hooks::delivery::pull(
             delivery_deadline,
@@ -756,7 +752,7 @@ fn antigravity_memory(
     conversation: &str,
     prompt: Option<String>,
     deadline: Instant,
-) -> Option<String> {
+) -> hide_agent_hooks::memory::MemoryContext {
     hide_agent_hooks::memory::memory_context_until(
         hide_agent_hooks::memory::MemoryRequest {
             runtime_id: GuidanceAgent::Antigravity.id(),
@@ -767,7 +763,6 @@ fn antigravity_memory(
         home,
         deadline,
     )
-    .joined()
 }
 
 /// What a Grok or Cursor event reports: its turn, and the count it makes.

@@ -182,43 +182,6 @@ impl LinkStore {
             .map_err(failed)
     }
 
-    /// The pull requests `sessions` made, newest first and each once, at
-    /// most `limit`.
-    pub fn prs_made(&self, sessions: &[SessionIdentity], limit: usize) -> Result<Vec<u64>, String> {
-        let mut statement = self
-            .connection
-            .prepare_cached(
-                "SELECT created_at,number FROM ledger_outputs WHERE device=?1 AND agent=?2 AND id=?3 \
-                 AND kind='pr' ORDER BY created_at DESC LIMIT ?4",
-            )
-            .map_err(failed)?;
-        let mut made = Vec::new();
-        for session in sessions {
-            let rows = statement
-                .query_map(
-                    params![
-                        session.device_id,
-                        session.agent,
-                        session.session_id,
-                        limit as i64
-                    ],
-                    |r| Ok((r.get::<_, u64>(0)?, r.get::<_, u64>(1)?)),
-                )
-                .map_err(failed)?;
-            for row in rows {
-                made.push(row.map_err(failed)?);
-            }
-        }
-        made.sort_by(|a, b| b.cmp(a));
-        let mut seen = HashSet::new();
-        Ok(made
-            .into_iter()
-            .map(|(_, number)| number)
-            .filter(|number| seen.insert(*number))
-            .take(limit)
-            .collect())
-    }
-
     /// The sessions of `members` active at or after `since`, newest first,
     /// at most `limit`, and how many more the period holds.
     pub fn session_page(

@@ -128,11 +128,16 @@ fn session_start_asks_memory_and_the_workspace_probe_at_once() {
     // Memory answered, so the probe was asked while Memory was
     // still waiting for its answer.
     assert!(context.contains("MEMORY-FOR-THIS-SESSION"), "{answer}");
-    // The probe's guidance is appended after Memory's, as before.
+    // Memory comes before the start text, and the probe's guidance after
+    // both (docs/agent-hooks.md, What the hook returns and reports back).
     let guidance = context
-        .find("checkout `/srv/fixture-checkout`")
+        .find("this session's checkout is `/srv/fixture-checkout`")
         .unwrap_or_else(|| panic!("{answer}"));
-    assert!(context.find("MEMORY-FOR-THIS-SESSION").unwrap() < guidance);
+    let start = context
+        .find(hide_agent_hooks::START_CONTEXT)
+        .unwrap_or_else(|| panic!("{answer}"));
+    assert!(context.find("MEMORY-FOR-THIS-SESSION").unwrap() < start);
+    assert!(start < guidance);
     // The Hide global instruction rides in its own slot, before Memory
     // (PRD memory-self-improve B1).
     assert!(
@@ -166,7 +171,7 @@ fn a_session_outside_a_hide_pane_is_not_probed_and_gets_no_guidance() {
     let context = answer["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap_or_default();
-    assert!(!context.contains("Workspace control"), "{answer}");
+    assert!(!context.contains("Hide Workspace:"), "{answer}");
     assert!(!context.contains("/srv/fixture-checkout"), "{answer}");
     let calls = std::fs::read_to_string(&machine.calls).unwrap();
     assert!(!calls.contains("workspace info"), "{calls}");

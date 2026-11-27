@@ -197,7 +197,10 @@ fn session(input: &Input) -> Option<String> {
 /// prompt.
 fn start() -> Value {
     json!({
-        "context": guidance::session_context(workspace_context::live_context().as_deref()),
+        "context": guidance::session_context(
+            hide_agent_hooks::START_CONTEXT,
+            workspace_context::live_context().as_deref(),
+        ),
     })
 }
 

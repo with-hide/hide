@@ -494,11 +494,9 @@ fn the_installed_helper_is_read_back_from_the_entry() {
 
 #[test]
 fn each_agent_reads_context_in_the_field_its_documentation_names() {
-    let context = session_context(Some("workspace guidance"));
-    assert!(context.contains(PURPOSE_CONTEXT));
-    assert!(context.contains("`hide browser help`"));
-    assert!(context.ends_with("workspace guidance"));
-    assert!(session_context(None).contains("`hide browser help`"));
+    let context = session_context(START_CONTEXT, Some("workspace guidance"));
+    assert_eq!(context, format!("{START_CONTEXT}\n\nworkspace guidance"));
+    assert_eq!(session_context(START_CONTEXT, None), START_CONTEXT);
 
     let stdout = |agent| super::stdout(agent, &context).unwrap();
     let gemini: Value = serde_json::from_str(&stdout(GuidanceAgent::Gemini)).unwrap();
@@ -531,7 +529,7 @@ fn the_same_session_start_twice_prints_the_same_bytes() {
     // agent's hooks inside another agent, or two config layers) is told the
     // same thing twice: the output depends on nothing but the context.
     for agent in GuidanceAgent::ALL {
-        let context = session_context(None);
+        let context = session_context(START_CONTEXT, None);
         assert_eq!(
             stdout(agent, &context),
             stdout(agent, &context),
