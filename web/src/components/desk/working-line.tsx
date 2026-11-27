@@ -2,6 +2,7 @@ import type { WorkingPhase } from "../../desk";
 import type { MessageKey } from "../../i18n/catalogs";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { Elapsed } from "../elapsed";
+import { WorkingOwl } from "../../WorkingOwl";
 
 const PHASE_WORDS = {
   thinking: "desk.working.thinking",
@@ -16,7 +17,8 @@ const PHASE_WORDS = {
 
 /**
  * The one line that says an agent is working (feedback 1 c3), at the foot of
- * Desk's conversation and of a session's thread alike: what it does now in a
+ * Desk's conversation and of a session's thread alike: Hide's small owl
+ * looking about (`WorkingOwl`), what it does now in a
  * short word from a closed set, then how long the turn has run. Only the word
  * moves, a slow shimmer (`.working-shimmer`), still under reduced motion; the
  * time stays still. Its height is fixed, so the conversation does not jump
@@ -27,6 +29,7 @@ export function WorkingLine({ phase, since }: { phase: WorkingPhase; since: numb
   const { t } = useInterfaceTranslation();
   return (
     <p role="status" className="flex h-(--size-control-compact) shrink-0 items-center gap-xxs text-caption text-muted-foreground" data-working-line={phase}>
+      <WorkingOwl className="mr-xxs" />
       <span className="working-shimmer">{t(PHASE_WORDS[phase])}</span>
       {since !== null ? <><span aria-hidden="true">·</span><Elapsed since={since} /></> : null}
     </p>
