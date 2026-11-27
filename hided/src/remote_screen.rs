@@ -118,13 +118,22 @@ impl Seat {
 impl Drop for Seat {
     fn drop(&mut self) {
         let mut seats = lock(&self.screens.seats);
-        if seats.get(&self.key).is_some_and(|held| held.0 == self.id) {
+        if seats.get(&self.key).is_some_and(|held| held.id == self.id) {
             seats.remove(&self.key);
             // Its machine shows this one no more: a look chosen there ends.
             self.screens.tell_core(&seats);
         }
         self.screens.views.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+/// A guest's view seated now: the one view its machine admitted, under the
+/// grant's generation it attached with.
+struct Seated {
+    id: u64,
+    taken: Arc<Notify>,
+    view: String,
+    generation: u64,
 }
 
 /// Why a view was not seated.
@@ -187,7 +196,7 @@ impl AssetCache {
 /// Both sides of other machines' views.
 pub struct RemoteScreens {
     /// The view each guest holds now, by its seat's id.
-    seats: Mutex<HashMap<PeerKey, (u64, Arc<Notify>)>>,
+    seats: Mutex<HashMap<PeerKey, Seated>>,
     /// Every view seated now.
     views: AtomicUsize,
     next: AtomicU64,
@@ -244,6 +253,17 @@ impl RemoteScreens {
             .ok()
     }
 
+    /// The seat `guest`'s view `view` holds now under the grant's
+    /// `generation`: the one view this machine admitted (`seat`). A bulk
+    /// stream with no seated view, an ended view, or the same view named
+    /// under another generation has none.
+    pub fn admitted(&self, guest: &PeerKey, view: &str, generation: u64) -> Option<u64> {
+        lock(&self.seats)
+            .get(guest)
+            .filter(|seated| seated.view == view && seated.generation == generation)
+            .map(|seated| seated.id)
+    }
+
     pub fn seated(&self) -> usize {
         self.views.load(Ordering::SeqCst)
     }
@@ -267,7 +287,7 @@ impl RemoteScreens {
 
     /// The machines whose view is seated now, by key, sorted: what the core
     /// is told of them (`remote_views`).
-    fn showing(seats: &HashMap<PeerKey, (u64, Arc<Notify>)>) -> Vec<String> {
+    fn showing(seats: &HashMap<PeerKey, Seated>) -> Vec<String> {
         let mut machines = seats.keys().map(PeerKey::to_hex).collect::<Vec<_>>();
         machines.sort();
         machines
@@ -278,7 +298,7 @@ impl RemoteScreens {
     /// Hide owns the read axis). Called under the seats' lock, so two changes
     /// reach the core in the order they happened; before the daemon's state
     /// is built there is no view and no core to tell.
-    fn tell_core(&self, seats: &HashMap<PeerKey, (u64, Arc<Notify>)>) {
+    fn tell_core(&self, seats: &HashMap<PeerKey, Seated>) {
         let Some(state) = self.state.get() else {
             return;
         };
@@ -305,12 +325,20 @@ impl RemoteScreens {
             return Err(SeatRefused::Full);
         }
         let shown = replacing.is_none();
-        if let Some((_, taken)) = replacing {
-            taken.notify_one();
+        if let Some(replaced) = replacing {
+            replaced.taken.notify_one();
         }
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let taken = Arc::new(Notify::new());
-        seats.insert(viewer.key, (id, Arc::clone(&taken)));
+        seats.insert(
+            viewer.key,
+            Seated {
+                id,
+                taken: Arc::clone(&taken),
+                view: viewer.view.clone(),
+                generation: viewer.generation,
+            },
+        );
         self.views.fetch_add(1, Ordering::SeqCst);
         // Its machine shows this one again: a look chosen there counts again.
         // A view taking its own machine's earlier place changes nothing.
@@ -376,12 +404,13 @@ impl RemoteScreens {
     }
 }
 
-/// A guest's view is open while its bulk stream is: the routes this
-/// machine makes for the view's pages live while it does
-/// (`browser_routes::Owner::Screen`).
+/// The routes this machine makes for a guest's view live while the guest
+/// holds the seat that view was admitted to (`browser_routes::Owner::Screen`).
 impl crate::browser_routes::ScreenViews for RemoteScreens {
-    fn live(&self, guest: &PeerKey, view: &str) -> bool {
-        lock(&self.bulks).contains_key(&(*guest, view.to_owned()))
+    fn live(&self, guest: &PeerKey, seat: u64) -> bool {
+        lock(&self.seats)
+            .get(guest)
+            .is_some_and(|seated| seated.id == seat)
     }
 }
 
@@ -440,10 +469,14 @@ async fn page_route(headers: HeaderMap, State(route): State<ViewRoute>, body: By
     };
     let routes = Arc::clone(&route.state.browser_routes);
     let guest = route.viewer.key;
-    let live = crate::browser_routes::ScreenViews::live(route.screens.as_ref(), &guest, &view);
-    answer_page_route(live, &body, move |ask| async move {
+    let owner = route
+        .screens
+        .admitted(&guest, &view, route.viewer.generation)
+        .map(|seat| crate::browser_routes::Owner::Screen { guest, seat });
+    answer_page_route(owner.is_some(), &body, move |ask| async move {
+        let owner = owner.ok_or("view_unavailable")?;
         routes
-            .resolve_for_screen(ask.device, ask.checkout, ask.view, ask.load, guest, view)
+            .resolve_for_screen(ask.device, ask.checkout, ask.view, ask.load, owner)
             .await
     })
     .await
@@ -462,18 +495,19 @@ async fn page_route_release(
     let Some(ask) = read_route_ask(&body) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    route
-        .state
-        .browser_routes
-        .release_for_screen(
-            &ask.device,
-            &ask.checkout,
-            &ask.view,
-            ask.load,
-            route.viewer.key,
-            &view,
-        )
-        .await;
+    let guest = route.viewer.key;
+    // A view no longer seated has no routes left to let go.
+    if let Some(seat) = route
+        .screens
+        .admitted(&guest, &view, route.viewer.generation)
+    {
+        let owner = crate::browser_routes::Owner::Screen { guest, seat };
+        route
+            .state
+            .browser_routes
+            .release_for_screen(&ask.device, &ask.checkout, &ask.view, ask.load, owner)
+            .await;
+    }
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -522,9 +556,9 @@ where
         Err("remote_device_page_unavailable") => {
             refusal(StatusCode::FORBIDDEN, "remote_device_page_unavailable")
         }
-        Err("browser_route_limit" | "browser_route_build_limit") => {
-            refusal(StatusCode::TOO_MANY_REQUESTS, "browser_route_limit")
-        }
+        Err("browser_route_limit") => refusal(StatusCode::TOO_MANY_REQUESTS, "browser_route_limit"),
+        // Every guest's builds are under way: a passing state, not a full view.
+        Err("browser_route_build_limit") => refusal(StatusCode::SERVICE_UNAVAILABLE, "route_busy"),
         Err("core_unavailable") => refusal(StatusCode::SERVICE_UNAVAILABLE, "core_unavailable"),
         Err(reason) => {
             hide_core::diagnostic!(json!({
@@ -1169,8 +1203,8 @@ mod tests {
             ),
             (
                 "browser_route_build_limit",
-                StatusCode::TOO_MANY_REQUESTS,
-                "browser_route_limit",
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_busy",
             ),
             (
                 "core_unavailable",

@@ -299,8 +299,13 @@ export function browserPartition(workspace: string, url: string, node: string | 
  * under another key, or of an earlier pairing of it.
  */
 export function remotePagePartition(device: string, key: string, pairing: string): string {
-  return `persist:hide-remote-page-${pairHash(device, key, pairing)}`;
+  return `${REMOTE_PAGE_PARTITION}${pairHash(device, key, pairing)}`;
 }
+
+/** The name every remote screen's login storage starts with (`remotePagePartition`). */
+export const REMOTE_PAGE_PARTITION = "persist:hide-remote-page-";
+/** The name every remote screen's file page storage starts with (`remoteFilePartition`). */
+export const REMOTE_FILE_PARTITION = "hide-remote-file-";
 
 /**
  * The storage of the file pages another computer's screen shows here (that
@@ -310,7 +315,7 @@ export function remotePagePartition(device: string, key: string, pairing: string
  * and gone with the app.
  */
 export function remoteFilePartition(device: string, key: string, pairing: string): string {
-  return `hide-remote-file-${pairHash(device, key, pairing)}`;
+  return `${REMOTE_FILE_PARTITION}${pairHash(device, key, pairing)}`;
 }
 
 function pairHash(device: string, key: string, pairing: string): string {
@@ -402,6 +407,36 @@ export function fileLink(route: PageRoute | null, raw: string): "follow" | "besi
   if (routed(route)) return remoteRequest(route, raw).cancel ? "refuse" : "follow";
   const target = protocolOf(raw);
   return target === "http:" || target === "https:" ? "beside" : "follow";
+}
+
+/**
+ * The `file:` address of `relative` (a path of `/`-separated names) under
+ * `root`, a checkout's root in the wire spelling of the machine that holds
+ * it (`/Users/me/repo`, or `C:/repo` on Windows), with `search` and `hash` as
+ * a URL spells them; null when either names no file under the root. Built as
+ * URL text, each name escaped as a URL path needs, never through this
+ * machine's own path rules, since the file may be on another system.
+ */
+export function wireFileAddress(root: string, relative: string, search = "", hash = ""): string | null {
+  const names = `${root.replace(/^\/+/, "").replace(/\/+$/, "")}/${relative}`.split("/");
+  if (names.some((name) => name === "" || name === "." || name === "..")) return null;
+  return `file:///${names.map((name) => encodeURIComponent(name).replace(/%3A/gi, ":")).join("/")}${search}${hash}`;
+}
+
+/**
+ * Whether two `file:` addresses name the same file, read as URLs alone (the
+ * same host and decoded path; their queries and fragments may differ),
+ * never through this machine's own path rules, since the file may be on
+ * another system.
+ */
+export function sameFileAddress(a: string, b: string): boolean {
+  try {
+    const one = new URL(a);
+    const other = new URL(b);
+    return one.protocol === "file:" && other.protocol === "file:" && one.host === other.host && decodeURIComponent(one.pathname) === decodeURIComponent(other.pathname);
+  } catch {
+    return false;
+  }
 }
 
 /** An address's scheme as `URL` spells it (`https:`), or `unparsable`. */

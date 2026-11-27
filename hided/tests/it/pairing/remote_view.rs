@@ -771,11 +771,24 @@ async fn a_screen_page_request_comes_from_a_port_the_host_dialed() {
 
 /// A POST of `body` on the guest daemon, with its token.
 async fn post_json(port: u16, path: &str, token: &str, body: &Value) -> (u16, Value) {
+    send_json(hyper::Method::POST, port, path, token, body).await
+}
+
+/// A request of `method` with `body` on the guest daemon, with its token.
+async fn send_json(
+    method: hyper::Method,
+    port: u16,
+    path: &str,
+    token: &str,
+    body: &Value,
+) -> (u16, Value) {
     use http_body_util::{BodyExt, Full};
     use hyper_util::client::legacy::Client;
     use hyper_util::rt::TokioExecutor;
     let client = Client::builder(TokioExecutor::new()).build_http::<Full<hyper::body::Bytes>>();
-    let request = hyper::Request::post(format!("http://127.0.0.1:{port}{path}"))
+    let request = hyper::Request::builder()
+        .method(method)
+        .uri(format!("http://127.0.0.1:{port}{path}"))
         .header("authorization", format!("Bearer {token}"))
         .header("content-type", "application/json")
         .body(Full::new(hyper::body::Bytes::from(body.to_string())))
@@ -792,7 +805,8 @@ async fn post_json(port: u16, path: &str, token: &str, body: &Value) -> (u16, Va
 // asked while the guest shows no screen of the host; once it shows one, the
 // host reads the question (one out of shape is refused, which it does only
 // for a live view of this guest) and asks its core, which answers a display
-// it does not have as gone. The core's answers for a display that is there,
+// it does not have as gone; a page closed there lets its route go, through
+// the guest and to the host's own handler. The core's answers for a display that is there,
 // the host's own and a third machine's, are `remote_screen::tests`' (a
 // display needs a pane, which this fixture's daemon has no holder for).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -825,6 +839,9 @@ async fn a_screen_asks_its_host_where_a_display_loads_from() {
         (503, Some("not_shown")),
         "{answer}"
     );
+    // A page closed with no view open has no route there to let go.
+    let (status, _) = send_json(hyper::Method::DELETE, port, &route, &token, &ask).await;
+    assert_eq!(status, 204, "a release with no view");
     let mut view = open_view(port, &token, &host_id, &key).await;
     until(&mut view, "the host's snapshot", |frame| {
         frame["type"] == "snapshot"
@@ -841,6 +858,20 @@ async fn a_screen_asks_its_host_where_a_display_loads_from() {
         (410, Some("view_unavailable")),
         "{answer}"
     );
+    // A page closed while the view is open: the release reaches the host's
+    // own handler, which reads the question (one out of shape is refused
+    // there) and answers it.
+    let (status, _) = send_json(hyper::Method::DELETE, port, &route, &token, &ask).await;
+    assert_eq!(status, 204, "a release the host answered");
+    let (status, _) = send_json(
+        hyper::Method::DELETE,
+        port,
+        &route,
+        &token,
+        &json!({"device": ""}),
+    )
+    .await;
+    assert_eq!(status, 400, "the host read the release");
     drop(view);
     drop(running);
 }

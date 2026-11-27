@@ -26,11 +26,11 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, screen, session, shell, webC
 import fs from "node:fs";
 import path from "node:path";
 import type { TFunction } from "i18next";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import type { BrowserDevicePlacement, BrowserHostEvent, BrowserPageState, BrowserPlacement, BrowserRect, BrowserSync } from "../../../web/src/host";
 import { hostChord, isCycleCommand, keySystemOf, matchHost, releaseModifier, systemRegistry, type Command, type CommandId } from "../../../web/src/shortcuts";
 import { BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL, REMOTE_BROWSER_EVENT_CHANNEL } from "../channel";
-import { appScheme, browserPartition, deviceEmulation, fileLink, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localNetworkReach, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, offScreenBounds, offScreenEmulation, overCap, parseCommand, parseRemoteSync, parseSync, parseTarget, placeIn, popupBounds, PRESS_WITHIN_MS, protocolOf, REMOTE_BOUNDS, remoteRequest, remoteRouteAddress, routed, toBounds, viewKey } from "./browserSync";
+import { appScheme, browserPartition, deviceEmulation, fileLink, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localNetworkReach, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, offScreenBounds, offScreenEmulation, overCap, parseCommand, parseRemoteSync, parseSync, parseTarget, placeIn, popupBounds, PRESS_WITHIN_MS, protocolOf, REMOTE_BOUNDS, REMOTE_FILE_PARTITION, REMOTE_PAGE_PARTITION, remoteRequest, remoteRouteAddress, routed, sameFileAddress, toBounds, viewKey, wireFileAddress } from "./browserSync";
 import { isLoopbackHost } from "../../../web/src/loopbackHost";
 import { nextZoomFactor, type PageZoom } from "../../../web/src/zoomSteps";
 import type { HostLog } from "./log";
@@ -39,10 +39,6 @@ import { accelerator } from "./menu";
 import { errorCode, externalPartition, type ExternalFiles } from "./externalFiles";
 import { egressWords } from "./remoteEgress";
 
-/** The name every remote screen's login storage starts with (`remotePagePartition`). */
-const REMOTE_PAGE_PARTITION = "persist:hide-remote-page-";
-/** The name every remote screen's file page storage starts with (`remoteFilePartition`). */
-const REMOTE_FILE_PARTITION = "hide-remote-file-";
 
 /** Page state reports coalesce to one per view in this window, so a title ticking every frame costs one event. */
 const REPORT_COALESCE_MS = 100;
@@ -137,6 +133,13 @@ type Page = {
    * computer's screen).
    */
   own?: boolean;
+  /**
+   * A remote screen's page: the address its screen's last sync named for its
+   * display, what that computer's core holds now (a page's own move inside
+   * itself included, once its report reached the core), which its Reload
+   * asks for.
+   */
+  address?: string;
   pressedAt?: number;
   /** The window's count of views added when this page was added last, so it is raised only above a view added after it. */
   addedAt: number;
@@ -549,11 +552,12 @@ export class BrowserViews {
     else if (command === "reload") {
       // A page that failed to load has nothing to reload; its address loads
       // again. A remote screen's page asks that computer's core again for the
-      // address it last routed, the display's, not a link that failed in it;
-      // a file page of that computer always does, since its route may have
-      // ended with the screen's view.
+      // display's address as the screen last named it, not a link that
+      // failed in it nor the address its first route answered; a file page
+      // of that computer always does, since its route may have ended with
+      // the screen's view.
       const remoteFile = source.remote && page.route && isFileAddress(page.route.source_url);
-      if (page.state.failure || remoteFile) this.load(page, source.remote ? (page.route?.source_url ?? page.state.url) : page.state.url);
+      if (page.state.failure || remoteFile) this.load(page, source.remote ? (page.address ?? page.state.url) : page.state.url);
       else contents.reload();
     }
   }
@@ -1093,6 +1097,7 @@ export class BrowserViews {
       this.destroy(page, "replaced");
       return { page: this.create(source, window, workspace, display), changed: true };
     }
+    if (source.remote) page.address = display.url;
     if (display.load <= page.applied) return { page, changed: false };
     page.applied = display.load;
     this.load(page, this.addressOf(display));
@@ -1194,6 +1199,7 @@ export class BrowserViews {
       cdpFileFrame: false,
       fileRefusals: new Set(),
       remoteRefusals: new Set(),
+      ...(source.remote ? { address: display.url } : {}),
       grab: null,
       hostVerdicts: new Map(),
       ...(display.grant ? { grant: display.grant } : {}),
@@ -1220,7 +1226,7 @@ export class BrowserViews {
     const window = this.window;
     if (!window || window.isDestroyed()) return;
     const fresh = this.construct(page.source, window, page.workspace, { id: page.id, url: page.state.url, load: page.applied, grant: page.grant }, page.partition);
-    Object.assign(fresh, { placed: page.placed, shownAt: page.shownAt, idleSince: page.idleSince, device: page.device, bounds: page.bounds });
+    Object.assign(fresh, { placed: page.placed, shownAt: page.shownAt, idleSince: page.idleSince, device: page.device, bounds: page.bounds, address: page.address });
     if (fresh.bounds) fresh.view.setBounds(fresh.bounds);
     this.emulate(fresh);
     this.show(fresh, page.visible);
@@ -1297,9 +1303,9 @@ export class BrowserViews {
   /**
    * A request of a remote screen's page, which its session's proxy carries
    * to that computer: none before the proxy is set or once its source is
-   * gone, no file of this computer, nothing but its own route from a page
-   * that loads from one (a file page of that computer: its own route's
-   * origin alone), nothing on that computer's loopback from a page its
+   * gone, none in a file page's session that no page of it owns, no file of
+   * this computer, nothing but its own route from a page that loads from
+   * one (a file page of that computer: its own route's origin alone), nothing on that computer's loopback from a page its
    * route did not call its own, and nothing on a local network from a
    * public document (`localNetworkReach`). Each refusal is logged once per
    * page and reason, with its scheme alone.
@@ -1311,7 +1317,11 @@ export class BrowserViews {
     try { host = new URL(details.url).hostname; } catch { /* refused below */ }
     const route = page?.route && routed(page.route) ? page.route : null;
     const onRoute = route ? remoteRequest(route, details.url) : null;
+    // A file page's session answers only its pages' own routes: a request
+    // no page of it owns (a worker's, an unknown contents') has none.
+    const filePage = partition.startsWith(REMOTE_FILE_PARTITION);
     const reason = !source?.remote?.ready() || (page && page.source !== source) ? "not_ready"
+      : filePage && !route ? "no_page"
       : isFileAddress(details.url) || host === null ? "file"
       : onRoute ? (onRoute.cancel || onRoute.redirectURL ? "off_route" : null)
       : page?.own === false && isLoopbackHost(host) ? "not_own"
@@ -1412,7 +1422,10 @@ export class BrowserViews {
       // The core can canonicalize a checked file address while the loading
       // report is in flight. The load stamp binds this answer to its intent;
       // spelling changes within that generation must not strand the load.
-      if (this.pages.get(page.key) !== page || page.applied !== stamp || route.load !== stamp) return;
+      if (this.pages.get(page.key) !== page || page.applied !== stamp || route.load !== stamp) {
+        this.abandoned(page, route);
+        return;
+      }
       if (!loadable(route.url)) throw new Error("Resolved page address cannot be loaded");
       if (!page.grant && !page.source.remote && browserPartition(page.workspace, route.source_url, this.local.node) !== page.partition) throw new Error("Resolved page requires a different browser partition");
       if (page.source.remote) page.own = (route as ResolvedPage & { own?: boolean }).own === true;
@@ -1423,7 +1436,14 @@ export class BrowserViews {
       // The call's own promise settles with this load alone, where the page's
       // stop events would also end an earlier load or one the page began.
       return page.view.webContents.loadURL(route.url).then(
-        () => this.loadStage(page, owned, "browser.load_stopped", { outcome: "loaded" }),
+        () => {
+          this.loadStage(page, owned, "browser.load_stopped", { outcome: "loaded" });
+          // An earlier route of a remote screen's page ends with the screen's
+          // view: Back never lands on one. Moves inside this route still go
+          // back and forth.
+          const contents = page.view.webContents;
+          if (page.source.remote && routed(route) && !contents.isDestroyed()) contents.navigationHistory.clear();
+        },
         (error: unknown) => {
           // did-fail-load reports it; a load a newer one replaced is not a failure.
           const code = (error as { errno?: number }).errno;
@@ -1443,6 +1463,21 @@ export class BrowserViews {
   }
 
   /**
+   * A route that computer made for a remote screen's page, answered once no
+   * page took it (the page closed or was unloaded, or a newer load replaced
+   * it while it was asked): it goes now rather than with the screen, unless
+   * a page made again for the same display holds it, whose own close lets it
+   * go.
+   */
+  private abandoned(page: Page, route: ResolvedPage): void {
+    const remote = page.source.remote;
+    if (!remote || !routed(route)) return;
+    const current = this.pages.get(page.key);
+    if (current && current !== page && current.applied === route.load) return;
+    remote.release(page.workspace, page.id, route.load);
+  }
+
+  /**
    * Where a remote screen's page loads from: its proxy's state first, then
    * that computer's core's answer for this load (`/page-route`), for the
    * display's own address: a web page loads that address, and a file of
@@ -1456,7 +1491,11 @@ export class BrowserViews {
     if (state !== "ready") throw new RemoteRefusal(state, egressWords(state));
     const route = await remote.route(page.workspace, page.id, stamp);
     if ("refused" in route) throw new RemoteRefusal(route.refused, routeWords(route.refused));
-    if (route.load !== stamp || route.source_url !== url || !remoteRouteAddress(route)) throw new RemoteRefusal("remote_route_invalid", "routeUnavailable");
+    // A file page's answer names the same file (its query and fragment are
+    // the core's, whose report of a move can land after the question); a
+    // web page's, the same address.
+    const same = isFileAddress(url) ? sameFileAddress(route.source_url, url) : route.source_url === url;
+    if (route.load !== stamp || !same || !remoteRouteAddress(route)) throw new RemoteRefusal("remote_route_invalid", "routeUnavailable");
     return route;
   }
 
@@ -1861,17 +1900,23 @@ export class BrowserViews {
     const route = page.route;
     if (!route || !routed(route)) return raw;
     if (raw === route.url) return route.source_url;
+    // A routed file page reports a file address alone: an address that does
+    // not map back to its route (an ended route, another origin, a path
+    // outside the route) keeps the file it last showed, so the display never
+    // becomes a web address of a route.
+    const file = isFileAddress(route.source_url);
+    const kept = isFileAddress(page.state.url) ? page.state.url : route.source_url;
     try {
       const address = new URL(raw);
       const local = new URL(route.url);
       const source = new URL(route.source_url);
-      if (address.origin !== local.origin) return raw;
+      if (address.origin !== local.origin) return file ? kept : raw;
       if (source.protocol === "file:") {
         const workspace = page.workspace.split("\u0000");
         const root = route.root ?? (workspace.length === 2 ? workspace[1] : undefined);
         const prefix = `/${local.pathname.split("/")[1]}/`;
-        if (!root || !address.pathname.startsWith(prefix)) return raw;
-        return `${pathToFileURL(path.join(root, decodeURIComponent(address.pathname.slice(prefix.length)))).href}${address.search}${address.hash}`;
+        if (!root || !address.pathname.startsWith(prefix)) return kept;
+        return wireFileAddress(root, decodeURIComponent(address.pathname.slice(prefix.length)), address.search, address.hash) ?? kept;
       }
       address.host = source.host;
       address.protocol = source.protocol;
@@ -2183,6 +2228,7 @@ function routeWords(reason: string): string {
       return "remotePageLimit";
     case "view_unavailable":
     case "route_unavailable":
+    case "route_busy":
       return "routeUnavailable";
     default:
       return egressWords(reason);

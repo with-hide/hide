@@ -47,15 +47,10 @@ describe("open in default browser", () => {
     }
     expect(defaultBrowserAddress("https://example.com/", "devbox", "mac")).toBe("https://example.com/");
     expect(defaultBrowserAddress("http://localhost.example.com/", "devbox", "mac")).toBe("http://localhost.example.com/");
-  });
-
-  // An SSH device behaves as another computer's screen does: its LAN and
-  // local names are not this machine's either.
-  it("offers no LAN or local name of another machine, and this machine's own", () => {
-    for (const address of ["http://[::ffff:10.0.0.1]/", "http://192.168.0.4:8080/", "http://printer.local/", "http://nas/", "http://10.1.2.3/"]) {
-      expect(defaultBrowserAddress(address, "devbox", "mac"), address).toBeNull();
-      expect(defaultBrowserAddress(address, "mac", "mac"), address).not.toBeNull();
-    }
+    // A device's LAN page loads from this machine's network in the display
+    // too, so the default browser opens the same page (#3086).
+    expect(defaultBrowserAddress("http://[::ffff:10.0.0.1]/", "devbox", "mac")).toBe("http://[::ffff:a00:1]/");
+    expect(defaultBrowserAddress("http://printer.local/", "devbox", "mac")).toBe("http://printer.local/");
   });
 
   // In another computer's screen the default browser is the showing

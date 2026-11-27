@@ -58,7 +58,7 @@ function screen() {
     loadURL: vi.fn(() => new Promise(() => undefined)), setWindowOpenHandler: vi.fn(), setWebRTCIPHandlingPolicy: vi.fn(),
     setVisualZoomLevelLimits: vi.fn().mockResolvedValue(undefined), enableDeviceEmulation: vi.fn(), disableDeviceEmulation: vi.fn(),
     capturePage: vi.fn(async () => ({ isEmpty: () => false, toDataURL: () => "data:still" })), isCurrentlyAudible: () => false,
-    navigationHistory: { canGoBack: () => false, canGoForward: () => false }, focus: vi.fn(), stop: vi.fn(),
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false, clear: vi.fn() }, focus: vi.fn(), stop: vi.fn(),
   }) as unknown as Contents;
   native.make = (options) => {
     const view: View = { contents: contentsOf(++nextId), options: options as View["options"], setBounds: vi.fn(), setVisible: vi.fn() };
@@ -170,8 +170,10 @@ describe("a remote screen's pages", () => {
   });
 
   // After a link in the page failed, Reload asks that computer's core for the
-  // display's address again, which its answer matches, not the failed link.
-  it("reload a page whose link failed at the address its route gave", async () => {
+  // address the screen names for the display now: the display's own until
+  // the core took the failure's report, then the failed link, as this
+  // window's own Reload does.
+  it("reload a page whose link failed at the address its screen names now", async () => {
     const { subject, remote, sync, display, views, route, settle } = screen();
     sync([display("d1")]);
     await settle();
@@ -181,6 +183,13 @@ describe("a remote screen's pages", () => {
     expect(route.mock.calls.at(-1)).toEqual([workspace, "d1", 3]);
     expect(views[0]!.contents.loadURL.mock.calls.at(-1)?.[0]).toBe("https://d1.example/");
     expect(views[0]!.contents.loadURL).toHaveBeenCalledTimes(2);
+    views[0]!.contents.emit("did-fail-load", {}, -105, "NAME_NOT_RESOLVED", "https://broken.example/", true);
+    sync([display("d1", true, RECT, "https://broken.example/")]);
+    await settle();
+    await vi.advanceTimersByTimeAsync(1_000);
+    subject.remoteCommand(remote, { workspace, id: "d1" }, "reload");
+    await settle();
+    expect(views[0]!.contents.loadURL.mock.calls.at(-1)?.[0]).toBe("https://broken.example/");
   });
 
   it("tell an older Hide there to be updated rather than load its file, asking it first", async () => {
@@ -552,6 +561,148 @@ describe("a remote screen's file pages", () => {
     await settle();
     expect(views[0]!.contents.close).toHaveBeenCalled();
     expect(remote.release).toHaveBeenCalledExactlyOnceWith(workspace, "f1", 3);
+  });
+
+  // TF3 holds whoever asks: a request of a file page's session that no page
+  // of it owns (a worker's, an unknown contents') reaches nothing.
+  it("refuse every request of their storage that no page of it owns", async () => {
+    const { sync, display, route, sessions, settle } = screen();
+    route.mockImplementation(routed());
+    sync([display("f1", true, RECT, FILE)]);
+    await settle();
+    const ask = (url: string, webContentsId?: number) => {
+      native.fromId = () => null;
+      let answer: { cancel: boolean } | undefined;
+      sessions.get(FILE_PARTITION)!.beforeRequest({ url, resourceType: "xhr", ...(webContentsId === undefined ? {} : { webContentsId }) }, (given) => { answer = given; });
+      return answer?.cancel;
+    };
+    for (const url of ["https://public.example/collect", ROUTE, "http://127.0.0.1:5000/s3cret/style.css"]) {
+      expect(ask(url), url).toBe(true);
+      expect(ask(url, 99999), url).toBe(true);
+    }
+  });
+
+  // That computer's file address keeps its own system's spelling: a Windows
+  // checkout's page moved to a fragment or a query is reported under its
+  // drive, whatever system this one runs.
+  it("report a moved page under that computer's own file address", async () => {
+    const { sync, display, views, route, events, settle } = screen();
+    const windows = "file:///C:/repo/report.html";
+    route.mockImplementation(async (_workspace, _id, load) => ({ url: ROUTE, source_url: windows, load, own: true, root: "C:/repo" }));
+    sync([display("f1", true, RECT, windows)]);
+    await settle();
+    const page = views[0]!.contents;
+    page.emit("did-navigate-in-page", {}, `${ROUTE}#section`, true);
+    await settle();
+    expect(events().filter((event) => event.kind === "state").at(-1)?.state).toMatchObject({ url: "file:///C:/repo/report.html#section" });
+    page.emit("did-navigate-in-page", {}, "http://127.0.0.1:5000/s3cret/a%20b/100%25.html?v=2", true);
+    await settle();
+    expect(events().filter((event) => event.kind === "state").at(-1)?.state).toMatchObject({ url: "file:///C:/repo/a%20b/100%25.html?v=2" });
+  });
+
+  // A route answered after its page closed is let go by that answer, unless
+  // a page made again for the same display at the same load took it.
+  it("let go of a route answered after its page closed, and keep one a page made again holds", async () => {
+    const { remote, sync, display, route, settle } = screen();
+    let answer: (route: RemoteRoute) => void = () => undefined;
+    route.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    sync([display("f1", true, RECT, FILE)]);
+    await settle();
+    sync([]);
+    await settle();
+    answer({ url: ROUTE, source_url: FILE, load: 3, own: true });
+    await settle();
+    expect(remote.release).toHaveBeenCalledExactlyOnceWith(workspace, "f1", 3);
+
+    vi.mocked(remote.release).mockClear();
+    route.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    sync([display("f2", true, RECT, FILE)]);
+    await settle();
+    sync([]);
+    await settle();
+    route.mockImplementation(routed());
+    sync([display("f2", true, RECT, FILE)]);
+    await settle();
+    answer({ url: ROUTE, source_url: FILE, load: 3, own: true });
+    await settle();
+    expect(remote.release).not.toHaveBeenCalled();
+  });
+
+  // Reload asks for the address the screen names for the display now: a
+  // page that moved to an anchor reloads there, whether the core's answer
+  // came after its sync or before it, and a display that moved to another
+  // file whose first route was refused reloads the new file.
+  it("reload at the address their display holds now, not their first route's", async () => {
+    const { subject, remote, sync, display, views, route, settle } = screen();
+    let core = FILE;
+    let port = 5000;
+    route.mockImplementation(async (_workspace, _id, load) => ({ url: `http://127.0.0.1:${port}/s3cret/report%2Ehtml${new URL(core).hash}`, source_url: core, load, own: true, root: "/Users/me/repo" }));
+    sync([display("f1", true, RECT, FILE)]);
+    await settle();
+    const page = views[0]!.contents;
+    page.emit("did-navigate-in-page", {}, `${ROUTE}#results`, true);
+    core = `${FILE}#results`;
+    port = 5001;
+    subject.remoteCommand(remote, { workspace, id: "f1" }, "reload");
+    await settle();
+    expect(page.loadURL.mock.calls.at(-1)?.[0]).toBe("http://127.0.0.1:5001/s3cret/report%2Ehtml#results");
+    sync([display("f1", true, RECT, core)]);
+    await settle();
+    port = 5002;
+    await vi.advanceTimersByTimeAsync(1_000);
+    subject.remoteCommand(remote, { workspace, id: "f1" }, "reload");
+    await settle();
+    expect(page.loadURL.mock.calls.at(-1)?.[0]).toBe("http://127.0.0.1:5002/s3cret/report%2Ehtml#results");
+
+    const other = "file:///Users/me/repo/other.html";
+    route.mockResolvedValueOnce({ refused: "not_connected" });
+    sync([{ ...display("f1", true, RECT, other), load: 4 }]);
+    await settle();
+    core = other;
+    port = 5003;
+    await vi.advanceTimersByTimeAsync(1_000);
+    subject.remoteCommand(remote, { workspace, id: "f1" }, "reload");
+    await settle();
+    expect(route.mock.calls.at(-1)).toEqual([workspace, "f1", 4]);
+    expect(page.loadURL.mock.calls.at(-1)?.[0]).toBe("http://127.0.0.1:5003/s3cret/report%2Ehtml");
+  });
+
+  // An earlier route ends with the screen's view: once a new route's load
+  // commits, Back no longer reaches the ended one; whatever address the page
+  // lands on that is not its route's (an old route, another origin, a path
+  // outside the route), it reports the file it showed, never a web address.
+  // A web page of the screen keeps its history through a new load.
+  it("leave no ended route in their history and report a file address alone", async () => {
+    const { subject, remote, sync, display, views, route, events, settle } = screen();
+    route.mockImplementation(routed());
+    sync([display("f1", true, RECT, FILE)]);
+    await settle();
+    const page = views[0]!.contents;
+    page.loadURL.mockResolvedValue(undefined);
+    route.mockImplementation(routed("http://127.0.0.1:5001/n3w/report%2Ehtml"));
+    subject.remoteCommand(remote, { workspace, id: "f1" }, "reload");
+    await settle();
+    expect((page.navigationHistory as { clear: ReturnType<typeof vi.fn> }).clear).toHaveBeenCalledOnce();
+    const reported = () => events().filter((event) => event.kind === "state").at(-1)?.state as { url: string } | undefined;
+    page.emit("did-navigate", {}, ROUTE);
+    await settle();
+    expect(reported()?.url).toBe(FILE);
+    page.emit("did-fail-load", {}, -20, "BLOCKED_BY_CLIENT", ROUTE, true);
+    await settle();
+    expect(reported()?.url).toBe(FILE);
+    page.emit("did-navigate-in-page", {}, "http://127.0.0.1:5001/x", true);
+    await settle();
+    expect(reported()?.url).toBe(FILE);
+
+    route.mockImplementation(async (_workspace, _id, load) => ({ url: "https://d1.example/", source_url: "https://d1.example/", load, own: true }));
+    sync([display("d1")]);
+    await settle();
+    const web = views.at(-1)!.contents;
+    web.loadURL.mockResolvedValue(undefined);
+    sync([{ ...display("d1"), load: 4 }]);
+    await settle();
+    expect(web.loadURL).toHaveBeenCalledTimes(2);
+    expect((web.navigationHistory as { clear: ReturnType<typeof vi.fn> }).clear).not.toHaveBeenCalled();
   });
 
   it("say so when the screen holds as many routes as it may", async () => {

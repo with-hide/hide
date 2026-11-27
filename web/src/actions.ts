@@ -103,7 +103,7 @@ import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type ExplorerTarget, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import { isRemoteView, remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
-import { isLocalNetworkHost } from "./loopbackHost";
+import { isLocalNetworkHost, isLoopbackHost } from "./loopbackHost";
 import type { PairingVerb } from "./pairing";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
@@ -4358,14 +4358,22 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       // or an Overview; a display opened there would land out of sight.
       const inFront = ui().screen?.kind === "workspace" ? frontViewWorkspace() : null;
       // The default browser is the showing window's machine's, whose
-      // loopback, LAN and local names are not those of another machine: a
-      // link in another computer's screen, or in an SSH device's pane, to
-      // one of them opens as a page here, which reaches that machine's
-      // loopback through it (docs/BROWSER_DISPLAYS.md, A page in another
+      // loopback is not another machine's: a link in another computer's
+      // screen to that computer's loopback, LAN or local names, and one in
+      // an SSH device's pane to that device's loopback, opens as a page
+      // here, which reaches it through that machine. A device's LAN or
+      // local name has no way through the device yet, so it keeps the
+      // default browser (docs/BROWSER_DISPLAYS.md, A page in another
       // computer's screen; Open in default browser).
-      const elsewhere = isRemoteView() || (openerPane !== undefined && remoteTargetOfPane(rest(), openerPane) !== null);
-      if (external && inFront && elsewhere && localNetworkLink(url)) {
-        this.openBrowser(url, undefined, undefined, undefined, openerPane);
+      // Desk's room shows a device session's pages too, as a page of its
+      // desk whose machine is the session's; with neither in front the link
+      // goes nowhere rather than to this machine's browser.
+      const onDevice = openerPane !== undefined && remoteTargetOfPane(rest(), openerPane) !== null;
+      const throughThatMachine = isRemoteView() ? localNetworkLink(url) : onDevice && loopbackLink(url);
+      if (throughThatMachine) {
+        const target = inFront ?? (ui().screen?.kind === "desk" ? frontViewWorkspace() : null);
+        if (!target) return diagnostic("open link: another machine's local address with no Workspace or Desk in front");
+        this.openBrowser(url, target, undefined, undefined, openerPane);
         return;
       }
       if (external || !inFront) {
@@ -4645,6 +4653,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       });
     },
   };
+}
+
+/** Whether `url` is a web address on its machine's loopback. */
+export function loopbackLink(url: string): boolean {
+  try {
+    const address = new URL(url);
+    return (address.protocol === "http:" || address.protocol === "https:") && isLoopbackHost(address.hostname);
+  } catch {
+    return false;
+  }
 }
 
 /** Whether `url` is a web address on its machine's loopback, its LAN or a local name. */

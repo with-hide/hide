@@ -171,15 +171,15 @@ describe("a link of another computer's screen", () => {
   });
 });
 
-// An SSH device and another computer's screen behave the same: a ⌘-click
-// (Ctrl off macOS) on the device's loopback, LAN or local name in its pane
-// opens a page in the Workspace in front, whose loopback page reaches the
-// device through its link, never this machine's default browser, which
-// would read `localhost` as this machine's. A link of this machine's own
-// pane, and a public one of the device's, still open in the default
-// browser.
+// A ⌘-click (Ctrl off macOS) on an SSH device's `localhost` in its pane opens
+// a page in the Workspace in front, whose loopback page reaches the device
+// through its link, never this machine's default browser, which would read
+// `localhost` as this machine's. The device's LAN and local names have no
+// way through the device yet (#3086), so they keep the default browser, as
+// a public link of the device's pane and a link of this machine's own pane
+// do.
 describe("a link of an SSH device's pane", () => {
-  it("opens the device's local address as a page in front, and this machine's or a public one in the default browser", () => {
+  it("opens the device's loopback as a page in front, and its LAN, a public or this machine's link in the default browser", () => {
     const saved = useShellStore.getState();
     const savedUi = useUiStore.getState();
     const opened = vi.fn();
@@ -190,20 +190,31 @@ describe("a link of an SSH device's pane", () => {
       useUiStore.setState({ screen: { kind: "workspace" } as never });
       const sent: Parameters<DispatchFn>[0][] = [];
       const actions = createActions((event) => { sent.push(event); return true; });
-      for (const url of ["http://localhost:5173/", "http://192.168.0.4:8080/", "http://printer.local/"]) actions.openLink(url, true, "w2:p1");
+      for (const url of ["http://localhost:5173/", "http://127.0.0.1:8080/x", "http://[::1]:3000/"]) actions.openLink(url, true, "w2:p1");
       const pages = sent.filter((event) => event.kind === "browser_open").map((event) => event.payload as { url: string; workspace: { device_id: string }; opener_pane?: string });
       expect(pages.map((page) => [page.url, page.workspace.device_id, page.opener_pane])).toEqual([
         ["http://localhost:5173/", "devbox", "w2:p1"],
-        ["http://192.168.0.4:8080/", "devbox", "w2:p1"],
-        ["http://printer.local/", "devbox", "w2:p1"],
+        ["http://127.0.0.1:8080/x", "devbox", "w2:p1"],
+        ["http://[::1]:3000/", "devbox", "w2:p1"],
       ]);
       expect(opened).not.toHaveBeenCalled();
-      actions.openLink("https://github.com/with-hide/hide", true, "w2:p1");
+      for (const url of ["http://192.168.0.4:8080/", "http://printer.local/", "https://github.com/with-hide/hide"]) actions.openLink(url, true, "w2:p1");
       actions.openLink("http://localhost:5173/", true, "w1:p1");
-      expect(opened.mock.calls).toEqual([
-        ["https://github.com/with-hide/hide", "_blank", "noopener,noreferrer"],
-        ["http://localhost:5173/", "_blank", "noopener,noreferrer"],
-      ]);
+      expect(opened.mock.calls.map(([url]) => url)).toEqual(["http://192.168.0.4:8080/", "http://printer.local/", "https://github.com/with-hide/hide", "http://localhost:5173/"]);
+      expect(sent.filter((event) => event.kind === "browser_open")).toHaveLength(3);
+
+      // In Desk's room the page opens on Desk's desk, for the device's session
+      // there; with neither a Workspace nor Desk in front it goes nowhere,
+      // never to this machine's default browser.
+      useShellStore.setState({ rest: { workspace_view: { device_id: "devbox", path: "/srv/web", layout: null }, desk_view: { device_id: "mac", path: "hide:desk", layout: null }, status: { remote: [device] } } as never });
+      useUiStore.setState({ screen: { kind: "desk" } as never });
+      for (const external of [true, false]) actions.openLink("http://localhost:5173/", external, "w2:p1");
+      const desk = sent.filter((event) => event.kind === "browser_open").slice(3).map((event) => event.payload as { workspace: { path: string }; opener_pane?: string });
+      expect(desk.map((page) => [page.workspace.path, page.opener_pane])).toEqual([["hide:desk", "w2:p1"], ["hide:desk", "w2:p1"]]);
+      useUiStore.setState({ screen: { kind: "missions" } as never });
+      actions.openLink("http://localhost:5173/", true, "w2:p1");
+      expect(sent.filter((event) => event.kind === "browser_open")).toHaveLength(5);
+      expect(opened).toHaveBeenCalledTimes(4);
     } finally {
       useShellStore.setState(saved, true);
       useUiStore.setState(savedUi, true);
