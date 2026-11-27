@@ -11,7 +11,9 @@ import { fileWords, keepSent, mentionAt, pickCommand, pickWords, useComposerTray
 import { sessionBarSlots, sessionMentions, sessionWords, switchCommand, useMentionFiles } from "../../sessionInput";
 import { checkoutOfPane, type DeskAgentId } from "../../snapshot";
 import { useSessionThread } from "../../sessionThread";
+import { sessionDraft } from "../../sessionDrafts";
 import { useShellStore } from "../../store";
+import { useUiStore } from "../../ui";
 import { threadInputHeld, threadScreen } from "../../threadView";
 import type { ReactNode } from "react";
 import type { AskLine } from "../open-asks";
@@ -69,7 +71,11 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   const refusal = useShellStore((s) => s.composerRefusal);
   const screen = useMemo(() => threadScreen(thread, history, { plans, missions }, rows), [thread, history, plans, missions, rows]);
 
-  const [text, setText] = useState("");
+  // The words are the pane's draft, kept while another session is open or Desk is left, and cleared once sent.
+  const text = useUiStore((s) => (paneId ? sessionDraft(s.sessionDrafts, paneId) : ""));
+  const setText = (value: string) => {
+    if (paneId) useUiStore.getState().setSessionDraft(paneId, value);
+  };
   const [caret, setCaret] = useState(0);
   const box = useRef<HTMLTextAreaElement>(null);
   const tray = useComposerTray();
@@ -203,9 +209,14 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
     actions.readOlderThread(thread.generation);
   };
 
+  // Only a press made while this session is open takes the keyboard: an earlier session's `답하기` left the count
+  // raised, and a session opened later must not read it as its own.
   const root = useRef<HTMLDivElement>(null);
+  const answered = useRef(answer);
   useEffect(() => {
-    if (answer > 0) root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]")?.focus();
+    if (answer === answered.current) return;
+    answered.current = answer;
+    root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]")?.focus();
   }, [answer]);
 
   if (!job && !foot) {

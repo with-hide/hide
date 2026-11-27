@@ -13,7 +13,8 @@ import type { CycleItem } from "./recent";
 import type { NumberedFamily } from "./shortcuts";
 import type { ViewFocusRequest, ViewWorkspace } from "./viewLayout";
 import type { KeyboardOwner } from "./viewFocus";
-import { DESK_ROOM_CLOSED, type DeskRoomWindow } from "./deskRoom";
+import { DESK_ROOM_CLOSED, leaveRoom, type DeskRoomWindow } from "./deskRoom";
+import { keepSessionDraft, NO_SESSION_DRAFTS, type SessionDrafts } from "./sessionDrafts";
 import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
 import { NO_CALLS_SEEN, NO_DRAWN_PAGES, type CallsSeen, type DrawnPages, type LaneMode, type LaneSide, type LaneView } from "./workspace";
@@ -320,7 +321,10 @@ type UiStore = {
   setSharing: (sharing: boolean) => void;
   deskDraft: DeskDraft;
   setDeskDraft: (draft: DeskDraft) => void;
-  /** Desk's room in this window: the session open beside Desk and Desk's desk (`deskRoom.ts`); closed each time the room is left (PRD desk-2-ui B26). */
+  /** What each session's input beside Desk holds, kept across opening another session and leaving Desk (`sessionDrafts.ts`). */
+  sessionDrafts: SessionDrafts;
+  setSessionDraft: (pane: string, text: string) => void;
+  /** Desk's room in this window: the session open beside Desk and Desk's desk (`deskRoom.ts`); its desk folds each time the room is left (PRD desk-2-ui B26), the session staying (`leaveRoom`). */
   deskRoom: DeskRoomWindow;
   setDeskRoom: (change: (room: DeskRoomWindow) => DeskRoomWindow) => void;
   /** The pane `터미널 ⌘J` left Desk for, which ⌘J on it brings back beside Desk (B7). */
@@ -580,6 +584,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setSharing: (sharing) => set({ sharing }),
   deskDraft: { text: "", mentions: [] },
   setDeskDraft: (deskDraft) => set({ deskDraft }),
+  sessionDrafts: NO_SESSION_DRAFTS,
+  setSessionDraft: (pane, text) => set((state) => ({ sessionDrafts: keepSessionDraft(state.sessionDrafts, pane, text) })),
   deskRoom: DESK_ROOM_CLOSED,
   setDeskRoom: (change) => set((state) => ({ deskRoom: change(state.deskRoom) })),
   deskReturn: null,
@@ -770,13 +776,15 @@ export const useUiStore = create<UiStore>((set, get) => ({
   },
 }));
 
-// Desk's room is this window's and closes whenever the screen leaves Desk
-// (PRD desk-2-ui B26), whichever way the screen moved: a setter, a restore or
-// a direct `setState`. Coming back to Desk, by ⌘J or any other way, spends
+// Desk's room is this window's and folds its desk whenever the screen leaves
+// Desk (PRD desk-2-ui B26), whichever way the screen moved: a setter, a
+// restore or a direct `setState`; the session beside Desk stays for the
+// return (`leaveRoom`). Coming back to Desk, by ⌘J or any other way, spends
 // the pane `터미널 ⌘J` left for: its `Desk로` and ⌘J are one round trip (B7).
 useUiStore.subscribe((state, previous) => {
-  if (previous.screen?.kind === "desk" && state.screen?.kind !== "desk" && state.deskRoom !== DESK_ROOM_CLOSED) {
-    useUiStore.setState({ deskRoom: DESK_ROOM_CLOSED });
+  if (previous.screen?.kind === "desk" && state.screen?.kind !== "desk") {
+    const left = leaveRoom(state.deskRoom);
+    if (left !== state.deskRoom) useUiStore.setState({ deskRoom: left });
   }
   if (previous.screen?.kind !== "desk" && state.screen?.kind === "desk" && state.deskReturn !== null) {
     useUiStore.setState({ deskReturn: null });

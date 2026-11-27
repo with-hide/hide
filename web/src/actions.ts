@@ -95,7 +95,7 @@ import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
 import { deskOn, laneCards } from "./desk";
-import { closeSession as closeDeskSession, hideDesk, openSession as openDeskSession, showDesk, toggleExpanded as toggleDeskExpanded, toggleExplorer as toggleDeskExplorer } from "./deskRoom";
+import { closeSession as closeDeskSession, deskShown, hideDesk, openSession as openDeskSession, showDesk, toggleExpanded as toggleDeskExpanded, toggleExplorer as toggleDeskExplorer } from "./deskRoom";
 import { deskOpenSend, deskTabCount, deskViewOf, deskWorkspaceOf, DESK_SCREEN, isDeskWorkspace, type DeskOpen } from "./deskDesk";
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type ExplorerTarget, type PendingClose, type PendingViewsClose } from "./ui";
@@ -2832,8 +2832,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (ui().screen?.kind !== "desk") this.openDesk();
       ui().setDeskRoom(showDesk);
       const desk = deskWorkspaceOf(rest());
-      if (sent.focus && desk) ui().setViewFocusRequest("card" in sent.focus ? sent.focus : { workspace: workspaceKey(desk), opened: sent.focus.opened });
-      dispatch({ schema_version: 2, kind: "desk_view_open", payload: sent.send });
+      let payload = sent.send;
+      if ("card" in sent.focus) ui().setViewFocusRequest(sent.focus);
+      else if (desk && "receipt" in sent.focus) payload = { ...payload, request_id: followBrowserOpen(desk) };
+      else if (desk && "opened" in sent.focus) ui().setViewFocusRequest({ workspace: workspaceKey(desk), opened: sent.focus.opened });
+      dispatch({ schema_version: 2, kind: "desk_view_open", payload });
     },
 
     /**
@@ -4081,29 +4084,24 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     closeLane,
 
     toggleLane() {
-      // In Desk's room the right side is the session panel, which `deskToggleSession` closes and opens.
-      if (ui().screen?.kind === "desk") return this.deskToggleSession();
+      // In Desk's room the right side is Desk's desk, which `deskToggleDesk` opens and folds.
+      if (ui().screen?.kind === "desk") return this.deskToggleDesk();
       return toggleLane();
     },
 
     /**
-     * ⌘E in Desk's room (B6; operator decision 2026-11-25, replacing PRD desk-2-ui D-13's nothing): the session
-     * panel closes as `‹ 한눈에` does, and pressed again opens the session just closed, as a
-     * sidebar row's press does, with the keyboard in its input box as a work tab's ⌘E gives it back to the pane. A
-     * session whose pane is gone since (closed, archived, woken in another pane) is not reopened as an empty
-     * panel: the memory is cleared and only the log says so.
+     * ⌘E in Desk's room (operator decision 2026-11-27, replacing 2026-11-25's close and reopen of the session): Desk's
+     * desk shows, with the keyboard in its area in front, as a work tab's ⌘E opens its right lane, and pressed again
+     * folds it, its tabs kept, the keyboard going back to where it was. The session beside Desk stays as it is; `‹ 한눈에`
+     * and Escape close it. A desk with no tab has nothing to show, which only the log says.
      */
-    deskToggleSession() {
-      const room = ui().deskRoom;
-      if (room.session) return ui().setDeskRoom(closeDeskSession);
-      const pane = room.closed;
-      if (!pane) return diagnostic("toggle_lane: no session was closed beside Desk to open again");
-      const state = useShellStore.getState();
-      if (!agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).has(pane)) {
-        ui().setDeskRoom((now) => ({ ...now, closed: null }));
-        return diagnostic(`toggle_lane: the session closed beside Desk (${pane}) is gone`);
-      }
-      this.openDeskSession(pane, { answer: true });
+    deskToggleDesk() {
+      const view = deskViewOf(rest());
+      const tabs = deskTabCount(view);
+      if (deskShown(ui().deskRoom, tabs)) return ui().setDeskRoom(hideDesk);
+      if (!view || tabs === 0) return diagnostic("toggle_lane: Desk's desk holds no tab to show");
+      ui().setDeskRoom(showDesk);
+      ui().setViewFocusRequest({ workspace: workspaceKey(view), areaId: view.layout.active_area });
     },
 
     setWorkspaceView,

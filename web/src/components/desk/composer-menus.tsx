@@ -3,7 +3,7 @@ import type { DeskMention } from "../../desk";
 import { commandAt, commandRows, mentionAt, mentionTree, type MentionFile, type MentionProject, type MentionSession } from "../../deskComposer";
 import { composingKey } from "../../keys";
 import type { DeskCommand, DeskCommandsUnread, DeskMentions } from "../../snapshot";
-import { DeskCommandMenu, type DeskCommandPanel } from "./desk-command-menu";
+import { DeskCommandMenu, type DeskCommandPanel, type HideCommand } from "./desk-command-menu";
 import { DeskMentionMenu } from "./desk-mention-menu";
 
 /** Where the `@` menu stands: the `@` Esc closed, the project ⇥ entered, the highlighted row and the operator's folds. */
@@ -11,6 +11,10 @@ type MenuPlace = { dismissed: number | null; entered: string | null; active: str
 
 const NO_PLACE: MenuPlace = { dismissed: null, entered: null, active: "", folds: {} };
 const NO_COMMANDS: readonly DeskCommand[] = [];
+const NO_OWN: readonly HideCommand[] = [];
+
+/** A Hide row's value in the `/` menu, apart from every agent command's name, which starts with its `/` or `$`. */
+const ownValue = (command: HideCommand) => `hide:${command.id}`;
 
 /** What one composer's `/` and `@` menus read, and what a pick writes into its box. */
 export type ComposerMenuSource = {
@@ -22,6 +26,11 @@ export type ComposerMenuSource = {
    * is on its way. None for a box with no agent.
    */
   commands: { agent: string; list: readonly DeskCommand[] | null; unread?: DeskCommandsUnread | null; opening?: boolean } | null;
+  /**
+   * Hide's own rows at the head of the `/` menu, above the agent's commands, the same for every agent (Desk's
+   * `새 대화`); a pick runs it rather than writing words. None in a session's box.
+   */
+  own?: readonly HideCommand[];
   /** Called once each time the `/` menu opens, so the core can check whether the agent's list moved. */
   onCommandsOpen?: () => void;
   mentions: DeskMentions | null;
@@ -53,7 +62,7 @@ export type ComposerMenus = {
  * a pick goes to the caller, which writes it into its box its own way.
  */
 export function useComposerMenus(source: ComposerMenuSource): ComposerMenus {
-  const { text, caret, commands, mentions, files = [] } = source;
+  const { text, caret, commands, mentions, files = [], own = NO_OWN } = source;
   const [menu, setMenu] = useState<MenuPlace>(NO_PLACE);
   // The `/` menu's highlighted row, and whether Esc closed it for the `/` word the box starts with now.
   const [commandMenu, setCommandMenu] = useState<{ active: string; dismissed: boolean }>({ active: "", dismissed: false });
@@ -71,20 +80,25 @@ export function useComposerMenus(source: ComposerMenuSource): ComposerMenus {
       ? [...shownFiles.map((file) => `file:${file.relative_path}`), ...[...tree.rows, ...tree.found].map((row) => `session:${row.session.id}`), ...tree.projects.map((project) => `project:${project.id}`)]
       : [];
 
-  // The `/` menu: open while the box starts with a `/` word the caret is in. It lists the agent's commands that match;
-  // with none matching it says so, and before the agent ever sent a list it says that Hide is reading it or why it
-  // has none. An agent whose session sent an empty list has no menu; ↵ sends when it lists nothing.
+  // The `/` menu: open while the box starts with a `/` word the caret is in. Hide's own rows that match come first; then
+  // the agent's commands that match; with none matching it says so, and before the agent ever sent a list it says
+  // that Hide is reading it or why it has none. An agent whose session sent an empty list has no part of the menu;
+  // ↵ sends when the menu lists nothing.
   const slash = commandAt(text, caret);
   const list = commands?.list ?? null;
+  const ownHits = slash ? ownRows(own, slash.query) : NO_OWN;
   const commandHits = slash && list ? commandRows(list, slash.query) : NO_COMMANDS;
   const unread = commands?.unread ?? null;
   const commandPanel: DeskCommandPanel | null = !slash || !commands ? null
     : list === null ? (unread === "reading" || commands.opening ? { kind: "waiting" } : unread ? { kind: "unread", why: unread } : { kind: "unknown" })
     : list.length === 0 ? null
     : commandHits.length > 0 ? { kind: "rows", commands: commandHits }
+    // A Hide row that matches is the menu's answer; the agent's part then says nothing.
+    : ownHits.length > 0 ? null
     : { kind: "none" };
-  const commandOpen = commandPanel !== null && !commandMenu.dismissed;
-  const commandActive = commandHits.some((command) => command.name === commandMenu.active) ? commandMenu.active : (commandHits[0]?.name ?? "");
+  const commandValues = [...ownHits.map(ownValue), ...commandHits.map((command) => command.name)];
+  const commandOpen = (commandPanel !== null || ownHits.length > 0) && !commandMenu.dismissed;
+  const commandActive = commandValues.includes(commandMenu.active) ? commandMenu.active : (commandValues[0] ?? "");
   const inSlash = slash !== null;
   useEffect(() => {
     if (!inSlash && commandMenu.dismissed) setCommandMenu({ active: "", dismissed: false });
@@ -97,14 +111,17 @@ export function useComposerMenus(source: ComposerMenuSource): ComposerMenus {
     if (inSlash && hasCommands) onCommandsOpen.current?.();
   }, [inSlash, hasCommands]);
   const menuOpen = commandOpen || (at !== null && menu.dismissed !== at.start && (values.length > 0 || tree !== null));
-  const menuEmpty = commandOpen ? commandHits.length === 0 : menuOpen && values.length === 0;
+  const menuEmpty = commandOpen ? commandValues.length === 0 : menuOpen && values.length === 0;
   const active = values.includes(menu.active) ? menu.active : (values[0] ?? "");
 
-  const pickCommandRow = (name: string) => {
-    const command = commandHits.find((one) => one.name === name);
-    if (!slash || !command) return;
+  const pickCommandRow = (value: string) => {
+    if (!slash) return;
+    const mine = ownHits.find((one) => ownValue(one) === value);
+    const command = commandHits.find((one) => one.name === value);
+    if (!mine && !command) return;
     setCommandMenu({ active: "", dismissed: true });
-    source.onCommand(slash, command);
+    if (mine) mine.run();
+    else if (command) source.onCommand(slash, command);
   };
   const pick = (mention: DeskMention) => {
     if (!at) return;
@@ -138,12 +155,11 @@ export function useComposerMenus(source: ComposerMenuSource): ComposerMenus {
   const onCommandKey = (event: KeyboardEvent<HTMLElement>) => {
     const key = event.key;
     // With no rows the panel's only key is Esc; ↵ sends the words.
-    if (commandHits.length === 0 && key !== "Escape") return;
+    if (commandValues.length === 0 && key !== "Escape") return;
     if (key === "ArrowDown" || key === "ArrowUp") {
       event.preventDefault();
-      const names = commandHits.map((command) => command.name);
-      const index = names.indexOf(commandActive);
-      setCommandMenu({ ...commandMenu, active: names[(index + (key === "ArrowDown" ? 1 : names.length - 1)) % names.length]! });
+      const index = commandValues.indexOf(commandActive);
+      setCommandMenu({ ...commandMenu, active: commandValues[(index + (key === "ArrowDown" ? 1 : commandValues.length - 1)) % commandValues.length]! });
     } else if ((key === "Enter" && !event.shiftKey) || (key === "Tab" && !event.shiftKey)) {
       event.preventDefault();
       pickCommandRow(commandActive);
@@ -196,13 +212,15 @@ export function useComposerMenus(source: ComposerMenuSource): ComposerMenus {
     }
   };
 
-  const panel = commandOpen && commandPanel ? (
+  const panel = commandOpen ? (
     <DeskCommandMenu
       agent={commands?.agent ?? ""}
+      own={ownHits}
       panel={commandPanel}
       query={slash?.query ?? ""}
       active={commandActive}
-      onActive={(name) => setCommandMenu({ ...commandMenu, active: name })}
+      onActive={(value) => setCommandMenu({ ...commandMenu, active: value })}
+      onPickOwn={(command) => pickCommandRow(ownValue(command))}
       onPick={(command) => pickCommandRow(command.name)}
     />
   ) : menuOpen && at && tree ? (
@@ -232,4 +250,11 @@ export function useComposerMenus(source: ComposerMenuSource): ComposerMenus {
       else if (at) setMenu({ ...menu, dismissed: at.start });
     },
   };
+}
+
+/** Hide's rows whose name holds what follows `/`, case aside, in their own order. */
+export function ownRows(own: readonly HideCommand[], query: string): readonly HideCommand[] {
+  if (query === "") return own;
+  const needle = query.toLocaleLowerCase();
+  return own.filter((command) => command.name.toLocaleLowerCase().includes(needle));
 }

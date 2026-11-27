@@ -7,7 +7,7 @@
 // is writing, where the `@` menu is, and the room's window state
 // (`deskRoom.ts`), which the core keeps only the widths of.
 
-import { LoaderCircleIcon, PlayIcon } from "lucide-react";
+import { LoaderCircleIcon, MessageSquarePlusIcon, PlayIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "./actions";
@@ -33,7 +33,7 @@ import { useElapsed } from "./components/elapsed";
 import { askIdentity, inputFailure, noticeText } from "./mobile/protocol";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { commandLabel } from "./shortcutLabels";
-import { deskReturn, deskReturnWords, leaveDesk } from "./keyboard";
+import { leaveDesk } from "./keyboard";
 import { keepSent, outgoing, pickCommand, pickMention, useComposerTray } from "./deskComposer";
 import { refusalText, stageDeskFiles } from "./attachments";
 import { DeskChat, DeskEmpty, type DeskChatActions, type DeskNoticeAction } from "./components/desk/desk-chat";
@@ -286,6 +286,11 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     onCommandsOpen: agent ? () => actions.deskCommandsCheck(agent.id) : undefined,
     mentions,
     projects: true,
+    // Hide's own row above the agent's commands, the same for every agent: the `/` word goes and a new conversation starts.
+    own: [{ id: "new_conversation", name: t("desk.newConversation"), description: t("desk.command.newConversationHint"), icon: MessageSquarePlusIcon, run: () => {
+      writeDraft({ draft: { text: "", mentions: [] }, caret: 0 });
+      actions.deskNewConversation();
+    } }],
     onCommand: (at, command) => writeDraft(pickCommand(draft, at, command)),
     onMention: (at, mention) => writeDraft(pickMention(draft, at, mention)),
   });
@@ -378,7 +383,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
           actions={actions}
           room={room}
           chat={(
-            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} onGlance={glanceFolded ? () => actions.deskGlanceFold(false) : null} />} composer={composer} tray={tray} scrollRef={scroller}>
+            <DeskChatColumn head={<DeskChatHead onGlance={glanceFolded ? () => actions.deskGlanceFold(false) : null} />} composer={composer} tray={tray} scrollRef={scroller}>
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
