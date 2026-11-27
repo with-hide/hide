@@ -3756,30 +3756,24 @@ fn dispatch_window_focus(
     screen: Option<crate::demand::FocusScreen>,
 ) {
     let screen = screen.map(crate::demand::FocusScreen::as_str);
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "window_focus.observation",
-            "connection": connection,
-            "screen": screen,
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "window_focus.observation",
+        "connection": connection,
+        "screen": screen,
+    }));
     let event = json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "window_focus",
         "payload": {"focused": screen.is_some(), "screen": screen.unwrap_or("workspace")},
     });
     if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
-        eprintln!(
-            "{}",
-            json!({
-                "component": "hided",
-                "kind": "window_focus.observation_failed",
-                "connection": connection,
-                "message": error,
-            })
-        );
+        hide_core::diagnostic!(json!({
+            "component": "hided",
+            "kind": "window_focus.observation_failed",
+            "connection": connection,
+            "message": error,
+        }));
     }
 }
 
