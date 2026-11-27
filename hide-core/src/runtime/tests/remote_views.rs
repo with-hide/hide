@@ -17,7 +17,7 @@ use crate::runtime::look::LookScreen;
 use serde_json::json;
 
 /// The key of the machine whose view chose the look.
-fn guest() -> String {
+pub(super) fn guest() -> String {
     "ab".repeat(32)
 }
 
@@ -26,18 +26,18 @@ fn other() -> String {
     "cd".repeat(32)
 }
 
-fn event(kind: &str, payload: serde_json::Value) -> Vec<u8> {
+pub(super) fn event(kind: &str, payload: serde_json::Value) -> Vec<u8> {
     serde_json::to_vec(&json!({"schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload}))
         .unwrap()
 }
 
 /// hided names every machine whose view of this one is seated now.
-fn views(runtime: &mut Runtime, machines: &[String]) -> bool {
+pub(super) fn views(runtime: &mut Runtime, machines: &[String]) -> bool {
     runtime.dispatch_json(&event("remote_views", json!({"machines": machines})))
 }
 
 /// The operator chooses `pane` on `screen`, as a click on its row sends it.
-fn choose(runtime: &mut Runtime, pane: &str, screen: LookScreen) {
+pub(super) fn choose(runtime: &mut Runtime, pane: &str, screen: LookScreen) {
     runtime.dispatch_json_from(
         &event("focus_pane", json!({"pane_id": pane, "origin": "operator"})),
         screen,
@@ -45,7 +45,7 @@ fn choose(runtime: &mut Runtime, pane: &str, screen: LookScreen) {
 }
 
 /// The row of this machine's `pane`: whether it is 읽을 것, and its group.
-fn row(runtime: &Runtime, pane: &str) -> (bool, String) {
+pub(super) fn row(runtime: &Runtime, pane: &str) -> (bool, String) {
     let row = runtime
         .snapshot
         .navigator

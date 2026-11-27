@@ -141,6 +141,86 @@ impl FocusDemand {
     }
 }
 
+/// Which machine's screen a window shows (`window_screen`): this machine's
+/// own, or another computer's in the rail's tile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowScreen {
+    Own,
+    Computer,
+}
+
+impl WindowScreen {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Own => "own",
+            Self::Computer => "computer",
+        }
+    }
+
+    pub fn parse(screen: &str) -> Option<Self> {
+        match screen {
+            "own" => Some(Self::Own),
+            "computer" => Some(Self::Computer),
+            _ => None,
+        }
+    }
+}
+
+/// What this machine's windows show (`window_screen`): each connection
+/// reports its own, whether or not it holds the keyboard, and the core hears
+/// another computer's screen only while every window that reports shows one,
+/// so a look chosen on this machine waits until a window shows its own
+/// screen again (`docs/status-model.md`, Hide owns the read axis). No window
+/// reporting is this machine's own, as before windows reported. A connection
+/// that closes lets go of its report.
+#[derive(Default)]
+pub struct ScreenDemand {
+    shown: Mutex<HashMap<u64, WindowScreen>>,
+}
+
+impl ScreenDemand {
+    fn summed(shown: &HashMap<u64, WindowScreen>) -> WindowScreen {
+        if shown.is_empty() || shown.values().any(|screen| *screen == WindowScreen::Own) {
+            WindowScreen::Own
+        } else {
+            WindowScreen::Computer
+        }
+    }
+
+    /// Records one connection's report, or lets it go with none. When that
+    /// changes what the core should hold, `announce` receives it, called
+    /// while the demand is still locked, so two changes reach the core in the
+    /// order they happened.
+    pub fn set(
+        &self,
+        connection: u64,
+        screen: Option<WindowScreen>,
+        announce: impl FnOnce(WindowScreen),
+    ) -> Option<WindowScreen> {
+        let mut shown = lock(&self.shown);
+        let before = Self::summed(&shown);
+        match screen {
+            Some(screen) => shown.insert(connection, screen),
+            None => shown.remove(&connection),
+        };
+        let after = Self::summed(&shown);
+        let changed = (before != after).then_some(after);
+        if let Some(now) = changed {
+            announce(now);
+        }
+        changed
+    }
+
+    /// Drops whatever report a closed connection held.
+    pub fn release(
+        &self,
+        connection: u64,
+        announce: impl FnOnce(WindowScreen),
+    ) -> Option<WindowScreen> {
+        self.set(connection, None, announce)
+    }
+}
+
 /// Items a single window may hold the origin of at once: its panel and its
 /// Start dialog, with room for a few left open.
 pub const ORIGIN_HOLDS_PER_CONNECTION: usize = 8;
@@ -330,6 +410,36 @@ mod tests {
                 Some(FocusScreen::Workspace),
                 Some(FocusScreen::Desk),
                 None,
+            ]
+        );
+    }
+
+    /// Another computer's screen reaches the core only while every window
+    /// that reports shows one; one window on this machine's own screen, or
+    /// none reporting, is this machine's own, and a closed window lets go.
+    #[test]
+    fn the_core_hears_another_computer_only_while_no_window_shows_its_own() {
+        let demand = ScreenDemand::default();
+        let heard = std::cell::RefCell::new(Vec::new());
+        let say = |now| heard.borrow_mut().push(now);
+        demand.set(1, Some(WindowScreen::Own), say);
+        demand.set(1, Some(WindowScreen::Computer), say);
+        demand.set(1, Some(WindowScreen::Computer), say);
+        demand.set(2, Some(WindowScreen::Own), say);
+        demand.set(2, Some(WindowScreen::Computer), say);
+        demand.release(2, say);
+        demand.release(1, say);
+        demand.set(3, Some(WindowScreen::Computer), say);
+        demand.set(3, Some(WindowScreen::Own), say);
+        assert_eq!(
+            heard.into_inner(),
+            [
+                WindowScreen::Computer,
+                WindowScreen::Own,
+                WindowScreen::Computer,
+                WindowScreen::Own,
+                WindowScreen::Computer,
+                WindowScreen::Own,
             ]
         );
     }

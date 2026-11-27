@@ -8,8 +8,9 @@ const MAX_PHONE_VIEWED_PANES: usize = 16;
 /// (`Runtime::looked_at`): this machine's focus pane as the operator chose
 /// it, each device's own focus while that device is in front and its window
 /// shows the pane's tab (`remote_read_focus`), both only while the screen
-/// they were chosen on shows (`LookInputs::chosen_shows`: another machine's
-/// view counts while that machine shows it), and every agent a phone has
+/// they were chosen on shows (`LookInputs::chosen_shows`: this machine's own
+/// while a window of it shows it, another machine's view while that machine
+/// shows it), and every agent a phone has
 /// open. One value, so a move of any of its parts is one comparison
 /// (`Runtime::follow_operator_look`).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

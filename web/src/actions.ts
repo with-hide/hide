@@ -99,6 +99,7 @@ import { closeSession as closeDeskSession, hideDesk, openSession as openDeskSess
 import { deskOpenSend, deskTabCount, deskViewOf, deskWorkspaceOf, DESK_SCREEN, isDeskWorkspace, type DeskOpen } from "./deskDesk";
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type ExplorerTarget, type PendingClose, type PendingViewsClose } from "./ui";
+import { windowScreen, type WindowScreen } from "./windowScreen";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import { remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
 import type { PairingVerb } from "./pairing";
@@ -180,6 +181,26 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const remote = remoteBridge();
   const board = clipboard ?? (remote ? remoteClipboard(remote, diagnostic) : browserClipboard(diagnostic));
   const ui = () => useUiStore.getState();
+  /** What this page's live connection was last told of the screen it shows, null before it was told anything. */
+  let toldScreen: WindowScreen | null = null;
+  /**
+   * Tells the daemon which machine's screen this window shows: `again` to a
+   * new connection (`installWindowScreen`), then each change, which an
+   * action tells after its own events, so the core never reads a look the
+   * action passes through (`windowScreen.ts`). Another machine's view is no
+   * window of this machine (D-60, D-67).
+   */
+  const tellWindowScreen = (again = false) => {
+    if (remote) return;
+    if (useShellStore.getState().connection !== "live") {
+      toldScreen = null;
+      return;
+    }
+    const screen = windowScreen();
+    if (!again && (toldScreen === null || screen === toldScreen)) return;
+    toldScreen = screen;
+    dispatch({ schema_version: 2, kind: "window_screen", payload: { screen } });
+  };
 
 
 
@@ -1648,6 +1669,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (remote) return;
       dispatch({ schema_version: 2, kind: "window_focus", payload: screen ? { focused: true, screen } : { focused: false } });
     },
+    /** Which machine's screen this window shows: when it changed, or `again` for a new connection (`windowScreen.ts`). */
+    noteWindowScreen(again = false) {
+      tellWindowScreen(again);
+    },
     /** Whether this page shows the request view; while one does, the core re-reads running checks (PRD overview-request-view D-32). */
     observeRequestView(observing: boolean) {
       dispatch({ schema_version: 2, kind: "request_view", payload: { observing } });
@@ -1927,22 +1952,27 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * the cell in front is read from what the center shows.
      */
     focusDevice(deviceId: string) {
-      // The window shows its own screen again (PRD device-connect-iroh B17).
+      // The window shows its own screen again (PRD device-connect-iroh B17),
+      // told once the device it chose is sent, whichever way this returns.
       ui().setRemoteScreen(null);
-      const screen = ui().screen;
-      // The mission screen follows the rail to the device chosen (PRD mission-screen D-06), a tool's mission screen too (B40).
-      if (screen?.kind === "missions") {
-        ui().setMissions({ deviceId: null });
-        if (screen.tool !== undefined) ui().setScreen({ kind: "missions" });
-      } else if (frontTool(rest(), screen) !== null) {
-        if (showDeviceFromTool(deviceId)) return;
-      } else if (screen?.kind === "main" && screen.deviceId !== deviceId) {
-        // The rail's choice replaces a device the Overview's own switch picked earlier (D-02, D-17).
-        ui().setOverview({ deviceId: null, projectId: null, panel: null });
-        ui().setScreen({ kind: "main", deviceId });
+      try {
+        const screen = ui().screen;
+        // The mission screen follows the rail to the device chosen (PRD mission-screen D-06), a tool's mission screen too (B40).
+        if (screen?.kind === "missions") {
+          ui().setMissions({ deviceId: null });
+          if (screen.tool !== undefined) ui().setScreen({ kind: "missions" });
+        } else if (frontTool(rest(), screen) !== null) {
+          if (showDeviceFromTool(deviceId)) return;
+        } else if (screen?.kind === "main" && screen.deviceId !== deviceId) {
+          // The rail's choice replaces a device the Overview's own switch picked earlier (D-02, D-17).
+          ui().setOverview({ deviceId: null, projectId: null, panel: null });
+          ui().setScreen({ kind: "main", deviceId });
+        }
+        if (frontDeviceId(rest()) === deviceId) return;
+        dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: deviceId } });
+      } finally {
+        tellWindowScreen();
       }
-      if (frontDeviceId(rest()) === deviceId) return;
-      dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: deviceId } });
     },
 
     /**
@@ -1963,6 +1993,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const tile = computerTiles(rest()).find((row) => row.id === id);
       if (tile?.screen && hostBridge()?.remoteScreens) {
         ui().setRemoteScreen(tile.screen.device_id);
+        tellWindowScreen();
         return;
       }
       if (tile?.screen && tile.screen.device_id === id && !rest()?.navigator?.devices?.some((device) => device.id === id)) {
@@ -1989,6 +2020,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (!computer.screen || !remote?.go || !remote.onWorkResult) return "no_screen";
       ui().setRemoteScreen(computer.screen.device_id);
       remote.go({ device: computer.screen.device_id, key: computer.screen.key, work });
+      tellWindowScreen();
       return "handed";
     },
 
@@ -2005,6 +2037,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       // It names this window's own machine, which the page shows again once the cell goes.
       useUiStore.setState({ screen: { kind: "main", deviceId: own, tool: connection }, overviewOpen: false, overviewReturnFocus: null, overviewReveal: null, overlay: "none", opening: null });
       if (frontDeviceId(rest()) !== own) dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: own } });
+      tellWindowScreen();
     },
 
     /** Every entry point of Add device (the rail's `+`, the hidden rail's menu, Add project's Host list) opens the one dialog (D-11); `computer` skips its computer-or-phone question. */

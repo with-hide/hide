@@ -138,6 +138,10 @@ pub struct AppState {
     /// core counts a View in front of the operator as seen only while one
     /// does (PRD unseen-agent-views D-07, B6, B8).
     pub window_focus_demand: Arc<crate::demand::FocusDemand>,
+    /// Which machine's screen each window shows: the core counts a look
+    /// chosen on this machine only while one shows its own
+    /// (`docs/status-model.md`, Hide owns the read axis).
+    pub window_screen_demand: Arc<crate::demand::ScreenDemand>,
     /// Which connections show which backlog item's origin: the core keeps
     /// an origin until the last of them closes it or leaves.
     pub origin_holds: Arc<crate::demand::OriginHolds>,
@@ -3086,6 +3090,25 @@ fn handle_client_text(
                 });
             return Ok(ClientAction::Replies(Vec::new()));
         }
+        // Which machine's screen a window shows, its own or another
+        // computer's, whether or not it holds the keyboard; the core hears
+        // another computer's only while no window shows this machine's own,
+        // and a window that leaves without saying so lets go with its
+        // connection.
+        Some("window_screen") => {
+            let screen = event
+                .get("payload")
+                .and_then(|payload| payload.get("screen"))
+                .and_then(Value::as_str)
+                .and_then(crate::demand::WindowScreen::parse)
+                .ok_or_else(|| "window_screen.screen must be own or computer".to_owned())?;
+            state
+                .window_screen_demand
+                .set(connection, Some(screen), |now| {
+                    dispatch_window_screen(&state.core, connection, now)
+                });
+            return Ok(ClientAction::Replies(Vec::new()));
+        }
         Some("request_view") => {
             let Some(observing) = event
                 .get("payload")
@@ -3790,6 +3813,31 @@ fn dispatch_window_focus(
         hide_core::diagnostic!(json!({
             "component": "hided",
             "kind": "window_focus.observation_failed",
+            "connection": connection,
+            "message": error,
+        }));
+    }
+}
+
+/// Tells the core which machine's screen this machine's windows show
+/// (`window_screen`). Runs under the screen demand's lock, so it only logs
+/// and hands the event to the core's channel.
+fn dispatch_window_screen(core: &CoreHandle, connection: u64, screen: crate::demand::WindowScreen) {
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "window_screen.observation",
+        "connection": connection,
+        "screen": screen.as_str(),
+    }));
+    let event = json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "window_screen",
+        "payload": {"screen": screen.as_str()},
+    });
+    if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
+        hide_core::diagnostic!(json!({
+            "component": "hided",
+            "kind": "window_screen.observation_failed",
             "connection": connection,
             "message": error,
         }));
@@ -6016,6 +6064,9 @@ pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, des
     }
     state.window_focus_demand.release(connection, |now| {
         dispatch_window_focus(&state.core, connection, now)
+    });
+    state.window_screen_demand.release(connection, |now| {
+        dispatch_window_screen(&state.core, connection, now)
     });
     state.origin_holds.release(connection, |key| {
         close_backlog_origin(&state.core, connection, key)
