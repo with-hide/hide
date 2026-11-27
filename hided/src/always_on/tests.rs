@@ -250,6 +250,7 @@ fn host(state: hide_peer::store::KnownState) -> hide_peer::store::Host {
         state,
         candidates: Vec::new(),
         started: None,
+        ssh: None,
     }
 }
 

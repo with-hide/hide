@@ -27,9 +27,10 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use hide_core::peer_machines::{
-    PeerMachine, PeerOpenedBy, PeerOpens, PeerPath, PeerReason, PeerUpdate,
+    PeerMachine, PeerOpenedBy, PeerOpens, PeerPath, PeerReason, PeerSsh, PeerSshBlocked, PeerUpdate,
 };
 use hide_peer::pairing::{AcceptError, Accepted, JoinError, Me, Pairings, RequestError, View};
+use hide_peer::proof::Proof;
 use hide_peer::protocol::hello::{Behind, GrantState};
 use hide_peer::protocol::{Candidate, PathKind, PeerKey, StreamKind};
 use hide_peer::store::{Grant, GrantStatus, Host, KnownState, Login, StoreError, Via};
@@ -81,6 +82,14 @@ fn put_first(candidates: &mut Vec<Candidate>, first: Candidate) {
             kept
         }
     });
+}
+
+/// What carries a carrier that arrives on the bootstrap socket, when it is
+/// not a distribution's `wsl.exe`.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CarryOver {
+    Ssh,
 }
 
 /// Which direction of a pair an ask is about.
@@ -196,9 +205,14 @@ pub enum Ask {
     },
     /// The stream this ask came on becomes the carrier of a connection to
     /// this machine's core: what `hide device carry` asks, run by the PC
-    /// of the distribution this core runs in (D-27, D-62). Answered by
+    /// of the distribution this core runs in (D-27, D-62), or with `over`
+    /// SSH by a paired machine that signed in to this account,
+    /// which this daemon then echoes. Answered by
     /// [`Pairing::carrier`], never as a value.
-    Carry,
+    Carry {
+        #[serde(default)]
+        over: Option<CarryOver>,
+    },
     /// Reads where a device stands on the rule every switch passes
     /// (`pairing_ssh::may_move`), over the login it is reached by, and
     /// changes nothing there: what an opened row shows beside its button.
@@ -268,7 +282,7 @@ impl Ask {
             | Self::PairSsh { .. }
             | Self::LookWsl { .. }
             | Self::PairWsl { .. }
-            | Self::Carry
+            | Self::Carry { .. }
             | Self::Switch { .. }
             | Self::AcceptSsh { .. }
             | Self::ReleaseHelper => true,
@@ -535,6 +549,117 @@ fn wsl_request_key(distro: &str) -> String {
     format!("wsl {distro}")
 }
 
+/// The most sessions one add of an alias makes.
+const ADD_SESSIONS: usize = 3;
+
+/// What the next session of an add does.
+#[derive(Clone, Copy)]
+enum AddNext {
+    /// Reads which machine the alias reaches, and pairs it unless it is a
+    /// known host.
+    Look,
+    /// Checks a known host's key over the alias.
+    Check(PeerKey),
+    /// Pairs, as a new machine.
+    Pair,
+}
+
+/// What a pairing of an add came to.
+enum Paired2 {
+    New(Value),
+    /// The key answered is a known host's.
+    Known(PeerKey),
+}
+
+/// What a check of an alias found.
+enum Checked {
+    Proved,
+    OtherKey(PeerKey),
+    /// Nothing recorded, for this reason (`"ssh"` of the answer).
+    Said(&'static str),
+    /// The session did not sign in: the code a pairing answers.
+    NotReached(&'static str),
+}
+
+impl Checked {
+    fn of_session(error: &hide_node::ssh::session::SessionError) -> Self {
+        use hide_node::ssh::session::SessionError;
+        match error {
+            error if error.carried_program_absent() => Self::Said("hide_absent"),
+            SessionError::Ssh(_) | SessionError::Lost(_) => Self::NotReached("ssh_not_reached"),
+            SessionError::Refused(_) | SessionError::Local(_) => Self::Said("not_proved"),
+        }
+    }
+}
+
+/// One session of an add: its `ssh`, ended when the session is dropped.
+struct AddLogin {
+    upstream: Arc<hide_node::ssh::upstream::Upstream>,
+    reach: pairing_ssh::Reach,
+}
+
+impl AddLogin {
+    fn new(reach: &pairing_ssh::Reach, alias: &str) -> Self {
+        Self {
+            upstream: Arc::new(hide_node::ssh::upstream::Upstream::new(
+                hide_node::ssh::session::SshTarget::new(&reach.home, alias),
+            )),
+            reach: reach.clone(),
+        }
+    }
+
+    /// One blocking step on the session, off the runtime.
+    async fn step<T: Send + 'static>(
+        &self,
+        step: impl FnOnce(&hide_node::ssh::upstream::Upstream, &pairing_ssh::Reach) -> T
+        + Send
+        + 'static,
+    ) -> Result<T, &'static str> {
+        let (upstream, reach) = (Arc::clone(&self.upstream), self.reach.clone());
+        tokio::task::spawn_blocking(move || step(&upstream, &reach))
+            .await
+            .map_err(|_| "ssh_not_reached")
+    }
+
+    fn close(&self) {
+        self.upstream.close();
+    }
+}
+
+impl Drop for AddLogin {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+/// What a far `hide device carry` said as it refused, read from its last
+/// line as a carrier's is (`peer_ssh::far_line`).
+async fn far_said(said: &Arc<Mutex<Vec<u8>>>) -> Option<&'static str> {
+    let said = Arc::clone(said);
+    tokio::task::spawn_blocking(move || crate::peer_ssh::far_line(&said, || false))
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        .and_then(crate::peer_ssh::far_refusal)
+}
+
+/// The code a pairing answers for a record that could not be saved.
+fn store_code(error: StoreError) -> &'static str {
+    match error {
+        StoreError::Unknown => "device_unknown",
+        StoreError::Full => "device_limit",
+        StoreError::Io(error) => {
+            hide_core::diagnostic!(json!({
+                "component": "pairing",
+                "kind": "pairing.not_saved",
+                "reason": error.to_string(),
+            }));
+            "device_not_saved"
+        }
+    }
+}
+
 struct SshRequest {
     alias: String,
     id: String,
@@ -717,7 +842,7 @@ impl Pairing {
     /// and still lists them, to be removed or paired again.
     async fn recorded(&self) -> Vec<Paired> {
         match self.host.recorded().await {
-            Ok((guests, hosts)) => rows(&hosts, &guests, |_| None, &HashMap::new()).0,
+            Ok((guests, hosts)) => rows(&hosts, &guests, |_| None, &HashMap::new(), |_| None).0,
             Err(error) => {
                 hide_core::diagnostic!(json!({
                     "component": "pairing",
@@ -763,7 +888,24 @@ impl Pairing {
         let mut saved = service.saved();
         let mut look = self.look.subscribe();
         let mut events = peers.events();
+        // What changes a row's SSH route, on a machine that dials over SSH.
+        let routes = self.host.ssh().cloned();
+        let mut routed = match &routes {
+            Some(routes) => routes.changed(),
+            None => watch::channel(0).1,
+        };
         loop {
+            // A host forgotten, or its alias changed or turned off, takes
+            // its route with it.
+            if let Some(routes) = &routes {
+                let kept: Vec<(PeerKey, Option<String>)> = peers
+                    .hosts()
+                    .iter()
+                    .map(|host| (host.key, host.ssh_alias().map(str::to_owned)))
+                    .collect();
+                routes.hosts(&kept);
+            }
+            routed.borrow_and_update();
             let frame = json!(*view.borrow_and_update());
             self.frame.send_if_modified(|shown| {
                 if **shown == frame {
@@ -801,6 +943,7 @@ impl Pairing {
                 changed = view.changed() => if changed.is_err() { return },
                 changed = saved.changed() => if changed.is_err() { return },
                 changed = look.changed() => if changed.is_err() { return },
+                changed = routed.changed() => if changed.is_err() { return },
                 event = events.recv() => match event {
                     Ok(PeerEvent::UpdateNeeded { key, behind, build, .. }) => {
                         let asked = {
@@ -836,6 +979,11 @@ impl Pairing {
                         lock(&self.updates).remove(&key);
                         if let Some(link) = peers.link(&key) {
                             let build = link.their_hello().build.clone();
+                            // A route parked for that machine's update is
+                            // tried again once it names another build.
+                            if let Some(routes) = &routes {
+                                routes.heard_build(&key, &build);
+                            }
                             self.raise_started(&peers, key, &build, false);
                         }
                     }
@@ -1013,7 +1161,14 @@ impl Pairing {
         // A raise under way or failed is what its row says: this machine
         // is who updates that Hide.
         updates.extend(lock(&self.raises).shown.clone());
-        let (mut paired, away) = rows(&hosts, &guests, |key| peers.link(key), &updates);
+        let routes = self.host.ssh();
+        let (mut paired, away) = rows(
+            &hosts,
+            &guests,
+            |key| peers.link(key),
+            &updates,
+            |key| routes.and_then(|routes| routes.blocked(key)),
+        );
         // Why a host this machine dials is not connected: the relay's own
         // answer when it has one (B34), else nothing more than "not
         // connected".
@@ -1051,12 +1206,24 @@ impl Pairing {
                 }
             }
         }
-        match self.run(ask, caller).await {
+        // Adding an alias a paired machine is reached by answers its outcome
+        // beside a refusal.
+        let answered = match ask {
+            Ask::PairSsh { alias } => self.pair_ssh(&alias).await,
+            ask => self.run(ask, caller).await.map_err(|code| (code, None)),
+        };
+        match answered {
             Ok(mut answer) => {
                 answer["ok"] = json!(true);
                 answer
             }
-            Err(code) => refused(code),
+            Err((code, ssh)) => {
+                let mut answer = refused(code);
+                if let Some(ssh) = ssh {
+                    answer["ssh"] = json!(ssh);
+                }
+                answer
+            }
         }
     }
 
@@ -1153,7 +1320,6 @@ impl Pairing {
         let service = match &ask {
             Ask::Share { .. }
             | Ask::Join { .. }
-            | Ask::PairSsh { .. }
             | Ask::PairWsl { .. }
             | Ask::Switch { .. }
             | Ask::AcceptSsh { .. } => self.service().await?,
@@ -1195,7 +1361,7 @@ impl Pairing {
             }
             // A carrier is a stream, which only the bootstrap socket hands
             // over (`Pairing::carrier`); asked as a value it is no request.
-            Ask::Carry => Err("invalid_request"),
+            Ask::Carry { .. } => Err("invalid_request"),
             Ask::PairWsl { distro } => {
                 let carriers = self.wsl()?;
                 let requested = wsl_request_key(&distro);
@@ -1215,40 +1381,18 @@ impl Pairing {
                 // The operator pressed: the dial that confirms the pairing
                 // may start the distribution again if it went off meanwhile.
                 carriers.may_wake(&distro);
-                service
-                    .adopt(paired.accepted, paired.first)
-                    .map_err(|error| match error {
+                // A distribution is reached through `wsl.exe` alone.
+                service.adopt(paired.accepted, paired.first, None).map_err(
+                    |error| match error {
                         AcceptError::Invalid => "device_own",
                         AcceptError::Already => "device_already_connected",
                         AcceptError::Store(error) => store(error),
-                    })?;
+                    },
+                )?;
                 lock(&self.ssh_requests).retain(|kept| kept.alias != requested);
                 Ok(answer)
             }
-            Ask::PairSsh { alias } => {
-                let request = self.ssh_request(&alias)?;
-                let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
-                let target = alias.clone();
-                let paired = self
-                    .ssh_dial(&alias, move || {
-                        pairing_ssh::accept(&reach, &target, &request, &me, &key)
-                    })
-                    .await??;
-                let answer = json!({
-                    "device_id": paired.accepted.device,
-                    "name": paired.accepted.name,
-                });
-                service
-                    .adopt(paired.accepted, paired.first)
-                    .map_err(|error| match error {
-                        AcceptError::Invalid => "device_own",
-                        AcceptError::Already => "device_already_connected",
-                        AcceptError::Store(error) => store(error),
-                    })?;
-                // Adopted: a later pairing of this alias is a new request.
-                lock(&self.ssh_requests).retain(|kept| kept.alias != alias);
-                Ok(answer)
-            }
+            Ask::PairSsh { .. } => unreachable!("answered by `pair_ssh`"),
             Ask::Switch { device, install } => {
                 // The device as the core knows it: a terminal may name it
                 // by its alias.
@@ -1384,6 +1528,10 @@ impl Pairing {
             }
             Ask::Retry { device } => {
                 let paired = self.named(&peers, &device)?;
+                // A route parked for the operator is tried again too.
+                if let Some(routes) = self.host.ssh() {
+                    routes.retry(&paired.key);
+                }
                 lock(&self.relay).answer = None;
                 peers.network_changed();
                 // A raise that failed is the operator's to ask again.
@@ -1521,7 +1669,7 @@ impl Pairing {
                         grant,
                         candidates: Vec::new(),
                     };
-                    match service.adopt(host, Vec::new()) {
+                    match service.adopt(host, Vec::new(), None) {
                         Ok(()) => {}
                         Err(AcceptError::Invalid) => return Err("invalid_request"),
                         Err(AcceptError::Already) => return Err("device_already_connected"),
@@ -1768,7 +1916,9 @@ impl Pairing {
         let connecting = json!({ "key": host.to_hex(), "own_folder": own_folder });
         self.switch_step(device, "connecting", connecting).await;
         if let Some(paired) = paired.clone() {
-            match service.adopt(paired.accepted, paired.first) {
+            // A switched host's route is the login it was switched through
+            // (`Host::started`), read as its alias.
+            match service.adopt(paired.accepted, paired.first, None) {
                 // Adopted before, by a switch that stopped after it.
                 Ok(()) | Err(AcceptError::Already) => {}
                 Err(AcceptError::Invalid) => return Err("device_own"),
@@ -1927,7 +2077,7 @@ impl Pairing {
             Some(peers) => self.paired(&peers),
             None => {
                 let (guests, hosts) = self.host.recorded().await.map_err(|_| "hide_unavailable")?;
-                rows(&hosts, &guests, |_| None, &HashMap::new()).0
+                rows(&hosts, &guests, |_| None, &HashMap::new(), |_| None).0
             }
         };
         let granted: Vec<PeerKey> = paired
@@ -1981,6 +2131,168 @@ impl Pairing {
         })
         .await
         .unwrap_or(HelperFolder::Kept)
+    }
+
+    /// Adds the machine `alias` reaches over SSH (B7): its own Hide pairs
+    /// over the login, which installs nothing there, and the alias is kept
+    /// as the route the connection takes when no direct path opens.
+    /// A machine already paired gets the alias only once a
+    /// carrier over it proved that machine's key (2.1): the device id the
+    /// look answers and the key the accept answers only choose which key is
+    /// checked. At most three sessions, one after another, on one of the
+    /// operator's places, each check bounded by `limits::CHECK_WITHIN`.
+    /// A refusal is its code, with what became of the alias when the
+    /// machine was paired already.
+    async fn pair_ssh(
+        self: &Arc<Self>,
+        alias: &str,
+    ) -> Result<Value, (&'static str, Option<&'static str>)> {
+        if !pairing_ssh::valid_alias(alias) {
+            return Err(("invalid_request", None));
+        }
+        let service = self.service().await.map_err(|code| (code, None))?;
+        let peers = self.host.peers().ok_or(("peer_unavailable", None))?;
+        // One place of the operator's for the whole add, held across its
+        // blocking steps and its checks, and given back however it ends.
+        let _place = Arc::clone(&self.ssh_dials)
+            .try_acquire_owned()
+            .map_err(|_| ("ssh_busy", None))?;
+        let already = |ssh: &'static str| Err(("device_already_connected", Some(ssh)));
+        let mut next = AddNext::Look;
+        for _ in 0..ADD_SESSIONS {
+            let login = AddLogin::new(&self.ssh, alias);
+            let key = match next {
+                AddNext::Check(key) => key,
+                AddNext::Look => {
+                    let looked = login
+                        .step(pairing_ssh::core_on)
+                        .await
+                        .map_err(|code| (code, None))?;
+                    let node = looked.ok().flatten().map(|core| core.node);
+                    let known = node.and_then(|node| {
+                        peers
+                            .hosts()
+                            .into_iter()
+                            .find(|host| host.device == node)
+                            .map(|host| host.key)
+                    });
+                    match known {
+                        Some(key) => key,
+                        None => match self.pair_on(&service, &peers, &login, alias).await? {
+                            Paired2::New(answer) => return Ok(answer),
+                            Paired2::Known(key) => key,
+                        },
+                    }
+                }
+                AddNext::Pair => match self.pair_on(&service, &peers, &login, alias).await? {
+                    Paired2::New(answer) => return Ok(answer),
+                    Paired2::Known(key) => key,
+                },
+            };
+            match self.check_alias(&peers, &login, key).await {
+                Checked::Proved => {
+                    let save = || peers.known(|known| known.record_ssh(&key, alias)).map(drop);
+                    let recorded = match self.host.ssh() {
+                        Some(routes) => routes.record(&key, alias, save),
+                        None => save(),
+                    };
+                    recorded.map_err(|error| (store_code(error), None))?;
+                    self.look.send_modify(|count| *count += 1);
+                    return already("recorded");
+                }
+                // Another known key: checked against itself next; nothing is
+                // recorded from a check of another key.
+                Checked::OtherKey(other) if peers.host(&other).is_some() => {
+                    next = AddNext::Check(other);
+                }
+                // A machine set up again under a new key pairs as a new
+                // machine; its earlier record goes as one device is one host.
+                Checked::OtherKey(_) => next = AddNext::Pair,
+                Checked::Said(ssh) => return already(ssh),
+                Checked::NotReached(code) => return Err((code, None)),
+            }
+        }
+        already("not_proved")
+    }
+
+    /// Today's SSH pairing on `login`'s session: `accept-ssh`, and the
+    /// answer adopted with the alias kept as the host's route. A host
+    /// already known under the key it answered with is that key, to check.
+    async fn pair_on(
+        &self,
+        service: &Service,
+        peers: &HostPeers,
+        login: &AddLogin,
+        alias: &str,
+    ) -> Result<Paired2, (&'static str, Option<&'static str>)> {
+        let request = self.ssh_request(alias).map_err(|code| (code, None))?;
+        let (me, key) = (self.me.clone(), peers.key());
+        let paired = login
+            .step(move |upstream, reach| {
+                pairing_ssh::pair_on(&pairing_ssh::Ssh(upstream), reach, &request, &me, &key)
+            })
+            .await
+            .map_err(|code| (code, None))?
+            .map_err(|code| (code, None))?;
+        let answer = json!({
+            "device_id": paired.accepted.device,
+            "name": paired.accepted.name,
+        });
+        let known = paired.accepted.key;
+        // A route recorded with the pairing starts over, as a re-add's does.
+        let adopt = || service.adopt(paired.accepted, paired.first, Some(alias.to_owned()));
+        let adopted = match self.host.ssh() {
+            Some(routes) => routes.record(&known, alias, adopt),
+            None => adopt(),
+        };
+        match adopted {
+            Ok(()) => {
+                // Adopted: a later pairing of this alias is a new request.
+                lock(&self.ssh_requests).retain(|kept| kept.alias != alias);
+                Ok(Paired2::New(answer))
+            }
+            Err(AcceptError::Already) => Ok(Paired2::Known(known)),
+            Err(AcceptError::Invalid) => Err(("device_own", None)),
+            Err(AcceptError::Store(error)) => Err((store_code(error), None)),
+        }
+    }
+
+    /// Runs `hide device carry --ssh` on `login`'s session and the key
+    /// proof against `key` on it, within `limits::CHECK_WITHIN`: nothing is
+    /// admitted, no route hears it, and the session's `ssh` ends however it
+    /// ends.
+    async fn check_alias(&self, peers: &HostPeers, login: &AddLogin, key: PeerKey) -> Checked {
+        let checking = async {
+            let channel = login
+                .step(|upstream, reach| {
+                    upstream.carry(|home, system| pairing_ssh::carry_argv(reach, home, system))
+                })
+                .await;
+            let channel = match channel {
+                Err(code) => return Checked::NotReached(code),
+                Ok(Err(error)) => return Checked::of_session(&error),
+                Ok(Ok(channel)) => channel,
+            };
+            let said = Arc::clone(&channel.stderr);
+            let carrier = hide_peer::mux::Carrier::from(channel.stream);
+            let pipe = peers.transport().pipe();
+            match pipe
+                .check(carrier, &key, hide_peer::limits::CHECK_WITHIN)
+                .await
+            {
+                Ok(Proof::Proved) => Checked::Proved,
+                Ok(Proof::OtherKey(other)) => Checked::OtherKey(other),
+                Ok(Proof::NotProved) => Checked::Said("not_proved"),
+                Err(_) => Checked::Said(far_said(&said).await.unwrap_or("not_proved")),
+            }
+        };
+        match tokio::time::timeout(hide_peer::limits::CHECK_WITHIN, checking).await {
+            Ok(checked) => checked,
+            Err(_) => {
+                login.close();
+                Checked::Said("check_timed_out")
+            }
+        }
     }
 
     /// Runs one `ssh` step for `alias` off the runtime, when fewer than
@@ -2190,6 +2502,7 @@ fn rows(
     guests: &[Grant],
     link: impl Fn(&PeerKey) -> Option<Link>,
     updates: &HashMap<PeerKey, PeerUpdate>,
+    ssh: impl Fn(&PeerKey) -> Option<PeerSshBlocked>,
 ) -> (Vec<Paired>, bool) {
     let mut paired: Vec<Paired> = Vec::new();
     let mut away = false;
@@ -2230,6 +2543,9 @@ fn rows(
                     }),
                 // The core's to say, of its own devices.
                 helper_device: None,
+                // Only a host this machine keeps has a route, and the row
+                // says only why one waits for the operator.
+                ssh: ssh(&host.key).map(|blocked| PeerSsh { blocked }),
             },
         });
     }
@@ -2262,6 +2578,7 @@ fn rows(
                 update: updates.get(&guest.key).copied(),
                 wsl: None,
                 helper_device: None,
+                ssh: None,
             },
         });
     }
@@ -2335,6 +2652,7 @@ fn path_of(path: PathKind) -> PeerPath {
         PathKind::Tailscale => PeerPath::Tailscale,
         PathKind::Relay => PeerPath::Relay,
         PathKind::Local => PeerPath::Local,
+        PathKind::Ssh => PeerPath::Ssh,
     }
 }
 
@@ -2373,6 +2691,7 @@ mod tests {
             update: None,
             wsl: None,
             helper_device: None,
+            ssh: None,
         }
     }
 
@@ -2451,6 +2770,7 @@ mod tests {
             state,
             candidates: Vec::new(),
             started: None,
+            ssh: None,
         };
         // A host that dropped the pairing is listed and is nothing to dial.
         let (dropped, away) = rows(
@@ -2458,6 +2778,7 @@ mod tests {
             &[],
             |_| None,
             &HashMap::new(),
+            |_| None,
         );
         assert_eq!(dropped[0].machine.opens, Some(PeerOpens::Unpaired));
         assert!(!dropped[0].machine.connected);
@@ -2468,6 +2789,7 @@ mod tests {
             &[],
             |_| None,
             &HashMap::new(),
+            |_| None,
         );
         assert!(away);
     }
@@ -2766,6 +3088,7 @@ mod tests {
             state: KnownState::Active,
             candidates: Vec::new(),
             started: None,
+            ssh: None,
         }
     }
 
@@ -2804,6 +3127,7 @@ mod tests {
             &[],
             |_| None,
             &HashMap::new(),
+            |_| None,
         );
         let mut shown: Vec<_> = rows
             .iter()

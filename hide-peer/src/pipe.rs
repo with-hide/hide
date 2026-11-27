@@ -14,25 +14,44 @@
 //! [`limits::HELLO_WITHIN`] at most, and one that arrives past the cap is
 //! ended before any of its bytes are read.
 //!
+//! The same transport carries a connection over the system `ssh`:
+//! the daemon's carrier maker signs in to an alias, asking
+//! nothing, and runs `hide device carry --ssh` there, whose input and output
+//! are the carrier; the far daemon takes it as it takes a distribution's.
+//! A connection says the path its carrier came by: [`PathKind::Ssh`] for
+//! one an alias carries, [`PathKind::Local`] for a distribution's.
+//!
 //! [`Beside`] puts this transport beside another, so one [`crate::Peers`]
 //! holds a machine's connections whatever carries each: an address that
-//! names a distribution ([`Candidate::Wsl`]) is dialed here, and every other
-//! one there.
+//! names a distribution ([`Candidate::Wsl`]) is dialed here, an address
+//! with only its SSH alias here too, and every other one there. An address
+//! that names both an alias and ways the other transport dials is the
+//! ladder's ([`Beside::dial`]): the other transport first, SSH from
+//! [`limits::SSH_AFTER`], and at [`limits::DIRECT_WITHIN`] the connection
+//! of the higher [`PathKind::rank`]. Below the seam it chooses between
+//! carriers before anything is admitted; which of two admitted connections
+//! stays is still [`crate::Peers`]'.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
+use hide_peer_protocol::addr::{ssh_alias, without_ssh};
 use hide_peer_protocol::{Candidate, CloseCode, PathKind, PeerAddr, PeerKey};
+use serde_json::json;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::sync::{Semaphore, mpsc, watch};
+use tokio::sync::{Notify, Semaphore, mpsc, watch};
+use tokio::time::Instant;
 
 use crate::key::MachineKey;
 use crate::mux::{Carrier, PROOF_PRIORITY, Pipe, PipeRecv, PipeSend};
-use crate::transport::{PeerConn, PeerTransport, RelayState, TransportError};
+use crate::proof::Proof;
+use crate::transport::{PeerConn, PeerTransport, RelayState, Route, TransportError};
 use crate::{limits, proof};
 
 /// Proved connections that wait to be accepted; one past it is closed
@@ -43,8 +62,42 @@ const BACKLOG: usize = 16;
 pub fn distribution(to: &PeerAddr) -> Option<&str> {
     to.candidates.iter().find_map(|candidate| match candidate {
         Candidate::Wsl(name) => Some(name.as_str()),
-        Candidate::Ip(_) | Candidate::Relay(_) => None,
+        Candidate::Ip(_) | Candidate::Relay(_) | Candidate::Ssh(_) => None,
     })
+}
+
+/// The path a carrier to `to` takes: SSH for an address that names an
+/// alias, inside one machine for a distribution.
+fn path_to(to: &PeerAddr) -> PathKind {
+    match ssh_alias(to) {
+        Some(_) => PathKind::Ssh,
+        None => PathKind::Local,
+    }
+}
+
+/// What a machine knows of the SSH routes to the hosts it keeps:
+/// the daemon's carrier maker owns them, with their waits
+/// and what parks one; [`Beside`] and the keeper's climb ask it.
+pub trait Routes: Send + Sync + 'static {
+    /// Where the route to `key` through `alias` stands now: [`Route::Ready`],
+    /// [`Route::Due`] or [`Route::Held`].
+    fn route(&self, key: &PeerKey, alias: &str) -> Route;
+
+    /// A connection over the route, or one a move installed, ended within
+    /// [`limits::STAYED_AFTER`]: the route waits, so a path that keeps
+    /// falling is signed in to at most once per wait. A parked route stays
+    /// parked.
+    fn fell(&self, key: &PeerKey);
+
+    /// A connection over the route stayed [`limits::STAYED_AFTER`] and
+    /// more: its wait starts over. Only this, a retry and a network change
+    /// do; a proof alone does not, so a path that proves and falls again
+    /// waits longer each time.
+    fn stayed(&self, key: &PeerKey);
+
+    /// The machine woke or its network changed: every waiting route is due
+    /// and its wait starts over; a parked one stays parked.
+    fn network_changed(&self);
 }
 
 type Dialing = Pin<Box<dyn Future<Output = io::Result<Carrier>> + Send>>;
@@ -57,6 +110,9 @@ type Accepted = mpsc::Receiver<(PipeSend, PipeRecv)>;
 pub struct PipeTransport {
     key: Arc<MachineKey>,
     dial: Option<Dial>,
+    /// The SSH routes this machine's carrier maker keeps, on a machine
+    /// that makes SSH carriers.
+    routes: Option<Arc<dyn Routes>>,
     runtime: tokio::runtime::Handle,
     /// The proofs of arrived carriers that run.
     admitting: Arc<Semaphore>,
@@ -79,6 +135,7 @@ impl PipeTransport {
         Self {
             key: Arc::new(key),
             dial: None,
+            routes: None,
             runtime: tokio::runtime::Handle::current(),
             admitting: Arc::new(Semaphore::new(limits::MAX_ADMITTING)),
             proved,
@@ -105,14 +162,30 @@ impl PipeTransport {
         }
     }
 
+    /// With the SSH routes the carrier maker keeps.
+    pub fn with_routes(mut self, routes: Arc<dyn Routes>) -> Self {
+        self.routes = Some(routes);
+        self
+    }
+
+    /// Where the route to `key` through `alias` stands; held on a machine
+    /// that keeps none.
+    fn route(&self, key: &PeerKey, alias: &str) -> Route {
+        self.routes
+            .as_ref()
+            .map_or(Route::Held, |routes| routes.route(key, alias))
+    }
+
     fn is_closed(&self) -> bool {
         *self.closed.borrow()
     }
 
-    /// A carrier a peer made arrived. Its proof runs in a task of its own,
-    /// so one that never finishes holds up no other; past the cap, or once
-    /// the transport closed, the carrier is ended unread.
-    pub fn arrived(&self, carrier: Carrier) {
+    /// A carrier a peer made arrived, by `path`: [`PathKind::Ssh`] for one
+    /// `hide device carry --ssh` hands over, [`PathKind::Local`] for a
+    /// distribution's PC. Its proof runs in a task of its own, so one that
+    /// never finishes holds up no other; past the cap, or once the
+    /// transport closed, the carrier is ended unread.
+    pub fn arrived(&self, carrier: Carrier, path: PathKind) {
         if self.is_closed() {
             return carrier.end();
         }
@@ -137,7 +210,7 @@ impl PipeTransport {
             let Ok(Some(peer)) = peer else {
                 return;
             };
-            let conn = PipeConn::new(unproved.proved(), peer, id, false, accepted);
+            let conn = PipeConn::new(unproved.proved(), peer, id, false, path, accepted);
             track(&conns, &conn.pipe);
             // Closed while the proof ran, or nobody accepts as fast as
             // carriers arrive.
@@ -177,6 +250,36 @@ fn unreachable(why: impl Into<String>) -> TransportError {
     TransportError::Unreachable(why.into())
 }
 
+impl PipeTransport {
+    /// Runs the key proof against `key` on a carrier the caller holds,
+    /// within `within`, and closes the carrier whatever it found: nothing is
+    /// admitted and no `told` hears it. What adding an alias to a paired
+    /// machine checks before it records the alias: an
+    /// operator's press, bounded on its own.
+    pub async fn check(
+        &self,
+        mut carrier: Carrier,
+        key: &PeerKey,
+        within: Duration,
+    ) -> io::Result<Proof> {
+        // A check changes no route: whoever made the carrier hears nothing.
+        drop(carrier.take_told());
+        let (pipe, _accepted) = Pipe::start(carrier, true)?;
+        let proving = async {
+            let (mut send, mut recv) = pipe.open(PROOF_PRIORITY)?;
+            proof::dialer(&self.key, key, &mut send, &mut recv).await
+        };
+        let found = tokio::time::timeout(within, proving).await;
+        pipe.close(CloseCode::Probe.number());
+        found.map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the key proof did not finish in time",
+            )
+        })?
+    }
+}
+
 impl PeerTransport for PipeTransport {
     type Conn = PipeConn;
 
@@ -198,25 +301,55 @@ impl PeerTransport for PipeTransport {
             .dial
             .as_ref()
             .ok_or_else(|| unreachable("this machine makes no carrier of this kind"))?;
-        let carrier = dial(to)
+        let mut carrier = dial(to)
             .await
             .map_err(|error| unreachable(format!("no carrier: {error}")))?;
-        let (pipe, accepted) = Pipe::start(carrier, true)
-            .map_err(|error| unreachable(format!("the carrier did not start: {error}")))?;
+        // Told once, before the dial returns, what the proof found or that
+        // the carrier ended first; a dial given up before then tells
+        // nothing.
+        let mut told = carrier.take_told();
+        let mut tell = |found: Option<Proof>| {
+            if let Some(told) = told.take() {
+                told(found);
+            }
+        };
+        let (pipe, accepted) = match Pipe::start(carrier, true) {
+            Ok(started) => started,
+            Err(error) => {
+                tell(None);
+                return Err(unreachable(format!("the carrier did not start: {error}")));
+            }
+        };
         let unproved = Unproved(Some(pipe.clone()));
-        let failed =
-            |error: io::Error| unreachable(format!("the key proof did not finish: {error}"));
-        let (mut send, mut recv) = pipe.open(PROOF_PRIORITY).map_err(failed)?;
-        if !proof::dialer(&self.key, &to.key, &mut send, &mut recv)
-            .await
-            .map_err(failed)?
-        {
-            return Err(unreachable(
-                "the machine did not prove the key that was dialed",
-            ));
+        let proving = async {
+            let (mut send, mut recv) = pipe.open(PROOF_PRIORITY)?;
+            proof::dialer(&self.key, &to.key, &mut send, &mut recv).await
+        };
+        let found = match proving.await {
+            Ok(found) => found,
+            Err(error) => {
+                tell(None);
+                return Err(unreachable(format!(
+                    "the key proof did not finish: {error}"
+                )));
+            }
+        };
+        tell(Some(found));
+        match found {
+            Proof::Proved => {}
+            Proof::OtherKey(_) => {
+                return Err(unreachable(
+                    "the machine proved another key than the one dialed",
+                ));
+            }
+            Proof::NotProved => {
+                return Err(unreachable(
+                    "the machine did not prove the key that was dialed",
+                ));
+            }
         }
         let id = self.next_id.fetch_sub(1, Ordering::AcqRel);
-        let conn = PipeConn::new(unproved.proved(), to.key, id, true, accepted);
+        let conn = PipeConn::new(unproved.proved(), to.key, id, true, path_to(to), accepted);
         track(&self.conns, &conn.pipe);
         Ok(conn)
     }
@@ -250,16 +383,26 @@ pub struct PipeConn {
     peer: PeerKey,
     id: u64,
     dialed: bool,
+    /// The way its carrier came: `ssh` or `wsl.exe`.
+    path: PathKind,
     accepting: Arc<tokio::sync::Mutex<Accepted>>,
 }
 
 impl PipeConn {
-    fn new(pipe: Pipe, peer: PeerKey, id: u64, dialed: bool, accepted: Accepted) -> Self {
+    fn new(
+        pipe: Pipe,
+        peer: PeerKey,
+        id: u64,
+        dialed: bool,
+        path: PathKind,
+        accepted: Accepted,
+    ) -> Self {
         Self {
             pipe,
             peer,
             id,
             dialed,
+            path,
             accepting: Arc::new(tokio::sync::Mutex::new(accepted)),
         }
     }
@@ -286,7 +429,7 @@ impl PeerConn for PipeConn {
     }
 
     fn path(&self) -> PathKind {
-        PathKind::Local
+        self.path
     }
 
     /// One carrier is the only path a pipe has, so it never moves; the
@@ -328,19 +471,242 @@ impl PeerConn for PipeConn {
 }
 
 /// A transport with a pipe transport beside it, as one: an address that
-/// names a distribution is dialed over a pipe and every other one over
-/// `main`, and a connection of either is accepted. The machine's addresses
-/// and its relay are `main`'s.
-pub struct Beside<T> {
+/// names a distribution is dialed over a pipe, an address with an SSH alias
+/// through the ladder ([`Beside::dial`]), and every other one over `main`;
+/// a connection of either is accepted. The machine's addresses and its
+/// relay are `main`'s.
+pub struct Beside<T: PeerTransport> {
     main: T,
-    pipe: PipeTransport,
+    pipe: Arc<PipeTransport>,
+    ssh: Arc<SshSide<Either<T::Conn, PipeConn>>>,
+}
+
+fn lock<V>(mutex: &Mutex<V>) -> MutexGuard<'_, V> {
+    // Small maps of handles: whole whatever panicked beside them.
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// What [`Beside`] holds of its SSH attempts beyond one dial.
+struct SshSide<C> {
+    /// The attempt a first dial stopped waiting for, per machine: the
+    /// climb takes it ([`Route::Handed`]). One per key at most.
+    handed: Mutex<HashMap<PeerKey, Arc<SshAttempt>>>,
+    /// Connections the ladder or a probe did not choose, closed and not yet
+    /// over: a machine is dialed again only after its own are, as
+    /// [`crate::Peers`] waits for the connections it closed.
+    draining: Mutex<HashMap<PeerKey, Vec<C>>>,
+    /// Ends every attempt still running when the transport closes.
+    closed: watch::Sender<bool>,
+}
+
+impl<C: PeerConn> SshSide<C> {
+    /// Closes a connection that was not chosen, before its first exchange,
+    /// and keeps it until its end.
+    fn unchosen(self: &Arc<Self>, conn: C) {
+        conn.close(CloseCode::Probe);
+        let key = conn.peer();
+        lock(&self.draining)
+            .entry(key)
+            .or_default()
+            .push(conn.clone());
+        let side = Arc::clone(self);
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(limits::BYE_WITHIN, conn.closed()).await;
+            let mut draining = lock(&side.draining);
+            if let Some(conns) = draining.get_mut(&key) {
+                conns.retain(|kept| kept.id() != conn.id());
+                if conns.is_empty() {
+                    draining.remove(&key);
+                }
+            }
+        });
+    }
+
+    /// Waits, [`limits::BYE_WITHIN`] at most, until the connections to
+    /// `key` that were not chosen ended.
+    async fn drained(&self, key: &PeerKey) {
+        let over = Instant::now() + limits::BYE_WITHIN;
+        loop {
+            let Some(conn) = lock(&self.draining)
+                .get(key)
+                .and_then(|conns| conns.first().cloned())
+            else {
+                return;
+            };
+            if tokio::time::timeout_at(over, conn.closed()).await.is_err() {
+                crate::diagnostic!(json!({
+                    "component": "peer",
+                    "event": "ssh.unchosen_not_drained",
+                    "peer": key.short(),
+                }));
+                return;
+            }
+            let mut draining = lock(&self.draining);
+            if let Some(conns) = draining.get_mut(key) {
+                conns.retain(|kept| kept.id() != conn.id());
+                if conns.is_empty() {
+                    draining.remove(key);
+                }
+            }
+        }
+    }
+}
+
+/// Where an SSH attempt stands.
+enum Attempted {
+    Running,
+    Done(Result<PipeConn, String>),
+    /// Its connection went to whoever took it, or was closed.
+    Taken,
+}
+
+/// One SSH carrier attempt: a task of its own, bounded
+/// by [`limits::CARRIER_WITHIN`] from its start, wherever it is (the
+/// ladder, handed, the climb). Dropping it ends the task, which ends its
+/// sign-in or its carrier, and closes a connection it proved that nobody
+/// took.
+struct SshAttempt {
+    started: Instant,
+    state: Mutex<Attempted>,
+    changed: Notify,
+    task: Mutex<Option<tokio::task::AbortHandle>>,
+}
+
+impl SshAttempt {
+    fn start(pipe: &Arc<PipeTransport>, to: PeerAddr) -> Arc<Self> {
+        Self::start_at(pipe, to, Instant::now())
+    }
+
+    /// An attempt whose bound runs from `started` (a test's attempt that
+    /// started long ago).
+    fn start_at(pipe: &Arc<PipeTransport>, to: PeerAddr, started: Instant) -> Arc<Self> {
+        let attempt = Arc::new(Self {
+            started,
+            state: Mutex::new(Attempted::Running),
+            changed: Notify::new(),
+            task: Mutex::new(None),
+        });
+        let (pipe, running) = (Arc::clone(pipe), Arc::downgrade(&attempt));
+        let task = tokio::spawn(async move {
+            let over = started + limits::CARRIER_WITHIN;
+            let done = match tokio::time::timeout_at(over, pipe.dial(&to)).await {
+                Ok(Ok(conn)) => Ok(conn),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => Err("the SSH attempt did not finish in its time".to_owned()),
+            };
+            match running.upgrade() {
+                Some(attempt) => {
+                    *lock(&attempt.state) = Attempted::Done(done);
+                    attempt.changed.notify_waiters();
+                }
+                // Nobody waits: a connection it made is nobody's.
+                None => {
+                    if let Ok(conn) = done {
+                        conn.close(CloseCode::Probe);
+                    }
+                }
+            }
+        });
+        *lock(&attempt.task) = Some(task.abort_handle());
+        attempt
+    }
+
+    fn finished(&self) -> bool {
+        !matches!(*lock(&self.state), Attempted::Running)
+    }
+
+    /// Whether it proved a connection that nobody took yet.
+    fn proved(&self) -> bool {
+        matches!(*lock(&self.state), Attempted::Done(Ok(_)))
+    }
+
+    /// Its connection once it has one, or why it has none.
+    async fn take(&self) -> Result<PipeConn, String> {
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            {
+                let mut state = lock(&self.state);
+                match std::mem::replace(&mut *state, Attempted::Taken) {
+                    Attempted::Running => *state = Attempted::Running,
+                    Attempted::Done(done) => return done,
+                    Attempted::Taken => return Err("the SSH attempt was taken".to_owned()),
+                }
+            }
+            changed.await;
+        }
+    }
+
+    /// Ends the attempt: its task, and a connection it proved that nobody
+    /// took, which goes to `side`'s draining list.
+    fn end<M: PeerConn>(&self, side: &Arc<SshSide<Either<M, PipeConn>>>) {
+        if let Some(task) = lock(&self.task).take() {
+            task.abort();
+        }
+        let left = std::mem::replace(&mut *lock(&self.state), Attempted::Taken);
+        if let Attempted::Done(Ok(conn)) = left {
+            side.unchosen(Either::Pipe(conn));
+        }
+        self.changed.notify_waiters();
+    }
+}
+
+/// Ends what a ladder holds when it ends without choosing it: the attempt
+/// it did not hand, and the connections it did not take.
+struct Ladder<'a, M: PeerConn> {
+    side: &'a Arc<SshSide<Either<M, PipeConn>>>,
+    attempt: Option<Arc<SshAttempt>>,
+    main: Option<M>,
+    ssh: Option<PipeConn>,
+}
+
+impl<'a, M: PeerConn> Ladder<'a, M> {
+    fn new(side: &'a Arc<SshSide<Either<M, PipeConn>>>) -> Self {
+        Self {
+            side,
+            attempt: None,
+            main: None,
+            ssh: None,
+        }
+    }
+}
+
+impl<M: PeerConn> Drop for Ladder<'_, M> {
+    fn drop(&mut self) {
+        if let Some(attempt) = self.attempt.take() {
+            attempt.end(self.side);
+        }
+        if let Some(conn) = self.main.take() {
+            self.side.unchosen(Either::Main(conn));
+        }
+        if let Some(conn) = self.ssh.take() {
+            self.side.unchosen(Either::Pipe(conn));
+        }
+    }
+}
+
+/// Whether `conn` reads a path the transport chose and that beats SSH.
+fn direct<C: PeerConn>(conn: &C) -> bool {
+    conn.chosen_path()
+        .is_some_and(|path| path.rank() > PathKind::Ssh.rank())
 }
 
 impl<T: PeerTransport> Beside<T> {
     /// Both carry the same machine key.
     pub fn new(main: T, pipe: PipeTransport) -> Self {
         assert!(main.key() == pipe.key(), "one machine, one key");
-        Self { main, pipe }
+        Self {
+            main,
+            pipe: Arc::new(pipe),
+            ssh: Arc::new(SshSide {
+                handed: Mutex::default(),
+                draining: Mutex::default(),
+                closed: watch::channel(false).0,
+            }),
+        }
     }
 
     pub fn main(&self) -> &T {
@@ -349,6 +715,140 @@ impl<T: PeerTransport> Beside<T> {
 
     pub fn pipe(&self) -> &PipeTransport {
         &self.pipe
+    }
+
+    /// The attempt kept for `key`, when one is.
+    fn handed(&self, key: &PeerKey) -> Option<Arc<SshAttempt>> {
+        lock(&self.ssh.handed).get(key).cloned()
+    }
+
+    /// Keeps `attempt` for the climb to take: until it fails, until the
+    /// earlier of [`limits::TAKE_WITHIN`] after it proved and its own
+    /// [`limits::CARRIER_WITHIN`] from its start, or until the transport
+    /// closes.
+    fn hand(&self, key: PeerKey, attempt: Arc<SshAttempt>) {
+        let earlier = lock(&self.ssh.handed).insert(key, Arc::clone(&attempt));
+        if let Some(earlier) = earlier {
+            earlier.end(&self.ssh);
+        }
+        let side = Arc::clone(&self.ssh);
+        let mut closed = self.ssh.closed.subscribe();
+        tokio::spawn(async move {
+            let watched = async {
+                loop {
+                    let changed = attempt.changed.notified();
+                    tokio::pin!(changed);
+                    changed.as_mut().enable();
+                    if attempt.finished() {
+                        break;
+                    }
+                    changed.await;
+                }
+                if attempt.proved() {
+                    let over = (Instant::now() + limits::TAKE_WITHIN)
+                        .min(attempt.started + limits::CARRIER_WITHIN);
+                    tokio::time::sleep_until(over).await;
+                }
+            };
+            tokio::select! {
+                () = watched => {}
+                _ = closed.wait_for(|closed| *closed) => {}
+            }
+            let mut handed = lock(&side.handed);
+            if handed
+                .get(&key)
+                .is_some_and(|kept| Arc::ptr_eq(kept, &attempt))
+            {
+                handed.remove(&key);
+            }
+            drop(handed);
+            attempt.end(&side);
+        });
+    }
+
+    /// The climb's dial (an address with only the alias): the attempt the
+    /// first dial handed on, else a new one.
+    async fn ssh_alone(&self, to: &PeerAddr) -> Result<Either<T::Conn, PipeConn>, TransportError> {
+        let attempt = lock(&self.ssh.handed)
+            .remove(&to.key)
+            .unwrap_or_else(|| SshAttempt::start(&self.pipe, to.clone()));
+        let mut held = Ladder::<T::Conn>::new(&self.ssh);
+        held.attempt = Some(Arc::clone(&attempt));
+        let taken = attempt.take().await;
+        drop(held);
+        taken.map(Either::Pipe).map_err(TransportError::Unreachable)
+    }
+
+    /// The first dial of a machine with an SSH alias whose route is ready:
+    /// `main` at once, SSH from [`limits::SSH_AFTER`]
+    /// unless `main` showed a direct path by then, and the connection of
+    /// the higher rank at [`limits::DIRECT_WITHIN`]. A relay connection
+    /// taken then hands a sign-in still running on, for the climb. What is
+    /// not chosen is closed before its first exchange.
+    async fn ladder(
+        &self,
+        to: &PeerAddr,
+        alias: &str,
+    ) -> Result<Either<T::Conn, PipeConn>, TransportError> {
+        let start = Instant::now();
+        let main_to = without_ssh(to);
+        let ssh_to = PeerAddr::new(to.key, vec![Candidate::Ssh(alias.to_owned())]);
+        let main_dial = self.main.dial(&main_to);
+        tokio::pin!(main_dial);
+        let mut held = Ladder::<T::Conn>::new(&self.ssh);
+        let (mut main_failed, mut ssh_failed) = (None::<String>, None::<String>);
+        let mut ssh_started = false;
+        let mut tick = tokio::time::interval(Duration::from_millis(100));
+        loop {
+            let window_over = start.elapsed() >= limits::DIRECT_WITHIN;
+            if held.main.as_ref().is_some_and(direct) {
+                return Ok(Either::Main(held.main.take().expect("checked")));
+            }
+            if held.ssh.is_some() && (window_over || main_failed.is_some()) {
+                return Ok(Either::Pipe(held.ssh.take().expect("checked")));
+            }
+            if held.main.is_some() && (window_over || ssh_failed.is_some()) {
+                // A sign-in still running finishes as the climb's move.
+                if let Some(attempt) = held.attempt.take() {
+                    self.hand(to.key, attempt);
+                }
+                return Ok(Either::Main(held.main.take().expect("checked")));
+            }
+            if let (Some(main), Some(ssh)) = (&main_failed, &ssh_failed) {
+                return Err(TransportError::Unreachable(format!(
+                    "{main}; over SSH: {ssh}"
+                )));
+            }
+            if !ssh_started && (start.elapsed() >= limits::SSH_AFTER || main_failed.is_some()) {
+                ssh_started = true;
+                held.attempt = Some(SshAttempt::start(&self.pipe, ssh_to.clone()));
+            }
+            let attempt = held.attempt.clone();
+            let attempted = async {
+                match &attempt {
+                    Some(attempt) => attempt.take().await,
+                    None => std::future::pending().await,
+                }
+            };
+            tokio::select! {
+                dialed = &mut main_dial, if held.main.is_none() && main_failed.is_none() => {
+                    match dialed {
+                        Ok(conn) => held.main = Some(conn),
+                        Err(error) => main_failed = Some(error.to_string()),
+                    }
+                }
+                taken = attempted => {
+                    held.attempt = None;
+                    match taken {
+                        Ok(conn) => held.ssh = Some(conn),
+                        Err(error) => ssh_failed = Some(error),
+                    }
+                }
+                () = tokio::time::sleep_until(start + limits::SSH_AFTER), if !ssh_started => {}
+                () = tokio::time::sleep_until(start + limits::DIRECT_WITHIN), if !window_over => {}
+                _ = tick.tick(), if held.main.is_some() => {}
+            }
+        }
     }
 }
 
@@ -364,9 +864,34 @@ impl<T: PeerTransport> PeerTransport for Beside<T> {
     }
 
     async fn dial(&self, to: &PeerAddr) -> Result<Self::Conn, TransportError> {
-        match distribution(to) {
-            Some(_) => self.pipe.dial(to).await.map(Either::Pipe),
-            None => self.main.dial(to).await.map(Either::Main),
+        self.ssh.drained(&to.key).await;
+        if distribution(to).is_some() {
+            return self.pipe.dial(to).await.map(Either::Pipe);
+        }
+        let Some(alias) = ssh_alias(to) else {
+            return self.main.dial(to).await.map(Either::Main);
+        };
+        match self.pipe.route(&to.key, alias) {
+            Route::Ready => self.ladder(to, alias).await,
+            // Nothing else carries the pair, and no climb runs without a
+            // connection: a due route is dialed after `main` failed, or
+            // found no path within the window a first dial gives it.
+            Route::Due => {
+                let main_to = without_ssh(to);
+                let main = tokio::time::timeout(limits::DIRECT_WITHIN, self.main.dial(&main_to));
+                let failed = match main.await {
+                    Ok(Ok(conn)) => return Ok(Either::Main(conn)),
+                    Ok(Err(failed)) => failed.to_string(),
+                    Err(_) => "no path opened in its window".to_owned(),
+                };
+                let ssh_to = PeerAddr::new(to.key, vec![Candidate::Ssh(alias.to_owned())]);
+                self.ssh_alone(&ssh_to).await.map_err(|ssh| {
+                    TransportError::Unreachable(format!("{failed}; over SSH: {ssh}"))
+                })
+            }
+            Route::Held | Route::Handed | Route::None => {
+                self.main.dial(&without_ssh(to)).await.map(Either::Main)
+            }
         }
     }
 
@@ -383,7 +908,57 @@ impl<T: PeerTransport> PeerTransport for Beside<T> {
         self.main.relay().await
     }
 
+    /// The climb's dial: the attempt the first dial handed on, else a new
+    /// SSH carrier.
+    async fn dial_route(&self, to: &PeerAddr) -> Result<Self::Conn, TransportError> {
+        let Some(alias) = ssh_alias(to) else {
+            return Err(TransportError::Unreachable(
+                "the address names no SSH alias".to_owned(),
+            ));
+        };
+        self.ssh.drained(&to.key).await;
+        let ssh_to = PeerAddr::new(to.key, vec![Candidate::Ssh(alias.to_owned())]);
+        self.ssh_alone(&ssh_to).await
+    }
+
+    fn route(&self, to: &PeerAddr) -> Route {
+        let Some(alias) = ssh_alias(to) else {
+            return Route::None;
+        };
+        if distribution(to).is_some() {
+            return Route::None;
+        }
+        if self.handed(&to.key).is_some() {
+            return Route::Handed;
+        }
+        self.pipe.route(&to.key, alias)
+    }
+
+    fn route_fell(&self, key: &PeerKey) {
+        if let Some(routes) = &self.pipe.routes {
+            routes.fell(key);
+        }
+    }
+
+    fn route_stayed(&self, key: &PeerKey) {
+        if let Some(routes) = &self.pipe.routes {
+            routes.stayed(key);
+        }
+    }
+
+    fn network_changed(&self) {
+        if let Some(routes) = &self.pipe.routes {
+            routes.network_changed();
+        }
+        self.main.network_changed();
+    }
+
     async fn close(&self) {
+        self.ssh.closed.send_replace(true);
+        let handed: Vec<_> = lock(&self.ssh.handed).drain().map(|(_, a)| a).collect();
+        for attempt in handed {
+            attempt.end(&self.ssh);
+        }
         self.pipe.close().await;
         self.main.close().await;
     }
@@ -425,6 +1000,13 @@ impl<M: PeerConn, P: PeerConn> PeerConn for Either<M, P> {
         match self {
             Self::Main(conn) => conn.path(),
             Self::Pipe(conn) => conn.path(),
+        }
+    }
+
+    fn chosen_path(&self) -> Option<PathKind> {
+        match self {
+            Self::Main(conn) => conn.chosen_path(),
+            Self::Pipe(conn) => conn.chosen_path(),
         }
     }
 
@@ -554,7 +1136,7 @@ mod tests {
         let distribution = Arc::clone(distribution);
         PipeTransport::dialing(key, move |_| {
             let (near, far) = LocalStream::pair().unwrap();
-            distribution.arrived(far.into());
+            distribution.arrived(far.into(), PathKind::Local);
             async move { Ok(Carrier::from(near)) }
         })
     }
@@ -627,13 +1209,13 @@ mod tests {
         let mut silent = Vec::new();
         for _ in 0..limits::MAX_ADMITTING {
             let (near, far) = LocalStream::pair().unwrap();
-            distro.arrived(far.into());
+            distro.arrived(far.into(), PathKind::Local);
             silent.push(near);
         }
         assert_eq!(distro.admitting.available_permits(), 0);
         // Past the cap: ended before any of its bytes are read.
         let (mut near, far) = LocalStream::pair().unwrap();
-        distro.arrived(far.into());
+        distro.arrived(far.into(), PathKind::Local);
         near.set_read_timeout(Some(WITHIN)).unwrap();
         assert_eq!(near.read(&mut [0_u8; 1]).unwrap(), 0);
 
@@ -693,9 +1275,127 @@ mod tests {
             Err(TransportError::Closed)
         ));
         let (mut near, far) = LocalStream::pair().unwrap();
-        distro.arrived(far.into());
+        distro.arrived(far.into(), PathKind::Local);
         near.set_read_timeout(Some(WITHIN)).unwrap();
         assert_eq!(near.read(&mut [0_u8; 1]).unwrap(), 0);
+    }
+
+    /// A connection says the way its carrier came: one `hide device carry
+    /// --ssh` handed over reads SSH on both ends, a distribution's reads
+    /// inside one machine.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_arrived_ssh_carrier_reads_ssh_and_a_wsl_one_local() {
+        let far = Arc::new(PipeTransport::accepting(key()));
+        for (path, to) in [
+            (
+                PathKind::Ssh,
+                PeerAddr::new(far.key(), vec![Candidate::Ssh("studio".to_owned())]),
+            ),
+            (PathKind::Local, in_wsl(far.key())),
+        ] {
+            let arrives = Arc::clone(&far);
+            let near = PipeTransport::dialing(key(), move |_| {
+                let (near, theirs) = LocalStream::pair().unwrap();
+                arrives.arrived(theirs.into(), path);
+                async move { Ok(Carrier::from(near)) }
+            });
+            let (dialed, accepted) = within("the connection", async {
+                tokio::join!(near.dial(&to), far.accept())
+            })
+            .await;
+            assert_eq!(
+                (dialed.unwrap().path(), accepted.unwrap().path()),
+                (path, path)
+            );
+        }
+    }
+
+    /// A handed attempt that proved just before its own bound is kept only
+    /// until that bound, not `TAKE_WITHIN` past its proof: it leaves the
+    /// handed list and its connection ends on both machines.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_handed_attempt_proved_near_its_bound_ends_at_that_bound() {
+        let far = Arc::new(PipeTransport::accepting(key()));
+        let arrives = Arc::clone(&far);
+        let ours = key();
+        let twin = MachineKey::from_secret(&ours.secret());
+        let pipe = PipeTransport::dialing(twin, move |_| {
+            let (near, theirs) = LocalStream::pair().unwrap();
+            arrives.arrived(theirs.into(), PathKind::Ssh);
+            async move { Ok(Carrier::from(near)) }
+        });
+        let beside = Beside::new(Net::new().join(ours), pipe);
+        let to = PeerAddr::new(far.key(), vec![Candidate::Ssh("studio".to_owned())]);
+        let left = Duration::from_millis(800);
+        let started = Instant::now() - (limits::CARRIER_WITHIN - left);
+        let attempt = SshAttempt::start_at(&beside.pipe, to.clone(), started);
+        let theirs = within("the far end", far.accept()).await.unwrap();
+        within("the proof", async {
+            while !attempt.proved() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        let proved = Instant::now();
+        beside.hand(to.key, attempt);
+        within("its end", async {
+            while beside.handed(&to.key).is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            proved.elapsed() < limits::TAKE_WITHIN,
+            "kept past its bound: {:?}",
+            proved.elapsed()
+        );
+        within("the far connection's end", theirs.closed()).await;
+    }
+
+    /// A dial tells its carrier what the proof found, once, before it
+    /// returns; a check tells nothing, admits nothing and closes its carrier.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dial_tells_its_carrier_the_proof_once_and_a_check_tells_nothing() {
+        let far = Arc::new(PipeTransport::accepting(key()));
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let (arrives, heard) = (Arc::clone(&far), Arc::clone(&told));
+        let near = PipeTransport::dialing(key(), move |_| {
+            let (near, theirs) = LocalStream::pair().unwrap();
+            arrives.arrived(theirs.into(), PathKind::Ssh);
+            let heard = Arc::clone(&heard);
+            async move { Ok(Carrier::from(near).told(move |proof| heard.lock().unwrap().push(proof))) }
+        });
+        let to = PeerAddr::new(far.key(), vec![Candidate::Ssh("studio".to_owned())]);
+        let (dialed, accepted) = within("the connection", async {
+            tokio::join!(near.dial(&to), far.accept())
+        })
+        .await;
+        dialed.unwrap();
+        accepted.unwrap();
+        let other = PeerAddr::new(key().public(), vec![Candidate::Ssh("other".to_owned())]);
+        assert!(within("the refusal", near.dial(&other)).await.is_err());
+        assert_eq!(
+            *told.lock().unwrap(),
+            vec![Some(Proof::Proved), Some(Proof::OtherKey(far.key()))]
+        );
+
+        // A check: the proof's outcome, no told, nothing to accept.
+        let (mine, theirs) = LocalStream::pair().unwrap();
+        far.arrived(theirs.into(), PathKind::Ssh);
+        let heard = Arc::clone(&told);
+        let carrier = Carrier::from(mine).told(move |proof| heard.lock().unwrap().push(proof));
+        let checked = within("the check", near.check(carrier, &far.key(), WITHIN))
+            .await
+            .unwrap();
+        assert_eq!(checked, Proof::Proved);
+        assert_eq!(told.lock().unwrap().len(), 2, "a check tells nothing");
+        // wait-ok: proves an absence, that nothing reaches the far queue.
+        let accepted = tokio::time::timeout(Duration::from_millis(300), far.accept()).await;
+        // A carrier proved and closed at once may still reach the far
+        // queue; it is over there.
+        if let Ok(Ok(conn)) = accepted {
+            within("its end", conn.closed()).await;
+        }
     }
 
     /// Beside another transport, an address that names a distribution goes

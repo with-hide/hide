@@ -590,6 +590,20 @@ function Step-Attach([string]$program, [string]$stateDir) {
     Hand-Over (Native $program) $words 'attach'
 }
 
+# Starts the program the node names, with its words, in the script's place:
+# the carrier of the connection two Hides keep over SSH, whose input and
+# output are the link's own from its answer on.
+function Step-Carry([string]$count) {
+    $words = New-Object Collections.Generic.List[string]
+    for ($n = 0; $n -lt [int]$count; $n++) { $words.Add((Read-Line)) }
+    if ($words.Count -lt 1) { Say fail '@CARRY_ABSENT@'; exit 65 }
+    $program = $words[0]
+    if (-not (Absolute $program) -or -not [IO.File]::Exists((Native $program))) { Say fail '@CARRY_ABSENT@'; exit 65 }
+    $rest = @()
+    if ($words.Count -gt 1) { $rest = $words.GetRange(1, $words.Count - 1).ToArray() }
+    Hand-Over (Native $program) $rest 'carry'
+}
+
 # Runs the command with no input and answers its status and both outputs,
 # each kept to $cap bytes: one that writes past it is ended with everything
 # it started, and refused. When the command ends, whatever it started and
@@ -676,6 +690,7 @@ try {
             'start' { Step-Start $fields[1] $fields[2] }
             'run' { Step-Run $fields[1] $fields[2] }
             'attach' { Step-Attach $fields[1] $fields[2] }
+            'carry' { Step-Carry $fields[1] }
             default { Say fail "unknown step $($fields[0])"; exit 64 }
         }
     }

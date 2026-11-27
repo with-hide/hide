@@ -79,6 +79,7 @@ pub mod peer_core;
 pub mod peer_dial;
 pub mod peer_host;
 pub mod peer_inbox;
+pub mod peer_ssh;
 pub mod placement;
 mod product_analytics;
 pub mod ps_cli;
@@ -626,6 +627,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             // system.
             hide_node::ssh::host::wsl::WslAccess::of_this_pc()
                 .map(|access| pairing_wsl::Carriers::new(access, reach.clone())),
+            // A host this machine keeps is reached over SSH when no direct
+            // path opens, on every system.
+            Some(peer_ssh::SshCarriers::new(reach.clone())),
         ),
         shutdown.clone(),
     );
@@ -710,6 +714,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     let listeners = Arc::new(accepting::CoreListeners::default());
     let app = AppState {
         core: Arc::clone(&core),
+        ssh_routes: peers.ssh().cloned(),
         boundary,
         roots,
         watch: Arc::clone(&watch),
@@ -957,7 +962,7 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
                 packages,
                 state_dir: env.state_dir.clone(),
                 // A node reaches no WSL distribution: only a core does.
-                peer: peer_host::Settings::of(&env, node.as_str(), None, None),
+                peer: peer_host::Settings::of(&env, node.as_str(), None, None, None),
             }),
     )?;
     hide_core::diagnostic!(serde_json::json!({

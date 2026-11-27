@@ -59,6 +59,41 @@ pub struct PeerMachine {
     /// devices (`name_helper_devices`); the daemon leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helper_device: Option<String>,
+    /// Where this machine's SSH route to it stands, when the route is
+    /// parked until the operator acts: what the relay tip
+    /// says instead of its usual line. Never the alias, which is this
+    /// machine's own fact, so the row is the same for every connection
+    /// that reads the snapshot.
+    #[serde(default)]
+    pub ssh: Option<PeerSsh>,
+}
+
+/// This machine's SSH route to a paired machine, as a row shows it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PeerSsh {
+    pub blocked: PeerSshBlocked,
+}
+
+/// Why an SSH route waits for the operator: what they do about it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerSshBlocked {
+    /// The login asks something, which a route nobody pressed for never
+    /// answers.
+    SignIn,
+    /// The server's key changed: checked in a terminal.
+    CheckHostKey,
+    /// This Hide was updated since it started: opened again, it signs in.
+    ReopenHide,
+    /// The other machine's Hide is too old to carry a connection over SSH,
+    /// or has no `hide` command.
+    UpdateThere,
+    /// It did not connect for a reason only a retry can change.
+    Retry,
+    /// The alias reached another Hide, and turning the route off could not
+    /// be saved.
+    NotSaved,
 }
 
 /// Where the direction "this machine opens it" stands.
@@ -95,6 +130,8 @@ pub enum PeerPath {
     Relay,
     /// Inside one machine: a WSL distribution and its PC.
     Local,
+    /// Through the system `ssh`.
+    Ssh,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -176,6 +213,7 @@ pub fn answer(machine: &PeerMachine) -> serde_json::Value {
         "reason": machine.reason,
         "update": machine.update,
         "helper_device": machine.helper_device,
+        "ssh": machine.ssh,
     })
 }
 
@@ -197,6 +235,7 @@ mod tests {
             update: None,
             wsl: None,
             helper_device: None,
+            ssh: None,
         }
     }
 

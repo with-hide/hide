@@ -149,8 +149,12 @@ pub enum Verb {
     /// What the PC of a WSL distribution runs in it through `wsl.exe` to
     /// reach its core (D-27): this command's input and output become the
     /// carrier of the connection between the two; not a command a person
-    /// types.
-    Carry,
+    /// types. With `--ssh`, what a paired machine runs here over its SSH
+    /// login: it never starts a core, and carries only to a
+    /// daemon that answers it carries over SSH.
+    Carry {
+        ssh: bool,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -168,6 +172,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
     let directed = matches!(verb, Some("pause" | "resume" | "remove"));
     let mut json = false;
     let mut wait = false;
+    let mut ssh = false;
     let mut wsl = false;
     let mut install = false;
     let mut helper = None;
@@ -188,6 +193,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
             }
             "--install" if verb == Some("switch") && !install => {
                 install = true;
+                continue;
+            }
+            "--ssh" if verb == Some("carry") && !ssh => {
+                ssh = true;
                 continue;
             }
             "--wsl" if accept && !wsl => {
@@ -293,7 +302,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
             install,
         },
         (Some("look-ssh"), []) if name.is_none() => Verb::LookSsh,
-        (Some("carry"), []) if name.is_none() && !json => Verb::Carry,
+        (Some("carry"), []) if name.is_none() && !json => Verb::Carry { ssh },
         (Some("accept-ssh"), []) => match (request, key, device, name) {
             (Some(request), Some(key), Some(device), Some(name)) => Verb::AcceptSsh {
                 request,
@@ -322,8 +331,8 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
 pub fn run(env: &Env, cli: &DeviceCli) -> Result<(), String> {
     // A carrier's output is the connection's bytes: nothing else is ever
     // printed there, and a refusal is the code this command ends with.
-    if cli.verb == Verb::Carry {
-        return carry(env);
+    if let Verb::Carry { ssh } = cli.verb {
+        return carry(env, ssh);
     }
     let (code, message, device) = match answer(env, cli) {
         Ok(Printed::Done) => return Ok(()),
@@ -528,7 +537,7 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             };
             Ok(Printed::Value(answer, lines))
         }
-        Verb::Carry => unreachable!("run answers it before anything is printed"),
+        Verb::Carry { .. } => unreachable!("run answers it before anything is printed"),
         Verb::LookSsh => {
             // Read by the machine that ran it, never by a person.
             let look = |core: bool, runs: bool| {
@@ -664,19 +673,38 @@ fn add_projects(env: &Env, projects: &[String], over: Instant) -> usize {
 /// first, as a login starts it: a distribution with no systemd has nothing
 /// else that does, so its core lives while the distribution runs. An
 /// account that never ran a core is left as it is.
-fn carry(env: &Env) -> Result<(), String> {
+///
+/// Over SSH (`ssh`) it starts nothing: a background dial never
+/// starts Hide on another machine, so a core that does not run ends it
+/// with `hide_not_running`. It carries only to a daemon that answers it
+/// carries over SSH, so every SSH connection's two ends are of a build that
+/// knows the SSH path; any other answer ends it with `ssh_update_there`
+/// before a byte is carried. A refusal is one JSON line on the error output,
+/// which the dialing machine reads.
+fn carry(env: &Env, ssh: bool) -> Result<(), String> {
+    match carried(env, ssh) {
+        Err(code) if ssh => {
+            eprintln!("{}", json!({ "ok": false, "reason": code }));
+            std::process::exit(3);
+        }
+        carried => carried,
+    }
+}
+
+fn carried(env: &Env, ssh: bool) -> Result<(), String> {
     use std::io::Read as _;
     if env.pane_id.is_some() || env.access.is_some() {
         return Err("device_from_pane".to_owned());
     }
     use crate::workspace_cli::NoCarrier;
-    let stream = match crate::workspace_cli::carrier(env) {
+    let stream = match crate::workspace_cli::carrier(env, ssh) {
         Ok(stream) => stream,
+        Err(NoCarrier::NoDaemon(_)) if ssh => return Err("hide_not_running".to_owned()),
         Err(NoCarrier::NoDaemon(_))
             if hide_kit::layout::daemon_lock(&env.state_dir).exists()
                 && crate::cli::core_started(env) =>
         {
-            crate::workspace_cli::carrier(env).map_err(NoCarrier::code)?
+            crate::workspace_cli::carrier(env, false).map_err(NoCarrier::code)?
         }
         Err(refused) => return Err(refused.code()),
     };
@@ -783,7 +811,20 @@ fn add_alias(
         .and_then(|looked| looked["looked"]["state"].as_str())
     {
         Some("ready") => {
-            let mut value = pairing(env, json!({"verb":"pair_ssh","alias":alias}))?;
+            let answer =
+                crate::workspace_cli::pairing_ask(env, json!({"verb":"pair_ssh","alias":alias}))
+                    .map_err(Refused::Unreachable)?;
+            // A machine paired already: the refusal says what became of the
+            // alias.
+            if answer["reason"] == "device_already_connected"
+                && let Some(ssh) = answer["ssh"].as_str()
+            {
+                return Err(Refused::Answer {
+                    code: "device_already_connected".to_owned(),
+                    message: alias_line(alias, ssh).trim_end().to_owned(),
+                });
+            }
+            let mut value = answered(answer)?;
             value["paired"] = json!("ssh");
             let name = value["name"].as_str().unwrap_or(alias).to_owned();
             return Ok(Printed::Value(
@@ -843,7 +884,11 @@ fn dialed_by(env: &Env, alias: &str) -> Option<Value> {
 
 /// One ask of this machine's daemon about pairing.
 fn pairing(env: &Env, ask: Value) -> Result<Value, Refused> {
-    let mut answer = crate::workspace_cli::pairing_ask(env, ask).map_err(Refused::Unreachable)?;
+    answered(crate::workspace_cli::pairing_ask(env, ask).map_err(Refused::Unreachable)?)
+}
+
+/// A pairing's answer as a value, or its refusal.
+fn answered(mut answer: Value) -> Result<Value, Refused> {
     if answer["ok"] == true {
         if let Some(fields) = answer.as_object_mut() {
             fields.remove("ok");
@@ -856,6 +901,33 @@ fn pairing(env: &Env, ask: Value) -> Result<Value, Refused> {
         .to_owned();
     let message = answer["next_action"].as_str().unwrap_or(&code).to_owned();
     Err(Refused::Answer { code, message })
+}
+
+/// What adding `alias` to a machine this computer is paired with already did
+/// with the alias: recorded once a carrier over it proved that
+/// machine's key, and otherwise why not.
+fn alias_line(alias: &str, ssh: &str) -> String {
+    match ssh {
+        "recorded" => format!(
+            "{alias} reaches a computer this one is already connected to: from now on they connect over SSH through {alias} when no direct path opens.\n"
+        ),
+        "not_proved" => format!(
+            "{alias} reaches a computer that did not prove it is the one this computer is connected to: nothing was recorded.\n"
+        ),
+        "check_timed_out" => format!(
+            "The computer {alias} reaches did not answer the check in time: nothing was recorded. Run hide device add {alias} again.\n"
+        ),
+        "update_there" => format!(
+            "Hide on {alias} is too old to connect over SSH: update it there and run hide device add {alias} again.\n"
+        ),
+        "hide_absent" => format!(
+            "{alias} has no hide command where Hide links it: open Hide there once and run hide device add {alias} again.\n"
+        ),
+        "hide_not_running" => format!(
+            "Hide is not running on {alias}: open it there and run hide device add {alias} again.\n"
+        ),
+        other => format!("{alias} is already connected; the SSH check answered {other}.\n"),
+    }
 }
 
 /// A yes or no the operator types at this terminal. Anything but a yes,
@@ -1306,22 +1378,30 @@ fn held_line(device: &str, answer: &Value) -> String {
 }
 
 /// A paired machine: who opens whom, whether the two are connected, and the
-/// path the connection takes now in one word (D-86).
+/// path the connection takes now in one word (D-86). A relayed one whose SSH
+/// route waits for the operator says why, as its row does.
 fn peer_line(peer: &Value) -> String {
     let text = |key: &str| peer[key].as_str().unwrap_or_default();
-    let mut line = format!(
-        "{}  {}  {}\n",
-        text("id"),
-        text("name"),
-        match (peer["connected"] == true, text("path")) {
-            (true, "direct") => "connected · direct",
-            (true, "tailscale") => "connected · Tailscale",
-            (true, "relay") => "connected · relay",
-            // A WSL distribution and its PC: one machine, no path to name.
-            (true, _) => "connected",
-            (false, _) => "not connected",
-        },
-    );
+    let name = text("name");
+    let parked = match peer["ssh"]["blocked"].as_str() {
+        Some("sign_in") => " · SSH: sign in needed".to_owned(),
+        Some("check_host_key") => " · SSH: check the server key".to_owned(),
+        Some("reopen_hide") => " · SSH: open Hide again".to_owned(),
+        Some("update_there") => format!(" · SSH: update {name}"),
+        Some("retry") => " · SSH: retry".to_owned(),
+        Some("not_saved") => " · SSH: could not save, retry".to_owned(),
+        _ => String::new(),
+    };
+    let state = match (peer["connected"] == true, text("path")) {
+        (true, "direct") => "connected · direct".to_owned(),
+        (true, "tailscale") => "connected · Tailscale".to_owned(),
+        (true, "ssh") => "connected · SSH".to_owned(),
+        (true, "relay") => format!("connected · relay{parked}"),
+        // A WSL distribution and its PC: one machine, no path to name.
+        (true, _) => "connected".to_owned(),
+        (false, _) => "not connected".to_owned(),
+    };
+    let mut line = format!("{}  {name}  {state}\n", text("id"));
     if let Some(opens) = peer["opens"].as_str() {
         line.push_str(&format!(
             "  this machine opens it: {}\n",
@@ -1457,6 +1537,38 @@ mod tests {
             first(peer(false, Value::Null)),
             "m1  Mac mini  not connected"
         );
+        assert_eq!(
+            first(peer(true, json!("ssh"))),
+            "m1  Mac mini  connected · SSH"
+        );
+    }
+
+    /// A relayed machine whose SSH route waits for the operator says why,
+    /// naming the machine and never the alias.
+    #[test]
+    fn a_relayed_machine_says_why_its_ssh_route_waits() {
+        let first = |blocked: &str| {
+            let peer = json!({"id": "m1", "name": "Mac mini", "connected": true, "path": "relay", "ssh": {"blocked": blocked}});
+            peer_line(&peer).lines().next().unwrap().to_owned()
+        };
+        for (blocked, said) in [
+            ("sign_in", "SSH: sign in needed"),
+            ("check_host_key", "SSH: check the server key"),
+            ("reopen_hide", "SSH: open Hide again"),
+            ("update_there", "SSH: update Mac mini"),
+            ("retry", "SSH: retry"),
+            ("not_saved", "SSH: could not save, retry"),
+        ] {
+            assert_eq!(
+                first(blocked),
+                format!("m1  Mac mini  connected · relay · {said}")
+            );
+        }
+        let direct = json!({"id": "m1", "name": "Mac mini", "connected": true, "path": "direct", "ssh": {"blocked": "retry"}});
+        assert_eq!(
+            peer_line(&direct).lines().next().unwrap(),
+            "m1  Mac mini  connected · direct"
+        );
     }
 
     /// `projects-ssh` takes each folder the asking machine had registered
@@ -1507,10 +1619,27 @@ mod tests {
     /// takes no word, and no `--json` that would promise an answer line.
     #[test]
     fn carry_takes_nothing_and_answers_no_json() {
-        assert_eq!(parse_words(&["carry"]).unwrap().verb, Verb::Carry);
+        assert_eq!(
+            parse_words(&["carry"]).unwrap().verb,
+            Verb::Carry { ssh: false }
+        );
         assert!(parse_words(&["carry", "Ubuntu"]).is_err());
         assert!(parse_words(&["carry", "--json"]).is_err());
         assert!(parse_words(&["carry", "--wait"]).is_err());
+    }
+
+    /// `carry --ssh` takes its one flag once and nothing else, and no other
+    /// verb takes it.
+    #[test]
+    fn carry_over_ssh_takes_one_flag() {
+        assert_eq!(
+            parse_words(&["carry", "--ssh"]).unwrap().verb,
+            Verb::Carry { ssh: true }
+        );
+        assert!(parse_words(&["carry", "--ssh", "--ssh"]).is_err());
+        assert!(parse_words(&["carry", "--ssh", "--json"]).is_err());
+        assert!(parse_words(&["carry", "--ssh", "studio"]).is_err());
+        assert!(parse_words(&["list", "--ssh"]).is_err());
     }
 
     #[test]

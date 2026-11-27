@@ -119,6 +119,12 @@ impl Upstream {
         *lock_recover(&self.press) = press;
     }
 
+    /// Whether the next dial may ask the operator: only after a press
+    /// handed it a sign-in.
+    pub fn asks(&self) -> bool {
+        lock_recover(&self.press).is_some()
+    }
+
     /// The alias this connection dials.
     pub fn alias(&self) -> &str {
         self.target.alias()
@@ -184,6 +190,20 @@ impl Upstream {
             None => self.open()?,
         };
         session.attach(program, state_dir)
+    }
+
+    /// Starts the program `program` names from the account's home and
+    /// system in place of the start script, on the session the last step
+    /// left or a new one; see [`Session::carry`].
+    pub fn carry(
+        &self,
+        program: impl FnOnce(&str, &str) -> Vec<String>,
+    ) -> Result<AttachChannel, SessionError> {
+        let session = match lock_recover(&self.held).take() {
+            Some(session) => session,
+            None => self.open()?,
+        };
+        session.carry(program)
     }
 
     /// The machine's system (`macos`, `linux` or `windows`), read at the

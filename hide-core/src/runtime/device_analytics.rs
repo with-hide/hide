@@ -129,9 +129,23 @@ impl Runtime {
                 "component": "product_analytics", "kind": "device_outcome_limit",
             }));
         }
+        // A paired machine's device names the path its connection came up
+        // on, as the core holds it for that machine now.
+        let path = match (outcome, self.link_origin(device)) {
+            (DeviceOutcome::Ready, Some(crate::model::LinkOrigin::Peer { key, .. })) => self
+                .snapshot
+                .navigator
+                .peers
+                .iter()
+                .find(|machine| machine.key == *key)
+                .and_then(|machine| machine.path)
+                .map(crate::product_analytics::DevicePath::of),
+            _ => None,
+        };
         sink.capture(Event::DeviceConnected {
             outcome,
             platform: attempt.platform,
+            path,
         });
     }
 

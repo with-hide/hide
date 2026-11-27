@@ -40,6 +40,11 @@ const GUEST: &str = "pairing-guest";
 
 const WITHIN: Duration = Duration::from_secs(40);
 
+/// A relay nothing answers at: with `HIDE_PEER_RELAY_ONLY` an endpoint has
+/// no IP path and reaches no relay, as two machines with no way to each
+/// other but SSH.
+const NO_RELAY: &str = "https://127.0.0.1:9";
+
 fn host_env(root: &Path) -> Env {
     let state = root.join("host-state");
     hide_platform::fs::private::create_dir_all(&state).unwrap();
@@ -150,6 +155,9 @@ struct Terminal {
     home: PathBuf,
     state: PathBuf,
     machine: Option<&'static str>,
+    /// The daemon this terminal starts has no IP path and an unreachable
+    /// relay, so nothing but SSH reaches another machine from it.
+    no_direct_path: bool,
 }
 
 impl Terminal {
@@ -161,7 +169,14 @@ impl Terminal {
             home,
             state,
             machine,
+            no_direct_path: false,
         }
+    }
+
+    /// This terminal, its daemon reaching nothing but over SSH.
+    fn with_no_direct_path(mut self) -> Self {
+        self.no_direct_path = true;
+        self
     }
 
     fn command_of(&self, program: &Path, args: &[&str]) -> Command {
@@ -190,7 +205,6 @@ impl Terminal {
             .env("HIDE_STATE_DIR", &self.state)
             .env("HIDE_TAILSCALE_BIN", self.home.join("no-tailscale"))
             .env("HIDE_RELAY_URL", "ws://127.0.0.1:9/ws")
-            .env("HIDE_PEER_DIRECT", "127.0.0.1:0")
             .env("LANG", "en_US.UTF-8")
             .env_remove("LC_ALL")
             .env_remove("LC_MESSAGES")
@@ -200,6 +214,12 @@ impl Terminal {
         if let Some(machine) = self.machine {
             command.env(hided::env::HIDE_MACHINE_ID, machine);
         }
+        match self.no_direct_path {
+            true => command
+                .env("HIDE_PEER_RELAY", NO_RELAY)
+                .env("HIDE_PEER_RELAY_ONLY", "1"),
+            false => command.env("HIDE_PEER_DIRECT", "127.0.0.1:0"),
+        };
         command
     }
 
@@ -1003,10 +1023,18 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
         .collect();
     assert_eq!(linked, ["hide"]);
 
-    // The same machine added again is the one it already is.
-    guest
-        .run(&["device", "add", "studio", "--json"])
-        .refused("device_already_connected");
+    // The same machine added again is the one it already is, and its key,
+    // proved over the alias, keeps the alias as its SSH route.
+    let again = guest.run(&["device", "add", "studio", "--json"]);
+    assert!(!again.ok, "{}", again.text());
+    assert_eq!(again.json()["error"]["code"], "device_already_connected");
+    assert!(
+        again.json()["error"]["message"]
+            .as_str()
+            .is_some_and(|said| said.contains("connect over SSH through studio")),
+        "{}",
+        again.text()
+    );
     assert_eq!(guest.peers().len(), 1);
 
     let removed = guest.run(&["device", "remove", "studio", "--json"]);
@@ -1023,6 +1051,327 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
     ]);
     assert!(removed.ok, "{}", removed.text());
     ssh.stop().unwrap();
+}
+
+/// Two Hides with no direct path and no relay between them connect over the
+/// SSH alias the guest paired through, and both say the path is SSH:
+/// the guest's first dial runs the ladder, the far account's
+/// `hide device carry --ssh` hands its stdio to the target's daemon, and the
+/// pending grant is confirmed over that connection.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
+async fn two_hides_with_no_other_way_connect_over_ssh() {
+    let pair = SshOnly::connected().await;
+    let listed = pair.guest.run(&["device", "list"]);
+    assert!(
+        listed.text().contains("connected · SSH"),
+        "{}",
+        listed.text()
+    );
+    // The alias is the guest's own: the target's records never name it.
+    let records =
+        std::fs::read_to_string(hide_kit::layout::peer_grants(&pair.target.state)).unwrap();
+    assert!(!records.contains("studio"), "{records}");
+}
+
+/// A cut SSH carrier is dialed again: ending only the carrier's `ssh` on
+/// the guest ends the connection, and with no press the pair is back on
+/// SSH on both machines, after the route's wait, since the connection that
+/// fell was short.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
+async fn a_cut_ssh_carrier_is_dialed_again() {
+    let pair = SshOnly::connected().await;
+    let carriers = pair.carrier_ssh();
+    assert_eq!(carriers.len(), 1, "one carrier ssh: {carriers:?}");
+    let killed = Command::new("kill")
+        .args(["-TERM", &carriers[0].to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    pair.guest
+        .peer_becomes("the guest sees the cut", |peer| peer["connected"] == false)
+        .await;
+    // A connection that ended within `STAYED_AFTER` puts the route into
+    // its first wait (`CLIMB_FIRST`, 30 s); the keeper's redials, doubling
+    // from 1 s, reach the due route at about 31 s, and a due route gives the
+    // other transport `DIRECT_WITHIN` (4 s) before it signs in: 31-35 s,
+    // and 12 s more for the sign-in and both lists reading it on a loaded
+    // runner.
+    let deadline = Instant::now()
+        + hide_peer::limits::CLIMB_FIRST
+        + hide_peer::limits::DIRECT_WITHIN
+        + Duration::from_secs(12);
+    for (side, terminal) in [("guest", &pair.guest), ("target", &pair.target)] {
+        loop {
+            let peers = terminal.peers();
+            if let [peer] = peers.as_slice()
+                && peer["connected"] == true
+                && peer["path"] == "ssh"
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the {side} is not back on SSH: {peers:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await; // wait-ok: the other machine's answer crosses the connection; the list is the daemon's own account of it
+        }
+    }
+    assert_eq!(pair.carrier_ssh().len(), 1, "one carrier again");
+}
+
+/// An SSH attempt given up while it runs leaves no process on either
+/// machine: a carrier whose far command is held before it carries is
+/// signing in when the guest forgets the target, and both the guest's `ssh`
+/// and the target's far command end.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
+async fn a_cancelled_ssh_attempt_leaves_no_process_on_either_machine() {
+    let pair = SshOnly::connected().await;
+    let bound = Duration::from_secs(10);
+    // The far command now reads its input and carries nothing.
+    pair.far_hide_is("#!/bin/sh\ncat > /dev/null\n");
+    pair.cut_and_retry().await;
+    pair.until("the attempt reaches the held far command", WITHIN, || {
+        pair.carrier_ssh().len() == 1 && !pair.far_carriers().is_empty()
+    })
+    .await;
+    let removed = pair
+        .guest
+        .run(&["device", "remove", &pair.host_id(), "--json"]);
+    assert!(removed.ok, "{}", removed.text());
+    pair.until("no ssh left on the guest", bound, || {
+        pair.carrier_ssh().is_empty()
+    })
+    .await;
+    pair.until("no far command left on the target", bound, || {
+        pair.far_carriers().is_empty()
+    })
+    .await;
+}
+
+/// An alias that now leads to another Hide carries nothing: the carrier
+/// reaches a Hide that proves another key, the guest turns the route off in
+/// its records, that Hide admits no connection and lists no machine, and
+/// no process stays on either side.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
+async fn an_ssh_alias_that_leads_to_another_hide_carries_nothing() {
+    let pair = SshOnly::connected().await;
+    let other = Terminal::new(
+        pair.root.path().join("other-home"),
+        pair.root.path().join("other-state"),
+        Some("other-machine"),
+    )
+    .with_no_direct_path();
+    let _stop = StopOnDrop(&other);
+    let started = other.run(&["connect"]);
+    assert!(started.ok, "the other Hide: {}", started.text());
+    // The target's account now runs the other Hide's `hide`.
+    pair.far_hide_is(&format!(
+        "#!/bin/sh\nHOME='{}' HIDE_STATE_DIR='{}' {}='other-machine' '{}' \"$@\"\n",
+        other.home.display(),
+        other.state.display(),
+        hided::env::HIDE_MACHINE_ID,
+        env!("CARGO_BIN_EXE_hide"),
+    ));
+    pair.cut_and_retry().await;
+    let known = hide_kit::layout::peer_known(&pair.guest.state);
+    pair.until("the guest turns the route off", WITHIN, || {
+        std::fs::read_to_string(&known).is_ok_and(|records| {
+            serde_json::from_str::<Value>(&records)
+                .is_ok_and(|records| records.to_string().contains(r#""ssh":"off""#))
+        })
+    })
+    .await;
+    assert!(
+        other.peers().is_empty(),
+        "the other Hide admitted the guest"
+    );
+    let bound = Duration::from_secs(10);
+    pair.until("no ssh left on the guest", bound, || {
+        pair.carrier_ssh().is_empty()
+    })
+    .await;
+    pair.until("no far command left on the target", bound, || {
+        pair.far_carriers().is_empty()
+    })
+    .await;
+    let listed = pair.guest.peers();
+    assert_eq!(listed[0]["connected"], false, "{listed:?}");
+}
+
+/// Two Hides with no IP path and an unreachable relay, connected over SSH:
+/// the target's daemon behind a real `sshd`, the guest's started by its
+/// `hide connect`, paired by `hide device add studio`. Its drop stops the
+/// guest's daemon and the `sshd`.
+#[cfg(unix)]
+struct SshOnly {
+    target: Terminal,
+    guest: Terminal,
+    ssh: crate::support::sshd::Sshd,
+    _running: hided::RunningDaemon,
+    root: tempfile::TempDir,
+}
+
+#[cfg(unix)]
+impl SshOnly {
+    async fn connected() -> Self {
+        use crate::support::sshd::Sshd;
+
+        let root = crate::fixtures::fixture_root("hq");
+        let mut env = host_env(root.path());
+        env.peer_direct = None;
+        env.peer_relay = Some(NO_RELAY.to_owned());
+        env.peer_relay_only = true;
+        let running = hided::start_daemon(env).await.unwrap();
+        let target = Terminal::new(
+            root.path().join("host-home"),
+            root.path().join("host-state"),
+            None,
+        )
+        .with_no_direct_path();
+        let guest = Terminal::new(
+            root.path().join("guest-home"),
+            root.path().join("guest-state"),
+            Some(GUEST),
+        )
+        .with_no_direct_path();
+        let ssh = Sshd::start(
+            &root.path().join("sshd"),
+            &[
+                (hided::env::HOME.into(), target.home.clone().into()),
+                ("HIDE_STATE_DIR".into(), target.state.clone().into()),
+            ],
+        )
+        .unwrap();
+        std::fs::create_dir_all(guest.home.join(".ssh")).unwrap();
+        std::fs::write(guest.home.join(".ssh/config"), ssh.client_config("studio")).unwrap();
+        let pair = Self {
+            target,
+            guest,
+            ssh,
+            _running: running,
+            root,
+        };
+        let connected = pair.guest.run(&["connect"]);
+        assert!(connected.ok, "the guest daemon: {}", connected.text());
+        let commands = pair.target.home.join(".local/bin");
+        std::fs::create_dir_all(&commands).unwrap();
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_hide"), commands.join("hide")).unwrap();
+
+        let added = pair.guest.run(&["device", "add", "studio", "--json"]);
+        assert!(added.ok, "{}", added.text());
+        assert_eq!(added.json()["value"]["paired"], "ssh", "{}", added.text());
+        let opened = pair
+            .guest
+            .peer_becomes("the guest opens the target over SSH", |peer| {
+                peer["opens"] == "active" && peer["connected"] == true
+            })
+            .await;
+        assert_eq!(opened["path"], "ssh", "{opened}");
+        let opener = pair
+            .target
+            .peer_becomes("the target is opened by the guest over SSH", |peer| {
+                peer["opened_by"] == "active" && peer["connected"] == true
+            })
+            .await;
+        assert_eq!(opener["path"], "ssh", "{opener}");
+        pair
+    }
+
+    /// The target as the guest names it.
+    fn host_id(&self) -> String {
+        let peers = self.guest.peers();
+        peers[0]["id"].as_str().unwrap().to_owned()
+    }
+
+    /// The processes the target's account runs for a carrier: its
+    /// `hide device carry --ssh`, started by the path the carry step names.
+    fn far_carriers(&self) -> Vec<u32> {
+        let hide = self.target.home.join(".local/bin/hide");
+        self.processes(|command| command.contains(hide.to_string_lossy().as_ref()))
+    }
+
+    /// Puts `script` where the carry step finds the target's `hide`.
+    fn far_hide_is(&self, script: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let hide = self.target.home.join(".local/bin/hide");
+        std::fs::remove_file(&hide).unwrap();
+        std::fs::write(&hide, script).unwrap();
+        std::fs::set_permissions(&hide, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Ends the carrier the pair runs on now, by its `ssh` here, and has
+    /// the guest dial again at once.
+    async fn cut_and_retry(&self) {
+        let carriers = self.carrier_ssh();
+        assert_eq!(carriers.len(), 1, "one carrier ssh: {carriers:?}");
+        let killed = Command::new("kill")
+            .args(["-TERM", &carriers[0].to_string()])
+            .status()
+            .unwrap();
+        assert!(killed.success());
+        self.guest
+            .peer_becomes("the guest sees the cut", |peer| peer["connected"] == false)
+            .await;
+        self.until("the cut carrier's far command ends", WITHIN, || {
+            self.far_carriers().is_empty()
+        })
+        .await;
+        let retried = self
+            .guest
+            .run(&["device", "retry", &self.host_id(), "--json"]);
+        assert!(retried.ok, "{}", retried.text());
+    }
+
+    /// The pids of the processes whose command line `wanted` takes.
+    fn processes(&self, wanted: impl Fn(&str) -> bool) -> Vec<u32> {
+        let listed = Command::new("ps")
+            .args(["-A", "-o", "pid=,command="])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&listed.stdout)
+            .lines()
+            .filter_map(|line| {
+                let (pid, command) = line.trim().split_once(' ')?;
+                wanted(command).then(|| pid.parse().ok()).flatten()
+            })
+            .collect()
+    }
+
+    /// Waits until `done` holds, within `bound`.
+    async fn until(&self, what: &str, bound: Duration, done: impl Fn() -> bool) {
+        let deadline = Instant::now() + bound;
+        while !done() {
+            assert!(Instant::now() < deadline, "{what}");
+            tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: processes and the records are read from outside the daemons, which announce neither
+        }
+    }
+
+    /// The `ssh` processes the guest's daemon runs to the target: the ones
+    /// that read the guest's own SSH configuration.
+    fn carrier_ssh(&self) -> Vec<u32> {
+        let config = self.guest.home.join(".ssh/config");
+        let config = config.to_string_lossy();
+        self.processes(|command| {
+            let program = command.split_whitespace().next().unwrap_or_default();
+            (program.ends_with("/ssh") || program == "ssh") && command.contains(config.as_ref())
+        })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SshOnly {
+    fn drop(&mut self) {
+        let _ = self.guest.command(&["stop"]).status();
+        let _ = self.ssh.stop();
+    }
 }
 
 /// A node is split from its core only once the two have met on the
@@ -1118,6 +1467,7 @@ async fn a_split_that_stops_before_its_commit_leaves_the_node_its_core_takes() {
         relay: None,
         relay_only: false,
         wsl: None,
+        ssh: None,
     };
     // The split runs where the node role runs it: on a thread no runtime
     // drives.
