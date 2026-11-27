@@ -252,9 +252,11 @@ export function useComposerMenus(source: ComposerMenuSource): ComposerMenus {
   };
 }
 
-/** Hide's rows whose name holds what follows `/`, case aside, in their own order. */
+/**
+ * Hide's rows whose name starts with what follows `/`, case aside, in their own order. Only a start: words inside a
+ * name (`/con` in `New conversation`) would put Hide's row over the agent's `/context`, and ↵ would run it.
+ */
 export function ownRows(own: readonly HideCommand[], query: string): readonly HideCommand[] {
-  if (query === "") return own;
   const needle = query.toLocaleLowerCase();
-  return own.filter((command) => command.name.toLocaleLowerCase().includes(needle));
+  return own.filter((command) => command.name.toLocaleLowerCase().startsWith(needle));
 }

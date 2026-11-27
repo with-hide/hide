@@ -109,12 +109,6 @@ describe("Desk's room", () => {
     expect(useUiStore.getState().screen).toEqual({ kind: "main" });
   });
 
-  it("leaves the room on its head's 나가기 ✕ (feedback 1 D2)", async () => {
-    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
-    await render(desk([]));
-    await press("[data-desk-leave]");
-    expect(useUiStore.getState().screen).toEqual({ kind: "main" });
-  });
 
   it("lands at the conversation's foot when Desk opens again, though the browser nudges the view as the replies fill in", async () => {
     const resized: (() => void)[] = [];
@@ -328,6 +322,8 @@ describe("Desk's room", () => {
     await render(desk([]));
     await act(async () => { useShellStore.setState({ deskCommands: section }); });
   };
+  // The agent's part of the `/` panel when it is one line, under Hide's own rows or alone.
+  const agentLine = () => document.body.querySelector<HTMLElement>("[data-desk-command-menu]:not([data-desk-command-menu='rows'])");
   const commandRowsShown = () => Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-command]")).map((row) => row.dataset.deskCommand);
 
   it("opens the agent's commands on a / at the box's start, filtered as typed, each with its hint and what it does", async () => {
@@ -349,6 +345,30 @@ describe("Desk's room", () => {
     expect(commandRowsShown()).toEqual(["/code-review"]);
   });
 
+  // Operator request 2026-11-27 (mission-109): Desk's head has no 새 대화 and no 나가기; 새 대화 is Hide's own first row
+  // of the `/` list, above the agent's commands and the same for every agent.
+  it("has no 새 대화 or 나가기 in its head, lists 새 대화 first on `/`, and ↵ there starts a new conversation and empties the box", async () => {
+    await withCommands("/");
+    expect(document.body.querySelector("[data-desk-chat-head] button:not([data-desk-glance-unfold])")).toBeNull();
+    const rows = Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-hide-command], [data-desk-command]")).map((row) => row.dataset.deskHideCommand ?? row.dataset.deskCommand);
+    expect(rows).toEqual(["new_conversation", "/compact", "/context", "/code-review"]);
+    // Only a start of its name lists it, so a word inside it never puts it over the agent's command.
+    await withCommands("/con");
+    expect(document.body.querySelector("[data-desk-hide-command]")).toBeNull();
+    await withCommands("/new");
+    expect(commandRowsShown()).toEqual([]);
+    await key("Enter");
+    expect(sent("desk_new_conversation")).toEqual([{}]);
+    expect(sent("desk_send")).toEqual([]);
+    expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
+  });
+
+  it("lists 새 대화 above the line that says why the agent has no list yet", async () => {
+    await withCommands("/", null);
+    expect(document.body.querySelector("[data-desk-hide-command='new_conversation']")).not.toBeNull();
+    expect(document.body.querySelector("[data-desk-command-menu]")?.textContent).toContain("Claude Code commands");
+  });
+
   it("writes the picked command and one space with ↵, sends nothing, and closes with Esc", async () => {
     await withCommands("/con");
     await key("Enter");
@@ -368,9 +388,13 @@ describe("Desk's room", () => {
     expect(sent("desk_send")).toEqual([{ text: "/co", mentions: [] }]);
   });
 
-  it("opens no / menu for an agent whose session sent an empty list, past the first word or for a / inside the words", async () => {
+  it("lists only Hide's own row for an agent whose session sent an empty list, and opens no / menu past the first word or for a / inside the words", async () => {
+    await withCommands("/", { lists: { claude: [] }, unread: {} });
+    expect(document.body.querySelector("[data-desk-hide-command='new_conversation']")).not.toBeNull();
+    expect(commandRowsShown()).toEqual([]);
+    expect(document.body.querySelector("[data-desk-command-menu]:not([data-desk-command-menu='rows'])")).toBeNull();
     const cases: [string, DeskCommands | null][] = [
-      ["/", { lists: { claude: [] }, unread: {} }],
+      ["/x", { lists: { claude: [] }, unread: {} }],
       ["/compact now", commands],
       ["see /compact", commands],
     ];
@@ -380,12 +404,12 @@ describe("Desk's room", () => {
     }
     // Another agent's list is never the chosen one's rows.
     await withCommands("/", { lists: { codex: claudeList }, unread: { claude: "sign_in" } });
-    expect(document.body.querySelector<HTMLElement>("[data-desk-command-menu]")?.dataset.deskCommandUnread).toBe("sign_in");
+    expect(agentLine()?.dataset.deskCommandUnread).toBe("sign_in");
     expect(commandRowsShown()).toEqual([]);
     // With no menu ↵ sends the words as they are.
-    await withCommands("/", { lists: { claude: [] }, unread: {} });
+    await withCommands("/x", { lists: { claude: [] }, unread: {} });
     await key("Enter");
-    expect(sent("desk_send")).toEqual([{ text: "/", mentions: [] }]);
+    expect(sent("desk_send")).toEqual([{ text: "/x", mentions: [] }]);
   });
 
   it("says when no command matches, and ↵ then sends the words", async () => {
@@ -400,7 +424,7 @@ describe("Desk's room", () => {
 
   it("says Hide is reading an agent's list it never had, why one it could not read has none, and that it is on its way while the session opens", async () => {
     await withCommands("/", { lists: {}, unread: { claude: "reading" } });
-    const reading = document.body.querySelector<HTMLElement>("[data-desk-command-menu]");
+    const reading = agentLine();
     expect(reading?.dataset.deskCommandMenu).toBe("waiting");
     expect(reading?.textContent).toContain("Getting the command list");
     for (const [why, words] of [
@@ -412,18 +436,19 @@ describe("Desk's room", () => {
       ["desk_off", "Turn on Desk"],
     ] as const) {
       await withCommands("/", { lists: {}, unread: { claude: why } });
-      const line = document.body.querySelector<HTMLElement>("[data-desk-command-menu]");
+      const line = agentLine();
       expect(line?.dataset.deskCommandMenu, why).toBe("unread");
       expect(line?.dataset.deskCommandUnread).toBe(why);
       expect(line?.textContent).toContain(words);
       expect(line?.textContent).toContain("sends it as written");
     }
-    await withCommands("/", { lists: {}, unread: { claude: "failed" } });
+    // A word Hide's row does not start leaves the line alone, and ↵ sends the words.
+    await withCommands("/x", { lists: {}, unread: { claude: "failed" } });
     await key("Enter");
-    expect(sent("desk_send")).toEqual([{ text: "/", mentions: [] }]);
+    expect(sent("desk_send")).toEqual([{ text: "/x", mentions: [] }]);
     await withCommands("/", null);
     await act(async () => { useShellStore.setState({ desk: { ...desk([]), host: { state: "starting", detail: null } } }); });
-    const waiting = document.body.querySelector<HTMLElement>("[data-desk-command-menu]");
+    const waiting = agentLine();
     expect(waiting?.dataset.deskCommandMenu).toBe("waiting");
     expect(waiting?.textContent).toContain("Getting the command list");
   });

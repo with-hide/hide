@@ -12,6 +12,7 @@ import type { DeskJob } from "../../desk";
 import type { AgentRow, DeskMentions, SessionThreadSection, SnapshotRest, ThreadPage } from "../../snapshot";
 import { useShellStore } from "../../store";
 import { useUiStore } from "../../ui";
+import { NO_SESSION_DRAFTS } from "../../sessionDrafts";
 import { TooltipProvider } from "../ui/tooltip";
 import { ThreadPanel } from "./thread-panel";
 import { clearPreviews } from "../../filePreview";
@@ -45,6 +46,7 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   saved = useShellStore.getState();
   useShellStore.setState({ connection: "live" });
+  useUiStore.setState({ sessionDrafts: NO_SESSION_DRAFTS });
   events = [];
   configureAttachments({ dispatch: (event) => events.push({ kind: event.kind, payload: event.payload as Record<string, unknown> }), sendBinary: () => undefined });
 });
@@ -58,18 +60,20 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void } = {}) {
+async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined, pane = "w1:p2", answer = 0 }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void; pane?: string; answer?: number } = {}) {
   const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn(), switchThread: vi.fn(() => "switch-1"), observeCatalog: vi.fn(() => noop), requestFileIndex: vi.fn(), deskCommandsCheck: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   mounted.push(root);
   const noop = () => undefined;
-  await act(async () => root.render(
+  const draw = (raised: number) => root.render(
     <TooltipProvider>
-      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} ask={ask} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
+      <ThreadPanel job={card} paneId={pane} answer={raised} actions={actions} foot={foot} ask={ask} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
     </TooltipProvider>,
-  ));
+  );
+  await act(async () => draw(answer));
+  const answerAgain = (raised: number) => act(async () => draw(raised));
   const box = () => container.querySelector("textarea")!;
   const type = async (value: string) => {
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
@@ -79,7 +83,7 @@ async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks 
     });
   };
   const enter = (composing = false) => act(async () => { box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: composing })); });
-  return { actions, container, root, box, type, enter };
+  return { actions, container, root, box, type, enter, answerAgain };
 }
 
 it("opens its pane's thread while shown, draws what the core read, and closes it after", async () => {
@@ -646,4 +650,35 @@ it("keeps a slot Hide cannot change in a running session read-only, and says so"
   expect(model.dataset.sessionBarFixed).toBe("true");
   expect(model.getAttribute("aria-label")).toContain("cannot change the model here yet");
   expect(container.querySelector('[data-session-bar="effort"]')?.getAttribute("data-session-bar-fixed")).toBe("true");
+});
+
+// Operator request 2026-11-27 (mission-109): a session's input keeps what was written in it per pane, as Desk's own
+// box keeps its draft, while another session is open beside Desk, and forgets it once the pane took it.
+it("keeps a session's words while another session opens beside Desk and gives them back on its return, and forgets them once sent", async () => {
+  const first = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await first.type("다크도 부탁해\n라이트도");
+  await act(async () => first.root.unmount());
+  const other = await mount({ ...job, pane_id: "w1:p3" }, null, { pane: "w1:p3" });
+  expect(other.box().value).toBe("");
+  await other.type("다른 세션");
+  await act(async () => other.root.unmount());
+  const back = await mount();
+  expect(back.box().value).toBe("다크도 부탁해\n라이트도");
+  await back.enter();
+  const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sent" } }) }));
+  expect(back.box().value).toBe("");
+  await act(async () => back.root.unmount());
+  expect((await mount()).box().value).toBe("");
+  expect((await mount({ ...job, pane_id: "w1:p3" }, null, { pane: "w1:p3" })).box().value).toBe("다른 세션");
+});
+
+// Operator request 2026-11-27 (mission-109): `답하기` gives the box the keyboard once per press; a count an earlier
+// session's press raised is no press for a session opened later.
+it("takes the keyboard on a 답하기 pressed while it is open, never on one pressed before it opened", async () => {
+  const opened = await mount(job, null, { answer: 3 });
+  expect(document.activeElement).not.toBe(opened.box());
+  await opened.answerAgain(4);
+  expect(document.activeElement).toBe(opened.box());
 });

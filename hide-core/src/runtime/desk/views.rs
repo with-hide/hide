@@ -313,7 +313,12 @@ impl Runtime {
     /// since Desk's desk has no diff tab. The session's View stays where it
     /// is, and is seen once it opened here (B25, B34); one that did not open
     /// stays to look at.
-    fn desk_open_output(&mut self, key: WorkspaceKey, id: &str, request_id: Option<String>) -> bool {
+    fn desk_open_output(
+        &mut self,
+        key: WorkspaceKey,
+        id: &str,
+        request_id: Option<String>,
+    ) -> bool {
         let desk = self.desk_key();
         let Some(display) = self.view_display(&key, id).cloned() else {
             self.desk_open_receipt(request_id, Err("desk_output_gone"));
@@ -331,7 +336,9 @@ impl Runtime {
                     "error": error.kind(),
                 }));
             }
-            let outcome = focused.map(|()| id.to_owned()).map_err(|error| error.kind());
+            let outcome = focused
+                .map(|()| id.to_owned())
+                .map_err(|error| error.kind());
             self.desk_open_receipt(request_id, outcome);
             self.mark_view_seen(&key, id);
             return true;
@@ -398,9 +405,16 @@ impl Runtime {
                     let opened = self.place_card_on(&desk, &Place::Desk, card.clone());
                     let shown = self
                         .desk_views()
-                        .and_then(|layout| layout.displays().find(|shown| shown.card.as_ref() == Some(&card)))
+                        .and_then(|layout| {
+                            layout
+                                .displays()
+                                .find(|shown| shown.card.as_ref() == Some(&card))
+                        })
                         .map(|shown| shown.id.clone());
-                    self.desk_open_receipt(request_id, shown.filter(|_| opened).ok_or("desk_output_refused"));
+                    self.desk_open_receipt(
+                        request_id,
+                        shown.filter(|_| opened).ok_or("desk_output_refused"),
+                    );
                     opened
                 }
                 None => {
@@ -424,17 +438,21 @@ impl Runtime {
 
     /// The receipt of an output open that named itself: the display of
     /// Desk's desk it placed, or why not. `None` writes nothing.
-    fn desk_open_receipt(&mut self, request_id: Option<String>, outcome: Result<String, &'static str>) {
+    fn desk_open_receipt(
+        &mut self,
+        request_id: Option<String>,
+        outcome: Result<String, &'static str>,
+    ) {
         let Some(request_id) = request_id else {
             return;
         };
         let desk = self.desk_key();
-        let outcome = outcome.map(|display_id| (desk, display_id)).map_err(|kind| {
-            crate::runtime::view_areas::LayoutRefusal {
+        let outcome = outcome
+            .map(|display_id| (desk, display_id))
+            .map_err(|kind| crate::runtime::view_areas::LayoutRefusal {
                 kind,
                 message: "The view could not be opened on Desk's desk".to_owned(),
-            }
-        });
+            });
         self.record_open_receipt(request_id, outcome);
     }
 
