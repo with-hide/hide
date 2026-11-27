@@ -7,7 +7,7 @@
 // is writing, where the `@` menu is, and the room's window state
 // (`deskRoom.ts`), which the core keeps only the widths of.
 
-import { LoaderCircleIcon, MessageSquarePlusIcon, PlayIcon } from "lucide-react";
+import { LoaderCircleIcon, PlayIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "./actions";
@@ -286,11 +286,6 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     onCommandsOpen: agent ? () => actions.deskCommandsCheck(agent.id) : undefined,
     mentions,
     projects: true,
-    // Hide's own row above the agent's commands, the same for every agent: the `/` word goes and a new conversation starts.
-    own: [{ id: "new_conversation", name: t("desk.newConversation"), description: t("desk.command.newConversationHint"), icon: MessageSquarePlusIcon, run: () => {
-      writeDraft({ draft: { text: "", mentions: [] }, caret: 0 });
-      actions.deskNewConversation();
-    } }],
     onCommand: (at, command) => writeDraft(pickCommand(draft, at, command)),
     onMention: (at, mention) => writeDraft(pickMention(draft, at, mention)),
   });

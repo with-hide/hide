@@ -199,9 +199,10 @@ export function DeskRoom({ chat, session = null, glance = false, panel = null, e
         <>
           {/* The dim covers Desk's chat and the sidebar; the session panel stands above it, bright and usable (B17). */}
           <div aria-hidden="true" className="fixed inset-0 z-10 bg-scrim" data-desk-dim="true" onPointerDown={(event) => { event.preventDefault(); onDim(); }} />
+          {/* Flush with the room's top and foot, so its tab strip lines up with Desk's head and the session's `‹ 한눈에` line. */}
           <section
             aria-label={t("desk.room.tabs")}
-            className="absolute inset-y-xs z-20 flex min-h-0 min-w-0 overflow-hidden rounded-l-lg border border-r-0 border-border bg-background shadow-overlay"
+            className="absolute inset-y-0 z-20 flex min-h-0 min-w-0 overflow-hidden border-l border-border bg-background shadow-overlay"
             style={placed.panelCovers || expanded ? { left: 0, right: placed.session } : { right: placed.session, width: placed.view }}
             data-desk-tab-panel={session !== null ? "beside_session" : "window_edge"}
             data-desk-expanded={expanded ? "true" : undefined}

@@ -107,7 +107,7 @@ function GroupHead({ start, end }: { start: string; end: string | null }) {
 export function GlanceCrumb({ title, lead = null, onBack }: { title: string; lead?: React.ReactNode; onBack: () => void }) {
   const { t } = useInterfaceTranslation();
   return (
-    <nav aria-label={t("desk.glance.back")} className="flex h-(--size-control-lg) shrink-0 items-center gap-xxs border-b border-border px-xs text-caption text-muted-foreground" data-desk-glance-crumb="true">
+    <nav aria-label={t("desk.glance.back")} className="flex h-(--size-tab-strip) shrink-0 items-center gap-xxs border-b border-border px-xs text-caption text-muted-foreground" data-desk-glance-crumb="true">
       <Hint label={t("desk.glance.back")} shortcut="Esc">
         <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-glance-back="true" onClick={onBack}>
           <ChevronLeftIcon aria-hidden="true" />
