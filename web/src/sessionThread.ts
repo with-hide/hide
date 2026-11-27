@@ -9,6 +9,7 @@ export function useSessionThread(actions: Pick<Actions, "openThread" | "closeThr
   const live = useShellStore((state) => state.connection === "live");
   const lease = useUiStore((state) => state.threadLease);
   const latest = useRef(actions);
+  const openingGeneration = useRef(0);
   latest.current = actions;
   useEffect(() => {
     if (!paneId) return;
@@ -16,12 +17,13 @@ export function useSessionThread(actions: Pick<Actions, "openThread" | "closeThr
     useUiStore.setState({ threadLease: previous?.paneId === paneId ? { ...previous, acquired: false } : { paneId, acquired: false, taken: false, thread: null, history: null } });
     // The first published result may already be a later window's open: the
     // core coalesces notifications, so seeing our own pane is not required.
-    const beforeOpen = useShellStore.getState().sessionThread;
+    openingGeneration.current = useShellStore.getState().sessionThread?.generation ?? 0;
     const observe = () => {
       const held = useUiStore.getState().threadLease;
       if (held?.paneId !== paneId || held.taken) return;
       const { sessionThread: thread, sessionThreadHistory: history } = useShellStore.getState();
-      const changedHold = thread && thread.generation > 0 && thread.generation !== (held.thread?.generation ?? beforeOpen?.generation ?? 0);
+      const seenGeneration = held.acquired ? held.thread?.generation : openingGeneration.current;
+      const changedHold = thread && thread.generation > 0 && thread.generation !== seenGeneration;
       if (thread?.pane_id === paneId && thread.state !== "closed") {
         if (!held.acquired || held.thread !== thread || held.history !== history) {
           useUiStore.setState({ threadLease: { ...held, acquired: true, thread, history } });
@@ -39,12 +41,16 @@ export function useSessionThread(actions: Pick<Actions, "openThread" | "closeThr
   }, [paneId]);
   useEffect(() => {
     if (!paneId || !live || useUiStore.getState().threadLease?.taken) return;
+    openingGeneration.current = useShellStore.getState().sessionThread?.generation ?? 0;
     if (paneConversation) latest.current.openThread(paneId, true);
     else latest.current.openThread(paneId);
   }, [paneId, live, paneConversation]);
   const reclaim = () => {
     const held = useUiStore.getState().threadLease;
     if (!paneId || !live || held?.paneId !== paneId) return;
+    // Until this open is answered, seeing the generation it replaces again
+    // is still pending, not another window taking this new request.
+    openingGeneration.current = useShellStore.getState().sessionThread?.generation ?? 0;
     useUiStore.setState({ threadLease: { ...held, taken: false, acquired: false } });
     if (paneConversation) latest.current.openThread(paneId, true);
     else latest.current.openThread(paneId);
