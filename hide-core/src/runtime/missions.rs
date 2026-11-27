@@ -2925,7 +2925,8 @@ impl Runtime {
                 // A plan opens nothing in the lane: the map opens only from
                 // the operator's press, and the shell shows a first plan on
                 // the Conductor pane's own chip (PRD mission-pane-chip D-02).
-                let mut next = crate::missions::apply_plan(&current, &plan, now)?;
+                let mut next =
+                    crate::missions::apply_plan(&current, &plan, now, self.interface_language())?;
                 // A replan does not make a node an agent on another machine
                 // works or checks one only the project's machine runs.
                 for node in next.nodes.iter().filter(|node| !node.runs_elsewhere()) {

@@ -1344,7 +1344,13 @@ mod tests {
             .iter()
             .map(|key| node(key, NodeKind::Change, &[]))
             .collect();
-        let mut out = apply_plan(&mission(), &plan(inputs), 2).unwrap();
+        let mut out = apply_plan(
+            &mission(),
+            &plan(inputs),
+            2,
+            crate::model::InterfaceLanguage::Korean,
+        )
+        .unwrap();
         out.status = MissionStatus::Running;
         out.scope = crate::missions::MissionScope::Merge;
         for node in &mut out.nodes {
