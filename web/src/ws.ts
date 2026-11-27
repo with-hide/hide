@@ -67,7 +67,7 @@ async function readHealth(): Promise<Health | null> {
   }
 }
 
-export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBinary: (bytes: Uint8Array) => void; close: () => void; drop: () => void } {
+export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBinary: (bytes: Uint8Array) => void; open: () => boolean; close: () => void; drop: () => void } {
   let socket: WebSocket | null = null;
   let closed = false;
   let backoff = BACKOFF_START_MS;
@@ -375,6 +375,13 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
   return {
     dispatch,
     sendBinary,
+    /**
+     * Whether the socket is open now, so an event dispatched is sent. Another
+     * computer's view whose tile the desktop hid reads `live` with its socket
+     * closed until the tile shows again, and an event sent before it reopens
+     * is dropped (`dispatch`).
+     */
+    open: () => socket?.readyState === WebSocket.OPEN,
     /** Closes the socket as a server drop would, so the reconnect path can be exercised (probe seam). */
     drop: () => socket?.close(),
     close: () => {
