@@ -463,7 +463,7 @@ impl SshCarriers {
         self: &Arc<Self>,
         key: PeerKey,
         alias: String,
-    ) -> impl Future<Output = io::Result<Carrier>> + Send + 'static {
+    ) -> impl Future<Output = io::Result<Carrier>> + Send + 'static + use<> {
         let carriers = Arc::clone(self);
         async move {
             let stop = Arc::new(Stop::default());

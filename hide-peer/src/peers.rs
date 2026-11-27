@@ -600,6 +600,7 @@ struct Inner<T: PeerTransport> {
     /// Taken after `grants` and `known`, never before them.
     table: Mutex<Table<T::Conn>>,
     clock: Clock,
+    pacing: Pacing,
     /// Counts changes of either record; a connection without a settled
     /// grant watches it to read again how long it may stay.
     relation: watch::Sender<u64>,
@@ -621,6 +622,30 @@ struct Inner<T: PeerTransport> {
     shutdown: watch::Sender<bool>,
 }
 
+/// The times of the climb and the beat (mission-107): [`limits`]' own in a
+/// daemon. A test shortens them to see a probe or a silent carrier without
+/// waiting minutes for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pacing {
+    pub relay_grace: Duration,
+    pub climb_first: Duration,
+    pub climb_most: Duration,
+    pub beat_every: Duration,
+    pub beat_dead: Duration,
+}
+
+impl Default for Pacing {
+    fn default() -> Self {
+        Self {
+            relay_grace: limits::RELAY_GRACE,
+            climb_first: limits::CLIMB_FIRST,
+            climb_most: limits::CLIMB_MOST,
+            beat_every: limits::BEAT_EVERY,
+            beat_dead: limits::BEAT_DEAD,
+        }
+    }
+}
+
 /// What a machine needs to say who it is.
 pub struct Config<'a> {
     pub state_dir: &'a Path,
@@ -634,6 +659,8 @@ pub struct Config<'a> {
     /// machine shows a new name from its next connection.
     pub name: Option<&'a str>,
     pub clock: Clock,
+    /// The climb's and the beat's times; [`Pacing::default`] in a daemon.
+    pub pacing: Pacing,
 }
 
 /// The connections of one machine, over one transport.
@@ -705,6 +732,7 @@ impl<T: PeerTransport> Peers<T> {
                 superseded: HashMap::new(),
             }),
             clock: config.clock,
+            pacing: config.pacing,
             relation: watch::channel(0).0,
             admitted: watch::channel(0).0,
             dialing: Mutex::new(HashMap::new()),
@@ -1522,8 +1550,10 @@ impl<T: PeerTransport> Inner<T> {
         // An SSH connection beats, so a carrier that went silent is closed
         // on both ends (mission-107, 4.6).
         let beats = link.path() == PathKind::Ssh && link.can_move();
-        let mut beat =
-            tokio::time::interval_at(Instant::now() + limits::BEAT_EVERY, limits::BEAT_EVERY);
+        let mut beat = tokio::time::interval_at(
+            Instant::now() + self.pacing.beat_every,
+            self.pacing.beat_every,
+        );
         loop {
             let frame = tokio::select! {
                 frame = queued.recv() => frame,
@@ -1552,7 +1582,7 @@ impl<T: PeerTransport> Inner<T> {
         loop {
             let read = wire::read_message(&mut recv, hello::MAX_HELLO);
             let read = match beats {
-                true => match tokio::time::timeout(limits::BEAT_DEAD, read).await {
+                true => match tokio::time::timeout(self.pacing.beat_dead, read).await {
                     Ok(read) => read,
                     // Nothing for three beats: the carrier went silent.
                     Err(_) => {
@@ -1772,11 +1802,12 @@ impl<T: PeerTransport> Inner<T> {
         self: &Arc<Self>,
         to: &PeerAddr,
         held: &Link<T::Conn>,
+        over_route: bool,
     ) -> Result<Link<T::Conn>, DialError> {
         let turn = Arc::clone(lock(&self.dialing).entry(to.key).or_default());
         let moved = {
             let _turn = turn.lock().await;
-            self.move_in_turn(to, held).await
+            self.move_in_turn(to, held, over_route).await
         };
         drop(turn);
         let mut dialing = lock(&self.dialing);
@@ -1793,10 +1824,17 @@ impl<T: PeerTransport> Inner<T> {
         self: &Arc<Self>,
         to: &PeerAddr,
         held: &Link<T::Conn>,
+        over_route: bool,
     ) -> Result<Link<T::Conn>, DialError> {
         self.drained(&to.key).await;
         let start = Instant::now();
-        let conn = tokio::time::timeout(limits::DIAL_WITHIN, self.transport.dial(to))
+        let dialing = async {
+            match over_route {
+                true => self.transport.dial_route(to).await,
+                false => self.transport.dial(to).await,
+            }
+        };
+        let conn = tokio::time::timeout(limits::DIAL_WITHIN, dialing)
             .await
             .map_err(|_| DialError::TimedOut)??;
         let beats = |conn: &T::Conn| {
@@ -1840,7 +1878,7 @@ impl<T: PeerTransport> Inner<T> {
         let over_ssh = PeerAddr::new(to.key, vec![Candidate::Ssh(alias.to_owned())]);
         if path.rank() < PathKind::Ssh.rank() {
             let to_ssh = || async {
-                let moved = self.dial_move(&over_ssh, link).await;
+                let moved = self.dial_move(&over_ssh, link, true).await;
                 // A move that did not take waits as a fall does, so a route
                 // that keeps failing is not signed in to every grace.
                 if moved.is_err() {
@@ -1853,7 +1891,7 @@ impl<T: PeerTransport> Inner<T> {
                 Route::Ready | Route::Due => {
                     // The other transport's hole punch gets its time first.
                     tokio::select! {
-                        () = tokio::time::sleep(limits::RELAY_GRACE) => {}
+                        () = tokio::time::sleep(self.pacing.relay_grace) => {}
                         _ = link.inner.conn.path_changed(path) => return None,
                     }
                     if link.path().rank() >= PathKind::Ssh.rank() {
@@ -1864,7 +1902,7 @@ impl<T: PeerTransport> Inner<T> {
                 // A wait runs out, or the network changes: read again.
                 Route::Held | Route::None => {
                     tokio::select! {
-                        () = tokio::time::sleep(limits::RELAY_GRACE) => {}
+                        () = tokio::time::sleep(self.pacing.relay_grace) => {}
                         _ = link.inner.conn.path_changed(path) => {}
                         _ = woke.changed() => {}
                     }
@@ -1880,12 +1918,12 @@ impl<T: PeerTransport> Inner<T> {
                     if changed.is_err() {
                         return std::future::pending().await;
                     }
-                    probe.wait = limits::CLIMB_FIRST;
+                    probe.wait = self.pacing.climb_first;
                 }
             }
-            let moved = self.dial_move(&without_ssh(to), link).await.ok();
+            let moved = self.dial_move(&without_ssh(to), link, false).await.ok();
             if moved.is_none() {
-                probe.wait = (probe.wait * 2).min(limits::CLIMB_MOST);
+                probe.wait = (probe.wait * 2).min(self.pacing.climb_most);
                 probe.at = Instant::now() + probe.wait;
             }
             return moved;
@@ -1907,7 +1945,7 @@ impl<T: PeerTransport> Inner<T> {
         let mut current = link;
         // When the current connection came, and whether a move brought it.
         let (mut since, mut moved) = (Instant::now(), false);
-        let mut probe = Probe::after(since);
+        let mut probe = Probe::after(since, self.pacing.climb_first);
         loop {
             // The host's address as the records say it now: an alias the
             // operator added since the dial is climbed to.
@@ -1958,7 +1996,7 @@ impl<T: PeerTransport> Inner<T> {
             };
             current = next;
             (since, moved) = (Instant::now(), true);
-            probe = Probe::after(since);
+            probe = Probe::after(since, self.pacing.climb_first);
         }
     }
 
@@ -2018,10 +2056,10 @@ struct Probe {
 }
 
 impl Probe {
-    fn after(since: Instant) -> Self {
+    fn after(since: Instant, first: Duration) -> Self {
         Self {
-            at: since + limits::CLIMB_FIRST,
-            wait: limits::CLIMB_FIRST,
+            at: since + first,
+            wait: first,
         }
     }
 }
@@ -2061,6 +2099,7 @@ mod tests {
             release: false,
             name: None,
             clock: Clock::system(),
+            pacing: Pacing::default(),
         }
     }
 

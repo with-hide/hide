@@ -1234,4 +1234,88 @@ mod tests {
             ("DESKTOP-7Q2", "회사 PC", KnownState::Active)
         );
     }
+
+    fn kept(started: Option<Login>, ssh: Option<SshRoute>) -> Host {
+        Host {
+            key: key(9),
+            device: "studio".into(),
+            name: "Studio".into(),
+            chosen_name: None,
+            grant: "g9".into(),
+            state: KnownState::Active,
+            candidates: vec![Candidate::Relay("https://relay.example./".into())],
+            started,
+            ssh,
+        }
+    }
+
+    /// The alias a host is dialed by is kept in its record, a record written
+    /// before it reads without one, and the address the keeper dials names
+    /// it last, built in memory and never written (mission-107).
+    #[test]
+    fn an_alias_field_is_kept_and_a_record_without_it_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known.json");
+        let mut known = Known::open(path.clone()).unwrap();
+        known.put(kept(None, None)).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("\"ssh\""), "{written}");
+        assert!(known.record_ssh(&key(9), "studio").unwrap());
+        assert!(!known.record_ssh(&key(9), "studio").unwrap(), "already so");
+        assert!(known.record_ssh(&key(9), "-oProxyCommand=x").is_err());
+        let read = Known::open(path.clone()).unwrap();
+        let host = read.of(&key(9)).unwrap();
+        assert_eq!(host.ssh_alias(), Some("studio"));
+        let to = host.dial_addr();
+        assert_eq!(to.candidates.last(), Some(&Candidate::Ssh("studio".into())));
+        // A record an older build wrote, with no route, reads.
+        let mut older: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        older["hosts"][0].as_object_mut().unwrap().remove("ssh");
+        std::fs::write(&path, older.to_string()).unwrap();
+        let read = Known::open(path).unwrap();
+        assert_eq!(read.of(&key(9)).unwrap().ssh, None);
+        // A distribution is reached through `wsl.exe` alone.
+        let mut distribution = kept(Some(Login::Ssh("studio".into())), None);
+        distribution.candidates = vec![Candidate::Wsl("Ubuntu".into())];
+        assert!(
+            !distribution
+                .dial_addr()
+                .candidates
+                .iter()
+                .any(|candidate| matches!(candidate, Candidate::Ssh(_)))
+        );
+    }
+
+    /// A route turned off gives no alias to dial and keeps the login a Hide
+    /// this machine started there is brought to its build through; it is
+    /// turned off only while it is still the alias the attempt dialed (R3).
+    #[test]
+    fn an_alias_refused_by_its_key_stays_off_and_leaves_the_started_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut known = Known::open(dir.path().join("known.json")).unwrap();
+        known
+            .put(kept(Some(Login::Ssh("studio".into())), None))
+            .unwrap();
+        assert_eq!(known.of(&key(9)).unwrap().ssh_alias(), Some("studio"));
+        assert!(
+            !known.refuse_ssh(&key(9), "another").unwrap(),
+            "a newer alias stays"
+        );
+        assert!(known.refuse_ssh(&key(9), "studio").unwrap());
+        let host = known.of(&key(9)).unwrap();
+        assert_eq!(host.ssh, Some(SshRoute::Off));
+        assert_eq!(host.ssh_alias(), None);
+        assert_eq!(host.started, Some(Login::Ssh("studio".into())));
+        assert!(
+            !host
+                .dial_addr()
+                .candidates
+                .iter()
+                .any(|candidate| matches!(candidate, Candidate::Ssh(_)))
+        );
+        // Recorded again by a later add, it is dialed again.
+        assert!(known.record_ssh(&key(9), "studio").unwrap());
+        assert_eq!(known.of(&key(9)).unwrap().ssh_alias(), Some("studio"));
+    }
 }

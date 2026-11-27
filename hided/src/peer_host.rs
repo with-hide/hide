@@ -203,6 +203,7 @@ impl Settings {
                 release: self.release,
                 name: self.name.as_deref(),
                 clock: Clock::system(),
+                pacing: Default::default(),
             },
         )?;
         // A route an alias led to another Hide on is turned off in the

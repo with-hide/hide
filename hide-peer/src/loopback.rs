@@ -67,6 +67,8 @@ impl Net {
             proved,
             admitting: Arc::new(Semaphore::new(limits::MAX_ADMITTING)),
             conns: Mutex::new(Vec::new()),
+            starts_on: Mutex::new(PathKind::Local),
+            unreachable: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -87,6 +89,10 @@ pub struct Loopback {
     /// of its bytes are read.
     admitting: Arc<Semaphore>,
     conns: Mutex<Vec<Weak<Shared>>>,
+    /// The path the connections this machine dials start on.
+    starts_on: Mutex<PathKind>,
+    /// This machine's dials reach nothing, as when no network carries them.
+    unreachable: std::sync::atomic::AtomicBool,
 }
 
 struct Shared {
@@ -144,6 +150,17 @@ impl Loopback {
         }
     }
 
+    /// The connections this machine dials from now start on `path`, as one
+    /// a transport proves over the relay before a direct path opens.
+    pub fn dial_on(&self, path: PathKind) {
+        *self.starts_on.lock().expect("the start path's lock") = path;
+    }
+
+    /// Whether this machine's dials reach nothing from now.
+    pub fn set_unreachable(&self, unreachable: bool) {
+        self.unreachable.store(unreachable, Ordering::Release);
+    }
+
     fn track(&self, conn: &LoopConn) {
         let mut conns = self.conns.lock().expect("the connection list's lock");
         conns.retain(|known| known.strong_count() > 0);
@@ -163,6 +180,9 @@ impl PeerTransport for Loopback {
     }
 
     async fn dial(&self, to: &PeerAddr) -> Result<LoopConn, TransportError> {
+        if self.unreachable.load(Ordering::Acquire) {
+            return Err(unreachable("no network carries this machine's dials"));
+        }
         let machine = self
             .net
             .machines
@@ -175,7 +195,7 @@ impl PeerTransport for Loopback {
             id: self.net.next_id.fetch_add(1, Ordering::AcqRel) + 1,
             open: Gate::new(OPEN),
             closed: watch::channel(None).0,
-            path: watch::channel(PathKind::Local).0,
+            path: watch::channel(*self.starts_on.lock().expect("the start path's lock")).0,
         });
         let (to_them, from_us) = mpsc::channel(BACKLOG);
         let (to_us, from_them) = mpsc::channel(BACKLOG);

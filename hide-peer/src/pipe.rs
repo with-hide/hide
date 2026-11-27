@@ -837,10 +837,6 @@ impl<T: PeerTransport> PeerTransport for Beside<T> {
         let Some(alias) = ssh_alias(to) else {
             return self.main.dial(to).await.map(Either::Main);
         };
-        // The climb's address: the alias and nothing else.
-        if to.candidates.len() == 1 {
-            return self.ssh_alone(to).await;
-        }
         match self.pipe.route(&to.key, alias) {
             Route::Ready => self.ladder(to, alias).await,
             // Nothing else carries the pair, and no climb runs without a
@@ -871,6 +867,19 @@ impl<T: PeerTransport> PeerTransport for Beside<T> {
 
     async fn relay(&self) -> RelayState {
         self.main.relay().await
+    }
+
+    /// The climb's dial: the attempt the first dial handed on, else a new
+    /// SSH carrier.
+    async fn dial_route(&self, to: &PeerAddr) -> Result<Self::Conn, TransportError> {
+        let Some(alias) = ssh_alias(to) else {
+            return Err(TransportError::Unreachable(
+                "the address names no SSH alias".to_owned(),
+            ));
+        };
+        self.ssh.drained(&to.key).await;
+        let ssh_to = PeerAddr::new(to.key, vec![Candidate::Ssh(alias.to_owned())]);
+        self.ssh_alone(&ssh_to).await
     }
 
     fn route(&self, to: &PeerAddr) -> Route {
@@ -1224,6 +1233,84 @@ mod tests {
         distro.arrived(far.into(), PathKind::Local);
         near.set_read_timeout(Some(WITHIN)).unwrap();
         assert_eq!(near.read(&mut [0_u8; 1]).unwrap(), 0);
+    }
+
+    /// A connection says the way its carrier came: one `hide device carry
+    /// --ssh` handed over reads SSH on both ends, a distribution's reads
+    /// inside one machine (mission-107).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_arrived_ssh_carrier_reads_ssh_and_a_wsl_one_local() {
+        let far = Arc::new(PipeTransport::accepting(key()));
+        for (path, to) in [
+            (
+                PathKind::Ssh,
+                PeerAddr::new(far.key(), vec![Candidate::Ssh("studio".to_owned())]),
+            ),
+            (PathKind::Local, in_wsl(far.key())),
+        ] {
+            let arrives = Arc::clone(&far);
+            let near = PipeTransport::dialing(key(), move |_| {
+                let (near, theirs) = LocalStream::pair().unwrap();
+                arrives.arrived(theirs.into(), path);
+                async move { Ok(Carrier::from(near)) }
+            });
+            let (dialed, accepted) = within("the connection", async {
+                tokio::join!(near.dial(&to), far.accept())
+            })
+            .await;
+            assert_eq!(
+                (dialed.unwrap().path(), accepted.unwrap().path()),
+                (path, path)
+            );
+        }
+    }
+
+    /// A dial tells its carrier what the proof found, once, before it
+    /// returns; a check tells nothing, admits nothing and closes its carrier.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dial_tells_its_carrier_the_proof_once_and_a_check_tells_nothing() {
+        let far = Arc::new(PipeTransport::accepting(key()));
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let (arrives, heard) = (Arc::clone(&far), Arc::clone(&told));
+        let near = PipeTransport::dialing(key(), move |_| {
+            let (near, theirs) = LocalStream::pair().unwrap();
+            arrives.arrived(theirs.into(), PathKind::Ssh);
+            let heard = Arc::clone(&heard);
+            async move { Ok(Carrier::from(near).told(move |proof| heard.lock().unwrap().push(proof))) }
+        });
+        let to = PeerAddr::new(far.key(), vec![Candidate::Ssh("studio".to_owned())]);
+        let (dialed, accepted) = within("the connection", async {
+            tokio::join!(near.dial(&to), far.accept())
+        })
+        .await;
+        dialed.unwrap();
+        accepted.unwrap();
+        let other = PeerAddr::new(key().public(), vec![Candidate::Ssh("other".to_owned())]);
+        assert!(within("the refusal", near.dial(&other)).await.is_err());
+        assert_eq!(
+            *told.lock().unwrap(),
+            vec![Proof::Proved, Proof::OtherKey(far.key())]
+        );
+
+        // A check: the proof's outcome, no told, nothing to accept.
+        let (mine, theirs) = LocalStream::pair().unwrap();
+        far.arrived(theirs.into(), PathKind::Ssh);
+        let heard = Arc::clone(&told);
+        let carrier = Carrier::from(mine).told(move |proof| heard.lock().unwrap().push(proof));
+        let checked = within("the check", near.check(carrier, &far.key(), WITHIN))
+            .await
+            .unwrap();
+        assert_eq!(checked, Proof::Proved);
+        assert_eq!(told.lock().unwrap().len(), 2, "a check tells nothing");
+        let accepted = tokio::time::timeout(Duration::from_millis(300), far.accept()).await;
+        match accepted {
+            // A carrier proved and closed at once may still reach the far
+            // queue; it is over there.
+            Ok(Ok(conn)) => {
+                within("its end", conn.closed()).await;
+            }
+            Ok(Err(_)) | Err(_) => {}
+        }
     }
 
     /// Beside another transport, an address that names a distribution goes

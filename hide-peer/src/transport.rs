@@ -104,6 +104,15 @@ pub trait PeerTransport: Send + Sync + 'static {
     /// on a timer.
     fn relay(&self) -> impl Future<Output = RelayState> + Send;
 
+    /// Dials `to` over the other carrier alone, its route's: the keeper's
+    /// climb from the relay. The transport's own dial by default.
+    fn dial_route(
+        &self,
+        to: &PeerAddr,
+    ) -> impl Future<Output = Result<Self::Conn, TransportError>> + Send {
+        self.dial(to)
+    }
+
     /// Where another carrier to `to` stands: what the keeper's climb reads
     /// before it moves a live connection. None by default.
     fn route(&self, _to: &PeerAddr) -> Route {

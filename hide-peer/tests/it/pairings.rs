@@ -1028,3 +1028,40 @@ async fn the_seventh_confirm_or_removal_in_a_minute_goes_unanswered() {
         Pairing::Confirmed { .. }
     ));
 }
+
+/// The alias this machine signs in to a host by is its own (R6): an answer
+/// that names one, or a distribution, has it dropped, and the alias saved
+/// is the one this machine's pairing signed in through.
+#[tokio::test]
+async fn a_peer_never_names_how_this_machine_signs_in() {
+    use hide_peer::protocol::Candidate;
+    use hide_peer::store::SshRoute;
+    let net = Net::new();
+    let pc = Desk::new(&net, "windows-pc", "Windows PC");
+    let mac = Desk::new(&net, "macbook", "MacBook");
+    let mut accepted = pc
+        .pairings
+        .accept_ssh("req-1", mac.key(), "macbook", "MacBook", Via::Ssh)
+        .unwrap();
+    accepted.candidates.extend([
+        Candidate::Ssh("the-peers-alias".to_owned()),
+        Candidate::Wsl("Ubuntu".to_owned()),
+    ]);
+    mac.pairings
+        .adopt(accepted.clone(), Vec::new(), Some("studio".to_owned()))
+        .unwrap();
+    let host = mac.peers().host(&accepted.key).unwrap();
+    assert!(
+        !host
+            .candidates
+            .iter()
+            .any(|candidate| matches!(candidate, Candidate::Ssh(_) | Candidate::Wsl(_))),
+        "{:?}",
+        host.candidates
+    );
+    assert_eq!(host.ssh, Some(SshRoute::Alias("studio".to_owned())));
+    assert_eq!(
+        host.dial_addr().candidates.last(),
+        Some(&Candidate::Ssh("studio".to_owned()))
+    );
+}

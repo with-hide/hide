@@ -9,6 +9,7 @@
 mod delivery;
 mod dial;
 mod grants;
+mod ladder;
 mod pairing;
 mod pairings;
 mod pipe;
@@ -92,6 +93,7 @@ impl Machine {
             release: false,
             name: shown,
             clock,
+            pacing: Default::default(),
         };
         let (peers, incoming) = Peers::start(net.join(key), config).unwrap();
         let events = peers.events();
