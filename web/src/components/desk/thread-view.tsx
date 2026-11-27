@@ -1,13 +1,12 @@
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, FilePenIcon, FileSearchIcon, GlobeIcon, MailIcon, PlusIcon, SquareTerminalIcon, WrenchIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, CircleAlertIcon, FilePenIcon, FileSearchIcon, GlobeIcon, MailIcon, PlusIcon, SquareTerminalIcon, WrenchIcon } from "lucide-react";
 import { pullLabel } from "../../codeHost";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithRef, type ReactNode, type Ref } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
-import { askPlace, namedMention, threadPhase, threadTurns } from "../../desk";
+import { askPlace, callName, namedMention, threadPhase, threadTurns } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { MarkdownText, type MarkdownChip, type MarkdownMark } from "../../MarkdownText";
-import { CopyableMessage } from "../copy-words";
 import type { CopyText } from "../human-turn-copy";
 import type { AskLine } from "../open-asks";
 import { useRunningClock } from "../elapsed";
@@ -76,31 +75,50 @@ function DiffBlock({ path, lines }: { path: string; lines: readonly DiffLine[] }
   );
 }
 
-/**
- * A tool call (B25): its kind's icon and its title, a command as the
- * command itself, `+n −m` after an edit, `실행 중` in words while it runs
- * (a ring is a session's state, D-75) and `실패` after it failed; then its
- * diff and what came out, cut at four lines.
- */
-function ToolLine({ line }: { line: Extract<ThreadLine, { kind: "tool" }> }) {
+/** A tool call's head (B25): its kind's icon, its one-line name (`callName`: a command as the command itself, a search with its term; its first line when `firstLine`), `+n −m` after an edit, `실행 중` in words while it runs (a ring is a session's state, D-75) and `실패` after it failed. */
+function ToolHead({ line, firstLine = false }: { line: Extract<ThreadLine, { kind: "tool" }>; firstLine?: boolean }) {
   const { t } = useInterfaceTranslation();
   const Icon = TOOL_ICON[line.toolKind] ?? WrenchIcon;
-  const diffs = line.diffs.map((diff) => ({ path: diff.path, lines: diffLines(diff.oldText, diff.newText) }));
-  const added = diffs.reduce((sum, diff) => sum + diff.lines.filter((one) => one.sign === "+").length, 0);
-  const removed = diffs.reduce((sum, diff) => sum + diff.lines.filter((one) => one.sign === "-").length, 0);
-  const title = line.toolKind === "execute" && line.input ? line.input : line.title;
+  const { added, removed } = diffCounts(line.diffs);
+  const title = callName(line);
+  const shown = firstLine ? (title.trim().split("\n", 1)[0] ?? "") : title;
   const running = line.status === "in_progress" || line.status === "pending";
   const clock = useRunningClock(running && line.toolKind === "execute" ? line.startedAtMs : null);
   return (
+    <p className="flex min-w-0 items-center gap-xs text-caption">
+      <Icon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate font-mono text-subtle-foreground" title={title}>{shown}</span>
+      {line.diffs.length ? <span className="shrink-0 font-mono text-micro"><span className="text-success">+{added}</span> <span className="text-destructive">−{removed}</span></span> : null}
+      <span className="flex-1" />
+      {running ? <span className="shrink-0 text-micro text-muted-foreground" data-desk-tool-clock={clock ?? undefined}>{clock ? `${t("desk.thread.tool.running")} ${clock}` : t("desk.thread.tool.running")}</span> : null}
+      {line.status === "failed" ? <span className="shrink-0 text-micro text-destructive">{t("desk.thread.tool.failed")}</span> : null}
+    </p>
+  );
+}
+
+/** The lines a call's diffs add and take away, as its head counts them. */
+function diffCounts(diffs: Extract<ThreadLine, { kind: "tool" }>["diffs"]): { added: number; removed: number } {
+  const lines = diffs.flatMap((diff) => diffLines(diff.oldText, diff.newText));
+  return { added: lines.filter((one) => one.sign === "+").length, removed: lines.filter((one) => one.sign === "-").length };
+}
+
+/** A `hide` call as the newest step of a running turn: the command the session typed, its first line, as a shell call's head reads. */
+function HideCallHead({ command }: { command: string }) {
+  return (
+    <p className="flex min-w-0 items-center gap-xs text-caption">
+      <SquareTerminalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate font-mono text-subtle-foreground" title={command}>{command.trim().split("\n", 1)[0]}</span>
+    </p>
+  );
+}
+
+/** A tool call (B25): its head, then its diff and what came out, cut at four lines. */
+function ToolLine({ line }: { line: Extract<ThreadLine, { kind: "tool" }> }) {
+  const { t } = useInterfaceTranslation();
+  const diffs = line.diffs.map((diff) => ({ path: diff.path, lines: diffLines(diff.oldText, diff.newText) }));
+  return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-thread-line="tool" data-tool-status={line.status}>
-      <p className="flex min-w-0 items-center gap-xs text-caption">
-        <Icon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-        <span className="min-w-0 truncate font-mono text-subtle-foreground" title={title}>{title}</span>
-        {diffs.length ? <span className="shrink-0 font-mono text-micro"><span className="text-success">+{added}</span> <span className="text-destructive">−{removed}</span></span> : null}
-        <span className="flex-1" />
-        {running ? <span className="shrink-0 text-micro text-muted-foreground" data-desk-tool-clock={clock ?? undefined}>{clock ? `${t("desk.thread.tool.running")} ${clock}` : t("desk.thread.tool.running")}</span> : null}
-        {line.status === "failed" ? <span className="shrink-0 text-micro text-destructive">{t("desk.thread.tool.failed")}</span> : null}
-      </p>
+      <ToolHead line={line} />
       {diffs.map((diff, index) => <span key={`${index}:${diff.path}`} className="min-w-0"><DiffBlock path={diff.path} lines={diff.lines} /></span>)}
       {line.output ? <pre aria-label={t("desk.thread.tool.output")} className="ml-(--size-icon) line-clamp-4 min-w-0 whitespace-pre-wrap break-all px-xs font-mono text-micro text-muted-foreground">{line.output}</pre> : null}
       {line.images.map((block, index) => <span key={index} className="ml-(--size-icon)"><ThreadImage block={block} /></span>)}
@@ -201,7 +219,6 @@ function HidePartLine({ part, command, actions }: { part: ThreadHidePart; comman
       body = (
         <PartLine kind="mission" icon={null}>
           <DeskMissionChip mission={part.mission} onOpen={actions.onMission} />
-          <span className="min-w-0 truncate text-subtle-foreground">{part.mission.title}</span>
         </PartLine>
       );
       break;
@@ -243,9 +260,9 @@ function AgentWords({ line, words, lit, live }: { line: Extract<ThreadLine, { ki
   const files = useFilePathChips(line.text, words.place, live, words.file);
   const chips = useMemo(() => (files.length ? [...words.chips, ...files] : words.chips), [words.chips, files]);
   return (
-    <CopyableMessage text={line.text} copy={words.copy} className="-mx-xs rounded-md px-xs" data-desk-thread-line="agent" data-desk-thread-message={line.id} data-desk-thread-lit={lit ? "true" : undefined}>
+    <div className="-mx-xs min-w-0 rounded-md px-xs" data-desk-thread-line="agent" data-desk-thread-message={line.id} data-desk-thread-lit={lit ? "true" : undefined}>
       <MarkdownText text={line.text} size="chat" chips={chips} copyCode={words.copy} mark={lit} />
-    </CopyableMessage>
+    </div>
   );
 }
 
@@ -272,7 +289,7 @@ function ReceivedLine({ line, actions }: { line: Extract<ThreadLine, { kind: "us
 }
 
 /** The operator's words, the one thing drawn as a bubble (D-75); the first one carries `Desk가 맡김` when Desk handed the task. */
-function UserLine({ line, handed, copy, actions }: { line: Extract<ThreadLine, { kind: "user" }>; handed: boolean; copy: CopyText; actions: ThreadPartActions }) {
+function UserLine({ line, handed, actions }: { line: Extract<ThreadLine, { kind: "user" }>; handed: boolean; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
   // The files a composer sent stand over the words, read from the quoted paths it typed before them (B41).
   const sent = useMemo(() => sentWords(line.text), [line.text]);
@@ -284,56 +301,94 @@ function UserLine({ line, handed, copy, actions }: { line: Extract<ThreadLine, {
       {handed ? <span className="text-micro text-muted-foreground" data-desk-thread-handed="true">{t("desk.thread.handedByDesk")}</span> : null}
       <SentAttachments files={sent.files} />
       {sent.words ? (
-        <CopyableMessage text={sent.words} copy={copy} own>
-          <p data-desk-thread-bubble="true" className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]">{sent.words}</p>
-        </CopyableMessage>
+        <p data-desk-thread-bubble="true" className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]">{sent.words}</p>
       ) : null}
       {line.images.map((block, index) => <ThreadImage key={index} block={block} />)}
     </div>
   );
 }
 
-/**
- * One turn (B25, D-75): the operator's words, the work folded into one line
- * `작업 · 파일 n · 명령 m ›`, the answer. The turn still running shows its
- * work open, along a rail. A part that leads somewhere (a new session, a
- * letter, an output, a mission, a PR) stays in view while the work is folded.
- */
 /** A turn as the place a conversation was left names it: its first line's place and words, since a page read in above moves the place. */
 function turnAnchor(turn: ThreadTurn): string {
   return `${turn.key}:${turn.user?.text.slice(0, 80) ?? ""}`;
 }
 
+/**
+ * One turn (B25, D-75): the operator's words, the work folded into one line
+ * `작업 · 파일 n · 명령 m ›`, the answer. A part that leads somewhere (a new
+ * session, a letter, an output, a mission, a PR) stays in view while the work
+ * is folded, once per target. The turn still running folds too: what it said
+ * and the parts it made stay in view, and its calls are one line at its foot,
+ * `작업 중 · 명령 n · 파일 n ⌄`, with its newest call's head under it,
+ * never what came out; unfolded, every line stands above that line.
+ */
 function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; live: boolean; handed: boolean; words: Words; lit: Lit | null; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
-  const [toggled, setToggled] = useState(false);
-  const open = live !== toggled;
-  const counts = [turn.files ? t("desk.turn.files", { count: turn.files }) : null, turn.commands ? t("desk.turn.commands", { count: turn.commands }) : null].filter(Boolean);
-  const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
+  const [open, setOpen] = useState(false);
+  const files = turn.files ? t("desk.turn.files", { count: turn.files }) : null;
+  const commands = turn.commands ? t("desk.turn.commands", { count: turn.commands }) : null;
+  // While it runs the line leads with what it does and counts the commands first; a finished turn's reads `작업 · 파일 n · 명령 m`.
+  const counts = (live ? [commands, files] : [files, commands]).filter(Boolean).map((count) => ` · ${count}`).join("");
+  // A running turn's lines open above its line at the foot, so its chevron points up while they stand.
+  const Chevron = live ? (open ? ChevronUpIcon : ChevronDownIcon) : open ? ChevronDownIcon : ChevronRightIcon;
+  const toggle = turn.work.length ? (
+    <Button variant="text" size="inline" className="self-start gap-xxs text-caption text-muted-foreground" aria-expanded={open} data-desk-turn-toggle={open ? "open" : "folded"} data-desk-turn-live={live || undefined} onClick={() => setOpen(!open)}>
+      <span>{live ? <span className="text-foreground">{t("desk.turn.working")}</span> : t("desk.turn.work")}{counts}</span>
+      <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
+    </Button>
+  ) : null;
+  const work = open && turn.work.length ? <WorkList work={turn.work} words={words} actions={actions} /> : null;
+  const answer = turn.answer.map((line) => <AgentWords key={line.id} line={line} words={words} lit={lit?.id === line.id ? lit.sentence : null} live={live} />);
+  const newest = live && !open ? turn.call : null;
   return (
     <li className="flex min-w-0 flex-col gap-sm" data-desk-thread-turn={open ? "open" : "folded"} data-scroll-anchor={turnAnchor(turn)}>
-      {turn.user ? <UserLine line={turn.user} handed={handed} copy={words.copy} actions={actions} /> : null}
-      {turn.work.length ? (
-        <Button variant="text" size="inline" className="self-start gap-xxs text-caption text-muted-foreground" aria-expanded={open} data-desk-turn-toggle={open ? "open" : "folded"} onClick={() => setToggled(!toggled)}>
-          {[t("desk.turn.work"), ...counts].join(" · ")}
-          <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
-        </Button>
-      ) : null}
-      {open && turn.work.length ? (
-        <ol className="ml-xxs flex min-w-0 flex-col gap-xs border-l border-border pl-sm" data-desk-thread-work={turn.work.length}>
-          {workRows(turn.work).map((row) =>
-            Array.isArray(row) ? (
-              <li key={row[0]!.id} className="min-w-0">
-                <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={row.map((line) => actions.outputOf(line.part.output, line.part.view_id))} onOpen={actions.onOutput} /></div>
-              </li>
-            ) : (
-              <li key={row.id} className="min-w-0"><WorkLine line={row} words={words} actions={actions} /></li>
-            ))}
-        </ol>
-      ) : null}
-      {turn.answer.map((line) => <AgentWords key={line.id} line={line} words={words} lit={lit?.id === line.id ? lit.sentence : null} live={live} />)}
-      {!open && turn.parts.length ? <FoldedParts parts={turn.parts} actions={actions} /> : null}
+      {turn.user ? <UserLine line={turn.user} handed={handed} actions={actions} /> : null}
+      {live ? (
+        <>
+          {work ?? <ShownWork work={turn.work} words={words} actions={actions} />}
+          {answer}
+          {toggle}
+          {newest ? <div className="ml-xxs min-w-0 border-l border-border pl-sm" data-desk-thread-newest={newest.id}>{newest.kind === "tool" ? <ToolHead line={newest} firstLine /> : <HideCallHead command={newest.command ?? ""} />}</div> : null}
+        </>
+      ) : (
+        <>
+          {toggle}
+          {work}
+          {answer}
+          {!open && turn.parts.length ? <FoldedParts parts={turn.parts} actions={actions} /> : null}
+        </>
+      )}
     </li>
+  );
+}
+
+/** A turn's work unfolded, along a rail: views opened one after another share one row of tiles. */
+function WorkList({ work, words, actions }: { work: readonly ThreadLine[]; words: Words; actions: ThreadPartActions }) {
+  return (
+    <ol className="ml-xxs flex min-w-0 flex-col gap-xs border-l border-border pl-sm" data-desk-thread-work={work.length}>
+      {workRows(work).map((row) => <WorkRow key={Array.isArray(row) ? row[0]!.id : row.id} row={row} words={words} actions={actions} />)}
+    </ol>
+  );
+}
+
+/** What a running turn keeps in view while its calls are folded: what the agent said and the parts that lead somewhere, in the order it made them. */
+function ShownWork({ work, words, actions }: { work: readonly ThreadLine[]; words: Words; actions: ThreadPartActions }) {
+  const shown = work.filter((line) => line.kind === "agent" || (line.kind === "hide" && line.part.kind !== "plan"));
+  if (!shown.length) return null;
+  return (
+    <ol className="flex min-w-0 flex-col gap-xs" data-desk-thread-shown={shown.length}>
+      {workRows(shown).map((row) => <WorkRow key={Array.isArray(row) ? row[0]!.id : row.id} row={row} words={words} actions={actions} />)}
+    </ol>
+  );
+}
+
+function WorkRow({ row, words, actions }: { row: ThreadLine | ViewLine[]; words: Words; actions: ThreadPartActions }) {
+  return Array.isArray(row) ? (
+    <li className="min-w-0">
+      <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={row.map((line) => actions.outputOf(line.part.output, line.part.view_id))} onOpen={actions.onOutput} /></div>
+    </li>
+  ) : (
+    <li className="min-w-0"><WorkLine line={row} words={words} actions={actions} /></li>
   );
 }
 

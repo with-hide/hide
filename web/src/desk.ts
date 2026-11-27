@@ -344,7 +344,7 @@ export type AcpSessionUpdate =
  * opened output, a mission's chip. wire gap: who reads a call into a part
  * (the threads node, from the call's `rawInput` command) and its fields.
  */
-export type ThreadHidePart =
+export type ThreadHidePart = (
   | { kind: "plan"; plan: PlanView }
   /** A new session this one handed work to. */
   | { kind: "spawn"; session: DeskSessionRef }
@@ -352,7 +352,16 @@ export type ThreadHidePart =
   | { kind: "letter"; direction: "sent" | "received"; peer: DeskSessionRef; body: string }
   | { kind: "view"; output: DeskOutput; view_id: string | null }
   | { kind: "mission"; mission: DeskMission }
-  | { kind: "pr"; number: number; state: PrState };
+  | { kind: "pr"; number: number; state: PrState }
+) & {
+  /**
+   * Where the part leads, by what names it in Hide rather than how it is
+   * drawn: a session by its pane, else the agent id the record wrote; a View
+   * by its id, else the target typed; a mission by its id. Parts of one turn
+   * with one target are one part (`onePerTarget`).
+   */
+  target: string;
+};
 
 /** One drawn line of a thread, after chunks are joined and call updates folded into their call. */
 export type ThreadLine =
@@ -361,8 +370,12 @@ export type ThreadLine =
   /** `atMs` is when its record was written, when the record says (its first piece's time). */
   | { kind: "agent"; id: string; message: string | null; text: string; atMs: number | null }
   | { kind: "thought"; id: string; message: string | null; text: string }
-  /** `startedAtMs` is when the session made the call, when its record says. */
-  | { kind: "tool"; id: string; title: string; toolKind: AcpToolKind; status: AcpToolCallStatus; input: string | null; output: string | null; diffs: Extract<AcpToolCallContent, { type: "diff" }>[]; images: AcpContentBlock[]; startedAtMs: number | null }
+  /**
+   * `startedAtMs` is when the session made the call, when its record says;
+   * `subject` is what it worked on, read from its input or its first place
+   * (a search's term, a file's path), whatever the agent's title says.
+   */
+  | { kind: "tool"; id: string; title: string; toolKind: AcpToolKind; status: AcpToolCallStatus; input: string | null; subject: string | null; output: string | null; diffs: Extract<AcpToolCallContent, { type: "diff" }>[]; images: AcpContentBlock[]; startedAtMs: number | null }
   | { kind: "plan"; id: string; entries: AcpPlanEntry[] }
   /** `command` is what the session typed, when the call carries it. */
   | { kind: "hide"; id: string; part: ThreadHidePart; command: string | null };
@@ -378,6 +391,35 @@ function commandOf(raw: unknown): string | null {
   if (typeof raw === "string") return raw;
   if (typeof raw === "object" && raw !== null && "command" in raw && typeof (raw as { command: unknown }).command === "string") return (raw as { command: string }).command;
   return null;
+}
+
+/** The input words that name what a call works on, in the order a reader trusts them: a term before a place. */
+const SUBJECT_KEYS = ["pattern", "query", "q", "regex", "glob", "url", "path", "file_path", "filepath", "searchpath", "directorypath", "searchdirectory", "directory"];
+
+/**
+ * What a call works on, from the input its reader kept (a search's term, a
+ * file's or a page's address), else its first place: every agent's reader
+ * hands one or the other, some only the tool's name as its title.
+ */
+function subjectOf(raw: unknown, locations: AcpToolCallFields["locations"]): string | null {
+  if (typeof raw === "object" && raw !== null) {
+    const fields = new Map(Object.entries(raw).map(([key, value]) => [key.toLowerCase(), value]));
+    for (const key of SUBJECT_KEYS) {
+      const value = fields.get(key);
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+  }
+  return locations?.[0]?.path ?? null;
+}
+
+/**
+ * A call in one line: a shell call as its command, any other as its title,
+ * followed by what it worked on when the title does not already say it
+ * (`grep needle` where the reader titled it `grep`).
+ */
+export function callName(line: Extract<ThreadLine, { kind: "tool" }>): string {
+  if (line.toolKind === "execute" && line.input) return line.input;
+  return line.subject && !line.title.includes(line.subject) ? `${line.title} ${line.subject}`.trim() : line.title;
 }
 
 function textOf(block: AcpContentBlock): string {
@@ -404,6 +446,7 @@ export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonl
     if (fields.kind !== undefined) line.toolKind = fields.kind;
     if (fields.status !== undefined) line.status = fields.status;
     if (fields.rawInput !== undefined) line.input = commandOf(fields.rawInput);
+    if (fields.rawInput !== undefined || fields.locations !== undefined) line.subject = subjectOf(fields.rawInput, fields.locations) ?? line.subject;
     if (fields.content !== undefined) {
       line.diffs = fields.content.filter((item): item is Extract<AcpToolCallContent, { type: "diff" }> => item.type === "diff");
       const blocks = fields.content.flatMap((item) => (item.type === "content" ? [item.content] : []));
@@ -444,10 +487,11 @@ export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonl
       case "tool_call": {
         const part = parts[update.toolCallId];
         if (part) {
-          lines.push({ kind: "hide", id: update.toolCallId, part, command: commandOf(update.rawInput) });
+          // Every reader titles a shell call by its command, whatever input it keeps (Codex's `cmd`, Antigravity's `CommandLine`, none at all).
+          lines.push({ kind: "hide", id: update.toolCallId, part, command: commandOf(update.rawInput) ?? (update.title || null) });
           return;
         }
-        const line: Extract<ThreadLine, { kind: "tool" }> = { kind: "tool", id: update.toolCallId, title: update.title, toolKind: "other", status: "pending", input: null, output: null, diffs: [], images: [], startedAtMs: update._meta?.hide?.at_ms ?? null };
+        const line: Extract<ThreadLine, { kind: "tool" }> = { kind: "tool", id: update.toolCallId, title: update.title, toolKind: "other", status: "pending", input: null, subject: null, output: null, diffs: [], images: [], startedAtMs: update._meta?.hide?.at_ms ?? null };
         fold(line, update);
         calls.set(update.toolCallId, line);
         lines.push(line);
@@ -548,7 +592,7 @@ export function deskPhase(step: DeskStepKind | null | undefined, text: string | 
 export function threadPhase(turn: ThreadTurn | undefined): WorkingPhase {
   if (!turn) return "thinking";
   if (turn.answer.length > 0) return "answering";
-  const last = turn.work.at(-1);
+  const last = turn.last;
   if (last?.kind === "tool") {
     switch (last.toolKind) {
       case "read":
@@ -578,11 +622,6 @@ export const markedMention = (mention: DeskMention) => `@${mention.kind}(${menti
 /** A mention as a session's own words say it. */
 export const namedMention = (mention: DeskMention) => `@${mention.name}`;
 
-/** A Desk message's words as the operator reads them, each held mention said by its name: what `복사` puts on the clipboard. */
-export function namedText(text: string, mentions: readonly DeskMention[]): string {
-  return mentions.reduce((words, mention) => words.split(markedMention(mention)).join(namedMention(mention)), text);
-}
-
 /** An agent Desk cannot be given (B4, D-79): one Settings › Agents switched off. One not ready or not signed in can be picked and says so (B6). */
 export function agentPickable(agent: DeskAgent): boolean {
   return agent.state !== "off";
@@ -602,21 +641,49 @@ export type ThreadTurn = {
   key: string;
   /** The message that began the turn; the first turn may have none. */
   user: Extract<ThreadLine, { kind: "user" }> | null;
-  /** The work before the answer: thoughts, calls, plans and every Hide part. */
+  /** The work before the answer: thoughts, calls, plans and every Hide part, each part's target once (`onePerTarget`). */
   work: ThreadLine[];
+  /** The newest line of the work as the session wrote it, a repeated part included: what the working line says it does. */
+  last: ThreadLine | null;
+  /** The newest call of the work as the session wrote it, a Hide call included: the one line under a running turn's fold. */
+  call: Extract<ThreadLine, { kind: "tool" | "hide" }> | null;
   /** The agent's words after its last piece of work. */
   answer: Extract<ThreadLine, { kind: "agent" }>[];
-  /** The Hide parts the work made that lead somewhere: they stay in view while the work is folded (B26). */
+  /** The Hide parts the work made that lead somewhere, one per target: they stay in view while the work is folded (B26). */
   parts: Extract<ThreadLine, { kind: "hide" }>[];
   files: number;
   commands: number;
 };
 
 /**
+ * A turn's lines with each Hide part's target drawn once: where the turn
+ * first reached it, so nothing moves as the session calls it again, with the
+ * newest call's state and command (six `hide mission` calls are one chip).
+ */
+function onePerTarget(lines: readonly ThreadLine[]): ThreadLine[] {
+  const newest = new Map<string, Extract<ThreadLine, { kind: "hide" }>>();
+  for (const line of lines) if (line.kind === "hide") newest.set(line.part.target, line);
+  const drawn = new Set<string>();
+  const kept: ThreadLine[] = [];
+  for (const line of lines) {
+    if (line.kind !== "hide") {
+      kept.push(line);
+      continue;
+    }
+    const target = line.part.target;
+    if (drawn.has(target)) continue;
+    drawn.add(target);
+    const last = newest.get(target)!;
+    kept.push(last === line ? line : { ...line, part: last.part, command: last.command });
+  }
+  return kept;
+}
+
+/**
  * A thread's lines as turns (B25): each message starts one, and its work
  * folds into one line, `파일 n · 명령 m`, above the answer. A new session, a
  * letter, an output, a mission or a PR it made stays in view under the
- * folded line; a plan change does not.
+ * folded line, once per target; a plan change does not.
  */
 export function threadTurns(lines: readonly ThreadLine[]): ThreadTurn[] {
   const turns: ThreadTurn[] = [];
@@ -625,13 +692,16 @@ export function threadTurns(lines: readonly ThreadLine[]): ThreadTurn[] {
     if (!open) return;
     let lastWork = open.body.length - 1;
     while (lastWork >= 0 && open.body[lastWork]!.kind === "agent") lastWork -= 1;
-    const work = open.body.slice(0, lastWork + 1);
+    const written = open.body.slice(0, lastWork + 1);
+    const work = onePerTarget(written);
     const answer = open.body.slice(lastWork + 1) as Extract<ThreadLine, { kind: "agent" }>[];
     const tools = work.filter((line): line is Extract<ThreadLine, { kind: "tool" }> => line.kind === "tool");
     turns.push({
       key: open.key,
       user: open.user,
       work,
+      last: written.at(-1) ?? null,
+      call: written.findLast((line): line is Extract<ThreadLine, { kind: "tool" | "hide" }> => line.kind === "tool" || (line.kind === "hide" && line.command !== null)) ?? null,
       answer,
       parts: work.filter((line): line is Extract<ThreadLine, { kind: "hide" }> => line.kind === "hide" && line.part.kind !== "plan"),
       files: tools.filter((line) => line.toolKind === "edit" || line.toolKind === "delete" || line.toolKind === "move").length,
