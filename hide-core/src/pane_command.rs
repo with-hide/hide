@@ -255,6 +255,9 @@ pub fn next_action(code: &str) -> Option<&'static str> {
         "pane_open_unconfirmed" => {
             "Run hide ps to see whether the pane opened before you open another"
         }
+        "pane_too_narrow" => {
+            "Your pane is too narrow to split: each side would be under the narrowest pane an agent's input box reads in, so nothing was opened; ask the operator to widen it, or run the command in a pane of its own"
+        }
         "shell_not_ready" => {
             "The pane opened but its shell did not take the command; type it with hide pane send <pane> <command> --enter"
         }
@@ -956,6 +959,7 @@ mod tests {
             "target_ambiguous",
             "pane_required",
             "pane_open_unconfirmed",
+            "pane_too_narrow",
             "shell_not_ready",
             "nothing_to_send",
             "text_invalid",

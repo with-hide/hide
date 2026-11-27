@@ -3537,6 +3537,20 @@ impl Runtime {
                     return true;
                 }
                 let direction = payload.direction;
+                if direction == crate::live::PaneSplitDirection::Right
+                    && let Some(cols) = self.too_narrow_to_split_right(&pane_id)
+                {
+                    self.set_error(
+                        "pane.too_narrow",
+                        format!(
+                            "Pane {pane_id} is {cols} columns wide; a split right needs {} so each side keeps {}",
+                            hide_agent_adapter::composer::SPLIT_RIGHT_COLUMNS,
+                            hide_agent_adapter::composer::PANE_FLOOR_COLUMNS
+                        ),
+                        false,
+                    );
+                    return true;
+                }
                 let action = PaneControlAction::Split {
                     pane_id: pane_id.clone(),
                     direction,
@@ -3642,6 +3656,19 @@ impl Runtime {
             Event::ReopenClosed => self.reopen_closed(),
             Event::ForkPane(payload) => {
                 let pane_id = payload.pane_id;
+                if matches!(payload.placement, crate::fork::ForkPlacement::Side)
+                    && let Some(cols) = self.too_narrow_to_split_right(&pane_id)
+                {
+                    self.set_error(
+                        "pane.too_narrow",
+                        format!(
+                            "Pane {pane_id} is {cols} columns wide; a fork to the side needs {}",
+                            hide_agent_adapter::composer::SPLIT_RIGHT_COLUMNS
+                        ),
+                        false,
+                    );
+                    return true;
+                }
                 if self.pane_move_holds_pane(&pane_id) {
                     self.set_error(
                         "pane.move_pending",
@@ -5029,6 +5056,20 @@ impl Event {
 }
 
 impl Runtime {
+    /// The columns `pane_id` is wide when a split right would leave either
+    /// half under the pane floor (`hide_agent_adapter::composer`), read from
+    /// the grid its view last reported; `None` when it splits right, and for
+    /// a pane no view has sized yet, which no grid says is narrow. Every split
+    /// right asks this before the engine is asked: the terminal menu, `hide
+    /// pane open --beside` and `hide agent spawn --beside` (`docs/UI_BEHAVIOR.md`,
+    /// The pane floor).
+    pub(crate) fn too_narrow_to_split_right(&self, pane_id: &str) -> Option<u16> {
+        self.terminal_sizes
+            .get(pane_id)
+            .map(|&(_, cols)| cols)
+            .filter(|&cols| cols < hide_agent_adapter::composer::SPLIT_RIGHT_COLUMNS)
+    }
+
     /// Sends the size the pane's view last reported to its node, which
     /// resizes its session (an observer attaches again once the size
     /// settles) and records `terminal.resize_settled`. An operation whose

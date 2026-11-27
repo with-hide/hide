@@ -179,6 +179,11 @@ impl Runtime {
                 )
             }
             PaneCommand::Open { command, focus } => {
+                // The split would leave a pane under the floor, so nothing
+                // is opened (`Runtime::too_narrow_to_split_right`).
+                if self.too_narrow_to_split_right(caller_pane).is_some() {
+                    return Err("pane_too_narrow".into());
+                }
                 let (_, raw) = crate::address::split_pane(node, caller_pane);
                 (
                     device.to_owned(),

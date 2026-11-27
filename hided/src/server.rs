@@ -1728,6 +1728,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "beside_other_machine" => {
             "--beside opens an agent only on your own machine; leave out --machine, or run the command again without --beside to open it in a new tab"
         }
+        "beside_too_narrow" => {
+            "Your pane is too narrow to split: the agent's input box would not be readable beside you, so nothing was opened; run the command again without --beside to open the agent in a new tab"
+        }
         "beside_needs_agent_pane" => {
             "--beside opens the agent beside the pane that calls it; run the command from an agent pane Hide knows, or without --beside to open it in a new tab"
         }
@@ -6723,6 +6726,7 @@ mod tests {
             "beside_other_checkout",
             "beside_other_machine",
             "beside_needs_agent_pane",
+            "beside_too_narrow",
             "beside_with_parent",
             "beside_pane_unavailable",
         ] {

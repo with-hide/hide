@@ -2439,6 +2439,18 @@ fn beside_target(
     let Some((repo, branch, path)) = target else {
         return Ok(pane);
     };
+    // A split that would leave the caller's pane or the new one under the
+    // pane floor is refused before anything is made, as the terminal menu's
+    // Split right is (`Runtime::too_narrow_to_split_right`).
+    if let Some(runtime) = client.runtime.upgrade()
+        && runtime
+            .lock()
+            .map_err(|_| "delivery_unavailable")?
+            .too_narrow_to_split_right(&actor.pane_id)
+            .is_some()
+    {
+        return Err(refused("beside_too_narrow"));
+    }
     let existing = match branch {
         Some(branch) => {
             let CoordinationContext { engine, .. } = context(client, &actor.device_id)?;

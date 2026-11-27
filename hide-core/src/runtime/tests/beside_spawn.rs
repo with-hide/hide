@@ -634,6 +634,34 @@ fn a_beside_spawn_with_a_parent_creates_nothing() {
     }
 }
 
+/// A split that would leave the caller or the child under the pane floor is
+/// refused before anything is reserved or created, with the next step of
+/// opening the agent in a new tab; a pane exactly twice the floor wide splits.
+#[test]
+fn a_beside_spawn_from_a_pane_too_narrow_to_split_creates_nothing() {
+    use hide_agent_adapter::composer::SPLIT_RIGHT_COLUMNS;
+    let spawner = spawner();
+    let size = |cols| {
+        spawner
+            .runtime
+            .lock()
+            .unwrap()
+            .terminal_sizes
+            .insert(spawner.actor.pane_id.clone(), (40, cols));
+    };
+    size(SPLIT_RIGHT_COLUMNS - 1);
+    assert_eq!(
+        spawner.spawn("narrow", BESIDE),
+        Err("beside_too_narrow".to_owned())
+    );
+    assert!(spawner.ledger().spawns.is_empty());
+    for method in ["split_beside", "create_tab", "start_agent"] {
+        assert_eq!(spawner.count(method), 0, "{method}");
+    }
+    size(SPLIT_RIGHT_COLUMNS);
+    assert_eq!(spawner.spawn("wide", BESIDE).unwrap()["pane"], "w2:p1");
+}
+
 /// B10: a split the engine refuses fails the spawn with its reason and opens no
 /// tab in its place.
 #[test]

@@ -6335,6 +6335,7 @@
                 "beside_other_checkout",
                 "beside_other_machine",
                 "beside_needs_agent_pane",
+                "beside_too_narrow",
                 "beside_with_parent",
                 "beside_pane_unavailable",
                 "plan_missing",
@@ -7475,6 +7476,7 @@
                 "command_too_long",
                 "pane_unavailable",
                 "pane_open_unconfirmed",
+                "pane_too_narrow",
                 "shell_not_ready"
             ],
             "repeats_at_most": null,

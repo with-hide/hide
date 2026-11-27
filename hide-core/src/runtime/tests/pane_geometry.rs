@@ -315,6 +315,45 @@ fn a_view_reporting_the_size_its_pane_runs_at_sends_no_resize() {
     assert_eq!(resizes(&terminals, LEFT), [(30, 40)]);
 }
 
+/// A split right that would leave either half under the pane floor is
+/// refused with its reason before the engine is asked, while a split down of
+/// the same pane goes on, and a pane exactly twice the floor wide splits
+/// right (`docs/UI_BEHAVIOR.md`, The pane floor).
+#[test]
+fn a_split_right_under_the_pane_floor_is_refused_and_a_split_down_is_not() {
+    use hide_agent_adapter::composer::SPLIT_RIGHT_COLUMNS;
+    let fake = fake_engine();
+    let (mut runtime, _terminals) = runtime_on(&fake, session(None, false));
+    let split = |runtime: &mut Runtime, cols: u16, direction: &str| {
+        runtime.terminal_sizes.insert(LEFT.to_owned(), (24, cols));
+        runtime.snapshot.status.last_error = None;
+        dispatch(
+            runtime,
+            "create_pane",
+            serde_json::json!({"tab_id": TAB, "cwd": CHECKOUT, "command": null, "direction": direction}),
+        );
+        runtime
+            .snapshot()
+            .status
+            .last_error
+            .as_ref()
+            .map(|error| error.kind.clone())
+    };
+    assert_eq!(
+        split(&mut runtime, SPLIT_RIGHT_COLUMNS - 1, "right").as_deref(),
+        Some("pane.too_narrow")
+    );
+    assert!(fake.calls_of("split_pane").is_empty());
+    assert_ne!(
+        split(&mut runtime, SPLIT_RIGHT_COLUMNS - 1, "down").as_deref(),
+        Some("pane.too_narrow")
+    );
+    assert_ne!(
+        split(&mut runtime, SPLIT_RIGHT_COLUMNS, "right").as_deref(),
+        Some("pane.too_narrow")
+    );
+}
+
 /// B11, grid-ahead-of-herdr B3: a split is drawn when the engine names the new
 /// pane: the pane split in half with the new one second, a row the canvas
 /// can draw it from, a terminal entry that attaches at its own view's size,
