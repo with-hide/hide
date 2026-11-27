@@ -321,7 +321,7 @@ fn choose_on_device(
     let pressed = event(
         "remote_control",
         json!({
-            "target_id": DEVICE, "request_id": format!("row-{id}"), "focus_device": focus_device,
+            "target_id": DEVICE, "request_id": format!("row-{id}-{}", screen.is_some()), "focus_device": focus_device,
             "action": "focus_pane", "pane_id": format!("remote:{DEVICE}:pane:{id}"),
         }),
     );
