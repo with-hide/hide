@@ -1992,6 +1992,18 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       return "handed";
     },
 
+    /**
+     * Another computer's agent chosen here, by a row of that computer's own
+     * work or the notice it handed over: that computer's screen comes
+     * forward on the agent's pane, as an SSH device's agent opens on its
+     * pane; `pane` is the pane that computer's core knows it by. Where no
+     * screen of it can be drawn here (a browser tab, an older desktop app),
+     * its tile comes forward as before.
+     */
+    openComputerAgent(deviceId: string, pane: string) {
+      if (this.openComputerWork(deviceId, { op: "show", pane }) !== "handed") this.focusDevice(deviceId);
+    },
+
     focusTool(connection: string) {
       ui().setRemoteScreen(null);
       const screen = ui().screen;

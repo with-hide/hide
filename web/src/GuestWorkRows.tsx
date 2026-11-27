@@ -202,9 +202,7 @@ export function PeerWorkRows({ group, actions, treeIndent = false }: { group: "n
               data-task-focus="row"
               className={cn("items-start py-xs text-caption text-subtle-foreground hover:text-foreground", treeIndent ? "rounded-xs pr-xs pl-none" : "min-h-(--size-control-lg) rounded-sm px-sm")}
               // That computer's work opens on its own screen with the work chosen (D-78, D-81); without a desktop to draw it, its tile.
-              onClick={() => {
-                if (actions.openComputerWork(deviceId, { op: "show", pane: row.id }) !== "handed") actions.focusDevice(deviceId);
-              }}
+              onClick={() => actions.openComputerAgent(deviceId, row.id)}
             >
               {treeIndent ? <span aria-hidden="true" className="w-(--size-lineage-chevron) shrink-0" /> : null}
               <SessionRowBody
