@@ -76,6 +76,10 @@ it("keeps the last thread after another pane takes it, including reconnect and r
     expect(calls.filter((call) => call.kind === "session_thread_open")).toHaveLength(1);
     await act(async () => container.querySelector("button")!.click());
     expect(calls.filter((call) => call.kind === "session_thread_open")).toHaveLength(2);
+    // Other sections can publish while the explicit open waits for its
+    // answer. The unchanged replacement is not a second takeover.
+    await act(async () => useShellStore.setState({ sessionThread: section("w1:p2", 3) }));
+    expect(container.querySelector("[data-taken]")?.getAttribute("data-taken")).toBe("false");
     await act(async () => useShellStore.setState({ sessionThread: section("w1:p1", 4) }));
     expect(container.querySelector("[data-taken]")?.getAttribute("data-taken")).toBe("false");
     expect(container.querySelector("span")?.textContent).toBe("4");
