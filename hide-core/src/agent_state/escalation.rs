@@ -144,7 +144,10 @@ pub(crate) fn of(
             match holds.get(&letter.id).copied().and_then(held_for) {
                 Some(HeldFor::Approval) => Cause::ParentBlocked,
                 Some(HeldFor::Draft) => Cause::Draft,
-                None => continue,
+                // The parent's pane is too narrow or covered to read its
+                // input: the pane's own letters mark says so, and nothing
+                // the child raises would widen it.
+                Some(HeldFor::Unreadable) | None => continue,
             }
         };
         return Some(Escalation {

@@ -2194,11 +2194,17 @@ pub struct SidebarAgentSnapshot {
     pub revisit: Option<crate::agent_state::sessions::Revisit>,
     pub escalation: Option<crate::agent_state::escalation::Escalation>,
     /// How many letters wait on this pane because a draft may stand in its
-    /// composer, once it has rested long enough for the operator to be shown
-    /// them (`doorbell::letters_waiting`): the pane header's Deliver now and
-    /// the row's envelope. Absent from the wire while none waits.
+    /// composer or no read finds its composer, once it has rested long
+    /// enough for the operator to be shown them (`doorbell::letters_waiting`):
+    /// the pane header's mark and the row's envelope. Absent from the wire
+    /// while none waits.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub letters_waiting: Option<u32>,
+    /// Why they wait, beside `letters_waiting`: `draft`, which Deliver now
+    /// lets through, or `unreadable`, a pane too narrow or covered for its
+    /// composer to be read, which widening it does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub letters_reason: Option<crate::delivery::held::HeldFor>,
     /// On a lineage root: every raised descendant, lead first (PRD D-10, D-27).
     pub raised: Vec<crate::agent_state::escalation::RaisedAsk>,
     /// On a parent between a declaring descendant and its lineage root: the
@@ -11385,10 +11391,10 @@ mod wire_enum_tests {
             assert_wire(&contract, "mission_answer_failure", &failures);
             checked.insert("mission_answer_failure");
             use crate::delivery::held::HeldFor;
-            let held = [HeldFor::Approval, HeldFor::Draft];
+            let held = [HeldFor::Approval, HeldFor::Draft, HeldFor::Unreadable];
             for variant in held {
                 match variant {
-                    HeldFor::Approval | HeldFor::Draft => {}
+                    HeldFor::Approval | HeldFor::Draft | HeldFor::Unreadable => {}
                 }
             }
             assert_wire(&contract, "mission_letters_held_for", &held);
