@@ -24,7 +24,7 @@ pub enum Candidate {
     /// An alias of this account's SSH configuration that signs in, asking
     /// nothing, to the account whose Hide holds this address's key: the
     /// machine is reached through the system `ssh` and `hide device carry
-    /// --ssh` there (mission-107). It is this machine's own fact, built in
+    /// --ssh` there. It is this machine's own fact, built in
     /// memory from the host's record (`Host::dial_addr`), so it is never
     /// written: not to `peers/known.json`, a link, an answer or the wire.
     #[serde(skip)]
@@ -84,7 +84,7 @@ pub enum PathKind {
     /// distribution and its PC.
     Local,
     /// Through the system `ssh`, to the alias this machine signs in to the
-    /// other one with (mission-107).
+    /// other one with.
     Ssh,
 }
 

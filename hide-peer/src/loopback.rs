@@ -69,6 +69,7 @@ impl Net {
             conns: Mutex::new(Vec::new()),
             starts_on: Mutex::new(PathKind::Local),
             unreachable: std::sync::atomic::AtomicBool::new(false),
+            silent: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -93,6 +94,9 @@ pub struct Loopback {
     starts_on: Mutex<PathKind>,
     /// This machine's dials reach nothing, as when no network carries them.
     unreachable: std::sync::atomic::AtomicBool,
+    /// This machine's dials neither connect nor fail, as a dial whose
+    /// packets are dropped.
+    silent: std::sync::atomic::AtomicBool,
 }
 
 struct Shared {
@@ -161,6 +165,11 @@ impl Loopback {
         self.unreachable.store(unreachable, Ordering::Release);
     }
 
+    /// Whether this machine's dials, from now, never answer.
+    pub fn set_silent(&self, silent: bool) {
+        self.silent.store(silent, Ordering::Release);
+    }
+
     fn track(&self, conn: &LoopConn) {
         let mut conns = self.conns.lock().expect("the connection list's lock");
         conns.retain(|known| known.strong_count() > 0);
@@ -182,6 +191,9 @@ impl PeerTransport for Loopback {
     async fn dial(&self, to: &PeerAddr) -> Result<LoopConn, TransportError> {
         if self.unreachable.load(Ordering::Acquire) {
             return Err(unreachable("no network carries this machine's dials"));
+        }
+        if self.silent.load(Ordering::Acquire) {
+            return std::future::pending().await;
         }
         let machine = self
             .net

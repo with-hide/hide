@@ -1029,7 +1029,7 @@ async fn the_seventh_confirm_or_removal_in_a_minute_goes_unanswered() {
     ));
 }
 
-/// The alias this machine signs in to a host by is its own (R6): an answer
+/// The alias this machine signs in to a host by is its own: an answer
 /// that names one, or a distribution, has it dropped, and the alias saved
 /// is the one this machine's pairing signed in through.
 #[tokio::test]

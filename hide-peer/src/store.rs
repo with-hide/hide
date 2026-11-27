@@ -555,7 +555,7 @@ pub struct Host {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started: Option<Login>,
     /// How this machine reaches the host over SSH when no direct path opens
-    /// (mission-107): an alias of this account's SSH configuration, recorded
+    ///: an alias of this account's SSH configuration, recorded
     /// only once a carrier over it proved the host's key, or `Off` once an
     /// alias reached a Hide that proved another key. Absent, the alias of
     /// [`Host::started`] is read ([`Host::ssh_alias`]). A field, not a
@@ -751,7 +751,7 @@ impl Known {
     }
 
     /// Records `alias` as the SSH route of the host under `key`: only once a
-    /// carrier over it proved that host's key (mission-107). Whether
+    /// carrier over it proved that host's key. Whether
     /// anything changed.
     pub fn record_ssh(&mut self, key: &PeerKey, alias: &str) -> Result<bool, StoreError> {
         if !valid_alias(alias) {
@@ -1251,7 +1251,7 @@ mod tests {
 
     /// The alias a host is dialed by is kept in its record, a record written
     /// before it reads without one, and the address the keeper dials names
-    /// it last, built in memory and never written (mission-107).
+    /// it last, built in memory and never written.
     #[test]
     fn an_alias_field_is_kept_and_a_record_without_it_reads() {
         let dir = tempfile::tempdir().unwrap();

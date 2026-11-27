@@ -59,7 +59,7 @@ pub enum RelayState {
 }
 
 /// Where another carrier to a machine stands, beside the transport's own
-/// paths: its SSH route (mission-107, 4.7).
+/// paths: its SSH route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Route {
     /// None: no alias, or a transport that makes no such carrier.
@@ -122,6 +122,11 @@ pub trait PeerTransport: Send + Sync + 'static {
     /// A connection to `key` over that other carrier, or one a move
     /// installed, ended within [`crate::limits::STAYED_AFTER`].
     fn route_fell(&self, _key: &PeerKey) {}
+
+    /// A connection to `key` over that other carrier, or one a move
+    /// installed, stayed [`crate::limits::STAYED_AFTER`] and more: the
+    /// route's wait starts over.
+    fn route_stayed(&self, _key: &PeerKey) {}
 
     /// The machine woke or its network changed: what waits after a failure
     /// is tried again.

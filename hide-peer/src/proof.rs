@@ -35,7 +35,7 @@ pub enum Proof {
     Proved,
     /// The other end holds another key, `0`, and proved it: its signature
     /// verified under the key it named. Another machine, another account,
-    /// or the same machine set up again (mission-107, R3).
+    /// or the same machine set up again.
     OtherKey(PeerKey),
     /// Nothing was proved: a signature that does not verify under the key
     /// named, or the other end did not take this machine's proof.

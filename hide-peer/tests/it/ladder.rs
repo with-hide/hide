@@ -1,4 +1,4 @@
-//! The SSH path beside a machine's other transport (mission-107, 4.2-4.6):
+//! The SSH path beside a machine's other transport:
 //! the first dial's ladder, the climb that moves a live connection, the
 //! probe for a direct path, and the beat on an SSH connection.
 //!
@@ -33,6 +33,7 @@ type Conn = <Transport as PeerTransport>::Conn;
 struct TestRoutes {
     route: Mutex<Option<Route>>,
     fell: AtomicUsize,
+    stayed: AtomicUsize,
 }
 
 impl TestRoutes {
@@ -53,10 +54,13 @@ impl Routes for TestRoutes {
     fn fell(&self, _key: &PeerKey) {
         self.fell.fetch_add(1, Ordering::AcqRel);
         let mut route = self.route.lock().unwrap();
-        if *route != Some(Route::Ready) {
-            return;
+        if matches!(*route, None | Some(Route::Ready)) {
+            *route = Some(Route::Held);
         }
-        *route = Some(Route::Held);
+    }
+
+    fn stayed(&self, _key: &PeerKey) {
+        self.stayed.fetch_add(1, Ordering::AcqRel);
     }
 
     fn network_changed(&self) {
@@ -75,6 +79,8 @@ struct TestSsh {
     sign_ins: AtomicUsize,
     late: Mutex<Duration>,
     fails: AtomicBool,
+    /// Carriers whose bytes stopped, the guest's end closed or the host's.
+    ended: Arc<AtomicUsize>,
     /// Held: a carrier made from now passes no byte while it is set.
     frozen: Arc<(Mutex<bool>, Condvar)>,
 }
@@ -82,6 +88,10 @@ struct TestSsh {
 impl TestSsh {
     fn sign_ins(&self) -> usize {
         self.sign_ins.load(Ordering::Acquire)
+    }
+
+    fn ended(&self) -> usize {
+        self.ended.load(Ordering::Acquire)
     }
 
     fn freeze(&self, frozen: bool) {
@@ -92,8 +102,13 @@ impl TestSsh {
 }
 
 /// Copies `from` to `to` a chunk at a time, holding each chunk while the
-/// carrier is frozen, until either end closes.
-fn copy(mut from: LocalStream, mut to: LocalStream, frozen: Arc<(Mutex<bool>, Condvar)>) {
+/// carrier is frozen, until either end closes; counts its end in `ended`.
+fn copy(
+    mut from: LocalStream,
+    mut to: LocalStream,
+    frozen: Arc<(Mutex<bool>, Condvar)>,
+    ended: Option<Arc<AtomicUsize>>,
+) {
     use std::io::{Read, Write};
     std::thread::spawn(move || {
         let mut buffer = [0_u8; 16 * 1024];
@@ -113,6 +128,9 @@ fn copy(mut from: LocalStream, mut to: LocalStream, frozen: Arc<(Mutex<bool>, Co
             }
         }
         to.shutdown_handle().shutdown();
+        if let Some(ended) = ended {
+            ended.fetch_add(1, Ordering::AcqRel);
+        }
     });
 }
 
@@ -162,6 +180,11 @@ struct Pair {
 }
 
 fn pair(pacing: Pacing) -> Pair {
+    pair_by(pacing, Some("studio"))
+}
+
+/// A pair whose guest keeps the host by `alias`, or by none.
+fn pair_by(pacing: Pacing, alias: Option<&str>) -> Pair {
     let net = Net::new();
     let host_dir = tempfile::tempdir().unwrap();
     let (key, twin) = keys(&host_dir, "studio");
@@ -194,8 +217,14 @@ fn pair(pacing: Pacing) -> Pair {
                 near_far.duplicate(),
                 far_near.duplicate(),
                 Arc::clone(&ssh.frozen),
+                None,
             );
-            copy(far_near, near_far, Arc::clone(&ssh.frozen));
+            copy(
+                far_near,
+                near_far,
+                Arc::clone(&ssh.frozen),
+                Some(Arc::clone(&ssh.ended)),
+            );
             far.transport()
                 .pipe()
                 .arrived(far_end.into(), PathKind::Ssh);
@@ -228,7 +257,7 @@ fn pair(pacing: Pacing) -> Pair {
                 state: KnownState::Active,
                 candidates: Vec::new(),
                 started: None,
-                ssh: Some(SshRoute::Alias("studio".to_owned())),
+                ssh: alias.map(|alias| SshRoute::Alias(alias.to_owned())),
             })
         })
         .unwrap();
@@ -394,7 +423,8 @@ async fn a_relay_connection_moves_to_ssh_on_both_machines() {
 
 /// A hole punch that lands while the SSH sign-in runs keeps its direct
 /// path: the SSH connection does not beat it, so it is closed unadmitted,
-/// and the route waits as after a fall.
+/// and the route waits once, as after a fall, so the next relay connection
+/// does not sign in at once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_move_never_replaces_a_connection_that_became_direct_meanwhile() {
     let pair = pair(quick());
@@ -416,13 +446,111 @@ async fn a_move_never_replaces_a_connection_that_became_direct_meanwhile() {
         .transport()
         .main()
         .move_path(PathKind::Direct);
-    within("the move given up", async {
+    let mut host_told = pair.host.peers.events();
+    within("the move given up, counted once", async {
         while pair.routes.fell() == 0 {
             tokio::task::yield_now().await;
         }
     })
     .await;
+    within("its carrier ended", async {
+        while pair.ssh.ended() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
     assert_eq!(pair.held_on(PathKind::Direct).await, relay);
+    assert_eq!(
+        pair.routes.fell(),
+        1,
+        "a move that was not taken waits once"
+    );
+    while let Ok(event) = host_told.try_recv() {
+        assert!(
+            !matches!(
+                event,
+                PeerEvent::Connected {
+                    path: PathKind::Ssh,
+                    ..
+                }
+            ),
+            "the host admitted the SSH connection: {event:?}"
+        );
+    }
+}
+
+/// An alias the operator records for a host already connected over the
+/// relay is climbed to while that connection lives: both machines move to
+/// SSH, and the relay connection is not dropped first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_alias_recorded_on_a_relay_connection_is_climbed_to() {
+    let pair = pair_by(quick(), None);
+    pair.main().dial_on(PathKind::Relay);
+    let _keeper = pair.keep();
+    let relay = pair.held_on(PathKind::Relay).await;
+    assert_eq!(pair.ssh.sign_ins(), 0);
+    let mut guest_told = pair.guest.peers.events();
+    let host = pair.host.peers.key();
+    pair.guest
+        .peers
+        .known(|known| known.record_ssh(&host, "studio"))
+        .unwrap();
+    let ssh = pair.held_on(PathKind::Ssh).await;
+    assert_ne!(relay, ssh);
+    assert_eq!(pair.ssh.sign_ins(), 1);
+    // The relay connection ended only as the one the move replaced.
+    while let Ok(event) = guest_told.try_recv() {
+        assert!(
+            !matches!(
+                event,
+                PeerEvent::Disconnected { code, .. } if code != CloseCode::Replaced
+            ),
+            "the pair was disconnected on the way: {event:?}"
+        );
+    }
+}
+
+/// A due route is signed in to when the other transport's dial neither
+/// connects nor fails: it is given the window a first dial gives it, not
+/// the whole dial's bound.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_due_route_is_tried_when_the_other_dial_never_answers() {
+    for route in [Route::Ready, Route::Due] {
+        let pair = pair(Pacing::default());
+        pair.main().set_silent(true);
+        pair.routes.set(route);
+        let started = tokio::time::Instant::now();
+        let link = within("the dial", pair.guest.peers.dial(&pair.to_host()))
+            .await
+            .unwrap_or_else(|error| panic!("{route:?}: {error}"));
+        assert_eq!(link.path(), PathKind::Ssh, "{route:?}");
+        assert!(
+            started.elapsed() < hide_peer::limits::DIAL_WITHIN,
+            "{route:?} waited for the whole dial"
+        );
+    }
+}
+
+/// A climb whose sign-in fails tells the route nothing more: the attempt
+/// counted its own failure, so the route's wait doubles once per failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_sign_in_on_the_climb_is_counted_once() {
+    let pair = pair(quick());
+    pair.main().dial_on(PathKind::Relay);
+    pair.routes.set(Route::Held);
+    pair.ssh.fails.store(true, Ordering::Release);
+    let _keeper = pair.keep();
+    pair.held_on(PathKind::Relay).await;
+    pair.routes.set(Route::Ready);
+    // The stand-in route stays ready, so a second sign-in means the first
+    // climb ended.
+    within("two climbs", async {
+        while pair.ssh.sign_ins() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert_eq!(pair.routes.fell(), 0);
 }
 
 /// The side that dialed SSH looks for a direct path beside it: a probe

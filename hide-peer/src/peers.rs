@@ -18,12 +18,12 @@
 //!   peer restarted or lost its end, and closing the new one as a duplicate
 //!   would leave the pair with a dead connection;
 //! - a connection that names the held one as the one it replaces (a move
-//!   to a better path, mission-107) replaces it whichever side dialed it,
+//!   to a better path) replaces it whichever side dialed it,
 //!   and one a move replaced is refused wherever it arrives late
 //!   ([`decide`]).
 //!
 //! A machine that keeps a host climbs while the connection lives
-//! (mission-107, 4.3): from the relay to SSH, and from SSH to a direct path
+//!: from the relay to SSH, and from SSH to a direct path
 //! the other transport finds, each move a new connection that names the one
 //! it replaces.
 
@@ -425,7 +425,7 @@ impl<C: PeerConn> Link<C> {
     }
 
     /// Whether the two builds agreed that a connection may run over SSH
-    /// and move between paths (mission-107).
+    /// and move between paths.
     pub fn can_move(&self) -> bool {
         self.inner.agreed.has(hello::SSH_PATH)
     }
@@ -578,15 +578,36 @@ impl<C: PeerConn> Table<C> {
         names
     }
 
+    /// Remembers `name` as ended for another. A name already known keeps
+    /// the time it was first heard, so two ends that name it to each other
+    /// do not keep it alive; every machine's names are aged here, and at
+    /// most [`limits::MAX_SUPERSEDED_PEERS`] machines keep any, the one
+    /// whose newest name is oldest going first.
     fn supersede(&mut self, key: PeerKey, name: u64) {
+        let now = Instant::now();
+        self.superseded.retain(|_, kept| {
+            kept.retain(|(_, at)| now.duration_since(*at) < limits::SUPERSEDED_FOR);
+            !kept.is_empty()
+        });
         let kept = self.superseded.entry(key).or_default();
-        if let Some(known) = kept.iter_mut().find(|(known, _)| *known == name) {
-            known.1 = Instant::now();
+        if kept.iter().any(|(known, _)| *known == name) {
             return;
         }
-        kept.push((name, Instant::now()));
+        kept.push((name, now));
         if kept.len() > limits::MAX_SUPERSEDED {
             kept.remove(0);
+        }
+        while self.superseded.len() > limits::MAX_SUPERSEDED_PEERS {
+            let oldest = self
+                .superseded
+                .iter()
+                .filter(|(peer, _)| **peer != key)
+                .min_by_key(|(_, kept)| kept.last().map(|(_, at)| *at))
+                .map(|(peer, _)| *peer);
+            match oldest {
+                Some(peer) => self.superseded.remove(&peer),
+                None => break,
+            };
         }
     }
 }
@@ -622,7 +643,7 @@ struct Inner<T: PeerTransport> {
     shutdown: watch::Sender<bool>,
 }
 
-/// The times of the climb and the beat (mission-107): [`limits`]' own in a
+/// The times of the climb and the beat: [`limits`]' own in a
 /// daemon. A test shortens them to see a probe or a silent carrier without
 /// waiting minutes for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1166,12 +1187,17 @@ impl<T: PeerTransport> Inner<T> {
                 return;
             };
             conn.closed().await;
-            let mut table = lock(&self.table);
-            if let Some(conns) = table.draining.get_mut(key) {
-                conns.retain(|draining| draining.id() != conn.id());
-                if conns.is_empty() {
-                    table.draining.remove(key);
-                }
+            self.undrain(key, &conn);
+        }
+    }
+
+    /// `conn`, closed here, ended: it no longer holds up a dial to `key`.
+    fn undrain(&self, key: &PeerKey, conn: &T::Conn) {
+        let mut table = lock(&self.table);
+        if let Some(conns) = table.draining.get_mut(key) {
+            conns.retain(|draining| draining.id() != conn.id());
+            if conns.is_empty() {
+                table.draining.remove(key);
             }
         }
     }
@@ -1414,7 +1440,9 @@ impl<T: PeerTransport> Inner<T> {
         // second wall.
         if conn.path() == PathKind::Ssh && !moves {
             conn.close(CloseCode::Probe);
-            return Err(DialError::Refused(CloseCode::Probe));
+            return Err(DialError::Protocol(
+                "an SSH connection with a build that does not name ssh_path".to_owned(),
+            ));
         }
         // Both ends read the names from the dialer's hello. With a build
         // that names none, every connection names nothing and the rule is
@@ -1516,7 +1544,12 @@ impl<T: PeerTransport> Inner<T> {
             };
             // Read under the same lock as the install, so a predecessor
             // that arrives later always finds it.
-            for name in std::iter::once(named.replaces).chain(supersedes) {
+            // The names the dialer knew first, then the one this connection
+            // replaces, so at the cap the name row 1 needs most is kept.
+            for name in supersedes
+                .into_iter()
+                .chain(std::iter::once(named.replaces))
+            {
                 if name != 0 {
                     table.supersede(key, name);
                 }
@@ -1561,12 +1594,13 @@ impl<T: PeerTransport> Inner<T> {
         _place: Option<Place>,
     ) {
         // An SSH connection beats, so a carrier that went silent is closed
-        // on both ends (mission-107, 4.6).
+        // on both ends.
         let beats = link.path() == PathKind::Ssh && link.can_move();
         let mut beat = tokio::time::interval_at(
             Instant::now() + self.pacing.beat_every,
             self.pacing.beat_every,
         );
+        beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             let frame = tokio::select! {
                 frame = queued.recv() => frame,
@@ -1804,7 +1838,7 @@ impl<T: PeerTransport> Inner<T> {
     }
 
     /// Dials `to` to move the live connection `held` to a better path
-    /// (mission-107, 4.3): in the same turn as a dial, through the same
+    ///: in the same turn as a dial, through the same
     /// first exchange, naming `held` as the connection it replaces. Unlike
     /// a dial it returns no live connection in place of its own and races
     /// no arriving one; and a connection that does not beat `held`'s path,
@@ -1816,7 +1850,7 @@ impl<T: PeerTransport> Inner<T> {
         to: &PeerAddr,
         held: &Link<T::Conn>,
         over_route: bool,
-    ) -> Result<Link<T::Conn>, DialError> {
+    ) -> Result<Link<T::Conn>, NotMoved> {
         let turn = Arc::clone(lock(&self.dialing).entry(to.key).or_default());
         let moved = {
             let _turn = turn.lock().await;
@@ -1838,7 +1872,7 @@ impl<T: PeerTransport> Inner<T> {
         to: &PeerAddr,
         held: &Link<T::Conn>,
         over_route: bool,
-    ) -> Result<Link<T::Conn>, DialError> {
+    ) -> Result<Link<T::Conn>, NotMoved> {
         self.drained(&to.key).await;
         let start = Instant::now();
         let dialing = async {
@@ -1847,22 +1881,33 @@ impl<T: PeerTransport> Inner<T> {
                 false => self.transport.dial(to).await,
             }
         };
-        let conn = tokio::time::timeout(limits::DIAL_WITHIN, dialing)
-            .await
-            .map_err(|_| DialError::TimedOut)??;
+        let conn = match tokio::time::timeout(limits::DIAL_WITHIN, dialing).await {
+            Ok(Ok(conn)) => conn,
+            Ok(Err(_)) | Err(_) => return Err(NotMoved::NotDialed),
+        };
+        // From here the connection is this move's: whichever way the move
+        // ends short of an install, its being given up included, it is
+        // closed and drained before the machine is dialed again.
+        let unadmitted = Unadmitted {
+            inner: Arc::clone(self),
+            conn: Some(conn.clone()),
+        };
         let beats = |conn: &T::Conn| {
             conn.chosen_path()
                 .is_some_and(|path| path.rank() > held.path().rank())
         };
         while !beats(&conn) {
             if start.elapsed() >= limits::DIRECT_WITHIN || conn.ended().is_some() {
-                conn.close(CloseCode::Probe);
-                return Err(DialError::Refused(CloseCode::Probe));
+                return Err(NotMoved::NotTaken(DialError::Refused(CloseCode::Probe)));
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: a transport's chosen path has no change event before it chose one
         }
         let from = held.path();
-        let link = self.establish_replacing(conn, held.dial_name()).await?;
+        let link = self
+            .establish_replacing(conn, held.dial_name())
+            .await
+            .map_err(NotMoved::NotTaken)?;
+        unadmitted.admitted();
         crate::diagnostic!(json!({
             "component": "peer",
             "event": "peer.moved",
@@ -1873,31 +1918,55 @@ impl<T: PeerTransport> Inner<T> {
         Ok(link)
     }
 
-    /// One step of the climb on the live connection `link` (mission-107,
-    /// 4.3): what it waits for, and the move it makes, if any. A connection
-    /// between builds that cannot move, or to a machine with no SSH alias,
-    /// never climbs.
+    /// One step of the climb on the live connection `link`: what it waits
+    /// for, and the move it makes, if any. A connection between builds that
+    /// cannot move never climbs; one to a machine with no SSH alias waits
+    /// for the records to change.
     async fn climb(
         self: &Arc<Self>,
         link: &Link<T::Conn>,
         to: &PeerAddr,
         probe: &mut Probe,
         woke: &mut watch::Receiver<u64>,
+        relation: &mut watch::Receiver<u64>,
     ) -> Option<Link<T::Conn>> {
-        let Some(alias) = ssh_alias(to).filter(|_| link.can_move()) else {
+        if !link.can_move() {
+            // A capability cannot change inside a connection.
             return std::future::pending().await;
+        }
+        let Some(alias) = ssh_alias(to) else {
+            // An alias the operator adds later is read when the record
+            // changes or the network does, and the caller reads the
+            // address again. The caller marked the records seen before it
+            // read them, so a change since is not missed.
+            tokio::select! {
+                _ = relation.changed() => {}
+                _ = woke.changed() => {}
+            }
+            return None;
         };
         let path = link.path();
         let over_ssh = PeerAddr::new(to.key, vec![Candidate::Ssh(alias.to_owned())]);
         if path.rank() < PathKind::Ssh.rank() {
             let to_ssh = || async {
-                let moved = self.dial_move(&over_ssh, link, true).await;
-                // A move that did not take waits as a fall does, so a route
-                // that keeps failing is not signed in to every grace.
-                if moved.is_err() {
-                    self.transport.route_fell(&to.key);
+                // A carrier that proved and was not taken (its first
+                // exchange failed, or the held path became direct meanwhile)
+                // waits as a fall does; a sign-in that failed was counted
+                // by its own attempt. Each failure is counted once.
+                match self.dial_move(&over_ssh, link, true).await {
+                    Ok(moved) => Some(moved),
+                    Err(NotMoved::NotTaken(error)) => {
+                        crate::diagnostic!(json!({
+                            "component": "peer",
+                            "event": "peer.move_not_taken",
+                            "peer": to.key.short(),
+                            "reason": error.to_string(),
+                        }));
+                        self.transport.route_fell(&to.key);
+                        None
+                    }
+                    Err(NotMoved::NotDialed) => None,
                 }
-                moved.ok()
             };
             match self.transport.route(to) {
                 Route::Handed => return to_ssh().await,
@@ -1955,55 +2024,71 @@ impl<T: PeerTransport> Inner<T> {
         let key = to.key;
         let started = Instant::now();
         let mut woke = self.woke.subscribe();
+        let mut relation = self.relation.subscribe();
         let mut current = link;
         // When the current connection came, and whether a move brought it.
         let (mut since, mut moved) = (Instant::now(), false);
         let mut probe = Probe::after(since, self.pacing.climb_first);
         loop {
             // The host's address as the records say it now: an alias the
-            // operator added since the dial is climbed to.
+            // operator added since the dial is climbed to. The records are
+            // marked seen first, so a change after this read wakes the
+            // climb.
+            relation.borrow_and_update();
             let to = lock(&self.known)
                 .of(&key)
                 .map(Host::dial_addr)
                 .unwrap_or_else(|| to.clone());
-            let climbed = tokio::select! {
-                biased;
-                moved_to = self.climb(&current, &to, &mut probe, &mut woke) => match moved_to {
-                    Some(link) => Ok(link),
-                    None => continue,
-                },
-                code = current.closed() => Err(code),
-            };
-            let next = match climbed {
-                Ok(link) => link,
-                Err(code) => {
-                    let replaced = matches!(code, CloseCode::Replaced | CloseCode::Duplicate);
-                    // A path that keeps falling is signed in to at most once
-                    // per the route's wait.
-                    if !replaced
-                        && (moved || current.path() == PathKind::Ssh)
-                        && since.elapsed() < limits::STAYED_AFTER
-                    {
-                        self.transport.route_fell(&key);
-                    }
-                    let successor = match self.link(&key) {
-                        Some(link) => Some(link),
-                        // The other side installed its move first: its
-                        // connection is on its way here.
-                        None if replaced => {
-                            let mut admitted = self.admitted.subscribe();
-                            tokio::time::timeout(
-                                limits::HELLO_WITHIN,
-                                self.arrived(&key, &mut admitted),
-                            )
-                            .await
-                            .ok()
+            let next = {
+                let climbing = self.climb(&current, &to, &mut probe, &mut woke, &mut relation);
+                tokio::pin!(climbing);
+                let climbed = tokio::select! {
+                    biased;
+                    moved_to = &mut climbing => match moved_to {
+                        Some(link) => Ok(link),
+                        None => continue,
+                    },
+                    code = current.closed() => Err(code),
+                };
+                match climbed {
+                    Ok(link) => link,
+                    Err(code) => {
+                        let replaced = matches!(code, CloseCode::Replaced | CloseCode::Duplicate);
+                        // A path that keeps falling is signed in to at most
+                        // once per the route's wait.
+                        let stayed = since.elapsed() >= limits::STAYED_AFTER;
+                        if !replaced && !stayed && (moved || current.path() == PathKind::Ssh) {
+                            self.transport.route_fell(&key);
                         }
-                        None => None,
-                    };
-                    match successor.filter(|link| link.id() != current.id()) {
-                        Some(link) => link,
-                        None => return (started.elapsed(), current.dial_name()),
+                        // An SSH connection that stayed starts the route's
+                        // wait over; a short one keeps the wait it doubled.
+                        if !replaced && stayed && current.path() == PathKind::Ssh {
+                            self.transport.route_stayed(&key);
+                        }
+                        let successor = match self.link(&key) {
+                            Some(link) => Some(link),
+                            // The other side installed a move first: its
+                            // own, which is on its way here, or the one this
+                            // climb has in flight, whose answer is, so the
+                            // climb runs on until one of them is installed.
+                            None if replaced => {
+                                let mut admitted = self.admitted.subscribe();
+                                let successor = async {
+                                    tokio::select! {
+                                        link = self.arrived(&key, &mut admitted) => link,
+                                        Some(link) = &mut climbing => link,
+                                    }
+                                };
+                                tokio::time::timeout(limits::HELLO_WITHIN, successor)
+                                    .await
+                                    .ok()
+                            }
+                            None => None,
+                        };
+                        match successor.filter(|link| link.id() != current.id()) {
+                            Some(link) => link,
+                            None => return (started.elapsed(), current.dial_name()),
+                        }
                     }
                 }
             };
@@ -2057,6 +2142,57 @@ impl<T: PeerTransport> Inner<T> {
                 _ = stopped.changed() => return,
                 _ = shutdown.wait_for(|stop| *stop) => return,
             }
+        }
+    }
+}
+
+/// Why a move took no connection.
+#[derive(Debug)]
+enum NotMoved {
+    /// The transport's dial gave none: what it tried counted itself (an SSH
+    /// attempt settles its own route).
+    NotDialed,
+    /// A connection was dialed and proved, and was not installed: it did
+    /// not beat the held path by its window, or its first exchange failed.
+    NotTaken(DialError),
+}
+
+/// A connection a move dialed and has not installed: dropped, it is closed
+/// as a probe and kept among the machine's draining connections, so the
+/// machine is dialed again only after its end.
+struct Unadmitted<T: PeerTransport> {
+    inner: Arc<Inner<T>>,
+    conn: Option<T::Conn>,
+}
+
+impl<T: PeerTransport> Unadmitted<T> {
+    fn admitted(mut self) {
+        self.conn = None;
+    }
+}
+
+impl<T: PeerTransport> Drop for Unadmitted<T> {
+    fn drop(&mut self) {
+        let Some(conn) = self.conn.take() else {
+            return;
+        };
+        conn.close(CloseCode::Probe);
+        let key = conn.peer();
+        lock(&self.inner.table)
+            .draining
+            .entry(key)
+            .or_default()
+            .push(conn.clone());
+        // Its end takes it off the list even when the machine is never
+        // dialed again (it was forgotten while the move ran).
+        let inner = Arc::downgrade(&self.inner);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                conn.closed().await;
+                if let Some(inner) = inner.upgrade() {
+                    inner.undrain(&key, &conn);
+                }
+            });
         }
     }
 }
@@ -2250,6 +2386,76 @@ mod tests {
             wait_after(waited, Some(limits::STAYED_AFTER)),
             limits::REDIAL_FIRST
         );
+    }
+
+    fn table() -> Table<LoopConn> {
+        Table {
+            live: HashMap::new(),
+            draining: HashMap::new(),
+            superseded: HashMap::new(),
+        }
+    }
+
+    /// The names of ended connections are kept to their cap per machine,
+    /// the one an install adds last (the one it replaces) staying, so a
+    /// late predecessor is still refused past the cap; a name heard again
+    /// keeps the time it was first heard.
+    #[tokio::test(start_paused = true)]
+    async fn ended_names_past_the_cap_still_refuse_the_late_predecessor() {
+        let (ours, peer) = (key(1), key(2));
+        let mut table = table();
+        // More names than a hello carries, then the one replaced.
+        let replaced = limits::MAX_SUPERSEDED as u64 + 2;
+        for name in 1..=replaced {
+            table.supersede(peer, name);
+        }
+        let kept = table.superseded(&peer);
+        assert_eq!(kept.len(), limits::MAX_SUPERSEDED);
+        assert_eq!(kept.last(), Some(&replaced));
+        let late = Named {
+            dialed_by_us: false,
+            dial: replaced,
+            replaces: 0,
+        };
+        let held = Named {
+            dialed_by_us: false,
+            dial: replaced + 1,
+            replaces: replaced,
+        };
+        assert_eq!(
+            decide(&ours, &peer, Some(held), late, &[], &kept),
+            Standing::Refuse(CloseCode::Replaced)
+        );
+
+        // Heard again half way, a name still ends when first heard.
+        let mut table = self::table();
+        table.supersede(peer, 7);
+        tokio::time::advance(limits::SUPERSEDED_FOR / 2).await;
+        table.supersede(peer, 7);
+        tokio::time::advance(limits::SUPERSEDED_FOR / 2).await;
+        assert!(table.superseded(&peer).is_empty());
+    }
+
+    /// Ended names are kept for at most so many machines, the one whose
+    /// newest name is oldest going first, and a machine whose names aged
+    /// is dropped when another's are kept, whether or not it is asked again.
+    #[tokio::test(start_paused = true)]
+    async fn ended_names_are_kept_for_a_bounded_set_of_machines() {
+        let mut table = table();
+        let machines: Vec<PeerKey> = (0..=limits::MAX_SUPERSEDED_PEERS)
+            .map(|_| MachineKey::generate().unwrap().public())
+            .collect();
+        for machine in &machines {
+            table.supersede(*machine, 1);
+            tokio::time::advance(Duration::from_millis(1)).await;
+        }
+        assert_eq!(table.superseded.len(), limits::MAX_SUPERSEDED_PEERS);
+        assert!(!table.superseded.contains_key(&machines[0]));
+        assert!(table.superseded.contains_key(machines.last().unwrap()));
+
+        tokio::time::advance(limits::SUPERSEDED_FOR).await;
+        table.supersede(machines[0], 2);
+        assert_eq!(table.superseded.len(), 1);
     }
 
     fn named(dialed_by_us: bool) -> Named {
@@ -2486,7 +2692,7 @@ mod tests {
     /// naming the held connection and a move naming an older one, from
     /// either side, under either key order and in every order their first
     /// exchanges finish and their closes are seen on the two ends, leaves
-    /// one connection, the same on both ends (mission-107, 4.4).
+    /// one connection, the same on both ends.
     fn exactly_one_stays_whatever_the_order() {
         let conn = |dialer, dial, made| Modeled { dialer, dial, made };
         let mut scenarios: Vec<Vec<Modeled>> = Vec::new();

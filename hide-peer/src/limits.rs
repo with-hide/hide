@@ -120,7 +120,7 @@ pub const STAYED_AFTER: Duration = REDIAL_MOST;
 /// How long one dial may take before it counts as failed.
 pub const DIAL_WITHIN: Duration = Duration::from_secs(30);
 
-/// The SSH path (mission-107, 4.1). The head start a direct path gets
+/// The SSH path. The head start a direct path gets
 /// before an SSH sign-in starts, so a pair on one network or on Tailscale,
 /// direct well inside it, makes no SSH login.
 pub const SSH_AFTER: Duration = Duration::from_secs(1);
@@ -170,9 +170,16 @@ pub const BYE_WITHIN: Duration = Duration::from_secs(2);
 /// ([`crate::peers`]): past it no first exchange of it can still finish.
 pub const SUPERSEDED_FOR: Duration = Duration::from_secs(2 * HELLO_WITHIN.as_secs());
 
-/// The most replaced connections remembered per machine; moves are spaced
-/// by the climb's waits.
-pub const MAX_SUPERSEDED: usize = 8;
+/// The most names of ended connections remembered per machine, and so the
+/// most a hello carries (`hello::MAX_SUPERSEDES`): a name matters for
+/// [`SUPERSEDED_FOR`], in which one side's redials (1 s doubling) and
+/// moves (the climb's waits) end at most five or six connections.
+pub const MAX_SUPERSEDED: usize = hide_peer_protocol::hello::MAX_SUPERSEDES;
+
+/// The most machines whose ended names are remembered at once: every host
+/// and every guest this machine may have, and the ones in the middle of
+/// pairing.
+pub const MAX_SUPERSEDED_PEERS: usize = MAX_KNOWN + MAX_GRANTS + MAX_UNGRANTED;
 
 /// How long a blocking write waits on a peer that reads nothing before the
 /// stream is given up ([`crate::blocking`]).

@@ -15,7 +15,7 @@
 //! ended before any of its bytes are read.
 //!
 //! The same transport carries a connection over the system `ssh`
-//! (mission-107): the daemon's carrier maker signs in to an alias, asking
+//!: the daemon's carrier maker signs in to an alias, asking
 //! nothing, and runs `hide device carry --ssh` there, whose input and output
 //! are the carrier; the far daemon takes it as it takes a distribution's.
 //! A connection says the path its carrier came by: [`PathKind::Ssh`] for
@@ -76,7 +76,7 @@ fn path_to(to: &PeerAddr) -> PathKind {
 }
 
 /// What a machine knows of the SSH routes to the hosts it keeps
-/// (mission-107): the daemon's carrier maker owns them, with their waits
+///: the daemon's carrier maker owns them, with their waits
 /// and what parks one; [`Beside`] and the keeper's climb ask it.
 pub trait Routes: Send + Sync + 'static {
     /// Where the route to `key` through `alias` stands now: [`Route::Ready`],
@@ -88,6 +88,12 @@ pub trait Routes: Send + Sync + 'static {
     /// falling is signed in to at most once per wait. A parked route stays
     /// parked.
     fn fell(&self, key: &PeerKey);
+
+    /// A connection over the route stayed [`limits::STAYED_AFTER`] and
+    /// more: its wait starts over. Only this, a retry and a network change
+    /// do; a proof alone does not, so a path that proves and falls again
+    /// waits longer each time.
+    fn stayed(&self, key: &PeerKey);
 
     /// The machine woke or its network changed: every waiting route is due
     /// and its wait starts over; a parked one stays parked.
@@ -156,7 +162,7 @@ impl PipeTransport {
         }
     }
 
-    /// With the SSH routes the carrier maker keeps (mission-107).
+    /// With the SSH routes the carrier maker keeps.
     pub fn with_routes(mut self, routes: Arc<dyn Routes>) -> Self {
         self.routes = Some(routes);
         self
@@ -248,7 +254,7 @@ impl PipeTransport {
     /// Runs the key proof against `key` on a carrier the caller holds,
     /// within `within`, and closes the carrier whatever it found: nothing is
     /// admitted and no `told` hears it. What adding an alias to a paired
-    /// machine checks before it records the alias (mission-107, 2.1): an
+    /// machine checks before it records the alias: an
     /// operator's press, bounded on its own.
     pub async fn check(
         &self,
@@ -298,21 +304,37 @@ impl PeerTransport for PipeTransport {
         let mut carrier = dial(to)
             .await
             .map_err(|error| unreachable(format!("no carrier: {error}")))?;
-        // Called once with what the proof found, before the dial returns;
-        // a carrier given up before then tells nothing.
-        let told = carrier.take_told();
-        let (pipe, accepted) = Pipe::start(carrier, true)
-            .map_err(|error| unreachable(format!("the carrier did not start: {error}")))?;
+        // Told once, before the dial returns, what the proof found or that
+        // the carrier ended first; a dial given up before then tells
+        // nothing.
+        let mut told = carrier.take_told();
+        let mut tell = |found: Option<Proof>| {
+            if let Some(told) = told.take() {
+                told(found);
+            }
+        };
+        let (pipe, accepted) = match Pipe::start(carrier, true) {
+            Ok(started) => started,
+            Err(error) => {
+                tell(None);
+                return Err(unreachable(format!("the carrier did not start: {error}")));
+            }
+        };
         let unproved = Unproved(Some(pipe.clone()));
-        let failed =
-            |error: io::Error| unreachable(format!("the key proof did not finish: {error}"));
-        let (mut send, mut recv) = pipe.open(PROOF_PRIORITY).map_err(failed)?;
-        let found = proof::dialer(&self.key, &to.key, &mut send, &mut recv)
-            .await
-            .map_err(failed)?;
-        if let Some(told) = told {
-            told(found);
-        }
+        let proving = async {
+            let (mut send, mut recv) = pipe.open(PROOF_PRIORITY)?;
+            proof::dialer(&self.key, &to.key, &mut send, &mut recv).await
+        };
+        let found = match proving.await {
+            Ok(found) => found,
+            Err(error) => {
+                tell(None);
+                return Err(unreachable(format!(
+                    "the key proof did not finish: {error}"
+                )));
+            }
+        };
+        tell(Some(found));
         match found {
             Proof::Proved => {}
             Proof::OtherKey(_) => {
@@ -540,12 +562,13 @@ enum Attempted {
     Taken,
 }
 
-/// One SSH carrier attempt (mission-107, 4.2): a task of its own, bounded
+/// One SSH carrier attempt: a task of its own, bounded
 /// by [`limits::CARRIER_WITHIN`] from its start, wherever it is (the
 /// ladder, handed, the climb). Dropping it ends the task, which ends its
 /// sign-in or its carrier, and closes a connection it proved that nobody
 /// took.
 struct SshAttempt {
+    started: Instant,
     state: Mutex<Attempted>,
     changed: Notify,
     task: Mutex<Option<tokio::task::AbortHandle>>,
@@ -554,6 +577,7 @@ struct SshAttempt {
 impl SshAttempt {
     fn start(pipe: &Arc<PipeTransport>, to: PeerAddr) -> Arc<Self> {
         let attempt = Arc::new(Self {
+            started: Instant::now(),
             state: Mutex::new(Attempted::Running),
             changed: Notify::new(),
             task: Mutex::new(None),
@@ -691,9 +715,10 @@ impl<T: PeerTransport> Beside<T> {
         lock(&self.ssh.handed).get(key).cloned()
     }
 
-    /// Keeps `attempt` for the climb to take: until it fails, until
-    /// [`limits::TAKE_WITHIN`] after it proved, until its own
-    /// [`limits::CARRIER_WITHIN`], or until the transport closes.
+    /// Keeps `attempt` for the climb to take: until it fails, until the
+    /// earlier of [`limits::TAKE_WITHIN`] after it proved and its own
+    /// [`limits::CARRIER_WITHIN`] from its start, or until the transport
+    /// closes.
     fn hand(&self, key: PeerKey, attempt: Arc<SshAttempt>) {
         let earlier = lock(&self.ssh.handed).insert(key, Arc::clone(&attempt));
         if let Some(earlier) = earlier {
@@ -713,7 +738,9 @@ impl<T: PeerTransport> Beside<T> {
                     changed.await;
                 }
                 if attempt.proved() {
-                    tokio::time::sleep(limits::TAKE_WITHIN).await;
+                    let over = (Instant::now() + limits::TAKE_WITHIN)
+                        .min(attempt.started + limits::CARRIER_WITHIN);
+                    tokio::time::sleep_until(over).await;
                 }
             };
             tokio::select! {
@@ -746,7 +773,7 @@ impl<T: PeerTransport> Beside<T> {
     }
 
     /// The first dial of a machine with an SSH alias whose route is ready
-    /// (mission-107, 4.2): `main` at once, SSH from [`limits::SSH_AFTER`]
+    ///: `main` at once, SSH from [`limits::SSH_AFTER`]
     /// unless `main` showed a direct path by then, and the connection of
     /// the higher rank at [`limits::DIRECT_WITHIN`]. A relay connection
     /// taken then hands a sign-in still running on, for the climb. What is
@@ -840,16 +867,21 @@ impl<T: PeerTransport> PeerTransport for Beside<T> {
         match self.pipe.route(&to.key, alias) {
             Route::Ready => self.ladder(to, alias).await,
             // Nothing else carries the pair, and no climb runs without a
-            // connection: a due route is dialed after `main` failed.
-            Route::Due => match self.main.dial(&without_ssh(to)).await {
-                Ok(conn) => Ok(Either::Main(conn)),
-                Err(failed) => {
-                    let ssh_to = PeerAddr::new(to.key, vec![Candidate::Ssh(alias.to_owned())]);
-                    self.ssh_alone(&ssh_to).await.map_err(|ssh| {
-                        TransportError::Unreachable(format!("{failed}; over SSH: {ssh}"))
-                    })
-                }
-            },
+            // connection: a due route is dialed after `main` failed, or
+            // found no path within the window a first dial gives it.
+            Route::Due => {
+                let main_to = without_ssh(to);
+                let main = tokio::time::timeout(limits::DIRECT_WITHIN, self.main.dial(&main_to));
+                let failed = match main.await {
+                    Ok(Ok(conn)) => return Ok(Either::Main(conn)),
+                    Ok(Err(failed)) => failed.to_string(),
+                    Err(_) => "no path opened in its window".to_owned(),
+                };
+                let ssh_to = PeerAddr::new(to.key, vec![Candidate::Ssh(alias.to_owned())]);
+                self.ssh_alone(&ssh_to).await.map_err(|ssh| {
+                    TransportError::Unreachable(format!("{failed}; over SSH: {ssh}"))
+                })
+            }
             Route::Held | Route::Handed | Route::None => {
                 self.main.dial(&without_ssh(to)).await.map(Either::Main)
             }
@@ -898,6 +930,12 @@ impl<T: PeerTransport> PeerTransport for Beside<T> {
     fn route_fell(&self, key: &PeerKey) {
         if let Some(routes) = &self.pipe.routes {
             routes.fell(key);
+        }
+    }
+
+    fn route_stayed(&self, key: &PeerKey) {
+        if let Some(routes) = &self.pipe.routes {
+            routes.stayed(key);
         }
     }
 
@@ -1237,7 +1275,7 @@ mod tests {
 
     /// A connection says the way its carrier came: one `hide device carry
     /// --ssh` handed over reads SSH on both ends, a distribution's reads
-    /// inside one machine (mission-107).
+    /// inside one machine.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_arrived_ssh_carrier_reads_ssh_and_a_wsl_one_local() {
         let far = Arc::new(PipeTransport::accepting(key()));
@@ -1289,7 +1327,7 @@ mod tests {
         assert!(within("the refusal", near.dial(&other)).await.is_err());
         assert_eq!(
             *told.lock().unwrap(),
-            vec![Proof::Proved, Proof::OtherKey(far.key())]
+            vec![Some(Proof::Proved), Some(Proof::OtherKey(far.key()))]
         );
 
         // A check: the proof's outcome, no told, nothing to accept.
@@ -1302,6 +1340,7 @@ mod tests {
             .unwrap();
         assert_eq!(checked, Proof::Proved);
         assert_eq!(told.lock().unwrap().len(), 2, "a check tells nothing");
+        // wait-ok: proves an absence, that nothing reaches the far queue.
         let accepted = tokio::time::timeout(Duration::from_millis(300), far.accept()).await;
         // A carrier proved and closed at once may still reach the far
         // queue; it is over there.

@@ -136,8 +136,9 @@ pub struct Carrier {
 }
 
 /// Who hears what the key proof on a dialed carrier found: once, before the
-/// dial returns (`crate::pipe`).
-pub type Told = Box<dyn FnOnce(crate::proof::Proof) + Send>;
+/// dial returns (`crate::pipe`). `None`: the carrier ended or failed before
+/// the proof found anything. A dial given up before then tells nothing.
+pub type Told = Box<dyn FnOnce(Option<crate::proof::Proof>) + Send>;
 
 impl Carrier {
     /// `end` must make a read blocked on `read` return and a write blocked
@@ -157,9 +158,9 @@ impl Carrier {
 
     /// Has `told` hear what the key proof on this carrier found, when it is
     /// dialed: the owner of an SSH route learns from it whether the alias
-    /// still reaches the host (mission-107). A carrier made without it
+    /// still reaches the host. A carrier made without it
     /// tells nobody.
-    pub fn told(mut self, told: impl FnOnce(crate::proof::Proof) + Send + 'static) -> Self {
+    pub fn told(mut self, told: impl FnOnce(Option<crate::proof::Proof>) + Send + 'static) -> Self {
         self.told = Some(Box::new(told));
         self
     }

@@ -29,7 +29,7 @@ pub enum CloseCode {
     Busy,
     /// A connection dialed to try a path and not chosen: closed before its
     /// first exchange, or because it did not beat the path held
-    /// (mission-107). Nothing was admitted, so nothing is recorded.
+    ///. Nothing was admitted, so nothing is recorded.
     Probe,
     Other(u32),
 }

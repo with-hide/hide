@@ -34,7 +34,7 @@ pub const NEWEST_LINK: u32 = 1;
 /// uses an act only when the peer listed its capability.
 pub const CAPABILITIES: &[&str] = &[SSH_PATH];
 
-/// A connection may run over SSH (mission-107): this build names each
+/// A connection may run over SSH: this build names each
 /// connection it dials and the one a move replaces ([`Hello::dial`],
 /// [`Hello::replaces`]), knows [`crate::CloseCode::Probe`], answers `hide
 /// device carry --ssh`, and beats on an SSH connection
