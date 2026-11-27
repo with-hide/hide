@@ -107,7 +107,7 @@ fn node_status(node: &Value) -> String {
 fn kind_words(node: &Value) -> String {
     match text(node, "kind") {
         "change" => "code".to_owned(),
-        "external" => "wait".to_owned(),
+        "external" => "watching".to_owned(),
         "general" => {
             let row = hide_core::missions::PRESETS
                 .iter()
@@ -1331,7 +1331,7 @@ mod tests {
         assert_eq!(said(json!({"preset": "verify"})), "general · verify");
         assert_eq!(said(json!({"preset": "deploy"})), "general · deploy");
         assert_eq!(said(json!({"preset": null})), "general");
-        assert_eq!(said(json!({"kind": "external", "preset": null})), "wait");
+        assert_eq!(said(json!({"kind": "external", "preset": null})), "watching");
     }
 
     /// PRD node-presets D-06: a start gate's line says it asks before the
