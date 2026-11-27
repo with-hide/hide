@@ -1190,12 +1190,7 @@ fn run_hook(arguments: &[String], started: Instant) {
     // One output with everything a session start says, so its one limit
     // counts the Workspace note too (`runtime::session_start_context`).
     let mut output = runtime.and_then(|runtime| {
-        hide_agent_hooks::memory::hook_output(
-            runtime,
-            event,
-            memory.as_ref(),
-            workspace.as_deref(),
-        )
+        hide_agent_hooks::memory::hook_output(runtime, event, memory.as_ref(), workspace.as_deref())
     });
     if let Some(intake) = &intake {
         output = match output {

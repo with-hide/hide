@@ -813,7 +813,9 @@ mod tests {
         // Over the limit with the instruction and the index alone, both are
         // still given whole.
         let memory = format!("<memory>{}</memory>\n", "m".repeat(9_000));
-        assert!(start(&memory, &workspace, Some(&sessions)).starts_with(&format!("{global}\n{memory}")));
+        assert!(
+            start(&memory, &workspace, Some(&sessions)).starts_with(&format!("{global}\n{memory}"))
+        );
     }
 
     #[test]
