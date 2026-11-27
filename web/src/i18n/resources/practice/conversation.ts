@@ -1,0 +1,77 @@
+import type { Catalogs } from "../../schema";
+
+const words = {
+  "en": {
+    "practice.conversation.title": "Read and reply in the pane",
+    "practice.conversation.summary": "Read an agent’s conversation and return to its live terminal.",
+    "practice.conversation.open.quest": "Open the conversation",
+    "practice.conversation.open.kick": "Read in place",
+    "practice.conversation.open.title": "Open the conversation",
+    "practice.conversation.open.text": "Press Conversation in the pane header. The terminal stays running underneath.",
+    "practice.conversation.read.kick": "The same session",
+    "practice.conversation.read.title": "Read what was said",
+    "practice.conversation.read.text": "Messages and tool calls appear here as the agent writes them.",
+    "practice.conversation.input.kick": "Reply here",
+    "practice.conversation.input.title": "Words and files go to this pane",
+    "practice.conversation.input.text": "Enter sends your reply. Use / for saved commands and @ for project files and sessions.",
+    "practice.conversation.back.quest": "Return to the terminal",
+    "practice.conversation.back.kick": "Keep working",
+    "practice.conversation.back.title": "Return to the terminal",
+    "practice.conversation.back.text": "Press Conversation again, or its shortcut. The terminal has kept its size and screen."
+  },
+  "ko": {
+    "practice.conversation.title": "pane에서 대화 읽고 답하기",
+    "practice.conversation.summary": "에이전트의 대화를 읽고 살아 있는 터미널로 돌아가요.",
+    "practice.conversation.open.quest": "대화 열기",
+    "practice.conversation.open.kick": "그 자리에서 읽기",
+    "practice.conversation.open.title": "대화 열기",
+    "practice.conversation.open.text": "pane 머리의 대화를 눌러요. 밑의 터미널은 계속 돌아가요.",
+    "practice.conversation.read.kick": "같은 세션",
+    "practice.conversation.read.title": "주고받은 말 읽기",
+    "practice.conversation.read.text": "에이전트가 쓰는 대로 메시지와 도구 호출이 여기에 보여요.",
+    "practice.conversation.input.kick": "여기서 답하기",
+    "practice.conversation.input.title": "이 pane으로 글과 파일 보내기",
+    "practice.conversation.input.text": "Enter로 답해요. /에는 저장된 명령이, @에는 프로젝트 파일과 세션이 나와요.",
+    "practice.conversation.back.quest": "터미널로 돌아가기",
+    "practice.conversation.back.kick": "이어서 일하기",
+    "practice.conversation.back.title": "터미널로 돌아가기",
+    "practice.conversation.back.text": "대화나 같은 단축키를 다시 눌러요. 터미널의 크기와 화면은 그대로예요."
+  },
+  "zh-CN": {
+    "practice.conversation.title": "在窗格中阅读和回复",
+    "practice.conversation.summary": "阅读智能体的对话，再返回正在运行的终端。",
+    "practice.conversation.open.quest": "打开对话",
+    "practice.conversation.open.kick": "原地阅读",
+    "practice.conversation.open.title": "打开对话",
+    "practice.conversation.open.text": "按窗格标题中的对话。下面的终端继续运行。",
+    "practice.conversation.read.kick": "同一个会话",
+    "practice.conversation.read.title": "阅读对话",
+    "practice.conversation.read.text": "智能体写入时，消息和工具调用会显示在这里。",
+    "practice.conversation.input.kick": "在这里回复",
+    "practice.conversation.input.title": "向此窗格发送文字和文件",
+    "practice.conversation.input.text": "Enter 发送回复。/ 显示已保存的命令，@ 显示项目文件和会话。",
+    "practice.conversation.back.quest": "返回终端",
+    "practice.conversation.back.kick": "继续工作",
+    "practice.conversation.back.title": "返回终端",
+    "practice.conversation.back.text": "再次按对话或同一个快捷键。终端的大小和画面保持不变。"
+  },
+  "ja": {
+    "practice.conversation.title": "ペインで会話を読んで返信",
+    "practice.conversation.summary": "エージェントの会話を読み、動いているターミナルに戻ります。",
+    "practice.conversation.open.quest": "会話を開く",
+    "practice.conversation.open.kick": "その場で読む",
+    "practice.conversation.open.title": "会話を開く",
+    "practice.conversation.open.text": "ペインの見出しの会話を押します。下のターミナルは動き続けます。",
+    "practice.conversation.read.kick": "同じセッション",
+    "practice.conversation.read.title": "やり取りを読む",
+    "practice.conversation.read.text": "エージェントが書くと、メッセージとツール呼び出しがここに表示されます。",
+    "practice.conversation.input.kick": "ここで返信",
+    "practice.conversation.input.title": "このペインに文字とファイルを送る",
+    "practice.conversation.input.text": "Enter で送信。/ には保存したコマンド、@ にはプロジェクトのファイルとセッションが出ます。",
+    "practice.conversation.back.quest": "ターミナルに戻る",
+    "practice.conversation.back.kick": "作業を続ける",
+    "practice.conversation.back.title": "ターミナルに戻る",
+    "practice.conversation.back.text": "会話か同じショートカットをもう一度押します。ターミナルのサイズと画面はそのままです。"
+  }
+} as const satisfies Catalogs<Record<string, string>>;
+export default words;

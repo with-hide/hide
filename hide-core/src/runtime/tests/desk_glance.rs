@@ -25,6 +25,7 @@ fn open_beside(runtime: &mut Runtime, pane: &str) {
     assert!(
         runtime.open_session_thread(crate::runtime::session_thread::ThreadOpenPayload {
             pane_id: pane.into(),
+            pane_conversation: false,
         })
     );
 }
@@ -220,6 +221,7 @@ fn a_session_read_from_its_record_alone_takes_no_place_in_glance() {
     guard.start_test_desk();
     guard.open_session_thread(crate::runtime::session_thread::ThreadOpenPayload {
         pane_id: "gone".into(),
+        pane_conversation: false,
     });
     assert!(guard.desk_stored_for_test().glance.is_empty());
 }

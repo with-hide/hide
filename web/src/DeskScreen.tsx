@@ -20,17 +20,16 @@ import { deskViewOf, DESK_SCREEN } from "./deskDesk";
 import { CardPlaceContext, type CardPlace } from "./deskFront";
 import { DeskViewAreas } from "./ViewAreas";
 import { ExplorerTree, type ExplorerScope } from "./ExplorerTree";
+import { SessionThreadAsk as DeskSessionAsk } from "./components/desk/session-ask";
 import { ThreadPanel } from "./components/desk/thread-panel";
 import { SessionChipProvider, type SessionChipSource } from "./components/desk/session-chip";
-import { SessionAskCard, SessionHead, SessionRecordFoot, SessionSleepingFoot } from "./components/desk/desk-session";
+import { SessionHead, SessionRecordFoot, SessionSleepingFoot } from "./components/desk/desk-session";
 import { LineButton } from "./LinkSessions";
 import { resumeBlock, resumeCheckout } from "./linkPanel";
 import { resumeFailureText, resumeReason, resumeRequest, useSessionResume } from "./useSessionResume";
 import { OutputShelf } from "./components/desk/output-shelf";
 import { GlanceCrumb, GlancePanel } from "./components/desk/glance-panel";
 import { rowPulls } from "./prMark";
-import { useElapsed } from "./components/elapsed";
-import { askIdentity, inputFailure, noticeText } from "./mobile/protocol";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { commandLabel } from "./shortcutLabels";
 import { leaveDesk } from "./keyboard";
@@ -48,7 +47,7 @@ import { DeskSettingsTab } from "./components/desk/desk-settings";
 import { useEscapeLayer } from "./components/ui/layer";
 import { useInterfaceTranslation } from "./i18n/client";
 import { machineName } from "./screenMachine";
-import { catalogOf, catalogWorkspaces, checkoutOfPane, localDeviceId, paneRowOf, type AgentRow, type SleepingSession } from "./snapshot";
+import { catalogOf, catalogWorkspaces, checkoutOfPane, localDeviceId, paneRowOf,  type SleepingSession } from "./snapshot";
 import { askingSession } from "./sessionWork";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -929,68 +928,16 @@ const WAKE_FOLLOW_MS = 60_000;
  * the card again. Until the read lands, the card
  * says what its row or card says, with `직접 쓰기` only.
  */
-function DeskSessionAsk({ paneId, deviceId, job, row, actions, onWrite }: { paneId: string; deviceId: string | null; job: DeskJob; row: AgentRow | null; actions: Actions; onWrite: () => void }) {
-  const { t } = useInterfaceTranslation();
-  // The daemon does not push an ask: it is read when the panel opens and again whenever the agent's row moves (its change time or group).
-  const changed = row?.changed_at_unix_ms ?? null;
-  const group = row?.group ?? null;
-  useEffect(() => {
-    if (deviceId) actions.askPane(deviceId, paneId);
-  }, [actions, deviceId, paneId, changed, group, job.changed_at_unix_ms]);
-  const read = useShellStore((s) => (s.paneAsk && s.paneAsk.pane_id === paneId && s.paneAsk.device_id === deviceId ? s.paneAsk : null));
-  const [marked, setMarked] = useState<{ ask: string; id: string } | null>(null);
-  const [sent, setSent] = useState<{ ask: string; choice: string; request: string | null; dropped?: boolean } | null>(null);
-  const result = useShellStore((s) => (sent?.request && s.paneChoice?.request_id === sent.request ? s.paneChoice : null));
-  // A connection lost before the answer's result came back leaves no result to wait for: the choice may have landed, so it
-  // is answered in the terminal from then on, as a result that says `uncertain` is (review m3).
-  const live = useShellStore((s) => s.connection === "live");
-  useEffect(() => {
-    if (!live) setSent((now) => (now && now.request !== null && !now.dropped ? { ...now, dropped: true } : now));
-  }, [live]);
-  const ask = read?.ask ?? null;
-  const waited = useElapsed(ask?.since_ms ?? null);
-  // A choice refused stale means the agent asks something else now: the card is read again.
-  const stale = result?.ok === false && result.reason === "stale" ? result.request_id : null;
-  useEffect(() => {
-    if (stale && deviceId) actions.askPane(deviceId, paneId);
-  }, [actions, deviceId, paneId, stale]);
-  if (!ask || !deviceId) return null;
-  const identity = askIdentity({ device_id: deviceId, pane_id: paneId }, ask);
-  const mine = sent?.ask === identity ? sent : null;
-  const lost = mine?.dropped === true && !result;
-  const answer = !mine ? null : mine.request === null || lost || (result && !result.ok) ? "failed" : result ? "sent" : "sending";
-  const reason = mine?.request === null ? "offline" : lost ? "uncertain" : result && !result.ok ? result.reason : null;
-  const inTerminal = answer === "failed" && (reason === "uncertain" || reason === "screen_differs" || reason === "ask_not_shown");
-  return (
-    <SessionAskCard
-      ask={ask}
-      disabled={false}
-      waited={waited}
-      picked={marked?.ask === identity ? marked.id : (mine?.choice ?? null)}
-      answer={answer}
-      error={answer === "failed" ? noticeText(t, inputFailure(reason)) : null}
-      inTerminal={inTerminal}
-      onPick={(id) => setMarked({ ask: identity, id })}
-      onAnswer={(choice) => {
-        // An answer sent, or one that may have landed, is never sent again from here: a second send would be a second press.
-        if (answer === "sending" || answer === "sent" || inTerminal) return;
-        setSent({ ask: identity, choice, request: actions.answerPane(deviceId, paneId, ask, choice) });
-      }}
-      onTerminal={() => actions.deskTerminal()}
-      onWrite={onWrite}
-    />
-  );
-}
 
 /**
  * At the head of an Agent tab Desk sent the operator to (PRD desk-2-ui B7):
  * `나도 참여 중` once the operator typed into a Desk job's, and `Desk로`,
- * which ⌘J also presses, back to Desk with this session beside it.
+ * back to Desk with this session beside it. The shared chord toggles the pane in place.
  */
 export function PaneDeskReturn({ paneId, actions }: { paneId: string; actions: Actions }) {
   const job = useShellStore((s) => s.deskJobs?.jobs.find((one) => one.pane_id === paneId) ?? s.deskJobs?.workers.find((one) => one.pane_id === paneId) ?? null);
   const returns = useUiStore((s) => s.deskReturn === paneId);
-  const chord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state)) || null;
+  const chord = null;
   const on = useShellStore((s) => deskOn(s.desk));
   if ((!job && !returns) || !on) return null;
   return <DeskPaneReturn joined={job?.joined ?? false} chord={chord} onDesk={() => actions.openDeskSession(paneId)} />;

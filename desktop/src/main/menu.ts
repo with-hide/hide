@@ -92,7 +92,7 @@ export const MENU_LAYOUT: Readonly<Record<"app" | "File" | "Edit" | "View" | "Pa
 };
 
 /** Commands the menu carries only while Settings › Labs › Desk has Desk on (D-76). */
-export const DESK_ONLY: readonly CommandId[] = ["desk_terminal"];
+
 
 export const KEYBOARD_ONLY: readonly CommandId[] = [
   "move_to_trash",
@@ -135,8 +135,8 @@ export function menuBindings(reported: unknown, system: KeySystem): EffectiveReg
   return effectiveRegistry(stored, "electron", system);
 }
 
-function items(layout: readonly (CommandId | null)[], send: (id: CommandId) => void, registry: readonly Command[], desk: boolean, t: TFunction<"translation">): MenuItemConstructorOptions[] {
-  return layout.filter((id) => desk || id === null || !DESK_ONLY.includes(id)).map((id) => {
+function items(layout: readonly (CommandId | null)[], send: (id: CommandId) => void, registry: readonly Command[], t: TFunction<"translation">): MenuItemConstructorOptions[] {
+  return layout.map((id) => {
     if (id === null) return { type: "separator" };
     const command = registry.find((row) => row.id === id);
     if (!command) throw new Error(`menu names an unknown command ${id}`);
@@ -155,11 +155,10 @@ export function menuTemplate(options: {
   /** The language the menu is drawn in; a role item carries its label too, since the system's own follows the OS, not the operator's choice. */
   t: TFunction<"translation">;
   registry?: readonly Command[];
-  /** Whether Desk is on; off (the default), its command and chord are not in the menu. */
+  /** Desk availability, retained for callers of the host menu. */
   desk?: boolean;
 }): MenuItemConstructorOptions[] {
   const { appName, send, developer, system, t } = options;
-  const desk = options.desk ?? false;
   const registry = options.registry ?? systemRegistry(system);
   const mac = system === "mac";
   // Services and hiding the app are macOS's own; Windows and Linux have neither.
@@ -188,13 +187,13 @@ export function menuTemplate(options: {
         { role: "about", label: t("native.menu.about", { appName }) },
         ...(mac ? [checkForUpdates] : []),
         { type: "separator" },
-        ...items(MENU_LAYOUT.app, send, registry, desk, t),
+        ...items(MENU_LAYOUT.app, send, registry, t),
         { type: "separator" },
         ...macOnly,
         { role: "quit", label: t("native.menu.quit", { appName }), ...pcKeys("Control+Shift+Q") },
       ],
     },
-    { label: t("native.menu.file"), submenu: items(MENU_LAYOUT.File, send, registry, desk, t) },
+    { label: t("native.menu.file"), submenu: items(MENU_LAYOUT.File, send, registry, t) },
     {
       label: t("native.menu.edit"),
       submenu: [
@@ -207,13 +206,13 @@ export function menuTemplate(options: {
         { role: "pasteAndMatchStyle", label: t("native.menu.pasteMatchStyle") },
         { role: "selectAll", label: t("native.menu.selectAll") },
         { type: "separator" },
-        ...items(MENU_LAYOUT.Edit, send, registry, desk, t),
+        ...items(MENU_LAYOUT.Edit, send, registry, t),
       ],
     },
     {
       label: t("native.menu.view"),
       submenu: [
-        ...items(MENU_LAYOUT.View, send, registry, desk, t),
+        ...items(MENU_LAYOUT.View, send, registry, t),
         ...(developer
           ? ([
               { type: "separator" },
@@ -225,7 +224,7 @@ export function menuTemplate(options: {
         { role: "togglefullscreen", label: t("native.menu.fullScreen") },
       ],
     },
-    { label: t("native.menu.pane"), submenu: items(MENU_LAYOUT.Pane, send, registry, desk, t) },
+    { label: t("native.menu.pane"), submenu: items(MENU_LAYOUT.Pane, send, registry, t) },
     ...(mac
       ? ([
           {
@@ -247,7 +246,7 @@ export function menuTemplate(options: {
         { id: SETUP_COMMAND, label: t("native.menu.setupHide"), click: () => send(SETUP_COMMAND) },
         ...(mac ? [] : [checkForUpdates]),
         { type: "separator" },
-        ...items(MENU_LAYOUT.Help, send, registry, desk, t),
+        ...items(MENU_LAYOUT.Help, send, registry, t),
       ],
     },
   ];

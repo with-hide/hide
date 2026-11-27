@@ -52,7 +52,7 @@ pub(super) struct PanePayload {
 /// on the thread's input as a switch line is.
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ThreadInterruptPayload {
+pub(crate) struct ThreadInterruptPayload {
     pub generation: u64,
     pub pane_id: String,
     pub request_id: String,
@@ -419,7 +419,18 @@ impl Runtime {
     /// ■ under the open thread's box: the keys are typed through the thread's
     /// input and answered on it as a switch line is.
     fn interrupt_session_thread(&mut self, payload: ThreadInterruptPayload) -> bool {
+        self.interrupt_session_thread_answered(payload, None)
+    }
+
+    pub(crate) fn interrupt_session_thread_answered(
+        &mut self,
+        payload: ThreadInterruptPayload,
+        reply: Option<ThreadInputReply>,
+    ) -> bool {
         if !crate::terminal_attachments::valid_request_id(&payload.request_id) {
+            if let Some(reply) = reply {
+                reply(Err("invalid_request"));
+            }
             return false;
         }
         let Some((raw_pane, device)) = self
@@ -433,17 +444,23 @@ impl Runtime {
                 )
             })
         else {
-            return self.settle_thread_input(&payload.request_id, Err("closed"));
+            return self.settle_thread_input_answered(&payload.request_id, Err("closed"), reply);
         };
         let Some(engine) = self
             .delivery_engine(&device)
             .map(crate::engine::EngineHandle::new)
         else {
-            return self.settle_thread_input(&payload.request_id, Err("device_unreachable"));
+            return self.settle_thread_input_answered(
+                &payload.request_id,
+                Err("device_unreachable"),
+                reply,
+            );
         };
         let keys = match self.interrupt_keys(&payload.pane_id) {
             Ok(keys) => keys,
-            Err(reason) => return self.settle_thread_input(&payload.request_id, Err(reason)),
+            Err(reason) => {
+                return self.settle_thread_input_answered(&payload.request_id, Err(reason), reply);
+            }
         };
         let terminals: Arc<dyn hide_node_link::terminal::TerminalRoutes> =
             Arc::clone(&self.terminals);
@@ -482,8 +499,9 @@ impl Runtime {
             let still = self.interrupt_still(&pane_id);
             let (landed, pressed) = press(&|| still);
             self.interrupt_answered(&pane_id, landed);
-            return self.settle_thread_input(&request_id, pressed);
+            return self.settle_thread_input_answered(&request_id, pressed, reply);
         };
+        let worker_reply = reply.clone();
         let spawned = thread::Builder::new()
             .name("hide-interrupt".to_owned())
             .spawn(move || {
@@ -495,6 +513,9 @@ impl Runtime {
                     runtime.interrupt_still(&pane_id)
                 };
                 let (landed, pressed) = press(&still);
+                if let Some(reply) = worker_reply {
+                    reply(pressed.map(|()| crate::model::ThreadInputState::Sent));
+                }
                 if let Err(reason) = pressed {
                     crate::diagnostic!(serde_json::json!({
                         "component": "input_queue", "kind": "input_queue.interrupt_failed",
@@ -508,7 +529,11 @@ impl Runtime {
             });
         if spawned.is_err() {
             self.interrupt_answered(&payload.pane_id, false);
-            return self.settle_thread_input(&payload.request_id, Err("unavailable"));
+            return self.settle_thread_input_answered(
+                &payload.request_id,
+                Err("unavailable"),
+                reply,
+            );
         }
         true
     }

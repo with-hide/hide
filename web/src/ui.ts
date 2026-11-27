@@ -22,6 +22,10 @@ import { NO_CALLS_SEEN, NO_DRAWN_PAGES, type CallsSeen, type DrawnPages, type La
 import type { Tool } from "./laneTools";
 import type { AutomationExample } from "./automationDraft";
 
+import type { SessionThreadSection, SessionThreadHistorySection } from "./snapshot";
+
+export type ThreadLease = { paneId: string; taken: boolean; acquired: boolean; thread: SessionThreadSection | null; history: SessionThreadHistorySection | null };
+
 export type { ViewFocusRequest } from "./viewLayout";
 
 /**
@@ -330,7 +334,7 @@ type UiStore = {
   /** Keeps `pane`'s words unless the edit makes them longer past one send (`sessionDraftTakes`); false when it did not take them. */
   setSessionDraft: (pane: string, device: string | null, text: string) => boolean;
   /** `pane`'s box sent its words as `request`; they wait beside the draft for the pane's answer (`sessionDraftSends.ts`). */
-  sendSessionDraft: (pane: string, device: string | null, request: string, words: string) => void;
+  sendSessionDraft: (pane: string, device: string | null, request: string, words: string, preserveDraft?: boolean) => void;
   /** The pane answered `request`: taken, its words go; refused, they come back to its box. */
   settleSessionSend: (request: string, taken: boolean) => void;
   /** Lets go of the drafts whose pane its machine says is gone (`sessionDraftsLeft`). */
@@ -338,7 +342,10 @@ type UiStore = {
   /** Desk's room in this window: the session open beside Desk and Desk's desk (`deskRoom.ts`); its desk folds each time the room is left (PRD desk-2-ui B26), the session staying (`leaveRoom`). */
   deskRoom: DeskRoomWindow;
   setDeskRoom: (change: (room: DeskRoomWindow) => DeskRoomWindow) => void;
-  /** The pane `터미널 ⌘J` left Desk for, which ⌘J on it brings back beside Desk (B7). */
+  /** One pane's conversation choice and bounded thread cache, kept only in this window. */
+  paneConversation: { paneId: string; session: string } | null;
+  threadLease: ThreadLease | null;
+  /** The pane opened from Desk, whose explicit return button brings Desk back. */
   deskReturn: string | null;
   setDeskReturn: (pane: string | null) => void;
   /** How far above the window's foot the corner's notices stand: the top of the input boxes drawn there (`noticeFloor.ts`). */
@@ -601,7 +608,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
     set((state) => ({ sessionDrafts: keepSessionDraft(state.sessionDrafts, pane, device, text) }));
     return true;
   },
-  sendSessionDraft: (pane, device, request, words) => set((state) => ({ sessionDrafts: sendSessionDraft(state.sessionDrafts, pane, device, request, words) })),
+  sendSessionDraft: (pane, device, request, words, preserveDraft) => set((state) => ({ sessionDrafts: sendSessionDraft(state.sessionDrafts, pane, device, request, words, preserveDraft) })),
   settleSessionSend: (request, taken) => {
     const drafts = get().sessionDrafts;
     const next = settleSessionSend(drafts, request, taken);
@@ -614,6 +621,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   },
   deskRoom: DESK_ROOM_CLOSED,
   setDeskRoom: (change) => set((state) => ({ deskRoom: change(state.deskRoom) })),
+  paneConversation: null,
+  threadLease: null,
   deskReturn: null,
   setDeskReturn: (deskReturn) => set({ deskReturn }),
   noticeFloor: 0,

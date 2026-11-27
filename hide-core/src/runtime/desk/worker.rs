@@ -41,7 +41,7 @@ pub(super) enum Order {
     /// read yet or is stale against its last read ahead (`marks`,
     /// [`super::lists`]).
     Check {
-        marks: crate::desk::ReadMarks,
+        marks: crate::agent_commands::ReadMarks,
         on: Vec<AdapterId>,
         /// The agents the operator is signed out of, as Settings reads it: a
         /// sign-out and the sign-in after it each read the list again.
@@ -53,7 +53,7 @@ pub(super) enum Order {
     /// The agents switched on or signed in moved in the catalog: only the
     /// list reader is told, which keeps the agents in place itself.
     Lists {
-        marks: crate::desk::ReadMarks,
+        marks: crate::agent_commands::ReadMarks,
         on: Vec<AdapterId>,
         signed_out: Vec<AdapterId>,
     },
@@ -91,7 +91,13 @@ pub(super) enum Order {
     /// ([`super::lists`]).
     ListRead {
         adapter: AdapterId,
-        result: Result<(hide_desk::commands::Commands, crate::desk::ReadMark), Unread>,
+        result: Result<
+            (
+                hide_desk::commands::Commands,
+                crate::agent_commands::ReadMark,
+            ),
+            Unread,
+        >,
     },
     /// The runtime is gone: end the process and the worker.
     Shutdown,
@@ -183,7 +189,7 @@ pub(super) enum Report {
     Commands {
         adapter: AdapterId,
         commands: hide_desk::commands::Commands,
-        read: Option<crate::desk::ReadMark>,
+        read: Option<crate::agent_commands::ReadMark>,
     },
     /// A read of the agent's commands ahead of the operator brought none.
     Unread {
@@ -504,7 +510,13 @@ impl Worker {
     fn list_read(
         &mut self,
         adapter: AdapterId,
-        result: Result<(hide_desk::commands::Commands, crate::desk::ReadMark), Unread>,
+        result: Result<
+            (
+                hide_desk::commands::Commands,
+                crate::agent_commands::ReadMark,
+            ),
+            Unread,
+        >,
     ) {
         let why = match result {
             Ok((commands, read)) => {
@@ -550,7 +562,7 @@ impl Worker {
     /// adapter until it is chosen.
     fn check(
         &mut self,
-        marks: crate::desk::ReadMarks,
+        marks: crate::agent_commands::ReadMarks,
         on: Vec<AdapterId>,
         signed_out: Vec<AdapterId>,
         retry: bool,

@@ -39,6 +39,9 @@ export const PRACTICE_OUTSIDE = "practice_outside";
  * the last `pairing_*` press (a world without one has nothing under way).
  */
 export type WorldFrames = {
+  sessionThread?: import("../snapshot").SessionThreadSection | null;
+  sessionThreadHistory?: import("../snapshot").SessionThreadHistorySection | null;
+  threadInputResult?: import("../snapshot").SessionThreadSection["input"];
   fileIndex?: FileIndexResult | null; editor?: EditorSnapshot | null; documents?: Documents;
   sessionWorkSearch?: SessionWorkSearch | null; sessionRecord?: SessionRecordSection | null; linkPanel?: LinkPanel | null;
   listings?: Record<string, DirectoryList>; changes?: ChangesSnapshot | null; memory?: MemorySection | null; suggestions?: SuggestionsSection | null;

@@ -560,6 +560,9 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onEnter, o
         event.stopPropagation();
         return finish();
       }
+      // A composed reply uses the production textarea's Enter handler. An
+      // empty field still lets Enter play the guide's next step.
+      if (event.key === "Enter" && event.target instanceof HTMLTextAreaElement && event.target.value.trim() && playing.current !== step) return;
       // A step that types into the palette's field keeps ⏎ while the field is empty, to type its words;
       // past them ⏎ is the palette's, which opens the row it highlights.
       const types = field !== null && !fieldFilled(field);

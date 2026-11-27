@@ -5,6 +5,10 @@ import type { Catalog, Catalogs } from "../schema";
 // shares with the screen it shows (the automation screen's title, an example
 // automation) come from that screen's own catalog.
 export const whatsNewScenesEnglish = {
+  "whatsNewScene.conversation.title": "Check the sign-in flow",
+  "whatsNewScene.conversation.prompt": "List the next steps.",
+  "whatsNewScene.conversation.reply": "Next, check the sign-in flow.",
+
   "whatsNewScene.connect.here": "Fix the checkout 500",
   "whatsNewScene.connect.mini": "Mac mini",
   "whatsNewScene.connect.windows": "Windows PC",
@@ -95,6 +99,10 @@ export const whatsNewScenesEnglish = {
 };
 
 const ko: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.conversation.title": "로그인 흐름 확인",
+  "whatsNewScene.conversation.prompt": "다음 할 일을 알려줘.",
+  "whatsNewScene.conversation.reply": "다음은 로그인 흐름 확인이에요.",
+
   "whatsNewScene.connect.here": "결제 500 오류 고치기",
   "whatsNewScene.connect.mini": "Mac mini",
   "whatsNewScene.connect.windows": "Windows PC",
@@ -185,6 +193,10 @@ const ko: Catalog<typeof whatsNewScenesEnglish> = {
 };
 
 const zh: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.conversation.title": "检查登录流程",
+  "whatsNewScene.conversation.prompt": "列出接下来的步骤。",
+  "whatsNewScene.conversation.reply": "下一步检查登录流程。",
+
   "whatsNewScene.connect.here": "修复结账 500",
   "whatsNewScene.connect.mini": "Mac mini",
   "whatsNewScene.connect.windows": "Windows PC",
@@ -275,6 +287,10 @@ const zh: Catalog<typeof whatsNewScenesEnglish> = {
 };
 
 const ja: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.conversation.title": "ログインの流れを確認",
+  "whatsNewScene.conversation.prompt": "次の手順を教えて。",
+  "whatsNewScene.conversation.reply": "次はログインの流れを確認します。",
+
   "whatsNewScene.connect.here": "決済の 500 を直す",
   "whatsNewScene.connect.mini": "Mac mini",
   "whatsNewScene.connect.windows": "Windows PC",

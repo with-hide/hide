@@ -440,6 +440,17 @@ let followingSnapshot = false;
 /** Moves keyboard focus to the pane the snapshot names; not an operator action. */
 
 export function focusTerminal(paneId: string) {
+  // Every return to a pane follows its visible body, including lane/dialog
+  // closure and a device's unzoom, which keeps the pane mounted.
+  // A toggle updates the window choice before React removes the old cover.
+  // Its closing composer must not take focus back from the live terminal.
+  const cover = useUiStore.getState().paneConversation?.paneId === paneId ? document.querySelector<HTMLElement>("[data-pane-conversation]") : null;
+  if (cover?.dataset.paneConversation === paneId) {
+    const composer = cover.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]:not(:disabled)");
+    if (composer && !composer.closest("[inert]")) composer.focus();
+    else (cover.querySelector<HTMLButtonElement>("[data-thread-reclaim]") ?? cover).focus();
+    return;
+  }
   const instance = instances.get(paneId);
   if (!instance) return;
   followingSnapshot = true;

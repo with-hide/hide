@@ -98,17 +98,6 @@ pub(super) struct Desk {
     /// opened: their word reads signed out whatever Hide AI's read of the
     /// login says, since a login file can outlive its sign-in.
     sign_in_refused: BTreeSet<AdapterId>,
-    /// Each agent's commands as its last session listed them, so a new
-    /// conversation's first `/` has a list before its session opens, after
-    /// a restart too (`commands_store`, letter-48626); empty from a
-    /// session's open until the agent sends one, then replaced whole by each
-    /// list it sends; none for an agent that never sent one.
-    commands: crate::desk::CommandLists,
-    /// The file each list the agents send is saved to, off the lock.
-    commands_store: Option<crate::desk::DeskCommandsStore>,
-    /// When each list read ahead of the operator was read, and what it
-    /// depended on (`desk/lists.rs`), saved with the lists.
-    read_marks: crate::desk::ReadMarks,
     /// Why a read ahead of the operator brought no list, by agent, until a
     /// list comes; never stored, since the next start reads it again.
     unread: BTreeMap<AdapterId, crate::model::DeskCommandsUnread>,
@@ -438,19 +427,6 @@ impl Runtime {
         self.compose_desk_sections();
     }
 
-    /// The command lists the last run kept, read before the lock by the
-    /// caller, and the file the lists sent from now on are saved to.
-    pub(crate) fn install_desk_commands(
-        &mut self,
-        store: crate::desk::DeskCommandsStore,
-        saved: crate::desk::SavedCommands,
-    ) {
-        self.desk.commands_store = Some(store);
-        self.desk.commands = saved.lists;
-        self.desk.read_marks = saved.read;
-        self.compose_desk_commands();
-    }
-
     /// Starts Desk's worker with what `hided` provides, and looks at the
     /// agents.
     pub(crate) fn install_desk(
@@ -678,7 +654,7 @@ impl Runtime {
         }
         // A command Desk keeps from this agent never goes: the message
         // stays in the conversation with the notice that says so.
-        if hide_desk::commands::kind(agent, self.desk_commands_of(agent), text)
+        if hide_desk::commands::kind(agent, self.agent_commands_of(agent), text)
             == hide_desk::commands::Kind::LeftOut
         {
             let id = self.desk.stored.conversation.next_id();
@@ -967,7 +943,7 @@ impl Runtime {
         attachments: Vec<DeskAttachment>,
     ) {
         let files: Vec<String> = attachments.iter().map(|file| file.path.clone()).collect();
-        let kind = hide_desk::commands::kind(agent, self.desk_commands_of(agent), &sent);
+        let kind = hide_desk::commands::kind(agent, self.agent_commands_of(agent), &sent);
         // A command is the prompt's first words, so its files follow it.
         let sent = match (kind, files.is_empty()) {
             (_, true) => sent,
@@ -1364,7 +1340,7 @@ impl Runtime {
             self.desk_start_queued();
         }
         if enabled != before.enabled {
-            self.compose_desk_commands();
+            self.compose_agent_commands();
             if enabled {
                 // Every adapter is installed now, not when it is chosen
                 // (D-80), and the sign-ins are read (D-81).
@@ -1527,7 +1503,7 @@ impl Runtime {
                 if !changed {
                     return false;
                 }
-                self.compose_desk_commands();
+                self.compose_agent_commands();
             }
             Report::Installing { adapter, asked } => {
                 self.desk
@@ -1585,7 +1561,7 @@ impl Runtime {
                 self.learn_choices(adapter, &choices);
                 // An open session has its list, empty until the agent sends
                 // one: the `/` menu no longer waits for it.
-                self.desk.commands.entry(adapter).or_default();
+                self.agent_commands.lists.entry(adapter).or_default();
                 self.forget_stopped();
                 self.desk.held = false;
                 self.desk.sign_in_refused.remove(&adapter);
@@ -1806,7 +1782,7 @@ impl Runtime {
                     return false;
                 }
                 self.desk.unread.insert(adapter, why);
-                self.compose_desk_commands();
+                self.compose_agent_commands();
                 return true;
             }
             Report::Commands {
@@ -1816,15 +1792,17 @@ impl Runtime {
             } => {
                 self.desk.unread.remove(&adapter);
                 let marked = match read {
-                    Some(read) => self.desk.read_marks.insert(adapter, read.clone()) != Some(read),
+                    Some(read) => {
+                        self.agent_commands.read_marks.insert(adapter, read.clone()) != Some(read)
+                    }
                     None => false,
                 };
-                if self.desk.commands.get(&adapter) == Some(&commands.commands) {
+                if self.agent_commands.lists.get(&adapter) == Some(&commands.commands) {
                     // A list read again unchanged keeps when it was read.
                     if marked {
-                        self.save_desk_commands();
+                        self.save_agent_commands();
                     }
-                    self.compose_desk_commands();
+                    self.compose_agent_commands();
                     return false;
                 }
                 if commands.cut > 0 {
@@ -1836,9 +1814,9 @@ impl Runtime {
                         "cut": commands.cut,
                     }));
                 }
-                self.desk.commands.insert(adapter, commands.commands);
-                self.save_desk_commands();
-                self.compose_desk_commands();
+                self.agent_commands.lists.insert(adapter, commands.commands);
+                self.save_agent_commands();
+                self.compose_agent_commands();
                 return true;
             }
             Report::Compacted { tag, compaction } => {
@@ -2045,7 +2023,7 @@ impl Runtime {
             lane: desk.stored.lane,
         }));
         // The section is composed once the worker stands.
-        self.compose_desk_commands();
+        self.compose_agent_commands();
     }
 
     /// Desk's agents as the catalog says them now, in its order.
@@ -2080,11 +2058,11 @@ impl Runtime {
         // reads again a list its sign-out left unread.
         let moved = reading(&catalog) != reading(&self.desk.catalog);
         self.compose_desk();
-        self.compose_desk_commands();
+        self.compose_agent_commands();
         if moved && self.desk.stored.settings.enabled {
             let (on, signed_out) = reading(&catalog);
             self.order(Order::Lists {
-                marks: self.desk.read_marks.clone(),
+                marks: self.agent_commands.read_marks.clone(),
                 on: on.into_iter().collect(),
                 signed_out: signed_out.into_iter().collect(),
             });
@@ -2098,7 +2076,7 @@ impl Runtime {
     fn desk_check(&self, retry: bool) -> Order {
         let (on, signed_out) = reading(&self.desk_catalog());
         Order::Check {
-            marks: self.desk.read_marks.clone(),
+            marks: self.agent_commands.read_marks.clone(),
             on: on.into_iter().collect(),
             signed_out: signed_out.into_iter().collect(),
             retry,
@@ -2127,33 +2105,16 @@ impl Runtime {
         self.compose_desk_mentions();
     }
 
-    /// The commands `agent` listed last, while hided runs; none before it
-    /// sent a list.
-    fn desk_commands_of(&self, agent: AdapterId) -> &[hide_desk::commands::Command] {
-        self.desk.commands.get(&agent).map_or(&[], Vec::as_slice)
-    }
-
-    /// Saves the lists the agents sent, not the empty ones an open stands
-    /// in with, and when each list read ahead was read.
-    fn save_desk_commands(&self) {
-        if let Some(store) = &self.desk.commands_store {
-            let mut lists = self.desk.commands.clone();
-            lists.retain(|_, list| !list.is_empty());
-            store.save(crate::desk::SavedCommands {
-                lists,
-                read: self.desk.read_marks.clone(),
-            });
-        }
-    }
-
     /// Why each of Desk's agents with no list has none: Desk is off, the
     /// agent is switched off in Settings › Agents or not in place on this
     /// machine, its read is under way or waits, or the read's own answer.
-    fn desk_commands_unread(&self) -> BTreeMap<AdapterId, crate::model::DeskCommandsUnread> {
+    pub(super) fn desk_commands_unread(
+        &self,
+    ) -> BTreeMap<AdapterId, crate::model::DeskCommandsUnread> {
         use crate::model::DeskCommandsUnread as Why;
         let enabled = self.desk.stored.settings.enabled;
         AdapterId::all()
-            .filter(|agent| !self.desk.commands.contains_key(agent))
+            .filter(|agent| !self.agent_commands.lists.contains_key(agent))
             .map(|agent| {
                 let why = if !enabled {
                     Why::DeskOff
@@ -2174,27 +2135,6 @@ impl Runtime {
                 (agent, why)
             })
             .collect()
-    }
-
-    /// The `desk_commands` section, every agent's last list and why each
-    /// other agent has none, sent again only when one moved.
-    fn compose_desk_commands(&mut self) {
-        if self.desk.worker.is_none() {
-            return;
-        }
-        let unread = self.desk_commands_unread();
-        if self
-            .snapshot
-            .desk_commands
-            .as_deref()
-            .is_some_and(|shown| shown.lists == self.desk.commands && shown.unread == unread)
-        {
-            return;
-        }
-        self.snapshot.desk_commands = Some(Arc::new(crate::model::DeskCommandsSnapshot {
-            lists: self.desk.commands.clone(),
-            unread,
-        }));
     }
 
     fn compose_desk_live(&mut self) {
@@ -4689,12 +4629,12 @@ mod tests {
     #[test]
     fn an_agent_s_last_list_is_listed_again_after_a_restart() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("state/desk/commands.json");
+        let path = root.path().join("state/agent-commands.json");
         let start = |root: &std::path::Path| {
             let (mut runtime, received) = runtime(root);
-            let store = crate::desk::DeskCommandsStore::new(path.clone());
+            let store = crate::agent_commands::AgentCommandsStore::new(path.clone());
             let lists = store.restore();
-            runtime.install_desk_commands(store, lists);
+            runtime.install_agent_commands(store, lists);
             event(&mut runtime, "desk_select", json!({"agent": "claude"}));
             (runtime, received)
         };
@@ -4706,7 +4646,7 @@ mod tests {
         drop(runtime);
         let (mut runtime, _received) = start(root.path());
         assert_eq!(slash(&runtime).1, ["/compact", "/context"]);
-        let saved = crate::desk::DeskCommandsStore::new(path.clone()).restore();
+        let saved = crate::agent_commands::AgentCommandsStore::new(path.clone()).restore();
         assert_eq!(
             saved.lists.keys().copied().collect::<Vec<_>>(),
             [AdapterId::CLAUDE]
@@ -4723,7 +4663,7 @@ mod tests {
         runtime.desk_report(Report::Commands {
             adapter,
             commands: hide_desk::commands::read(adapter, &update),
-            read: Some(crate::desk::ReadMark::of(facts, 1_000)),
+            read: Some(crate::agent_commands::ReadMark::of(facts, 1_000)),
         });
     }
 
@@ -4852,12 +4792,12 @@ mod tests {
     #[test]
     fn a_list_read_ahead_and_its_mark_outlive_a_restart_and_reach_the_next_look() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("state/desk/commands.json");
+        let path = root.path().join("state/agent-commands.json");
         let start = |root: &std::path::Path| {
             let (mut runtime, received) = runtime(root);
-            let store = crate::desk::DeskCommandsStore::new(path.clone());
+            let store = crate::agent_commands::AgentCommandsStore::new(path.clone());
             let saved = store.restore();
-            runtime.install_desk_commands(store, saved);
+            runtime.install_agent_commands(store, saved);
             (runtime, received)
         };
         let (mut runtime, _received) = start(root.path());
@@ -4886,7 +4826,7 @@ mod tests {
             .expect("a look");
         assert_eq!(
             marks[&AdapterId::OPENCODE],
-            crate::desk::ReadMark::of("opencode 2.0.29", 1_000)
+            crate::agent_commands::ReadMark::of("opencode 2.0.29", 1_000)
         );
 
         // The same list read again under a new version keeps the new mark.
@@ -4897,10 +4837,10 @@ mod tests {
             "opencode 2.0.30",
         );
         drop(runtime);
-        let saved = crate::desk::DeskCommandsStore::new(path).restore();
+        let saved = crate::agent_commands::AgentCommandsStore::new(path).restore();
         assert_eq!(
             saved.read[&AdapterId::OPENCODE],
-            crate::desk::ReadMark::of("opencode 2.0.30", 1_000)
+            crate::agent_commands::ReadMark::of("opencode 2.0.30", 1_000)
         );
     }
 

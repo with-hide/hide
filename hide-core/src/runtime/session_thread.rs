@@ -64,18 +64,60 @@ pub(crate) struct ThreadReference {
 }
 
 impl ThreadReference {
+    /// The same admission used by `of`, without account-specific read data.
+    pub(crate) fn capability(
+        agent: &crate::sidebar::SessionAgentPayload,
+    ) -> crate::model::ThreadCapability {
+        use crate::model::ThreadCapability;
+        let Some(kind) = agent
+            .agent
+            .as_deref()
+            .and_then(hide_session::Agent::from_kind)
+        else {
+            return ThreadCapability::None;
+        };
+        if !hide_session::thread::reads(kind.format()) {
+            return ThreadCapability::None;
+        }
+        if agent.agent_session.as_ref().is_some_and(|session| {
+            !session.value.trim().is_empty()
+                && session.value.len() <= 4096
+                && matches!(session.kind.as_str(), "id" | "path")
+        }) {
+            ThreadCapability::Ready
+        } else {
+            ThreadCapability::Pending
+        }
+    }
+
+    /// Opaque session identity for window-local mode invalidation, including path-based readers.
+    pub(crate) fn identity(agent: &crate::sidebar::SessionAgentPayload) -> Option<String> {
+        use sha2::{Digest, Sha256};
+        if Self::capability(agent) != crate::model::ThreadCapability::Ready {
+            return None;
+        }
+        let session = agent.agent_session.as_ref()?;
+        let mut digest = Sha256::new();
+        digest.update(agent.agent.as_deref()?.as_bytes());
+        digest.update([0]);
+        digest.update(session.kind.as_bytes());
+        digest.update([0]);
+        digest.update(session.value.as_bytes());
+        Some(format!("{:x}", digest.finalize()))
+    }
+
     /// The reference of an agent whose runtime has a thread reader and that
     /// reported its session, read in `account`; `None` otherwise.
     pub(crate) fn of(
         agent: &crate::sidebar::SessionAgentPayload,
         account: hide_agent_adapter::AccountKey,
     ) -> Option<Self> {
+        if Self::capability(agent) != crate::model::ThreadCapability::Ready {
+            return None;
+        }
         let kind = hide_session::Agent::from_kind(agent.agent.as_deref()?)?;
         let session = agent.agent_session.as_ref()?;
-        (hide_session::thread::reads(kind.format())
-            && session.value.len() <= 4096
-            && matches!(session.kind.as_str(), "id" | "path"))
-        .then(|| Self {
+        Some(Self {
             agent: kind,
             account,
             reference_kind: session.kind.clone(),
@@ -211,6 +253,8 @@ impl OpenThread {
 #[serde(deny_unknown_fields)]
 pub(super) struct ThreadOpenPayload {
     pub pane_id: String,
+    #[serde(default)]
+    pub pane_conversation: bool,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -224,7 +268,7 @@ pub(super) struct ThreadOlderPayload {
 /// hided's boundary.
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ThreadInputPayload {
+pub(crate) struct ThreadInputPayload {
     pub generation: u64,
     pub pane_id: String,
     pub request_id: String,
@@ -237,11 +281,16 @@ pub(super) struct ThreadInputPayload {
     pub bytes: u64,
 }
 
+/// One nonblocking completion to the requesting connection, independent of
+/// coalesced display snapshots. The input worker owns it until completion.
+pub(crate) type ThreadInputReply =
+    Arc<dyn Fn(Result<ThreadInputState, &'static str>) + Send + Sync>;
+
 /// A change of model or effort for the session a thread shows (`[switch]`
 /// of its agent's definition): exactly one of `model` and `effort`.
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ThreadSwitchPayload {
+pub(crate) struct ThreadSwitchPayload {
     pub generation: u64,
     pub pane_id: String,
     pub request_id: String,
@@ -300,7 +349,14 @@ enum ReadKind {
 }
 
 impl Runtime {
+    pub(in crate::runtime) fn session_thread_is_open(&self) -> bool {
+        self.session_thread.open.is_some()
+    }
+
     pub(super) fn open_session_thread(&mut self, payload: ThreadOpenPayload) -> bool {
+        if payload.pane_conversation {
+            self.note_feature_used(crate::product_analytics::Feature::PaneConversation);
+        }
         if let Some(open) = &self.session_thread.open
             && open.pane_id == payload.pane_id
         {
@@ -369,6 +425,7 @@ impl Runtime {
         }
         // A session that is no job of Desk's gets its card for the thread's head (D-87).
         self.compose_desk_jobs();
+        self.compose_desk_mentions();
         true
     }
 
@@ -603,10 +660,21 @@ impl Runtime {
     }
 
     pub(super) fn send_session_thread_input(&mut self, payload: ThreadInputPayload) -> bool {
+        self.send_session_thread_input_answered(payload, None)
+    }
+
+    pub(crate) fn send_session_thread_input_answered(
+        &mut self,
+        payload: ThreadInputPayload,
+        reply: Option<ThreadInputReply>,
+    ) -> bool {
         if !ingress::valid_request_id(&payload.request_id) {
+            if let Some(reply) = reply {
+                reply(Err("invalid_request"));
+            }
             return false;
         }
-        self.type_into_thread(payload, None)
+        self.type_into_thread(payload, None, reply)
     }
 
     /// Changes the model or the effort of the session the thread shows the
@@ -620,22 +688,43 @@ impl Runtime {
     /// its pane's launch record when one describes the agent (a restart
     /// starts it so), else beside it by session.
     pub(super) fn switch_session_thread(&mut self, payload: ThreadSwitchPayload) -> bool {
+        self.switch_session_thread_answered(payload, None)
+    }
+
+    pub(crate) fn switch_session_thread_answered(
+        &mut self,
+        payload: ThreadSwitchPayload,
+        reply: Option<ThreadInputReply>,
+    ) -> bool {
         use hide_agent_adapter::definition::SwitchTo;
         if !ingress::valid_request_id(&payload.request_id) {
+            if let Some(reply) = reply {
+                reply(Err("invalid_request"));
+            }
             return false;
         }
         let to = match (payload.model.as_deref(), payload.effort.as_deref()) {
             (Some(model), None) => SwitchTo::Model(model),
             (None, Some(effort)) => SwitchTo::Effort(effort),
-            _ => return self.settle_thread_input(&payload.request_id, Err("invalid_request")),
+            _ => {
+                return self.settle_thread_input_answered(
+                    &payload.request_id,
+                    Err("invalid_request"),
+                    reply,
+                );
+            }
         };
         if self.session_thread.open.as_ref().is_none_or(|open| {
             open.generation != payload.generation || open.pane_id != payload.pane_id
         }) {
-            return self.settle_thread_input(&payload.request_id, Err("closed"));
+            return self.settle_thread_input_answered(&payload.request_id, Err("closed"), reply);
         }
         let Some(observation) = self.delivery_observations.get(&payload.pane_id) else {
-            return self.settle_thread_input(&payload.request_id, Err("switch_unsupported"));
+            return self.settle_thread_input_answered(
+                &payload.request_id,
+                Err("switch_unsupported"),
+                reply,
+            );
         };
         // The line ends with Enter, which answers whatever the agent shows: a
         // question on screen (a permission's Enter allows it) or a turn under
@@ -651,7 +740,7 @@ impl Runtime {
             _ => None,
         };
         if let Some(reason) = busy {
-            return self.settle_thread_input(&payload.request_id, Err(reason));
+            return self.settle_thread_input_answered(&payload.request_id, Err(reason), reply);
         }
         let switch = hide_agent_adapter::definition::find(
             hide_agent_adapter::definition::builtins(),
@@ -659,12 +748,18 @@ impl Runtime {
         )
         .map(|definition| &definition.switch);
         let Some(switch) = switch else {
-            return self.settle_thread_input(&payload.request_id, Err("switch_unsupported"));
+            return self.settle_thread_input_answered(
+                &payload.request_id,
+                Err("switch_unsupported"),
+                reply,
+            );
         };
         let now = self.session_choice(&payload.pane_id);
         let line = match switch.line(to, &now) {
             Ok(line) => line,
-            Err(reason) => return self.settle_thread_input(&payload.request_id, Err(reason)),
+            Err(reason) => {
+                return self.settle_thread_input_answered(&payload.request_id, Err(reason), reply);
+            }
         };
         let after = switch.after(to, &now);
         self.type_into_thread(
@@ -677,6 +772,7 @@ impl Runtime {
                 bytes: 0,
             },
             Some(after),
+            reply,
         )
     }
 
@@ -738,6 +834,7 @@ impl Runtime {
         &mut self,
         payload: ThreadInputPayload,
         choice: Option<hide_agent_adapter::LaunchChoice>,
+        reply: Option<ThreadInputReply>,
     ) -> bool {
         let Some(open) = self.session_thread.open.as_ref().filter(|open| {
             open.generation == payload.generation && open.pane_id == payload.pane_id
@@ -749,13 +846,13 @@ impl Runtime {
             // The screen keeps its words until an answer names them; a
             // closed thread keeps its section, so there is always one to
             // answer on.
-            return self.settle_thread_input(&payload.request_id, Err("closed"));
+            return self.settle_thread_input_answered(&payload.request_id, Err("closed"), reply);
         };
         let refusal = crate::operator_input::problem(&payload.text, payload.paths.len())
             .or(self.thread_input_target(open.generation).err())
             .or(open.inputting.then_some("in_flight"));
         if let Some(reason) = refusal {
-            return self.settle_thread_input(&payload.request_id, Err(reason));
+            return self.settle_thread_input_answered(&payload.request_id, Err(reason), reply);
         }
         // The operator's words wait for an agent at work, behind words that
         // wait already (PRD desk-queue D-01); a switch line is refused there
@@ -771,8 +868,15 @@ impl Runtime {
                 payload.request_id.clone(),
             );
             return match queued {
-                Ok(_) => self.settle_thread_queued(&payload.request_id),
-                Err(reason) => self.settle_thread_input(&payload.request_id, Err(reason)),
+                Ok(_) => {
+                    if let Some(reply) = reply {
+                        reply(Ok(ThreadInputState::Queued));
+                    }
+                    self.settle_thread_queued(&payload.request_id)
+                }
+                Err(reason) => {
+                    self.settle_thread_input_answered(&payload.request_id, Err(reason), reply)
+                }
             };
         }
         let device = open.device.clone();
@@ -787,7 +891,7 @@ impl Runtime {
             } else {
                 "device_unreachable"
             };
-            return self.settle_thread_input(&payload.request_id, Err(reason));
+            return self.settle_thread_input_answered(&payload.request_id, Err(reason), reply);
         };
         let attach = self.input_attach(&device);
         let terminals: Arc<dyn hide_node_link::terminal::TerminalRoutes> =
@@ -837,12 +941,16 @@ impl Runtime {
         let Some(context) = self.worker_context.clone() else {
             // Nothing moves between here and the write without a worker.
             let sent = write(&|| Ok(()));
+            if let Some(reply) = reply {
+                reply(sent.map(|()| ThreadInputState::Sent));
+            }
             return self.ingest_thread_input(generation, &request_id, sent, choice.as_ref());
         };
         let spawned = thread::Builder::new()
             .name("hide-thread-input".to_owned())
             .spawn({
                 let request_id = request_id.clone();
+                let reply = reply.clone();
                 move || {
                     let still = || {
                         let runtime = context.runtime.upgrade().ok_or("closed")?;
@@ -850,12 +958,18 @@ impl Runtime {
                         runtime.thread_input_target(generation)
                     };
                     let sent = write(&still);
+                    if let Some(reply) = reply {
+                        reply(sent.map(|()| ThreadInputState::Sent));
+                    }
                     apply_in(&context, move |runtime| {
                         runtime.ingest_thread_input(generation, &request_id, sent, choice.as_ref())
                     });
                 }
             });
         if spawned.is_err() {
+            if let Some(reply) = reply {
+                reply(Err("unavailable"));
+            }
             return self.ingest_thread_input(generation, &request_id, Err("unavailable"), None);
         }
         true
@@ -1293,6 +1407,18 @@ impl Runtime {
         })
     }
 
+    pub(super) fn settle_thread_input_answered(
+        &mut self,
+        request_id: &str,
+        sent: Result<(), &'static str>,
+        reply: Option<ThreadInputReply>,
+    ) -> bool {
+        if let Some(reply) = reply {
+            reply(sent.map(|()| ThreadInputState::Sent));
+        }
+        self.settle_thread_input(request_id, sent)
+    }
+
     /// The words of `request_id` wait in the pane's line: the box lets them
     /// go as it does sent ones (PRD desk-queue B1).
     pub(super) fn settle_thread_queued(&mut self, request_id: &str) -> bool {
@@ -1720,7 +1846,45 @@ mod tests {
     fn open(runtime: &mut Runtime) {
         runtime.open_session_thread(ThreadOpenPayload {
             pane_id: "w1:p1".to_owned(),
+            pane_conversation: false,
         });
+    }
+
+    /// The approved reader set controls row admission, before any file read or web rendering.
+    #[test]
+    fn reader_capability_and_identity_follow_the_reported_session() {
+        use crate::model::ThreadCapability::{None, Pending, Ready};
+        for name in [
+            "claude",
+            "codex",
+            "opencode",
+            "pi",
+            "omp",
+            "grok",
+            "antigravity",
+        ] {
+            let mut agent: crate::sidebar::SessionAgentPayload =
+                serde_json::from_value(json!({"id":"worker", "pane_id":"w1:p1", "agent":name}))
+                    .unwrap();
+            assert_eq!(ThreadReference::capability(&agent), Pending, "{name}");
+            assert!(ThreadReference::identity(&agent).is_none());
+            agent.agent_session =
+                Some(serde_json::from_value(json!({"kind":"id", "value":SESSION})).unwrap());
+            assert_eq!(ThreadReference::capability(&agent), Ready, "{name}");
+            let identity = ThreadReference::identity(&agent).unwrap();
+            agent.agent_session.as_mut().unwrap().value.push('2');
+            assert_ne!(
+                ThreadReference::identity(&agent).as_deref(),
+                Some(identity.as_str())
+            );
+            agent.agent_session.as_mut().unwrap().value.clear();
+            assert_eq!(ThreadReference::capability(&agent), Pending);
+        }
+        let agent = serde_json::from_value(
+            json!({"id":"worker", "pane_id":"w1:p1", "agent":"unsupported"}),
+        )
+        .unwrap();
+        assert_eq!(ThreadReference::capability(&agent), None);
     }
 
     #[test]
@@ -2021,6 +2185,7 @@ mod tests {
         // Another pane, never seen: no record, and no pane.
         runtime.open_session_thread(ThreadOpenPayload {
             pane_id: "w9:p9".to_owned(),
+            pane_conversation: false,
         });
         let shown = thread(&runtime);
         assert_eq!(
@@ -2206,6 +2371,7 @@ mod tests {
         runtime.observe_delivery_laid("mini", &payload, None, None);
         runtime.open_session_thread(ThreadOpenPayload {
             pane_id: "remote:mini:pane:w1:p1".to_owned(),
+            pane_conversation: false,
         });
         let shown = thread(&runtime);
         assert_eq!(shown.machine.as_deref(), Some("mini"));
@@ -2726,6 +2892,71 @@ mod tests {
         );
     }
 
+    /// Two windows sending in one burst each get their own answer even if
+    /// no snapshot is read between the refusal and the accepted write.
+    #[test]
+    fn every_input_completes_even_when_display_outcomes_coalesce() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        let terminals = Arc::new(GrantingTerminals::default());
+        terminals
+            .hold
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        runtime.set_terminals(Arc::clone(&terminals) as _);
+        let fake = crate::engine::fake::FakeEngine::start(|method, _| {
+            assert_eq!(method, "prompt_agent");
+            crate::engine::fake::reply(())
+        });
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("ready")])));
+        open(&mut runtime);
+        let generation = thread(&runtime).generation;
+        let shared = crate::runtime::tests::SharedRuntime::new(runtime);
+        let (first_tx, first_rx) = std::sync::mpsc::channel();
+        let (second_tx, second_rx) = std::sync::mpsc::channel();
+        let input = |request: &str| ThreadInputPayload {
+            generation,
+            pane_id: "w1:p1".to_owned(),
+            request_id: request.to_owned(),
+            text: "reply".to_owned(),
+            paths: Vec::new(),
+            bytes: 0,
+        };
+        {
+            let mut runtime = shared.lock().unwrap();
+            runtime.worker_context = Some(RuntimeWorkerContext {
+                runtime: shared.weak(),
+                notifier: crate::handle::ChangeNotifier::noop(),
+            });
+            runtime.send_session_thread_input_answered(
+                input(INPUT),
+                Some(Arc::new(move |answer| {
+                    first_tx.send(answer).unwrap();
+                })),
+            );
+        }
+        crate::runtime::tests::wait_for("the first input's permit", || {
+            terminals.held.lock().unwrap().is_some()
+        });
+        shared.lock().unwrap().send_session_thread_input_answered(
+            input("22222222-2222-4222-8222-222222222222"),
+            Some(Arc::new(move |answer| {
+                second_tx.send(answer).unwrap();
+            })),
+        );
+        assert_eq!(
+            second_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Err("in_flight")
+        );
+        terminals.held.lock().unwrap().take().unwrap()(Ok(()));
+        assert_eq!(
+            first_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Ok(ThreadInputState::Sent)
+        );
+        assert_eq!(fake.calls_of("prompt_agent").len(), 1);
+    }
+
     /// An input that arrives after its thread closed, or after another
     /// pane's opened, types nothing and is answered as closed, so the screen
     /// that sent it gets its words back.
@@ -2943,6 +3174,7 @@ mod tests {
         let pane = "remote:mini:pane:w1:p1";
         runtime.open_session_thread(ThreadOpenPayload {
             pane_id: pane.to_owned(),
+            pane_conversation: false,
         });
         let generation = thread(&runtime).generation;
         runtime.send_session_thread_input(ThreadInputPayload {
@@ -3226,6 +3458,53 @@ mod tests {
         send_words(&mut runtime, generation, INPUT, "테스트도 돌려 줘");
         send_words(&mut runtime, generation, SECOND, "끝나면 PR 열어 줘");
         (runtime, fake, generation)
+    }
+
+    /// A queued send and a stop each answer their requester, even when the
+    /// display only retains the last outcome (pane conversation CR-06 and
+    /// desk-queue B1, B10, B12).
+    #[test]
+    fn queued_input_and_interrupt_complete_independently_of_the_display() {
+        let node = Arc::new(ScriptedNode::default());
+        let (mut runtime, fake, generation) = queued_runtime(&node);
+        let (send_tx, send_rx) = std::sync::mpsc::channel();
+        runtime.send_session_thread_input_answered(
+            ThreadInputPayload {
+                generation,
+                pane_id: "w1:p1".to_owned(),
+                request_id: INPUT.to_owned(),
+                text: "one more line".to_owned(),
+                paths: Vec::new(),
+                bytes: 0,
+            },
+            Some(Arc::new(move |answer| send_tx.send(answer).unwrap())),
+        );
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        runtime.interrupt_session_thread_answered(
+            crate::runtime::ThreadInterruptPayload {
+                generation,
+                pane_id: "w1:p1".to_owned(),
+                request_id: SECOND.to_owned(),
+            },
+            Some(Arc::new(move |answer| stop_tx.send(answer).unwrap())),
+        );
+        assert_eq!(thread(&runtime).input.unwrap().request_id, SECOND);
+        assert_eq!(send_rx.try_recv().unwrap(), Ok(ThreadInputState::Queued));
+        assert_eq!(stop_rx.try_recv().unwrap(), Ok(ThreadInputState::Sent));
+        assert!(fake.calls_of("prompt_agent").is_empty());
+        assert_eq!(fake.calls_of("interrupt_agent").len(), 1);
+
+        let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+        runtime.interrupt_session_thread_answered(
+            crate::runtime::ThreadInterruptPayload {
+                generation: generation + 1,
+                pane_id: "w1:p1".to_owned(),
+                request_id: INPUT.to_owned(),
+            },
+            Some(Arc::new(move |answer| closed_tx.send(answer).unwrap())),
+        );
+        assert_eq!(closed_rx.try_recv().unwrap(), Err("closed"));
+        assert_eq!(fake.calls_of("interrupt_agent").len(), 1);
     }
 
     /// PRD desk-queue B1-B3, B29: words sent while the agent works are typed

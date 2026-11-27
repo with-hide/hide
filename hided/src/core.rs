@@ -1279,6 +1279,17 @@ impl CoreHandle {
         self.dispatch_from(event, None)
     }
 
+    /// The thread's input completion goes to its caller even when snapshots
+    /// coalesce. The same core input worker performs the write.
+    pub fn send_thread_input(
+        &self,
+        kind: String,
+        payload: serde_json::Value,
+        reply: impl Fn(Result<hide_core::ThreadInputState, &'static str>) + Send + Sync + 'static,
+    ) -> Result<(), String> {
+        self.on_owner(move |core| core.send_thread_input(&kind, payload, reply))
+    }
+
     /// Dispatches a client's event sent from `screen`: whatever it chooses
     /// of the operator's look is chosen there, so a choice made in another
     /// machine's view counts only while that machine shows it; with none (a

@@ -621,8 +621,6 @@ export function installKeyboard(actions: Actions): () => void {
     if (!command) return;
     // Text fields keep their own selection keys, including Ctrl+Shift+arrows.
     if (isPaneFocusCommand(command.id) && !paneFocusOwner()) return;
-    // Desk switched off has no chord (D-76): the key goes on to the page or the terminal.
-    if (command.id === "desk_terminal" && !deskOn(useShellStore.getState().desk)) return;
     event.preventDefault();
     event.stopPropagation();
     run(command.id, event);

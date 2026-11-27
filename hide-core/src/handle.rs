@@ -537,8 +537,10 @@ impl Core {
             let moving = matches!(restored, Restored::Moving(_));
             let desk = crate::desk::DeskStore::new(hide_kit::layout::desk_store(directory));
             let desk_restored = desk.restore();
-            let desk_commands =
-                crate::desk::DeskCommandsStore::new(hide_kit::layout::desk_commands(directory));
+            let desk_commands = crate::agent_commands::AgentCommandsStore::with_legacy(
+                hide_kit::layout::agent_commands(directory),
+                hide_kit::layout::desk_commands(directory),
+            );
             let desk_commands_restored = desk_commands.restore();
             let input_queue =
                 crate::input_queue::InputQueueStore::new(hide_kit::layout::input_queue(directory));
@@ -557,7 +559,7 @@ impl Core {
                 guard.save_missions();
             }
             guard.install_desk_store(desk, desk_restored);
-            guard.install_desk_commands(desk_commands, desk_commands_restored);
+            guard.install_agent_commands(desk_commands, desk_commands_restored);
             guard.install_input_queue(input_queue, input_queue_restored);
             guard.install_access_store(access, access_restored);
             guard.install_automations_store(automations, automations_restored, zone);
@@ -738,6 +740,60 @@ impl Core {
     /// on.
     pub fn dispatch_bytes(&self, bytes: &[u8]) -> bool {
         self.dispatch_bytes_on(bytes, None)
+    }
+
+    /// Sends one trusted daemon input and completes it separately from the
+    /// display snapshot. `reply` must be nonblocking; no I/O runs under the
+    /// runtime lock. A coalesced snapshot cannot erase this request's answer.
+    pub fn send_thread_input(
+        &self,
+        kind: &str,
+        payload: serde_json::Value,
+        reply: impl Fn(Result<crate::model::ThreadInputState, &'static str>) + Send + Sync + 'static,
+    ) {
+        if !check_owner_thread(self, "thread_input") {
+            reply(Err("unavailable"));
+            return;
+        }
+        let reply: crate::runtime::ThreadInputReply = Arc::new(reply);
+        let mut runtime = lock_recover(&self.runtime);
+        let changed = match kind {
+            "session_thread_input" => {
+                match serde_json::from_value::<crate::runtime::ThreadInputPayload>(payload) {
+                    Ok(payload) => runtime.send_session_thread_input_answered(payload, Some(reply)),
+                    Err(_) => {
+                        reply(Err("invalid_request"));
+                        false
+                    }
+                }
+            }
+            "session_thread_switch" => {
+                match serde_json::from_value::<crate::runtime::ThreadSwitchPayload>(payload) {
+                    Ok(payload) => runtime.switch_session_thread_answered(payload, Some(reply)),
+                    Err(_) => {
+                        reply(Err("invalid_request"));
+                        false
+                    }
+                }
+            }
+            "session_thread_interrupt" => {
+                match serde_json::from_value::<crate::runtime::ThreadInterruptPayload>(payload) {
+                    Ok(payload) => runtime.interrupt_session_thread_answered(payload, Some(reply)),
+                    Err(_) => {
+                        reply(Err("invalid_request"));
+                        false
+                    }
+                }
+            }
+            _ => {
+                reply(Err("invalid_request"));
+                false
+            }
+        };
+        drop(runtime);
+        if changed {
+            notify_change(self);
+        }
     }
 
     /// Dispatches a window's or a view's event sent from `screen`, which is

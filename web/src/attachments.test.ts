@@ -215,6 +215,17 @@ describe("thread input (B29)", () => {
     useShellStore.setState({ attachmentRefusal: null, composerRefusal: null });
   });
 
+  it("does not admit a thread send when the socket declines its stage or commit", () => {
+    const file = { name: "keep.png", bytes: new Uint8Array([1]) };
+    const binaries: Uint8Array[] = [];
+    const events: string[] = [];
+    configureAttachments({ dispatch: (event) => { events.push(event.kind); return false; }, sendBinary: (bytes) => binaries.push(bytes) });
+    expect(submitThreadInput(3, "w1:p1", "keep these words", [file])).toBeNull();
+    expect(events).toEqual(["attachment_stage"]);
+    expect(binaries).toEqual([]);
+    expect(submitThreadInput(3, "w1:p1", "keep these words", [])).toBeNull();
+  });
+
   it("stages each file under the input's id, then names the stages with the words", () => {
     const { events, binaries } = capture();
     const requestId = submitThreadInput(3, "w1:p1", "이거 봐줘", [{ name: "shot.png", bytes: new Uint8Array([1, 2]) }]);

@@ -11,7 +11,7 @@ import { fileWords, keepSent, mentionAt, pickCommand, pickWords, useComposerTray
 import { sessionBarSlots, sessionMentions, sessionWords, switchCommand, useMentionFiles } from "../../sessionInput";
 import { checkoutOfPane, type DeskAgentId } from "../../snapshot";
 import { useSessionThread } from "../../sessionThread";
-import { sessionDraft } from "../../sessionDrafts";
+import { sessionDraft, visitSessionTerminal } from "../../sessionDrafts";
 import { remoteTargetOfPane } from "../../remote";
 import "../../sessionDraftSends";
 import { useShellStore } from "../../store";
@@ -24,6 +24,9 @@ import { SessionAgentBar } from "./desk-composer";
 import { FileDropZone } from "./file-drop";
 import { QueueGroup } from "./queue-group";
 import { NO_MENTIONS, ThreadView, type ThreadPartActions } from "./thread-view";
+
+import { Button } from "../ui/button";
+import { Hint } from "../ui/tooltip";
 
 const NO_CHOICE: { model?: string; effort?: string } = {};
 
@@ -41,16 +44,17 @@ const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "u
  * the outputs shelf under it), the agent's choice card, the questions Hide
  * found and what stands in the box's place while it sleeps are the caller's.
  */
-export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = false, onAnswered, head = null, ask = null, asks, onAsk, foot = null, onTerminal, ...parts }: {
+export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = false, onAnswered, head = null, ask = null, asks, onAsk, foot = null, onTerminal, ...parts }: {
   /** The session's card; a session that is no job of Desk's opens before its card arrives, by its pane (D-87). */
   job: DeskJob | null;
+  paneConversation?: boolean;
   /** The pane whose thread this is; its card's when not given. */
   paneId?: string | null;
   actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread" | "switchThread" | "observeCatalog" | "requestFileIndex" | "deskCommandsCheck" | "inputQueue" | "interruptThread">;
   mentions?: readonly DeskMention[];
   startedByDesk?: boolean;
   focused?: boolean;
-  /** A `답하기` press asks for this session's input box and no box has taken it yet (B29): the box takes the keyboard. */
+  /** A press asks for this session's input box and no box has taken it yet (`답하기`, B29, or opening the conversation over its pane): the box takes the keyboard. */
   answer?: boolean;
   /** The box took the keyboard for that press, which is spent. */
   onAnswered?: () => void;
@@ -65,15 +69,14 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   onTerminal?: () => void;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
-  useSessionThread(actions, paneId);
-
-  // The core holds one thread; until it holds this pane's, this one is still being read.
-  const thread = useShellStore((s) => (paneId && s.sessionThread?.pane_id === paneId ? s.sessionThread : null));
-  const history = useShellStore((s) => s.sessionThreadHistory);
+  const { thread, history, taken, reclaim } = useSessionThread(actions, paneId, paneConversation);
+  const toTerminal = onTerminal ? () => {
+    if (paneId) useUiStore.setState((s) => ({ sessionDrafts: visitSessionTerminal(s.sessionDrafts, paneId) }));
+    onTerminal();
+  } : undefined;
   const plans = useShellStore((s) => s.rest?.plans);
   const missions = useShellStore((s) => s.rest?.missions);
   const rows = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
-  const refusal = useShellStore((s) => s.composerRefusal);
   const screen = useMemo(() => threadScreen(thread, history, { plans, missions }, rows), [thread, history, plans, missions, rows]);
 
   // The words are the pane's draft, kept while another session is open or Desk is left, and cleared once sent.
@@ -90,40 +93,57 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   // The request a send is waiting on and the tiles it carried, while this panel stands; its words wait beside the
   // pane's draft (`sessionDraftSends.ts`), so a send still unanswered when the panel closed holds the next one too.
   const [sent, setSent] = useState<{ request: string; tiles: string[] } | null>(null);
+  const pending = useRef<typeof sent>(null);
+  const holdSent = (next: typeof sent) => { pending.current = next; setSent(next); };
   const waiting = useUiStore((s) => (paneId ? s.sessionDrafts.some((draft) => draft.pane === paneId && draft.sending) : false));
+  const uncertain = useUiStore((s) => (paneId ? s.sessionDrafts.some((draft) => draft.pane === paneId && draft.uncertain) : false));
   const [notice, setNotice] = useState<string | null>(null);
   const words = (reason: string) => (INPUT_WORDS.has(reason) ? t(`desk.thread.input.${reason}` as MessageKey) : refusalText(reason, t));
 
   // A send takes the words out of the box at once, and `sessionDraftSends.ts` gives them back on a refusal or lets
   // them go once the pane took them, whether this panel still stands or not; here only the line and the files the
-  // send carried follow the answer. The answer names its request, so it is read from whichever thread the core
-  // holds: an input that arrived after another pane's thread opened is answered there, as closed.
-  const input = useShellStore((s) => s.sessionThread?.input ?? null);
+  // send carried follow its direct completion. Subscribe to every frame: React may batch two answers into one
+  // render, and another request's last result must never hide this request's result.
+  useEffect(() => useShellStore.subscribe((state, previous) => {
+    const input = state.threadInputResult;
+    const refusal = state.composerRefusal;
+    const current = pending.current;
+    if (!current) return;
+    if (input && input !== previous.threadInputResult && input.request_id === current.request && input.state !== "sending") {
+      pending.current = null;
+      setSent(null);
+      if (input.state === "refused") setNotice(input.reason ? words(input.reason) : null);
+      else {
+        current.tiles.forEach(tray.remove);
+        setNotice(null);
+      }
+    } else if (refusal && refusal !== previous.composerRefusal && refusal.request_id === current.request) {
+      pending.current = null;
+      setSent(null);
+      setNotice(words(refusal.reason));
+    }
+  }), [tray.remove, t]);
   useEffect(() => {
-    if (!sent || input?.request_id !== sent.request || input.state === "sending") return;
-    setSent(null);
-    if (input.state === "refused") return setNotice(input.reason ? words(input.reason) : null);
-    // Only the files this send carried: one dropped since stays for the next.
-    sent.tiles.forEach(tray.remove);
-    setNotice(null);
-  }, [input, sent]);
-  useEffect(() => {
-    if (!sent || refusal?.request_id !== sent.request) return;
-    setSent(null);
-    setNotice(words(refusal.reason));
-  }, [refusal, sent]);
+    if (uncertain) { holdSent(null); setNotice(words("uncertain")); }
+  }, [uncertain]);
 
-  const held = threadInputHeld(thread);
+  const held = taken ? "closed" : threadInputHeld(thread);
+  const canSend = () => {
+    if (useShellStore.getState().connection === "live") return true;
+    setNotice(words("forward_failed"));
+    return false;
+  };
   const send = () => {
     const files = tray.outgoing();
-    if (!thread?.pane_id || !paneId || held !== null || sent || waiting || !files) return;
+    if (!thread?.pane_id || !paneId || held !== null || sent || waiting || uncertain || !files) return;
+    if (!canSend()) return;
     const request = submitThreadInput(thread.generation, thread.pane_id, text, files.map(({ name, bytes }) => ({ name, bytes })));
     if (request && typeof request === "object") {
       setNotice(words(request.refused));
     } else if (request) {
       // The bubble the record will show names these files by their stages, here and on a device.
       files.forEach((file, index) => keepSent(`${request}-${index}`, file.name, file.image));
-      setSent({ request, tiles: files.map((file) => file.id) });
+      holdSent({ request, tiles: files.map((file) => file.id) });
       useUiStore.getState().sendSessionDraft(paneId, remoteTargetOfPane(useShellStore.getState().rest, paneId), request, text);
       setNotice(null);
     } else {
@@ -182,10 +202,12 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   const choice = thread?.choice ?? NO_CHOICE;
   const slots = adapter ? sessionBarSlots(adapter.agent_cli, choice, catalog, t) : null;
   const change = (to: { model: string } | { effort: string }) => {
-    if (!thread?.pane_id || held !== null || sent || ask !== null) return;
+    if (!thread?.pane_id || !paneId || held !== null || sent || waiting || uncertain || ask !== null) return;
+    if (!canSend()) return;
     const request = actions.switchThread(thread.generation, thread.pane_id, to);
     if (request) {
-      setSent({ request, tiles: [] });
+      holdSent({ request, tiles: [] });
+      useUiStore.getState().sendSessionDraft(paneId, remoteTargetOfPane(useShellStore.getState().rest, paneId), request, "", true);
       setNotice(null);
     } else {
       setNotice(words("forward_failed"));
@@ -195,10 +217,12 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   // line (PRD desk-queue B10-B12). A line's `보내기` waits until it rests and asks nothing (B16).
   const working = row?.state.working === true && !row.state.asking;
   const stop = () => {
-    if (!thread?.pane_id || held !== null || sent) return;
+    if (!thread?.pane_id || !paneId || held !== null || sent || waiting || uncertain) return;
+    if (!canSend()) return;
     const request = actions.interruptThread(thread.generation, thread.pane_id);
     if (request) {
-      setSent({ request, tiles: [] });
+      holdSent({ request, tiles: [] });
+      useUiStore.getState().sendSessionDraft(paneId, remoteTargetOfPane(useShellStore.getState().rest, paneId), request, "", true);
       setNotice(null);
     } else {
       setNotice(words("forward_failed"));
@@ -222,7 +246,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
       effort={slots.effort}
       switchHint={{ model: switchCommand(adapter.switch?.model), effort: switchCommand(adapter.switch?.effort) }}
       // A question card on screen is answered first: the line's Enter would answer it.
-      held={held !== null || sent !== null || ask !== null}
+      held={held !== null || sent !== null || uncertain || ask !== null}
       onModel={(model) => change({ model })}
       onEffort={(effort) => change({ effort })}
     />
@@ -236,7 +260,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
     askedOlder.current = false;
   }, [thread?.generation, thread?.older]);
   const reachTop = () => {
-    if (askedOlder.current || !thread?.has_older || (thread.older !== "idle" && thread.older !== "failed")) return;
+    if (taken || askedOlder.current || !thread?.has_older || (thread.older !== "idle" && thread.older !== "failed")) return;
     askedOlder.current = true;
     actions.readOlderThread(thread.generation);
   };
@@ -244,7 +268,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   // A `답하기` press names the session it was pressed for, and that session's box takes the keyboard once it stands,
   // whether the session was open at the press or opened because of it (its card and record may still be on their way).
   const root = useRef<HTMLDivElement>(null);
-  const boxStands = job !== null && !foot;
+  const boxStands = paneId !== null && !foot && !taken;
   useEffect(() => {
     if (!answer || !boxStands) return;
     const input = root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]");
@@ -253,7 +277,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
     onAnswered?.();
   }, [answer, boxStands]);
 
-  if (!job && !foot) {
+  if (!paneId && !foot) {
     // The thread opened from the first frame and its card is on its way, or the session has no card any more (its
     // pane closed): the head and the way back above it stand either way (B6).
     return (
@@ -265,8 +289,9 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   }
   return (
     // The whole panel, its head, conversation and box, takes a dropped file into the box while the box stands (Doop L 나).
-    <FileDropZone ref={root} tray={foot ? null : tray} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""}>
+    <FileDropZone ref={root} tray={foot || taken ? null : tray} className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""}>
       {head}
+      <div inert={taken} className={`flex min-h-0 min-w-0 flex-1 flex-col ${taken || thread?.connected === false ? "opacity-(--opacity-disabled)" : ""}`} data-thread-taken={taken ? "true" : "false"}>
       <ThreadView
         key={paneId ?? ""}
         scrollKey={paneId ? `thread:${paneId}` : null}
@@ -285,7 +310,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
           value: text,
           tray,
           focused,
-          held: held !== null || sent !== null || waiting,
+          held: held !== null || sent !== null || waiting || uncertain,
           notice: held === "pane_changed" || held === "pane_gone" ? words(held) : notice,
           textRef: box,
           menus,
@@ -299,11 +324,18 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
           onCaret: setCaret,
           onSend: send,
         }}
-        onTerminal={onTerminal}
+        onTerminal={toTerminal}
         onReachTop={reachTop}
         olderLeft={thread?.has_older ?? false}
         {...parts}
       />
+      {uncertain && toTerminal ? <div className="px-md pb-md"><Button variant="text-link" size="inline" onClick={toTerminal}>{t("desk.thread.toTerminal")}</Button></div> : null}
+      </div>
+      {taken ? <div className="absolute inset-0 flex items-center justify-center p-md">
+        <Hint label={t("panes.conversation.onePlace")}>
+          <Button variant="secondary" size="sm" onClick={reclaim} data-thread-reclaim="true">{t("panes.conversation.reclaim")}</Button>
+        </Hint>
+      </div> : null}
     </FileDropZone>
   );
 }

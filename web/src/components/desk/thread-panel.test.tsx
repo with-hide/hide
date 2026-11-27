@@ -11,6 +11,7 @@ import type { AskLine } from "../open-asks";
 import type { DeskJob } from "../../desk";
 import type { AgentRow, DeskMentions, SessionThreadSection, SnapshotRest, ThreadPage } from "../../snapshot";
 import { useShellStore } from "../../store";
+import { receiveThreadInputResult } from "../../sessionDraftSends";
 import { useUiStore } from "../../ui";
 import { NO_SESSION_DRAFTS, SESSION_DRAFT_BYTES } from "../../sessionDrafts";
 import { TooltipProvider } from "../ui/tooltip";
@@ -36,6 +37,12 @@ function section(extra: Partial<SessionThreadSection> = {}): SessionThreadSectio
     tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는 끝났어요")], parts: {}, sessions: {} }, ...extra };
 }
 
+// Display snapshots and request completions are separate wire messages.
+function completeInput(next: SessionThreadSection) {
+  useShellStore.setState({ sessionThread: next });
+  if (next.input) receiveThreadInputResult(next.input);
+}
+
 let saved: ReturnType<typeof useShellStore.getState>;
 let events: { kind: string; payload: Record<string, unknown> }[];
 let mounted: ReturnType<typeof createRoot>[] = [];
@@ -45,7 +52,8 @@ beforeEach(() => {
   // The input box holds the corner's notices above it by its measured box (`noticeFloor.ts`).
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   saved = useShellStore.getState();
-  useShellStore.setState({ connection: "live" });
+  useUiStore.setState({ threadLease: null, paneConversation: null });
+  useShellStore.setState({ connection: "live", threadInputResult: null });
   useUiStore.setState({ sessionDrafts: NO_SESSION_DRAFTS });
   events = [];
   configureAttachments({ dispatch: (event) => events.push({ kind: event.kind, payload: event.payload as Record<string, unknown> }), sendBinary: () => undefined });
@@ -124,7 +132,7 @@ it("sends the box's words on Enter, takes them out of the box at once, and never
   const request = events[0]!.payload.request_id as string;
   expect(box().value).toBe("");
   await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sending" } }) }));
-  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sent" } }) }));
+  await act(async () => completeInput(section({ input: { request_id: request, state: "sent" } })));
   expect(box().value).toBe("");
 });
 
@@ -136,7 +144,7 @@ it("brings no sent words back when the panel closed before the pane took them", 
   await first.enter();
   const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
   await act(async () => first.root.unmount());
-  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sent" } }) }));
+  await act(async () => completeInput(section({ input: { request_id: request, state: "sent" } })));
   const back = await mount();
   expect(back.box().value).toBe("");
 });
@@ -159,7 +167,7 @@ it("puts refused words back before any words written since, so neither is lost",
   await enter();
   const request = events[0]!.payload.request_id as string;
   await type("다른 말");
-  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "asleep" } }) }));
+  await act(async () => completeInput(section({ input: { request_id: request, state: "refused", reason: "asleep" } })));
   expect(box().value).toBe("계속\n다른 말");
 });
 
@@ -171,7 +179,7 @@ it("gives words refused while its panel was closed back to the box when the sess
   await first.enter();
   const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
   await act(async () => first.root.unmount());
-  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "closed" } }) }));
+  await act(async () => completeInput(section({ input: { request_id: request, state: "refused", reason: "closed" } })));
   const back = await mount();
   expect(back.box().value).toBe("not delivered, must not vanish");
 });
@@ -189,7 +197,7 @@ it("frees the box and gives refused words back when the answer lands on a thread
   const back = await mount();
   await act(async () => useShellStore.setState({ sessionThread: section({ generation: 5 }) }));
   expect(back.container.querySelector<HTMLButtonElement>('[data-desk-composer-send="true"]')?.disabled).toBe(true);
-  await act(async () => useShellStore.setState({ sessionThread: section({ generation: 5, input: { request_id: request, state: "refused", reason: "closed" } }) }));
+  await act(async () => completeInput(section({ generation: 5, input: { request_id: request, state: "refused", reason: "closed" } })));
   expect(back.box().value).toBe("늦은 답");
   await back.enter();
   expect(events.filter((event) => event.kind === "thread_input")).toHaveLength(2);
@@ -204,7 +212,7 @@ it("gives back refused words at the cap together with every word written since",
   await enter();
   const request = events[0]!.payload.request_id as string;
   await type("new words");
-  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "asleep" } }) }));
+  await act(async () => completeInput(section({ input: { request_id: request, state: "refused", reason: "asleep" } })));
   expect(box().value).toBe(`${full}\nnew words`);
 });
 
@@ -217,7 +225,7 @@ it("keeps a restored box past one send whole while typing would lengthen it, and
   await enter();
   const request = events[0]!.payload.request_id as string;
   await type("new words");
-  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "asleep" } }) }));
+  await act(async () => completeInput(section({ input: { request_id: request, state: "refused", reason: "asleep" } })));
   const restored = `${full}\nnew words`;
   expect(box().value).toBe(restored);
   await type(`${restored}!`);
@@ -246,7 +254,7 @@ it("keeps the words and says why when the pane refused them, and holds send whil
   await type("계속");
   await enter();
   const request = events[0]!.payload.request_id as string;
-  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "asleep" } }) }));
+  await act(async () => completeInput(section({ input: { request_id: request, state: "refused", reason: "asleep" } })));
   expect(box().value).toBe("계속");
   expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe("The session is asleep: wake it to send");
 
@@ -264,7 +272,7 @@ it("gets its words back when the core answers them as closed on another pane's t
   await enter();
   const request = events[0]!.payload.request_id as string;
   // Another window opened another pane's thread before the core took the words.
-  await act(async () => useShellStore.setState({ sessionThread: section({ generation: 5, pane_id: "w1:p9", input: { request_id: request, state: "refused", reason: "closed" } }) }));
+  await act(async () => completeInput(section({ generation: 5, pane_id: "w1:p9", input: { request_id: request, state: "refused", reason: "closed" } })));
   expect(box().value).toBe("계속");
   expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe("This thread is not open");
 });
@@ -595,12 +603,86 @@ it("keeps every message's view while the operator types and while the last messa
 const answer = (text: string, at: number) => ({ sessionUpdate: "agent_message_chunk", messageId: text, content: { type: "text", text }, _meta: { hide: { at_ms: at } } });
 const asked = (...updates: ThreadPage["updates"]) => ({ updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, ...updates], parts: {}, sessions: {} });
 
+/** JSDOM has no layout; the browser boundary reports which messages approach the viewport. */
+function conversationVisibility() {
+  const observers: { callback: IntersectionObserverCallback; targets: Set<Element>; disconnected: boolean; root: Element | Document | null }[] = [];
+  vi.stubGlobal("IntersectionObserver", class {
+    readonly state;
+    constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+      this.state = { callback, targets: new Set<Element>(), disconnected: false, root: options?.root ?? null };
+      observers.push(this.state);
+    }
+    observe(target: Element) { this.state.targets.add(target); }
+    unobserve(target: Element) { this.state.targets.delete(target); }
+    disconnect() { this.state.disconnected = true; this.state.targets.clear(); }
+    takeRecords() { return []; }
+  });
+  const conversation = () => observers.filter((one) => one.root instanceof Element && one.root.hasAttribute("data-desk-thread-conversation"));
+  return {
+    conversation,
+    see: (target: Element, shown: boolean) => act(async () => {
+      const observer = conversation().find((one) => one.targets.has(target));
+      expect(observer, "the conversation watches this message").toBeDefined();
+      observer!.callback([{ target, isIntersecting: shown } as IntersectionObserverEntry], {} as IntersectionObserver);
+    }),
+  };
+}
+
+it("releases offscreen Markdown in one long turn, restoring it on return and retaining a selected message until copying ends", async () => {
+  const visibility = conversationVisibility();
+  const { container, type, root } = await mount();
+  const updates = Array.from({ length: 40 }, (_, index) => [
+    answer(`Past **answer ${index}**`, index + 1),
+    { sessionUpdate: "tool_call", toolCallId: `call-${index}`, kind: "execute", title: "echo work", status: "completed" },
+  ]).flat();
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: asked(...updates, answer("Newest **answer**", 100)) }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  expect(container.querySelectorAll(".cm-editor")).toHaveLength(0);
+  const messages = Array.from(container.querySelectorAll<HTMLElement>("[data-thread-markdown]"));
+  expect(messages).toHaveLength(41);
+  const first = messages[0]!, last = messages.at(-1)!;
+  expect(first.textContent).toContain("answer 0");
+  await visibility.see(last, true);
+  const latestEditor = last.querySelector(".cm-editor");
+  expect(latestEditor).not.toBeNull();
+  await type("keep my draft");
+  expect(last.querySelector(".cm-editor")).toBe(latestEditor);
+  await visibility.see(first, true);
+  expect(first.querySelector(".cm-editor")).not.toBeNull();
+  await visibility.see(first, false);
+  expect(first.querySelector(".cm-editor")).toBeNull();
+  expect(first.textContent).toContain("answer 0");
+  await visibility.see(first, true);
+  const selectedEditor = first.querySelector(".cm-editor");
+  await act(async () => {
+    const range = document.createRange();
+    range.selectNodeContents(first.querySelector(".cm-content")!);
+    document.getSelection()!.removeAllRanges();
+    document.getSelection()!.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  await visibility.see(first, false);
+  expect(first.querySelector(".cm-editor")).toBe(selectedEditor);
+  await act(async () => {
+    document.getSelection()!.removeAllRanges();
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  expect(first.querySelector(".cm-editor")).toBeNull();
+  expect(last.querySelector(".cm-editor")).toBe(latestEditor);
+  expect(visibility.conversation()).toHaveLength(1);
+  await act(async () => root.unmount());
+  mounted = [];
+  expect(visibility.conversation()[0]!.disconnected).toBe(true);
+  expect(visibility.conversation()[0]!.targets.size).toBe(0);
+});
+
 it("shows a question in the agent's own sentence above the box and lights only that sentence in its message for 2 s (Doop N3 가)", async () => {
+  conversationVisibility();
   const scrolled: string[] = [];
   vi.stubGlobal("CSS", { escape: (value: string) => value });
   Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this.textContent ?? ""); };
   const { container } = await mount(job, null, { asks: [{ id: "missed-1-0", text: "다크 화면을 넣을지", at_unix_ms: 1_500, quote: "다크 화면도 넣을까요?" }] });
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: asked(answer("라이트를 찍었어요. 다크 화면도 넣을까요? 넣으면 두 배예요.", 1_000)) }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  expect(container.querySelector(".cm-editor")).toBeNull();
   const line = container.querySelector("[data-desk-thread-asks]")!;
   const row = line.querySelector('[data-desk-thread-ask-row="missed-1-0"]')!;
   // One row above the box: 확인할 것, the agent's sentence, when it was asked and ×; no message unfolds under it.
@@ -625,6 +707,7 @@ it("shows a question in the agent's own sentence above the box and lights only t
     expect(lit()).toHaveLength(1);
     await act(async () => vi.advanceTimersByTime(1));
     expect(lit()).toEqual([]);
+    expect(container.querySelector(".cm-editor")).toBeNull();
     expect(row.getAttribute("data-lit")).toBeNull();
   } finally {
     vi.useRealTimers();
@@ -880,7 +963,7 @@ it("says the reason a change typed nothing and keeps the session's choice", asyn
       effort.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
     });
     await act(async () => document.body.querySelector<HTMLElement>('[data-session-bar-choice="high"]')!.click());
-    await act(async () => useShellStore.setState({ sessionThread: section({ choice: { model: "opus" }, input: { request_id: `switch-${reason}`, state: "refused", reason } }) }));
+    await act(async () => completeInput(section({ choice: { model: "opus" }, input: { request_id: `switch-${reason}`, state: "refused", reason } })));
     expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe(words);
     expect(container.querySelector('[data-session-bar="model"]')?.textContent).toContain("opus");
   }
@@ -924,7 +1007,7 @@ it("keeps a session's words while another session opens beside Desk and gives th
   expect(back.box().value).toBe("다크도 부탁해\n라이트도");
   await back.enter();
   const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
-  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sent" } }) }));
+  await act(async () => completeInput(section({ input: { request_id: request, state: "sent" } })));
   expect(back.box().value).toBe("");
   await act(async () => back.root.unmount());
   expect((await mount()).box().value).toBe("");
@@ -941,12 +1024,12 @@ it("takes the keyboard for a 답하기 pressed while it is open, and spends the 
   expect(opened.answered).toHaveBeenCalledTimes(1);
 });
 
-it("takes the keyboard for the 답하기 that opened it, once its box stands", async () => {
-  // The session opens because of the press, before its card arrived: no box yet, so the press waits.
+it("takes the keyboard for the 답하기 that opened it, before its card arrives", async () => {
+  // The session opens because of the press, its card still on its way: its pane's box stands and takes the press once.
   const opened = await mount(null, null, { answer: true });
-  expect(opened.answered).not.toHaveBeenCalled();
-  await opened.redraw(true, job);
   expect(document.activeElement).toBe(opened.box());
+  expect(opened.answered).toHaveBeenCalledTimes(1);
+  await opened.redraw(false, job);
   expect(opened.answered).toHaveBeenCalledTimes(1);
 });
 
@@ -954,6 +1037,65 @@ it("takes no keyboard when it opens with no press naming it", async () => {
   const opened = await mount();
   expect(document.activeElement).not.toBe(opened.box());
   expect(opened.answered).not.toHaveBeenCalled();
+});
+
+// CR-06: the wire answers each input even when another window's snapshot wins the same burst.
+it("ignores display outcomes and settles each direct outcome even when React batches another result", async () => {
+  const { box, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await type("keep these words");
+  await enter();
+  const request = events[0]!.payload.request_id as string;
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sent" } }) }));
+  await enter();
+  expect(events).toHaveLength(1);
+  await act(async () => {
+    receiveThreadInputResult({ request_id: request, state: "refused", reason: "in_flight" });
+    receiveThreadInputResult({ request_id: "another-window", state: "sent" });
+  });
+  expect(box().value).toBe("keep these words");
+  await enter();
+  expect(events).toHaveLength(2);
+});
+
+it("keeps new words while reconnecting, before a snapshot, or when the live socket declines them", async () => {
+  const panel = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section(), agents: [claudeRow] }));
+  await panel.type("not sent yet");
+  for (const connection of ["reconnecting", "connecting"] as const) {
+    await act(async () => useShellStore.setState({ connection }));
+    await panel.enter();
+    expect(panel.box().value).toBe("not sent yet");
+    expect(useUiStore.getState().sessionDrafts.find((draft) => draft.pane === "w1:p2")?.sending).toBeUndefined();
+  }
+  expect(events).toEqual([]);
+  await act(async () => useShellStore.setState({ connection: "live" }));
+  configureAttachments({ dispatch: () => false, sendBinary: () => undefined });
+  await panel.enter();
+  expect(panel.box().value).toBe("not sent yet");
+  expect(useUiStore.getState().sessionDrafts.find((draft) => draft.pane === "w1:p2")?.sending).toBeUndefined();
+  configureAttachments({ dispatch: (event) => events.push({ kind: event.kind, payload: event.payload }), sendBinary: () => undefined });
+  await panel.enter();
+  expect(events).toHaveLength(1);
+});
+
+it("keeps an unanswered send uncertain across reconnect and remount until its terminal is visited", async () => {
+  const first = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section(), agents: [claudeRow] }));
+  await first.type("check the terminal first");
+  await first.enter();
+  await act(async () => useShellStore.setState({ connection: "reconnecting" }));
+  await act(async () => first.root.unmount());
+  await act(async () => useShellStore.setState({ connection: "live" }));
+  const back = await mount();
+  expect(back.box().value).toBe("check the terminal first");
+  await back.enter();
+  expect(events).toHaveLength(1);
+  const terminal = Array.from(back.container.querySelectorAll("button")).find((button) => button.textContent === "Go to terminal")!;
+  expect(terminal).toBeDefined();
+  await act(async () => terminal.click());
+  await back.enter();
+  expect(events).toHaveLength(2);
 });
 
 // PRD desk-queue: words sent while the agent works wait over the box, one going at each rest; ■ stops the turn and the line.
@@ -967,7 +1109,7 @@ it("clears the box once the core queues the words, and draws the pane's waiting 
   await enter();
   const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
   const queue = { state: "waiting" as const, lines: [line(1, "테스트도 같이 돌려 줘", { files: ["shot.png"] }), line(2, "끝나면 PR 열어 줘", { sending: true })], max: 8, full: false };
-  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "queued" }, queue }) }));
+  await act(async () => completeInput(section({ input: { request_id: request, state: "queued" }, queue })));
   expect(box().value).toBe("");
   expect(useUiStore.getState().sessionDrafts.find((draft) => draft.pane === "w1:p2")?.sending ?? false).toBe(false);
   expect(container.querySelector("[data-queue-group='waiting']")?.textContent).toContain("Waiting · 2");
@@ -989,15 +1131,37 @@ it("puts ■ in send's place while the agent works, keeps ↵ adding to the line
   await enter();
   expect(events.filter((event) => event.kind === "thread_input")).toHaveLength(1);
   const sent = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
-  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: sent, state: "queued" } }) }));
+  await act(async () => completeInput(section({ input: { request_id: sent, state: "queued" } })));
   await act(async () => container.querySelector<HTMLElement>("[data-desk-composer-stop]")!.click());
   expect(actions.interruptThread).toHaveBeenCalledWith(4, "w1:p2");
-  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: "stop-1", state: "refused", reason: "agent_asking" } }) }));
+  await act(async () => completeInput(section({ input: { request_id: "stop-1", state: "refused", reason: "agent_asking" } })));
   expect(container.querySelector("[data-desk-composer-notice]")?.textContent).toBe("The agent is asking something: answer it first");
   // An agent asking is answered with the box: send stands again.
   await act(async () => useShellStore.setState({ agents: [workingRow(true)] }));
   expect(container.querySelector("[data-desk-composer-stop]")).toBeNull();
   expect(container.querySelector("[data-desk-composer-send]")).not.toBeNull();
+});
+
+// CR-08/F9: a lost stop answer must recover like another accepted command,
+// with no automatic replay and without losing the words already in the box.
+it.each(["", "keep these unsent words"])("recovers a lost stop completion after reconnect with draft %j", async (draft) => {
+  const { actions, container, box, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ agents: [workingRow()], sessionThread: section() }));
+  await type(draft);
+  await act(async () => container.querySelector<HTMLElement>("[data-desk-composer-stop]")!.click());
+  await act(async () => useShellStore.setState({ connection: "reconnecting" }));
+  await act(async () => useShellStore.setState({ connection: "live", agents: [claudeRow], sessionThread: section({ input: { request_id: "stop-1", state: "sent" } }) }));
+  expect(box().value).toBe(draft);
+  await enter();
+  expect(events).toHaveLength(0);
+  expect(actions.interruptThread).toHaveBeenCalledTimes(1);
+  const terminal = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Go to terminal");
+  expect(terminal).toBeDefined();
+  await act(async () => terminal!.click());
+  await type("send after checking the terminal");
+  await enter();
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({ kind: "thread_input", payload: { text: "send after checking the terminal" } });
 });
 
 it("offers 모두 지우기, 이어 보내기 and each line's 보내기 once paused, 보내기 waiting while the agent works, and 되돌리기 after a clear (B14-B17, B23)", async () => {
@@ -1042,7 +1206,7 @@ it("words a refusal of a full line and of its files under the box (B8, B9)", asy
   await type("아홉 번째");
   await enter();
   const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
-  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "queue_full" } }) }));
+  await act(async () => completeInput(section({ input: { request_id: request, state: "refused", reason: "queue_full" } })));
   expect(container.querySelector("[data-desk-composer-notice]")?.textContent).toBe("The waiting line is full");
   expect(container.querySelector("textarea")!.value).toBe("아홉 번째");
 });

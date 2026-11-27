@@ -1,3 +1,4 @@
+import { checkoutAtRoot } from "./snapshot";
 import { projectCheckout } from "./projects";
 import type { PhoneAsk } from "./mobile/protocol";
 import { deviceConnected, readsHere } from "./devices";
@@ -102,6 +103,7 @@ import { closeSession as closeDeskSession, deskShown, hideDesk, openSession as o
 import { deskOpenSend, deskTabCount, deskViewOf, deskWorkspaceOf, DESK_SCREEN, isDeskWorkspace, type DeskOpen } from "./deskDesk";
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type ExplorerTarget, type PendingClose, type PendingViewsClose } from "./ui";
+import { visitSessionTerminal } from "./sessionDrafts";
 import { windowScreen, type WindowScreen } from "./windowScreen";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import { isRemoteView, remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
@@ -580,13 +582,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       return;
     }
     dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: workspaceId, checkout_id: checkoutId, ...(expanded === undefined ? {} : { expanded }), ...(projectExpanded === undefined ? {} : { project_expanded: projectExpanded }) } });
-  };
-
-  /** Whether ⌘J on `pane` goes back to Desk (B7): the pane `터미널 ⌘J` left Desk for, or a session Desk started. */
-  const deskReturnsTo = (pane: string): boolean => {
-    if (ui().deskReturn === pane) return true;
-    const section = useShellStore.getState().deskJobs;
-    return [...(section?.jobs ?? []), ...(section?.workers ?? [])].some((job) => job.pane_id === pane);
   };
 
   /**
@@ -2857,25 +2852,29 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       state.setScreen({ kind: "desk" });
     },
 
-    /**
-     * ⌘J and the session panel's `터미널 ⌘J` (PRD desk-2-ui D-04, B7): from
-     * Desk, the Agent tab of the session open beside it, with the keyboard
-     * in its pane; from that pane, or a Desk job's, back to Desk with that
-     * session beside it. Anywhere else there is nowhere to go.
-     */
+    /** One window's pane conversation; the terminal remains mounted under it. */
+    togglePaneConversation(paneId: string) {
+      const row = allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote).find((row) => row.pane_id === paneId);
+      if (row?.thread_capability !== "ready" || !row.thread_identity) return;
+      const selected = ui().paneConversation;
+      useUiStore.setState({ paneConversation: selected?.paneId === paneId ? null : { paneId, session: row.thread_identity }, ...(selected?.paneId === paneId ? { sessionDrafts: visitSessionTerminal(ui().sessionDrafts, paneId) } : {}) });
+      if (selected?.paneId === paneId) focusTerminal(paneId);
+      else this.focusPane(paneId);
+    },
+
+    /** The shared chord opens Desk's adjacent terminal, or toggles the focused pane in place. */
     deskTerminal() {
-      // A menu item or a host's chord can still ask while Desk is off; it goes nowhere (D-76).
-      if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk terminal: Desk is switched off");
       const state = ui();
       if (state.screen?.kind === "desk") {
         const pane = state.deskRoom.session;
-        if (!pane) return diagnostic("desk terminal: no session open beside Desk");
+        if (!pane) return;
+        useUiStore.setState({ sessionDrafts: visitSessionTerminal(state.sessionDrafts, pane) });
         state.setDeskReturn(pane);
         return this.openAgent(pane);
       }
-      const pane = useShellStore.getState().focusedPaneId;
-      if (!pane || !deskReturnsTo(pane)) return diagnostic("desk terminal: the pane in front is no session Desk opened");
-      this.openDeskSession(pane);
+      const owner = keyboardOwner();
+      const pane = owner.kind === "pane" ? owner.paneId : useShellStore.getState().focusedPaneId;
+      if (pane) this.togglePaneConversation(pane);
     },
 
     /**
@@ -4087,8 +4086,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "disk_watch", payload: { workspace_ids: [...workspaceIds] } });
     },
     /** A session thread of `paneId` (B25): its record is read, and read on as the session writes, until it closes. */
-    openThread(paneId: string) {
-      dispatch({ schema_version: 2, kind: "session_thread_open", payload: { pane_id: paneId } });
+    openThread(paneId: string, paneConversation = false) {
+      dispatch({ schema_version: 2, kind: "session_thread_open", payload: { pane_id: paneId, ...(paneConversation ? { pane_conversation: true } : {}) } });
     },
     /** The page before the oldest one the thread holds. */
     readOlderThread(generation: number) {
@@ -4384,6 +4383,22 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     explorerIn(device: string, root: string) {
       return explorerOps(() => ({ root, ...deviceField(device, localDeviceId(rest())), desk: true }), () => device);
+    },
+
+    /** A file named by a session, on the machine and checkout that own it. */
+    openThreadFile(file: import("./answerPaths").FoundAnswerPath, paneId: string) {
+      if (file.kind === "outside") {
+        const bridge = hostBridge();
+        if (!bridge) return diagnostic("thread file: no desktop host to reveal an outside path");
+        return bridge.revealPath(file.path);
+      }
+      const here = checkoutAtRoot(rest(), file.device, file.root);
+      if (!here) return diagnostic("thread file: checkout unavailable");
+      followOpen(file.path, "file", null, { device_id: file.device, path: here.checkout.path });
+      dispatch({ schema_version: 2, kind: "file_open", payload: {
+        path: file.path, workspace_id: here.checkout.workspace_id, checkout_id: here.checkout.id,
+        preview: false, opener_pane: paneId, ...deviceField(file.device, localDeviceId(rest())),
+      } });
     },
 
     /** A single click opens the active area's preview slot; a double click pins it. */
