@@ -361,7 +361,8 @@ it("folds a running turn's calls into one line with its newest call under it, ne
   const turn = container.querySelector("[data-desk-thread-turn]")!;
   const toggle = turn.querySelector("[data-desk-turn-toggle]")!;
   expect(toggle.getAttribute("data-desk-turn-toggle")).toBe("folded");
-  expect(toggle.textContent).toBe("Working · 1 commands · 2 files");
+  // One command is a command, in the singular; two files are files.
+  expect(toggle.textContent).toBe("Working · 1 command · 2 files");
   // What it said and the mission it reached stay in view; its calls and their output do not.
   expect(turn.textContent).toContain("먼저 칩을 고칠게요.");
   expect(turn.querySelectorAll('[data-desk-hide-part="mission"]')).toHaveLength(1);
@@ -426,7 +427,7 @@ it("names a running turn's newest call whatever it was: a Hide call by its comma
 it("folds a finished turn under 작업 · 파일 n · 명령 m with no newest call", async () => {
   const { container } = await mount({ ...job, state: "done" });
   await shown({ updates: [operator("고쳐줘"), shell("r0", "rg -n mission"), edit("e1", "web/src/desk.ts", "a", "b"), said("고쳤어요")], parts: {}, sessions: {} });
-  expect(container.querySelector("[data-desk-turn-toggle]")?.textContent).toBe("Work · 1 files · 1 commands");
+  expect(container.querySelector("[data-desk-turn-toggle]")?.textContent).toBe("Work · 1 file · 1 command");
   expect(container.querySelector("[data-desk-thread-newest]")).toBeNull();
   expect(container.querySelectorAll('[data-desk-thread-line="tool"]')).toHaveLength(0);
 });
