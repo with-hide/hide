@@ -168,22 +168,47 @@ impl WindowScreen {
 
 /// What this machine's windows show (`window_screen`): each connection
 /// reports its own, whether or not it holds the keyboard, and the core hears
-/// another computer's screen only while every window that reports shows one,
-/// so a look chosen on this machine waits until a window shows its own
-/// screen again (`docs/status-model.md`, Hide owns the read axis). No window
-/// reporting is this machine's own, as before windows reported. A connection
-/// that closes lets go of its report.
-#[derive(Default)]
+/// another computer's screen while every window that reports shows one, so
+/// a look chosen on this machine waits until a window shows its own screen
+/// again (`docs/status-model.md`, Hide owns the read axis). A connection
+/// that closes lets go of its report, and when the last report goes the core
+/// keeps what it was last told: a window that closed, or is reconnecting,
+/// shows nothing, so a turn it never showed is not read for it. A launch
+/// starts at this machine's own screen, as the core does, and a window that
+/// never reports (an older app) keeps it there; quitting the app on another
+/// computer's screen and opening it again opens on this machine's own, which
+/// that window then says.
 pub struct ScreenDemand {
-    shown: Mutex<HashMap<u64, WindowScreen>>,
+    reports: Mutex<ScreenReports>,
+}
+
+struct ScreenReports {
+    windows: HashMap<u64, WindowScreen>,
+    /// What the core was last told; a launch's is this machine's own.
+    told: WindowScreen,
+}
+
+impl Default for ScreenDemand {
+    fn default() -> Self {
+        Self {
+            reports: Mutex::new(ScreenReports {
+                windows: HashMap::new(),
+                told: WindowScreen::Own,
+            }),
+        }
+    }
 }
 
 impl ScreenDemand {
-    fn summed(shown: &HashMap<u64, WindowScreen>) -> WindowScreen {
-        if shown.is_empty() || shown.values().any(|screen| *screen == WindowScreen::Own) {
-            WindowScreen::Own
+    /// What the reporting windows show together, or none while no window
+    /// reports.
+    fn summed(windows: &HashMap<u64, WindowScreen>) -> Option<WindowScreen> {
+        if windows.values().any(|screen| *screen == WindowScreen::Own) {
+            Some(WindowScreen::Own)
+        } else if windows.is_empty() {
+            None
         } else {
-            WindowScreen::Computer
+            Some(WindowScreen::Computer)
         }
     }
 
@@ -197,18 +222,15 @@ impl ScreenDemand {
         screen: Option<WindowScreen>,
         announce: impl FnOnce(WindowScreen),
     ) -> Option<WindowScreen> {
-        let mut shown = lock(&self.shown);
-        let before = Self::summed(&shown);
+        let mut reports = lock(&self.reports);
         match screen {
-            Some(screen) => shown.insert(connection, screen),
-            None => shown.remove(&connection),
+            Some(screen) => reports.windows.insert(connection, screen),
+            None => reports.windows.remove(&connection),
         };
-        let after = Self::summed(&shown);
-        let changed = (before != after).then_some(after);
-        if let Some(now) = changed {
-            announce(now);
-        }
-        changed
+        let now = Self::summed(&reports.windows).filter(|now| *now != reports.told)?;
+        reports.told = now;
+        announce(now);
+        Some(now)
     }
 
     /// Drops whatever report a closed connection held.
@@ -414,11 +436,15 @@ mod tests {
         );
     }
 
-    /// Another computer's screen reaches the core only while every window
-    /// that reports shows one; one window on this machine's own screen, or
-    /// none reporting, is this machine's own, and a closed window lets go.
+    /// Another computer's screen reaches the core while every window that
+    /// reports shows one; one window on this machine's own screen brings it
+    /// back. The last report going tells nothing, so a window that closed or
+    /// is reconnecting on another computer's screen reads nothing it never
+    /// showed; a relaunched app opens on this machine's own screen and says
+    /// so.
     #[test]
-    fn the_core_hears_another_computer_only_while_no_window_shows_its_own() {
+    fn the_core_hears_another_computer_until_a_window_shows_its_own_and_keeps_it_when_the_last_goes()
+     {
         let demand = ScreenDemand::default();
         let heard = std::cell::RefCell::new(Vec::new());
         let say = |now| heard.borrow_mut().push(now);
@@ -428,14 +454,18 @@ mod tests {
         demand.set(2, Some(WindowScreen::Own), say);
         demand.set(2, Some(WindowScreen::Computer), say);
         demand.release(2, say);
+        // The last window goes on another computer's screen, then the same
+        // page reconnects there: the core keeps what it held.
         demand.release(1, say);
         demand.set(3, Some(WindowScreen::Computer), say);
-        demand.set(3, Some(WindowScreen::Own), say);
+        demand.release(3, say);
+        // The app opened again opens on this machine's own screen.
+        demand.set(4, Some(WindowScreen::Own), say);
+        // The last window going on this machine's own screen keeps that too.
+        demand.release(4, say);
         assert_eq!(
             heard.into_inner(),
             [
-                WindowScreen::Computer,
-                WindowScreen::Own,
                 WindowScreen::Computer,
                 WindowScreen::Own,
                 WindowScreen::Computer,
