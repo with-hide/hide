@@ -8,7 +8,7 @@ import { continueFixtureTranscript } from "../../web/e2e/pane-fixture";
 import { countSent, enterWorkspace, sendEvent, showExplorer } from "../../web/e2e/wire";
 import { animationsFinished, compositorPresents } from "../../web/e2e/wait";
 import { fitWindow, launchShell, startStack, test } from "./fixture";
-import { captureNativeWindow } from "./native-window";
+import { captureElectronWindow } from "./electron-window";
 import { finishNative } from "./native-teardown";
 import { withProbe, type Probe } from "./terminal-probe";
 
@@ -52,7 +52,7 @@ test("a pane conversation with Desk off replies in place and keeps its terminal 
       await sendEvent(page, daemon, "theme_set", { theme });
       await expect(page.locator("html")).toHaveClass(new RegExp(`\\b${theme}\\b`));
       await compositorPresents(page);
-      await captureNativeWindow(app, `pane-conversation-${theme}`, facts);
+      await captureElectronWindow(app, `pane-conversation-${theme}`, facts);
     }
     await toggle.click();
     await expect(cover).toHaveCount(0);
@@ -77,7 +77,7 @@ test("a pane conversation with Desk off replies in place and keeps its terminal 
     await toggle.click();
     await expect(composer).toBeVisible();
     await compositorPresents(page);
-    await captureNativeWindow(app, "pane-conversation-narrow-max-ko", facts);
+    await captureElectronWindow(app, "pane-conversation-narrow-max-ko", facts);
   } catch (error) { failures.push(error); }
   await finishNative(failures, [["close the app", () => app?.close()], ["stop the stack", () => stack.stop()]]);
 });
@@ -104,7 +104,7 @@ test("another window takes the thread once and only an explicit press reclaims i
     await expect(page.locator("[data-thread-taken=true]")).toHaveAttribute("inert", "");
     await expect(page.locator("[data-pane-conversation]")).toContainText("Agent one 진행해줘");
     await compositorPresents(page);
-    await captureNativeWindow(first, "pane-conversation-taken", { panes: fixture.panes, profiles: 2, state: run.env.HIDE_STATE_DIR });
+    await captureElectronWindow(first, "pane-conversation-taken", { panes: fixture.panes, profiles: 2, state: run.env.HIDE_STATE_DIR });
     await reclaim.click();
     await expect(reclaim).toHaveCount(0);
     await expect(another.page.locator("[data-thread-reclaim]")).toBeVisible();
