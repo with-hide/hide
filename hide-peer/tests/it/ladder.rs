@@ -547,9 +547,8 @@ async fn a_build_without_ssh_path_is_never_climbed_to_or_held_over_ssh() {
     let _keeper = pair.keep();
     pair.held_on(PathKind::Relay).await;
     pair.routes.set(Route::Ready);
-    // wait-ok: proves an absence, that no climb signs in over ten of its
-    // graces.
-    tokio::time::sleep(quick().relay_grace * 10).await;
+    // Proves an absence: no climb signs in over ten of its graces.
+    tokio::time::sleep(quick().relay_grace * 10).await; // wait-ok: an absence over ten climb graces
     assert_eq!(pair.ssh.sign_ins(), 0);
 
     // Only SSH reaches it.
