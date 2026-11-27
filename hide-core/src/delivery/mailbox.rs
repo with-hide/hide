@@ -935,7 +935,7 @@ fn operator_prompt_intake(ledger: &Ledger, actor: &Actor) -> Result<Intake, Stri
         .count();
     let mut intake = Intake::default();
     if waiting > 0 && prompt_hook(&actor.kind) {
-        intake.context = format!("Hide 편지 {waiting}통 대기 중, 이 턴이 끝난 뒤 전달\n");
+        intake.context = format!("Hide letters waiting: {waiting}, delivered after this turn\n");
     }
     Ok(intake)
 }
@@ -1257,7 +1257,7 @@ fn render(mut pending: Vec<&Letter>, language: InterfaceLanguage, bundling: Bund
     let remaining = pending.len().saturating_sub(ids.len());
     if remaining > 0 {
         context.push_str(&format!(
-            "\n대기 {remaining}통 더 있음. hide inbox로 확인하세요.\n"
+            "\n{remaining} more letters waiting. Read them with hide inbox.\n"
         ));
     }
     Intake {
@@ -1615,7 +1615,7 @@ mod tests {
         let intake = pull(&ledger, &b).unwrap();
         assert!(intake.context.len() <= HOOK_LIMIT);
         assert_eq!(intake.ids, vec![ledger.letters[0].id.clone()]);
-        assert!(intake.context.contains("대기 6통 더 있음"));
+        assert!(intake.context.contains("6 more letters waiting"));
         assert!(intake.context.contains("hide request show letter-1"));
         assert_eq!(ledger.letters[0].body.len(), (BODY_LIMIT / 3) * 3);
     }
@@ -2310,7 +2310,7 @@ mod tests {
         assert!(operator.ids.is_empty(), "nothing to confirm");
         assert_eq!(
             operator.context.trim(),
-            "Hide 편지 2통 대기 중, 이 턴이 끝난 뒤 전달"
+            "Hide letters waiting: 2, delivered after this turn"
         );
         assert!(!operator.context.contains("body-"));
         let bell = pull_for(&mut ledger, &recipient, &format!("{LINE}\n"));

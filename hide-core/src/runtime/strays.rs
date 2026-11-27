@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::agent_state::tally::project_status::{MAX_STRAY_DISMISSALS, Stray, StrayDismissal};
-use crate::model::StrayHandOffSnapshot;
+use crate::model::{InterfaceLanguage, StrayHandOffSnapshot};
 use serde::Deserialize;
 
 /// The 마무리 맡기기 receipts the status keeps, oldest dropped first.
@@ -31,18 +31,39 @@ pub(super) struct StrayHandOffPayload {
 }
 
 /// The words a hand-off sends for what is left (B11): one sentence per
-/// kind, together when there are several.
-pub(crate) fn hand_off_words(stray: &Stray) -> String {
+/// kind, together when there are several. They are typed into the session
+/// as the operator's own words, so they are in the operator's language,
+/// which the agent then answers in.
+pub(crate) fn hand_off_words(stray: &Stray, language: InterfaceLanguage) -> String {
+    use InterfaceLanguage::{English, Japanese, Korean, SimplifiedChinese};
     let mut words = Vec::new();
     if stray.changed_files > 0 {
-        words.push("커밋하고 PR 열어줘".to_owned());
+        words.push(match language {
+            English => "Commit and open a PR".to_owned(),
+            Korean => "커밋하고 PR 열어줘".to_owned(),
+            Japanese => "コミットしてPRを開いて".to_owned(),
+            SimplifiedChinese => "提交并打开一个 PR".to_owned(),
+        });
     } else if stray.unpushed > 0 {
-        words.push("브랜치 푸시하고 PR 열어줘".to_owned());
+        words.push(match language {
+            English => "Push the branch and open a PR".to_owned(),
+            Korean => "브랜치 푸시하고 PR 열어줘".to_owned(),
+            Japanese => "ブランチをプッシュしてPRを開いて".to_owned(),
+            SimplifiedChinese => "推送分支并打开一个 PR".to_owned(),
+        });
     }
     if let Some(number) = stray.failed_pr {
-        words.push(format!("#{number} CI 실패 원인 고쳐줘"));
+        words.push(match language {
+            English => format!("Fix the CI failure on #{number}"),
+            Korean => format!("#{number} CI 실패 원인 고쳐줘"),
+            Japanese => format!("#{number}のCIが失敗した原因を直して"),
+            SimplifiedChinese => format!("修复 #{number} 的 CI 失败"),
+        });
     }
-    words.join(". ")
+    words.join(match language {
+        English | Korean => ". ",
+        Japanese | SimplifiedChinese => "。",
+    })
 }
 
 impl Runtime {
@@ -153,7 +174,7 @@ impl Runtime {
             );
             return true;
         };
-        let words = hand_off_words(&stray);
+        let words = hand_off_words(&stray, self.interface_language());
         self.note_stray_hand_off(&payload.request_id, &payload.checkout_id, "sending");
         let live = stray
             .pane_id
@@ -327,18 +348,30 @@ mod tests {
     /// several are left; committing changes already pushes the branch.
     #[test]
     fn a_hand_off_says_what_is_left() {
-        assert_eq!(hand_off_words(&stray(4, 0, None)), "커밋하고 PR 열어줘");
+        use InterfaceLanguage::{English, Japanese, Korean};
         assert_eq!(
-            hand_off_words(&stray(0, 3, None)),
+            hand_off_words(&stray(4, 0, None), Korean),
+            "커밋하고 PR 열어줘"
+        );
+        assert_eq!(
+            hand_off_words(&stray(0, 3, None), Korean),
             "브랜치 푸시하고 PR 열어줘"
         );
         assert_eq!(
-            hand_off_words(&stray(0, 0, Some(1815))),
+            hand_off_words(&stray(0, 0, Some(1815)), Korean),
             "#1815 CI 실패 원인 고쳐줘"
         );
         assert_eq!(
-            hand_off_words(&stray(2, 3, Some(7))),
+            hand_off_words(&stray(2, 3, Some(7)), Korean),
             "커밋하고 PR 열어줘. #7 CI 실패 원인 고쳐줘"
+        );
+        assert_eq!(
+            hand_off_words(&stray(2, 3, Some(7)), English),
+            "Commit and open a PR. Fix the CI failure on #7"
+        );
+        assert_eq!(
+            hand_off_words(&stray(0, 3, Some(7)), Japanese),
+            "ブランチをプッシュしてPRを開いて。#7のCIが失敗した原因を直して"
         );
     }
 }

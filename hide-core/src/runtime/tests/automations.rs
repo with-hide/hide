@@ -1591,6 +1591,13 @@ fn a_start_that_never_finishes_is_closed_before_the_next_attempt_opens() {
 fn an_agent_that_keeps_ending_is_tried_three_times_with_its_conversation_resumed() {
     let state = tempfile::tempdir().unwrap();
     let mut harness = Harness::new(&state);
+    harness
+        .runtime
+        .lock()
+        .unwrap()
+        .snapshot
+        .ui_state
+        .interface_language = Some(json!("ko"));
     let id = harness.run_now();
     for attempt in 1..=3 {
         harness.tick(1);
@@ -2053,7 +2060,7 @@ fn a_turn_that_stopped_unseen_without_an_answer_is_tried_again() {
         starts.asked[1],
         (
             intent(&id, 1, 2),
-            Some("이어서 해줘. 하던 일을 마저 끝내 줘.".to_owned())
+            Some("Continue. Finish what you were doing.".to_owned())
         )
     );
 }

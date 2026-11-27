@@ -123,7 +123,7 @@ impl Runtime {
             crate::delivery::Command::Send {
                 target: record.actor.pane_id.clone(),
                 intent: human_turn::done_intent(&turn),
-                body: human_turn::done_letter(&turn),
+                body: human_turn::done_letter(&turn, self.interface_language()),
                 // A report waits for no answer; the operator's Done still
                 // wakes a sleeping agent (`Letter::wakes_a_sleeper`).
                 kind: "report".into(),

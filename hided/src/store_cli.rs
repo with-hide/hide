@@ -5,7 +5,7 @@
 //! the answer.
 //!
 //! `add` and `update` wait until the operator answers the confirm Hide shows
-//! in their 내 차례, and print what they chose; there is no option to skip
+//! in their Needs You, and print what they chose; there is no option to skip
 //! it. A key's value is never an argument: `--env` and `--header` take a
 //! name, and the operator types its value on the confirm.
 
@@ -18,9 +18,9 @@ use serde_json::json;
 
 use crate::env::Env;
 
-pub const SKILL_USAGE: &str = "hide skill list [--machine <device id>]\nhide skill show <name> [--machine <device id>]\nhide skill add <github address|folder> [--name <skill>]... [--machine <device id>]\nhide skill update <name> [--machine <device id>]\nhide skill on|off <name> [--agent <agent>] [--machine <device id>]\nhide skill remove <name> [--machine <device id>]\nadd and update wait until the operator answers the confirm in their 내 차례.";
+pub const SKILL_USAGE: &str = "hide skill list [--machine <device id>]\nhide skill show <name> [--machine <device id>]\nhide skill add <github address|folder> [--name <skill>]... [--machine <device id>]\nhide skill update <name> [--machine <device id>]\nhide skill on|off <name> [--agent <agent>] [--machine <device id>]\nhide skill remove <name> [--machine <device id>]\nadd and update wait until the operator answers the confirm in their Needs You.";
 
-pub const MCP_USAGE: &str = "hide mcp list [--machine <device id>]\nhide mcp show <name> [--machine <device id>]\nhide mcp add|update <name> [--env <NAME>]... [--machine <device id>] -- <command> [<argument>...]\nhide mcp add|update <name> --url <https address> [--sse] [--header <NAME>]... [--machine <device id>]\nhide mcp on|off <name> [--agent <agent>] [--machine <device id>]\nhide mcp remove <name> [--machine <device id>]\nHide's own options come before --, and every word after it is the server's.\n--env and --header take a key's name only; the operator types its value on the confirm in their 내 차례.";
+pub const MCP_USAGE: &str = "hide mcp list [--machine <device id>]\nhide mcp show <name> [--machine <device id>]\nhide mcp add|update <name> [--env <NAME>]... [--machine <device id>] -- <command> [<argument>...]\nhide mcp add|update <name> --url <https address> [--sse] [--header <NAME>]... [--machine <device id>]\nhide mcp on|off <name> [--agent <agent>] [--machine <device id>]\nhide mcp remove <name> [--machine <device id>]\nHide's own options come before --, and every word after it is the server's.\n--env and --header take a key's name only; the operator types its value on the confirm in their Needs You.";
 
 /// The answer comes a little after the core's own wait ends, which then
 /// answers `store_unanswered` itself.
@@ -230,7 +230,7 @@ pub fn run(env: &Env, command: StoreCommand) -> Result<(), String> {
     } + SLACK;
     if command.confirms() {
         eprintln!(
-            "Waiting for the operator to answer the confirm in their 내 차례… If your tool stops waiting first, run the same command again: it waits on the same confirm."
+            "Waiting for the operator to answer the confirm in their Needs You… If your tool stops waiting first, run the same command again: it waits on the same confirm."
         );
     }
     let answer = (|| {
