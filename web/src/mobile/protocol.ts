@@ -10,7 +10,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
 import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
-import type { Automation, AutomationRecord, AutomationRun, AutomationSchedule, SubagentRow } from "../snapshot";
+import type { Automation, AutomationRecord, AutomationRun, AutomationSchedule, SubagentRow, InputQueue, QueueAction } from "../snapshot";
 import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, ChangeRequestRef, ViewReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, MissionWaitOutcome, MissionWaitTarget, PrCard, PrState, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
@@ -395,7 +395,7 @@ export type ServerFrame =
    * reply of `MAX_REPLY_CHARS`.
    */
   /** `attachments`: the computer takes files attached to a reply (`uploads.ts`); absent from every computer before it, which shows no `+`. */
-  | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications; device_connect?: boolean; machine?: string; answer?: boolean; attachments?: boolean }
+  | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications; device_connect?: boolean; machine?: string; answer?: boolean; attachments?: boolean; /** The computer holds a pane's waiting words and takes ■ (PRD desk-queue D-11): `queue` frames and requests, `input` with `interrupt`. */ queue?: boolean }
   // Older computers still send off; new phone settings do not use this global mode.
   /** `machines`: the other machines this computer opens that run work of their own (PRD device-connect-iroh B56); absent when none. */
   | { type: "meta"; push_mode: "off" | "app_closed" | "always"; other_phones: number; machines?: OtherMachine[] }
@@ -442,7 +442,12 @@ export type ServerFrame =
   | LookHead
   | { type: "look_chunk"; request_id: string; seq: number; data: string }
   | { type: "look_end"; request_id: string; view_id: string }
-  | { type: "input_result"; request_id?: string; ok: boolean; reason: string | null }
+  /** `queued`: the reply waits in the pane's line for the agent's rest (PRD desk-queue D-01), which the `queue` frame shows. */
+  | { type: "input_result"; request_id?: string; ok: boolean; reason: string | null; queued?: boolean }
+  /** The open detail's waiting words, sent when they change; null once none wait (PRD desk-queue D-11). */
+  | { type: "queue"; device_id: string; pane_id: string; queue: InputQueue | null }
+  /** A press on them was handed to the core, or why not; what it did comes back in the next `queue` frame. */
+  | { type: "queue_result"; request_id?: string; ok: boolean; reason: string | null }
   /** An upload frame taken (hided/src/mobile/uploads.rs): a chunk on disk (`seq`), every byte in (`done`), or refused with why (`failed`). */
   | { type: "attach_ack"; stage: string; seq?: number; begun?: boolean; done?: boolean; cancelled?: boolean; failed?: string }
   | { type: "human_turn_result"; request_id?: string; ok: boolean; reason: string | null }
@@ -473,7 +478,10 @@ export type PhoneMessage =
   | { type: "wake_agent"; request_id: string; device_id: string; pane_id: string; fresh?: boolean }
   | { type: "human_turn_done"; request_id: string; device_id: string; pane_id: string; declaration: string }
   /** A reply's `stages` are the files uploaded for it (`uploads.ts`), typed as their paths before its words. */
-  | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string; stages?: string[] } | { key: QuickKey } | { turn: string; kind: PhoneAsk["kind"]; choice: string }))
+  /** `interrupt`: ■, the keys the agent's definition stops its turn with, typed while it works (PRD desk-queue B33). */
+  | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string; stages?: string[] } | { key: QuickKey } | { turn: string; kind: PhoneAsk["kind"]; choice: string } | { interrupt: true }))
+  /** ✕ or `보내기` on line `id` of the open detail's waiting words, or `▶ 이어 보내기`, `모두 지우기` and `되돌리기` on all of them; answered by a `queue_result`. */
+  | { type: "queue"; request_id: string; device_id: string; pane_id: string; action: QueueAction; id?: number }
   /** A file attached to the reply being written, uploaded one phone message at a time; only to a computer whose hello says `attachments`. */
   | { type: "attach_begin"; stage: string; name: string; size: number }
   | { type: "attach_chunk"; stage: string; seq: number; data: string }
@@ -521,7 +529,10 @@ export function sameKey(a: AgentKey | null, b: AgentKey | null): boolean {
 type LimitKey = "mobile.input.tooLong" | "mobile.start.tooLong" | "mobile.refusal.phoneLimit";
 
 /** The other input, refusal, row and start sentences carry no value. */
-type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}` | `mobile.mission.answer.${string}` | `mobile.mission.material.${string}` | `mobile.mission.reopen.${string}` | `mobile.prs.refusal.${string}` | `mobile.automations.refusal.${string}`>, LimitKey>;
+type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}` | `mobile.mission.answer.${string}` | `mobile.mission.material.${string}` | `mobile.mission.reopen.${string}` | `mobile.prs.refusal.${string}` | `mobile.automations.refusal.${string}` | QueueKey>, LimitKey>;
+
+/** The waiting line's refusals and ■'s, which the phone says in the desktop's words (PRD desk-queue B8, B9, B12). */
+type QueueKey = "desk.queued.full" | "panes.attachment.deskFull" | "desk.thread.input.agent_asking" | "desk.thread.input.agent_not_working" | "desk.thread.input.interrupt_unsupported";
 
 /** A sentence the phone shows, kept as its catalog key so it follows a language change. */
 export type Notice = { key: PlainKey } | { key: LimitKey; limit: number };
@@ -679,6 +690,16 @@ export function inputFailure(reason: string | null, lines = false): Notice {
       return { key: "mobile.input.attachmentFailed" };
     case "offline":
       return { key: "mobile.input.offline" };
+    // The pane's waiting line and ■, in the desktop's words (PRD desk-queue B8, B9, B12).
+    case "queue_full":
+      return { key: "desk.queued.full" };
+    case "queue_files_full":
+    case "input_full":
+      return { key: "panes.attachment.deskFull" };
+    case "agent_asking":
+    case "agent_not_working":
+    case "interrupt_unsupported":
+      return { key: `desk.thread.input.${reason}` };
     default:
       return { key: "mobile.input.failed" };
   }

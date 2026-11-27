@@ -514,10 +514,12 @@ impl Runtime {
         let shown = on_screen
             .entry(device.map(str::to_owned))
             .or_insert_with(|| self.agent_sleep_on_screen(device));
+        let queued = self.input_queue_panes();
         let awake = crate::agent_sleep::Awake {
             on_screen: shown,
             backoff_until: &HashMap::new(),
             letters,
+            queued: &queued,
         };
         if awake.holds(agent, now_unix_ms) || self.pane_move_holds_pane(pane) {
             return Verdict::Keep;

@@ -58,7 +58,7 @@ it("opens a changed session without the previous session's taken pages", async (
   const actions = createActions((event) => { calls.push(event); return true; });
   const container = document.createElement("div"), root = createRoot(container);
   const row = (identity: string) => [{ pane_id: "w1:p1", thread_capability: "ready", thread_identity: identity }] as never;
-  const section: SessionThreadSection = { generation: 1, pane_id: "w1:p1", machine: "local", state: "ready", failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: null, choice: {}, input: null };
+  const section: SessionThreadSection = { generation: 1, pane_id: "w1:p1", machine: "local", state: "ready", failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: null, choice: {}, queue: null, input: null };
   try {
     useShellStore.setState({ agents: row("first"), connection: "live", sessionThread: { ...section, generation: 2, pane_id: "w1:p2" } });
     useUiStore.setState({ paneConversation: { paneId: "w1:p1", session: "first" }, threadLease: { paneId: "w1:p1", acquired: true, taken: true, thread: section, history: null } });
@@ -85,7 +85,7 @@ it("keeps the last thread after another pane takes it, including reconnect and r
   const saved = useShellStore.getState(), local = useUiStore.getState();
   const calls: Parameters<DispatchFn>[0][] = [];
   const actions = createActions((event) => { calls.push(event); return true; });
-  const section = (pane: string, generation: number): SessionThreadSection => ({ generation, pane_id: pane, machine: "local", state: "ready", failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: null, choice: {}, input: null });
+  const section = (pane: string, generation: number): SessionThreadSection => ({ generation, pane_id: pane, machine: "local", state: "ready", failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: null, choice: {}, queue: null, input: null });
   const container = document.createElement("div"), root = createRoot(container);
   try {
     useUiStore.setState({ threadLease: null });
@@ -131,7 +131,7 @@ it.each(["ready", "closed"] as const)("does not reclaim a superseded first open 
     useUiStore.setState({ threadLease: null });
     useShellStore.setState({ connection: "live", sessionThread: null });
     await act(async () => root.render(<ObservedPanel actions={actions} />));
-    const replacement: SessionThreadSection = { generation: 2, pane_id: state === "closed" ? null : "w1:p2", machine: "local", state, failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: null, choice: {}, input: null };
+    const replacement: SessionThreadSection = { generation: 2, pane_id: state === "closed" ? null : "w1:p2", machine: "local", state, failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: null, choice: {}, queue: null, input: null };
     await act(async () => useShellStore.setState({ sessionThread: replacement }));
     expect(container.querySelector("[data-taken]")?.getAttribute("data-taken")).toBe("true");
     await act(async () => useShellStore.setState({ connection: "reconnecting" }));

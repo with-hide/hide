@@ -57,7 +57,7 @@ fn blocked_stdin_cannot_hold_the_agent_hook_past_its_hard_deadline() {
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         payload["hookSpecificOutput"]["additionalContext"],
-        hide_agent_hooks::runtime::PURPOSE_CONTEXT
+        hide_agent_hooks::runtime::START_CONTEXT
     );
     // A payload that never closes costs the hook its 500 ms payload wait and
     // no Memory request; the bound leaves a debug binary room above that.

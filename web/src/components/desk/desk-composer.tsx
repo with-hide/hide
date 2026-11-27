@@ -118,7 +118,7 @@ export function SentAttachments({ files }: { files: readonly SentAttachment[] })
  * mentions stand as chips (D-85) and `value` is the draft's text; without,
  * it is a plain text box.
  */
-export function DeskComposer({ value, draft, inputRef, textRef, label, placeholder, tray, answering = false, focused = false, held = false, notice = null, menu = null, menuOpen = false, menuEmpty = false, onChange, onCaret, onKeyDown, onSend, onStop, onMenuOpenChange, children }: {
+export function DeskComposer({ value, draft, inputRef, textRef, label, placeholder, tray, answering = false, stopHint, focused = false, held = false, notice = null, menu = null, menuOpen = false, menuEmpty = false, onChange, onCaret, onKeyDown, onSend, onStop, onMenuOpenChange, children }: {
   value: string;
   /** Desk's draft: its mentions are drawn as chips in the box. */
   draft?: DeskDraft;
@@ -129,8 +129,10 @@ export function DeskComposer({ value, draft, inputRef, textRef, label, placehold
   placeholder: string;
   /** The files attached so far; without it the box takes none. */
   tray?: ComposerTray;
-  /** Desk is answering: send becomes stop (B7). A thread never answers here. */
+  /** Desk is answering, or a session's agent works: send becomes stop (B7, PRD desk-queue B10); ↵ still sends. */
   answering?: boolean;
+  /** What stop's hint says it stops; Desk's answer when not given. */
+  stopHint?: string;
   /** Drawn as the keyboard's place, as `답하기` leaves it (B29). */
   focused?: boolean;
   /** Send waits: the words have nowhere to go yet, or the last ones are still on their way. */
@@ -206,7 +208,7 @@ export function DeskComposer({ value, draft, inputRef, textRef, label, placehold
               ) : null}
               <span className="flex min-w-0 flex-1 items-center justify-end">{children}</span>
               {answering ? (
-                <Hint label={t("desk.composer.stopHint")}>
+                <Hint label={stopHint ?? t("desk.composer.stopHint")}>
                   <Button variant="secondary" size="icon-sm" className="rounded-full" aria-label={t("desk.composer.stop")} data-desk-composer-stop="true" onClick={onStop}><SquareIcon className="fill-current" /></Button>
                 </Hint>
               ) : (

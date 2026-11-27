@@ -37,6 +37,7 @@ import { keepSent, outgoing, pickCommand, pickMention, useComposerTray } from ".
 import { refusalText, stageDeskFiles } from "./attachments";
 import { DeskChat, DeskEmpty, type DeskChatActions, type DeskNoticeAction } from "./components/desk/desk-chat";
 import { DeskAgentBar, DeskComposer, DeskPermissionMenu } from "./components/desk/desk-composer";
+import { QueueGroup } from "./components/desk/queue-group";
 import { Separator } from "./components/ui/separator";
 import type { MentionInputHandle } from "./components/desk/mention-input";
 import { DeskPaneReturn } from "./components/desk/desk-entry";
@@ -177,13 +178,14 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const turnLine = useMemo(() => (answering && desk?.approvals_waiting === 0 ? { phase: deskPhase(live?.step, liveText), since: turn } : null), [answering, desk?.approvals_waiting, live?.step, liveText, turn]);
   const agent = desk?.selection.agent ? desk.agents.find((one) => one.id === desk.selection.agent) : undefined;
   // A ready agent takes a message even when Settings reads it signed out: the agent's own refusal comes back as the sign-in line (B6).
-  // While Desk answers a message waits for its turn (it shows in the conversation as 대기 중); only an agent not ready holds it.
+  // While Desk answers a message waits for its turn (it shows over the box as 대기 중, PRD desk-queue B30); only an agent not ready holds it.
   // A message the agent could not take (its sign-in, a session that did not open, a file that is gone) comes back as the
   // first waiting one with its files, so the box never gets it again (B6). The core refuses one more when the line is
   // full: then the words and files stay in the box.
   const queued = desk?.conversation.queued ?? NO_QUEUED;
   const queuedFull = desk?.conversation.queued_full ?? false;
   const queuedHeld = desk?.conversation.queued_held ?? false;
+  const queuedPaused = desk?.conversation.queued_paused ?? false;
   const canSend = agent?.state === "ready" && !queuedFull;
 
   const lastUserId = (list: readonly DeskItem[]) => list.reduce((last, item) => (item.kind === "user" ? item.id : last), -1);
@@ -318,7 +320,6 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     onOutput: room.output,
     onMission: room.mission,
     onApproval: (id, option, text) => actions.deskApproval(id, option, text),
-    onQueuedRemove: (id) => actions.deskQueuedRemove(id),
     onNoticeAction,
     onCopy: (text, what) => actions.copyText(text, what),
     onMention: (mention) => {
@@ -340,7 +341,20 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const working = jobs.filter((job) => job.state === "working").length;
   // The card or chip that opened what shows is marked (B16).
   const shownJob = place.session ? (jobs.find((job) => job.pane_id === place.session)?.id ?? null) : null;
+  // Desk's waiting messages stand over its box as a session's do (B30, B31): ■ pauses them, and a refusal of its agent
+  // holds them until the notice's `다시 시작`.
+  const group = (
+    <QueueGroup
+      state={queuedPaused ? "paused" : queuedHeld ? "held" : "waiting"}
+      lines={queued.map((one) => ({ id: one.id, text: one.text, files: (one.attachments ?? []).map((file) => file.name) }))}
+      cleared={desk.conversation.queued_cleared}
+      sendable={!answering && agent?.state === "ready"}
+      onAction={(action, id) => actions.deskQueue(action, id)}
+    />
+  );
   const composer = (
+    <div className="flex min-w-0 flex-col gap-xs">
+    {group}
     <DeskComposer
       value={draft.text}
       draft={draft}
@@ -369,6 +383,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       <Separator orientation="vertical" className="mx-xxs data-[orientation=vertical]:h-(--size-icon)" />
       <DeskAgentBar agents={desk.agents} selection={desk.selection} onAgent={(id) => actions.deskSelect(id, null, null)} onModel={(model) => actions.deskSelect(null, model, null)} onEffort={(effort) => actions.deskSelect(null, null, effort)} onAgentSettings={() => actions.openSettings("agents")} />
     </DeskComposer>
+    </div>
   );
   return (
     <SessionChipProvider source={chipSource}>

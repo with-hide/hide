@@ -35,6 +35,7 @@ mod clone;
 mod closed_registrations;
 pub(crate) use closed_registrations::settle_reopen;
 pub(crate) use core_calls::SENDER_NOT_REGISTERED;
+pub(crate) use input_queue::ThreadInterruptPayload;
 pub(crate) use session_thread::{
     ThreadInputPayload, ThreadInputReply, ThreadReference, ThreadSwitchPayload,
 };
@@ -66,6 +67,7 @@ mod home_retire;
 mod hosts;
 mod human_turn;
 mod inbound;
+pub(crate) mod input_queue;
 mod issues;
 mod kit;
 mod kit_store;
@@ -1764,6 +1766,9 @@ pub struct Runtime {
     turn_answer_work: turn_answer::TurnAnswerWork,
     /// The one session thread a screen has open (`runtime/session_thread.rs`).
     session_thread: session_thread::ThreadWork,
+    /// The operator's words held for each pane's agent until it rests, and
+    /// their file (`runtime/input_queue.rs`, PRD desk-queue).
+    input_queue: input_queue::InputQueueWork,
     backlog_work: backlog::BacklogWork,
     issue_detail_work: issues::IssueDetailWork,
     /// The minute the PRs tool's list was last judged against the clock
@@ -2709,6 +2714,7 @@ impl Runtime {
             links_work: links::LinksWork::default(),
             turn_answer_work: Default::default(),
             session_thread: session_thread::ThreadWork::default(),
+            input_queue: input_queue::InputQueueWork::default(),
             backlog_work: backlog::BacklogWork::default(),
             issue_detail_work: issues::IssueDetailWork::default(),
             work_clock_minute: 0,

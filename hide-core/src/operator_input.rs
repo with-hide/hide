@@ -164,14 +164,19 @@ pub enum Typed<'a> {
     /// The operator's words, submitted with Enter: they may answer the
     /// question on screen, so the agent's state never holds them.
     Words(&'a str),
-    /// A line Hide types for the operator, such as a session bar's switch of
-    /// model or effort, submitted with Enter: typed as a letter is, only
-    /// while the agent is at rest and asks nothing, so its Enter never
-    /// answers a permission or lands in a turn.
-    Command(&'a str),
+    /// Words typed only while the agent is at rest and asks nothing, as a
+    /// letter is, submitted with Enter, so the Enter never answers a
+    /// permission or lands in a turn: a session bar's switch of model or
+    /// effort, and the operator's words that waited for the agent's rest
+    /// (PRD desk-queue D-14).
+    AtRest(&'a str),
     /// Keys in order, each an engine key name (`down`, `enter`, `esc`) or
     /// one character typed as a key press, never pasted.
     Keys(&'a [&'a str]),
+    /// ■'s keys, typed only while the engine reads the agent at work where
+    /// it types them (PRD desk-queue D-24): refused, typing nothing, once
+    /// the agent asks or rests.
+    Interrupt(&'a [&'a str]),
     /// A choice's keys, each typed only while the screen shows what `screen`
     /// expects there.
     Choice {
@@ -186,8 +191,10 @@ impl Typed<'_> {
     /// [`KEY_BYTES`] a key.
     fn reserved(&self) -> usize {
         match self {
-            Self::Words(text) | Self::Command(text) => text.len() + 1,
-            Self::Keys(keys) | Self::Choice { keys, .. } => keys.len() * KEY_BYTES,
+            Self::Words(text) | Self::AtRest(text) => text.len() + 1,
+            Self::Keys(keys) | Self::Interrupt(keys) | Self::Choice { keys, .. } => {
+                keys.len() * KEY_BYTES
+            }
         }
     }
 }
@@ -207,7 +214,7 @@ pub enum Unwritten {
     /// may have landed.
     Uncertain,
     /// The agent was asking (`agent_asking`) or not at rest
-    /// (`agent_busy`), so a [`Typed::Command`] typed nothing.
+    /// (`agent_busy`), so a [`Typed::AtRest`] typed nothing.
     Busy(&'static str),
     /// The caller's last step refused, for the reason it named: the pane
     /// moved on, or its machine's engine could not be had; nothing was typed.
@@ -240,6 +247,9 @@ impl Unwritten {
             }
             EngineError::Refused { code, .. } if code == "agent_not_ready" => {
                 Self::Busy("agent_busy")
+            }
+            EngineError::Refused { code, .. } if code == "agent_not_working" => {
+                Self::Busy("agent_not_working")
             }
             EngineError::Refused { .. } => Self::Refused,
             EngineError::NotRunning(_) | EngineError::Transport(_) | EngineError::Request(_) => {
@@ -276,8 +286,8 @@ pub fn write(
     // One key write in a pane at a time, so two screens' keys never
     // interleave between a row read and the key after it.
     let _keys = match typed {
-        Typed::Words(_) | Typed::Command(_) => None,
-        Typed::Keys(_) | Typed::Choice { .. } => Some(
+        Typed::Words(_) | Typed::AtRest(_) => None,
+        Typed::Keys(_) | Typed::Interrupt(_) | Typed::Choice { .. } => Some(
             gate.hold_keys(core_pane)
                 .ok_or(Unwritten::Unready(IN_FLIGHT))?,
         ),
@@ -287,10 +297,13 @@ pub fn write(
         Typed::Words(text) => engine
             .prompt_agent(raw_pane, text, PromptBy::Operator, STEP_TIMEOUT)
             .map_err(|error| Unwritten::of(&error)),
-        Typed::Command(text) => engine
+        Typed::AtRest(text) => engine
             .prompt_agent(raw_pane, text, PromptBy::Letter, STEP_TIMEOUT)
             .map_err(|error| Unwritten::of(&error)),
         Typed::Keys(keys) => press(&engine, raw_pane, keys, None),
+        Typed::Interrupt(keys) => engine
+            .interrupt_agent(raw_pane, keys, STEP_TIMEOUT)
+            .map_err(|error| Unwritten::of(&error)),
         Typed::Choice { keys, screen } => press(&engine, raw_pane, keys, Some(screen)),
     }
 }
@@ -1034,6 +1047,15 @@ mod tests {
                         ask.name()
                     );
                 }
+            }
+            // ■'s keys too (PRD desk-queue D-08).
+            if let Some(interrupt) = &definition.interrupt {
+                let keys: Vec<&str> = interrupt.keys.iter().map(String::as_str).collect();
+                assert!(
+                    crate::engine::own::types_keys(&keys),
+                    "{} interrupt: {keys:?}",
+                    definition.id
+                );
             }
         }
     }

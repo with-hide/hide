@@ -313,7 +313,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/peer-screen/{device}/page-route",
-            post(crate::remote_screen::guest_page_route),
+            post(crate::remote_screen::guest_page_route)
+                .delete(crate::remote_screen::guest_page_route),
         )
         .route(
             "/peer-screen/{device}/",
@@ -1121,7 +1122,7 @@ async fn screen_loop(
     // completion apart from display snapshots and ends with this socket.
     let mut thread_input: Option<(
         String,
-        tokio::sync::oneshot::Receiver<Result<(), &'static str>>,
+        tokio::sync::oneshot::Receiver<Result<hide_core::ThreadInputState, &'static str>>,
     )> = None;
     let mut device_reads: std::collections::VecDeque<DeviceRead> =
         std::collections::VecDeque::new();
@@ -1226,8 +1227,12 @@ async fn screen_loop(
                     log_snapshot_failure("thread_input_completion", "completion dropped");
                     break;
                 };
+                let (outcome, reason) = match answer {
+                    Ok(outcome) => (outcome, None),
+                    Err(reason) => (hide_core::ThreadInputState::Refused, Some(reason)),
+                };
                 let frame = json!({"type":"thread_input_result", "payload":{
-                    "request_id":request_id, "state":if answer.is_ok() { "sent" } else { "refused" }, "reason":answer.err()
+                    "request_id":request_id, "state":outcome, "reason":reason
                 }});
                 if socket.send(Message::Text(frame.to_string().into())).await.is_err() { break; }
             }
@@ -3037,7 +3042,7 @@ fn handle_client_text(
                 state, &event,
             )));
         }
-        Some("thread_input" | "session_thread_switch") => {
+        Some("thread_input" | "session_thread_switch" | "session_thread_interrupt") => {
             return Ok(ClientAction::ThreadInput(event));
         }
         Some("desk_send") => {
@@ -4150,7 +4155,7 @@ fn attachment_refused(request_id: &str, reason: &str) -> Value {
 fn handle_thread_input(
     state: &AppState,
     event: &Value,
-    reply: impl Fn(Result<(), &'static str>) + Send + Sync + 'static,
+    reply: impl Fn(Result<hide_core::ThreadInputState, &'static str>) + Send + Sync + 'static,
 ) -> Vec<Message> {
     let request_id = payload_str(event, "request_id");
     let refuse = |reason: &str| {
@@ -4161,13 +4166,15 @@ fn handle_thread_input(
     if !attachments::valid_request_id(&request_id) {
         return refuse("invalid_request_id");
     }
-    if event.get("kind").and_then(Value::as_str) == Some("session_thread_switch") {
-        if let Err(error) = state.core.send_thread_input(
-            "session_thread_switch".to_owned(),
-            event["payload"].clone(),
-            reply,
-        ) {
-            log_snapshot_failure("thread_switch", &error);
+    if let Some(kind @ ("session_thread_switch" | "session_thread_interrupt")) =
+        event.get("kind").and_then(Value::as_str)
+    {
+        if let Err(error) =
+            state
+                .core
+                .send_thread_input(kind.to_owned(), event["payload"].clone(), reply)
+        {
+            log_snapshot_failure(kind, &error);
             return refuse("forward_failed");
         }
         return Vec::new();
@@ -4189,11 +4196,20 @@ fn handle_thread_input(
                 .collect()
         })
         .unwrap_or_default();
-    let paths = if stages.is_empty() {
-        Vec::new()
+    // Kept where the words that wait for the agent keep them (PRD
+    // desk-queue D-12): whether these words go now or wait is the core's.
+    let (paths, bytes) = if stages.is_empty() {
+        (Vec::new(), 0)
     } else {
-        match state.attachments.commit(&stages, false) {
-            Ok(paths) => paths,
+        let in_use = match state.core.input_files_in_use() {
+            Ok(in_use) => in_use,
+            Err(error) => {
+                log_snapshot_failure("input_files_in_use", &error);
+                return refuse("forward_failed");
+            }
+        };
+        match state.attachments.commit_held(&stages, &in_use) {
+            Ok(kept) => kept,
             Err(reason) => return refuse(reason),
         }
     };
@@ -4203,6 +4219,7 @@ fn handle_thread_input(
             "request_id": request_id,
             "text": text,
             "paths": paths,
+            "bytes": bytes,
     });
     if let Err(error) =
         state

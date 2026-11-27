@@ -68,6 +68,44 @@ struct File {
     /// the built-in files' alone.
     #[serde(default)]
     pub switch: Option<Switch>,
+    /// The keys that interrupt the agent's turn ([`Interrupt`]); the
+    /// built-in files' alone.
+    #[serde(default)]
+    pub interrupt: Option<Interrupt>,
+}
+
+/// The keys that interrupt a turn the agent is working on (`[interrupt]`),
+/// as the operator presses them in its terminal: what a session input's ■
+/// types, only while the agent works, so a key that would also answer a
+/// question or a permission never reaches one (PRD desk-queue D-08, D-24).
+/// An agent that takes a second press to interrupt names the key twice.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Interrupt {
+    /// The keys in order, each a name in [`INTERRUPT_KEY_NAMES`].
+    pub keys: Vec<String>,
+}
+
+/// The most keys an `[interrupt]` table presses.
+pub const MAX_INTERRUPT_KEYS: usize = 4;
+/// The keys a turn is stopped with: Esc, or Ctrl+C for an agent whose Esc
+/// does not stop a turn (Grok's).
+pub const INTERRUPT_KEY_NAMES: [&str; 2] = ["esc", "ctrl-c"];
+
+fn check_interrupt(name: &str, interrupt: &Interrupt) -> Result<(), String> {
+    if interrupt.keys.is_empty()
+        || interrupt.keys.len() > MAX_INTERRUPT_KEYS
+        || !interrupt
+            .keys
+            .iter()
+            .all(|key| INTERRUPT_KEY_NAMES.contains(&key.as_str()))
+    {
+        return Err(format!(
+            "{name}: interrupt.keys holds 1 to {MAX_INTERRUPT_KEYS} of {}",
+            INTERRUPT_KEY_NAMES.join(", ")
+        ));
+    }
+    Ok(())
 }
 
 /// How a running session of the agent changes its model and its reasoning
@@ -594,6 +632,7 @@ pub struct Fields {
     pub answer: Option<Answer>,
     pub desk: Option<Desk>,
     pub switch: Option<Switch>,
+    pub interrupt: Option<Interrupt>,
 }
 
 /// Parse one file and check every field it carries: the one reading of a
@@ -638,6 +677,14 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
     }
     if let Some(switch) = &file.switch {
         check_switch(name, switch)?;
+    }
+    if origin == Origin::User && file.interrupt.is_some() {
+        return Err(format!(
+            "{name}: interrupt is for the built-in agents' files"
+        ));
+    }
+    if let Some(interrupt) = &file.interrupt {
+        check_interrupt(name, interrupt)?;
     }
     if let Some(display) = &file.name
         && (display.trim().is_empty()
@@ -704,6 +751,7 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
         answer: file.answer,
         desk: file.desk,
         switch: file.switch,
+        interrupt: file.interrupt,
     })
 }
 
@@ -1591,6 +1639,44 @@ mod tests {
             )
             .unwrap_err(),
             "x.toml: switch is for the built-in agents' files"
+        );
+    }
+
+    /// `[interrupt]` names one to four engine keys, and only a built-in file
+    /// may set it.
+    #[test]
+    fn an_interrupt_table_names_engine_keys_and_is_the_built_in_files_alone() {
+        let file = |interrupt: &str| {
+            format!(
+                "schema = 1\nid = \"x\"\nname = \"X\"\nexecutables = [\"x\"]\nhooks = \"none\"\n[interrupt]\n{interrupt}"
+            )
+        };
+        let interrupt = read(
+            "x.toml",
+            &file("keys = [\"esc\", \"esc\"]\n"),
+            Origin::Builtin,
+        )
+        .unwrap()
+        .interrupt
+        .unwrap();
+        assert_eq!(interrupt.keys, ["esc", "esc"]);
+        assert!(read("x.toml", &file("keys = [\"ctrl-c\"]\n"), Origin::Builtin).is_ok());
+        for refused in [
+            "keys = []\n",
+            "keys = [\"escape\"]\n",
+            "keys = [\"enter\"]\n",
+            "keys = [\"x\"]\n",
+            "keys = [\"esc\", \"esc\", \"esc\", \"esc\", \"esc\"]\n",
+            "keys = [\"esc\"]\nnow = true\n",
+        ] {
+            assert!(
+                read("x.toml", &file(refused), Origin::Builtin).is_err(),
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            read("x.toml", &file("keys = [\"esc\"]\n"), Origin::User).unwrap_err(),
+            "x.toml: interrupt is for the built-in agents' files"
         );
     }
 }

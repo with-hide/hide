@@ -91,6 +91,9 @@ pub(super) struct Desk {
     /// operator's next send, `다시 시작` or a session that opens, rather
     /// than meet the same refusal one after another.
     held: bool,
+    /// What `모두 지우기` took from the waiting line, while `되돌리기` can
+    /// bring it back (PRD desk-queue D-17); never stored.
+    cleared: Option<DeskCleared>,
     /// Agents that refused Desk for their sign-in since their last session
     /// opened: their word reads signed out whatever Hide AI's read of the
     /// login says, since a login file can outlive its sign-in.
@@ -113,6 +116,15 @@ pub(super) struct Desk {
     /// them themselves.
     #[cfg(test)]
     launched: Vec<String>,
+}
+
+/// What `모두 지우기` took from Desk's waiting line.
+struct DeskCleared {
+    messages: Vec<DeskQueuedMessage>,
+    /// Until when `되돌리기` brings them back.
+    until: u64,
+    /// Why the last `되돌리기` could not (`queue_full`).
+    refused: Option<&'static str>,
 }
 
 /// One of Desk's agents as Hide's catalog says it on the core's own
@@ -231,6 +243,15 @@ pub(super) enum DeskEvent {
     ViewOpen(views::OpenPayload),
     /// ✕ on a message waiting for the turn before it: it never goes.
     QueuedRemove(QueuedPayload),
+    /// `보내기` on a message of a stopped line, while no reply is being
+    /// written: it goes alone (PRD desk-queue B16).
+    QueuedSend(QueuedPayload),
+    /// `▶ 이어 보내기`: the stopped line waits again (B15).
+    QueuedResume,
+    /// `모두 지우기` (B17).
+    QueuedClear,
+    /// `되돌리기` after `모두 지우기` (B17).
+    QueuedRestore,
     /// The `/` menu opened on an agent.
     CommandsCheck(CommandsCheckPayload),
 }
@@ -345,7 +366,7 @@ fn present<'de, D: serde::Deserializer<'de>>(
 }
 
 impl DeskEvent {
-    pub(super) const KINDS: [&'static str; 16] = [
+    pub(super) const KINDS: [&'static str; 20] = [
         "desk_send",
         "desk_stop",
         "desk_approval",
@@ -361,6 +382,10 @@ impl DeskEvent {
         "desk_lane",
         "desk_view_open",
         "desk_queued_remove",
+        "desk_queued_send",
+        "desk_queued_resume",
+        "desk_queued_clear",
+        "desk_queued_restore",
         "desk_commands_check",
     ];
 
@@ -384,6 +409,10 @@ impl DeskEvent {
             "desk_lane" => Self::Lane(parse(payload)?),
             "desk_view_open" => Self::ViewOpen(parse(payload)?),
             "desk_queued_remove" => Self::QueuedRemove(parse(payload)?),
+            "desk_queued_send" => Self::QueuedSend(parse(payload)?),
+            "desk_queued_resume" => Self::QueuedResume,
+            "desk_queued_clear" => Self::QueuedClear,
+            "desk_queued_restore" => Self::QueuedRestore,
             "desk_commands_check" => Self::CommandsCheck(parse(payload)?),
             _ => return None,
         })
@@ -489,6 +518,14 @@ impl Runtime {
             DeskEvent::Lane(payload) => self.desk_lane(payload),
             DeskEvent::ViewOpen(payload) => self.desk_view_open(payload),
             DeskEvent::QueuedRemove(payload) => self.desk_queued_remove(payload.id),
+            DeskEvent::QueuedSend(payload) => self.desk_queued_send(payload.id),
+            DeskEvent::QueuedResume => {
+                let resumed = self.desk.stored.queued_paused;
+                self.desk.stored.queued_paused = false;
+                resumed
+            }
+            DeskEvent::QueuedClear => self.desk_queued_clear(),
+            DeskEvent::QueuedRestore => self.desk_queued_restore(),
             DeskEvent::CommandsCheck(payload) => {
                 // The `/` menu opened on this agent: the reader looks at
                 // what its list depends on and reads it again only when
@@ -632,8 +669,12 @@ impl Runtime {
             return true;
         }
         // While a reply is being written, or earlier messages still wait,
-        // the message waits its turn with its files (letter-47148).
-        if self.desk.turn.is_some() || !self.desk.stored.queued.is_empty() {
+        // the message waits its turn with its files (letter-47148). A line
+        // stopped with ■ holds nothing back while no reply is being written:
+        // the message goes, and the stopped ones stay (PRD desk-queue D-09).
+        if self.desk.turn.is_some()
+            || (!self.desk.stored.queued.is_empty() && !self.desk.stored.queued_paused)
+        {
             if self.desk.stored.queued.len() >= DESK_QUEUED_MAX {
                 return refused("desk_queued_full");
             }
@@ -667,6 +708,7 @@ impl Runtime {
     /// change of state is missed (`desk_event`, `desk_report`).
     fn desk_send_queued(&mut self) -> bool {
         if self.desk.stored.queued.is_empty()
+            || self.desk.stored.queued_paused
             || !self.desk.stored.settings.enabled
             || self.desk.turn.is_some()
             || self.desk.refusal.is_some()
@@ -776,15 +818,107 @@ impl Runtime {
                 } if Some(*id) == turn => Some(attachments),
                 _ => None,
             });
+        // Once `되돌리기` is no longer offered, its files are let go.
+        let now = crate::links::now_ms();
+        let cleared = self
+            .desk
+            .cleared
+            .iter()
+            .filter(|cleared| now < cleared.until)
+            .flat_map(|cleared| cleared.messages.iter());
         self.desk
             .stored
             .queued
             .iter()
+            .chain(cleared)
             .map(|message| &message.attachments)
             .chain(turn_files)
             .flatten()
             .map(|file| file.path.clone())
             .collect()
+    }
+
+    /// `보내기` on a message of the stopped line: it goes alone, now, while
+    /// nothing else is being written and the agent is ready; the rest stay
+    /// stopped (PRD desk-queue B16).
+    fn desk_queued_send(&mut self, id: u64) -> bool {
+        if !self.desk.stored.queued_paused
+            || self.desk.turn.is_some()
+            || self.desk.refusal.is_some()
+            || self.desk.host.state == Some(DeskHostState::Stopped)
+        {
+            return false;
+        }
+        let Some(agent) = self
+            .desk
+            .stored
+            .selection
+            .agent
+            .filter(|agent| self.desk_agent_state(*agent) == DeskAgentState::Ready)
+        else {
+            return false;
+        };
+        let Some(index) = self
+            .desk
+            .stored
+            .queued
+            .iter()
+            .position(|message| message.id == id)
+        else {
+            return false;
+        };
+        let message = self.desk.stored.queued.remove(index);
+        self.desk.held = false;
+        self.desk_start_turn(
+            agent,
+            Some(message.text.clone()),
+            message.text,
+            message.mentions,
+            message.attachments,
+        );
+        true
+    }
+
+    /// `모두 지우기`: every waiting message leaves the line, and `되돌리기`
+    /// brings them back for `input_queue::UNDO_MS` (PRD desk-queue B17).
+    fn desk_queued_clear(&mut self) -> bool {
+        if self.desk.stored.queued.is_empty() {
+            return false;
+        }
+        let until = crate::links::now_ms() + crate::input_queue::UNDO_MS;
+        self.desk.cleared = Some(DeskCleared {
+            messages: std::mem::take(&mut self.desk.stored.queued),
+            until,
+            refused: None,
+        });
+        self.desk.stored.queued_paused = false;
+        true
+    }
+
+    /// `되돌리기`: the cleared messages come back first, in their order,
+    /// stopped. Refused while the line could not hold them, with nothing
+    /// moved: they stay to be put back once there is room, and the screen
+    /// says why (B17).
+    fn desk_queued_restore(&mut self) -> bool {
+        let Some(cleared) = self.desk.cleared.as_mut() else {
+            return false;
+        };
+        if crate::links::now_ms() >= cleared.until {
+            self.desk.cleared = None;
+            return true;
+        }
+        if cleared.messages.len() + self.desk.stored.queued.len() > DESK_QUEUED_MAX {
+            cleared.refused = Some(crate::input_queue::FULL);
+            return true;
+        }
+        let Some(cleared) = self.desk.cleared.take() else {
+            return false;
+        };
+        let mut queued = cleared.messages;
+        queued.append(&mut self.desk.stored.queued);
+        self.desk.stored.queued = queued;
+        self.desk.stored.queued_paused = true;
+        true
     }
 
     /// ✕ on a queued message: it leaves the line and never goes. Its files
@@ -909,6 +1043,11 @@ impl Runtime {
             self.set_approval(approval.item, DeskApprovalState::Closed, None, None);
         }
         self.order(Order::Cancel);
+        // The operator stopped Desk: the messages waiting behind the turn
+        // stop with it (PRD desk-queue D-10).
+        if !self.desk.stored.queued.is_empty() {
+            self.desk.stored.queued_paused = true;
+        }
         true
     }
 
@@ -1000,6 +1139,8 @@ impl Runtime {
         self.desk.stored.conversation.clear();
         // A new conversation starts with nothing of the last one waiting.
         self.desk.stored.queued.clear();
+        self.desk.stored.queued_paused = false;
+        self.desk.cleared = None;
         if let Some(default) = self.desk.stored.settings.default_agent
             && Some(default) != agent
         {
@@ -1868,6 +2009,14 @@ impl Runtime {
                 queued_max: DESK_QUEUED_MAX,
                 queued_full: desk.stored.queued.len() >= DESK_QUEUED_MAX,
                 queued_held: desk.held && !desk.stored.queued.is_empty(),
+                queued_paused: desk.stored.queued_paused && !desk.stored.queued.is_empty(),
+                queued_cleared: desk.cleared.as_ref().map(|cleared| {
+                    crate::model::InputQueueCleared {
+                        count: cleared.messages.len(),
+                        until_unix_ms: cleared.until,
+                        refused: cleared.refused,
+                    }
+                }),
             },
             approvals_waiting: desk.approvals.len(),
             settings: desk.stored.settings,
@@ -3550,6 +3699,16 @@ mod tests {
             .collect()
     }
 
+    fn paused(runtime: &Runtime) -> bool {
+        runtime
+            .snapshot
+            .desk
+            .as_ref()
+            .unwrap()
+            .conversation
+            .queued_paused
+    }
+
     fn no_send(received: &Receiver<Order>) {
         assert!(
             !received
@@ -3560,9 +3719,10 @@ mod tests {
     }
 
     /// letter-47148: a message sent while a reply is being written waits in
-    /// line, shown apart from the conversation; ✕ takes one out, `중지`
-    /// stops only the turn, and each goes, in order, when the turn before
-    /// it ends; past eight the next is refused and the composer keeps it.
+    /// line, shown apart from the conversation; ✕ takes one out, each goes,
+    /// in order, when the turn before it ends, ■ pauses the line until
+    /// `보내기` or `▶ 이어 보내기`; past eight the next is refused and the
+    /// composer keeps it.
     #[test]
     fn a_message_sent_during_a_reply_waits_and_goes_when_the_turn_before_it_ends() {
         let root = tempfile::tempdir().unwrap();
@@ -3594,21 +3754,52 @@ mod tests {
             json!({"id": waiting[1].0})
         ));
 
+        // ■ stops the turn and pauses the line behind it (PRD desk-queue
+        // D-10, B31): nothing goes when the stopped turn ends.
         assert!(event(&mut runtime, "desk_stop", json!({})));
         runtime.desk_report(Report::TurnEnded {
             tag: one.tag,
             outcome: TurnOutcome::Cancelled,
         });
-        let two = sent(&received);
-        assert_eq!(two.text, "two");
-        runtime.desk_report(Report::TurnEnded {
-            tag: two.tag,
-            outcome: TurnOutcome::Done,
-        });
+        no_send(&received);
+        assert!(paused(&runtime));
+
+        // `보내기` sends that one message alone; the rest stay paused (B16),
+        // and it is refused while that turn is under way.
+        assert!(event(
+            &mut runtime,
+            "desk_queued_send",
+            json!({"id": waiting[2].0})
+        ));
         let four = sent(&received);
         assert_eq!(four.text, "four");
+        assert!(!event(
+            &mut runtime,
+            "desk_queued_send",
+            json!({"id": waiting[0].0})
+        ));
+        runtime.desk_report(Report::TurnEnded {
+            tag: four.tag,
+            outcome: TurnOutcome::Done,
+        });
+        no_send(&received);
+        assert_eq!(queued(&runtime), [waiting[0].clone()]);
+        assert!(paused(&runtime));
+
+        // `모두 지우기` empties the line; `되돌리기` brings it back paused (B17).
+        assert!(event(&mut runtime, "desk_queued_clear", json!({})));
+        assert!(queued(&runtime).is_empty());
+        assert!(event(&mut runtime, "desk_queued_restore", json!({})));
+        assert_eq!(queued(&runtime), [waiting[0].clone()]);
+        assert!(paused(&runtime));
+        no_send(&received);
+
+        // `▶ 이어 보내기` lets the line go again.
+        assert!(event(&mut runtime, "desk_queued_resume", json!({})));
+        assert_eq!(sent(&received).text, "two");
         assert!(queued(&runtime).is_empty());
 
+        // While "two" is being answered, the line fills to its cap.
         for index in 0..DESK_QUEUED_MAX {
             assert!(event(
                 &mut runtime,
@@ -3622,6 +3813,51 @@ mod tests {
             json!({"text": "one too many"})
         ));
         assert_eq!(queued(&runtime).len(), DESK_QUEUED_MAX);
+    }
+
+    /// PRD desk-queue B17: `되돌리기` while the line could not hold what was
+    /// cleared moves nothing: it stays, the screen says the line is full,
+    /// and it comes back once there is room.
+    #[test]
+    fn a_restore_desk_cannot_hold_keeps_what_was_cleared_until_there_is_room() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _received, _) = talking(root.path());
+        for index in 0..DESK_QUEUED_MAX {
+            assert!(event(
+                &mut runtime,
+                "desk_send",
+                json!({"text": format!("old {index}")})
+            ));
+        }
+        assert!(event(&mut runtime, "desk_queued_clear", json!({})));
+        assert!(event(&mut runtime, "desk_send", json!({"text": "new"})));
+        assert!(event(&mut runtime, "desk_queued_restore", json!({})));
+        let cleared = |runtime: &Runtime| {
+            runtime
+                .snapshot
+                .desk
+                .as_ref()
+                .unwrap()
+                .conversation
+                .queued_cleared
+                .clone()
+        };
+        let refused = cleared(&runtime).unwrap();
+        assert_eq!(
+            (refused.count, refused.refused),
+            (DESK_QUEUED_MAX, Some(crate::input_queue::FULL))
+        );
+        assert_eq!(queued(&runtime).len(), 1);
+        let new = queued(&runtime)[0].0;
+        assert!(event(
+            &mut runtime,
+            "desk_queued_remove",
+            json!({"id": new})
+        ));
+        assert!(event(&mut runtime, "desk_queued_restore", json!({})));
+        assert_eq!(queued(&runtime).len(), DESK_QUEUED_MAX);
+        assert_eq!(queued(&runtime)[0].1, "old 0");
+        assert!(cleared(&runtime).is_none());
     }
 
     /// A queued message is kept with Desk's store, so after hided starts

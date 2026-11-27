@@ -2,17 +2,85 @@
 //! help` and `hide mission help`; a skill or a hook only points at it. It
 //! needs no daemon and no environment.
 //!
-//! The spawning and pane rules are the session-start text every agent is
-//! given (`hide_agent_hooks::PURPOSE_CONTEXT`), put in at print time, so the
-//! guide and the session note cannot say two different things.
+//! A session starts with a short note (`hide_agent_hooks::START_CONTEXT`)
+//! that names the common commands and points here, so every other rule an
+//! agent needs lives in one section of this guide, and `hide guide <topic>`
+//! prints that section alone. Its first section is the full table of what
+//! the operator asks and the command for each
+//! (`hide_agent_hooks::intent_table!`), put in at print time, so the guide
+//! and the `hide` skill cannot say two different things.
 
 const TEXT: &str = include_str!("../assets/guide.md");
 
-/// Where the session-start rules go in [`TEXT`].
-const SESSION_RULES: &str = "{session_rules}";
+/// Where the intent table goes in [`TEXT`].
+const INTENT_TABLE: &str = "{intent_table}";
+/// Where the list of topics goes in [`TEXT`].
+const TOPICS: &str = "{topics}";
 
+pub const USAGE: &str = "usage: hide guide [<topic>]";
+
+/// The whole guide, with the topics `hide guide <topic>` takes listed after
+/// its opening.
 pub fn text() -> String {
-    TEXT.replacen(SESSION_RULES, hide_agent_hooks::PURPOSE_CONTEXT, 1)
+    let topics: Vec<String> = topics().iter().map(|key| format!("`{key}`")).collect();
+    body().replacen(TOPICS, &topics.join(", "), 1)
+}
+
+/// The section `topic` names, heading included, or none when no section is
+/// named so. A topic is a section's heading in any case, with or without
+/// its leading "The" and its punctuation: `letters`, `agent-profiles`,
+/// `operators-screen`, "Project Memory".
+pub fn section(topic: &str) -> Option<String> {
+    let wanted = key(topic);
+    let body = body();
+    sections(&body)
+        .find(|(heading, _)| key(heading) == wanted)
+        .map(|(_, section)| section.to_owned())
+}
+
+/// Every topic, in the guide's order.
+pub fn topics() -> Vec<String> {
+    sections(&body()).map(|(heading, _)| key(heading)).collect()
+}
+
+/// What `hide guide <topic>` answers for a topic no section is named by.
+pub fn unknown_topic(topic: &str) -> String {
+    format!(
+        "no guide topic named {topic:?}; the topics are {}\n{USAGE}",
+        topics().join(", ")
+    )
+}
+
+fn body() -> String {
+    TEXT.replacen(INTENT_TABLE, hide_agent_hooks::intent_table!(), 1)
+}
+
+/// Each `## ` section of `body` with its heading, up to the next one.
+fn sections(body: &str) -> impl Iterator<Item = (&str, &str)> {
+    let starts: Vec<usize> = body.match_indices("\n## ").map(|(at, _)| at + 1).collect();
+    let ends: Vec<usize> = starts.iter().skip(1).copied().chain([body.len()]).collect();
+    starts.into_iter().zip(ends).map(move |(start, end)| {
+        let section = &body[start..end];
+        let heading = section["## ".len()..].lines().next().unwrap_or_default();
+        (heading, section)
+    })
+}
+
+/// A heading or a typed topic as one key: lower case, apostrophes dropped,
+/// words joined by `-`, and a leading "the" left out.
+fn key(text: &str) -> String {
+    let words: Vec<String> = text
+        .to_lowercase()
+        .replace(['\'', '’'], "")
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect();
+    let words = match words.first().map(String::as_str) {
+        Some("the") if words.len() > 1 => &words[1..],
+        _ => &words[..],
+    };
+    words.join("-")
 }
 
 #[cfg(test)]
@@ -20,12 +88,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_guide_carries_the_session_start_rules_once() {
-        assert_eq!(TEXT.matches(SESSION_RULES).count(), 1);
+    fn the_guide_carries_the_intent_table_once_and_lists_its_topics() {
+        assert_eq!(TEXT.matches(INTENT_TABLE).count(), 1);
+        assert_eq!(TEXT.matches(TOPICS).count(), 1);
         let guide = text();
-        assert_eq!(guide.matches(hide_agent_hooks::PURPOSE_CONTEXT).count(), 1);
-        // A pane pasted from another machine is read by its full address.
-        assert!(guide.contains("remote:<device id>:pane:<id>"));
+        assert_eq!(guide.matches(hide_agent_hooks::intent_table!()).count(), 1);
+        assert!(!guide.contains(INTENT_TABLE) && !guide.contains(TOPICS));
+        assert!(guide.contains("`hide guide <topic>` prints one section of this guide; the topics are `what-the-operator-asks`, `before-the-first-command`, `letters`,"));
         // B9: the top-level guide routes planning to missions; workers keep
         // their node steps in the mission guide.
         assert!(!guide.contains("hide task help"));
@@ -40,6 +109,158 @@ mod tests {
             "With none of these signals, work directly without asking",
         ] {
             assert!(guide.contains(rule), "{rule}");
+        }
+    }
+
+    /// Each section is a topic of its own, named by its heading in any case,
+    /// with or without its "The" and punctuation, and printed alone.
+    #[test]
+    fn each_section_of_the_guide_is_a_topic_printed_alone() {
+        assert_eq!(
+            topics(),
+            [
+                "what-the-operator-asks",
+                "before-the-first-command",
+                "letters",
+                "agents",
+                "waiting",
+                "agent-profiles",
+                "panes",
+                "removing-a-worktree",
+                "automations",
+                "devices",
+                "bots",
+                "operators-screen",
+                "project-memory",
+                "past-sessions",
+                "where-to-go-next",
+            ]
+        );
+        for topic in topics() {
+            let section = section(&topic).unwrap();
+            assert!(section.starts_with("## "), "{topic}");
+            assert!(
+                !section.contains("\n## "),
+                "{topic} runs into the next section"
+            );
+            assert!(text().contains(&section), "{topic}");
+        }
+        let screen = section("operators-screen").unwrap();
+        assert!(screen.starts_with("## The operator's screen\n"));
+        for typed in [
+            "The operator's screen",
+            "the-operators-screen",
+            "OPERATORS SCREEN",
+        ] {
+            assert_eq!(section(typed).as_deref(), Some(screen.as_str()), "{typed}");
+        }
+        assert_eq!(section("Project Memory"), section("project-memory"));
+        assert_eq!(section("nothing-like-it"), None);
+        assert!(unknown_topic("x").contains("letters, agents"));
+        assert!(unknown_topic("x").ends_with(USAGE));
+    }
+
+    /// The session-start note names topics by the key `hide guide` takes.
+    #[test]
+    fn the_topics_the_session_start_names_are_topics_of_the_guide() {
+        let start = hide_agent_hooks::START_CONTEXT;
+        for topic in [
+            "agents",
+            "letters",
+            "panes",
+            "operators-screen",
+            "automations",
+            "devices",
+        ] {
+            assert!(start.contains(&format!("`{topic}`")), "{topic}");
+            assert!(section(topic).is_some(), "{topic}");
+        }
+        assert!(start.contains("`hide guide agents`"));
+    }
+
+    /// Every rule the session start stopped carrying (it once held the
+    /// whole intent table and the pane, letter, worktree and delegation
+    /// rules) lives in the section where an agent looks for it.
+    #[test]
+    fn every_rule_the_session_start_dropped_lives_in_its_guide_section() {
+        let rules: &[(&str, &[&str])] = &[
+            (
+                "what-the-operator-asks",
+                &[hide_agent_hooks::intent_table!()],
+            ),
+            (
+                "panes",
+                &[
+                    "hide pane read <pane>",
+                    "hide pane send <pane>",
+                    "`hide pane open --beside -- <command>`",
+                    "hide agent read <agent>",
+                    "`remote:<device id>:pane:<id>`",
+                    "`core:<device id>:pane:<id>`",
+                    "`@name (pane <address> · task)`",
+                    "a pane that is no registered agent takes `hide pane send` and no letter",
+                    "so hand an agent work with `hide request send`",
+                    "40 characters at most",
+                    "`cd <worktree> && hide workspace purpose \"…\"`",
+                ],
+            ),
+            (
+                "letters",
+                &["`--force` puts the letter into the recipient's input now"],
+            ),
+            (
+                "agents",
+                &[
+                    "`hide agent spawn --parent here …`: it records that you answer for the child and starts an automatic watch on it",
+                    "`hide agent spawn …` without `--parent`: it becomes an operator-owned root with no automatic watch",
+                    "Both record you as origin and leave the operator's screen and keyboard focus unchanged",
+                    "Without `--beside`, `hide agent spawn` opens the agent in a tab of its own",
+                    "`hide agent spawn --beside …` starts it in a pane beside yours, in your own checkout only",
+                    "Never start an agent with `hide pane open` or by typing its program into a pane",
+                    "From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>`",
+                    "`--repo` and `--path` are then that device's paths",
+                    "`machine_not_permitted`",
+                    "`hide agent ask-human auth <where>`",
+                    "needs a timeout of its own",
+                    "Read it before you start an agent",
+                    "`hide agent show <id>`",
+                    "`hide ps`",
+                ],
+            ),
+            (
+                "operators-screen",
+                &[
+                    "asked for or not, you open as soon as it is ready, without asking whether to",
+                    "so it interrupts nothing",
+                    "Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`)",
+                    "for a file outside the checkout too",
+                    "such as `aside`, not `browser open`",
+                    "read it with `view status <view-id>`",
+                ],
+            ),
+            (
+                "automations",
+                &[
+                    "`--schedule \"once in 7d 09:00\"`",
+                    "Not a cron job, an OS scheduler or a script of your own",
+                    "shorter than five minutes",
+                    "Run `hide automation help` first",
+                ],
+            ),
+            (
+                "where-to-go-next",
+                &[
+                    "first ask in one line: Shall I run this as a mission, or do it directly?",
+                    "With none of these signals, work directly without asking",
+                    "run `hide issue help` and follow it",
+                ],
+            ),
+        ];
+        for (topic, wanted) in rules {
+            let section = section(topic).unwrap();
+            for rule in *wanted {
+                assert!(section.contains(rule), "{topic} lacks {rule}");
+            }
         }
     }
 
@@ -122,10 +343,7 @@ mod tests {
     /// by `hide mission help`.
     fn taught() -> Vec<(&'static str, String)> {
         vec![
-            (
-                "session start",
-                hide_agent_hooks::PURPOSE_CONTEXT.to_owned(),
-            ),
+            ("session start", hide_agent_hooks::START_CONTEXT.to_owned()),
             ("hide guide", text()),
             ("hide mission help", crate::mission_cli::HELP.to_owned()),
             ("hide issue help", crate::issue_cli::HELP.to_owned()),

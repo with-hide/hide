@@ -146,8 +146,13 @@ export function refusalText(reason: string, t: TFunction<"translation">): string
       return t("panes.attachment.tooMany", { minimum: 1, maximum: MAX_FILES });
     case "staging_full":
       return t("panes.attachment.stagingFull");
+    // The files waiting lines hold, Desk's or a pane's, are at their cap (PRD desk-queue B9).
     case "desk_full":
+    case "queue_files_full":
+    case "input_full":
       return t("panes.attachment.deskFull");
+    case "queue_full":
+      return t("desk.queued.full");
     case "invalid_request_id":
       return t("panes.attachment.invalidName");
     case "size_mismatch":

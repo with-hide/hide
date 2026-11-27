@@ -24,7 +24,7 @@ use hide_agent_hooks::counters::{self, Change, Reporter, Said, SubagentInput, To
 use hide_agent_hooks::diagnosis::Diagnosis;
 use hide_agent_hooks::guidance::{self, GuidanceAgent};
 use hide_agent_hooks::report::{self, HookCounts, HookRefusal, HookStatusReport, HookTurn};
-use hide_agent_hooks::runtime::{AgentRuntime, HookEvent, hook_stdout};
+use hide_agent_hooks::runtime::{AgentRuntime, HookEvent};
 use hide_agent_hooks::{antigravity, basic};
 use hide_platform::process::{OwnedChild, OwnerWatch};
 
@@ -282,7 +282,12 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
         HookEvent::SessionStart => (
             guidance::stdout(
                 agent,
-                &guidance::session_context(workspace_context::live_context().as_deref()),
+                &hide_agent_hooks::session_start_context(
+                    None,
+                    None,
+                    None,
+                    workspace_context::live_context().as_deref(),
+                ),
             ),
             None,
         ),
@@ -559,15 +564,7 @@ fn antigravity_event(event: HookEvent, started: Instant) {
                 };
                 (index, workspace)
             });
-            let mut context = guidance::session_context(workspace.as_deref());
-            if let Some(index) = index {
-                context.push_str(
-                    "
-
-",
-                );
-                context.push_str(&index);
-            }
+            let context = index.session_start(workspace.as_deref());
             if let Some(answer) = antigravity::inject(&context) {
                 print_line(&answer);
             }
@@ -647,6 +644,7 @@ fn antigravity_prompt(
                     prompt.clone(),
                     memory_deadline,
                 )
+                .joined()
             });
         let intake = hide_agent_hooks::delivery::pull(
             delivery_deadline,
@@ -756,7 +754,7 @@ fn antigravity_memory(
     conversation: &str,
     prompt: Option<String>,
     deadline: Instant,
-) -> Option<String> {
+) -> hide_agent_hooks::memory::MemoryContext {
     hide_agent_hooks::memory::memory_context_until(
         hide_agent_hooks::memory::MemoryRequest {
             runtime_id: GuidanceAgent::Antigravity.id(),
@@ -767,7 +765,6 @@ fn antigravity_memory(
         home,
         deadline,
     )
-    .joined()
 }
 
 /// What a Grok or Cursor event reports: its turn, and the count it makes.
@@ -1139,10 +1136,9 @@ fn run_hook(arguments: &[String], started: Instant) {
         || hide_agent_hooks::runtime::takes_letters(|name| std::env::var_os(name));
     let pulls = event == HookEvent::UserPromptSubmit && prompt_hook && takes_letters;
     let memory_runtime = runtime.filter(|_| memory_injection);
-    let memory = |runtime| {
-        memory_output_before_deadline(runtime, event, &home, memory_deadline, payload.as_ref())
-    };
-    let (memory_output, intake, workspace) = std::thread::scope(|scope| {
+    let memory =
+        |runtime| memory_before_deadline(runtime, event, &home, memory_deadline, payload.as_ref());
+    let (memory, intake, workspace) = std::thread::scope(|scope| {
         let asking = memory_runtime.map(|runtime| {
             std::thread::Builder::new()
                 .name("hide-hook-memory".to_owned())
@@ -1170,7 +1166,7 @@ fn run_hook(arguments: &[String], started: Instant) {
         } else {
             None
         };
-        let memory_output = match asking {
+        let memory = match asking {
             Some(Ok(asked)) => asked.join().unwrap_or_else(|_| {
                 hide_agent_hooks::memory::record_panic(&home);
                 None
@@ -1189,15 +1185,13 @@ fn run_hook(arguments: &[String], started: Instant) {
             Some(Err(_)) => workspace_context::live_context(),
             None => None,
         };
-        (memory_output, intake, workspace)
+        (memory, intake, workspace)
     });
-    let mut output =
-        memory_output.or_else(|| runtime.and_then(|runtime| hook_stdout(runtime, event)));
-    if let Some(context) = workspace {
-        output = output.map(|value| {
-            hide_agent_hooks::runtime::append_session_context(&value, &context).unwrap_or(value)
-        });
-    }
+    // One output with everything a session start says, so its one limit
+    // counts the Workspace note too (`runtime::session_start_context`).
+    let mut output = runtime.and_then(|runtime| {
+        hide_agent_hooks::memory::hook_output(runtime, event, memory.as_ref(), workspace.as_deref())
+    });
     if let Some(intake) = &intake {
         output = match output {
             Some(existing) => {
@@ -1648,21 +1642,17 @@ fn notification_type(payload: &[u8], truncated: bool) -> Option<String> {
         .notification_type
 }
 
-fn memory_output_before_deadline(
+fn memory_before_deadline(
     runtime: AgentRuntime,
     event: HookEvent,
     home: &std::path::Path,
     deadline: Instant,
     payload: Option<&(Vec<u8>, bool)>,
-) -> Option<String> {
-    let Some((payload, exceeded)) = payload else {
-        return hook_stdout(runtime, event);
-    };
-    hide_agent_hooks::memory::project_memory_output_until(
+) -> Option<hide_agent_hooks::memory::MemoryContext> {
+    let (payload, exceeded) = payload?;
+    Some(hide_agent_hooks::memory::project_memory_until(
         runtime, event, payload, *exceeded, home, deadline,
-    )
-    .stdout
-    .or_else(|| hook_stdout(runtime, event))
+    ))
 }
 
 /// The hook's event from stdin, read until EOF, the size cap or `deadline`.

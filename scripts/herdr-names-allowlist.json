@@ -116,7 +116,7 @@
     "hide-agent-hooks/src/pi_extension/extension.js": {"max": 4, "reason": "pinned-plugin"},
     "hide-agent-hooks/src/plugin/helper.rs": {"max": 1, "reason": "prd-slug"},
     "hide-agent-hooks/src/plugin/tests.rs": {"max": 10, "reason": "test"},
-    "hide-agent-hooks/src/runtime.rs": {"max": 9, "reason": "to-rewrite"},
+    "hide-agent-hooks/src/runtime.rs": {"max": 4, "reason": "to-rewrite"},
     "hide-agent-hooks/tests/fixtures/claude-pasted-brief-prompt.json": {"max": 1, "reason": "fixture"},
     "hide-agent-hooks/tests/fixtures/hook-bytes/omp-extension.ts": {"max": 4, "reason": "pinned-plugin"},
     "hide-agent-hooks/tests/fixtures/hook-bytes/opencode-plugin.js": {"max": 4, "reason": "pinned-plugin"},

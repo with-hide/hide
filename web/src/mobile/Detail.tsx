@@ -24,7 +24,8 @@ import { DetailChildrenChip } from "./ListRows";
 import { ActivityLine, Composer, PageHead, StatusStrip } from "./layout";
 import { lineParts } from "../agentRow";
 import { statusText } from "../agentStatus";
-import { closeDetail, closeLook, loadMore, loadOlder, onReplyResult, openPrPage, sendChoice, sendKey, sendReply, setTab, wakeAgent } from "./connection";
+import { closeDetail, closeLook, loadMore, loadOlder, onReplyResult, openPrPage, sendChoice, sendInterrupt, sendKey, sendReply, setTab, wakeAgent } from "./connection";
+import { PhoneQueueGroup } from "./QueueGroup";
 import { LookViewer, LooksList, useKindWord } from "./Looks";
 import { AskCardView, AskStrip } from "./AskCard";
 import { MessageItem } from "./messages";
@@ -183,6 +184,7 @@ export function Detail({ onBack }: { onBack: () => void }) {
         about={viewing ? { name: viewing.row.name, kind: viewing.row.kind } : null}
         keys={!showsConversation && tab !== "looks"}
         ask={showsConversation ? (detail?.ask ?? null) : null}
+        working={agent?.status_code === "working"}
         onComposing={setComposing}
       />
     </main>
@@ -495,7 +497,7 @@ export function AskCard({ ask, disabled }: { ask: PhoneAsk; disabled: boolean })
  * true on the terminal alone (Doop 05), where the operator sees what a key does; the conversation answers an ask with its card, and
  * 볼 것 with words. Files go up the same way from the conversation and from a View, on a computer that takes them.
  */
-function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boolean; about: { name: string; kind: LookKind } | null; keys: boolean; ask: PhoneAsk | null; onComposing: (composing: boolean) => void }) {
+function ReplyBar({ disabled, about, keys, ask, working, onComposing }: { disabled: boolean; about: { name: string; kind: LookKind } | null; keys: boolean; ask: PhoneAsk | null; working: boolean; onComposing: (composing: boolean) => void }) {
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState("");
   const [composing, setComposingHere] = useState(false);
@@ -513,6 +515,9 @@ function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boole
   // A computer that answers from the phone takes a reply of several lines, as long as one phone message holds.
   const lines = usePhone((s) => s.answer);
   const agentKey = usePhone((s) => s.detail?.key ?? null);
+  // Replies sent while the agent works wait over the bar, and ■ stops its turn, on a computer that holds them (PRD desk-queue D-11).
+  const queues = usePhone((s) => s.queues);
+  const queue = usePhone((s) => s.detail?.queue ?? null);
   useEffect(
     () =>
       onReplyResult((ok) => {
@@ -545,6 +550,7 @@ function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boole
       </div>
       ) : null}
       <div className={`${keys ? "mt-sm" : "mt-xs"} pb-md`}>
+        {queue ? <PhoneQueueGroup queue={queue} working={working} disabled={disabled} /> : null}
         {takesFiles ? (
           <>
             <ComposerFiles files={files} onRemove={removeFile} onRetry={retryFile} />
@@ -570,6 +576,7 @@ function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boole
             onBlur: () => setComposing(false),
           }}
           send={{ "data-phone-send": "true" }}
+          onStop={queues && working && !ask ? () => sendInterrupt() : undefined}
         />
       </div>
       {shown ? (

@@ -41,8 +41,10 @@ pub const HOOK_VERSION: u32 = 8;
 /// and its usage-limit continuation notice (mission-56).
 pub const HOOK_ENTRY_VERSION: u32 = 13;
 
-/// The intent table at the front of `PURPOSE_CONTEXT`, as a literal so the
-/// `hide` skill (`hide_kit::agents::GUIDE_SKILL`) carries the very same text.
+/// The full intent table, the first section of `hide guide` and the body of
+/// the `hide` skill (`hide_kit::agents::GUIDE_SKILL`), as a literal so both
+/// carry the very same text. A session start carries the short form in
+/// [`START_CONTEXT`] and points at the guide for the rest.
 #[macro_export]
 macro_rules! intent_table {
     () => {
@@ -50,22 +52,149 @@ macro_rules! intent_table {
     };
 }
 
-/// What SessionStart adds to every agent runtime inside Hide: first the table
-/// that turns what the operator asks for into the one command that does it,
-/// then the rules behind those commands. Every runtime accepts the same
-/// `hookSpecificOutput.additionalContext` envelope, while the runtime
-/// argument remains explicit in the installed command so a future protocol
-/// difference has one dispatch point.
-pub const PURPOSE_CONTEXT: &str = concat!(
-    intent_table!(),
-    "\n\n",
-    "Read and drive the panes of your machine through Hide: `hide pane read <pane>` and `hide agent read <agent>` print a pane's last 120 lines, unwrapped (`--lines <n>`, 2000 at most), `hide pane send <pane> <text>` types text, presses keys with `--key <name>` (esc, enter, up, down, tab, ctrl-c, ...) and Enter only with `--enter`, `hide agent show <id>` says what an agent is doing and waits on, and `hide pane open --beside -- <command>` runs a command in a new pane right of yours and prints its id, leaving your focus where it is unless `--focus`; `hide ps` lists the panes and their ids. A bare pane id such as `w1:p2` names a pane of your own machine; a pane of another machine is named by its full address, `remote:<device id>:pane:<id>` for one your Hide runs there and `core:<device id>:pane:<id>` for one that machine's own Hide keeps (`hide device list` shows the device ids); `hide ps`, `hide agent list` and `hide agent spawn` print every pane in the form to pass as written, and an `@name (pane <address> · task)` reference the operator pastes gives that address, which `hide pane read`, `hide pane send` and `hide request send` take as it stands; a pane that is no registered agent takes `hide pane send` and no letter. Text typed into another agent's pane is no letter: hand an agent something with `hide request send`, which keeps it with its reply and retry, and add `--force` to put it into the agent's input now even while it works, which is refused while someone is typing there. When you create a worktree, set its one-line purpose in 40 characters or fewer with `hide workspace purpose \"…\"` run in that worktree's folder (`cd <worktree> && hide workspace purpose \"…\"`), which names that worktree and not your own checkout, and remove a worktree Hide shows with `hide workspace remove <path>`, never a plain `git worktree remove`, which leaves its panes open. For work you will supervise, delegate with `hide agent spawn --parent here …`; this records responsibility and starts an automatic watch. For independent work the operator will handle, hand it off with `hide agent spawn …` without --parent; it becomes an operator-owned root with no automatic watch. Both modes record you as origin and leave the current screen and keyboard focus unchanged. From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the device_id `hide workspace info` shows, the machine `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`. When the next step is one only a person can take (a sign-in, an unlock, an app or OS permission), run `hide agent ask-human auth|permission <where>` and stop: the operator is told and you get a letter once they have done it; give a command that waits for a person's approval a timeout so it cannot hang."
-);
+/// What a session start gives every agent inside Hide besides the core's
+/// answer: where to read more when it needs it, and the few requests the
+/// operator makes most, each with its command. It is short on purpose:
+/// Claude Code saves a session-start context of about 10,000 characters or
+/// more to a file and gives the model only its first 2,000, so every rule
+/// the agent needs only sometimes lives in `hide guide <topic>`, and the
+/// operator's global instruction and the Project Memory index come before
+/// this ([`session_start_context`]).
+pub const START_CONTEXT: &str = "Inside Hide, read more when you need it:\n\
+- `hide guide <topic>` prints one part of the guide to working in Hide, such as `agents`, `letters`, `panes`, `operators-screen`, `automations` or `devices`; `hide guide` lists every topic.\n\
+- `hide workspace info` shows this checkout and the commands this pane may run.\n\
+- `hide session list` lists this Project's sessions, and `hide session record <id>` reads one.\n\
+- `hide memory show <id>` reads a Project Memory card in full, and `hide memory search <words>` finds others.\n\
+| The operator asks | Run |\n\
+| --- | --- |\n\
+| show a file, a diff or a page, or you made one for them to look at | `hide file open <path>`, `hide diff open <path>` or `hide browser open <url-or-path>`, as soon as it is ready and without asking, then say in one line what you opened; never the system opener (`open`, `xdg-open`, `start`) |\n\
+| an agent beside you | `hide agent spawn --beside …`; read `hide guide agents` before your first spawn |\n\
+| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n\
+| tell another agent something | `hide request send <agent> …`, never by typing into its pane |\n\
+| complex work: planning or review first, several PRs or parallel work, another agent reviewing | first ask in one line: Shall I run this as a mission, or do it directly? A mission is `hide mission help` |\n\
+| Hide itself misbehaves | `hide issue help` |";
+
+/// The characters a session start's whole context keeps at most, the one
+/// string the hook prints with everything in it: under the 10,000 or so
+/// past which Claude Code shows the model only the first 2,000 (the 1.2.13
+/// release candidate's start was saved to a file at 9.9 K).
+pub const START_CONTEXT_LIMIT_CHARS: usize = 9_000;
+
+/// What stands in for the Project's open sessions when the start has no room
+/// for them.
+pub const SESSIONS_LEFT_OUT: &str =
+    "The Project's open sessions are left out to keep this short: `hide session list` lists them.";
+
+/// What stands in for the Workspace note when the start has no room for it,
+/// a long checkout path being the usual cause.
+pub const WORKSPACE_LEFT_OUT: &str = "Hide Workspace: `hide workspace info` names this session's checkout and the commands this pane may run.";
+
+/// What stands in for [`START_CONTEXT`] when the operator's global
+/// instruction and the Memory index leave no room for it either.
+pub const START_LEFT_OUT: &str = "Inside Hide, `hide guide` prints how to work here.";
+
+/// The few lines a session in a Hide pane needs about its Workspace: which
+/// checkout the daemon bound it to, that its commands act only there, and
+/// where the commands this pane may run are listed. A bare `hide` reaches
+/// that checkout from the pane (it bootstraps its own one-shot credential),
+/// so the note gives no command prefix, and the command list and the rules
+/// for letters and Views live in `hide workspace info` and `hide guide`.
+pub fn workspace_note(checkout_path: &str) -> String {
+    format!(
+        "Hide Workspace: this session's checkout is `{checkout_path}`, and Workspace commands act only on it. `hide workspace info` lists the commands this pane may run."
+    )
+}
+
+/// A session start's whole context, the one string the hook prints: first
+/// the parts whose length is fixed or capped, the operator's global
+/// instruction and the Project Memory index (each only when the core
+/// answered with it) and [`START_CONTEXT`], then the parts whose length
+/// follows their input, the Workspace note of a live pane
+/// ([`workspace_note`]) and the Project's open sessions. Every agent with a
+/// session-start route gets this text.
+///
+/// Past [`START_CONTEXT_LIMIT_CHARS`] the parts give way from the back: the
+/// open sessions become [`SESSIONS_LEFT_OUT`], then the Workspace note
+/// [`WORKSPACE_LEFT_OUT`], then the start text [`START_LEFT_OUT`]. The
+/// global instruction and the Memory index are always given whole; their
+/// own caps keep the two under the limit (`hide-core`'s
+/// `the_worst_session_start_still_fits_what_claude_code_shows` holds that
+/// with every part at its cap and the longest checkout path a request
+/// takes).
+pub fn session_start_context(
+    global: Option<&str>,
+    memory: Option<&str>,
+    sessions: Option<&str>,
+    workspace: Option<&str>,
+) -> String {
+    let sessions = sessions.filter(|sessions| !sessions.is_empty());
+    let workspace = workspace.filter(|workspace| !workspace.is_empty());
+    let sessions_left_out = sessions.map(|_| SESSIONS_LEFT_OUT);
+    let workspace_left_out = workspace.map(|_| WORKSPACE_LEFT_OUT);
+    let compose = |start: &str, workspace: Option<&str>, sessions: Option<&str>| {
+        joined([global, memory, Some(start), workspace, sessions])
+    };
+    [
+        (START_CONTEXT, workspace, sessions),
+        (START_CONTEXT, workspace, sessions_left_out),
+        (START_CONTEXT, workspace_left_out, sessions_left_out),
+    ]
+    .into_iter()
+    .map(|(start, workspace, sessions)| compose(start, workspace, sessions))
+    .find(|context| within_limit(context))
+    .unwrap_or_else(|| compose(START_LEFT_OUT, workspace_left_out, sessions_left_out))
+}
+
+/// The open sessions as the core gave them while they fit beside the
+/// global instruction, the Memory index and [`START_CONTEXT`] under
+/// [`START_CONTEXT_LIMIT_CHARS`], else [`SESSIONS_LEFT_OUT`]; none when the
+/// core gave none. OpenCode, Pi and omp, whose script puts the start text
+/// and the Workspace note in front of the first prompt's context, keep
+/// their sessions by this rule; those hosts show the model the whole
+/// context, so the note's length is not counted there.
+pub fn open_sessions_within_limit<'a>(
+    global: Option<&str>,
+    memory: Option<&str>,
+    sessions: Option<&'a str>,
+) -> Option<&'a str> {
+    let sessions = sessions.filter(|sessions| !sessions.is_empty())?;
+    let whole = joined([global, memory, Some(START_CONTEXT), Some(sessions)]);
+    Some(if within_limit(&whole) {
+        sessions
+    } else {
+        SESSIONS_LEFT_OUT
+    })
+}
+
+fn within_limit(context: &str) -> bool {
+    context.chars().count() <= START_CONTEXT_LIMIT_CHARS
+}
+
+/// `parts` one after another, a blank line between two, leaving out a
+/// missing or empty one.
+fn joined<const N: usize>(parts: [Option<&str>; N]) -> String {
+    let mut context = String::new();
+    for part in parts.into_iter().flatten().filter(|part| !part.is_empty()) {
+        if !context.is_empty() {
+            context.push_str(if context.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            });
+        }
+        context.push_str(part);
+    }
+    context
+}
 
 pub fn hook_stdout(runtime: AgentRuntime, event: HookEvent) -> Option<String> {
     hook_stdout_with_context(runtime, event, None)
 }
 
+/// The runtime's envelope for `event` with `context`: at `SessionStart` the
+/// whole start context, as [`session_start_context`] composed it, and
+/// [`START_CONTEXT`] alone when the core gave nothing; at a prompt, the
+/// context itself.
 pub fn hook_stdout_with_context(
     runtime: AgentRuntime,
     event: HookEvent,
@@ -73,8 +202,8 @@ pub fn hook_stdout_with_context(
 ) -> Option<String> {
     let additional_context = match event {
         HookEvent::SessionStart => match memory_context {
-            Some(memory) if !memory.is_empty() => format!("{PURPOSE_CONTEXT}\n\n{memory}"),
-            _ => PURPOSE_CONTEXT.to_owned(),
+            Some(context) if !context.is_empty() => context.to_owned(),
+            _ => START_CONTEXT.to_owned(),
         },
         HookEvent::UserPromptSubmit => memory_context.filter(|value| !value.is_empty())?.to_owned(),
         HookEvent::SubagentStart
@@ -530,12 +659,12 @@ mod tests {
 
     #[test]
     fn ascii_json_decodes_to_the_same_value_in_ascii_only() {
-        let context = format!("{PURPOSE_CONTEXT} 메모리 \u{1F600}");
+        let context = format!("{START_CONTEXT} 메모리 \u{1F600}");
         let json = serde_json::json!({ "hookSpecificOutput": { "additionalContext": context } })
             .to_string();
         let ascii = ascii_json(&json);
         assert!(ascii.is_ascii(), "{ascii}");
-        assert!(ascii.contains(r#"purpose \"\u2026\""#));
+        assert!(ascii.contains(r"--beside \u2026"));
         assert!(ascii.contains(r"\ud83d\ude00"), "outside the BMP as a pair");
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&ascii).unwrap(),
@@ -544,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn both_runtimes_emit_the_purpose_instruction_only_at_session_start() {
+    fn both_runtimes_emit_the_start_context_only_at_session_start() {
         for runtime in AgentRuntime::ALL {
             let output: serde_json::Value = serde_json::from_str(
                 &hook_stdout(runtime, HookEvent::SessionStart).expect("SessionStart output"),
@@ -556,80 +685,8 @@ mod tests {
             );
             assert_eq!(
                 output["hookSpecificOutput"]["additionalContext"],
-                PURPOSE_CONTEXT
+                START_CONTEXT
             );
-            assert!(PURPOSE_CONTEXT.contains("40 characters or fewer"));
-            assert!(PURPOSE_CONTEXT.contains("`hide workspace purpose \"…\"`"));
-            // Hide's commands only: no Herdr program, variable or command
-            // (PRD engine-bundle-1 D-6, B1).
-            for herdr in ["herdr", "Herdr", "HERDR"] {
-                assert!(!PURPOSE_CONTEXT.contains(herdr), "{herdr}");
-            }
-            assert!(PURPOSE_CONTEXT.contains("`hide agent spawn --parent here"));
-            assert!(PURPOSE_CONTEXT.contains("`hide agent spawn …` without --parent"));
-            assert!(PURPOSE_CONTEXT.contains("operator-owned root with no automatic watch"));
-            assert!(PURPOSE_CONTEXT.contains("record you as origin"));
-            assert!(PURPOSE_CONTEXT.contains("`--machine <device id>`"));
-            assert!(PURPOSE_CONTEXT.contains("`hide agent list`"));
-            assert!(PURPOSE_CONTEXT.contains("From the machine that runs Hide"));
-            assert!(PURPOSE_CONTEXT.contains("`machine_not_permitted`"));
-            // A step only a person takes is declared, and a wait on a
-            // person's approval is bounded (PRD ask-human B27).
-            assert!(PURPOSE_CONTEXT.contains("`hide agent ask-human auth|permission <where>`"));
-            assert!(PURPOSE_CONTEXT.contains("a timeout"));
-            // The intent table comes first, in English, and names the exact
-            // command for each request (PRD agent-beside-and-session-guide B18).
-            assert!(PURPOSE_CONTEXT.starts_with("Inside Hide, turn what the operator asks for"));
-            assert!(!PURPOSE_CONTEXT.contains("hide task help"));
-            for command in [
-                "`hide file open <path>`",
-                "`hide diff open <path>`",
-                "`hide browser open <url-or-path>`",
-                "stays in the operator's Needs You as To look at",
-                "else waits in your pane's Views list",
-                // A result made for the operator opens unasked: an
-                // unwatched pane only lists it, so it interrupts nothing.
-                "asked for or not | open it the same way as soon as it is ready, without asking whether to",
-                "so it interrupts nothing",
-                "such as `aside`, not `hide browser open`",
-                "open it again from your own pane",
-                "`hide agent spawn --beside …`",
-                "`hide agent spawn --parent here …`",
-                "`hide agent spawn …` without --parent",
-                // An agent asked for a repeated task makes an automation
-                // (PRD automations B9).
-                "`hide automation add --name <name> --task <text> --schedule <when> --kind <kind>`",
-                "run `hide automation help` first",
-                // Only unattended repeats at set times: a short wait inside
-                // the conversation stays the agent's own (D-16 caps runs,
-                // not polling).
-                "with no one present",
-                // One task at a later time is a once automation too
-                // (mission-104 O-6).
-                "or do one at a later time",
-                "`--schedule \"once in 7d 09:00\"`",
-                "or one that ends within this conversation, you keep doing yourself as now",
-                // Propose before complex work, but do not re-ask an explicit choice.
-                "first ask in one line: Shall I run this as a mission, or do it directly?",
-                "Follow the operator's answer",
-                "if they already requested a mission or invoked `/hide-mission`",
-                "run `hide mission help` and follow it without asking again",
-                "With none of these signals, work directly without asking",
-                "Never start an agent with `hide pane open` or by typing its program into a pane",
-                "`hide pane read <pane>`",
-                "`hide agent read <agent>`",
-                "`hide pane send <pane> <text>`",
-                "`hide pane open --beside -- <command>`",
-                "add `--force`",
-                "Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`)",
-                "for a file outside the checkout too",
-            ] {
-                assert!(PURPOSE_CONTEXT.contains(command), "{command}");
-            }
-            // Open takes no --beside; only a spawn does (PRD
-            // unseen-agent-views B29).
-            assert!(!PURPOSE_CONTEXT.contains("open <path> --beside"));
-            assert!(!PURPOSE_CONTEXT.contains("<url-or-path> --beside"));
             for event in [
                 HookEvent::SubagentStart,
                 HookEvent::SubagentStop,
@@ -638,6 +695,127 @@ mod tests {
                 assert_eq!(hook_stdout(runtime, event), None);
             }
         }
+    }
+
+    /// The start text points at where to read more and names the command
+    /// for each request the operator makes most; every other rule is in
+    /// `hide guide` (hided's guide tests hold that nothing was lost).
+    #[test]
+    fn the_start_context_points_at_the_guide_and_names_the_common_commands() {
+        assert!(START_CONTEXT.starts_with("Inside Hide, read more when you need it:"));
+        // Hide's commands only: no Herdr program, variable or command
+        // (PRD engine-bundle-1 D-6, B1).
+        assert!(!START_CONTEXT.to_lowercase().contains("herdr"));
+        for command in [
+            "`hide guide <topic>`",
+            "`hide workspace info`",
+            "`hide session list`",
+            "`hide session record <id>`",
+            "`hide memory show <id>`",
+            "`hide file open <path>`",
+            "`hide diff open <path>`",
+            "`hide browser open <url-or-path>`",
+            "without asking, then say in one line what you opened",
+            "never the system opener",
+            "`hide agent spawn --beside …`",
+            "read `hide guide agents` before your first spawn",
+            "`hide agent spawn --parent here …`",
+            "`hide request send <agent> …`, never by typing into its pane",
+            "first ask in one line: Shall I run this as a mission, or do it directly?",
+            "`hide mission help`",
+            "`hide issue help`",
+        ] {
+            assert!(START_CONTEXT.contains(command), "{command}");
+        }
+        // Open takes no --beside; only a spawn does (PRD
+        // unseen-agent-views B29).
+        assert!(!START_CONTEXT.contains("open <path> --beside"));
+        assert!(!START_CONTEXT.contains("<url-or-path> --beside"));
+        assert!(
+            START_CONTEXT.chars().count() < 2_000,
+            "{}",
+            START_CONTEXT.len()
+        );
+    }
+
+    /// The operator's instruction, the Memory index and the start text come
+    /// first, then the Workspace note and the open sessions, and a part
+    /// left out leaves no gap.
+    #[test]
+    fn a_session_start_reads_the_global_instruction_and_memory_first() {
+        let context = session_start_context(
+            Some("<global/>\n"),
+            Some("<memory/>\n"),
+            Some("<sessions/>\n"),
+            Some("<workspace/>"),
+        );
+        assert_eq!(
+            context,
+            format!("<global/>\n\n<memory/>\n\n{START_CONTEXT}\n\n<workspace/>\n\n<sessions/>\n")
+        );
+        assert_eq!(session_start_context(None, None, None, None), START_CONTEXT);
+        assert_eq!(
+            session_start_context(None, Some(""), Some("<sessions/>\n"), Some("")),
+            format!("{START_CONTEXT}\n\n<sessions/>\n")
+        );
+    }
+
+    /// Past the limit the parts give way from the back, each to one line:
+    /// the open sessions, then the Workspace note, then the start text;
+    /// the global instruction and the Memory index stay whole.
+    #[test]
+    fn past_its_limit_a_session_start_gives_way_from_the_back() {
+        let global = format!("<global>{}</global>\n", "g".repeat(3_000));
+        let memory = format!("<memory>{}</memory>\n", "m".repeat(3_000));
+        let sessions = format!("<sessions>{}</sessions>\n", "s".repeat(3_000));
+        let workspace = workspace_note(&"w".repeat(1_000));
+        let start = |memory: &str, workspace: &str, sessions: Option<&str>| {
+            session_start_context(Some(&global), Some(memory), sessions, Some(workspace))
+        };
+        assert_eq!(
+            start(&memory, &workspace, Some(&sessions)),
+            format!("{global}\n{memory}\n{START_CONTEXT}\n\n{workspace}\n\n{SESSIONS_LEFT_OUT}")
+        );
+        let long_workspace = workspace_note(&"w".repeat(2_000));
+        assert_eq!(
+            start(&memory, &long_workspace, Some(&sessions)),
+            format!(
+                "{global}\n{memory}\n{START_CONTEXT}\n\n{WORKSPACE_LEFT_OUT}\n\n{SESSIONS_LEFT_OUT}"
+            )
+        );
+        let memory = format!("<memory>{}</memory>\n", "m".repeat(5_000));
+        assert_eq!(
+            start(&memory, &workspace, Some(&sessions)),
+            format!(
+                "{global}\n{memory}\n{START_LEFT_OUT}\n\n{WORKSPACE_LEFT_OUT}\n\n{SESSIONS_LEFT_OUT}"
+            )
+        );
+        // Nothing stands in for a part there was none of.
+        assert_eq!(
+            session_start_context(Some(&global), Some(&memory), None, None),
+            format!("{global}\n{memory}\n{START_LEFT_OUT}")
+        );
+        // The first-prompt route of OpenCode, Pi and omp keeps its sessions
+        // by the same rule.
+        let memory_small = format!("<memory>{}</memory>\n", "m".repeat(1_000));
+        assert_eq!(
+            open_sessions_within_limit(Some(&global), Some(&memory_small), Some(&sessions)),
+            Some(sessions.as_str())
+        );
+        assert_eq!(
+            open_sessions_within_limit(Some(&global), Some(&memory), Some(&sessions)),
+            Some(SESSIONS_LEFT_OUT)
+        );
+        assert_eq!(
+            open_sessions_within_limit(Some(&global), Some(&memory), None),
+            None
+        );
+        // Over the limit with the instruction and the index alone, both are
+        // still given whole.
+        let memory = format!("<memory>{}</memory>\n", "m".repeat(9_000));
+        assert!(
+            start(&memory, &workspace, Some(&sessions)).starts_with(&format!("{global}\n{memory}"))
+        );
     }
 
     #[test]

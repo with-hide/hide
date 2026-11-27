@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use hide_agent_hooks::guidance::{GUIDANCE_LINE, GuidanceAgent};
+use hide_agent_hooks::guidance::GuidanceAgent;
 use hide_platform::process::OwnedChild;
 
 fn run(home: &Path, runtime: &str, event: &str) -> String {
@@ -58,13 +58,13 @@ fn cursor_gets_the_guidance_in_its_own_field_and_grok_gets_none() {
         let stdout = run(home.path(), agent.id(), "SessionStart");
         match agent {
             GuidanceAgent::Cursor => {
-                assert!(stdout.contains("hide browser help"), "{stdout}");
                 let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
                 assert!(
                     value["additional_context"]
                         .as_str()
                         .unwrap()
-                        .contains(GUIDANCE_LINE)
+                        .starts_with(hide_agent_hooks::START_CONTEXT),
+                    "{stdout}"
                 );
             }
             _ => assert_eq!(stdout, "", "{agent:?}"),

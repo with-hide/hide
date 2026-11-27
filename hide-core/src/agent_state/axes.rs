@@ -1644,14 +1644,33 @@ pub(crate) struct TurnProjection {
     /// The activity is the turn the agent's own hook reported, not the engine's
     /// reading of its screen: proof the agent itself started or ended it.
     pub reported: bool,
+    /// The agent rests because its turn was interrupted, by a key in its
+    /// terminal or Hide's ■, as its hook or its session record says (PRD
+    /// desk-queue D-08): the operator's waiting words stop with it.
+    pub interrupted: bool,
 }
 
 pub(crate) fn turn_projection(agent: &SessionAgentPayload) -> TurnProjection {
+    let activity = agent_activity(agent);
     TurnProjection {
-        activity: agent_activity(agent),
+        activity,
         prompt: approval_prompt(agent),
         operator_wait: native_question(agent) || session_wait(agent),
         reported: !reports_nothing(agent) && hook_turn(agent).is_some(),
+        interrupted: activity == AgentActivity::Stopped && turn_interrupted(agent),
+    }
+}
+
+/// Whether the agent's last turn ended interrupted: its hook's `idle` (a
+/// prompt it waits at without having finished a turn), or, for an agent
+/// whose hook reported no turn, its session record's interrupted end.
+fn turn_interrupted(agent: &SessionAgentPayload) -> bool {
+    match hook_turn(agent) {
+        Some(HookTurn::Idle) => true,
+        Some(_) => false,
+        None => agent.facts.as_ref().is_some_and(|facts| {
+            facts.turn_ended == Some(hide_session::turns::TurnEnded::Interrupted)
+        }),
     }
 }
 

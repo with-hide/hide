@@ -101,7 +101,8 @@
         "max"
       ],
       "model_resets_effort": false
-    }
+    },
+    "interrupt": true
   },
   {
     "usage": {
@@ -210,7 +211,8 @@
         "xhigh"
       ],
       "model_resets_effort": true
-    }
+    },
+    "interrupt": true
   },
   {
     "usage": {
@@ -321,7 +323,8 @@
         "xhigh"
       ],
       "model_resets_effort": false
-    }
+    },
+    "interrupt": true
   },
   {
     "usage": {
@@ -411,7 +414,8 @@
     "hook_kind": "plugin",
     "account_by": "folder",
     "bell_echo": null,
-    "switch": null
+    "switch": null,
+    "interrupt": true
   },
   {
     "usage": {
@@ -509,7 +513,8 @@
         "max"
       ],
       "model_resets_effort": false
-    }
+    },
+    "interrupt": true
   },
   {
     "usage": {
@@ -612,7 +617,8 @@
         "max"
       ],
       "model_resets_effort": false
-    }
+    },
+    "interrupt": true
   },
   {
     "usage": {
@@ -726,6 +732,7 @@
         "max"
       ],
       "model_resets_effort": false
-    }
+    },
+    "interrupt": true
   }
 ]

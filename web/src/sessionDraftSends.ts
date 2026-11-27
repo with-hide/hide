@@ -24,7 +24,7 @@ useShellStore.subscribe((state, previous) => {
   if (input && input !== previous.threadInputResult && input.state !== "sending") {
     if (input.state === "refused" && input.reason === "uncertain") {
       useUiStore.setState((local) => ({ sessionDrafts: uncertainSessionSends(local.sessionDrafts, input.request_id) }));
-    } else useUiStore.getState().settleSessionSend(input.request_id, input.state === "sent");
+    } else useUiStore.getState().settleSessionSend(input.request_id, input.state === "sent" || input.state === "queued");
   }
   // A refusal hided makes before the core (a file it never staged) names the input's request too.
   const refusal = state.composerRefusal;

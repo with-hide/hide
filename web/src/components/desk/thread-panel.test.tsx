@@ -33,7 +33,7 @@ const job: DeskJob = {
 const said = (text: string) => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
 
 function section(extra: Partial<SessionThreadSection> = {}): SessionThreadSection {
-  return { generation: 4, state: "ready", pane_id: "w1:p2", machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", input: null, choice: {},
+  return { generation: 4, state: "ready", pane_id: "w1:p2", machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", input: null, queue: null, choice: {},
     tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는 끝났어요")], parts: {}, sessions: {} }, ...extra };
 }
 
@@ -69,7 +69,7 @@ afterEach(async () => {
 });
 
 async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined, pane = "w1:p2", answer = 0 }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void; pane?: string; answer?: number } = {}) {
-  const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn(), switchThread: vi.fn(() => "switch-1"), observeCatalog: vi.fn(() => noop), requestFileIndex: vi.fn(), deskCommandsCheck: vi.fn() };
+  const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn(), switchThread: vi.fn(() => "switch-1"), observeCatalog: vi.fn(() => noop), requestFileIndex: vi.fn(), deskCommandsCheck: vi.fn(), inputQueue: vi.fn(), interruptThread: vi.fn(() => "stop-1") };
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -796,7 +796,7 @@ it("draws a code block under a head row with its language and 복사, the code b
 });
 
 // mission-106: the session's box has Desk's `/` and `@` menus and its model and effort under it, its agent fixed.
-const claudeRow = { pane_id: "w1:p2", agent_kind: "claude" } as AgentRow;
+const claudeRow = { pane_id: "w1:p2", agent_kind: "claude", state: { working: false, asking: false } } as AgentRow;
 const projectRest = { navigator: { workspaces: [{ id: "w", device_id: "mac", label: "herdr-ide", path: "/repo", checkouts: [{ id: "c", path: "/repo", tabs: [{ panes: [{ id: "w1:p2" }] }] }] }] } } as unknown as SnapshotRest;
 const deskSessions: DeskMentions = {
   sessions: [
@@ -909,7 +909,7 @@ it("holds the bar while the agent's question card is on screen: a change's Enter
 
 it("keeps a slot Hide cannot change in a running session read-only, and says so", async () => {
   const { container } = await mount();
-  await act(async () => useShellStore.setState({ sessionThread: section(), agents: [{ pane_id: "w1:p2", agent_kind: "opencode" } as AgentRow] }));
+  await act(async () => useShellStore.setState({ sessionThread: section(), agents: [{ pane_id: "w1:p2", agent_kind: "opencode", state: { working: false, asking: false } } as AgentRow] }));
   const model = container.querySelector<HTMLElement>('[data-session-bar="model"]')!;
   expect(model.dataset.sessionBarFixed).toBe("true");
   expect(model.getAttribute("aria-label")).toContain("cannot change the model here yet");
@@ -1004,4 +1004,95 @@ it("keeps an unanswered send uncertain across reconnect and remount until its te
   await act(async () => terminal.click());
   await back.enter();
   expect(events).toHaveLength(2);
+});
+
+// PRD desk-queue: words sent while the agent works wait over the box, one going at each rest; ■ stops the turn and the line.
+const workingRow = (asking = false) => ({ pane_id: "w1:p2", agent_kind: "claude", state: { working: !asking, asking } }) as AgentRow;
+const line = (id: number, text: string, extra: Partial<NonNullable<SessionThreadSection["queue"]>["lines"][number]> = {}) => ({ id, text, files: [], sending: false, ...extra });
+
+it("clears the box once the core queues the words, and draws the pane's waiting line over it with each line's ✕ (B1, B2, B7)", async () => {
+  const { actions, container, box, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ agents: [workingRow()], sessionThread: section() }));
+  await type("테스트도 같이 돌려 줘");
+  await enter();
+  const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
+  const queue = { state: "waiting" as const, lines: [line(1, "테스트도 같이 돌려 줘", { files: ["shot.png"] }), line(2, "끝나면 PR 열어 줘", { sending: true })], max: 8, full: false };
+  await act(async () => completeInput(section({ input: { request_id: request, state: "queued" }, queue })));
+  expect(box().value).toBe("");
+  expect(useUiStore.getState().sessionDrafts.find((draft) => draft.pane === "w1:p2")?.sending ?? false).toBe(false);
+  expect(container.querySelector("[data-queue-group='waiting']")?.textContent).toContain("Waiting · 2");
+  expect(container.querySelector("[data-queue-line='1'] [data-queue-line-files]")?.textContent).toBe("shot.png");
+  // A line on its way has no ✕; a waiting one has, and it is the core's one event.
+  expect(container.querySelector("[data-queue-remove='2']")).toBeNull();
+  await act(async () => container.querySelector<HTMLElement>("[data-queue-remove='1']")!.click());
+  expect(actions.inputQueue).toHaveBeenCalledWith("w1:p2", "remove", 1);
+  // Folded, the head alone stands.
+  await act(async () => container.querySelector<HTMLElement>("[data-queue-fold]")!.click());
+  expect(container.querySelector("[data-queue-lines]")).toBeNull();
+});
+
+it("puts ■ in send's place while the agent works, keeps ↵ adding to the line, and says why a stop typed nothing (B10, B12)", async () => {
+  const { actions, container, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ agents: [workingRow()], sessionThread: section() }));
+  expect(container.querySelector("[data-desk-composer-send]")).toBeNull();
+  await type("하나 더");
+  await enter();
+  expect(events.filter((event) => event.kind === "thread_input")).toHaveLength(1);
+  const sent = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
+  await act(async () => completeInput(section({ input: { request_id: sent, state: "queued" } })));
+  await act(async () => container.querySelector<HTMLElement>("[data-desk-composer-stop]")!.click());
+  expect(actions.interruptThread).toHaveBeenCalledWith(4, "w1:p2");
+  await act(async () => completeInput(section({ input: { request_id: "stop-1", state: "refused", reason: "agent_asking" } })));
+  expect(container.querySelector("[data-desk-composer-notice]")?.textContent).toBe("The agent is asking something: answer it first");
+  // An agent asking is answered with the box: send stands again.
+  await act(async () => useShellStore.setState({ agents: [workingRow(true)] }));
+  expect(container.querySelector("[data-desk-composer-stop]")).toBeNull();
+  expect(container.querySelector("[data-desk-composer-send]")).not.toBeNull();
+});
+
+it("offers 모두 지우기, 이어 보내기 and each line's 보내기 once paused, 보내기 waiting while the agent works, and 되돌리기 after a clear (B14-B17, B23)", async () => {
+  const { actions, container } = await mount();
+  const paused = { state: "paused" as const, lines: [line(1, "테스트도 같이 돌려 줘", { failure: "uncertain" as const }), line(2, "끝나면 PR 열어 줘")], max: 8, full: false };
+  await act(async () => useShellStore.setState({ agents: [workingRow()], sessionThread: section({ queue: paused }) }));
+  expect(container.querySelector("[data-queue-group='paused']")?.textContent).toContain("Paused · 2");
+  expect(container.querySelector("[data-queue-line-failure='uncertain']")?.textContent).toBe("Hide could not tell whether it was sent");
+  expect(container.querySelector<HTMLButtonElement>("[data-queue-send='1']")!.disabled).toBe(true);
+  await act(async () => useShellStore.setState({ agents: [claudeRow] }));
+  expect(container.querySelector<HTMLButtonElement>("[data-queue-send='1']")!.disabled).toBe(false);
+  await act(async () => container.querySelector<HTMLElement>("[data-queue-send='2']")!.click());
+  await act(async () => container.querySelector<HTMLElement>("[data-queue-resume]")!.click());
+  await act(async () => container.querySelector<HTMLElement>("[data-queue-clear]")!.click());
+  expect(actions.inputQueue.mock.calls).toEqual([["w1:p2", "send", 2], ["w1:p2", "resume", undefined], ["w1:p2", "clear", undefined]]);
+  await act(async () => useShellStore.setState({ sessionThread: section({ queue: { state: "waiting", lines: [], max: 8, full: false, cleared: { count: 2, until_unix_ms: Date.now() + 10_000 } } }) }));
+  expect(container.querySelector("[data-queue-cleared]")?.textContent).toContain("Cleared 2");
+  await act(async () => container.querySelector<HTMLElement>("[data-queue-restore]")!.click());
+  expect(actions.inputQueue).toHaveBeenLastCalledWith("w1:p2", "restore", undefined);
+  // Its ten seconds over, 되돌리기 goes.
+  await act(async () => useShellStore.setState({ sessionThread: section({ queue: { state: "waiting", lines: [], max: 8, full: false, cleared: { count: 2, until_unix_ms: Date.now() - 1 } } }) }));
+  expect(container.querySelector("[data-queue-group]")).toBeNull();
+});
+
+it("offers 이어 보내기 on a waiting line only once the core says its last words opened no turn, and says why a 되돌리기 brought nothing back", async () => {
+  const { actions, container } = await mount();
+  const waiting = { state: "waiting" as const, lines: [line(1, "끝나면 PR 열어 줘")], max: 8, full: false };
+  await act(async () => useShellStore.setState({ agents: [claudeRow], sessionThread: section({ queue: waiting }) }));
+  expect(container.querySelector("[data-queue-group='waiting']")).not.toBeNull();
+  expect(container.querySelector("[data-queue-resume]")).toBeNull();
+  await act(async () => useShellStore.setState({ sessionThread: section({ queue: { ...waiting, stalled: true } }) }));
+  await act(async () => container.querySelector<HTMLElement>("[data-queue-resume]")!.click());
+  expect(actions.inputQueue).toHaveBeenLastCalledWith("w1:p2", "resume", undefined);
+  const cleared = { count: 2, until_unix_ms: Date.now() + 10_000, refused: "queue_full" as const };
+  await act(async () => useShellStore.setState({ sessionThread: section({ queue: { ...waiting, cleared } }) }));
+  expect(container.querySelector("[data-queue-restore-refused='queue_full']")?.textContent).toContain("The waiting line is full");
+});
+
+it("words a refusal of a full line and of its files under the box (B8, B9)", async () => {
+  const { container, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ agents: [workingRow()], sessionThread: section() }));
+  await type("아홉 번째");
+  await enter();
+  const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
+  await act(async () => completeInput(section({ input: { request_id: request, state: "refused", reason: "queue_full" } })));
+  expect(container.querySelector("[data-desk-composer-notice]")?.textContent).toBe("The waiting line is full");
+  expect(container.querySelector("textarea")!.value).toBe("아홉 번째");
 });

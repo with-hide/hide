@@ -168,7 +168,7 @@ const SCENE_DESK: DeskSection = {
   selection: { agent: "claude", model: null, effort: null },
   agents: AGENTS,
   host: { state: "ready", detail: null },
-  conversation: { generation: 1, items: [], dropped: 0, queued: [], queued_max: 8, queued_full: false, queued_held: false },
+  conversation: { generation: 1, items: [], dropped: 0, queued: [], queued_max: 8, queued_full: false, queued_held: false, queued_paused: false },
   approvals_waiting: 0,
   settings: { enabled: true, default_agent: "claude", location: "desk", cap: 8, permission: "allow_all" },
   lane: { view_width: null, session_width: null },

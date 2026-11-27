@@ -1,7 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { appScheme, browserPartition, deviceEmulation, isLocalNetworkHost, localNetworkReach, localPageRequest, isPopup, loadable, parseRemoteSync, placeIn, popupBounds, MAX_AUTHORIZED_SCOPES, MAX_SYNCED_DISPLAYS, offScreenBounds, overCap, parseCommand, parseSync, parseTarget, REMOTE_BOUNDS, remotePagePartition, remoteRequest, toBounds } from "./browserSync";
+import { appScheme, browserPartition, deviceEmulation, isLocalNetworkHost, localNetworkReach, localPageRequest, isPopup, loadable, parseRemoteSync, placeIn, popupBounds, MAX_AUTHORIZED_SCOPES, MAX_SYNCED_DISPLAYS, offScreenBounds, overCap, parseCommand, parseSync, parseTarget, REMOTE_BOUNDS, remoteFilePartition, remotePagePartition, remoteRequest, remoteRouteAddress, sameFileAddress, toBounds, wireFileAddress } from "./browserSync";
 
 const rect = { x: 0, y: 40, width: 800, height: 600 };
 const display = { id: "d1", area_id: "a1", url: "https://a.test/", load: 3, rect, visible: true };
@@ -330,6 +330,53 @@ describe("another computer's screen's pages", () => {
       expect(browserPartition(workspace, url, null)).not.toBe(partition);
       expect(browserPartition(workspace, url, "mini")).not.toBe(partition);
     }
+  });
+
+  // TF2: a checkout's HTML of that computer reads none of the screen's
+  // logins, nor anything of this window's, and keeps nothing on disk.
+  it("keep file pages in memory, apart from the logins of every machine and of this window", () => {
+    const key = "ab".repeat(32);
+    const pairing = "11".repeat(16);
+    const files = remoteFilePartition("mini", key, pairing);
+    expect(files).toMatch(/^hide-remote-file-[0-9a-f]{32}$/);
+    expect(files.startsWith("persist:")).toBe(false);
+    expect(remoteFilePartition("mini", key, "22".repeat(16))).not.toBe(files);
+    expect(remoteFilePartition("pc", key, pairing)).not.toBe(files);
+    expect(files).not.toBe(remotePagePartition("mini", key, pairing));
+    for (const url of ["https://mini.example/", "http://localhost:3000/", "file:///Users/me/a.html"]) expect(browserPartition(workspace, url, "mini")).not.toBe(files);
+  });
+
+  // A routed file page's address is that computer's, in its own spelling
+  // whatever system this one runs, escaped as a URL path needs.
+  it("spell another computer's file address from its wire root by URL alone", () => {
+    expect(wireFileAddress("C:/repo", "report.html", "", "#section")).toBe("file:///C:/repo/report.html#section");
+    expect(wireFileAddress("C:/repo/", "docs/a.html", "?v=2")).toBe("file:///C:/repo/docs/a.html?v=2");
+    expect(wireFileAddress("/Users/me/repo", "a b/100%.html#x?", "", "#top")).toBe("file:///Users/me/repo/a%20b/100%25.html%23x%3F#top");
+    expect(wireFileAddress("/srv/문서", "보고서.html")).toBe(`file:///srv/${encodeURIComponent("문서")}/${encodeURIComponent("보고서.html")}`);
+    for (const relative of ["../secret.html", "a/../../b.html", "", "a//b.html"]) expect(wireFileAddress("/srv/repo", relative), relative).toBeNull();
+    expect(wireFileAddress("", "a.html")).toBeNull();
+    // A Windows share keeps its two slashes under an empty host, as that
+    // machine spells it (`to_file_url`), never `file://server/`.
+    expect(wireFileAddress("//server/share/repo", "report.html", "?v=2", "#section")).toBe("file:////server/share/repo/report.html?v=2#section");
+    expect(wireFileAddress("//server/share/repo/", "docs/a b.html")).toBe("file:////server/share/repo/docs/a%20b.html");
+    expect(new URL(wireFileAddress("//server/share/repo", "r.html")!).host).toBe("");
+    expect(sameFileAddress("file:////server/share/repo/r.html#a", "file:////server/share/repo/r.html?b")).toBe(true);
+    expect(sameFileAddress("file:////server/share/repo/r.html", "file:///server/share/repo/r.html")).toBe(false);
+  });
+
+  // TF1: a file page of that computer loads only from its own loopback over
+  // plain HTTP, which the screen's proxy carries there; a web page only from
+  // its own address.
+  it("load a file page only from that computer's loopback route, and a web page only from its address", () => {
+    const file = "file:///Users/me/repo/report.html";
+    for (const url of ["http://127.0.0.1:5000/s/report.html", "http://127.0.0.2:5000/s/report.html", "http://[::1]:5000/s/report.html"]) {
+      expect(remoteRouteAddress({ url, source_url: file }), url).toBe(true);
+    }
+    for (const url of [file, "file:///etc/passwd", "https://127.0.0.1:5000/s/report.html", "http://localhost:5000/s/report.html", "http://127.0.0.1/s/report.html", "http://files.example:5000/s/report.html", "http://10.0.0.2:5000/s/report.html", "http://u:p@127.0.0.1:5000/s/report.html", "not a url"]) {
+      expect(remoteRouteAddress({ url, source_url: file }), url).toBe(false);
+    }
+    expect(remoteRouteAddress({ url: "https://a.example/", source_url: "https://a.example/" })).toBe(true);
+    expect(remoteRouteAddress({ url: "http://127.0.0.1:5000/", source_url: "https://a.example/" })).toBe(false);
   });
 
   it("are cut to the screen's tile, scaled by its zoom, and hidden when nothing of them is inside", () => {

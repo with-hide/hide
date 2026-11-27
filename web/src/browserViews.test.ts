@@ -47,7 +47,10 @@ describe("open in default browser", () => {
     }
     expect(defaultBrowserAddress("https://example.com/", "devbox", "mac")).toBe("https://example.com/");
     expect(defaultBrowserAddress("http://localhost.example.com/", "devbox", "mac")).toBe("http://localhost.example.com/");
+    // A device's LAN page loads from this machine's network in the display
+    // too, so the default browser opens the same page (#3086).
     expect(defaultBrowserAddress("http://[::ffff:10.0.0.1]/", "devbox", "mac")).toBe("http://[::ffff:a00:1]/");
+    expect(defaultBrowserAddress("http://printer.local/", "devbox", "mac")).toBe("http://printer.local/");
   });
 
   // In another computer's screen the default browser is the showing

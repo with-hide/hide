@@ -440,7 +440,7 @@ fn start_answers_hides_session_guidance() {
     let answer = machine.run("start", &json!({"cwd": machine.home}), true);
     let context = answer["context"].as_str().unwrap();
     assert!(
-        context.contains(hide_agent_hooks::guidance::GUIDANCE_LINE),
+        context.starts_with(hide_agent_hooks::START_CONTEXT),
         "{context}"
     );
 }

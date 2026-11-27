@@ -546,6 +546,12 @@ pub(crate) trait Engine: Send + Sync {
     /// screen. A refusal typed nothing; an answer that never came may follow
     /// a submission that arrived.
     fn prompt_agent(&self, wait: Wait, target: &str, text: &str, by: PromptBy) -> Answer<()>;
+    /// Presses `keys` in the agent's pane only while the engine reads the
+    /// agent at work, read where the keys are typed: refused, typing
+    /// nothing, while it is held at a prompt (`agent_blocked`) or not at work
+    /// (`agent_not_working`), so a stop never answers a permission (PRD
+    /// desk-queue D-24).
+    fn interrupt_agent(&self, wait: Wait, target: &str, keys: &[&str]) -> Answer<()>;
 
     // Worktrees.
 
@@ -800,6 +806,17 @@ impl EngineHandle {
     ) -> Result<(), EngineError> {
         self.engine
             .prompt_agent(Wait::Each(timeout), pane, text, by)
+    }
+
+    /// Presses `keys` in the agent's pane while it works
+    /// ([`Engine::interrupt_agent`]); a refusal typed nothing.
+    pub fn interrupt_agent(
+        &self,
+        pane: &str,
+        keys: &[&str],
+        timeout: Duration,
+    ) -> Result<(), EngineError> {
+        self.engine.interrupt_agent(Wait::Each(timeout), pane, keys)
     }
 
     /// Presses one key in a pane.

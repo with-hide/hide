@@ -214,10 +214,12 @@ impl Runtime {
             (Some(_), Ok(ledger)) => LetterWaits::of(ledger),
             _ => LetterWaits::default(),
         };
+        let queued = self.input_queue_panes();
         let awake = Awake {
             on_screen: &on_screen,
             backoff_until: &backoff_until,
             letters: &letters,
+            queued: &queued,
         };
         let store = &self.snapshot.ui_state.agent_sleep;
         let due = store.due(

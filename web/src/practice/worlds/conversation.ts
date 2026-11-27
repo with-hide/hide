@@ -8,7 +8,7 @@ const PLACE = { project: "hide-practice", label: "hide-practice", branch: "main"
 export type ConversationModel = DeskModel & { opened: boolean; generation: number; sent: string | null; request: string | null };
 export const conversationThread = (model: ConversationModel): SessionThreadSection => ({
   generation: model.generation, pane_id: model.opened ? CONVERSATION_PANE : null, machine: "practice", state: model.opened ? "ready" : "closed", failure: null,
-  pane: "same", connected: true, has_older: false, older: "idle", choice: {}, input: model.request ? { request_id: model.request, state: "sent" } : null,
+  pane: "same", connected: true, has_older: false, older: "idle", choice: {}, queue: null, input: model.request ? { request_id: model.request, state: "sent" } : null,
   tail: { updates: [
     { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Read the project and list the next steps." } },
     { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "I read the project. The next step is to check the sign-in flow." } },

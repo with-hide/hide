@@ -22,6 +22,7 @@ import type { AskLine } from "../open-asks";
 import { useComposerMenus } from "./composer-menus";
 import { SessionAgentBar } from "./desk-composer";
 import { FileDropZone } from "./file-drop";
+import { QueueGroup } from "./queue-group";
 import { NO_MENTIONS, ThreadView, type ThreadPartActions } from "./thread-view";
 
 import { Button } from "../ui/button";
@@ -30,7 +31,7 @@ import { Hint } from "../ui/tooltip";
 const NO_CHOICE: { model?: string; effort?: string } = {};
 
 /** The refusals a thread's input words itself; any other is an attachment's, worded as a terminal attachment's is. */
-const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "uncertain", "unavailable", "device_unreachable", "too_long", "control_characters", "attachment_failed", "input_refused", "switch_unsupported", "needs_model", "invalid_model", "invalid_effort", "invalid_request", "agent_asking", "agent_busy", "draft"]);
+const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "uncertain", "unavailable", "device_unreachable", "too_long", "control_characters", "attachment_failed", "input_refused", "switch_unsupported", "needs_model", "invalid_model", "invalid_effort", "invalid_request", "agent_asking", "agent_busy", "draft", "agent_not_working", "interrupt_unsupported"]);
 
 /**
  * A session's conversation on screen, connected to the core (PRD desk-2-ui
@@ -49,7 +50,7 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
   paneConversation?: boolean;
   /** The pane whose thread this is; its card's when not given. */
   paneId?: string | null;
-  actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread" | "switchThread" | "observeCatalog" | "requestFileIndex" | "deskCommandsCheck">;
+  actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread" | "switchThread" | "observeCatalog" | "requestFileIndex" | "deskCommandsCheck" | "inputQueue" | "interruptThread">;
   mentions?: readonly DeskMention[];
   startedByDesk?: boolean;
   focused?: boolean;
@@ -149,7 +150,8 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
   };
   // The `/` and `@` menus Desk's composer has: the session's agent's own commands, and the session's project's
   // files above Desk's sessions. A pick is written as the agent reads it in its terminal.
-  const kind = rows.find((row) => row.pane_id === paneId)?.agent_kind ?? null;
+  const row = rows.find((one) => one.pane_id === paneId);
+  const kind = row?.agent_kind ?? null;
   const adapter = kind ? agentAdapter(kind) : undefined;
   const commandSection = useShellStore((s) => s.deskCommands);
   const deskMentions = useShellStore((s) => s.deskMentions);
@@ -209,6 +211,31 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
       setNotice(words("forward_failed"));
     }
   };
+  // While the agent works, ■ types the keys its `[interrupt]` names and pauses its waiting line; ↵ keeps adding to the
+  // line (PRD desk-queue B10-B12). A line's `보내기` waits until it rests and asks nothing (B16).
+  const working = row?.state.working === true && !row.state.asking;
+  const stop = () => {
+    if (!thread?.pane_id || held !== null || sent) return;
+    if (!canSend()) return;
+    const request = actions.interruptThread(thread.generation, thread.pane_id);
+    if (request) {
+      holdSent({ request, tiles: [] });
+      setNotice(null);
+    } else {
+      setNotice(words("forward_failed"));
+    }
+  };
+  const queue = thread?.queue && paneId ? (
+    <QueueGroup
+      state={thread.queue.state}
+      lines={thread.queue.lines}
+      cleared={thread.queue.cleared}
+      stalled={thread.queue.stalled === true}
+      sendable={row?.state.working === false && !row.state.asking}
+      dimmed={!thread.connected}
+      onAction={(action, id) => actions.inputQueue(paneId, action, id)}
+    />
+  ) : null;
   const bar = adapter && slots && !foot ? (
     <SessionAgentBar
       agent={{ kind: adapter.agent_cli, label: adapter.picker_label }}
@@ -283,6 +310,8 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
           textRef: box,
           menus,
           bar,
+          queue,
+          onStop: working && adapter?.interrupt ? stop : undefined,
           onChange: (value, next) => {
             setText(value);
             setCaret(next);

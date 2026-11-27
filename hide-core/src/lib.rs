@@ -42,6 +42,7 @@ mod fetch;
 mod files;
 pub use files::{FileRoots, inode_text};
 pub use fork::AGENT_NAME_LIMIT;
+pub use input_queue::{FILES_FULL as QUEUE_FILES_FULL, FULL as QUEUE_FULL, InterruptStep};
 mod agent_groups;
 mod agent_layout;
 pub mod find;
@@ -56,6 +57,7 @@ pub mod guest_panes;
 mod handle;
 pub mod herdr_import;
 pub mod input_gate;
+mod input_queue;
 pub mod issues;
 mod kit;
 mod labels;
@@ -128,7 +130,7 @@ pub use handle::{Core, ExecAsk, PreparedChanges};
 pub use model::{
     ChangedFileStatus, LookChange, LookView, LookViews, RemoteFileListSnapshot,
     RemoteSessionSnapshot, RemoteStatusSnapshot, RestSections, RightPanelSection,
-    SnapshotDeltaWire,
+    SnapshotDeltaWire, ThreadInputState,
 };
 pub use model::{
     CoreOptions, DeviceProblem, DeviceRegistration, HerdrImportSnapshot, InterfaceLanguage,

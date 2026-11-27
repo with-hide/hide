@@ -56,7 +56,9 @@ test("a Claude pane's record reads as a thread, follows what the session writes,
     await setAgentState(daemon, pane, "working");
     await expect.poll(() => words(), { timeout: 30_000 }).toContain("스레드가 따라 읽는 새 말");
 
-    // The input box's words reach the pane's program, with Enter, and nowhere else.
+    // The input box's words reach the pane's program at rest, with Enter, and nowhere else; words sent while it
+    // works wait in its line (PRD desk-queue D-01).
+    await setAgentState(daemon, pane, "idle");
     const request = crypto.randomUUID();
     await sendEvent(page, daemon, "thread_input", { generation: thread()!.generation, pane_id: pane, request_id: request, text: "계속해 주세요", stages: [] });
     await expect.poll(() => thread()?.input, { timeout: 30_000 }).toEqual({ request_id: request, state: "sent" });
@@ -99,7 +101,12 @@ test("a Pi pane's record reads as a thread, follows what the session writes, and
     });
     await expect.poll(() => words(), { timeout: 30_000 }).toContain("스레드가 따라 읽는 새 말");
 
-    // The input box's words reach the pane's program, with Enter, and nowhere else.
+    // The input box's words reach the pane's program at rest, with Enter, and nowhere else; words sent while it
+    // works wait in its line (PRD desk-queue D-01).
+    await withControl(daemon, async (control) => {
+      sendKeys(control, pane, "\x1b[2J\x1b[H");
+      await control.until((rest) => agentIn(rest, pane)?.activity === "working" ? undefined : true, `${pane} at rest`, 30_000);
+    });
     const request = crypto.randomUUID();
     await sendEvent(page, daemon, "thread_input", { generation: thread()!.generation, pane_id: pane, request_id: request, text: "계속해 주세요", stages: [] });
     await expect.poll(() => thread()?.input, { timeout: 30_000 }).toEqual({ request_id: request, state: "sent" });

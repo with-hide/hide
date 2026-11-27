@@ -87,6 +87,7 @@ import {
   type SignInReply,
   type GlanceGroupKey,
   type GlanceTab,
+  type QueueAction,
 } from "./snapshot";
 import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
@@ -106,7 +107,7 @@ import { visitSessionTerminal } from "./sessionDrafts";
 import { windowScreen, type WindowScreen } from "./windowScreen";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import { isRemoteView, remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
-import { isLocalNetworkHost } from "./loopbackHost";
+import { isLocalNetworkHost, isLoopbackHost } from "./loopbackHost";
 import type { PairingVerb } from "./pairing";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
@@ -3007,9 +3008,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_send", payload: { text, mentions: mentions.map(({ kind, id, name }) => ({ kind, id, name })), ...(files ?? {}), ...(again === null ? {} : { again }) } });
     },
 
-    /** ✕ on a message waiting for the turn before it: it never goes (`desk_queued_remove`). */
-    deskQueuedRemove(id: number) {
-      dispatch({ schema_version: 2, kind: "desk_queued_remove", payload: { id } });
+    /**
+     * One move on Desk's waiting messages (PRD desk-queue B14-B17, B30, B31): ✕ (`remove`) or `보내기` (`send`) on
+     * message `id`, `▶ 이어 보내기` (`resume`), `모두 지우기` (`clear`) and `되돌리기` (`restore`).
+     */
+    deskQueue(action: QueueAction, id?: number) {
+      dispatch({ schema_version: 2, kind: `desk_queued_${action}`, payload: id === undefined ? {} : { id } });
     },
 
     /** `중지`: ends Desk's turn and nothing it started (B7). */
@@ -4102,6 +4106,20 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const sent = dispatch({ schema_version: 2, kind: "session_thread_switch", payload: { generation, pane_id: paneId, request_id: requestId, ...change } });
       return sent === false ? null : requestId;
     },
+    /** The same moves on a pane's waiting line (PRD desk-queue B7, B14-B17), which every window and the phone share. */
+    inputQueue(paneId: string, action: QueueAction, id?: number) {
+      dispatch({ schema_version: 2, kind: `input_queue_${action}`, payload: id === undefined ? { pane_id: paneId } : { pane_id: paneId, id } });
+    },
+    /**
+     * ■ on the session input (B10-B12): the keys the agent's `[interrupt]` names, typed while it works, and its
+     * waiting line paused; answered on the thread's input state by the request id returned, or null when nothing
+     * could be sent.
+     */
+    interruptThread(generation: number, paneId: string): string | null {
+      const requestId = crypto.randomUUID();
+      const sent = dispatch({ schema_version: 2, kind: "session_thread_interrupt", payload: { generation, pane_id: paneId, request_id: requestId } });
+      return sent === false ? null : requestId;
+    },
     /** The Overview panel's record: read, without the lane moving. */
     readSessionRecord(session: import("./snapshot").WorkSession) {
       dispatch({ schema_version: 2, kind: "session_record_open", payload: { session } });
@@ -4433,12 +4451,24 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       // The core keeps a Workspace in front while the page shows All projects
       // or an Overview; a display opened there would land out of sight.
       const inFront = ui().screen?.kind === "workspace" ? frontViewWorkspace() : null;
-      // In another computer's screen the default browser is the showing
-      // window's, which never opens this machine's loopback, LAN or local
-      // names; such a link opens as a page here, which reaches them through
-      // this machine (docs/BROWSER_DISPLAYS.md, A page in another computer's screen).
-      if (external && inFront && isRemoteView() && localNetworkLink(url)) {
-        this.openBrowser(url, undefined, undefined, undefined, openerPane);
+      // The default browser is the showing window's machine's, whose
+      // loopback is not another machine's: a link in another computer's
+      // screen to that computer's loopback, LAN or local names, and one in
+      // an SSH device's pane to that device's loopback, opens as a page
+      // here, which reaches it through that machine. A device's LAN or
+      // local name has no way through the device yet, so it keeps the
+      // default browser (docs/BROWSER_DISPLAYS.md, A page in another
+      // computer's screen; Open in default browser).
+      // Only a Workspace in front opens such a page as that machine's: a
+      // page of Desk's desk opened from here would be this machine's (its
+      // machine comes from a session's own View alone), so in Desk's room and
+      // with no Workspace in front the link goes nowhere rather than to this
+      // machine's browser or loopback.
+      const onDevice = openerPane !== undefined && remoteTargetOfPane(rest(), openerPane) !== null;
+      const throughThatMachine = isRemoteView() ? localNetworkLink(url) : onDevice && loopbackLink(url);
+      if (throughThatMachine) {
+        if (!inFront) return diagnostic("open link: another machine's local address with no Workspace in front");
+        this.openBrowser(url, inFront, undefined, undefined, openerPane);
         return;
       }
       if (external || !inFront) {
@@ -4718,6 +4748,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       });
     },
   };
+}
+
+/** Whether `url` is a web address on its machine's loopback. */
+export function loopbackLink(url: string): boolean {
+  try {
+    const address = new URL(url);
+    return (address.protocol === "http:" || address.protocol === "https:") && isLoopbackHost(address.hostname);
+  } catch {
+    return false;
+  }
 }
 
 /** Whether `url` is a web address on its machine's loopback, its LAN or a local name. */

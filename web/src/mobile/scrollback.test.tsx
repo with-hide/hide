@@ -20,7 +20,7 @@ it("explains alternate rows, opens their conversation, and leaves primary and le
   const frame = { type: "rows", ...key, state: "ok", text: "Current screen", lines: 200, more: false } satisfies ServerFrame;
   const hint = () => container.querySelector<HTMLElement>("[data-phone-screen-history]");
   try {
-    patch({ connected: true, detail: { key, view: "terminal", tab: "terminal", rows: null, moreAskedAt: null, conversation: { messages: [{ id: 1, who: "agent", text: "Earlier answer", truncated: false, at_ms: 0 }], before: null }, olderAskedAt: null, looks: null, look: null, ask: null, running: null } });
+    patch({ connected: true, detail: { key, view: "terminal", tab: "terminal", rows: null, moreAskedAt: null, conversation: { messages: [{ id: 1, who: "agent", text: "Earlier answer", truncated: false, at_ms: 0 }], before: null }, olderAskedAt: null, looks: null, look: null, ask: null, running: null, queue: null } });
     await act(async () => { applyFrame(frame); root.render(<Detail onBack={() => {}} />); });
     expect(hint()).toBeNull(); // An older computer has no screen-mode field.
     await act(async () => applyFrame({ ...frame, alternate_screen: false }));

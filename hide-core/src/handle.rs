@@ -542,6 +542,9 @@ impl Core {
                 hide_kit::layout::desk_commands(directory),
             );
             let desk_commands_restored = desk_commands.restore();
+            let input_queue =
+                crate::input_queue::InputQueueStore::new(hide_kit::layout::input_queue(directory));
+            let input_queue_restored = input_queue.restore();
             let (access, access_restored) =
                 crate::runtime::access::restore(hide_kit::layout::access_store(directory));
             let (automations, automations_restored, zone) = crate::runtime::automations::restore(
@@ -557,6 +560,7 @@ impl Core {
             }
             guard.install_desk_store(desk, desk_restored);
             guard.install_agent_commands(desk_commands, desk_commands_restored);
+            guard.install_input_queue(input_queue, input_queue_restored);
             guard.install_access_store(access, access_restored);
             guard.install_automations_store(automations, automations_restored, zone);
             drop(guard);
@@ -745,7 +749,7 @@ impl Core {
         &self,
         kind: &str,
         payload: serde_json::Value,
-        reply: impl Fn(Result<(), &'static str>) + Send + Sync + 'static,
+        reply: impl Fn(Result<crate::model::ThreadInputState, &'static str>) + Send + Sync + 'static,
     ) {
         if !check_owner_thread(self, "thread_input") {
             reply(Err("unavailable"));
@@ -766,6 +770,15 @@ impl Core {
             "session_thread_switch" => {
                 match serde_json::from_value::<crate::runtime::ThreadSwitchPayload>(payload) {
                     Ok(payload) => runtime.switch_session_thread_answered(payload, Some(reply)),
+                    Err(_) => {
+                        reply(Err("invalid_request"));
+                        false
+                    }
+                }
+            }
+            "session_thread_interrupt" => {
+                match serde_json::from_value::<crate::runtime::ThreadInterruptPayload>(payload) {
+                    Ok(payload) => runtime.interrupt_session_thread_answered(payload, Some(reply)),
                     Err(_) => {
                         reply(Err("invalid_request"));
                         false
@@ -1473,6 +1486,81 @@ impl Core {
             return Vec::new();
         }
         lock_recover(&self.runtime).desk_files_in_use()
+    }
+
+    /// The paths of the files the operator's waiting words name (PRD
+    /// desk-queue D-12), which hided's folder for waiting input keeps
+    /// whatever its cap says.
+    pub fn input_files_in_use(&self) -> Vec<String> {
+        if !check_owner_thread(self, "input_files_in_use") {
+            return Vec::new();
+        }
+        lock_recover(&self.runtime).input_queue_files_in_use()
+    }
+
+    /// `pane_id`'s waiting words as every screen draws them, for a phone's
+    /// open detail; none while it holds none.
+    pub fn input_queue(&self, pane_id: &str) -> Option<serde_json::Value> {
+        if !check_owner_thread(self, "input_queue") {
+            return None;
+        }
+        lock_recover(&self.runtime)
+            .input_queue_snapshot(pane_id)
+            .and_then(|snapshot| serde_json::to_value(snapshot).ok())
+    }
+
+    /// Whether the operator's words to `pane_id` wait in its line now rather
+    /// than being typed (PRD desk-queue D-01): its agent works, or words wait
+    /// ahead of them. A phone's reply asks before it types.
+    pub fn input_waits(&self, pane_id: &str) -> bool {
+        if !check_owner_thread(self, "input_waits") {
+            return false;
+        }
+        lock_recover(&self.runtime).input_route(pane_id) == crate::input_queue::Route::Queue
+    }
+
+    /// Holds the operator's words at the end of `pane_id`'s line, with the
+    /// files at `paths` (kept in hided's folder for waiting input, `bytes`
+    /// together) that a device's pane stages under `stage_id` when they go.
+    /// Refused past the line's caps (`queue_full`, `queue_files_full`).
+    pub fn queue_input(
+        &self,
+        pane_id: &str,
+        text: String,
+        paths: Vec<String>,
+        bytes: u64,
+        stage_id: String,
+    ) -> Result<u64, String> {
+        if !check_owner_thread(self, "queue_input") {
+            return Err("core_unavailable".to_owned());
+        }
+        let queued = lock_recover(&self.runtime)
+            .queue_input(pane_id, text, paths, bytes, stage_id)
+            .map_err(str::to_owned);
+        if queued.is_ok() {
+            self.notifier.notify();
+        }
+        queued
+    }
+
+    /// A step of ■ in `pane_id` (PRD desk-queue D-08, D-24), whose keys the
+    /// caller types off the lock: `Start` answers the keys, refused while the
+    /// agent asks or rests, and holds its waiting words; `Ready` looks once
+    /// more, right before the keys go; `Answered` pauses the words when the
+    /// keys may have landed.
+    pub fn interrupt(
+        &self,
+        pane_id: &str,
+        step: crate::InterruptStep,
+    ) -> Result<Vec<String>, String> {
+        if !check_owner_thread(self, "interrupt") {
+            return Err("core_unavailable".to_owned());
+        }
+        let keys = lock_recover(&self.runtime)
+            .interrupt_step(pane_id, step)
+            .map_err(str::to_owned);
+        self.notifier.notify();
+        keys
     }
 
     /// Why a link from `node` would be refused now, if it would.

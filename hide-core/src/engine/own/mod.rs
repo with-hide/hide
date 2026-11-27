@@ -2451,6 +2451,34 @@ impl<'g> Engine for OwnEngine<'g> {
         Ok(())
     }
 
+    fn interrupt_agent(&self, _wait: Wait, target: &str, keys: &[&str]) -> Answer<()> {
+        self.check()?;
+        let inputs = typed_keys(keys)?;
+        {
+            let topology = self.topology();
+            let (_, _, agent) = topology.agent(target)?;
+            match agent.live.status {
+                agents::Status::Working => {}
+                agents::Status::Blocked => {
+                    return Err(refused(
+                        "agent_blocked",
+                        format!("agent {target} is blocked and requires interactive input"),
+                    ));
+                }
+                _ => {
+                    return Err(refused(
+                        "agent_not_working",
+                        format!("agent {target} is not at work"),
+                    ));
+                }
+            }
+        }
+        for input in inputs {
+            self.type_input(target, input)?;
+        }
+        Ok(())
+    }
+
     fn send_sleep_keys(&self, _wait: Wait, pane: &str, keys: &[&str]) -> Answer<()> {
         self.check()?;
         for input in typed_keys(keys)? {
