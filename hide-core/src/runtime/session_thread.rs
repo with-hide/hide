@@ -580,15 +580,7 @@ impl Runtime {
         if !ingress::valid_request_id(&payload.request_id) {
             return false;
         }
-        self.type_into_thread(
-            payload.generation,
-            &payload.pane_id,
-            payload.request_id,
-            payload.text,
-            payload.paths,
-            payload.bytes,
-            None,
-        )
+        self.type_into_thread(payload, None)
     }
 
     /// Changes the model or the effort of the session the thread shows the
@@ -650,12 +642,14 @@ impl Runtime {
         };
         let after = switch.after(to, &now);
         self.type_into_thread(
-            payload.generation,
-            &payload.pane_id,
-            payload.request_id,
-            line,
-            Vec::new(),
-            0,
+            ThreadInputPayload {
+                generation: payload.generation,
+                pane_id: payload.pane_id,
+                request_id: payload.request_id,
+                text: line,
+                paths: Vec::new(),
+                bytes: 0,
+            },
             Some(after),
         )
     }
@@ -710,28 +704,15 @@ impl Runtime {
         }
     }
 
-    /// Types `text` (with the files at `paths` before it) into the thread's
-    /// pane through the one operator write, answered on the thread's input
-    /// state by `request_id`; `choice` is what a switch line makes the
-    /// session's model and effort once it is typed.
+    /// Types the payload's text (with the files at its paths before it) into
+    /// the thread's pane through the one operator write, answered on the
+    /// thread's input state by its request id; `choice` is what a switch line
+    /// makes the session's model and effort once it is typed.
     fn type_into_thread(
         &mut self,
-        generation: u64,
-        pane_id: &str,
-        request_id: String,
-        text: String,
-        paths: Vec<String>,
-        bytes: u64,
+        payload: ThreadInputPayload,
         choice: Option<hide_agent_adapter::LaunchChoice>,
     ) -> bool {
-        let payload = ThreadInputPayload {
-            generation,
-            pane_id: pane_id.to_owned(),
-            request_id,
-            text,
-            paths,
-            bytes,
-        };
         let Some(open) = self.session_thread.open.as_ref().filter(|open| {
             open.generation == payload.generation && open.pane_id == payload.pane_id
         }) else {
