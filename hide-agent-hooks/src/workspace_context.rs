@@ -153,7 +153,7 @@ mod tests {
                 "context": {
                     "device_id": "14ad0319-60d7-5a7c-ae5a-f71550dc8a60",
                     "workspace_id": "workspace:487095a4dbe5f2af",
-                    "checkout_path": "/Users/someone/.hide/worktrees/a-project/fix-start-context-progressive"
+                    "checkout_path": "/srv/work/.hide/worktrees/a-project/fix-start-context-progressive"
                 },
                 "capabilities": ["workspace.info", "request.send", "inbox", "file.open", "browser.open"]
             }
