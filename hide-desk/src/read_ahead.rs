@@ -139,6 +139,10 @@ pub fn read(
         }
         Err(unread) => return Err(unread),
     };
+    // A tree whose end the system could not confirm is reported, not its
+    // list: the caller logs why and remembers the read as failed, so the
+    // next look at a moved mark (or the operator's `/`) starts it afresh;
+    // the tied start still ends what is left with hided.
     if let Err(error) = ended {
         return Err(Unread::Failed(format!("the process did not end: {error}")));
     }
@@ -186,7 +190,12 @@ fn listen(
                     }
                     Ok(list)
                 }
-                (Some(_), None) => Err(Unread::NoList),
+                (Some(session), None) => {
+                    if can_delete && let Some(session) = session {
+                        forget(connection, heard, &session, stop, bounds.forget);
+                    }
+                    Err(Unread::NoList)
+                }
                 (None, _) => Err(Unread::Failed("no session within the deadline".into())),
             };
         }

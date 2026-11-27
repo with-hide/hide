@@ -83,6 +83,14 @@ fn a_read_that_brings_no_list_says_why_and_ends_its_process() {
         assert_eq!(read.unwrap_err(), why, "{role}");
         assert!(pid != 0 && !hide_platform::process::is_alive(pid), "{role}");
     }
+    // A session that sent no list is deleted too, where the agent offers it.
+    let folder = tempfile::tempdir().unwrap();
+    let (read, _) = read_in(folder.path(), "lists-none", &AtomicBool::new(false));
+    assert_eq!(read.unwrap_err(), Unread::NoList);
+    assert_eq!(
+        std::fs::read_to_string(folder.path().join("pid.deleted")).unwrap(),
+        "s1"
+    );
 }
 
 /// A read the caller stops ends with its process, however long the agent

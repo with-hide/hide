@@ -421,7 +421,7 @@ impl Runtime {
             Ok(handle) => {
                 // Desk switched off looks at no agent (D-76).
                 if self.desk.stored.settings.enabled {
-                    let _ = handle.orders.send(self.desk_check());
+                    let _ = handle.orders.send(self.desk_check(false));
                     self.ask_ai_catalog_read();
                 }
                 self.desk.worker = Some(handle);
@@ -1011,7 +1011,7 @@ impl Runtime {
     fn desk_restart(&mut self) -> bool {
         self.end_desk_process();
         self.forget_stopped();
-        self.order(self.desk_check());
+        self.order(self.desk_check(true));
         self.desk.held = false;
         true
     }
@@ -1200,7 +1200,7 @@ impl Runtime {
             if enabled {
                 // Every adapter is installed now, not when it is chosen
                 // (D-80), and the sign-ins are read (D-81).
-                self.order(self.desk_check());
+                self.order(self.desk_check(false));
                 self.ask_ai_catalog_read();
                 self.desk_start_queued();
                 self.desk_views_switched(true);
@@ -1906,19 +1906,26 @@ impl Runtime {
         self.compose_desk();
         self.compose_desk_commands();
         if moved && self.desk.stored.settings.enabled {
-            self.order(self.desk_check());
+            let (on, signed_out) = reading(&catalog);
+            self.order(Order::Lists {
+                marks: self.desk.read_marks.clone(),
+                on: on.into_iter().collect(),
+                signed_out: signed_out.into_iter().collect(),
+            });
         }
     }
 
     /// The look at every agent Desk orders: with the last reads ahead, the
     /// agents switched on, whose commands are read, and those the operator
-    /// is signed out of (`desk/lists.rs`).
-    fn desk_check(&self) -> Order {
+    /// is signed out of (`desk/lists.rs`); `retry` when the operator asked
+    /// for it, so a failed read is tried once more.
+    fn desk_check(&self, retry: bool) -> Order {
         let (on, signed_out) = reading(&self.desk_catalog());
         Order::Check {
             marks: self.desk.read_marks.clone(),
             on: on.into_iter().collect(),
             signed_out: signed_out.into_iter().collect(),
+            retry,
         }
     }
 
@@ -4424,7 +4431,7 @@ mod tests {
         // The look that says so takes Pi out of what the reader reads.
         let on = std::iter::from_fn(|| received.try_recv().ok())
             .find_map(|order| match order {
-                Order::Check { on, .. } => Some(on),
+                Order::Lists { on, .. } => Some(on),
                 _ => None,
             })
             .expect("a look once Pi is switched off");
@@ -4433,7 +4440,7 @@ mod tests {
         assert_eq!(unread(&runtime, AdapterId::PI), Some(Why::Reading));
         let on = std::iter::from_fn(|| received.try_recv().ok())
             .find_map(|order| match order {
-                Order::Check { on, .. } => Some(on),
+                Order::Lists { on, .. } => Some(on),
                 _ => None,
             })
             .expect("a look once Pi is switched on");
@@ -4503,7 +4510,10 @@ mod tests {
         event(&mut runtime, "desk_restart", json!({}));
         let marks = std::iter::from_fn(|| received.try_recv().ok())
             .find_map(|order| match order {
-                Order::Check { marks, .. } => Some(marks),
+                Order::Check { marks, retry, .. } => {
+                    assert!(retry, "`다시 시작` tries a failed read once more");
+                    Some(marks)
+                }
                 _ => None,
             })
             .expect("a look");

@@ -105,6 +105,7 @@ fn stand_in_agent() {
                         send(list(&["compact", "review"]));
                         send(list(&["compact"]));
                     }
+                    "lists-none" => send(answer),
                     "lists-empty" => {
                         send(answer);
                         send(list(&["logout"]));

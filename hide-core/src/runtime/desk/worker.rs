@@ -46,6 +46,16 @@ pub(super) enum Order {
         /// The agents the operator is signed out of, as Settings reads it: a
         /// sign-out and the sign-in after it each read the list again.
         signed_out: Vec<AdapterId>,
+        /// The operator asked for it (`다시 시작`): a list whose read failed
+        /// is tried once more on the same mark.
+        retry: bool,
+    },
+    /// The agents switched on or signed in moved in the catalog: only the
+    /// list reader is told, with the agents in place at the last look.
+    Lists {
+        marks: crate::desk::ReadMarks,
+        on: Vec<AdapterId>,
+        signed_out: Vec<AdapterId>,
     },
     /// Install `adapter`'s adapter; `asked` when the operator pressed
     /// `다시 받기`.
@@ -278,6 +288,7 @@ pub(super) fn start(
         installing: Vec::new(),
         lists: None,
         open: Arc::new(Mutex::new(None)),
+        ready: Vec::new(),
     };
     std::thread::Builder::new()
         .name("hide-core-desk".into())
@@ -315,6 +326,9 @@ struct Worker {
     /// The agent whose Desk session is open, which the list reader leaves
     /// alone: that session sends its list.
     open: Arc<Mutex<Option<AdapterId>>>,
+    /// The agents in place at the last look, which a catalog change hands
+    /// the list reader without looking at every agent again.
+    ready: Vec<AdapterId>,
 }
 
 /// The Desk process and its session.
@@ -367,7 +381,19 @@ impl Worker {
                 marks,
                 on,
                 signed_out,
-            } => self.check(marks, on, signed_out),
+                retry,
+            } => self.check(marks, on, signed_out, retry),
+            Order::Lists {
+                marks,
+                on,
+                signed_out,
+            } => self.read_ahead(super::lists::Wanted::Look {
+                marks,
+                on,
+                ready: self.ready.clone(),
+                signed_out,
+                retry: false,
+            }),
             Order::Install { adapter, asked } => self.install(adapter, asked),
             Order::Send(send) => self.send(send),
             Order::Cancel => {
@@ -531,6 +557,7 @@ impl Worker {
         marks: crate::desk::ReadMarks,
         on: Vec<AdapterId>,
         signed_out: Vec<AdapterId>,
+        retry: bool,
     ) {
         self.on = true;
         let places = self.platform.places();
@@ -557,11 +584,12 @@ impl Worker {
                 }
             })
             .collect();
-        let ready = states
+        let ready: Vec<AdapterId> = states
             .iter()
             .filter(|(_, state, _)| *state == DeskAgentState::Ready)
             .map(|(adapter, _, _)| *adapter)
             .collect();
+        self.ready = ready.clone();
         self.report(Report::Availability(states));
         for adapter in missing {
             self.install(adapter, false);
@@ -573,6 +601,7 @@ impl Worker {
             on,
             ready,
             signed_out,
+            retry,
         });
     }
 
@@ -1401,6 +1430,7 @@ mod tests {
             installing: Vec::new(),
             lists: None,
             open: Arc::new(Mutex::new(None)),
+            ready: Vec::new(),
         }
     }
 

@@ -147,7 +147,8 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
     text,
     caret,
     commands: adapter ? { agent: adapter.picker_label, list: commandSection?.lists[adapter.agent_cli as DeskAgentId] ?? null, unread: commandSection?.unread[adapter.agent_cli as DeskAgentId] ?? null } : null,
-    onCommandsOpen: adapter ? () => actions.deskCommandsCheck(adapter.agent_cli as DeskAgentId) : undefined,
+    // Only an agent Desk reads lists for: one the section names, with its list or why it has none.
+    onCommandsOpen: adapter && commandSection && (adapter.agent_cli in commandSection.lists || adapter.agent_cli in commandSection.unread) ? () => actions.deskCommandsCheck(adapter.agent_cli as DeskAgentId) : undefined,
     mentions: named,
     projects: false,
     files,

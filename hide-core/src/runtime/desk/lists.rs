@@ -21,8 +21,11 @@
 //! agent's program and the skills folder its definition names, file facts
 //! only, and whether the operator is signed out of it) and starts the agent
 //! only when that moved since the list it has, and not when a read of that
-//! same digest already failed: a failure is tried again only once the
-//! program, the skills or the sign-in moved. The agent whose Desk session is
+//! same digest already failed: a failure is tried again once the program,
+//! the skills or the sign-in moved, or when the operator asks: opening `/`
+//! on the agent or `다시 시작` tries it once more, so a transient failure
+//! or a sign-in Settings does not read is never stuck, and the retries are
+//! as many as the operator's own presses. The agent whose Desk session is
 //! open is not read, since that session sends its list. Each read can leave
 //! one empty session in the agents that cannot delete it (omp, Grok, agy),
 //! so a read happens only when what the list depends on moved.
@@ -51,10 +54,13 @@ pub(super) enum Wanted {
         on: Vec<AdapterId>,
         ready: Vec<AdapterId>,
         signed_out: Vec<AdapterId>,
+        /// The operator asked for it (`다시 시작`): failures are forgotten.
+        retry: bool,
     },
     /// An agent whose adapter was just installed.
     Ready(AdapterId),
-    /// The operator opened the `/` menu on an agent.
+    /// The operator opened the `/` menu on an agent: a failure of its read
+    /// is forgotten, so this look reads it once more.
     Check(AdapterId),
 }
 
@@ -83,7 +89,11 @@ impl Schedule {
                 on,
                 ready,
                 signed_out,
+                retry,
             } => {
+                if retry {
+                    self.failed.clear();
+                }
                 self.marks = marks;
                 self.on = on.into_iter().collect();
                 self.signed_out = signed_out.into_iter().collect();
@@ -103,6 +113,7 @@ impl Schedule {
             }
             Wanted::Check(agent) => {
                 if self.in_place.contains(&agent) {
+                    self.failed.remove(&agent);
                     self.queue_up(vec![agent]);
                 }
             }
@@ -331,6 +342,7 @@ mod tests {
             on: on.to_vec(),
             ready: vec![PI, OMP],
             signed_out: signed_out.to_vec(),
+            retry: false,
         }
     }
 
@@ -378,9 +390,9 @@ mod tests {
         assert!(schedule.due(OMP, &v2));
     }
 
-    /// A read that brought no list is not tried again on the same digest,
-    /// at any later moment; a new program, skill or sign-in is a new digest,
-    /// and the sign-in moves the digest through the look that reports it.
+    /// A read that brought no list is not tried again on the same digest by
+    /// a look Hide takes itself; a new program, skill or sign-in is a new
+    /// digest, and the sign-in moves it through the look that reports it.
     #[test]
     fn a_failed_read_is_tried_again_only_when_its_files_or_sign_in_moved() {
         let mut schedule = Schedule::default();
@@ -389,7 +401,6 @@ mod tests {
         let refused = ReadMark::of(&schedule.facts(OMP, files()), 1_000);
         schedule.read(OMP, &refused, false);
         for _ in 0..3 {
-            schedule.take(Wanted::Check(OMP));
             schedule.take(look(&[OMP], &[], ReadMarks::new()));
             assert!(!schedule.due(OMP, &refused));
         }
@@ -403,11 +414,39 @@ mod tests {
         schedule.take(look(&[OMP], &[], ReadMarks::new()));
         let signed_in = ReadMark::of(&schedule.facts(OMP, files()), 1_000);
         assert_eq!(signed_in.mark, refused.mark);
-        // Back to the digest whose read failed last before the sign-out:
-        // the failure kept is the sign-out's, so this one is read.
         assert!(schedule.due(OMP, &signed_in));
         // A new program is a new digest too.
         let updated = ReadMark::of(&schedule.facts(OMP, "cli /opt/omp 11 2\n".into()), 1_000);
         assert!(schedule.due(OMP, &updated));
+    }
+
+    /// The operator's own press tries a failed read once more on the same
+    /// digest: opening `/` on that agent, or `다시 시작` for every agent; a
+    /// failure after it waits for the next press.
+    #[test]
+    fn a_slash_or_a_restart_tries_a_failed_read_once_more() {
+        let mut schedule = Schedule::default();
+        schedule.take(look(&[PI, OMP], &[], ReadMarks::new()));
+        drain(&mut schedule);
+        let pi = ReadMark::of("cli /opt/pi 1 1\n", 1_000);
+        let omp = ReadMark::of("cli /opt/omp 1 1\n", 1_000);
+        schedule.read(PI, &pi, false);
+        schedule.read(OMP, &omp, false);
+
+        schedule.take(Wanted::Check(PI));
+        assert_eq!(drain(&mut schedule), [PI]);
+        assert!(schedule.due(PI, &pi));
+        assert!(!schedule.due(OMP, &omp));
+        schedule.read(PI, &pi, false);
+        assert!(!schedule.due(PI, &pi));
+
+        schedule.take(Wanted::Look {
+            marks: ReadMarks::new(),
+            on: vec![PI, OMP],
+            ready: vec![PI, OMP],
+            signed_out: Vec::new(),
+            retry: true,
+        });
+        assert!(schedule.due(PI, &pi) && schedule.due(OMP, &omp));
     }
 }
