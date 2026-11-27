@@ -459,18 +459,131 @@ fn retiring_a_pane_clears_every_pane_keyed_terminal_state() {
         .terminal_states
         .insert(pane.into(), terminal_state("controlling", 7));
     runtime.terminal_sizes.insert(pane.into(), (80, 24));
+    runtime.floor_reports.note(pane, Some(floor_report(1000.0)));
     runtime.wheel_before_attach.insert(pane.into(), 3);
     runtime.panes_closing.insert(pane.into());
 
     assert!(runtime.retain_terminal_pane_state(|known| known != pane));
     assert!(!runtime.terminal_states.contains_key(pane));
     assert!(!runtime.terminal_sizes.contains_key(pane));
+    assert!(!runtime.floor_reports.holds(pane));
     assert!(!runtime.wheel_before_attach.contains_key(pane));
     assert!(!runtime.panes_closing.contains(pane));
     // Its node forgets it too, so an id the engine reuses starts clean.
     assert_eq!(
         terminals.take(),
         [TerminalControl::Forget { pane: pane.into() }]
+    );
+}
+
+/// What a window measured with a grid: cells of 8 px, 8 px in from each
+/// side, in a canvas `canvas` px wide (`runtime::pane_floor`).
+fn floor_report(canvas: f64) -> crate::runtime::pane_floor::FloorReport {
+    serde_json::from_value(serde_json::json!({
+        "cell_px": 8.0, "canvas_px": canvas, "inset_px": 8.0, "base_cell_px": 8.0,
+        "scale": 1.0, "font_size": 14.0, "font_family": "",
+    }))
+    .unwrap()
+}
+
+/// A device pane's split right is judged on the rectangles its device
+/// reports, under the id the window reported it by, the core's own name for
+/// it, and a window that attaches anew judges by nothing the last one
+/// measured.
+#[test]
+fn a_device_pane_splits_right_on_its_devices_rectangles_by_the_cores_name() {
+    let mut runtime = runtime();
+    let (tab, wide, narrow) = (
+        "remote:mini:tab:w1:t1",
+        "remote:mini:pane:w1:p1",
+        "remote:mini:pane:w1:p2",
+    );
+    let frame = |pane_id: &str, x: f64, width: f64| crate::model::RemotePaneLayoutFrame {
+        pane_id: pane_id.to_owned(),
+        x,
+        y: 0.0,
+        width,
+        height: 1.0,
+    };
+    runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
+        target_id: "mini".to_owned(),
+        state: "connected".to_owned(),
+        message: None,
+        session: Some(RemoteSessionSnapshot {
+            workspaces: Vec::new(),
+            agents: Vec::new(),
+            active_tab_ids: Default::default(),
+            focused_workspace_id: None,
+            focused_checkout_id: None,
+            focused_tab_id: None,
+            focused_pane_id: None,
+            pane_layouts: vec![crate::model::RemotePaneLayoutSnapshot {
+                workspace_id: "remote:mini:workspace:w1".to_owned(),
+                tab_id: tab.to_owned(),
+                focused_pane_id: wide.to_owned(),
+                zoomed: false,
+                frames: vec![frame(wide, 0.0, 0.75), frame(narrow, 0.75, 0.25)],
+            }],
+            pane_hook_tokens: Default::default(),
+            issue_tokens: Default::default(),
+            issue_links: Default::default(),
+        }),
+        files: RemoteFileListSnapshot::idle(),
+        catalog: Default::default(),
+        unreachable_since_unix_ms: None,
+    });
+    // The device's tab is the one on screen.
+    runtime.snapshot.navigator.focused_workspace_id = None;
+    runtime.snapshot.navigator.focused_checkout_id = Some("remote:mini:checkout:c1".to_owned());
+    runtime
+        .visible_tab_ids
+        .insert("remote:mini:checkout:c1".to_owned(), tab.to_owned());
+    runtime.ui_attached = true;
+    assert_eq!(runtime.shown_agent_tabs(), [tab.to_owned()]);
+    assert_eq!(
+        runtime.split_right_floor(narrow),
+        Err(crate::model::PaneFloorRefusal::Unmeasured)
+    );
+    // 1280 px: the wide pane splits into halves of 480, the narrow one into 160 less a pixel.
+    let (font_size, font_family) = (
+        runtime.snapshot.ui_state.terminal_font_size,
+        runtime.snapshot.ui_state.terminal_font_family.clone(),
+    );
+    runtime.dispatch_json(
+        &serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": "terminal_resize",
+            "payload": {"pane_id": narrow, "rows": 24, "cols": 30, "floor": {
+                "cell_px": 8.0, "canvas_px": 1276.0, "inset_px": 8.0, "base_cell_px": 8.0,
+                "scale": 1.0, "font_size": font_size, "font_family": font_family,
+            }},
+        }))
+        .unwrap(),
+    );
+    assert_eq!(runtime.split_right_floor(wide), Ok(()));
+    assert_eq!(
+        runtime.split_right_floor(narrow),
+        Err(crate::model::PaneFloorRefusal::TooNarrow)
+    );
+    // The terminal menu reads the same answer, published with the report.
+    assert_eq!(
+        runtime.snapshot.pane_floor.split_right.get(narrow),
+        Some(&crate::model::PaneFloorRefusal::TooNarrow)
+    );
+    // A window attached anew has measured nothing yet.
+    let attach = |runtime: &mut Runtime, attached: bool| {
+        runtime.dispatch_json(
+            &serde_json::to_vec(&serde_json::json!({
+                "schema_version": SCHEMA_VERSION, "kind": "ui_attached",
+                "payload": {"attached": attached},
+            }))
+            .unwrap(),
+        );
+    };
+    attach(&mut runtime, false);
+    attach(&mut runtime, true);
+    assert_eq!(
+        runtime.split_right_floor(narrow),
+        Err(crate::model::PaneFloorRefusal::Unmeasured)
     );
 }
 

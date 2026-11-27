@@ -95,6 +95,7 @@ mod overview_graph;
 mod own_devices;
 mod pair_view;
 mod pane_command;
+mod pane_floor;
 pub(crate) mod pane_move;
 mod pane_move_preview;
 mod pane_prediction;
@@ -171,6 +172,7 @@ use control_lane::ControlLane;
 pub(crate) use control_lane::LaneStart;
 use events::*;
 use operations::*;
+pub(crate) use operations::{BesideRefusal, BesideTurn};
 #[cfg(test)]
 pub(crate) use terminal::NoTerminals;
 use view_areas::{
@@ -1495,6 +1497,9 @@ pub struct Runtime {
     attachment_rejection: Option<crate::model::AsyncOperationSnapshot>,
     attachment_worker: Option<thread::JoinHandle<()>>,
     terminal_sizes: HashMap<String, (u16, u16)>,
+    /// What the window drawing each pane measured with its grid, which the
+    /// pane floor judges by (`pane_floor`).
+    floor_reports: pane_floor::FloorReports,
     /// Wheel lines that arrived before the pane had a session to take them
     /// (no size reported yet, or its attach still starting after a tab
     /// switch), summed per pane and sent at the pane's first frame through
@@ -2603,6 +2608,7 @@ impl Runtime {
             attachment_rejection: None,
             attachment_worker: None,
             terminal_sizes: pane_terminal_sizes.into_iter().collect(),
+            floor_reports: pane_floor::FloorReports::default(),
             wheel_before_attach: HashMap::new(),
             pane_relocations_in_flight: BTreeMap::new(),
             pane_hook_tokens: BTreeMap::new(),

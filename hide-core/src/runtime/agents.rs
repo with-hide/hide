@@ -518,6 +518,17 @@ impl Runtime {
                     false,
                 );
             }
+            // A device pane's split right is judged by the pane floor once, at
+            // the request, on the rectangles its device reports: the device's
+            // tab takes one mutation at a time, refused below while busy.
+            if let RemoteControlRequest::SplitPane {
+                direction: crate::live::PaneSplitDirection::Right,
+                ..
+            } = &payload.request
+                && let Err(refusal) = self.split_right_floor(&pane_id)
+            {
+                fail_request!(refusal.event_code(), refusal.message().to_owned(), false);
+            }
             let status_unknown = matches!(&payload.request, RemoteControlRequest::ClosePane { .. })
                 && session
                     .agents

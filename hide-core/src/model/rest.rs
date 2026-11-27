@@ -212,6 +212,7 @@ section!(RestSections, Snapshot, s, {
     zoomed: Option<String> => s.zoomed,
     focused: FocusedSnapshot => s.focused,
     pane_layouts: Vec<PaneLayoutSnapshot> => s.pane_layouts,
+    pane_floor: PaneFloorSnapshot => s.pane_floor,
     ui_state: UiStateSnapshot => s.ui_state,
     ime: ImeSnapshot => s.ime,
     recent_closed: RecentClosedSnapshot => s.recent_closed,
