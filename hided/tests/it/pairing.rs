@@ -33,6 +33,8 @@ mod fault_run;
 mod guest_work;
 #[cfg(unix)]
 mod moved_core;
+#[cfg(unix)]
+mod released_ssh_host;
 mod remote_view;
 
 /// The machine id the guest daemon runs under, so one host is two machines.
@@ -1222,9 +1224,22 @@ struct SshOnly {
 #[cfg(unix)]
 impl SshOnly {
     async fn connected() -> Self {
+        let pair = Self::started(crate::fixtures::fixture_root("hq")).await;
+        let added = pair.guest.run(&["device", "add", "studio", "--json"]);
+        assert!(added.ok, "{}", added.text());
+        assert_eq!(added.json()["value"]["paired"], "ssh", "{}", added.text());
+        pair.on_ssh().await;
+        pair
+    }
+
+    /// The two machines in `root`, each on the state folder it already has
+    /// there (`host-state`, `guest-state`), with the `sshd` before the
+    /// target's account and the target's `hide` linked in it before the
+    /// guest's daemon starts, so a guest that keeps the target from an
+    /// earlier run dials it at once.
+    async fn started(root: tempfile::TempDir) -> Self {
         use crate::support::sshd::Sshd;
 
-        let root = crate::fixtures::fixture_root("hq");
         let mut env = host_env(root.path());
         env.peer_direct = None;
         env.peer_relay = Some(NO_RELAY.to_owned());
@@ -1252,6 +1267,9 @@ impl SshOnly {
         .unwrap();
         std::fs::create_dir_all(guest.home.join(".ssh")).unwrap();
         std::fs::write(guest.home.join(".ssh/config"), ssh.client_config("studio")).unwrap();
+        let commands = target.home.join(".local/bin");
+        std::fs::create_dir_all(&commands).unwrap();
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_hide"), commands.join("hide")).unwrap();
         let pair = Self {
             target,
             guest,
@@ -1261,28 +1279,27 @@ impl SshOnly {
         };
         let connected = pair.guest.run(&["connect"]);
         assert!(connected.ok, "the guest daemon: {}", connected.text());
-        let commands = pair.target.home.join(".local/bin");
-        std::fs::create_dir_all(&commands).unwrap();
-        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_hide"), commands.join("hide")).unwrap();
+        pair
+    }
 
-        let added = pair.guest.run(&["device", "add", "studio", "--json"]);
-        assert!(added.ok, "{}", added.text());
-        assert_eq!(added.json()["value"]["paired"], "ssh", "{}", added.text());
-        let opened = pair
+    /// Waits until both machines say the guest opens the target over SSH,
+    /// and answers the target as the guest lists it.
+    async fn on_ssh(&self) -> Value {
+        let opened = self
             .guest
             .peer_becomes("the guest opens the target over SSH", |peer| {
                 peer["opens"] == "active" && peer["connected"] == true
             })
             .await;
         assert_eq!(opened["path"], "ssh", "{opened}");
-        let opener = pair
+        let opener = self
             .target
             .peer_becomes("the target is opened by the guest over SSH", |peer| {
                 peer["opened_by"] == "active" && peer["connected"] == true
             })
             .await;
         assert_eq!(opener["path"], "ssh", "{opener}");
-        pair
+        opened
     }
 
     /// The target as the guest names it.

@@ -635,10 +635,8 @@ fn a_beside_spawn_with_a_parent_creates_nothing() {
 }
 
 /// The caller's tab as its device lays it out, the caller alone in it, on
-/// screen in a window that measured it `canvas` px wide with cells of 8 px
-/// 8 px in from each side, or measured nothing yet. The report is filed under
-/// the caller's pane as the core names it, as the window names it.
-fn caller_drawn(spawner: &Spawner, canvas: Option<f64>) {
+/// screen with a window attached that has drawn none of it yet.
+fn caller_shown(spawner: &Spawner) {
     let mut guard = spawner.runtime.lock().unwrap();
     // The caller's tab and checkout in the device's pass (`spawner`), which
     // keeps its workspaces: the caller is found in them.
@@ -666,30 +664,41 @@ fn caller_drawn(spawner: &Spawner, canvas: Option<f64>) {
     guard.visible_tab_ids.insert(checkout, tab.clone());
     guard.ui_attached = true;
     assert_eq!(guard.shown_agent_tabs(), [tab]);
+}
+
+/// The same tab drawn by the window, which measured it `canvas` px wide with
+/// cells of 8 px 8 px in from each side, or drew it where it measures nothing.
+/// The report is filed under the caller's pane as the core names it, as the
+/// window names it.
+fn caller_drawn(spawner: &Spawner, canvas: Option<f64>) {
+    caller_shown(spawner);
+    let mut guard = spawner.runtime.lock().unwrap();
     // The window reports the caller's grid as it reports every pane's: the
     // same `terminal_resize`, its measure filed under the core's own name for
     // the device's pane, the frame's.
-    if let Some(canvas) = canvas {
-        let (font_size, font_family) = (
-            guard.snapshot.ui_state.terminal_font_size,
-            guard.snapshot.ui_state.terminal_font_family.clone(),
-        );
-        let resize = serde_json::to_vec(&json!({
-            "schema_version": SCHEMA_VERSION, "kind": "terminal_resize",
-            "payload": {"pane_id": spawner.actor.pane_id, "rows": 24, "cols": 30, "floor": {
-                "cell_px": 8.0, "canvas_px": canvas, "inset_px": 8.0, "base_cell_px": 8.0,
-                "scale": 1.0, "font_size": font_size, "font_family": font_family,
-            }},
-        }))
-        .unwrap();
-        guard.dispatch_json(&resize);
-    }
+    let (font_size, font_family) = (
+        guard.snapshot.ui_state.terminal_font_size,
+        guard.snapshot.ui_state.terminal_font_family.clone(),
+    );
+    let floor = canvas.map(|canvas| {
+        json!({
+            "cell_px": 8.0, "canvas_px": canvas, "inset_px": 8.0, "base_cell_px": 8.0,
+            "scale": 1.0, "font_size": font_size, "font_family": font_family,
+        })
+    });
+    let resize = serde_json::to_vec(&json!({
+        "schema_version": SCHEMA_VERSION, "kind": "terminal_resize",
+        "payload": {"pane_id": spawner.actor.pane_id, "rows": 24, "cols": 30, "floor": floor},
+    }))
+    .unwrap();
+    guard.dispatch_json(&resize);
 }
 
 /// A split that would leave the caller or the child under the pane floor is
 /// refused before anything is reserved or created, with the next step of
-/// opening the agent in a new tab, and so is one the caller's window has not
-/// measured yet; the least pane that splits holds two floors and two insets.
+/// opening the agent in a new tab, and so is one the caller's window draws
+/// but has not measured; the least pane that splits holds two floors and two
+/// insets.
 #[test]
 fn a_beside_spawn_from_a_pane_too_narrow_to_split_creates_nothing() {
     let spawner = spawner();
@@ -713,6 +722,17 @@ fn a_beside_spawn_from_a_pane_too_narrow_to_split_creates_nothing() {
     nothing_made(&spawner);
     caller_drawn(&spawner, Some(320.0));
     assert_eq!(spawner.spawn("wide", BESIDE).unwrap()["pane"], "w2:p1");
+}
+
+/// An agent in a tab the window has not drawn (a project opened from the
+/// command line while the window shows Home, a tab not shown since the app
+/// started) splits beside itself with a window attached: nothing of the tab
+/// is drawn under the floor.
+#[test]
+fn a_beside_spawn_from_a_tab_the_window_has_not_drawn_splits() {
+    let spawner = spawner();
+    caller_shown(&spawner);
+    assert_eq!(spawner.spawn("undrawn", BESIDE).unwrap()["pane"], "w2:p1");
 }
 
 /// A core no window draws, a server's, judges no floor: nothing is drawn

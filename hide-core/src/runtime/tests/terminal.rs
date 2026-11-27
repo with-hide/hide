@@ -488,8 +488,8 @@ fn floor_report(canvas: f64) -> crate::runtime::pane_floor::FloorReport {
 
 /// A device pane's split right is judged on the rectangles its device
 /// reports, under the id the window reported it by, the core's own name for
-/// it, and a window that attaches anew judges by nothing the last one
-/// measured.
+/// it, once the window draws the tab, and a window that attaches anew judges
+/// by nothing the last one measured.
 #[test]
 fn a_device_pane_splits_right_on_its_devices_rectangles_by_the_cores_name() {
     let mut runtime = runtime();
@@ -542,7 +542,8 @@ fn a_device_pane_splits_right_on_its_devices_rectangles_by_the_cores_name() {
     assert_eq!(runtime.shown_agent_tabs(), [tab.to_owned()]);
     assert_eq!(
         runtime.split_right_floor(narrow),
-        Err(crate::model::PaneFloorRefusal::Unmeasured)
+        Ok(()),
+        "the window has drawn none of the tab"
     );
     // 1280 px: the wide pane splits into halves of 480, the narrow one into 160 less a pixel.
     let (font_size, font_family) = (
@@ -569,7 +570,8 @@ fn a_device_pane_splits_right_on_its_devices_rectangles_by_the_cores_name() {
         runtime.snapshot.pane_floor.split_right.get(narrow),
         Some(&crate::model::PaneFloorRefusal::TooNarrow)
     );
-    // A window attached anew has measured nothing yet.
+    // A window attached anew has drawn nothing yet: the last one's measure,
+    // which refused `narrow`, judges nothing.
     let attach = |runtime: &mut Runtime, attached: bool| {
         runtime.dispatch_json(
             &serde_json::to_vec(&serde_json::json!({
@@ -581,10 +583,7 @@ fn a_device_pane_splits_right_on_its_devices_rectangles_by_the_cores_name() {
     };
     attach(&mut runtime, false);
     attach(&mut runtime, true);
-    assert_eq!(
-        runtime.split_right_floor(narrow),
-        Err(crate::model::PaneFloorRefusal::Unmeasured)
-    );
+    assert_eq!(runtime.split_right_floor(narrow), Ok(()));
 }
 
 /// B1: the keyboard can leave a pane without a key (the engine's own focus move,
