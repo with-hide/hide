@@ -582,9 +582,7 @@ async fn queue_request(
     projection: &Projection,
 ) -> Value {
     let request_id = message.get("request_id").cloned().unwrap_or(Value::Null);
-    let answer = |ok: bool, reason: Option<&str>| {
-        json!({"type": "queue_result", "request_id": request_id, "ok": ok, "reason": reason})
-    };
+    let answer = |ok: bool, reason: Option<&str>| json!({"type": "queue_result", "request_id": request_id, "ok": ok, "reason": reason});
     let Some(key) = key_of(message).filter(|key| projection.find(key).is_some()) else {
         refusal_logged("scope.refused", Some(phone_id), "queue_not_an_agent");
         return answer(false, Some("gone"));
@@ -626,7 +624,11 @@ async fn queue_request(
 /// The pane's waiting words (PRD desk-queue D-11), when they differ from
 /// what the phone was last told: a `queue` frame, which an older bundle
 /// ignores (docs/ARCHITECTURE.md, The mobile companion).
-async fn queue_step(mobile: &Arc<Mobile>, key: &AgentKey, told: &mut Option<Value>) -> Option<Value> {
+async fn queue_step(
+    mobile: &Arc<Mobile>,
+    key: &AgentKey,
+    told: &mut Option<Value>,
+) -> Option<Value> {
     let (core, pane_id) = (Arc::clone(mobile.core()), key.pane_id.clone());
     let queue = match tokio::task::spawn_blocking(move || core.input_queue(&pane_id)).await {
         Ok(Ok(queue)) => queue.unwrap_or(Value::Null),
@@ -2530,17 +2532,18 @@ async fn input(
             let interrupt_keys: Vec<&str>;
             let typed = match (&text, engine_key, &chosen) {
                 (None, None, None) if interrupt => {
-                    interrupting = writer
-                        .config
-                        .core
-                        .interrupt_keys(&core_pane_id)
-                        .map_err(|reason| match reason.as_str() {
-                            "agent_asking" => "agent_asking",
-                            "agent_not_working" => "agent_not_working",
-                            "interrupt_unsupported" => "interrupt_unsupported",
-                            "pane_gone" => "gone",
-                            _ => "unavailable",
-                        })?;
+                    interrupting =
+                        writer
+                            .config
+                            .core
+                            .interrupt_keys(&core_pane_id)
+                            .map_err(|reason| match reason.as_str() {
+                                "agent_asking" => "agent_asking",
+                                "agent_not_working" => "agent_not_working",
+                                "interrupt_unsupported" => "interrupt_unsupported",
+                                "pane_gone" => "gone",
+                                _ => "unavailable",
+                            })?;
                     interrupt_keys = interrupting.iter().map(String::as_str).collect();
                     Typed::Keys(&interrupt_keys)
                 }

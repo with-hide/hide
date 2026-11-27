@@ -1288,7 +1288,10 @@ impl Runtime {
 
     /// Changes the thread section, as a new value so a payload already
     /// handed out keeps the state it was taken at.
-    pub(super) fn set_session_thread(&mut self, change: impl FnOnce(&mut SessionThreadSnapshot)) -> bool {
+    pub(super) fn set_session_thread(
+        &mut self,
+        change: impl FnOnce(&mut SessionThreadSnapshot),
+    ) -> bool {
         let Some(held) = self.snapshot.session_thread.as_ref() else {
             return false;
         };
@@ -3053,7 +3056,10 @@ mod tests {
         let sent = fake.calls_of("prompt_agent");
         assert_eq!(sent.len(), 1, "{sent:?}");
         assert_eq!(sent[0]["text"], "테스트도 돌려 줘");
-        assert_eq!(sent[0]["by"], "Letter", "typed only at rest, as a letter is");
+        assert_eq!(
+            sent[0]["by"], "Letter",
+            "typed only at rest, as a letter is"
+        );
         assert_eq!(waiting(&runtime), ["끝나면 PR 열어 줘"]);
         runtime.send_queued_lines(unix_milliseconds());
         assert_eq!(
@@ -3070,7 +3076,10 @@ mod tests {
         let sent = fake.calls_of("prompt_agent");
         assert_eq!(sent.len(), 2);
         assert_eq!(sent[1]["text"], "끝나면 PR 열어 줘");
-        assert!(thread(&runtime).queue.is_none(), "the last line gone, the group goes");
+        assert!(
+            thread(&runtime).queue.is_none(),
+            "the last line gone, the group goes"
+        );
         assert!(!runtime.input_queue_waits("w1:p1"));
     }
 
@@ -3102,7 +3111,10 @@ mod tests {
             fake.calls_of("prompt_agent").is_empty(),
             "a paused line does not go at the rest"
         );
-        assert!(!runtime.input_queue_waits("w1:p1"), "nor holds a letter back");
+        assert!(
+            !runtime.input_queue_waits("w1:p1"),
+            "nor holds a letter back"
+        );
 
         let second = thread(&runtime).queue.unwrap().lines[1].id;
         runtime.input_queue_event(crate::runtime::input_queue::QueueEvent::Send(

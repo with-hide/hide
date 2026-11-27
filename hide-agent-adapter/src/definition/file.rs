@@ -679,7 +679,9 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
         check_switch(name, switch)?;
     }
     if origin == Origin::User && file.interrupt.is_some() {
-        return Err(format!("{name}: interrupt is for the built-in agents' files"));
+        return Err(format!(
+            "{name}: interrupt is for the built-in agents' files"
+        ));
     }
     if let Some(interrupt) = &file.interrupt {
         check_interrupt(name, interrupt)?;
@@ -1649,10 +1651,14 @@ mod tests {
                 "schema = 1\nid = \"x\"\nname = \"X\"\nexecutables = [\"x\"]\nhooks = \"none\"\n[interrupt]\n{interrupt}"
             )
         };
-        let interrupt = read("x.toml", &file("keys = [\"esc\", \"esc\"]\n"), Origin::Builtin)
-            .unwrap()
-            .interrupt
-            .unwrap();
+        let interrupt = read(
+            "x.toml",
+            &file("keys = [\"esc\", \"esc\"]\n"),
+            Origin::Builtin,
+        )
+        .unwrap()
+        .interrupt
+        .unwrap();
         assert_eq!(interrupt.keys, ["esc", "esc"]);
         assert!(read("x.toml", &file("keys = [\"ctrl-c\"]\n"), Origin::Builtin).is_ok());
         for refused in [

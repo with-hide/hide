@@ -125,7 +125,10 @@ impl Runtime {
     }
 
     /// What a screen draws of `pane`'s waiting words.
-    pub(crate) fn input_queue_snapshot(&self, pane: &str) -> Option<crate::model::InputQueueSnapshot> {
+    pub(crate) fn input_queue_snapshot(
+        &self,
+        pane: &str,
+    ) -> Option<crate::model::InputQueueSnapshot> {
         self.input_queue.queues.snapshot(pane)
     }
 
@@ -172,9 +175,8 @@ impl Runtime {
         };
         let projected = observation.projected_turn();
         let asking = observation.status == "blocked"
-            || projected.is_some_and(|projected| {
-                projected.turn.prompt || projected.turn.operator_wait
-            });
+            || projected
+                .is_some_and(|projected| projected.turn.prompt || projected.turn.operator_wait);
         let working = projected.map_or(observation.status == "working", |projected| {
             projected.turn.activity == AgentActivity::Working
         });
@@ -260,12 +262,12 @@ impl Runtime {
                     .panes
                     .get(&line.pane_id)
                     .is_some_and(|queue| queue.paused);
-                let resting = self
-                    .delivery_observations
-                    .get(&line.pane_id)
-                    .is_some_and(|observation| {
-                        crate::delivery::doorbell::judge_operator(observation).is_ok()
-                    });
+                let resting =
+                    self.delivery_observations
+                        .get(&line.pane_id)
+                        .is_some_and(|observation| {
+                            crate::delivery::doorbell::judge_operator(observation).is_ok()
+                        });
                 let changed =
                     paused && resting && self.start_queued_line(&line.pane_id, Some(line.id), now);
                 (line.pane_id, changed, "send_pressed")
@@ -331,13 +333,11 @@ impl Runtime {
             .get(pane)
             .map(|observation| observation.actor.kind.clone())
             .ok_or("pane_gone")?;
-        let keys = hide_agent_adapter::definition::find(
-            hide_agent_adapter::definition::builtins(),
-            &kind,
-        )
-        .and_then(|definition| definition.interrupt.as_ref())
-        .map(|interrupt| interrupt.keys.clone())
-        .ok_or(INTERRUPT_UNSUPPORTED)?;
+        let keys =
+            hide_agent_adapter::definition::find(hide_agent_adapter::definition::builtins(), &kind)
+                .and_then(|definition| definition.interrupt.as_ref())
+                .map(|interrupt| interrupt.keys.clone())
+                .ok_or(INTERRUPT_UNSUPPORTED)?;
         if self.input_queue.queues.pause(pane) {
             self.input_queue_changed();
         }
@@ -360,7 +360,7 @@ impl Runtime {
         let Some((raw_pane, device)) = self
             .session_thread_is(payload.generation, &payload.pane_id)
             .then(|| self.delivery_observations.get(&payload.pane_id))
-        .flatten()
+            .flatten()
             .map(|observation| {
                 (
                     observation.raw_pane_id.clone(),

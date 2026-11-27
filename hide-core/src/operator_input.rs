@@ -1039,7 +1039,11 @@ mod tests {
             // ■'s keys too (PRD desk-queue D-08).
             if let Some(interrupt) = &definition.interrupt {
                 let keys: Vec<&str> = interrupt.keys.iter().map(String::as_str).collect();
-                assert!(crate::engine::own::types_keys(&keys), "{} interrupt: {keys:?}", definition.id);
+                assert!(
+                    crate::engine::own::types_keys(&keys),
+                    "{} interrupt: {keys:?}",
+                    definition.id
+                );
             }
         }
     }

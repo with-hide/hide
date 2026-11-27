@@ -328,7 +328,13 @@ impl Queues {
     /// The line due to go now in `pane`: `id` when the operator pressed a
     /// paused line's `보내기`, else the head of a line that waits, once the
     /// last typed line showed its turn. Marks it on its way.
-    pub fn take(&mut self, pane: &str, id: Option<u64>, seq: Option<u64>, now: u64) -> Option<Line> {
+    pub fn take(
+        &mut self,
+        pane: &str,
+        id: Option<u64>,
+        seq: Option<u64>,
+        now: u64,
+    ) -> Option<Line> {
         let queue = self.panes.get_mut(pane)?;
         if queue.typing.is_some() {
             return None;
@@ -356,7 +362,11 @@ impl Queues {
     /// How the line `id` on its way to `pane` ended; the engine's sequence
     /// `seq` is the one it was typed under. Whether anything changed.
     pub fn settle(&mut self, pane: &str, id: u64, sent: Sent, seq: Option<u64>, now: u64) -> bool {
-        let Some(queue) = self.panes.get_mut(pane).filter(|queue| queue.typing == Some(id)) else {
+        let Some(queue) = self
+            .panes
+            .get_mut(pane)
+            .filter(|queue| queue.typing == Some(id))
+        else {
             return false;
         };
         queue.typing = None;
@@ -389,7 +399,8 @@ impl Queues {
             return false;
         }
         let gone = kind.is_none_or(|kind| {
-            hide_agent_adapter::canonical_kind(kind) != hide_agent_adapter::canonical_kind(&queue.kind)
+            hide_agent_adapter::canonical_kind(kind)
+                != hide_agent_adapter::canonical_kind(&queue.kind)
         });
         let interrupted = interrupted_at
             .is_some_and(|seq| queue.baseline_seq.is_none_or(|baseline| seq > baseline));
@@ -405,7 +416,11 @@ impl Queues {
     pub fn expire(&mut self, now: u64) -> bool {
         let mut changed = false;
         for queue in self.panes.values_mut() {
-            if queue.cleared.as_ref().is_some_and(|cleared| now >= cleared.until_ms) {
+            if queue
+                .cleared
+                .as_ref()
+                .is_some_and(|cleared| now >= cleared.until_ms)
+            {
                 queue.cleared = None;
                 changed = true;
             }
@@ -424,9 +439,9 @@ impl Queues {
     /// Whether a line waits in `pane` (not paused): a letter's bell waits
     /// behind the operator's own words (D-13, B29).
     pub fn waits(&self, pane: &str) -> bool {
-        self.panes
-            .get(pane)
-            .is_some_and(|queue| !queue.paused && (!queue.lines.is_empty() || queue.typing.is_some()))
+        self.panes.get(pane).is_some_and(|queue| {
+            !queue.paused && (!queue.lines.is_empty() || queue.typing.is_some())
+        })
     }
 
     /// Every file a waiting or cleared line attaches, which hided's folder
@@ -435,10 +450,12 @@ impl Queues {
         self.panes
             .values()
             .flat_map(|queue| {
-                queue
-                    .lines
-                    .iter()
-                    .chain(queue.cleared.iter().flat_map(|cleared| cleared.lines.iter()))
+                queue.lines.iter().chain(
+                    queue
+                        .cleared
+                        .iter()
+                        .flat_map(|cleared| cleared.lines.iter()),
+                )
             })
             .flat_map(|line| line.paths.iter().cloned())
             .collect()
@@ -489,9 +506,9 @@ impl Queues {
     /// whether it landed is not known until its answer.
     fn bounded(mut self) -> Self {
         self.panes.retain(|pane, queue| {
-            queue.lines.retain(|line| {
-                !line.text.trim().is_empty() || !line.paths.is_empty()
-            });
+            queue
+                .lines
+                .retain(|line| !line.text.trim().is_empty() || !line.paths.is_empty());
             queue.lines.truncate(LINES_MAX);
             pane.len() <= 512 && !queue.lines.is_empty()
         });
@@ -517,10 +534,7 @@ impl Queue {
 /// The name a file had, from its kept path: hided keeps a file as
 /// `<stage>-<name>`, the stage a 36-character UUID.
 fn file_name(path: &str) -> String {
-    let base = path
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(path);
+    let base = path.rsplit(['/', '\\']).next().unwrap_or(path);
     match base.split_at_checked(37) {
         Some((stage, name))
             if stage.ends_with('-')
@@ -661,10 +675,16 @@ mod tests {
         let second = push(&mut queues, "second").unwrap();
         let line = queues.take(PANE, None, Some(1), 100).unwrap();
         assert_eq!(line.id, first);
-        assert!(queues.take(PANE, None, Some(1), 100).is_none(), "one on its way at a time");
+        assert!(
+            queues.take(PANE, None, Some(1), 100).is_none(),
+            "one on its way at a time"
+        );
         assert!(queues.settle(PANE, first, Sent::Taken, Some(1), 100));
         assert_eq!(texts(&queues), ["second"]);
-        assert!(!queues.due(PANE, Some(1), 200), "the turn it started has not shown");
+        assert!(
+            !queues.due(PANE, Some(1), 200),
+            "the turn it started has not shown"
+        );
         assert_eq!(
             queues.route(PANE, Agent::AtRest, Some(1), 200),
             Route::Queue,
@@ -674,7 +694,10 @@ mod tests {
         assert!(queues.due(PANE, Some(1), 100 + SETTLE_MS), "or it settled");
         assert_eq!(queues.take(PANE, None, Some(3), 200).unwrap().id, second);
         assert!(queues.settle(PANE, second, Sent::Taken, Some(3), 200));
-        assert!(queues.snapshot(PANE).is_none(), "the last line gone, the group goes");
+        assert!(
+            queues.snapshot(PANE).is_none(),
+            "the last line gone, the group goes"
+        );
     }
 
     /// B8, B9: the ninth line is refused, and so is a line whose files would
@@ -688,12 +711,34 @@ mod tests {
         assert_eq!(push(&mut queues, "ninth"), Err(FULL));
         assert!(queues.snapshot(PANE).unwrap().full);
         let mut queues = Queues::default();
-        let paths = |count: usize| (0..count).map(|index| format!("/f{index}")).collect::<Vec<_>>();
+        let paths = |count: usize| {
+            (0..count)
+                .map(|index| format!("/f{index}"))
+                .collect::<Vec<_>>()
+        };
         queues
-            .push(PANE, "claude", "a".into(), paths(6), 10, STAGE.into(), None, 0)
+            .push(
+                PANE,
+                "claude",
+                "a".into(),
+                paths(6),
+                10,
+                STAGE.into(),
+                None,
+                0,
+            )
             .unwrap();
         assert_eq!(
-            queues.push(PANE, "claude", "b".into(), paths(3), 10, STAGE.into(), None, 0),
+            queues.push(
+                PANE,
+                "claude",
+                "b".into(),
+                paths(3),
+                10,
+                STAGE.into(),
+                None,
+                0
+            ),
             Err(FILES_FULL)
         );
         assert_eq!(
@@ -730,10 +775,16 @@ mod tests {
     fn an_interrupt_or_another_agent_pauses_and_resume_waits_again() {
         let mut queues = Queues::default();
         push(&mut queues, "first").unwrap();
-        assert!(!queues.follow(PANE, Some("claude"), Some(1)), "seen when the line started");
+        assert!(
+            !queues.follow(PANE, Some("claude"), Some(1)),
+            "seen when the line started"
+        );
         assert!(queues.follow(PANE, Some("claude"), Some(2)));
         assert!(queues.panes[PANE].paused);
-        assert!(queues.take(PANE, None, Some(2), 0).is_none(), "a paused line does not go");
+        assert!(
+            queues.take(PANE, None, Some(2), 0).is_none(),
+            "a paused line does not go"
+        );
         assert!(queues.resume(PANE, "claude", Some(2)));
         assert!(!queues.follow(PANE, Some("claude"), Some(2)));
         assert!(queues.follow(PANE, Some("codex"), None), "another agent");
@@ -814,7 +865,10 @@ mod tests {
 
     #[test]
     fn a_file_shows_the_name_it_was_attached_by() {
-        assert_eq!(file_name(&format!("/state/input/{STAGE}-notes.md")), "notes.md");
+        assert_eq!(
+            file_name(&format!("/state/input/{STAGE}-notes.md")),
+            "notes.md"
+        );
         assert_eq!(file_name("C:\\held\\shot.png"), "shot.png");
     }
 }
