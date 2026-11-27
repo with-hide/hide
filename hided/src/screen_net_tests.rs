@@ -1193,16 +1193,24 @@ async fn a_relay_tunnel_moving_to_direct_is_not_counted_or_ended() {
         host_write.write_all(&chunk).await.unwrap();
         page.read_exact(&mut back).await.unwrap();
     }
-    assert_eq!(budget.used(), 2 * CHUNK as u64);
+    // Two chunks read on the relay, and each direction's waiting read
+    // holding at most one more.
+    let at_move = budget.used();
+    assert!(
+        (2 * CHUNK as u64..=4 * CHUNK as u64).contains(&at_move),
+        "{at_move}"
+    );
     on_relay.store(false, Ordering::SeqCst);
     for _ in 0..64 {
         host_write.write_all(&chunk).await.unwrap();
         page.read_exact(&mut back).await.unwrap();
     }
-    assert_eq!(
-        budget.used(),
-        2 * CHUNK as u64,
-        "direct bytes are not counted"
+    // The reads held before the move stay counted as they were; nothing
+    // read since is.
+    assert!(
+        budget.used() <= at_move,
+        "direct bytes are not counted: {}",
+        budget.used()
     );
     assert!(
         !tunnel.is_finished(),
@@ -1234,7 +1242,7 @@ struct Streaming {
 }
 
 impl Streaming {
-    async fn into(&self, mut send: impl AsyncWrite + Unpin) {
+    async fn write_into(&self, mut send: impl AsyncWrite + Unpin) {
         self.started.fetch_add(1, Ordering::SeqCst);
         let chunk = vec![3_u8; 16 * 1024];
         while let Ok(count) = send.write(&chunk).await {
@@ -1258,7 +1266,7 @@ impl Streaming {
     async fn all_ended(&self) {
         within("the host's writes to end", async {
             while self.ended.load(Ordering::SeqCst) < PLACES {
-                tokio::time::sleep(Duration::from_millis(10)).await; // wait-ok: the host's writes fail once the guest's ends are dropped
+                tokio::time::sleep(Duration::from_millis(10)).await; // wait-ok: the host's writes fail once the connection is closed
             }
         })
         .await;
@@ -1282,9 +1290,18 @@ where
         let budget = Arc::clone(&budget);
         tunnels.push(tokio::spawn(async move {
             let mut local = local;
-            pipe(&mut local, &[], recv, send, &budget, &|| true, &slot(), &|| {})
-                .await
-                .0
+            pipe(
+                &mut local,
+                &[],
+                recv,
+                send,
+                &budget,
+                &|| true,
+                &slot(),
+                &|| {},
+            )
+            .await
+            .0
         }));
     }
     for tunnel in tunnels {
@@ -1300,7 +1317,8 @@ where
 // at most what the transport lets it send ahead: one stream receive window
 // per tunnel. On the real direct transport.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_host_streaming_into_sixteen_tunnels_passes_the_budget_by_at_most_sixteen_receive_windows() {
+async fn a_host_streaming_into_sixteen_tunnels_passes_the_budget_by_at_most_sixteen_receive_windows()
+ {
     let host = Machine::new("windows-pc");
     let guest = Machine::new("macbook");
     let streaming = Streaming::default();
@@ -1310,7 +1328,7 @@ async fn a_host_streaming_into_sixteen_tunnels_passes_the_budget_by_at_most_sixt
             let streaming = streaming.clone();
             async move {
                 let _recv = incoming.stream.recv;
-                streaming.into(incoming.stream.send).await;
+                streaming.write_into(incoming.stream.send).await;
             }
         });
     }
@@ -1322,8 +1340,15 @@ async fn a_host_streaming_into_sixteen_tunnels_passes_the_budget_by_at_most_sixt
     }
     streaming.all_started().await;
     let budget = on_the_relay(streams, 32 * CHUNK as u64).await;
+    // The bound holds at every moment: the host's writes are held by the
+    // window once the guest stops reading. Closing the connection ends
+    // every one of them, so the count read below is the last.
+    link.close(hide_peer::protocol::CloseCode::Lost);
     streaming.all_ended().await;
-    let past = streaming.written.load(Ordering::SeqCst).saturating_sub(budget.used());
+    let past = streaming
+        .written
+        .load(Ordering::SeqCst)
+        .saturating_sub(budget.used());
     assert!(
         past <= PLACES as u64 * DIRECT_STREAM_WINDOW,
         "the host wrote {past} bytes past the reservations"
@@ -1334,7 +1359,8 @@ async fn a_host_streaming_into_sixteen_tunnels_passes_the_budget_by_at_most_sixt
 // window: sixteen streams of a pipe transport, the far end writing without
 // end into each.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_host_streaming_into_sixteen_mux_tunnels_passes_the_budget_by_at_most_sixteen_mux_windows() {
+async fn a_host_streaming_into_sixteen_mux_tunnels_passes_the_budget_by_at_most_sixteen_mux_windows()
+ {
     use hide_peer::key::MachineKey;
     use hide_peer::mux::Carrier;
     use hide_peer::pipe::PipeTransport;
@@ -1352,7 +1378,10 @@ async fn a_host_streaming_into_sixteen_mux_tunnels_passes_the_budget_by_at_most_
         })
     };
     let to = PeerAddr::new(far.key(), vec![Candidate::Wsl("Ubuntu".to_owned())]);
-    let (dialed, accepted) = within("the connection", async { tokio::join!(near.dial(&to), far.accept()) }).await;
+    let (dialed, accepted) = within("the connection", async {
+        tokio::join!(near.dial(&to), far.accept())
+    })
+    .await;
     let (ours, theirs) = (dialed.unwrap(), accepted.unwrap());
     let streaming = Streaming::default();
     let mut streams = Vec::new();
@@ -1363,13 +1392,17 @@ async fn a_host_streaming_into_sixteen_mux_tunnels_passes_the_budget_by_at_most_
         let streaming = streaming.clone();
         tokio::spawn(async move {
             let _recv = their_recv;
-            streaming.into(their_send).await;
+            streaming.write_into(their_send).await;
         });
     }
     streaming.all_started().await;
     let budget = on_the_relay(streams, 16 * CHUNK as u64).await;
+    ours.close(hide_peer::protocol::CloseCode::Lost);
     streaming.all_ended().await;
-    let past = streaming.written.load(Ordering::SeqCst).saturating_sub(budget.used());
+    let past = streaming
+        .written
+        .load(Ordering::SeqCst)
+        .saturating_sub(budget.used());
     assert!(
         past <= PLACES as u64 * MUX_STREAM_WINDOW,
         "the far end wrote {past} bytes past the reservations"
