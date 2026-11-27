@@ -354,6 +354,17 @@ fn measured_at_scale(runtime: &mut Runtime, pane: &str, canvas: f64, cell: f64, 
     );
 }
 
+/// The window draws `pane` where it cannot measure it, as a pair view does:
+/// a grid with no measure.
+fn drawn_unmeasured(runtime: &mut Runtime, pane: &str) {
+    runtime.ui_attached = true;
+    dispatch(
+        runtime,
+        "terminal_resize",
+        serde_json::json!({"pane_id": pane, "rows": 24, "cols": 40, "floor": null}),
+    );
+}
+
 /// Splits `LEFT`, the tab's focused pane, toward `direction`: the error the
 /// request ended with, if any.
 fn split_of(runtime: &mut Runtime, direction: &str) -> Option<String> {
@@ -473,13 +484,20 @@ fn a_split_after_a_text_scale_change_waits_for_a_measure_at_the_new_scale() {
 /// A tab a window draws but has not measured is not judged as wide: its
 /// split right waits for the window's report, refused as `unmeasured`, as
 /// is one whose pane has a text scale of its own and no cell reported. A
-/// core no window draws judges nothing, since nothing is drawn under the
-/// floor there (`docs/INSTALL.md`, What each system supports).
+/// tab the window has not drawn and a core no window draws judge nothing,
+/// since nothing is drawn under the floor there (`docs/INSTALL.md`, What
+/// each system supports).
 #[test]
-fn a_drawn_tab_not_measured_yet_refuses_a_split_right_and_a_windowless_core_splits() {
+fn a_drawn_tab_not_measured_yet_refuses_a_split_right_and_an_undrawn_one_splits() {
     let fake = fake_engine();
     let (mut runtime, _terminals) = runtime_on(&fake, session(Some(0.5), false));
+    // The front checkout's tab with a window attached, drawn by none: the
+    // window shows Home, or has not shown the tab since it attached.
     runtime.ui_attached = true;
+    assert!(runtime.shown_agent_tabs().contains(&TAB.to_owned()));
+    assert_eq!(runtime.split_right_floor(LEFT), Ok(()));
+    // The window draws RIGHT where it cannot measure it: the tab is drawn.
+    drawn_unmeasured(&mut runtime, RIGHT);
     assert_eq!(
         split_of(&mut runtime, "right").as_deref(),
         Some("pane.unmeasured")
@@ -501,6 +519,21 @@ fn a_drawn_tab_not_measured_yet_refuses_a_split_right_and_a_windowless_core_spli
     assert_eq!(runtime.split_right_floor(LEFT), Ok(()));
     // A core no window draws splits as it always did.
     runtime.ui_attached = false;
+    assert_eq!(split_of(&mut runtime, "right"), None);
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    assert_eq!(sent(&fake, "split_pane"), 1);
+}
+
+/// A split right in a tab no window has drawn goes to the engine with a
+/// window attached, as on a core with none: a project opened from the
+/// command line is the front checkout's tab while the window still shows
+/// Home, and nothing of it is drawn under the floor.
+#[test]
+fn a_tab_the_window_has_not_drawn_splits_right_with_a_window_attached() {
+    let fake = fake_engine();
+    let (mut runtime, _terminals) = runtime_on(&fake, session(None, false));
+    runtime.ui_attached = true;
+    assert!(runtime.shown_agent_tabs().contains(&TAB.to_owned()));
     assert_eq!(split_of(&mut runtime, "right"), None);
     fake.wait_for_calls(1, Duration::from_secs(5));
     assert_eq!(sent(&fake, "split_pane"), 1);

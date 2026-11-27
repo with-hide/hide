@@ -179,7 +179,8 @@ test("the installed app updates to the next version and the panes and daemon kee
     throw error;
   } finally {
     await app?.close().catch(() => undefined);
-    endReopenedApp(file);
+    // A cleanup failure is logged, never thrown over the test's own error.
+    try { endReopenedApp(file); } catch (error) { console.log(`ending the reopened app failed: ${error instanceof Error ? error.message : String(error)}`); }
     if (shim) fs.rmSync(shim, { recursive: true, force: true });
     await served.close();
     run.cleanup();
