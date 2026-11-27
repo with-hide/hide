@@ -7,7 +7,6 @@ import { askPlace, namedMention, threadPhase, threadTurns } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { MarkdownText, type MarkdownChip, type MarkdownMark } from "../../MarkdownText";
-import { CopyableMessage } from "../copy-words";
 import type { CopyText } from "../human-turn-copy";
 import type { AskLine } from "../open-asks";
 import { useRunningClock } from "../elapsed";
@@ -251,9 +250,9 @@ function AgentWords({ line, words, lit, live }: { line: Extract<ThreadLine, { ki
   const files = useFilePathChips(line.text, words.place, live, words.file);
   const chips = useMemo(() => (files.length ? [...words.chips, ...files] : words.chips), [words.chips, files]);
   return (
-    <CopyableMessage text={line.text} copy={words.copy} className="-mx-xs rounded-md px-xs" data-desk-thread-line="agent" data-desk-thread-message={line.id} data-desk-thread-lit={lit ? "true" : undefined}>
+    <div className="-mx-xs min-w-0 rounded-md px-xs" data-desk-thread-line="agent" data-desk-thread-message={line.id} data-desk-thread-lit={lit ? "true" : undefined}>
       <MarkdownText text={line.text} size="chat" chips={chips} copyCode={words.copy} mark={lit} />
-    </CopyableMessage>
+    </div>
   );
 }
 
@@ -280,7 +279,7 @@ function ReceivedLine({ line, actions }: { line: Extract<ThreadLine, { kind: "us
 }
 
 /** The operator's words, the one thing drawn as a bubble (D-75); the first one carries `Desk가 맡김` when Desk handed the task. */
-function UserLine({ line, handed, copy, actions }: { line: Extract<ThreadLine, { kind: "user" }>; handed: boolean; copy: CopyText; actions: ThreadPartActions }) {
+function UserLine({ line, handed, actions }: { line: Extract<ThreadLine, { kind: "user" }>; handed: boolean; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
   // The files a composer sent stand over the words, read from the quoted paths it typed before them (B41).
   const sent = useMemo(() => sentWords(line.text), [line.text]);
@@ -292,9 +291,7 @@ function UserLine({ line, handed, copy, actions }: { line: Extract<ThreadLine, {
       {handed ? <span className="text-micro text-muted-foreground" data-desk-thread-handed="true">{t("desk.thread.handedByDesk")}</span> : null}
       <SentAttachments files={sent.files} />
       {sent.words ? (
-        <CopyableMessage text={sent.words} copy={copy} own>
-          <p data-desk-thread-bubble="true" className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]">{sent.words}</p>
-        </CopyableMessage>
+        <p data-desk-thread-bubble="true" className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]">{sent.words}</p>
       ) : null}
       {line.images.map((block, index) => <ThreadImage key={index} block={block} />)}
     </div>
@@ -312,7 +309,7 @@ function turnAnchor(turn: ThreadTurn): string {
  * session, a letter, an output, a mission, a PR) stays in view while the work
  * is folded, once per target. The turn still running folds too: what it said
  * and the parts it made stay in view, and its calls are one line at its foot,
- * `일하는 중 · 명령 n · 파일 n ⌄`, with its newest call's head under it,
+ * `작업 중 · 명령 n · 파일 n ⌄`, with its newest call's head under it,
  * never what came out; unfolded, every line stands above that line.
  */
 function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; live: boolean; handed: boolean; words: Words; lit: Lit | null; actions: ThreadPartActions }) {
@@ -335,7 +332,7 @@ function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; l
   const newest = live && !open ? turn.work.findLast((line): line is Extract<ThreadLine, { kind: "tool" }> => line.kind === "tool") : undefined;
   return (
     <li className="flex min-w-0 flex-col gap-sm" data-desk-thread-turn={open ? "open" : "folded"} data-scroll-anchor={turnAnchor(turn)}>
-      {turn.user ? <UserLine line={turn.user} handed={handed} copy={words.copy} actions={actions} /> : null}
+      {turn.user ? <UserLine line={turn.user} handed={handed} actions={actions} /> : null}
       {live ? (
         <>
           {work ?? <ShownWork work={turn.work} words={words} actions={actions} />}

@@ -311,7 +311,7 @@ const ko: Catalog<typeof deskEnglish> = {
   "desk.turn.commands": "명령 {{count}}",
   "desk.turn.files": "파일 {{count}}",
   "desk.turn.work": "작업",
-  "desk.turn.working": "일하는 중",
+  "desk.turn.working": "작업 중",
   "desk.thread.askPermission": "이 명령을 실행해도 될까요?",
   "desk.thread.handedByDesk": "Desk가 맡김",
   "desk.thread.interrupted": "중단됨",

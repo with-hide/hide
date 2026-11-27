@@ -393,7 +393,7 @@ it("folds a finished turn under 작업 · 파일 n · 명령 m with no newest ca
 /** Waits until the lazily loaded Markdown language parsed the messages, so a code block carries its copy button. */
 const codeCopyDrawn = (container: HTMLElement) => act(() => vi.waitFor(() => expect(container.querySelector("[data-code-block-action]")).not.toBeNull()));
 
-it("draws the agent's words as Markdown and copies a message's original words and a code block's code (Doop E2)", async () => {
+it("draws the agent's words as Markdown, copies a code block's code, and offers no copy under a message for now (operator decision 2026-11-27)", async () => {
   const copied: [string, string][] = [];
   const { container } = await mount(job, null, { onCopy: async (text, what) => { copied.push([text, what]); return true; } });
   const words = "**라이트**는 끝났어요.\n\n```\nopen https://play.google.com/console\n```";
@@ -402,11 +402,12 @@ it("draws the agent's words as Markdown and copies a message's original words an
   await codeCopyDrawn(container);
   const message = container.querySelector('[data-desk-thread-line="agent"]')!;
   expect(message.querySelector('[data-markdown-text="true"]')).not.toBeNull();
-  await act(async () => message.querySelector<HTMLElement>('[data-message-copy] [data-copy-words="message"]')!.click());
+  // Neither the answer nor the operator's bubble carries a copy row.
+  expect(container.querySelectorAll('[data-copy-words="message"]')).toHaveLength(0);
   await act(async () => message.querySelector<HTMLElement>('[data-code-block-action] [data-copy-words="code block"]')!.click());
-  expect(copied).toEqual([[words, "message"], ["open https://play.google.com/console", "code block"]]);
+  expect(copied).toEqual([["open https://play.google.com/console", "code block"]]);
   // A copy that took says so on the button that made it.
-  expect(message.querySelector('[data-copy-words="message"]')?.getAttribute("data-copied")).toBe("true");
+  expect(message.querySelector('[data-copy-words="code block"]')?.getAttribute("data-copied")).toBe("true");
 });
 
 it("keeps every message's view while the operator types and while the last message streams, so a selection in one stays", async () => {
