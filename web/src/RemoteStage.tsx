@@ -66,10 +66,7 @@ export function RemoteStage({ actions }: { actions: Actions }) {
   // A machine no longer paired leaves no screen to come back to: the window
   // shows its own again, which the daemon is told (`windowScreen.ts`).
   useEffect(() => {
-    if (device !== null && peer === null) {
-      useUiStore.getState().setRemoteScreen(null);
-      actions.noteWindowScreen();
-    }
+    if (device !== null && peer === null) actions.showScreen(null);
   }, [device, peer, actions]);
 
   useEffect(() => {

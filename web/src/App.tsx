@@ -108,7 +108,7 @@ export function App() {
     const keyboard = installKeyboard(actions);
     // Which machine's screen this window shows, told to each new connection;
     // an action that changes it tells it after its own events.
-    const windowScreen = installWindowScreen(() => actions.noteWindowScreen(true));
+    const windowScreen = installWindowScreen(() => actions.noteWindowScreen());
     if (probeEnabled()) {
       installProbe(
         () => terminalFor(useShellStore.getState().focusedPaneId),

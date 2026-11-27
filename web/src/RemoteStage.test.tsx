@@ -171,3 +171,28 @@ it("draws a ring and the computer's name while its screen opens, names the relay
     vi.unstubAllGlobals();
   }
 });
+
+// A machine no longer paired leaves no screen to come back to: the window shows its own again and says so after the
+// change, so a look chosen on this machine counts again (docs/status-model.md, Hide owns the read axis).
+it("shows this window's own screen again, and says so, when the machine on it is no longer paired", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const sent: { kind: string; payload: unknown }[] = [];
+  const actions = createActions((event) => { sent.push(event as never); return true; });
+  try {
+    window.hideHost = { kind: "electron", platform: "darwin", onWindowChrome: () => () => undefined } as never;
+    await act(async () => {
+      useShellStore.setState({ connection: "live", rest: { navigator: { devices: [], peers: [peer()] } } } as never);
+      useUiStore.setState({ remoteScreen: "mini" });
+    });
+    actions.noteWindowScreen();
+    const root = createRoot(document.body.appendChild(document.createElement("div")));
+    await act(async () => root.render(<TooltipProvider><RemoteStage actions={actions} /></TooltipProvider>));
+    await act(async () => useShellStore.setState({ rest: { navigator: { devices: [], peers: [] } } } as never));
+    expect(useUiStore.getState().remoteScreen).toBeNull();
+    expect(sent.filter((event) => event.kind === "window_screen").map((event) => event.payload)).toEqual([{ screen: "computer" }, { screen: "own" }]);
+    await act(async () => root.unmount());
+  } finally {
+    window.hideHost = undefined;
+    useUiStore.setState({ remoteScreen: null });
+  }
+});

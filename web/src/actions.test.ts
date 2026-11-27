@@ -613,30 +613,55 @@ describe("which machine's screen this window shows", () => {
     live(mini);
     const sent: Parameters<DispatchFn>[0][] = [];
     const actions = createActions((event) => { sent.push(event); return true; });
-    actions.noteWindowScreen(true);
+    actions.noteWindowScreen();
     actions.focusDevice("ssh-box");
     expect(told(sent)).toEqual(["screen:computer", "focus_device", "screen:own"]);
     expect(useUiStore.getState().remoteScreen).toBeNull();
 
     // The device already in front sends no focus, and the screen is told once.
     sent.length = 0;
-    useUiStore.setState({ remoteScreen: mini });
-    actions.noteWindowScreen();
+    actions.showScreen(mini);
     actions.focusDevice("core");
     actions.focusDevice("core");
     expect(told(sent)).toEqual(["screen:computer", "screen:own"]);
   });
 
-  it("says another computer's screen when its tile shows it, and this machine's again from a tool's tile", () => {
+  it("says another computer's screen when its tile or its work shows it, and this machine's again from a tool's tile", () => {
     live(null);
-    window.hideHost = { kind: "electron", platform: "darwin", remoteScreens: { show: vi.fn(), onState: () => () => {} } } as never;
+    const go = vi.fn();
+    window.hideHost = { kind: "electron", platform: "darwin", remoteScreens: { show: vi.fn(), go, onState: () => () => {}, onWorkResult: () => () => {} } } as never;
     const sent: Parameters<DispatchFn>[0][] = [];
     const actions = createActions((event) => { sent.push(event); return true; });
-    actions.noteWindowScreen(true);
+    actions.noteWindowScreen();
     actions.selectComputer(mini);
     expect(useUiStore.getState().remoteScreen).toBe(mini);
     actions.focusTool("tool-connection");
-    expect(told(sent)).toEqual(["screen:own", "screen:computer", "screen:own"]);
+    expect(actions.openComputerWork(mini, { op: "show", pane: "p" })).toBe("handed");
+    expect(go).toHaveBeenCalledOnce();
+    expect(told(sent)).toEqual(["screen:own", "screen:computer", "screen:own", "screen:computer"]);
+  });
+
+  it("tells after the action's own events, however the action ends", () => {
+    live(mini);
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.noteWindowScreen();
+    expect(() => actions.showScreen(null, () => {
+      actions.openAgent("w1:p1");
+      throw new Error("the open failed");
+    })).toThrow("the open failed");
+    expect(told(sent)).toEqual(["screen:computer", "focus_pane", "screen:own"]);
+  });
+
+  it("opens this machine's agent on this machine's own screen when it is asked for from another computer's", () => {
+    live(mini);
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.noteWindowScreen();
+    actions.openAgent("w1:p1");
+    expect(useUiStore.getState().remoteScreen).toBeNull();
+    actions.openAgent("w1:p1");
+    expect(told(sent)).toEqual(["screen:computer", "focus_pane", "screen:own", "focus_pane"]);
   });
 
   it("tells a new connection first, then only what changes, and nothing while none is live", () => {
@@ -646,14 +671,14 @@ describe("which machine's screen this window shows", () => {
     // Before the connection's first report a change is the report's to tell.
     actions.focusDevice("core");
     expect(told(sent)).toEqual([]);
-    useUiStore.setState({ remoteScreen: mini });
-    actions.noteWindowScreen(true);
+    actions.showScreen(mini);
     actions.noteWindowScreen();
+    actions.showScreen(mini);
     useShellStore.setState({ connection: "connecting" } as never);
-    actions.noteWindowScreen(true);
-    useShellStore.setState({ connection: "live" } as never);
     actions.noteWindowScreen();
-    actions.noteWindowScreen(true);
+    useShellStore.setState({ connection: "live" } as never);
+    actions.showScreen(mini);
+    actions.noteWindowScreen();
     expect(told(sent)).toEqual(["screen:computer", "screen:computer"]);
   });
 });

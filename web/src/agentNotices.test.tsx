@@ -327,3 +327,33 @@ it("notifies a once automation's ended run once, takes it back when it is opened
     useShellStore.setState(saved, true);
   }
 });
+
+// docs/status-model.md, Hide owns the read axis: a turn of this machine's agent that ended while the window showed
+// another computer's screen is news; a click on its notice is the way back, so the window shows this machine's screen
+// again and the daemon hears it after the open, which then reads the row.
+it("comes back to this machine's own screen when its agent's notice is clicked from another computer's", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  let open: ((id: string) => void) | null = null;
+  window.hideHost = {
+    kind: "electron", platform: "darwin", notify: vi.fn(), reportBadge: vi.fn(), onComputerUse: () => () => undefined,
+    onNotificationOpen: (listener: (id: string) => void) => ((open = listener), () => undefined),
+  } as never;
+  const sent: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { sent.push(event); return true; });
+  try {
+    await act(async () => {
+      useShellStore.setState({ connection: "live", agents: [], rest: { navigator: { devices: [], workspaces: [], peers: [] }, status: { remote: [] }, ui_state: {} } } as never);
+      useUiStore.setState({ screen: { kind: "workspace" }, remoteScreen: "mini" } as never);
+    });
+    actions.noteWindowScreen();
+    const root = createRoot(document.body.appendChild(document.createElement("div")));
+    await act(async () => root.render(<Probe actions={actions} />));
+    await act(async () => open!("agent:core|w1:p1"));
+    expect(useUiStore.getState().remoteScreen).toBeNull();
+    const kinds = sent.map((event) => event.kind === "window_screen" ? `screen:${(event.payload as { screen: string }).screen}` : event.kind);
+    expect(kinds.filter((kind) => kind.startsWith("screen:") || kind === "focus_pane")).toEqual(["screen:computer", "focus_pane", "screen:own"]);
+    await act(async () => root.unmount());
+  } finally {
+    useUiStore.setState({ remoteScreen: null });
+  }
+});

@@ -201,6 +201,22 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     toldScreen = screen;
     dispatch({ schema_version: 2, kind: "window_screen", payload: { screen } });
   };
+  /**
+   * The one way this window enters another computer's screen, `device`'s,
+   * or leaves it for its own with null (PRD device-connect-iroh B17): it
+   * shows that screen, runs `then`, the action's own events, and tells the
+   * daemon the screen it then shows after them, whichever way `then` ends,
+   * so the core never reads a look the action passes through
+   * (`windowScreen.ts`).
+   */
+  const showScreen = (device: string | null, then?: () => void) => {
+    ui().setRemoteScreen(device);
+    try {
+      then?.();
+    } finally {
+      tellWindowScreen();
+    }
+  };
 
 
 
@@ -665,6 +681,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * focus mode (`openLook`, operator decision 2026-11-23).
    */
   const openAgent = (paneId: string, look?: LookAt) => {
+    // A pane of this machine or of its devices shows on this machine's own
+    // screen: from another computer's screen (an overlay such as the palette
+    // drawn over it, or a key), the window shows its own again, told after
+    // the open (`showScreen`).
+    if (ui().remoteScreen !== null) return showScreen(null, () => openAgentHere(paneId, look));
+    openAgentHere(paneId, look);
+  };
+  const openAgentHere = (paneId: string, look?: LookAt) => {
     beginOpening({ paneId });
     // A request id makes the core answer this click, a pane that is gone
     // or a device's refusal included, so the opening says why at once
@@ -1669,9 +1693,18 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (remote) return;
       dispatch({ schema_version: 2, kind: "window_focus", payload: screen ? { focused: true, screen } : { focused: false } });
     },
-    /** Which machine's screen this window shows: when it changed, or `again` for a new connection (`windowScreen.ts`). */
-    noteWindowScreen(again = false) {
-      tellWindowScreen(again);
+    /** Which machine's screen this window shows, told to a new connection, which has heard nothing yet (`windowScreen.ts`). */
+    noteWindowScreen() {
+      tellWindowScreen(true);
+    },
+    /**
+     * Shows `device`'s screen in this window, or this machine's own with
+     * null, and runs `then`, the action's own events, before the daemon is
+     * told which screen shows; the one way to enter or leave another
+     * computer's screen.
+     */
+    showScreen(device: string | null, then?: () => void) {
+      showScreen(device, then);
     },
     /** Whether this page shows the request view; while one does, the core re-reads running checks (PRD overview-request-view D-32). */
     observeRequestView(observing: boolean) {
@@ -1952,10 +1985,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * the cell in front is read from what the center shows.
      */
     focusDevice(deviceId: string) {
-      // The window shows its own screen again (PRD device-connect-iroh B17),
-      // told once the device it chose is sent, whichever way this returns.
-      ui().setRemoteScreen(null);
-      try {
+      // The window shows its own screen again, told once the device it chose is sent.
+      showScreen(null, () => {
         const screen = ui().screen;
         // The mission screen follows the rail to the device chosen (PRD mission-screen D-06), a tool's mission screen too (B40).
         if (screen?.kind === "missions") {
@@ -1970,9 +2001,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         }
         if (frontDeviceId(rest()) === deviceId) return;
         dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: deviceId } });
-      } finally {
-        tellWindowScreen();
-      }
+      });
     },
 
     /**
@@ -1992,8 +2021,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     selectComputer(id: string) {
       const tile = computerTiles(rest()).find((row) => row.id === id);
       if (tile?.screen && hostBridge()?.remoteScreens) {
-        ui().setRemoteScreen(tile.screen.device_id);
-        tellWindowScreen();
+        showScreen(tile.screen.device_id);
         return;
       }
       if (tile?.screen && tile.screen.device_id === id && !rest()?.navigator?.devices?.some((device) => device.id === id)) {
@@ -2017,27 +2045,27 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const computer = pairedComputer(rest(), deviceId);
       if (!computer) return "not_paired";
       const remote = hostBridge()?.remoteScreens;
-      if (!computer.screen || !remote?.go || !remote.onWorkResult) return "no_screen";
-      ui().setRemoteScreen(computer.screen.device_id);
-      remote.go({ device: computer.screen.device_id, key: computer.screen.key, work });
-      tellWindowScreen();
+      const screen = computer.screen;
+      if (!screen || !remote?.go || !remote.onWorkResult) return "no_screen";
+      const go = remote.go;
+      showScreen(screen.device_id, () => go({ device: screen.device_id, key: screen.key, work }));
       return "handed";
     },
 
     focusTool(connection: string) {
-      ui().setRemoteScreen(null);
-      const screen = ui().screen;
-      if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
-      // Under the cell stands this window's own machine, which the window shows again once the cell goes (B44).
-      const own = windowDeviceId(rest()?.navigator?.devices);
-      // The Overview's own pick and the page's named device both give way, as a rail tile's choice does, so the cell gone leaves the Overview on the rail's machine.
-      ui().setOverview({ deviceId: null, projectId: null, panel: null });
-      // The tool's Overview is the center's page, not a layer over the Workspace (D-54, B47): its agents, its missions
-      // and the Views it opened, each one press from its pane or View. A device tile takes the center back (`focusDevice`).
-      // It names this window's own machine, which the page shows again once the cell goes.
-      useUiStore.setState({ screen: { kind: "main", deviceId: own, tool: connection }, overviewOpen: false, overviewReturnFocus: null, overviewReveal: null, overlay: "none", opening: null });
-      if (frontDeviceId(rest()) !== own) dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: own } });
-      tellWindowScreen();
+      showScreen(null, () => {
+        const screen = ui().screen;
+        if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
+        // Under the cell stands this window's own machine, which the window shows again once the cell goes (B44).
+        const own = windowDeviceId(rest()?.navigator?.devices);
+        // The Overview's own pick and the page's named device both give way, as a rail tile's choice does, so the cell gone leaves the Overview on the rail's machine.
+        ui().setOverview({ deviceId: null, projectId: null, panel: null });
+        // The tool's Overview is the center's page, not a layer over the Workspace (D-54, B47): its agents, its missions
+        // and the Views it opened, each one press from its pane or View. A device tile takes the center back (`focusDevice`).
+        // It names this window's own machine, which the page shows again once the cell goes.
+        useUiStore.setState({ screen: { kind: "main", deviceId: own, tool: connection }, overviewOpen: false, overviewReturnFocus: null, overviewReveal: null, overlay: "none", opening: null });
+        if (frontDeviceId(rest()) !== own) dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: own } });
+      });
     },
 
     /** Every entry point of Add device (the rail's `+`, the hidden rail's menu, Add project's Host list) opens the one dialog (D-11); `computer` skips its computer-or-phone question. */

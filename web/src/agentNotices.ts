@@ -176,7 +176,7 @@ export function useAgentNotifications(actions: Actions) {
       const tag = id.slice(AGENT_NOTICE_PREFIX.length);
       if (tag.startsWith(LOOK_TAG_PREFIX)) {
         const [automation, run] = tag.slice(LOOK_TAG_PREFIX.length).split("|");
-        if (automation) actions.openAutomation(automation, run ? Number(run) : null);
+        if (automation) actions.showScreen(null, () => actions.openAutomation(automation, run ? Number(run) : null));
         return;
       }
       // Another machine's work opens in that machine's tile, as pressing its row does (D-50).
@@ -191,10 +191,13 @@ export function useAgentNotifications(actions: Actions) {
       if (!paneId) return;
       // A 볼 것 notice names the View, so it opens that View as the row's chip does; every other notice goes to the agent
       // (operator decision 2026-11-23). A row's notice is its newest, so the row's mark now says which one was clicked.
+      // It is this machine's work, so a window on another computer's screen shows its own again, told after the open.
       const state = useShellStore.getState();
       const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
-      if (agent?.mark === "look" && agent.look) actions.openLook(paneId, agent.look);
-      else actions.openListedAgent(paneId);
+      actions.showScreen(null, () => {
+        if (agent?.mark === "look" && agent.look) actions.openLook(paneId, agent.look);
+        else actions.openListedAgent(paneId);
+      });
     });
   }, [bridge, actions]);
 }
