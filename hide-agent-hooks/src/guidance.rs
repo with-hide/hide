@@ -51,7 +51,7 @@ use crate::install::{
     helper_exists, read_document, write_document,
 };
 use crate::route::HookTarget;
-use crate::runtime::{HookEvent, START_CONTEXT, marker_version_of};
+use crate::runtime::{HookEvent, marker_version_of};
 
 /// The marker Hide stamps into every guidance hook it installs, carried as
 /// the `--source` argument of the command like the other hooks' marker.
@@ -419,7 +419,7 @@ impl Layout {
 // --- What the hook prints --------------------------------------------------------
 
 /// The context a guidance hook delivers: the session start's context
-/// (`crate::runtime::session_start_context`, or [`START_CONTEXT`] alone
+/// ([`crate::runtime::session_start_context`], or [`crate::runtime::START_CONTEXT`] alone
 /// where Memory comes with the first prompt instead), then the Workspace
 /// guidance when the daemon answered for this checkout.
 pub fn session_context(start: &str, workspace: Option<&str>) -> String {

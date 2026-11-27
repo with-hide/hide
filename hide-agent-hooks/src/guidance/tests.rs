@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::runtime::START_CONTEXT;
 
 /// What an earlier build wrote, retired agents included: the public
 /// [`super::install`] refuses a retired agent.
