@@ -1210,7 +1210,7 @@ async fn a_relay_tunnel_moving_to_direct_is_not_counted_or_ended() {
     );
     drop(host_write);
     drop(page);
-    assert_eq!(within("the tunnel", tunnel).await.unwrap(), Piped::Closed);
+    assert_eq!(within("the tunnel", tunnel).await.unwrap(), Piped::Done);
 }
 
 /// The direct transport's stream receive window: noq's default
