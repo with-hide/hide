@@ -4,7 +4,7 @@
 use crate::account::Accounts;
 use crate::source::FileIdentity;
 use crate::source::facts::{self, Wanted};
-use crate::{Agent, SESSION_INCREMENT_READ_LIMIT_BYTES, SESSION_READ_LIMIT_BYTES};
+use crate::{Agent, SESSION_INCREMENT_READ_LIMIT_BYTES};
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -219,19 +219,15 @@ fn confirm_metadata(
                 })?
                 .and_then(|meta| meta["payload"]["id"].as_str().map(str::to_owned)),
             Agent::Claude => {
-                let id = facts::claude(&file, Wanted::Id)
-                    .map_err(|_| anyhow!("label_session_metadata_read_failed"))?
-                    .id;
-                // Claude Code makes the file as the session starts, with its
-                // mode, owner and attachments, and names the session on its
-                // first person's or assistant's record. A file read whole
-                // with no such record is a session that has not written its
-                // conversation yet, which reading again answers, as a file
-                // not there yet is; never one whose owner is unconfirmed.
-                if id.is_none() && metadata.len() <= SESSION_READ_LIMIT_BYTES {
+                let head = facts::claude(&file, Wanted::Id)
+                    .map_err(|_| anyhow!("label_session_metadata_read_failed"))?;
+                // A session that has not written its conversation yet, which
+                // reading again answers, as a file not there yet is; a
+                // message whose owner is not found stays unconfirmed.
+                if head.no_message {
                     return Err(anyhow!("session_file_missing"));
                 }
-                id
+                head.id
             }
             _ => None,
         }
@@ -409,6 +405,35 @@ mod tests {
                 .to_string(),
             "session_file_missing"
         );
+        // A message is there but its owner is not found: still unconfirmed,
+        // never a session that has not written yet (review round 1 of
+        // pull request 3099, F2). A message that names no session, one
+        // over the record cap whatever it names, and a line that does not
+        // parse may each be a message.
+        let unconfirmed = |contents: String| {
+            fs::write(&path, contents).unwrap();
+            confirm_label_session(Agent::Claude, &path, Some(id))
+                .unwrap_err()
+                .to_string()
+        };
+        assert_eq!(
+            unconfirmed(format!(
+                "{start}{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n"
+            )),
+            "label_session_metadata_unconfirmed"
+        );
+        assert_eq!(
+            unconfirmed(format!(
+                "{start}{{\"type\":\"user\",\"sessionId\":\"{id}\",\"pad\":\"{}\"}}\n",
+                "x".repeat(SESSION_LINE_LIMIT_BYTES)
+            )),
+            "label_session_metadata_unconfirmed"
+        );
+        assert_eq!(
+            unconfirmed(format!("{start}{{\"type\":\"user\",\"sessionId\n")),
+            "label_session_metadata_unconfirmed"
+        );
+
         // Its first message names the session.
         fs::write(
             &path,
