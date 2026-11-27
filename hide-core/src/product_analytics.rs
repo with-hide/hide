@@ -214,6 +214,8 @@ pub struct ActiveDays {
     phone_answer: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     phone_attachments: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pane_conversation: Option<u64>,
 }
 
 impl ActiveDays {
@@ -231,6 +233,7 @@ impl ActiveDays {
             Daily::Feature(Feature::Gitlab) => &mut self.gitlab,
             Daily::Feature(Feature::PhoneAnswer) => &mut self.phone_answer,
             Daily::Feature(Feature::PhoneAttachments) => &mut self.phone_attachments,
+            Daily::Feature(Feature::PaneConversation) => &mut self.pane_conversation,
         };
         if *recorded == Some(day) {
             return false;
