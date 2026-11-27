@@ -51,6 +51,7 @@ import { catalogWorkspaces, type SnapshotRest } from "./snapshot";
 import type { DispatchFn } from "./ws";
 import { isGuestPaneId } from "./guestWork";
 import type { ClipboardContent } from "./clipboard";
+import { isRemoteView } from "./remoteView";
 
 /** What a terminal asks of the shell's actions: where a clicked link goes, and the clipboard its copy and paste use. */
 export type TerminalActions = TerminalLinkActions & {
@@ -1288,7 +1289,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
   const system = keySystem();
   term.attachCustomKeyEventHandler((event) => {
     if (event.type !== "keydown") return true;
-    const action = terminalKey(event, system, hasCopyText(instance));
+    const action = terminalKey(event, system, hasCopyText(instance), !isRemoteView());
     // A key that is not a modifier ends the text kept off screen, as it ends
     // a drawn selection; the chord that copies it keeps it for its own read.
     // On macOS ⌘C is the browser's own copy, which `terminalKey` leaves alone.

@@ -17,7 +17,10 @@ export const LINE_END = new Uint8Array([0x05]);
  *   Ctrl+Shift+C, which is the terminal's even with nothing selected, and
  *   Ctrl+C while there is a selection, as Windows Terminal does, so Ctrl+C
  *   still interrupts when nothing is selected;
- * - a paste: Ctrl+Shift+V elsewhere.
+ * - a paste: Ctrl+Shift+V elsewhere, which the shell reads from the
+ *   clipboard itself; where the page reads no clipboard (another machine's
+ *   view), the chord is left to the page's own paste, which carries the text
+ *   this computer copied (#3097).
  */
 export type TerminalKey = { kind: "bytes"; bytes: Uint8Array } | { kind: "copy" } | { kind: "paste" };
 
@@ -41,7 +44,7 @@ export function composingKey(event: Pick<KeyboardEvent, "isComposing" | "keyCode
   return composing || event.keyCode === 229;
 }
 
-export function terminalKey(event: KeyEventLike, system: KeySystem, selection: boolean, composing = composingKey({ isComposing: event.isComposing, keyCode: event.keyCode ?? 0 })): TerminalKey | null {
+export function terminalKey(event: KeyEventLike, system: KeySystem, selection: boolean, readsClipboard = true, composing = composingKey({ isComposing: event.isComposing, keyCode: event.keyCode ?? 0 })): TerminalKey | null {
   if (composing) return null;
   const bytes = (value: Uint8Array): TerminalKey => ({ kind: "bytes", bytes: value });
   const chord = !event.ctrlKey && !event.altKey;
@@ -53,7 +56,7 @@ export function terminalKey(event: KeyEventLike, system: KeySystem, selection: b
     if (event.key === "ArrowRight") return bytes(LINE_END);
     return null;
   }
-  if (presses(event, modChord(TERMINAL_PASTE, system))) return { kind: "paste" };
+  if (presses(event, modChord(TERMINAL_PASTE, system))) return readsClipboard ? { kind: "paste" } : null;
   if (presses(event, modChord(TERMINAL_COPY, system)) || (selection && presses(event, { code: "KeyC", ctrl: true }))) return { kind: "copy" };
   return null;
 }
