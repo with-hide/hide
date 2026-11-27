@@ -4,7 +4,7 @@
 use crate::account::Accounts;
 use crate::source::FileIdentity;
 use crate::source::facts::{self, Wanted};
-use crate::{Agent, SESSION_INCREMENT_READ_LIMIT_BYTES};
+use crate::{Agent, SESSION_INCREMENT_READ_LIMIT_BYTES, SESSION_READ_LIMIT_BYTES};
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -219,9 +219,19 @@ fn confirm_metadata(
                 })?
                 .and_then(|meta| meta["payload"]["id"].as_str().map(str::to_owned)),
             Agent::Claude => {
-                facts::claude(&file, Wanted::Id)
+                let id = facts::claude(&file, Wanted::Id)
                     .map_err(|_| anyhow!("label_session_metadata_read_failed"))?
-                    .id
+                    .id;
+                // Claude Code makes the file as the session starts, with its
+                // mode, owner and attachments, and names the session on its
+                // first person's or assistant's record. A file read whole
+                // with no such record is a session that has not written its
+                // conversation yet, which reading again answers, as a file
+                // not there yet is; never one whose owner is unconfirmed.
+                if id.is_none() && metadata.len() <= SESSION_READ_LIMIT_BYTES {
+                    return Err(anyhow!("session_file_missing"));
+                }
+                id
             }
             _ => None,
         }
@@ -377,6 +387,44 @@ mod tests {
         ] {
             assert!(label_reference_token(provider, kind, value).is_none());
         }
+    }
+
+    /// Mission-109's walk: a Claude Code session opened beside Desk before
+    /// its first message read `읽기가 거절됐어요`. Claude Code writes the
+    /// file as it starts, with no person's or assistant's record yet.
+    #[test]
+    fn a_claude_file_with_no_message_yet_is_a_session_not_written_yet() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let id = "0b9a7a52-2f4e-4c1e-9f7a-3c1d2b4e5f60";
+        let start = format!(
+            "{{\"type\":\"mode\",\"mode\":\"normal\",\"sessionId\":\"{id}\"}}\n\
+             {{\"type\":\"session-owner\",\"sessionId\":\"{id}\"}}\n\
+             {{\"type\":\"system\",\"subtype\":\"informational\",\"sessionId\":\"{id}\",\"cwd\":\"/repo\"}}\n"
+        );
+        fs::write(&path, &start).unwrap();
+        assert_eq!(
+            confirm_label_session(Agent::Claude, &path, Some(id))
+                .unwrap_err()
+                .to_string(),
+            "session_file_missing"
+        );
+        // Its first message names the session.
+        fs::write(
+            &path,
+            format!(
+                "{start}{{\"type\":\"user\",\"sessionId\":\"{id}\",\"cwd\":\"/repo\",\
+                 \"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            confirm_label_session(Agent::Claude, &path, Some(id))
+                .unwrap()
+                .native_session_id
+                .as_deref(),
+            Some(id)
+        );
     }
 
     #[test]

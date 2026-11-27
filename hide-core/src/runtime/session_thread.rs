@@ -252,10 +252,11 @@ enum ReadFailure {
     Busy,
     /// The cursor's file was replaced: the thread starts over.
     Stale,
-    /// The session the agent reported has no file yet
-    /// (`session_file_missing`): the agent writes it with its first
-    /// message, so for a pane still running that session this is an empty
-    /// conversation, and for one whose pane is gone a missing record.
+    /// The session the agent reported has not written its conversation
+    /// yet (`session_file_missing`: no file, or a Claude Code file holding
+    /// no message yet): the agent writes it with its first message, so for
+    /// a pane still running that session this is an empty conversation, and
+    /// for one whose pane is gone a missing record.
     NotWritten,
     NoRecord,
     Refused,
