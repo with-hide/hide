@@ -29,6 +29,8 @@ import { keyboardOwner } from "./viewFocus";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { ToolMark } from "./components/tool-mark";
+import { markOf, peerRows } from "./guestWork";
+import { ownWindow } from "./pairing";
 
 // ⌘K (PRD cmdk-navigation): a palette that goes to things. A query finds an
 // agent, project, checkout, device, issue or pull request by name or #number;
@@ -68,6 +70,8 @@ export function SearchPalette({ actions }: { actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const rest = useShellStore((s) => s.rest);
+  // Another computer's agents are found only on this computer's own window, as its rows show in the lists (D-50).
+  const own = useShellStore((s) => ownWindow(s.pairing));
   const linkSummaries = useShellStore((s) => s.linkSummaries);
   const workSearch = useShellStore((s) => s.sessionWorkSearch);
   const summaries = summariesEnabled(rest?.status?.background_ai);
@@ -109,7 +113,11 @@ export function SearchPalette({ actions }: { actions: Actions }) {
     return () => observer.disconnect();
   }, [box]);
 
-  const entries = useMemo(() => (rest ? [...searchEntries(rest, t), ...(front.desk ? missionEntries(rest) : [])] : []), [rest, t, front.desk]);
+  const entries = useMemo(() => {
+    if (!rest) return [];
+    const peers = own ? [...peerRows(rest, "needs_you"), ...peerRows(rest, "done")] : [];
+    return [...searchEntries(rest, t, peers), ...(front.desk ? missionEntries(rest) : [])];
+  }, [rest, own, t, front.desk]);
   const related = useMemo<Relations | null>(() => (front.target ? relationsOf(rest, front.target, t, true) : null), [rest, front, t]);
   const trimmed = query.trim();
   useEffect(() => { actions.searchSessionWork(trimmed); }, [actions, trimmed, summaries]);
@@ -169,6 +177,8 @@ export function SearchPalette({ actions }: { actions: Actions }) {
       case "device":
         return entry.deviceId ? actions.focusDevice(entry.deviceId) : undefined;
       case "agent":
+        // Another computer's agent opens on that computer's screen, as its row in the lists does.
+        if (entry.peer) return actions.openComputerAgent(entry.peer.deviceId, entry.peer.row.id);
         return entry.paneId ? actions.openAgent(entry.paneId) : undefined;
       case "project":
         return entry.deviceId && entry.workspaceId ? actions.openProjectById(entry.deviceId, entry.workspaceId) : undefined;
@@ -201,7 +211,7 @@ export function SearchPalette({ actions }: { actions: Actions }) {
   const reads = (entry: SearchEntry): ProjectRead => (entry.kind === "checkout" && entry.workspace ? projectRead(entry.workspace, askedProjects, now, t, language) : null);
 
   const detailOfRow = selectedEntry ? detailOf(rest, selectedEntry, now, t, language, linkSummaries) : null;
-  const sessionOnDesk = front.desk && selectedEntry?.kind === "agent";
+  const sessionOnDesk = front.desk && selectedEntry?.kind === "agent" && selectedEntry.paneId !== undefined;
   const detail: Detail | null = detailOfRow && sessionOnDesk ? { ...detailOfRow, action: t("search.openBesideDesk") } : detailOfRow;
 
   return (
@@ -300,7 +310,7 @@ function EntryIcon({ entry }: { entry: SearchEntry }) {
   if (entry.kind === "agent" || entry.kind === "session") {
     return (
       <span className="flex w-(--size-agent-badge-compact) shrink-0 justify-center" aria-hidden="true">
-        {entry.agent ? <StatusMark mark={entry.agent.mark} human={entry.agent.human_turn !== undefined} className={markTone(entry.agent)} /> : null}
+        {entry.agent ? <StatusMark mark={entry.agent.mark} human={entry.agent.human_turn !== undefined} className={markTone(entry.agent)} /> : entry.peer ? <StatusMark mark={markOf(entry.peer.row.mark)} read={entry.peer.row.read === true} /> : null}
       </span>
     );
   }
