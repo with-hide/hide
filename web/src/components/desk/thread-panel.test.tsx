@@ -1050,6 +1050,28 @@ it("puts ■ in send's place while the agent works, keeps ↵ adding to the line
   expect(container.querySelector("[data-desk-composer-send]")).not.toBeNull();
 });
 
+// CR-08/F9: a lost stop answer must recover like another accepted command,
+// with no automatic replay and without losing the words already in the box.
+it.each(["", "keep these unsent words"])("recovers a lost stop completion after reconnect with draft %j", async (draft) => {
+  const { actions, container, box, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ agents: [workingRow()], sessionThread: section() }));
+  await type(draft);
+  await act(async () => container.querySelector<HTMLElement>("[data-desk-composer-stop]")!.click());
+  await act(async () => useShellStore.setState({ connection: "reconnecting" }));
+  await act(async () => useShellStore.setState({ connection: "live", agents: [claudeRow], sessionThread: section({ input: { request_id: "stop-1", state: "sent" } }) }));
+  expect(box().value).toBe(draft);
+  await enter();
+  expect(events).toHaveLength(0);
+  expect(actions.interruptThread).toHaveBeenCalledTimes(1);
+  const terminal = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Go to terminal");
+  expect(terminal).toBeDefined();
+  await act(async () => terminal!.click());
+  await type("send after checking the terminal");
+  await enter();
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({ kind: "thread_input", payload: { text: "send after checking the terminal" } });
+});
+
 it("offers 모두 지우기, 이어 보내기 and each line's 보내기 once paused, 보내기 waiting while the agent works, and 되돌리기 after a clear (B14-B17, B23)", async () => {
   const { actions, container } = await mount();
   const paused = { state: "paused" as const, lines: [line(1, "테스트도 같이 돌려 줘", { failure: "uncertain" as const }), line(2, "끝나면 PR 열어 줘")], max: 8, full: false };

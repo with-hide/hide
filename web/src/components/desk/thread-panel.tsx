@@ -215,11 +215,12 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
   // line (PRD desk-queue B10-B12). A line's `보내기` waits until it rests and asks nothing (B16).
   const working = row?.state.working === true && !row.state.asking;
   const stop = () => {
-    if (!thread?.pane_id || held !== null || sent) return;
+    if (!thread?.pane_id || !paneId || held !== null || sent || waiting || uncertain) return;
     if (!canSend()) return;
     const request = actions.interruptThread(thread.generation, thread.pane_id);
     if (request) {
       holdSent({ request, tiles: [] });
+      useUiStore.getState().sendSessionDraft(paneId, remoteTargetOfPane(useShellStore.getState().rest, paneId), request, "", true);
       setNotice(null);
     } else {
       setNotice(words("forward_failed"));
