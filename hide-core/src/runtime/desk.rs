@@ -3734,6 +3734,16 @@ mod tests {
             .collect()
     }
 
+    fn paused(runtime: &Runtime) -> bool {
+        runtime
+            .snapshot
+            .desk
+            .as_ref()
+            .unwrap()
+            .conversation
+            .queued_paused
+    }
+
     fn no_send(received: &Receiver<Order>) {
         assert!(
             !received
@@ -3744,9 +3754,10 @@ mod tests {
     }
 
     /// letter-47148: a message sent while a reply is being written waits in
-    /// line, shown apart from the conversation; ✕ takes one out, `중지`
-    /// stops only the turn, and each goes, in order, when the turn before
-    /// it ends; past eight the next is refused and the composer keeps it.
+    /// line, shown apart from the conversation; ✕ takes one out, each goes,
+    /// in order, when the turn before it ends, ■ pauses the line until
+    /// `보내기` or `▶ 이어 보내기`; past eight the next is refused and the
+    /// composer keeps it.
     #[test]
     fn a_message_sent_during_a_reply_waits_and_goes_when_the_turn_before_it_ends() {
         let root = tempfile::tempdir().unwrap();
@@ -3778,19 +3789,54 @@ mod tests {
             json!({"id": waiting[1].0})
         ));
 
+        // ■ stops the turn and pauses the line behind it (PRD desk-queue
+        // D-10, B31): nothing goes when the stopped turn ends.
         assert!(event(&mut runtime, "desk_stop", json!({})));
         runtime.desk_report(Report::TurnEnded {
             tag: one.tag,
             outcome: TurnOutcome::Cancelled,
         });
+        no_send(&received);
+        assert!(paused(&runtime));
+
+        // `보내기` sends that one message alone; the rest stay paused (B16),
+        // and it is refused while that turn is under way.
+        assert!(event(
+            &mut runtime,
+            "desk_queued_send",
+            json!({"id": waiting[2].0})
+        ));
+        let four = sent(&received);
+        assert_eq!(four.text, "four");
+        assert!(!event(
+            &mut runtime,
+            "desk_queued_send",
+            json!({"id": waiting[0].0})
+        ));
+        runtime.desk_report(Report::TurnEnded {
+            tag: four.tag,
+            outcome: TurnOutcome::Done,
+        });
+        no_send(&received);
+        assert_eq!(queued(&runtime), [waiting[0].clone()]);
+        assert!(paused(&runtime));
+
+        // `모두 지우기` empties the line; `되돌리기` brings it back paused (B17).
+        assert!(event(&mut runtime, "desk_queued_clear", json!({})));
+        assert!(queued(&runtime).is_empty());
+        assert!(event(&mut runtime, "desk_queued_restore", json!({})));
+        assert_eq!(queued(&runtime), [waiting[0].clone()]);
+        assert!(paused(&runtime));
+        no_send(&received);
+
+        // `▶ 이어 보내기` lets the line go again.
+        assert!(event(&mut runtime, "desk_queued_resume", json!({})));
         let two = sent(&received);
         assert_eq!(two.text, "two");
         runtime.desk_report(Report::TurnEnded {
             tag: two.tag,
             outcome: TurnOutcome::Done,
         });
-        let four = sent(&received);
-        assert_eq!(four.text, "four");
         assert!(queued(&runtime).is_empty());
 
         for index in 0..DESK_QUEUED_MAX {
