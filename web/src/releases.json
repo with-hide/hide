@@ -18,6 +18,24 @@
         {
           "kind": "change",
           "text": {
+            "en": "Two computers that run Hide and find no direct path connect over the SSH alias you paired them with, and use Hide's relay only when SSH does not work either.",
+            "ko": "Hide가 도는 두 컴퓨터 사이에 직접 길이 없으면 연결할 때 쓴 SSH 별칭으로 붙고, SSH도 안 될 때만 Hide 중계를 써요.",
+            "zh-CN": "运行 Hide 的两台电脑之间没有直连路径时，会通过配对时使用的 SSH 别名连接，只有 SSH 也不通时才使用 Hide 的中继。",
+            "ja": "Hide が動く 2 台のコンピュータの間に直接の経路がないときは、ペアリングに使った SSH エイリアスでつながり、SSH も使えないときだけ Hide の中継を使います。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "A page or HTML file an agent opens on another computer now shows inside that computer's screen here, loaded through that computer, so its localhost is that computer's.",
+            "ko": "다른 컴퓨터의 에이전트가 연 페이지와 HTML 파일이 이 창의 그 컴퓨터 화면 안에 보여요. 그 컴퓨터를 거쳐 열리니 localhost도 그 컴퓨터 것이에요.",
+            "zh-CN": "其他电脑上的智能体打开的页面和 HTML 文件，现在会显示在这里那台电脑的画面中，并经由那台电脑加载，所以其中的 localhost 就是那台电脑的。",
+            "ja": "ほかのコンピュータのエージェントが開いたページや HTML ファイルが、このウィンドウのそのコンピュータの画面の中に表示されます。そのコンピュータを経由して読み込むので、localhost もそのコンピュータのものです。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
             "en": "Desk in Settings › Labs got many improvements: sessions open beside it, files can be dropped anywhere in it, and its box lists each agent's own / commands.",
             "ko": "설정 › 실험실의 Desk가 많이 좋아졌어요. 세션을 Desk 옆에 열어 보고, 파일을 아무 데나 끌어다 놓고, 입력창의 /에서 에이전트 고유 명령을 불러와요.",
             "zh-CN": "设置 › 实验室 中的 Desk 有了许多改进：会话可以在它旁边打开，文件可以拖到它的任意位置，输入框里的 / 会列出各个智能体自己的命令。",
@@ -130,6 +148,33 @@
             "ko": "폰에서 에이전트를 시작할 때 프로젝트와 브랜치를 차례로 고르고, 기기 선택은 한 기기에 두 줄로 보이며 추가하기 전에 방법을 골라요. 칩은 데스크톱과 같은 모양이에요.",
             "zh-CN": "手机上启动智能体时依次选择项目和分支；设备选择里每台设备占两行，添加前先选方式；标记的外形与桌面一致。",
             "ja": "スマホでエージェントを始めるときにプロジェクトとブランチを順に選べます。デバイスの選択は 1 台 2 行になり、追加する前に方法を選びます。チップはデスクトップと同じ形になりました。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "Splitting a pane or starting an agent beside you works in a tab the window has not shown yet.",
+            "ko": "창이 아직 보여 주지 않은 탭에서도 패널 나누기와 옆에 에이전트 띄우기가 거절되지 않아요.",
+            "zh-CN": "在窗口尚未显示过的标签页中，拆分面板或在旁边启动智能体也不会再被拒绝。",
+            "ja": "ウィンドウがまだ表示していないタブでも、パネルの分割や横にエージェントを起動することが拒否されなくなりました。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "Agents start with a short note that puts your Project Memory first and read the rest of Hide's guide when they need it, so Claude Code no longer cuts the Memory off.",
+            "ko": "에이전트가 Project Memory를 맨 앞에 둔 짧은 안내로 시작하고, 나머지 사용법은 필요할 때 읽어요. 그래서 Claude Code에서 Memory가 잘리지 않아요.",
+            "zh-CN": "智能体启动时会收到一份把 Project Memory 放在最前面的简短说明，其余用法在需要时再读，因此 Claude Code 不会再把 Memory 截掉。",
+            "ja": "エージェントは Project Memory を先頭に置いた短い案内で始まり、残りの使い方は必要なときに読みます。そのため Claude Code で Memory が切れなくなりました。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "While the window shows another computer's screen, an agent here that finishes stays unread and notifies you.",
+            "ko": "창이 다른 컴퓨터 화면을 보여 주는 동안 이 컴퓨터에서 일을 끝낸 에이전트는 읽지 않음으로 남고 알림이 와요.",
+            "zh-CN": "窗口显示其他电脑的画面时，这台电脑上完成工作的智能体会保持未读并通知你。",
+            "ja": "ウィンドウがほかのコンピュータの画面を表示している間、このコンピュータで作業を終えたエージェントは未読のまま残り、通知が届きます。"
           }
         },
         {
