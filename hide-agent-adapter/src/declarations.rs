@@ -310,6 +310,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             empty: &[Placeholder {
                 text: "",
                 style: Style::Dim,
+                cut: false,
             }],
             // Claude Code counts a paste's line breaks: twelve lines show `+11
             // lines` (`tests/fixtures/composer/claude-3-pasted.ansi`).
@@ -417,6 +418,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             empty: &[Placeholder {
                 text: "Ask Codex to do anything",
                 style: Style::Dim,
+                cut: true,
             }],
             // Codex shows a paste as its text.
             pasted: None,
@@ -529,6 +531,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             empty: &[Placeholder {
                 text: "",
                 style: Style::Italic,
+                cut: false,
             }],
             // (`tests/fixtures/composer/grok-3-pasted.ansi`)
             pasted: Some(PasteMark {
@@ -646,6 +649,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             empty: &[Placeholder {
                 text: "Ask anything…",
                 style: Style::Rgb(128, 128, 128),
+                cut: false,
             }],
             // (`tests/fixtures/composer/opencode-3-pasted.ansi`; a 18-line brief
             // showed `~18 lines` on Windows, agent journey run 41951563729)
@@ -875,6 +879,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             empty: &[Placeholder {
                 text: "⇧⇥ to change thinking effort",
                 style: Style::Any,
+                cut: false,
             }],
             // omp marks a paste with its number alone (`📄 #1`), which no count ties to the text.
             pasted: None,
@@ -1007,6 +1012,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             empty: &[Placeholder {
                 text: "",
                 style: Style::Palette(8),
+                cut: false,
             }],
             // (`tests/fixtures/composer/agy-3-pasted.ansi`)
             pasted: Some(PasteMark {

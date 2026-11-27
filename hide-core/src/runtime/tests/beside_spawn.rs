@@ -634,6 +634,99 @@ fn a_beside_spawn_with_a_parent_creates_nothing() {
     }
 }
 
+/// The caller's tab as its device lays it out, the caller alone in it, on
+/// screen in a window that measured it `canvas` px wide with cells of 8 px
+/// 8 px in from each side, or measured nothing yet. The report is filed under
+/// the caller's pane as the core names it, as the window names it.
+fn caller_drawn(spawner: &Spawner, canvas: Option<f64>) {
+    let mut guard = spawner.runtime.lock().unwrap();
+    // The caller's tab and checkout in the device's pass (`spawner`), which
+    // keeps its workspaces: the caller is found in them.
+    let tab = format!("remote:{DEVICE}:tab:w2:t1");
+    let checkout = format!("remote:{DEVICE}:checkout:w2");
+    let session = guard.snapshot.status.remote[0]
+        .session
+        .as_mut()
+        .expect("the device's pass");
+    session.pane_layouts = vec![crate::model::RemotePaneLayoutSnapshot {
+        workspace_id: format!("remote:{DEVICE}:workspace:w2"),
+        tab_id: tab.clone(),
+        focused_pane_id: spawner.actor.pane_id.clone(),
+        zoomed: false,
+        frames: vec![crate::model::RemotePaneLayoutFrame {
+            pane_id: spawner.actor.pane_id.clone(),
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        }],
+    }];
+    guard.snapshot.navigator.focused_workspace_id = None;
+    guard.snapshot.navigator.focused_checkout_id = Some(checkout.clone());
+    guard.visible_tab_ids.insert(checkout, tab.clone());
+    guard.ui_attached = true;
+    assert_eq!(guard.shown_agent_tabs(), [tab]);
+    // The window reports the caller's grid as it reports every pane's: the
+    // same `terminal_resize`, its measure filed under the core's own name for
+    // the device's pane, the frame's.
+    if let Some(canvas) = canvas {
+        let (font_size, font_family) = (
+            guard.snapshot.ui_state.terminal_font_size,
+            guard.snapshot.ui_state.terminal_font_family.clone(),
+        );
+        let resize = serde_json::to_vec(&json!({
+            "schema_version": SCHEMA_VERSION, "kind": "terminal_resize",
+            "payload": {"pane_id": spawner.actor.pane_id, "rows": 24, "cols": 30, "floor": {
+                "cell_px": 8.0, "canvas_px": canvas, "inset_px": 8.0, "base_cell_px": 8.0,
+                "scale": 1.0, "font_size": font_size, "font_family": font_family,
+            }},
+        }))
+        .unwrap();
+        guard.dispatch_json(&resize);
+    }
+}
+
+/// A split that would leave the caller or the child under the pane floor is
+/// refused before anything is reserved or created, with the next step of
+/// opening the agent in a new tab, and so is one the caller's window has not
+/// measured yet; the least pane that splits holds two floors and two insets.
+#[test]
+fn a_beside_spawn_from_a_pane_too_narrow_to_split_creates_nothing() {
+    let spawner = spawner();
+    let nothing_made = |spawner: &Spawner| {
+        assert!(spawner.ledger().spawns.is_empty());
+        for method in ["split_beside", "create_tab", "start_agent"] {
+            assert_eq!(spawner.count(method), 0, "{method}");
+        }
+    };
+    caller_drawn(&spawner, None);
+    assert_eq!(
+        spawner.spawn("unmeasured", BESIDE),
+        Err("beside_unmeasured".to_owned())
+    );
+    nothing_made(&spawner);
+    caller_drawn(&spawner, Some(319.0));
+    assert_eq!(
+        spawner.spawn("narrow", BESIDE),
+        Err("beside_too_narrow".to_owned())
+    );
+    nothing_made(&spawner);
+    caller_drawn(&spawner, Some(320.0));
+    assert_eq!(spawner.spawn("wide", BESIDE).unwrap()["pane"], "w2:p1");
+}
+
+/// A core no window draws, a server's, judges no floor: nothing is drawn
+/// under it there, and `--beside` splits as it always did.
+#[test]
+fn a_beside_spawn_on_a_core_no_window_draws_splits() {
+    let spawner = spawner();
+    spawner.runtime.lock().unwrap().ui_attached = false;
+    assert_eq!(
+        spawner.spawn("windowless", BESIDE).unwrap()["pane"],
+        "w2:p1"
+    );
+}
+
 /// B10: a split the engine refuses fails the spawn with its reason and opens no
 /// tab in its place.
 #[test]

@@ -7,7 +7,7 @@ import { Hint } from "./components/ui/tooltip";
 import { EntryPointMenu, type MenuEntry } from "./components/entry-menu";
 import { relationEntries, relationState } from "./lineage";
 import { agentReference, referenceText } from "./agentReference";
-import { type AgentActionRefusal, type PaneRow } from "./snapshot";
+import { type AgentActionRefusal, type PaneFloorRefusal, type PaneRow } from "./snapshot";
 import { agentActionReasonsEnglish } from "./i18n/resources/agentActionReasons";
 import { useShellStore } from "./store";
 import { copySelection, pasteClipboard, selectAllText } from "./terminals";
@@ -294,6 +294,18 @@ export function terminalMenuItems(pane: PaneRow, title: string, context: Termina
   return [...items, ...paneItems];
 }
 
+/**
+ * A pane whose split right the core's pane floor refuses (`refusal`, from
+ * the snapshot's `pane_floor`) offers Split right and Fork agent to the side
+ * disabled, with the reason; the core refuses both for the same pane
+ * (`Runtime::split_right_floor`). Split down is the height's.
+ */
+export function refuseNarrowSplits(items: MenuEntry<PaneMenuId>[], refusal: PaneFloorRefusal | undefined): MenuEntry<PaneMenuId>[] {
+  if (!refusal) return items;
+  const reason = translate(refusal === "unmeasured" ? "panes.menu.splitUnmeasured" : "panes.menu.splitTooNarrow");
+  return items.map((item) => (item.id === "split_right" || item.id === "fork_agent_side") && item.unavailable === null ? { ...item, unavailable: reason } : item);
+}
+
 /** Where the menu opened, and what a terminal right-click knew then; its items are drawn from the pane as it is now. */
 type MenuOpen = { x: number; y: number; terminal: TerminalMenuContext | null };
 
@@ -374,7 +386,8 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions, head
   const revisit = useRevisitOffer(pane.id, open !== null);
   const overview = useShellStore((s) => open !== null && agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(pane.id));
   const plan = useShellStore((s) => open !== null && planOfPane(s.rest, pane.id) !== null);
-  const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive, revisit, overview, plan, head) : paneMenuItems(pane, title, archive, revisit, overview, plan, head);
+  const floor = useShellStore((s) => (open === null ? undefined : s.rest?.pane_floor?.split_right[pane.id]));
+  const items = refuseNarrowSplits(open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive, revisit, overview, plan, head) : paneMenuItems(pane, title, archive, revisit, overview, plan, head), floor);
   if (move?.mutationBlocked(pane.id)) {
     for (const item of items) if (["close_pane", "split_right", "split_down", "toggle_zoom", "sleep_agent", "archive_session", "fork_agent", "fork_agent_side"].includes(item.id)) item.unavailable = t("menus.paneMove.busy");
   }

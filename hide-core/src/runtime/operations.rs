@@ -105,6 +105,9 @@ pub(super) struct PendingPaneOperation {
 /// How many operations may wait in one tab's line behind the one the engine is
 /// answering; the next is refused and logged (D-10, engineering 15).
 pub(super) const GEOMETRY_QUEUE_LIMIT: usize = 8;
+/// How long a split right made outside the line may hold its turn: the
+/// engine's split and its answer, never the agent's start after it.
+pub(super) const BESIDE_TURN_TIMEOUT_MS: u64 = 30_000;
 
 /// A start holds the tab through creation, durable identity saves, unzoom,
 /// move and authoritative confirmation. Bound each wait/lease by the existing
@@ -114,8 +117,13 @@ pub(super) const CHECKOUT_START_GEOMETRY_TIMEOUT_MS: u64 =
 
 #[derive(Clone, Debug)]
 pub(super) enum GeometryRequest {
+    /// A turn of the line handed to a worker that makes its change itself:
+    /// a checkout start (`task`), or a split right made outside the line, a
+    /// fork to the side, `hide pane open --beside` or `hide agent spawn
+    /// --beside` (no task, [`BesideTurn`]). `ready` is answered when the turn
+    /// comes, or with the refusal that ends it.
     Task {
-        task: u64,
+        task: Option<u64>,
         ready: std::sync::mpsc::SyncSender<Result<String, String>>,
     },
     /// A split, zoom or resize, sent as this action.
@@ -124,6 +132,148 @@ pub(super) enum GeometryRequest {
     /// (`close_local_pane`) when its turn comes; from then on the close keeps
     /// its own record and this one is gone.
     Close { pane_id: String, confirmed: bool },
+}
+
+/// How long a worker waits for its turn of a tab's line before its split
+/// right is refused as the tab being busy.
+const BESIDE_TURN_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Where a worker hears that its turn of a tab's line came (its operation
+/// id), or the refusal that ended it.
+pub(crate) type TurnAnswer = std::sync::mpsc::Receiver<Result<String, String>>;
+
+/// Why a split right a worker makes outside the line did not get its turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BesideRefusal {
+    /// The pane floor refused it, at the request or when its turn came.
+    Floor(crate::model::PaneFloorRefusal),
+    /// The tab's line is full, a pane move holds the tab, or the turn did
+    /// not come in time.
+    Busy,
+}
+
+impl BesideRefusal {
+    fn of_turn_answer(answer: &str) -> Self {
+        use crate::model::PaneFloorRefusal;
+        [PaneFloorRefusal::TooNarrow, PaneFloorRefusal::Unmeasured]
+            .into_iter()
+            .find(|refusal| refusal.event_code() == answer)
+            .map_or(Self::Busy, Self::Floor)
+    }
+
+    /// The refusal's code for a command whose codes start with `prefix`:
+    /// `pane_` for `hide pane open --beside`, `beside_` for `hide agent spawn
+    /// --beside`.
+    pub(crate) fn code(self, prefix: &str) -> String {
+        use crate::model::PaneFloorRefusal;
+        let reason = match self {
+            Self::Floor(PaneFloorRefusal::TooNarrow) => "too_narrow",
+            Self::Floor(PaneFloorRefusal::Unmeasured) => "unmeasured",
+            Self::Busy => "tab_busy",
+        };
+        format!("{prefix}{reason}")
+    }
+}
+
+/// A turn of a tab's geometry line, held by a worker for the one split right
+/// it makes itself (`Runtime::queue_beside_turn`): from the engine's split to
+/// its answer, never the agent's start after it. Dropping it lets the turn go,
+/// so every way out of the worker, a failed split included, ends it; a
+/// successful split ends it with `end` or `finish`, which draw the split in
+/// the same step. It must not be dropped while its runtime's lock is held.
+pub(crate) struct BesideTurn {
+    runtime: Weak<Mutex<Runtime>>,
+    id: Option<String>,
+}
+
+impl BesideTurn {
+    /// Waits for the turn of `target`'s tab, `target` as the core names it.
+    /// A pane of no local tab, a device's, is judged by the floor once and
+    /// has no line of this core's to wait in.
+    pub(crate) fn take(
+        runtime: &Weak<Mutex<Runtime>>,
+        target: &str,
+    ) -> Result<Self, BesideRefusal> {
+        let queued = {
+            let owner = runtime.upgrade().ok_or(BesideRefusal::Busy)?;
+            let mut owner = owner.lock().unwrap_or_else(|poison| poison.into_inner());
+            owner.queue_beside_turn(target)?
+        };
+        let Some((id, ready)) = queued else {
+            return Ok(Self::detached());
+        };
+        let turn = Self {
+            runtime: runtime.clone(),
+            id: Some(id),
+        };
+        match ready.recv_timeout(BESIDE_TURN_WAIT) {
+            Ok(Ok(_)) => Ok(turn),
+            Ok(Err(answer)) => Err(BesideRefusal::of_turn_answer(&answer)),
+            Err(_) => Err(BesideRefusal::Busy),
+        }
+    }
+
+    /// Whether the turn is still this worker's, asked right before its split:
+    /// one past its deadline is not split in, and the tab is busy.
+    pub(crate) fn confirm(&self) -> Result<(), BesideRefusal> {
+        let Some(id) = &self.id else {
+            return Ok(());
+        };
+        let owner = self.runtime.upgrade().ok_or(BesideRefusal::Busy)?;
+        let current = owner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .beside_turn_current(id);
+        if current {
+            Ok(())
+        } else {
+            Err(BesideRefusal::Busy)
+        }
+    }
+
+    /// A turn of no line: what a split of a device's pane, and a test,
+    /// hold.
+    pub(crate) fn detached() -> Self {
+        Self {
+            runtime: Weak::new(),
+            id: None,
+        }
+    }
+
+    /// Ends the turn under the lock its caller holds, with the split it made
+    /// as (`target`, `created`), or with no drawing when the caller draws it
+    /// itself in the same step, as a fork's pane is.
+    pub(crate) fn end(mut self, runtime: &mut Runtime, created: Option<(&str, &str)>) {
+        if let Some(id) = self.id.take() {
+            runtime.end_beside_turn(&id, created);
+        }
+    }
+
+    /// The same, taking the runtime's lock.
+    pub(crate) fn finish(mut self, created: Option<(&str, &str)>) {
+        let Some(id) = self.id.take() else {
+            return;
+        };
+        if let Some(owner) = self.runtime.upgrade() {
+            owner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .end_beside_turn(&id, created);
+        }
+    }
+}
+
+impl Drop for BesideTurn {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.take()
+            && let Some(owner) = self.runtime.upgrade()
+        {
+            owner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .end_beside_turn(&id, None);
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1010,7 +1160,7 @@ impl Runtime {
             .checkout_start_geometry_context(task, pane_id)
             .ok_or("Checkout start task or target pane is no longer current")?;
         if self.pane_operations.values().any(|operation| {
-            matches!(operation.request, GeometryRequest::Task { task: queued, .. } if queued == task)
+            matches!(operation.request, GeometryRequest::Task { task: Some(queued), .. } if queued == task)
         }) {
             return Err("Checkout start already has a geometry reservation".into());
         }
@@ -1023,7 +1173,10 @@ impl Runtime {
             pane_id.to_owned(),
             scope.clone(),
             baseline,
-            GeometryRequest::Task { task, ready },
+            GeometryRequest::Task {
+                task: Some(task),
+                ready,
+            },
             None,
         );
         let operation = self.pane_operations.get_mut(&id).expect("inserted above");
@@ -1054,7 +1207,7 @@ impl Runtime {
     /// Checked before every effect, including effects after a durable save.
     pub(crate) fn checkout_start_geometry_is_current(&self, task: u64, id: &str) -> bool {
         self.pane_operations.get(id).is_some_and(|operation| {
-            matches!(operation.request, GeometryRequest::Task { task: held, .. } if held == task)
+            matches!(operation.request, GeometryRequest::Task { task: Some(held), .. } if held == task)
                 && operation.phase == "transmitting"
                 && self.checkout_start_geometry_target_is_current(task, operation)
         })
@@ -1071,7 +1224,8 @@ impl Runtime {
         let Some(operation) = self.pane_operations.get(id) else {
             return;
         };
-        if !matches!(operation.request, GeometryRequest::Task { task: held, .. } if held == task) {
+        if !matches!(operation.request, GeometryRequest::Task { task: Some(held), .. } if held == task)
+        {
             return;
         }
         let success = result.is_ok() && self.checkout_start_geometry_is_current(task, id);
@@ -1098,7 +1252,7 @@ impl Runtime {
     /// revokes a grant racing with that timeout, before the worker can use it.
     pub(crate) fn cancel_checkout_start_geometry(&mut self, task: u64) {
         let id = self.pane_operations.values().find_map(|operation| {
-            matches!(operation.request, GeometryRequest::Task { task: held, .. } if held == task)
+            matches!(operation.request, GeometryRequest::Task { task: Some(held), .. } if held == task)
                 .then(|| operation.id.clone())
         });
         if let Some(id) = id {
@@ -1108,6 +1262,192 @@ impl Runtime {
                 Err("Checkout start geometry wait cancelled".into()),
             );
         }
+    }
+
+    /// `action` as the pane floor lets it go: a sideways resize cut to the
+    /// part that keeps every pane at the floor, on the tab as the line will
+    /// leave it at the request (`at_turn` false) or as the engine confirmed it
+    /// when its turn comes; none for one the floor leaves nothing of. Every
+    /// other action goes as it is.
+    fn floor_resize_action(
+        &self,
+        scope_id: &str,
+        at_turn: bool,
+        action: PaneControlAction,
+    ) -> Option<PaneControlAction> {
+        let PaneControlAction::Resize {
+            pane_id,
+            direction,
+            amount,
+        } = action
+        else {
+            return Some(action);
+        };
+        let layout = if at_turn {
+            self.confirmed_layouts.get(scope_id).cloned().or_else(|| {
+                self.snapshot
+                    .pane_layouts
+                    .iter()
+                    .find(|layout| layout.tab_id == scope_id)
+                    .cloned()
+            })
+        } else {
+            self.predicted_tab_layout(scope_id)
+        };
+        let kept = match &layout {
+            Some(layout) => self.floor_resize_amount(scope_id, layout, &pane_id, direction, amount),
+            None => amount,
+        };
+        if kept < 0.001 {
+            crate::diagnostic!(serde_json::json!({
+                "component": "pane_floor", "kind": "pane_floor.resize_stopped",
+                "tab_id": scope_id, "pane_id": pane_id, "amount": amount,
+            }));
+            return None;
+        }
+        Some(PaneControlAction::Resize {
+            pane_id,
+            direction,
+            amount: kept,
+        })
+    }
+
+    /// What the line sends when `id`'s turn comes, judged again by the pane
+    /// floor on the tab as the operation ahead left it: none when a split
+    /// right would now leave a pane under the floor, which is refused with
+    /// its reason, or when a sideways resize has nothing left that keeps it,
+    /// which goes without a word since the divider simply stopped.
+    fn floor_at_send(
+        &mut self,
+        scope_id: &str,
+        id: &str,
+        action: PaneControlAction,
+    ) -> Option<PaneControlAction> {
+        if let PaneControlAction::Split {
+            pane_id,
+            direction: PaneSplitDirection::Right,
+            ..
+        } = &action
+            && let Err(refusal) = self.split_right_floor_at_turn(scope_id, pane_id)
+        {
+            self.refuse_at_turn(id, refusal.event_code(), refusal.message());
+            return None;
+        }
+        let resize = matches!(action, PaneControlAction::Resize { .. });
+        let kept = self.floor_resize_action(scope_id, true, action);
+        match (&kept, resize) {
+            (None, _) => {
+                self.pane_operations.remove(id);
+                self.op_timings.finish(id, "stopped");
+                self.request_republish();
+            }
+            (
+                Some(PaneControlAction::Resize {
+                    pane_id,
+                    direction,
+                    amount,
+                }),
+                true,
+            ) => {
+                // The drawing follows what is sent, not what was asked.
+                let prediction = self.confirmed_layouts.get(scope_id).and_then(|layout| {
+                    super::pane_prediction::resize_prediction(layout, pane_id, *direction, *amount)
+                });
+                if let Some(operation) = self.pane_operations.get_mut(id)
+                    && prediction.is_some()
+                    && operation.prediction != prediction
+                {
+                    operation.prediction = prediction;
+                    self.request_republish();
+                }
+            }
+            _ => {}
+        }
+        kept
+    }
+
+    /// Ends `id` at its turn with the refusal's reason, keeping what waits
+    /// behind it: nothing there was predicted on an operation not sent.
+    fn refuse_at_turn(&mut self, id: &str, code: &str, message: &str) {
+        let Some(operation) = self.pane_operations.remove(id) else {
+            return;
+        };
+        self.op_timings.finish(id, "refused");
+        self.discard_input_request(
+            &super::terminal_input::InputOrigin::Split(id.to_owned()),
+            "refused",
+        );
+        crate::diagnostic!(serde_json::json!({
+            "component": "pane_floor", "kind": "pane_floor.refused_at_turn",
+            "operation": operation.kind, "tab_id": operation.scope_id,
+            "pane_id": operation.target_id, "code": code,
+        }));
+        self.set_error(code, message, false);
+        self.request_republish();
+    }
+
+    /// Queues a turn of `target`'s tab line for a split right a worker makes
+    /// outside the line: a fork to the side, `hide pane open --beside` or
+    /// `hide agent spawn --beside` (`BesideTurn`). The split is judged by the
+    /// pane floor now, on the tab as the line will leave it, and again when
+    /// the turn comes; the answer comes on the receiver.
+    pub(crate) fn queue_beside_turn(
+        &mut self,
+        target: &str,
+    ) -> Result<Option<(String, TurnAnswer)>, BesideRefusal> {
+        self.split_right_floor(target)
+            .map_err(BesideRefusal::Floor)?;
+        // A pane of no local tab has no line of the core's own to wait in.
+        let (Some(scope), Some(baseline)) = (
+            self.pane_operation_scope(target),
+            self.pane_operation_baseline(target),
+        ) else {
+            return Ok(None);
+        };
+        if self.pane_move_holds_tab(&scope)
+            || !self.admit_to_geometry_queue(&scope, "pane.split.beside", target)
+        {
+            return Err(BesideRefusal::Busy);
+        }
+        let (ready, receiver) = std::sync::mpsc::sync_channel(1);
+        let id = self.insert_queued_geometry(
+            "pane.split.beside",
+            target.to_owned(),
+            scope.clone(),
+            baseline,
+            GeometryRequest::Task { task: None, ready },
+            None,
+        );
+        self.pump_geometry_queue(&scope);
+        self.sync_async_operations();
+        Ok(Some((id, receiver)))
+    }
+
+    /// Whether the turn `id` is still its worker's to split in: granted and
+    /// not past its deadline.
+    pub(crate) fn beside_turn_current(&self, id: &str) -> bool {
+        self.pane_operations.get(id).is_some_and(|operation| {
+            matches!(operation.request, GeometryRequest::Task { task: None, .. })
+                && operation.phase == "transmitting"
+        })
+    }
+
+    /// Ends the turn `id`, its split made as `created` or not made: the made
+    /// split is drawn and holds the line until the engine's layout lists it
+    /// (`draw_answered_split`), in the same step that lets the turn go, so the
+    /// next operation is judged on the tab with it.
+    pub(crate) fn end_beside_turn(&mut self, id: &str, created: Option<(&str, &str)>) {
+        let operation = self.pane_operations.remove(id);
+        if let Some((target, created)) = created {
+            self.draw_answered_split(target, created);
+        }
+        // A turn past its deadline is still here as unknown and lets the
+        // line go now; one its tab took with it has no line left.
+        if let Some(operation) = operation {
+            self.pump_geometry_queue(&operation.scope_id);
+        }
+        self.request_republish();
+        self.sync_async_operations();
     }
 
     /// Admits a split, zoom or resize into its tab's line and sends it when
@@ -1149,6 +1489,11 @@ impl Runtime {
             !(operation.scope_id == scope_id
                 && matches!(operation.phase.as_str(), "failed" | "refused"))
         });
+        // A sideways resize moves the divider only as far as every pane keeps
+        // the floor, on the tab as the line will leave it (`pane_floor`).
+        let Some(action) = self.floor_resize_action(&scope_id, false, action) else {
+            return true;
+        };
         // A resize behind an unsent resize of the same pane and axis moves
         // that one further instead, so a drag cannot fill the line.
         if self.fold_queued_resize(&scope_id, &action) {
@@ -1389,15 +1734,18 @@ impl Runtime {
 
     /// Whether an operation of the tab is still waiting for the engine, so the
     /// next one has to wait its turn. A result that became unknown does not
-    /// hold the line (D-09, D-12).
+    /// hold the line (D-09, D-12), except a split beside whose worker still
+    /// holds its turn: the worker may still split, so nothing goes before it
+    /// lets the turn go (`BesideTurn`).
     fn geometry_in_flight(&self, scope_id: &str) -> bool {
         self.pane_move_holds_tab(scope_id)
             || self.pane_operations.values().any(|operation| {
                 operation.scope_id == scope_id
-                    && matches!(
+                    && (matches!(
                         operation.phase.as_str(),
                         "transmitting" | "awaiting_topology"
-                    )
+                    ) || matches!(operation.request, GeometryRequest::Task { task: None, .. }))
+                    && operation.phase != "queued"
             })
             || self.close_operations.values().any(|operation| {
                 operation.scope_id == scope_id
@@ -1429,7 +1777,7 @@ impl Runtime {
     /// The tab as the line will leave it: the engine's confirmed layout with every
     /// prediction folded in. The stored layout already shows the drawn ones,
     /// so the fold starts from what the engine confirmed when there is a drawing.
-    fn predicted_tab_layout(&self, scope_id: &str) -> Option<PaneLayoutSnapshot> {
+    pub(super) fn predicted_tab_layout(&self, scope_id: &str) -> Option<PaneLayoutSnapshot> {
         let layout = self.confirmed_layouts.get(scope_id).or_else(|| {
             self.snapshot
                 .pane_layouts
@@ -1696,7 +2044,31 @@ impl Runtime {
             }
             moved = true;
             match request {
-                GeometryRequest::Task { task, ready } => {
+                GeometryRequest::Task { task: None, ready } => {
+                    // A split right made outside the line is judged by the
+                    // pane floor on the tab as everything ahead left it.
+                    let target = self.pane_operations[&id].target_id.clone();
+                    if let Err(refusal) = self.split_right_floor_at_turn(scope_id, &target) {
+                        let _ = ready.try_send(Err(refusal.event_code().to_owned()));
+                        self.pane_operations.remove(&id);
+                        continue;
+                    }
+                    let operation = self.pane_operations.get_mut(&id).expect("queued above");
+                    operation.phase = "transmitting".into();
+                    operation.stage = "beside".into();
+                    operation.deadline_at_unix_ms =
+                        Some(unix_milliseconds().saturating_add(BESIDE_TURN_TIMEOUT_MS));
+                    if ready.try_send(Ok(id.clone())).is_err() {
+                        // The worker stopped waiting: the turn goes to whoever is next.
+                        self.pane_operations.remove(&id);
+                        continue;
+                    }
+                    break;
+                }
+                GeometryRequest::Task {
+                    task: Some(task),
+                    ready,
+                } => {
                     if !self
                         .checkout_start_geometry_target_is_current(task, &self.pane_operations[&id])
                     {
@@ -1723,6 +2095,16 @@ impl Runtime {
                     break;
                 }
                 GeometryRequest::Pane(action) => {
+                    // What the line asked is judged again by the pane floor on
+                    // the tab as the operation ahead left it: a split right
+                    // that would now leave a pane under it is refused, and a
+                    // sideways resize is cut to the part that keeps it.
+                    let Some(action) = self.floor_at_send(scope_id, &id, action) else {
+                        continue;
+                    };
+                    if let Some(operation) = self.pane_operations.get_mut(&id) {
+                        operation.request = GeometryRequest::Pane(action.clone());
+                    }
                     self.send_pane_operation(&id, action);
                     break;
                 }
@@ -1835,9 +2217,7 @@ impl Runtime {
                 continue;
             };
             if let GeometryRequest::Task { ready, .. } = &operation.request {
-                let _ = ready.try_send(Err(format!(
-                    "Checkout start geometry queue dropped: {reason}"
-                )));
+                let _ = ready.try_send(Err(format!("Geometry queue dropped: {reason}")));
             }
             self.op_timings.finish(&id, "dropped");
             self.discard_input_request(
@@ -2338,7 +2718,33 @@ impl Runtime {
             if deadline > now_unix_ms {
                 continue;
             }
-            if let GeometryRequest::Task { task, .. } = operation.request {
+            if let GeometryRequest::Task { task: None, .. } = operation.request {
+                // A worker past its deadline is not known to have ended: its
+                // turn becomes unknown and keeps the line until the worker
+                // lets it go, and what waited behind it is dropped, as behind
+                // every operation whose result is unknown. A worker that has
+                // not split yet finds its turn gone (`BesideTurn::confirm`).
+                if let Some(current) = self.pane_operations.get_mut(&id) {
+                    current.phase = "unknown".to_owned();
+                    current.deadline_at_unix_ms = None;
+                    current.message =
+                        Some("The split beside took its turn past the deadline".to_owned());
+                }
+                self.push_diagnostic(
+                    "pane.beside.turn_expired",
+                    format!(
+                        "The split beside {} took its turn past the deadline; the tab waits for it",
+                        operation.target_id
+                    ),
+                );
+                self.drop_geometry_queue(&operation.scope_id, "unknown");
+                changed = true;
+                continue;
+            }
+            if let GeometryRequest::Task {
+                task: Some(task), ..
+            } = operation.request
+            {
                 self.finish_checkout_start_geometry(
                     task,
                     &id,

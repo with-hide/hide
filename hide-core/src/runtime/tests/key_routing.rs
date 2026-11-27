@@ -54,6 +54,7 @@ fn runtime_on(fake: &Fake) -> (Runtime, Arc<RecordedTerminals>) {
         .insert(0, "w-order:t1".to_owned());
     report_terminal(&mut runtime, ORIGIN, terminal_state("controlling", 1));
     runtime.snapshot.terminal.pane_id = Some(ORIGIN.to_owned());
+    window_measured(&mut runtime, ORIGIN, 1280.0);
     terminals.take();
     (runtime, terminals)
 }

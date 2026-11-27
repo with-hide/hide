@@ -254,6 +254,30 @@ impl Runtime {
     ///
     /// The caller runs it after the session's confirmations have read the engine's
     /// own layout, so nothing Hide drew can confirm an operation.
+    /// Takes the engine's layout of this pass as confirmed for every tab with
+    /// an operation in its line, before the pass settles any: what a settled
+    /// operation lets go is sent and judged on it. `overlay_geometry` keeps
+    /// it for the tabs still drawn ahead.
+    pub(super) fn confirm_engine_layouts(&mut self, payload: &SessionSnapshotPayload) {
+        for layout in &payload.layouts {
+            let in_line = self
+                .pane_operations
+                .values()
+                .any(|operation| operation.scope_id == layout.tab_id)
+                || self
+                    .close_operations
+                    .values()
+                    .any(|operation| operation.scope_id == layout.tab_id);
+            if !in_line {
+                continue;
+            }
+            if let Ok(confirmed) = crate::live::project_layout(layout) {
+                self.confirmed_layouts
+                    .insert(layout.tab_id.clone(), confirmed);
+            }
+        }
+    }
+
     fn overlay_geometry(&mut self, payload: &mut SessionSnapshotPayload) {
         let mut scopes = self
             .pane_operations
