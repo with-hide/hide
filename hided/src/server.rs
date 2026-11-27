@@ -139,7 +139,7 @@ pub struct AppState {
     /// Which windows hold the keyboard and draw the Workspace screen: the
     /// core counts a View in front of the operator as seen only while one
     /// does (PRD unseen-agent-views D-07, B6, B8).
-    pub window_focus_demand: Arc<crate::demand::ObservationDemand>,
+    pub window_focus_demand: Arc<crate::demand::FocusDemand>,
     /// Which connections show which backlog item's origin: the core keeps
     /// an origin until the last of them closes it or leaves.
     pub origin_holds: Arc<crate::demand::OriginHolds>,
@@ -418,8 +418,7 @@ async fn release_browser_route(
 }
 
 fn browser_control_failure((reason, next_action): crate::browser_control::Failure) -> Response {
-    eprintln!(
-        "{}",
+    hide_core::diagnostic!(
         json!({"component":"browser_control","kind":"request.refused","reason":reason})
     );
     (
@@ -1737,6 +1736,15 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "beside_other_machine" => {
             "--beside opens an agent only on your own machine; leave out --machine, or run the command again without --beside to open it in a new tab"
         }
+        "beside_too_narrow" => {
+            "Your pane is too narrow to split: the agent's input box would not be readable beside you, so nothing was opened; run the command again without --beside to open the agent in a new tab"
+        }
+        "beside_unmeasured" => {
+            "The panes of your tab are not drawn yet, so nothing was opened; run the command again without --beside to open the agent in a new tab"
+        }
+        "beside_tab_busy" => {
+            "Your tab is still busy with the splits and moves ahead of this one, so nothing was opened; run the command again without --beside to open the agent in a new tab"
+        }
         "beside_needs_agent_pane" => {
             "--beside opens the agent beside the pane that calls it; run the command from an agent pane Hide knows, or without --beside to open it in a new tab"
         }
@@ -2746,15 +2754,12 @@ fn start_device_read(
         && let Some(oldest) = reads.pop_front()
     {
         oldest.task.abort();
-        eprintln!(
-            "{}",
-            json!({
-                "component": "hided", "kind": "device.file_bytes_ended",
-                "device": device,
-                "request_id": oldest.request_id.chars().take(LOGGED_PATH_CAP).collect::<String>(),
-                "reason": "a newer read for this client took its place",
-            })
-        );
+        hide_core::diagnostic!(json!({
+            "component": "hided", "kind": "device.file_bytes_ended",
+            "device": device,
+            "request_id": oldest.request_id.chars().take(LOGGED_PATH_CAP).collect::<String>(),
+            "reason": "a newer read for this client took its place",
+        }));
         superseded = Some(file_bytes_error(
             &oldest.request_id,
             &oldest.path,
@@ -2992,7 +2997,12 @@ fn handle_client_text(
         // that screen (`pane_sizes`).
         Some("terminal_resize") => {
             let (pane, size) = terminal_grid(&event)?;
-            if state.pane_sizes.resized(connection, &pane, size).is_none() {
+            let floor = event.pointer("/payload/floor").cloned();
+            if state
+                .pane_sizes
+                .resized_measured(connection, &pane, size, floor)
+                .is_none()
+            {
                 return Ok(ClientAction::Replies(Vec::new()));
             }
         }
@@ -3053,21 +3063,30 @@ fn handle_client_text(
             });
             return Ok(ClientAction::Replies(Vec::new()));
         }
-        // A window that has the keyboard and draws the Workspace screen; the
-        // core hears whether any window does, and a window that leaves
-        // without saying so lets go of its focus with its connection.
+        // A window that has the keyboard, and the screen it draws: the
+        // Workspace or Desk's desk (a window that names none draws the
+        // Workspace); the core hears the screen of the window that took the
+        // keyboard last, and a window that leaves without saying so lets go
+        // of its focus with its connection.
         Some("window_focus") => {
-            let Some(focused) = event
-                .get("payload")
+            let payload = event.get("payload");
+            let Some(focused) = payload
                 .and_then(|payload| payload.get("focused"))
                 .and_then(Value::as_bool)
             else {
                 return Err("window_focus.focused must be a boolean".to_owned());
             };
-            Demand::WindowFocus
-                .of(state)
-                .set(connection, focused, |aggregate| {
-                    dispatch_observation(&state.core, Demand::WindowFocus, connection, aggregate)
+            let screen = match payload.and_then(|payload| payload.get("screen")) {
+                None => crate::demand::FocusScreen::Workspace,
+                Some(screen) => screen
+                    .as_str()
+                    .and_then(crate::demand::FocusScreen::parse)
+                    .ok_or_else(|| "window_focus.screen must be workspace or desk".to_owned())?,
+            };
+            state
+                .window_focus_demand
+                .set(connection, focused.then_some(screen), |now| {
+                    dispatch_window_focus(&state.core, connection, now)
                 });
             return Ok(ClientAction::Replies(Vec::new()));
         }
@@ -3393,17 +3412,14 @@ fn device_listing(
     // `reason` is the host's refusal code, which the Explorer words; the
     // sentence beside it is the log's.
     let unavailable = |code: &str, reason: Option<&str>, message: String| {
-        eprintln!(
-            "{}",
-            json!({
-                "component": "hided",
-                "kind": "device.listing_unavailable",
-                "device": device,
-                "code": code,
-                "reason": reason,
-                "message": message,
-            })
-        );
+        hide_core::diagnostic!(json!({
+            "component": "hided",
+            "kind": "device.listing_unavailable",
+            "device": device,
+            "code": code,
+            "reason": reason,
+            "message": message,
+        }));
         json!({"type": "directory_unavailable", "payload": {
             "kind": "file_list", "device_id": device, "root_path": folder, "code": code, "reason": reason,
         }})
@@ -3522,13 +3538,10 @@ fn node_ask(core: &CoreHandle, boundary: &Boundary, event: &Value) -> Value {
             LinkError::Refused(refused) => (Some(refused.code), refused.message.clone()),
             other => (None, other.to_string()),
         };
-        eprintln!(
-            "{}",
-            json!({
-                "component": "hided", "kind": "add_project.node_refused", "event": kind,
-                "device": device, "code": code.map(|code| code.as_str()), "message": message,
-            })
-        );
+        hide_core::diagnostic!(json!({
+            "component": "hided", "kind": "add_project.node_refused", "event": kind,
+            "device": device, "code": code.map(|code| code.as_str()), "message": message,
+        }));
         node_ask_reason(&error)
     };
     let link = core.node_link(&device);
@@ -3570,13 +3583,10 @@ fn node_ask(core: &CoreHandle, boundary: &Boundary, event: &Value) -> Value {
                     // A source the node could not read is the log's, never
                     // the screen's (PRD device-add-project D-12, B27).
                     for dropped in &found.dropped {
-                        eprintln!(
-                            "{}",
-                            json!({
-                                "component": "hided", "kind": "add_project.import_source_dropped",
-                                "device": device, "source": dropped.source, "reason": dropped.reason,
-                            })
-                        );
+                        hide_core::diagnostic!(json!({
+                            "component": "hided", "kind": "add_project.import_source_dropped",
+                            "device": device, "source": dropped.source, "reason": dropped.reason,
+                        }));
                     }
                     (Some(found.projects), None)
                 }
@@ -3671,9 +3681,6 @@ pub(crate) enum Demand {
     Start,
     /// The Overview's request view: the running checks' re-read.
     RequestView,
-    /// A window with the keyboard on the Workspace screen: what is in
-    /// front of it is seen.
-    WindowFocus,
 }
 
 impl Demand {
@@ -3682,7 +3689,6 @@ impl Demand {
             Self::Settings => "observing",
             Self::Start => "start_observing",
             Self::RequestView => "request_view",
-            Self::WindowFocus => "window_focus",
         }
     }
 
@@ -3691,7 +3697,6 @@ impl Demand {
             Self::Settings => &state.demand,
             Self::Start => &state.start_demand,
             Self::RequestView => &state.request_view_demand,
-            Self::WindowFocus => &state.window_focus_demand,
         }
     }
 }
@@ -3710,8 +3715,7 @@ fn close_backlog_origin(
         "payload": owner,
     });
     if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
-        eprintln!(
-            "{}",
+        hide_core::diagnostic!(
             json!({"component": "hided", "kind": "backlog.origin_release_failed", "connection": connection, "message": error})
         );
     }
@@ -3737,26 +3741,18 @@ pub(crate) fn dispatch_observation(
     connection: u64,
     observing: bool,
 ) {
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "settings.observation",
-            "connection": connection,
-            "demand": demand.field(),
-            "observing": observing,
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "settings.observation",
+        "connection": connection,
+        "demand": demand.field(),
+        "observing": observing,
+    }));
     let event = match demand {
         Demand::RequestView => json!({
             "schema_version": SCHEMA_VERSION,
             "kind": "request_view",
             "payload": {"observing": observing},
-        }),
-        Demand::WindowFocus => json!({
-            "schema_version": SCHEMA_VERSION,
-            "kind": "window_focus",
-            "payload": {"focused": observing},
         }),
         Demand::Settings | Demand::Start => json!({
             "schema_version": SCHEMA_VERSION,
@@ -3765,15 +3761,42 @@ pub(crate) fn dispatch_observation(
         }),
     };
     if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
-        eprintln!(
-            "{}",
-            json!({
-                "component": "hided",
-                "kind": "settings.observation_failed",
-                "connection": connection,
-                "message": error,
-            })
-        );
+        hide_core::diagnostic!(json!({
+            "component": "hided",
+            "kind": "settings.observation_failed",
+            "connection": connection,
+            "message": error,
+        }));
+    }
+}
+
+/// Tells the core which screen the window holding the keyboard draws, or
+/// that none does (`window_focus`). Runs under the focus demand's lock, so it
+/// only logs and hands the event to the core's channel.
+fn dispatch_window_focus(
+    core: &CoreHandle,
+    connection: u64,
+    screen: Option<crate::demand::FocusScreen>,
+) {
+    let screen = screen.map(crate::demand::FocusScreen::as_str);
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "window_focus.observation",
+        "connection": connection,
+        "screen": screen,
+    }));
+    let event = json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "window_focus",
+        "payload": {"focused": screen.is_some(), "screen": screen.unwrap_or("workspace")},
+    });
+    if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
+        hide_core::diagnostic!(json!({
+            "component": "hided",
+            "kind": "window_focus.observation_failed",
+            "connection": connection,
+            "message": error,
+        }));
     }
 }
 
@@ -3796,14 +3819,11 @@ fn handle_open_external(state: &AppState, event: &Value) -> Vec<Message> {
     // rather than opening it, and this frame is a page's request rather than
     // the operator's own click, so the same rule holds here (D-12).
     if let Err(reason) = openable(&real) {
-        eprintln!(
-            "{}",
-            json!({
-                "component": "hided",
-                "kind": "open.external.refused",
-                "reason": reason,
-            })
-        );
+        hide_core::diagnostic!(json!({
+            "component": "hided",
+            "kind": "open.external.refused",
+            "reason": reason,
+        }));
         return vec![Message::Text(
             json!({
                 "type": "open_external_result",
@@ -3817,15 +3837,12 @@ fn handle_open_external(state: &AppState, event: &Value) -> Vec<Message> {
         Ok(()) => (true, Value::Null),
         Err(reason) => (false, Value::String(reason.to_owned())),
     };
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "open.external",
-            "ok": ok,
-            "open_handlers_in_flight": state.opener.in_flight(),
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "open.external",
+        "ok": ok,
+        "open_handlers_in_flight": state.opener.in_flight(),
+    }));
     vec![Message::Text(
         json!({
             "type": "open_external_result",
@@ -4641,16 +4658,13 @@ fn device_walk(state: &AppState, device: &str, root: &str) -> crate::index::Walk
     let (walk_device, walk_root) = (device.to_owned(), root.to_owned());
     Box::new(move || {
         let log = |code: &str, message: String| {
-            eprintln!(
-                "{}",
-                json!({
-                    "component": "hided",
-                    "kind": "device.index_unavailable",
-                    "device": walk_device,
-                    "code": code,
-                    "message": message,
-                })
-            );
+            hide_core::diagnostic!(json!({
+                "component": "hided",
+                "kind": "device.index_unavailable",
+                "device": walk_device,
+                "code": code,
+                "message": message,
+            }));
             code.to_owned()
         };
         let channel = core
@@ -4807,15 +4821,12 @@ pub(crate) fn split_bytes_frame(frame: &[u8]) -> Option<(Value, &[u8])> {
 /// A read the daemon could not serve as bytes: the file is past the read cap,
 /// or the disk refused it. The client shows one line and offers no retry.
 fn file_bytes_error(request_id: &str, path: &str, reason: &str) -> Message {
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "file_bytes.failed",
-            "reason": reason,
-            "path": path.chars().take(LOGGED_PATH_CAP).collect::<String>(),
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "file_bytes.failed",
+        "reason": reason,
+        "path": path.chars().take(LOGGED_PATH_CAP).collect::<String>(),
+    }));
     Message::Text(
         json!({
             "type": "file_bytes_error",
@@ -4930,15 +4941,12 @@ pub(crate) async fn stream_device_file_bytes(
                     .map_err(|_| ());
             }
             Err((None, message)) => {
-                eprintln!(
-                    "{}",
-                    json!({
-                        "component": "hided",
-                        "kind": "device.file_bytes_failed",
-                        "device": device,
-                        "message": message,
-                    })
-                );
+                hide_core::diagnostic!(json!({
+                    "component": "hided",
+                    "kind": "device.file_bytes_failed",
+                    "device": device,
+                    "message": message,
+                }));
                 return frames
                     .send(file_bytes_error(&request_id, &path, "read_failed"))
                     .await
@@ -5245,14 +5253,11 @@ fn admit_event(
     }
     let again = apply_boundary(boundary, event);
     if !again.as_ref().is_some_and(refused_outside_checkout) {
-        eprintln!(
-            "{}",
-            json!({
-                "component": "hided",
-                "kind": "boundary.roots_caught_up",
-                "event": event.get("kind").and_then(Value::as_str).unwrap_or(""),
-            })
-        );
+        hide_core::diagnostic!(json!({
+            "component": "hided",
+            "kind": "boundary.roots_caught_up",
+            "event": event.get("kind").and_then(Value::as_str).unwrap_or(""),
+        }));
     }
     again
 }
@@ -5392,10 +5397,15 @@ fn screen_input(state: &AppState, connection: u64, pane: &str) {
 /// them.
 fn send_grid(state: &AppState, pane: &str, size: GridSize) {
     state.core.terminals.view(pane, size, false);
+    let mut payload = json!({"pane_id": pane, "cols": size.cols, "rows": size.rows});
+    // The measure the new screen took to fit this grid goes on with it.
+    if let Some(floor) = state.pane_sizes.applied_floor(pane) {
+        payload["floor"] = floor;
+    }
     let event = json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "terminal_resize",
-        "payload": {"pane_id": pane, "cols": size.cols, "rows": size.rows},
+        "payload": payload,
     });
     if let Err(error) = state.core.dispatch(event.to_string().into_bytes()) {
         hide_core::diagnostic!(json!({
@@ -5463,15 +5473,12 @@ fn payload_str(event: &Value, field: &str) -> String {
 /// The frame a client-sent shell-only event is answered with: the event is
 /// never forwarded, so a path it carries cannot reach the core.
 fn rejected(kind: &str) -> Option<Value> {
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "client.rejected",
-            "event": kind,
-            "reason": "daemon_only_event",
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "client.rejected",
+        "event": kind,
+        "reason": "daemon_only_event",
+    }));
     Some(json!({
         "type": "error",
         "payload": {},
@@ -5774,17 +5781,14 @@ const LOGGED_PATH_CAP: usize = 256;
 
 fn log_path_refusal(kind: &str, path: &str, refusal: Refusal) {
     let logged: String = path.chars().take(LOGGED_PATH_CAP).collect();
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "path.refused",
-            "event": kind,
-            "reason": refusal.code(),
-            "path": logged,
-            "path_truncated": logged.len() < path.len(),
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "path.refused",
+        "event": kind,
+        "reason": refusal.code(),
+        "path": logged,
+        "path_truncated": logged.len() < path.len(),
+    }));
 }
 
 /// Which frame a delta read turned into, decided by the cursors alone.
@@ -5827,15 +5831,12 @@ async fn read_delta(
 /// A frame the daemon could not produce ends the client's loop, so the
 /// client sees a bare close; this record is the only trace of why.
 fn log_snapshot_failure(stage: &str, message: &str) {
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "ws.snapshot_failed",
-            "stage": stage,
-            "message": message,
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "ws.snapshot_failed",
+        "stage": stage,
+        "message": message,
+    }));
 }
 
 async fn send_snapshot(
@@ -5919,8 +5920,7 @@ fn close_session_thread(core: &CoreHandle, connection: u64) {
         "payload": {},
     });
     let failed = core.dispatch(event.to_string().into_bytes()).err();
-    eprintln!(
-        "{}",
+    hide_core::diagnostic!(
         json!({"component": "hided", "kind": "session_thread.closed_with_connection", "connection": connection, "failed": failed})
     );
 }
@@ -5933,8 +5933,7 @@ fn dispatch_ui_attached(core: &CoreHandle, attached: bool) {
         "payload": { "attached": attached },
     });
     if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
-        eprintln!(
-            "{}",
+        hide_core::diagnostic!(
             json!({"component": "hided", "kind": "ui_attached.dispatch_failed", "attached": attached, "message": error})
         );
     }
@@ -6014,16 +6013,14 @@ pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, des
     for (pane, size) in state.pane_sizes.left(connection) {
         send_grid(state, &pane, size);
     }
-    for demand in [
-        Demand::Settings,
-        Demand::Start,
-        Demand::RequestView,
-        Demand::WindowFocus,
-    ] {
+    for demand in [Demand::Settings, Demand::Start, Demand::RequestView] {
         demand.of(state).release(connection, |observing| {
             dispatch_observation(&state.core, demand, connection, observing)
         });
     }
+    state.window_focus_demand.release(connection, |now| {
+        dispatch_window_focus(&state.core, connection, now)
+    });
     state.origin_holds.release(connection, |key| {
         close_backlog_origin(&state.core, connection, key)
     });
@@ -6069,16 +6066,13 @@ pub(crate) async fn refuse(socket: &mut WebSocket, reason: CloseReason, extra: O
 }
 
 fn log_refusal(reason: CloseReason, extra: Option<usize>) {
-    eprintln!(
-        "{}",
-        json!({
-            "component": "hided",
-            "kind": "ws.refused",
-            "reason": reason.name(),
-            "code": reason.code(),
-            "clients": extra,
-        })
-    );
+    hide_core::diagnostic!(json!({
+        "component": "hided",
+        "kind": "ws.refused",
+        "reason": reason.name(),
+        "code": reason.code(),
+        "clients": extra,
+    }));
 }
 
 /// Mounts the core's routes on `seat` and starts the clock that ends the
@@ -6202,14 +6196,11 @@ fn panes_running(live: &(dyn Fn() -> Result<usize, String> + Send + Sync)) -> bo
     match live() {
         Ok(count) => count > 0,
         Err(message) => {
-            eprintln!(
-                "{}",
-                json!({
-                    "component": "hided",
-                    "kind": "idle.panes_uncounted",
-                    "message": message,
-                })
-            );
+            hide_core::diagnostic!(json!({
+                "component": "hided",
+                "kind": "idle.panes_uncounted",
+                "message": message,
+            }));
             true
         }
     }
@@ -6732,6 +6723,9 @@ mod tests {
             "beside_other_checkout",
             "beside_other_machine",
             "beside_needs_agent_pane",
+            "beside_too_narrow",
+            "beside_unmeasured",
+            "beside_tab_busy",
             "beside_with_parent",
             "beside_pane_unavailable",
         ] {

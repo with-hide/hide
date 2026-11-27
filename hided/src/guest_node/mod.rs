@@ -71,6 +71,7 @@ fn record(kind: &str, extra: serde_json::Value) {
             line.insert(key.clone(), value.clone());
         }
     }
+    #[allow(clippy::disallowed_methods)] // the result is ignored: a failed write loses the line
     let _ = writeln!(io::stderr().lock(), "{line}");
 }
 
@@ -138,6 +139,7 @@ fn say_event(event: &str) {
 /// link while there is one, and otherwise the host's log.
 fn diagnostic(value: serde_json::Value) {
     hide_node::terminal::device::forward_diagnostic_or(value, |value| {
+        #[allow(clippy::disallowed_methods)] // the result is ignored: a failed write loses the line
         let _ = writeln!(io::stderr().lock(), "{value}");
     });
 }

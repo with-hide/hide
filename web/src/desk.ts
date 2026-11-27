@@ -90,6 +90,31 @@ function rowSession(row: AgentRow): DeskSessionRef {
  */
 export const ENDED_JOB_STATES: ReadonlySet<DeskJob["state"]> = new Set<DeskJob["state"]>(["failed", "cancelled", "closed", "moved_out", "archived"]);
 
+/** Where a session stands in 한눈에: waiting on the operator, at work, or idle (its agent done or asleep, or its job ended, `ENDED_JOB_STATES`), shown as 끝남. */
+export type GlanceGroup = "turn" | "working" | "idle";
+
+export function glanceGroup(job: DeskJob): GlanceGroup {
+  if (job.state === "asking") return "turn";
+  if (job.state === "queued" || job.state === "starting" || job.state === "working") return "working";
+  return "idle";
+}
+
+const GLANCE_ORDER: Readonly<Record<GlanceGroup, number>> = { turn: 0, working: 1, idle: 2 };
+
+/**
+ * 한눈에's sessions as cards (`desk_jobs.glance.sessions`, newest first): 내
+ * 차례 first, then at work, then ended, each newest first; a pane with no
+ * card is left out.
+ */
+export function glanceSessions(panes: readonly string[], cards: readonly DeskJob[]): DeskJob[] {
+  const byPane = new Map(cards.filter((card) => card.pane_id !== null).map((card) => [card.pane_id!, card]));
+  const listed = panes.flatMap((pane) => {
+    const card = byPane.get(pane);
+    return card ? [card] : [];
+  });
+  return listed.map((card, at) => ({ card, at })).sort((a, b) => GLANCE_ORDER[glanceGroup(a.card)] - GLANCE_ORDER[glanceGroup(b.card)] || a.at - b.at).map(({ card }) => card);
+}
+
 /** Whether a job card is dimmed: an ended job's, but a failed one's (see `ENDED_JOB_STATES`). */
 export function jobDimmed(state: DeskJob["state"]): boolean {
   return ENDED_JOB_STATES.has(state) && state !== "failed";

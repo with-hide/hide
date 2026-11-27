@@ -15,10 +15,10 @@ use super::ledger::{Ledger, State};
 
 /// What the operator does to let held letters through, for the holds only
 /// the operator ends, in the order one is named when a recipient's letters
-/// wait for both (PRD letters-missions-simplify D-05, B14). A pane Hide
-/// cannot reach, another conversation in it, or bells the agent did not
-/// take are Hide's to settle (the agent's end hands its letters on, a wake
-/// or a later turn takes them), never the operator's.
+/// wait for more than one (PRD letters-missions-simplify D-05, B14). A pane
+/// Hide cannot reach, another conversation in it, or bells the agent did
+/// not take are Hide's to settle (the agent's end hands its letters on, a
+/// wake or a later turn takes them), never the operator's.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HeldFor {
@@ -26,6 +26,18 @@ pub enum HeldFor {
     Approval,
     /// Text that may be the operator's stands unsent in its input.
     Draft,
+    /// The screen shows no input to read: the pane is too narrow for the
+    /// agent to draw it, or something covers it. Widening the pane, or
+    /// closing what covers the input, lets the letters through.
+    Unreadable,
+}
+
+/// The letters a pane's mark shows waiting (`doorbell::letters_waiting`):
+/// how many, and what the operator does, a draft or an input no read finds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Waiting {
+    pub count: u32,
+    pub reason: HeldFor,
 }
 
 /// The operator's part in `hold`, none for a hold that ends on its own
@@ -37,6 +49,7 @@ pub(crate) fn held_for(hold: Hold) -> Option<HeldFor> {
     match hold {
         Hold::Blocked | Hold::AwaitingOperator => Some(HeldFor::Approval),
         Hold::Draft => Some(HeldFor::Draft),
+        Hold::ComposerUnreadable => Some(HeldFor::Unreadable),
         Hold::Absent
         | Hold::Session
         | Hold::Exhausted
@@ -111,4 +124,74 @@ pub(crate) fn letters_held(
         });
     }
     (held, next)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::delivery::mailbox;
+
+    /// mission-108: letters to a Conductor whose pane is too narrow, or
+    /// covered, for its input to be read reach the operator's 내 차례 as a
+    /// draft's do, once the first is two minutes old, and say why. A read
+    /// that failed is Hide's to retry and counts nothing; a draft beside
+    /// them is named first, since sending or clearing it comes first.
+    #[test]
+    fn letters_held_on_an_unreadable_input_count_for_the_operator_with_their_reason() {
+        let root = tempfile::tempdir().unwrap();
+        let (_runtime, sender, recipient, _) =
+            crate::runtime::delivery::tests::fixture(root.path());
+        let mut ledger = Ledger::default();
+        let mut send = |intent: &str| {
+            mailbox::send(
+                &mut ledger,
+                &sender,
+                &recipient.actor,
+                intent,
+                "body",
+                "report",
+                None,
+                1,
+            )
+            .unwrap()
+            .id
+        };
+        let first = send("first");
+        let second = send("second");
+        let since = ledger.letters[0].created_at_unix_ms;
+        let due = since + WAITING_MARK_REST_MS;
+        let holds = |first_hold, second_hold| {
+            BTreeMap::from([(first.clone(), first_hold), (second.clone(), second_hold)])
+        };
+        let unreadable = holds(Hold::ComposerUnreadable, Hold::ComposerUnreadable);
+
+        assert_eq!(
+            letters_held(&ledger, &unreadable, &recipient.actor, due),
+            (
+                Some(HeldLetters {
+                    count: 2,
+                    reason: HeldFor::Unreadable,
+                    since_unix_ms: since,
+                }),
+                None
+            )
+        );
+        assert_eq!(
+            letters_held(&ledger, &unreadable, &recipient.actor, due - 1),
+            (None, Some(due)),
+            "shown when the first comes of age, not before"
+        );
+        let failed = holds(Hold::ComposerUnread, Hold::ComposerUnread);
+        assert_eq!(
+            letters_held(&ledger, &failed, &recipient.actor, due).0,
+            None
+        );
+        let mixed = holds(Hold::ComposerUnreadable, Hold::Draft);
+        assert_eq!(
+            letters_held(&ledger, &mixed, &recipient.actor, due)
+                .0
+                .map(|held| (held.count, held.reason)),
+            Some((2, HeldFor::Draft))
+        );
+    }
 }

@@ -23,6 +23,8 @@ pub(crate) mod schedule;
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 
+use crate::model::InterfaceLanguage;
+
 pub use schedule::{Asked, Clock, Day, FromNow, Meaning, ONCE_HORIZON_DAYS, Schedule, Weekday};
 
 /// Records kept per automation (D-18): runs, skips and missed lines.
@@ -53,13 +55,58 @@ pub const RESULT_ADDRESS_LIMIT: usize = 1024;
 const SCHEMA_VERSION: u32 = 1;
 const NAME_CAP: usize = 80;
 const TASK_CAP: usize = 16 * 1024;
-/// The line every run's first prompt carries after the task: a result file
-/// is shown with `hide file open`, which is how a run's result reaches the
-/// operator (`Run::results`), and a run with nothing to show just ends. A
-/// reminder in the prompt, not a check at the run's end, so it reads the same
-/// for every agent on every system.
-const RESULT_LINE: &str =
-    "[결과] 결과 파일을 만들었으면 `hide file open <경로>`로 보여 줘. 만들 게 없으면 그냥 끝내.";
+/// The line every run's first prompt carries after the task: a result is
+/// shown in a View, which is how it reaches the operator (`Run::results`),
+/// a page (an HTML file or a URL) with `hide browser open` so it is drawn
+/// rather than shown as its source, any other file with `hide file open`,
+/// and a run with nothing to show just ends. A reminder in the prompt, not a
+/// check at the run's end, so it reads the same for every agent on every
+/// system. It is typed into the run's conversation
+/// as the operator's words, so it is in the operator's language, which the
+/// agent then answers in.
+fn result_line(language: InterfaceLanguage) -> &'static str {
+    match language {
+        InterfaceLanguage::English => {
+            "[Result] If you made a result, show an HTML page or a URL with `hide browser open <path>` and any other file with `hide file open <path>`. If there is nothing to make, just finish."
+        }
+        InterfaceLanguage::Korean => {
+            "[결과] 결과를 만들었으면 HTML 페이지나 URL은 `hide browser open <경로>`로, 그 밖의 파일은 `hide file open <경로>`로 보여 줘. 만들 게 없으면 그냥 끝내."
+        }
+        InterfaceLanguage::Japanese => {
+            "[結果] 結果を作ったら、HTMLページやURLは `hide browser open <パス>` で、それ以外のファイルは `hide file open <パス>` で見せて。作るものがなければそのまま終えて。"
+        }
+        InterfaceLanguage::SimplifiedChinese => {
+            "[结果] 如果做了结果，HTML 页面或 URL 用 `hide browser open <路径>` 打开，其他文件用 `hide file open <路径>` 打开给我看。没有要做的就直接结束。"
+        }
+    }
+}
+
+/// How a finished run ended, in the words its record shows on the screen
+/// (`automation.record.*` in the web catalogs).
+fn ended_words(run: &Run, language: InterfaceLanguage) -> String {
+    use InterfaceLanguage::{English, Japanese, Korean, SimplifiedChinese};
+    let moved = run.reason.as_deref() == Some(MACHINE_CHANGED);
+    let attempt = run.attempt;
+    match (run.state, language) {
+        (RunState::Succeeded, English) => "Succeeded".to_owned(),
+        (RunState::Succeeded, Korean) => "성공".to_owned(),
+        (RunState::Succeeded, Japanese | SimplifiedChinese) => "成功".to_owned(),
+        (RunState::Failed, English) if attempt == 1 => "Failed · 1 try".to_owned(),
+        (RunState::Failed, English) => format!("Failed · {attempt} tries"),
+        (RunState::Failed, Korean) => format!("실패 · {attempt}번 시도"),
+        (RunState::Failed, Japanese) => format!("失敗 · {attempt}回試行"),
+        (RunState::Failed, SimplifiedChinese) => format!("失败 · 尝试 {attempt} 次"),
+        (RunState::Stopped, English) if moved => "Stopped · read on another computer".to_owned(),
+        (RunState::Stopped, Korean) if moved => "멈춤 · 기계 바뀜".to_owned(),
+        (RunState::Stopped, Japanese) if moved => "停止 · コンピュータが変わった".to_owned(),
+        (RunState::Stopped, SimplifiedChinese) if moved => "已停止 · 换了电脑".to_owned(),
+        (RunState::Stopped, English) => "Stopped · ended by a person".to_owned(),
+        (RunState::Stopped, Korean) => "멈춤 · 사람이 끝냄".to_owned(),
+        (RunState::Stopped, Japanese) => "停止 · 人が終了".to_owned(),
+        (RunState::Stopped, SimplifiedChinese) => "已停止 · 由人结束".to_owned(),
+        (RunState::Starting | RunState::Running, _) => unreachable!("a finished run"),
+    }
+}
 /// The last answer a run keeps for the next one: one paragraph (D-10).
 const ANSWER_CAP: usize = 1_000;
 /// A failure's code as a run keeps it.
@@ -739,29 +786,25 @@ impl Automation {
 
     /// The run's first prompt (D-10, B13): the task, the line that asks for
     /// its result as a View, then the last finished run's time and result
-    /// and, when it finished the task, its last answer.
-    pub fn prompt(&self, before: u64, zone: &TimeZone) -> String {
+    /// and, when it finished the task, its last answer. Hide's own lines are
+    /// in `language`, the operator's, since they join the operator's task.
+    pub fn prompt(&self, before: u64, zone: &TimeZone, language: InterfaceLanguage) -> String {
         let last = self
             .runs()
             .rev()
             .find(|run| run.number < before && run.finished());
         let Some(last) = last else {
-            return format!("{}\n\n{RESULT_LINE}", self.task);
+            return format!("{}\n\n{}", self.task, result_line(language));
         };
         let when = local_minute(last.started_at_unix_ms, zone);
-        let result = match last.state {
-            RunState::Succeeded => "성공".to_owned(),
-            RunState::Failed => format!("실패 · {}번 시도", last.attempt),
-            RunState::Stopped if last.reason.as_deref() == Some(MACHINE_CHANGED) => {
-                "멈춤 · 기계 바뀜".to_owned()
-            }
-            RunState::Stopped => "멈춤 · 사람이 끝냄".to_owned(),
-            RunState::Starting | RunState::Running => unreachable!("a finished run"),
+        let result = ended_words(last, language);
+        let header = match language {
+            InterfaceLanguage::English => format!("[Last run · {when} · {result}]"),
+            InterfaceLanguage::Korean => format!("[지난 회차 · {when} · {result}]"),
+            InterfaceLanguage::Japanese => format!("[前回 · {when} · {result}]"),
+            InterfaceLanguage::SimplifiedChinese => format!("[上次运行 · {when} · {result}]"),
         };
-        let mut prompt = format!(
-            "{}\n\n{RESULT_LINE}\n\n[지난 회차 · {when} · {result}]",
-            self.task
-        );
+        let mut prompt = format!("{}\n\n{}\n\n{header}", self.task, result_line(language));
         if let Some(answer) = last
             .answer
             .as_deref()
@@ -1734,18 +1777,24 @@ mod tests {
         let mut automation = automation(daily("09:00"), now);
         let first = automation.new_run(Trigger::Scheduled, Some(now), now);
         assert_eq!(
-            automation.prompt(first, &zone),
-            format!("새 이슈를 정리해줘\n\n{RESULT_LINE}")
+            automation.prompt(first, &zone, InterfaceLanguage::Korean),
+            "새 이슈를 정리해줘\n\n[결과] 결과를 만들었으면 HTML 페이지나 URL은 `hide browser open <경로>`로, 그 밖의 파일은 `hide file open <경로>`로 보여 줘. 만들 게 없으면 그냥 끝내."
         );
         let run = automation.run_mut(first).unwrap();
         run.state = RunState::Succeeded;
         run.answer = answer_paragraph("새 이슈 3개를 정리했어요.\n\n자세한 내용은 아래.");
         let second = automation.new_run(Trigger::Scheduled, Some(now + 24 * HOUR), now);
+        assert!(
+            automation
+                .prompt(second, &zone, InterfaceLanguage::Korean)
+                .ends_with(
+                    "끝내.\n\n[지난 회차 · 2026-11-19 09:00 · 성공]\n새 이슈 3개를 정리했어요."
+                )
+        );
         assert_eq!(
-            automation.prompt(second, &zone),
-            format!(
-                "새 이슈를 정리해줘\n\n{RESULT_LINE}\n\n[지난 회차 · 2026-11-19 09:00 · 성공]\n새 이슈 3개를 정리했어요."
-            )
+            automation.prompt(second, &zone, InterfaceLanguage::English),
+            "새 이슈를 정리해줘\n\n[Result] If you made a result, show an HTML page or a URL with `hide browser open <path>` and any other file with `hide file open <path>`. If there is nothing to make, just finish.\n\n[Last run · 2026-11-19 09:00 · Succeeded]\n새 이슈 3개를 정리했어요.",
+            "Hide's own lines follow the operator's language; the task and the answer stay as written"
         );
         let run = automation.run_mut(second).unwrap();
         run.state = RunState::Failed;
@@ -1753,7 +1802,7 @@ mod tests {
         let third = automation.new_run(Trigger::Manual, None, now);
         assert!(
             automation
-                .prompt(third, &zone)
+                .prompt(third, &zone, InterfaceLanguage::Korean)
                 .ends_with("[지난 회차 · 2026-11-19 09:00 · 실패 · 3번 시도]"),
             "a failed run passes on no answer"
         );
@@ -1786,10 +1835,10 @@ mod tests {
         let next = automation.new_run(Trigger::Manual, None, now + 3 * HOUR);
         assert!(
             automation
-                .prompt(next, &zone)
-                .ends_with("[지난 회차 · 2026-11-19 09:00 · 멈춤 · 기계 바뀜]"),
+                .prompt(next, &zone, InterfaceLanguage::Japanese)
+                .ends_with("[前回 · 2026-11-19 09:00 · 停止 · コンピュータが変わった]"),
             "{}",
-            automation.prompt(next, &zone)
+            automation.prompt(next, &zone, InterfaceLanguage::Japanese)
         );
     }
 

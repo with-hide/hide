@@ -84,7 +84,9 @@ fn create_private_dir(dir: &Path) -> io::Result<()> {
 fn record_in(dir: &Path, record: serde_json::Value) {
     let core_state = dir.join(hide_core::node_migration::CORE_STATE);
     if let Err(error) = hide_core::diagnostics::record_now(&core_state, record) {
-        eprintln!("the state folder's record could not be logged: {error}");
+        hide_core::diagnostic!(serde_json::json!({
+            "kind": "diagnostics.record_failed", "record": "state_folder", "message": error.to_string()
+        }));
     }
 }
 

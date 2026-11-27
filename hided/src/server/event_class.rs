@@ -215,6 +215,7 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("create_worktree", Screen),
     ("deliver_letters_now", Screen),
     ("desk_approval", Screen),
+    ("desk_commands_check", Screen),
     ("desk_install", Screen),
     ("desk_job_cancel", Screen),
     ("desk_job_read", Screen),

@@ -11,7 +11,6 @@ import { canRetryDevice, deviceAwayLine, deviceLine } from "./settings";
 import { catalogWorkspaces, focusedRemoteDevice, frontCheckout, type Checkout } from "./snapshot";
 import { awayDevice, machineName, windowDeviceId, wslPlace } from "./screenMachine";
 import { useShellStore } from "./store";
-import { focusTerminal } from "./terminals";
 import { AgentAreas } from "./AgentAreas";
 import { DividerGuide, LaneDivider } from "./LaneDivider";
 import { Lane, laneUp, ToolRail } from "./Tools";
@@ -24,6 +23,9 @@ import { PairLayer } from "./PairLayer";
 import { drawnPair, pairBesideDesk } from "./pairView";
 import { laneFrame, laneViewOf, pageLaneWidth, workspaceViewOf, type LaneFrame, type LaneInput, type LaneSizes, type PairView, type WorkspaceView } from "./workspace";
 import { keyboardOwner, noteKeyboardOwner } from "./viewFocus";
+import { areasOf } from "./areaLayout";
+import { areaTreeWidth } from "./paneFloor";
+import { focusTerminal } from "./terminals";
 import { cn } from "./lib/utils";
 import { useInterfaceTranslation } from "./i18n/client";
 import "./laneCalls";
@@ -61,9 +63,13 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const stackFront = useUiStore((s) => s.stackFront);
   const [body, setBody] = useState<HTMLElement | null>(null);
   const width = useWidth(body);
+  // Pair view draws one pane beside the desk, which keeps Agent Views' own
+  // minimum; every other drawing keeps each of the front tab's panes at the
+  // floor beside a standing desk (`useAgentViewsFloor`).
+  const agentFloor = useAgentViewsFloor(checkout, view, drawnPair(view) === null);
   const sizes = useMemo<LaneSizes>(
     () => ({
-      agentMin: tokenPx("--size-agent-views-min"),
+      agentMin: Math.max(tokenPx("--size-agent-views-min"), agentFloor),
       viewMin: tokenPx("--size-lane-min"),
       viewIdeal: tokenPx("--size-lane-ideal"),
       lanePage: tokenPx("--size-lane-page"),
@@ -73,7 +79,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       panelIdeal: tokenPx("--size-lane-panel-ideal"),
       divider: tokenPx("--spacing-sm"),
     }),
-    [],
+    [agentFloor],
   );
   const opening = useShellStore((s) => (s.editor?.opening ?? []).some((row) => row.checkout_id === checkout?.id));
   const hasViews = (view?.layout?.display_count ?? 0) > 0 || opening;
@@ -241,6 +247,25 @@ function laneEscape(event: React.KeyboardEvent<HTMLElement>, frame: LaneFrame, a
   } else return;
   event.preventDefault();
   event.stopPropagation();
+}
+
+/**
+ * The width Agent Views needs for every pane the front tab of each Agent
+ * area shows to keep the pane floor (docs/UI_BEHAVIOR.md, The pane floor):
+ * each tab's least width as the core judged it (`pane_floor.min_width_px`),
+ * through the areas' own split tree. A standing desk gives way down to its
+ * minimum to leave this, and floats over the panes when even that does not
+ * (`laneFrame`). Zero for a tab the core has no width for yet, and when
+ * `counted` is false.
+ */
+function useAgentViewsFloor(checkout: Checkout | null, view: WorkspaceView | null, counted: boolean): number {
+  const widths = useShellStore((s) => s.rest?.pane_floor?.min_width_px);
+  if (!counted || !checkout) return 0;
+  const tabWidth = (tabId: string | null) => (tabId ? Math.ceil(widths?.[tabId] ?? 0) : 0);
+  const layout = view?.agent_layout;
+  if (!layout) return tabWidth(checkout.active_tab_id);
+  const shown = new Map(areasOf(layout.root).map((area) => [area.id, layout.canvases[area.id] ?? area.active]));
+  return areaTreeWidth(layout.root, (areaId) => tabWidth(shown.get(areaId) ?? null), tokenPx("--size-resize-handle"));
 }
 
 function tokenPx(name: string): number {

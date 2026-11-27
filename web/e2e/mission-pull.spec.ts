@@ -12,7 +12,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { HideAnswer } from "./agent-pane";
-import { closePane, untilLogged, withControl } from "./daemon-actions";
+import { chooseCoreLanguage, closePane, untilLogged, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace } from "./wire";
@@ -69,6 +69,8 @@ test("a closed mission fast-forwards the checkout on its destination by its own 
         const settings = (rest.ui_state as { project_settings?: Record<string, { auto_fetch?: boolean | null }> } | undefined)?.project_settings ?? {};
         return Object.values(settings).some((record) => record.auto_fetch === false) || undefined;
       }, "the project's fetch turned off", 20_000);
+      // The report's folder line is written in the operator's language.
+      await chooseCoreLanguage(control, "en");
     });
 
     await ok(conductor, ["mission", "create", "--title", "로그인 고치기"]);
@@ -106,7 +108,7 @@ test("a closed mission fast-forwards the checkout on its destination by its own 
     expect(git(repo, ["branch", "--show-current"]).trim()).toBe("feat/login");
     const closed = (await ok(conductor, ["mission", "show", "--json"])).result as Shown;
     expect(closed.mission.status).toBe("done");
-    expect(closed.mission.report?.trim().split("\n").at(-1)).toBe("내 폴더도 최신으로 당겨왔어요 (2커밋)");
+    expect(closed.mission.report?.trim().split("\n").at(-1)).toBe("Your folder is up to date too (pulled 2 commits)");
 
     // The landed direct change's worktree is gone and its branch stays.
     await untilLogged(live, { kind: "mission.worktree_retired", branch: "fix", outcome: "removed" }, 1, "the direct change's worktree retired", 60_000);

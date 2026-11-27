@@ -10,7 +10,16 @@
 
 use hide_core::links::ledger::BacklogOriginIdentity;
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+/// Takes a hold's lock whether or not a caller's callback panicked under it.
+/// Every callback here (`announce`, `close`, `dispatch`) runs while the lock
+/// is held, and each hold changes its set before it calls out, so the set
+/// stays valid after a panic; refusing every later caller would turn one
+/// failed callback into a daemon that panics on each connection event.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 #[derive(Default)]
 pub struct ObservationDemand {
@@ -28,7 +37,7 @@ impl ObservationDemand {
         observing: bool,
         announce: impl FnOnce(bool),
     ) -> Option<bool> {
-        let mut observers = self.observers.lock().expect("observation demand");
+        let mut observers = lock(&self.observers);
         let before = !observers.is_empty();
         if observing {
             observers.insert(connection);
@@ -50,7 +59,85 @@ impl ObservationDemand {
 
     #[cfg(test)]
     fn observers(&self) -> usize {
-        self.observers.lock().expect("observation demand").len()
+        lock(&self.observers).len()
+    }
+}
+
+/// What a window holding the keyboard shows, whose View in front of it is
+/// then seen (PRD unseen-agent-views D-07; 한눈에 for Desk's desk).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FocusScreen {
+    Workspace,
+    Desk,
+}
+
+impl FocusScreen {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Workspace => "workspace",
+            Self::Desk => "desk",
+        }
+    }
+
+    pub fn parse(screen: &str) -> Option<Self> {
+        match screen {
+            "workspace" => Some(Self::Workspace),
+            "desk" => Some(Self::Desk),
+            _ => None,
+        }
+    }
+}
+
+/// Which window holds the keyboard and on what screen (`window_focus`): each
+/// connection reports its own, and the core hears the screen of the window
+/// that took the keyboard last, which is the one the operator is in, or none
+/// once no window holds it. A connection that closes lets go of its report.
+#[derive(Default)]
+pub struct FocusDemand {
+    /// Focused connections, the one that took the keyboard last at the end.
+    focused: Mutex<Vec<(u64, FocusScreen)>>,
+}
+
+impl FocusDemand {
+    /// Records one connection's report. When that changes what the core
+    /// should hold, `announce` receives it, called while the demand is still
+    /// locked, so two changes reach the core in the order they happened.
+    pub fn set(
+        &self,
+        connection: u64,
+        screen: Option<FocusScreen>,
+        announce: impl FnOnce(Option<FocusScreen>),
+    ) -> Option<Option<FocusScreen>> {
+        let mut focused = self.focused.lock().expect("focus demand");
+        let before = focused.last().map(|(_, screen)| *screen);
+        let kept = focused.iter().position(|(held, _)| *held == connection);
+        match (kept, screen) {
+            // The same window on the same screen keeps its place.
+            (Some(at), Some(screen)) if focused[at].1 == screen => {}
+            (kept, screen) => {
+                if let Some(at) = kept {
+                    focused.remove(at);
+                }
+                if let Some(screen) = screen {
+                    focused.push((connection, screen));
+                }
+            }
+        }
+        let after = focused.last().map(|(_, screen)| *screen);
+        let changed = (before != after).then_some(after);
+        if let Some(now) = changed {
+            announce(now);
+        }
+        changed
+    }
+
+    /// Drops whatever report a closed connection held.
+    pub fn release(
+        &self,
+        connection: u64,
+        announce: impl FnOnce(Option<FocusScreen>),
+    ) -> Option<Option<FocusScreen>> {
+        self.set(connection, None, announce)
     }
 }
 
@@ -73,7 +160,7 @@ impl OriginHolds {
     /// invalid identity and past `ORIGIN_HOLDS_PER_CONNECTION` items.
     pub fn hold(&self, connection: u64, key: &BacklogOriginIdentity) -> Result<(), String> {
         key.validate()?;
-        let mut holders = self.holders.lock().expect("origin holds");
+        let mut holders = lock(&self.holders);
         let held = holders
             .values()
             .filter(|connections| connections.contains(&connection))
@@ -103,7 +190,7 @@ impl OriginHolds {
         key: &BacklogOriginIdentity,
         close: impl FnOnce(&BacklogOriginIdentity),
     ) -> bool {
-        let mut holders = self.holders.lock().expect("origin holds");
+        let mut holders = lock(&self.holders);
         let Some(connections) = holders.get_mut(key) else {
             return false;
         };
@@ -118,7 +205,7 @@ impl OriginHolds {
     /// Drops what a closed connection held, calling `close` under the lock,
     /// in key order, for each key no connection shows any more.
     pub fn release(&self, connection: u64, mut close: impl FnMut(&BacklogOriginIdentity)) {
-        let mut holders = self.holders.lock().expect("origin holds");
+        let mut holders = lock(&self.holders);
         let mut emptied = Vec::new();
         holders.retain(|key, connections| {
             if connections.remove(&connection) && connections.is_empty() {
@@ -154,10 +241,8 @@ struct HeldThread {
 }
 
 impl ThreadHolds {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HeldThread> {
-        self.held
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    fn lock(&self) -> MutexGuard<'_, HeldThread> {
+        lock(&self.held)
     }
 
     /// A window (`Some(connection)`) or a tool (`None`) opens `pane`'s
@@ -225,6 +310,29 @@ impl ThreadHolds {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_core_hears_the_screen_of_the_window_that_took_the_keyboard_last() {
+        let demand = FocusDemand::default();
+        let heard = std::cell::RefCell::new(Vec::new());
+        let say = |now| heard.borrow_mut().push(now);
+        demand.set(1, Some(FocusScreen::Workspace), say);
+        demand.set(1, Some(FocusScreen::Workspace), say);
+        demand.set(2, Some(FocusScreen::Desk), say);
+        demand.set(2, None, say);
+        demand.set(1, Some(FocusScreen::Desk), say);
+        demand.release(1, say);
+        assert_eq!(
+            heard.into_inner(),
+            [
+                Some(FocusScreen::Workspace),
+                Some(FocusScreen::Desk),
+                Some(FocusScreen::Workspace),
+                Some(FocusScreen::Desk),
+                None,
+            ]
+        );
+    }
 
     fn owner(key: &str) -> BacklogOriginIdentity {
         BacklogOriginIdentity {
@@ -435,6 +543,51 @@ mod tests {
             [true, false],
             "only transitions are announced"
         );
+    }
+
+    #[test]
+    fn a_demand_stays_usable_after_its_announce_panics() {
+        let demand = ObservationDemand::default();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            demand.set(1, true, |_| panic!("the log write failed"))
+        }));
+        assert!(panicked.is_err(), "the callback's panic reaches the caller");
+        // The set changed before it announced, and the next caller is not
+        // refused: this one still sees the connection the panicked call held.
+        let announced = std::cell::RefCell::new(Vec::new());
+        let note = |flag| announced.borrow_mut().push(flag);
+        assert_eq!(demand.observers(), 1);
+        assert_eq!(
+            demand.set(2, true, note),
+            None,
+            "connection 1 still holds it"
+        );
+        assert_eq!(demand.release(1, note), None);
+        assert_eq!(demand.release(2, note), Some(false));
+        assert_eq!(*announced.borrow(), [false]);
+    }
+
+    #[test]
+    fn origin_and_thread_holds_stay_usable_after_their_callback_panics() {
+        let origins = OriginHolds::default();
+        origins.hold(1, &owner("local:/repo#1")).unwrap();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            origins.let_go(1, &owner("local:/repo#1"), |_| {
+                panic!("the log write failed")
+            })
+        }));
+        assert!(panicked.is_err());
+        origins.hold(2, &owner("local:/repo#1")).unwrap();
+        assert!(origins.let_go(2, &owner("local:/repo#1"), |_| {}));
+
+        let threads = ThreadHolds::default();
+        threads.open(Some(1), "w1:p1", || Ok(())).unwrap();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            threads.release(1, || panic!("the log write failed"))
+        }));
+        assert!(panicked.is_err());
+        threads.open(Some(2), "w1:p1", || Ok(())).unwrap();
+        assert!(threads.release(2, || {}));
     }
 
     #[test]

@@ -2,3 +2,4 @@
 //! integration test binary per crate").
 
 mod host;
+mod read_ahead;

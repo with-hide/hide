@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros)] // the terminal is this command's output: it prints to the operator's own terminal and holds no lock
+
 fn main() {
     // `hide ... | head` closes our stdout early; end quietly, not with a panic.
     hide_platform::stdio::exit_quietly_when_stdout_closes();

@@ -1376,6 +1376,13 @@ impl Runtime {
         ) {
             (None, _) => Err("no_letter_waiting"),
             (Some(_), None) => Err("pane_unavailable"),
+            // The press says the input holds nothing of the operator's; it
+            // cannot make a screen show an input no read finds.
+            (Some(shown), Some(_))
+                if shown.reason == crate::delivery::held::HeldFor::Unreadable =>
+            {
+                Err("composer_unreadable")
+            }
             (Some(_), Some(observation))
                 if !observation.unsent_draft()
                     || now.saturating_sub(
@@ -1386,9 +1393,9 @@ impl Runtime {
             {
                 Err("pane_not_at_rest")
             }
-            (Some(letters), Some(observation)) => {
+            (Some(shown), Some(observation)) => {
                 observation.released_input_at_unix_ms = observation.last_input_at_unix_ms;
-                Ok(letters)
+                Ok(shown.count)
             }
         };
         let letters = match refusal {
@@ -1472,7 +1479,15 @@ impl Runtime {
             composer,
             version,
             input_at_unix_ms,
+            size: self.delivery_pane_size(&observation.actor.pane_id),
         })
+    }
+
+    /// The grid `pane_id`'s view last reported, rows then columns: the size
+    /// its terminal runs at, which an agent draws its composer for. `None`
+    /// before any view has reported one.
+    pub(crate) fn delivery_pane_size(&self, pane_id: &str) -> Option<(u16, u16)> {
+        self.terminal_sizes.get(pane_id).copied()
     }
 
     /// Whether a pane takes a composer read: the engine reports a current resting

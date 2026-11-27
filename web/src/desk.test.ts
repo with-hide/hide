@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, approvalButtons, askPlace, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, livePane, ENDED_JOB_STATES, jobDimmed, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
+import { glanceSessions, agentPickable, approvalButtons, askPlace, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, livePane, ENDED_JOB_STATES, jobDimmed, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
 import type { AgentRow, DeskRecord } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -320,5 +320,14 @@ describe("an ended job", () => {
     expect([...ENDED_JOB_STATES].sort()).toEqual(["archived", "cancelled", "closed", "failed", "moved_out"]);
     const states = ["queued", "starting", "working", "asking", "done", "sleeping", "failed", "cancelled", "closed", "moved_out", "archived"] as const;
     expect(states.filter(jobDimmed)).toEqual(["cancelled", "closed", "moved_out", "archived"]);
+  });
+});
+
+describe("glanceSessions", () => {
+  // 한눈에: 내 차례 first, then at work, then ended, each newest first as the core lists them; a pane with no card is left out.
+  it("orders 한눈에's sessions by whose turn it is, keeping the core's newest-first order inside each group", () => {
+    const cards = [job("a", "done", { pane_id: "p1" }), job("b", "working", { pane_id: "p2" }), job("c", "asking", { pane_id: "p3" }), job("d", "starting", { pane_id: "p4" }), job("e", "sleeping", { pane_id: "p5" })];
+    const order = glanceSessions(["p5", "p4", "p3", "gone", "p2", "p1"], cards).map((card) => card.pane_id);
+    expect(order).toEqual(["p3", "p4", "p2", "p5", "p1"]);
   });
 });

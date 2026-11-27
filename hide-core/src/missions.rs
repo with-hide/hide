@@ -29,6 +29,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::delivery::Actor;
 use crate::mission_criteria::{CheckInput, Criterion};
+use crate::model::InterfaceLanguage;
 
 pub(crate) const SCHEMA_VERSION: u32 = 5;
 /// The schema before node criteria, read and converted (D-19).
@@ -188,17 +189,39 @@ impl GateWhen {
     }
 }
 
-/// One row of `PRESETS`: the preset's name key, which the wire and the
-/// screens' words name it by, the name `hide mission show` says, the icon
-/// key its card draws, and the gate a node of it is planned with when the
-/// plan names none.
+/// One row of `PRESETS`: the preset's name key, which the wire, the
+/// screens' words and `hide mission show` name it by, the icon key its card
+/// draws, and the gate a node of it is planned with when the plan names
+/// none.
 #[derive(Debug, Eq, PartialEq)]
 pub struct PresetRow {
     pub preset: Option<Preset>,
     pub key: &'static str,
-    pub word: &'static str,
     pub icon: &'static str,
-    pub gate: Option<(&'static str, GateWhen)>,
+    pub gate: Option<(GateWords, GateWhen)>,
+}
+
+/// A default gate's words in each interface language. The plan writes them
+/// into the mission as the gate's text, which the operator's screens show
+/// and the Conductor reads, so they are written in the operator's language
+/// when the node is planned and keep it after.
+#[derive(Debug, Eq, PartialEq)]
+pub struct GateWords {
+    pub english: &'static str,
+    pub korean: &'static str,
+    pub japanese: &'static str,
+    pub simplified_chinese: &'static str,
+}
+
+impl GateWords {
+    pub fn get(&self, language: InterfaceLanguage) -> &'static str {
+        match language {
+            InterfaceLanguage::English => self.english,
+            InterfaceLanguage::Korean => self.korean,
+            InterfaceLanguage::Japanese => self.japanese,
+            InterfaceLanguage::SimplifiedChinese => self.simplified_chinese,
+        }
+    }
 }
 
 /// The general node's presets, and the row of a general node with none, the
@@ -208,29 +231,33 @@ pub const PRESETS: [PresetRow; 4] = [
     PresetRow {
         preset: Some(Preset::Research),
         key: "research",
-        word: "리서치",
         icon: "search",
         gate: None,
     },
     PresetRow {
         preset: Some(Preset::Verify),
         key: "verify",
-        word: "검증",
         icon: "shield-check",
         gate: None,
     },
     PresetRow {
         preset: Some(Preset::Deploy),
         key: "deploy",
-        word: "배포·출시",
         icon: "rocket",
         // It is hard to undo, so the operator looks before it starts.
-        gate: Some(("배포해도 될지", GateWhen::Start)),
+        gate: Some((
+            GateWords {
+                english: "whether to deploy",
+                korean: "배포해도 될지",
+                japanese: "デプロイしてよいか",
+                simplified_chinese: "是否可以部署",
+            },
+            GateWhen::Start,
+        )),
     },
     PresetRow {
         preset: None,
         key: "general",
-        word: "일반",
         icon: "file-text",
         gate: None,
     },
@@ -3501,11 +3528,13 @@ pub(crate) fn gate_asked(mission: &Mission) -> Option<&MissionNode> {
         .find(|node| asks_gate(Some(question), node))
 }
 
-/// The plan `input` would make of `mission`, or why it is refused.
+/// The plan `input` would make of `mission`, or why it is refused. A
+/// preset's default gate is written in `language`, the operator's.
 pub(crate) fn apply_plan(
     mission: &Mission,
     input: &PlanInput,
     now: u64,
+    language: InterfaceLanguage,
 ) -> Result<Mission, String> {
     if input.nodes.len() > NODE_LIMIT {
         return Err("mission_too_many_nodes".into());
@@ -3580,7 +3609,7 @@ pub(crate) fn apply_plan(
                 &node.key,
             ));
         }
-        check_gate(mission, node)?;
+        check_gate(mission, node, language)?;
         check_operator_merge(mission, input, node)?;
         check_checkers(node)?;
         if node.kind() == NodeKind::Change && node.delivery.is_none() {
@@ -3731,7 +3760,7 @@ pub(crate) fn apply_plan(
             });
             // The node's gate, worked out before the node takes the plan's
             // kind and preset, which it is judged against.
-            let gate = planned_gate(mission, input);
+            let gate = planned_gate(mission, input, language);
             node.title.clone_from(&input.title);
             node.kind = input.kind();
             node.preset = input.preset();
@@ -3871,10 +3900,14 @@ fn valid_steps(steps: &[String]) -> bool {
 /// bound, so a plan cannot put one on a node that already started
 /// (`mission_gate_node_started`), whether it names it or the node's preset
 /// brings it.
-fn check_gate(mission: &Mission, node: &NodeInput) -> Result<(), String> {
+fn check_gate(
+    mission: &Mission,
+    node: &NodeInput,
+    language: InterfaceLanguage,
+) -> Result<(), String> {
     let refused = |code: &str| Err(crate::coordination::refusal(code, &node.key));
     let before = mission.node(&node.key);
-    let Some(gate) = planned_gate(mission, node) else {
+    let Some(gate) = planned_gate(mission, node, language) else {
         return Ok(());
     };
     if gate.len() > 1 {
@@ -3916,7 +3949,11 @@ fn check_gate(mission: &Mission, node: &NodeInput) -> Result<(), String> {
 /// D-07), so a node moved off `deploy` loses its start gate and one moved
 /// onto it gains one. A node's preset is its general node's preset, so a
 /// move between a general node and another kind changes it.
-fn planned_gate(mission: &Mission, node: &NodeInput) -> Option<Vec<GateInput>> {
+fn planned_gate(
+    mission: &Mission,
+    node: &NodeInput,
+    language: InterfaceLanguage,
+) -> Option<Vec<GateInput>> {
     if node.gate.is_some() {
         return node.gate.clone();
     }
@@ -3930,12 +3967,12 @@ fn planned_gate(mission: &Mission, node: &NodeInput) -> Option<Vec<GateInput>> {
     {
         return None;
     }
-    let gate = next.and_then(|preset| preset_row(preset).gate);
+    let gate = next.and_then(|preset| preset_row(preset).gate.as_ref());
     Some(
         gate.into_iter()
             .map(|(look, when)| GateInput {
-                look: look.to_owned(),
-                when,
+                look: look.get(language).to_owned(),
+                when: *when,
             })
             .collect(),
     )
@@ -5268,18 +5305,20 @@ pub(crate) mod tests {
             node("b", NodeKind::Change, &["a"]),
         ]);
         assert_eq!(
-            apply_plan(&mission(), &cycle, 2).unwrap_err(),
+            apply_plan(&mission(), &cycle, 2, InterfaceLanguage::Korean).unwrap_err(),
             "mission_dependency_cycle"
         );
         let unknown = plan(vec![node("a", NodeKind::Change, &["z"])]);
         assert_eq!(
-            crate::coordination::split_refusal(&apply_plan(&mission(), &unknown, 2).unwrap_err()),
+            crate::coordination::split_refusal(
+                &apply_plan(&mission(), &unknown, 2, InterfaceLanguage::Korean).unwrap_err()
+            ),
             ("mission_dependency_unknown", Some("a → z"))
         );
         let mut repeated = plan(vec![node("a", NodeKind::Change, &[])]);
         repeated.merge_order = vec!["a".into(), "a".into()];
         assert_eq!(
-            apply_plan(&mission(), &repeated, 2).unwrap_err(),
+            apply_plan(&mission(), &repeated, 2, InterfaceLanguage::Korean).unwrap_err(),
             "mission_dependency_unknown"
         );
     }
@@ -5291,7 +5330,7 @@ pub(crate) mod tests {
     #[test]
     fn a_dependency_on_a_finish_line_names_a_line_of_one_node_and_merges_after_it() {
         let refused = |plan: PlanInput| {
-            let code = apply_plan(&mission(), &plan, 2).unwrap_err();
+            let code = apply_plan(&mission(), &plan, 2, InterfaceLanguage::Korean).unwrap_err();
             let (code, detail) = crate::coordination::split_refusal(&code);
             (code.to_owned(), detail.map(str::to_owned))
         };
@@ -5299,7 +5338,7 @@ pub(crate) mod tests {
             node("core", NodeKind::Change, &[]),
             node("host", NodeKind::Change, &["core:c1"]),
         ]);
-        let planned = apply_plan(&mission(), &stacked, 2).unwrap();
+        let planned = apply_plan(&mission(), &stacked, 2, InterfaceLanguage::Korean).unwrap();
         assert_eq!(
             planned.nodes[1].depends_on,
             vec![Dependency {
@@ -5346,10 +5385,10 @@ pub(crate) mod tests {
         );
         let mut both_left_out = stacked.clone();
         both_left_out.merge_order = Vec::new();
-        assert!(apply_plan(&mission(), &both_left_out, 2).is_ok());
+        assert!(apply_plan(&mission(), &both_left_out, 2, InterfaceLanguage::Korean).is_ok());
         let mut in_order = stacked;
         in_order.merge_order = vec!["core".into(), "host".into()];
-        assert!(apply_plan(&mission(), &in_order, 2).is_ok());
+        assert!(apply_plan(&mission(), &in_order, 2, InterfaceLanguage::Korean).is_ok());
     }
 
     /// A dependency on a line reads the line as its owner shows it now
@@ -5366,6 +5405,7 @@ pub(crate) mod tests {
                 node("note", NodeKind::General, &["core:c1"]),
             ]),
             2,
+            InterfaceLanguage::Korean,
         )
         .unwrap();
         planned.nodes[0].criteria[0].state = crate::mission_criteria::CriterionState::Pass;
@@ -5441,13 +5481,25 @@ pub(crate) mod tests {
         let mut research = node("r", NodeKind::General, &[]);
         research.delivery = Some(Delivery::Pr);
         assert_eq!(
-            apply_plan(&mission(), &plan(vec![research]), 2).unwrap_err(),
+            apply_plan(
+                &mission(),
+                &plan(vec![research]),
+                2,
+                InterfaceLanguage::Korean
+            )
+            .unwrap_err(),
             "mission_delivery_invalid"
         );
         let mut change = node("c", NodeKind::Change, &[]);
         change.delivery = None;
         assert_eq!(
-            apply_plan(&mission(), &plan(vec![change]), 2).unwrap_err(),
+            apply_plan(
+                &mission(),
+                &plan(vec![change]),
+                2,
+                InterfaceLanguage::Korean
+            )
+            .unwrap_err(),
             "mission_delivery_required"
         );
     }
@@ -5461,6 +5513,7 @@ pub(crate) mod tests {
                 node("b", NodeKind::Change, &["a"]),
             ]),
             2,
+            InterfaceLanguage::Korean,
         )
         .unwrap();
         let mut running = first.clone();
@@ -5481,18 +5534,29 @@ pub(crate) mod tests {
                 node("c", NodeKind::General, &[]),
             ]),
             4,
+            InterfaceLanguage::Korean,
         )
         .unwrap();
         assert_eq!(again.nodes[0].prs, vec![7]);
         assert_eq!(again.nodes[0].status, NodeStatus::Working);
         assert!(again.node("b").is_none(), "a planned node left out goes");
-        let without = apply_plan(&running, &plan(vec![node("c", NodeKind::General, &[])]), 4);
+        let without = apply_plan(
+            &running,
+            &plan(vec![node("c", NodeKind::General, &[])]),
+            4,
+            InterfaceLanguage::Korean,
+        );
         assert_eq!(without.unwrap_err(), "mission_node_in_progress");
         // A node whose status still says planned but that names its pull
         // request ran too.
         let mut named = first.clone();
         named.nodes[1].prs = vec![8];
-        let dropped = apply_plan(&named, &plan(vec![node("a", NodeKind::Change, &[])]), 4);
+        let dropped = apply_plan(
+            &named,
+            &plan(vec![node("a", NodeKind::Change, &[])]),
+            4,
+            InterfaceLanguage::Korean,
+        );
         assert_eq!(dropped.unwrap_err(), "mission_node_in_progress");
     }
 
@@ -5507,6 +5571,7 @@ pub(crate) mod tests {
                 node("d", NodeKind::Change, &[]),
             ]),
             2,
+            InterfaceLanguage::Korean,
         )
         .unwrap();
         assert!(m.blocked().is_empty());
@@ -5534,7 +5599,13 @@ pub(crate) mod tests {
 
     #[test]
     fn a_patch_null_clears_and_an_absent_field_is_kept() {
-        let m = apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2).unwrap();
+        let m = apply_plan(
+            &mission(),
+            &plan(vec![node("a", NodeKind::Change, &[])]),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         let set: NodePatch =
             serde_json::from_value(serde_json::json!({"line": "running tests", "pr": 3})).unwrap();
         let after = apply_patch(&m.nodes[0], &set, 3).unwrap();
@@ -5555,7 +5626,13 @@ pub(crate) mod tests {
             effort: None,
             effort_auto: false,
         });
-        let m = apply_plan(&mission(), &plan(vec![planned]), 2).unwrap();
+        let m = apply_plan(
+            &mission(),
+            &plan(vec![planned]),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         // The CLI builds the patch in Rust and the daemon reads it back from JSON.
         let wire = |patch: NodePatch| -> NodePatch {
             serde_json::from_value(serde_json::to_value(patch).unwrap()).unwrap()
@@ -5594,7 +5671,13 @@ pub(crate) mod tests {
     /// the others; naming one it holds makes it current again.
     #[test]
     fn a_named_pull_request_joins_the_node_as_its_current_one() {
-        let m = apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2).unwrap();
+        let m = apply_plan(
+            &mission(),
+            &plan(vec![node("a", NodeKind::Change, &[])]),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         let name = |pr: u32| NodePatch {
             pr: Some(Some(pr)),
             ..Default::default()
@@ -5616,11 +5699,11 @@ pub(crate) mod tests {
         let mut theirs = node("x", NodeKind::Change, &[]);
         theirs.issues = vec![12];
         theirs.paths = vec!["web/src".into()];
-        other = apply_plan(&other, &plan(vec![theirs]), 2).unwrap();
+        other = apply_plan(&other, &plan(vec![theirs]), 2, InterfaceLanguage::Korean).unwrap();
         book.missions.push(other);
         let mut mine = node("y", NodeKind::Change, &[]);
         mine.paths = vec!["web/src/App.tsx".into()];
-        let m = apply_plan(&mission(), &plan(vec![mine]), 2).unwrap();
+        let m = apply_plan(&mission(), &plan(vec![mine]), 2, InterfaceLanguage::Korean).unwrap();
         let found = overlaps(&book, &m);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].paths, vec!["web/src/App.tsx".to_owned()]);
@@ -5630,7 +5713,13 @@ pub(crate) mod tests {
         assert!(overlaps(&book, &elsewhere).is_empty());
         let mut unrelated = node("z", NodeKind::Change, &[]);
         unrelated.paths = vec!["web/srcs".into()];
-        let m = apply_plan(&mission(), &plan(vec![unrelated]), 2).unwrap();
+        let m = apply_plan(
+            &mission(),
+            &plan(vec![unrelated]),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         assert!(overlaps(&book, &m).is_empty());
     }
 
@@ -5643,6 +5732,7 @@ pub(crate) mod tests {
                     &mission(),
                     &plan(vec![node(&format!("n{index}"), NodeKind::Change, &[])]),
                     2,
+                    InterfaceLanguage::Korean,
                 )
                 .unwrap()
                 .nodes
@@ -5681,7 +5771,7 @@ pub(crate) mod tests {
     #[test]
     fn a_plan_keeps_a_nodes_steps_and_refuses_too_many_or_unreadable_ones() {
         let refused = |plan: PlanInput| {
-            let code = apply_plan(&mission(), &plan, 2).unwrap_err();
+            let code = apply_plan(&mission(), &plan, 2, InterfaceLanguage::Korean).unwrap_err();
             crate::coordination::split_refusal(&code).0.to_owned()
         };
         let with = |steps: Vec<String>| {
@@ -5690,7 +5780,13 @@ pub(crate) mod tests {
             plan(vec![one])
         };
         let lines = |count: usize| (0..count).map(|n| format!("step {n}")).collect::<Vec<_>>();
-        let planned = apply_plan(&mission(), &with(lines(STEP_LIMIT)), 2).unwrap();
+        let planned = apply_plan(
+            &mission(),
+            &with(lines(STEP_LIMIT)),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         assert_eq!(planned.nodes[0].steps, lines(STEP_LIMIT));
         assert_eq!(
             refused(with(lines(STEP_LIMIT + 1))),
@@ -5703,11 +5799,26 @@ pub(crate) mod tests {
         assert_eq!(refused(with(vec!["  ".into()])), "mission_steps_invalid");
         assert_eq!(refused(with(vec!["a\nb".into()])), "mission_steps_invalid");
         // The limit counts characters, so a Korean line of the same length fits.
-        assert!(apply_plan(&mission(), &with(vec!["가".repeat(STEP_CHARS)]), 2).is_ok());
+        assert!(
+            apply_plan(
+                &mission(),
+                &with(vec!["가".repeat(STEP_CHARS)]),
+                2,
+                InterfaceLanguage::Korean
+            )
+            .is_ok()
+        );
         // A replan that leaves the steps out keeps them; an empty list clears them.
-        let kept = apply_plan(&planned, &plan(vec![node("a", NodeKind::Change, &[])]), 3).unwrap();
+        let kept = apply_plan(
+            &planned,
+            &plan(vec![node("a", NodeKind::Change, &[])]),
+            3,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         assert_eq!(kept.nodes[0].steps, lines(STEP_LIMIT));
-        let cleared = apply_plan(&planned, &with(Vec::new()), 3).unwrap();
+        let cleared =
+            apply_plan(&planned, &with(Vec::new()), 3, InterfaceLanguage::Korean).unwrap();
         assert!(cleared.nodes[0].steps.is_empty());
         // An outside node has no work to plan.
         let mut outside = node("pr", NodeKind::Wait, &[]);
@@ -5724,7 +5835,7 @@ pub(crate) mod tests {
     #[test]
     fn a_plan_names_one_to_three_criteria_per_node_and_an_external_node_none() {
         let refused = |plan: PlanInput| {
-            let code = apply_plan(&mission(), &plan, 2).unwrap_err();
+            let code = apply_plan(&mission(), &plan, 2, InterfaceLanguage::Korean).unwrap_err();
             crate::coordination::split_refusal(&code).0.to_owned()
         };
         let mut bare = node("a", NodeKind::Change, &[]);
@@ -5739,7 +5850,7 @@ pub(crate) mod tests {
         // A mission made before criteria plans as it did.
         let mut old = mission();
         old.exempt = true;
-        assert!(apply_plan(&old, &plan(vec![bare]), 2).is_ok());
+        assert!(apply_plan(&old, &plan(vec![bare]), 2, InterfaceLanguage::Korean).is_ok());
         let mut external = node("pr", NodeKind::Wait, &[]);
         external.delivery = None;
         external.criteria.clear();
@@ -5763,7 +5874,13 @@ pub(crate) mod tests {
             "mission_wait_invalid"
         );
         let waits = node("a", NodeKind::Change, &["pr"]);
-        let planned = apply_plan(&mission(), &plan(vec![external, waits]), 2).unwrap();
+        let planned = apply_plan(
+            &mission(),
+            &plan(vec![external, waits]),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         assert!(planned.nodes[0].criteria.is_empty());
         // Each of review and verify at most once.
         let mut twice = node("a", NodeKind::Change, &[]);
@@ -5789,7 +5906,7 @@ pub(crate) mod tests {
             node("r", NodeKind::General, &[]),
         ]);
         input.check = Some("cargo test".into());
-        let mut planned = apply_plan(&mission(), &input, 2).unwrap();
+        let mut planned = apply_plan(&mission(), &input, 2, InterfaceLanguage::Korean).unwrap();
         let keys = |node: &MissionNode| -> Vec<String> {
             node.criteria.iter().map(|line| line.key.clone()).collect()
         };
@@ -5802,7 +5919,8 @@ pub(crate) mod tests {
             "criteria": "a works"
         }))
         .unwrap();
-        let replanned = apply_plan(&planned, &plan(vec![again]), 3).unwrap();
+        let replanned =
+            apply_plan(&planned, &plan(vec![again]), 3, InterfaceLanguage::Korean).unwrap();
         assert_eq!(
             replanned.nodes[0].criteria[0].state,
             crate::mission_criteria::CriterionState::Pass
@@ -5815,8 +5933,13 @@ pub(crate) mod tests {
     #[test]
     fn a_ci_line_saved_spent_before_a_restart_does_not_send_its_node_back_again() {
         let head = "a".repeat(40);
-        let planned =
-            apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2).unwrap();
+        let planned = apply_plan(
+            &mission(),
+            &plan(vec![node("a", NodeKind::Change, &[])]),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         let mut value = serde_json::to_value(Stored {
             schema_version: SCHEMA_VERSION,
             book: MissionBook {
@@ -6026,13 +6149,21 @@ pub(crate) mod tests {
             plan(vec![serde_json::from_value(fix).unwrap()])
         };
         let refused = |mission: &Mission, gate: serde_json::Value| {
-            crate::coordination::split_refusal(&apply_plan(mission, &gated(gate), 2).unwrap_err())
-                .0
-                .to_owned()
+            crate::coordination::split_refusal(
+                &apply_plan(mission, &gated(gate), 2, InterfaceLanguage::Korean).unwrap_err(),
+            )
+            .0
+            .to_owned()
         };
         let base = mission();
         let at = "가".repeat(crate::mission_criteria::GATE_CHARS);
-        let planned = apply_plan(&base, &gated(serde_json::json!(at)), 2).unwrap();
+        let planned = apply_plan(
+            &base,
+            &gated(serde_json::json!(at)),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         let line = crate::mission_criteria::gate(&planned.nodes[0].criteria).unwrap();
         assert_eq!(
             (line.key.as_str(), line.text.as_deref(), line.state),
@@ -6061,15 +6192,34 @@ pub(crate) mod tests {
             "mission_gate_exempt"
         );
         // Left out, a replan keeps it; null takes it away.
-        let kept =
-            apply_plan(&planned, &plan(vec![node("fix", NodeKind::Change, &[])]), 3).unwrap();
+        let kept = apply_plan(
+            &planned,
+            &plan(vec![node("fix", NodeKind::Change, &[])]),
+            3,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         assert_eq!(kept.nodes[0].criteria, planned.nodes[0].criteria);
-        let cleared = apply_plan(&planned, &gated(serde_json::Value::Null), 3).unwrap();
+        let cleared = apply_plan(
+            &planned,
+            &gated(serde_json::Value::Null),
+            3,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         assert!(crate::mission_criteria::gate(&cleared.nodes[0].criteria).is_none());
         // A done node keeps the gate it has and takes no other.
         let mut done = planned.clone();
         done.nodes[0].status = NodeStatus::Done;
-        assert!(apply_plan(&done, &gated(serde_json::json!(at)), 3).is_ok());
+        assert!(
+            apply_plan(
+                &done,
+                &gated(serde_json::json!(at)),
+                3,
+                InterfaceLanguage::Korean
+            )
+            .is_ok()
+        );
         assert_eq!(
             refused(&done, serde_json::json!("the panel")),
             "mission_gate_node_done"
@@ -6089,7 +6239,8 @@ pub(crate) mod tests {
                 &apply_plan(
                     &base,
                     &plan(vec![serde_json::from_value(outside).unwrap()]),
-                    2
+                    2,
+                    InterfaceLanguage::Korean
                 )
                 .unwrap_err()
             )
@@ -6231,7 +6382,7 @@ pub(crate) mod tests {
                 .collect();
             let input: PlanInput =
                 serde_json::from_value(serde_json::json!({"nodes": nodes})).unwrap();
-            apply_plan(&mission(), &input, 2)
+            apply_plan(&mission(), &input, 2, InterfaceLanguage::Korean)
         };
         let read = planned(serde_json::json!([
             {"key": "a", "kind": "research"},
@@ -6294,28 +6445,66 @@ pub(crate) mod tests {
             crate::mission_criteria::gate(&mission.nodes[0].criteria)
                 .map(|line| (line.text.clone().unwrap(), line.when))
         };
-        let planned = apply_plan(&mission(), &general(Some("deploy"), None), 2).unwrap();
+        let planned = apply_plan(
+            &mission(),
+            &general(Some("deploy"), None),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         assert_eq!(
             gate_of(&planned),
             Some(("배포해도 될지".to_owned(), GateWhen::Start))
         );
+        // The default gate is written in the operator's language, which the
+        // screens and the Conductor read it in.
+        let english = apply_plan(
+            &mission(),
+            &general(Some("deploy"), None),
+            2,
+            InterfaceLanguage::English,
+        )
+        .unwrap();
+        assert_eq!(
+            gate_of(&english),
+            Some(("whether to deploy".to_owned(), GateWhen::Start))
+        );
         let stored = serde_json::to_value(&planned).unwrap();
         assert_eq!(stored["nodes"][0]["criteria"][1]["when"], "start");
-        let kept = apply_plan(&planned, &general(Some("deploy"), None), 3).unwrap();
+        let kept = apply_plan(
+            &planned,
+            &general(Some("deploy"), None),
+            3,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         assert_eq!(kept.nodes[0].criteria, planned.nodes[0].criteria);
         let off = apply_plan(
             &mission(),
             &general(Some("deploy"), Some(serde_json::Value::Null)),
             2,
+            InterfaceLanguage::Korean,
         )
         .unwrap();
         assert_eq!(gate_of(&off), None);
         assert!(!off.nodes[0].waits_to_start());
         // Its preset changed and its gate left out, a node takes the new
         // preset's: none off `deploy`, the start gate again back onto it.
-        let research = apply_plan(&planned, &general(Some("research"), None), 3).unwrap();
+        let research = apply_plan(
+            &planned,
+            &general(Some("research"), None),
+            3,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         assert_eq!(gate_of(&research), None);
-        let again = apply_plan(&research, &general(Some("deploy"), None), 4).unwrap();
+        let again = apply_plan(
+            &research,
+            &general(Some("deploy"), None),
+            4,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         assert_eq!(
             gate_of(&again),
             Some(("배포해도 될지".to_owned(), GateWhen::Start))
@@ -6328,6 +6517,7 @@ pub(crate) mod tests {
                 Some(serde_json::json!({"look": "배포해도 될지", "when": "start"})),
             ),
             3,
+            InterfaceLanguage::Korean,
         )
         .unwrap();
         assert_eq!(
@@ -6342,6 +6532,7 @@ pub(crate) mod tests {
                 Some(serde_json::json!({"look": "릴리스 노트", "when": "start"})),
             ),
             2,
+            InterfaceLanguage::Korean,
         )
         .unwrap();
         assert_eq!(
@@ -6352,6 +6543,7 @@ pub(crate) mod tests {
             &mission(),
             &general(Some("deploy"), Some(serde_json::json!("배포된 화면"))),
             2,
+            InterfaceLanguage::Korean,
         )
         .unwrap();
         assert_eq!(
@@ -6361,12 +6553,20 @@ pub(crate) mod tests {
         let stored = serde_json::to_value(&end).unwrap();
         assert!(stored["nodes"][0]["criteria"][1].get("when").is_none());
         // A node already started takes no start gate, named or by its preset.
-        let mut started = apply_plan(&mission(), &general(None, None), 2).unwrap();
+        let mut started = apply_plan(
+            &mission(),
+            &general(None, None),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         started.nodes[0].agent_id = Some("agent-1".into());
         let refused = |input: &PlanInput| {
-            crate::coordination::split_refusal(&apply_plan(&started, input, 3).unwrap_err())
-                .0
-                .to_owned()
+            crate::coordination::split_refusal(
+                &apply_plan(&started, input, 3, InterfaceLanguage::Korean).unwrap_err(),
+            )
+            .0
+            .to_owned()
         };
         assert_eq!(
             refused(&general(Some("deploy"), None)),
@@ -6383,7 +6583,8 @@ pub(crate) mod tests {
             apply_plan(
                 &started,
                 &general(Some("deploy"), Some(serde_json::Value::Null)),
-                3
+                3,
+                InterfaceLanguage::Korean
             )
             .is_ok()
         );
@@ -6391,7 +6592,8 @@ pub(crate) mod tests {
             apply_plan(
                 &started,
                 &general(None, Some(serde_json::json!("배포된 화면"))),
-                3
+                3,
+                InterfaceLanguage::Korean
             )
             .is_ok()
         );
@@ -6420,6 +6622,7 @@ pub(crate) mod tests {
                 node("fix", NodeKind::Change, &[]),
             ]),
             2,
+            InterfaceLanguage::Korean,
         )
         .unwrap();
         let general = apply_patch(&planned.nodes[0], &verdict, 3).unwrap();
@@ -6435,6 +6638,7 @@ pub(crate) mod tests {
             &mission(),
             &plan(vec![serde_json::from_value(ship.clone()).unwrap()]),
             2,
+            InterfaceLanguage::Korean,
         )
         .unwrap();
         let node = &gated.nodes[0];
@@ -6482,6 +6686,7 @@ pub(crate) mod tests {
             &was_dropped,
             &plan(vec![serde_json::from_value(ship).unwrap()]),
             5,
+            InterfaceLanguage::Korean,
         )
         .unwrap();
         assert!(apply_patch(&ungated.nodes[0], &back, 6).is_ok());
@@ -6533,6 +6738,7 @@ pub(crate) mod tests {
             &mission(),
             &plan(vec![node("fix", NodeKind::Change, &[])]),
             2,
+            InterfaceLanguage::Korean,
         )
         .unwrap();
         let fix = &planned.nodes[0];
@@ -6617,9 +6823,14 @@ pub(crate) mod tests {
     #[test]
     fn a_node_forgets_no_cause_it_raised_and_refuses_one_it_cannot_remember() {
         let one = |key: &str| {
-            apply_plan(&mission(), &plan(vec![node(key, NodeKind::Change, &[])]), 2)
-                .unwrap()
-                .nodes[0]
+            apply_plan(
+                &mission(),
+                &plan(vec![node(key, NodeKind::Change, &[])]),
+                2,
+                InterfaceLanguage::Korean,
+            )
+            .unwrap()
+            .nodes[0]
                 .clone()
         };
         let mut node = one("a");
@@ -6649,9 +6860,14 @@ pub(crate) mod tests {
     #[test]
     fn a_node_back_at_work_from_a_finish_splits_its_time_again_from_then() {
         use crate::mission_criteria::{Criterion, CriterionKind, CriterionState};
-        let mut node = apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2)
-            .unwrap()
-            .nodes[0]
+        let mut node = apply_plan(
+            &mission(),
+            &plan(vec![node("a", NodeKind::Change, &[])]),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap()
+        .nodes[0]
             .clone();
         for line in node
             .criteria
@@ -6695,7 +6911,7 @@ pub(crate) mod tests {
         assert_eq!(serde_json::to_value(&read).unwrap(), stored);
         let mut input = plan(Vec::new());
         input.strength = Some(Strength::Thorough);
-        let planned = apply_plan(&read, &input, 2).unwrap();
+        let planned = apply_plan(&read, &input, 2, InterfaceLanguage::Korean).unwrap();
         assert_eq!(planned.strength, Some(Strength::Thorough));
         assert_eq!(planned.checkers, Some(recorded));
     }
@@ -6709,8 +6925,13 @@ pub(crate) mod tests {
     fn a_node_from_before_the_operators_merge_reads_and_writes_as_it_was() {
         let mut planned = mission();
         planned.scope = MissionScope::Merge;
-        let planned =
-            apply_plan(&planned, &plan(vec![node("a", NodeKind::Change, &[])]), 2).unwrap();
+        let planned = apply_plan(
+            &planned,
+            &plan(vec![node("a", NodeKind::Change, &[])]),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
         let stored = serde_json::to_value(&planned).unwrap();
         assert!(
             stored["nodes"][0].get("operator_merge").is_none(),
@@ -6723,7 +6944,7 @@ pub(crate) mod tests {
 
         let mut input = node("a", NodeKind::Change, &[]);
         input.operator_merge = Some(Some("직접 보고 머지".into()));
-        let mine = apply_plan(&read, &plan(vec![input]), 3).unwrap();
+        let mine = apply_plan(&read, &plan(vec![input]), 3, InterfaceLanguage::Korean).unwrap();
         assert!(mine.operator_merges(&mine.nodes[0]));
         let written = serde_json::to_value(&mine).unwrap();
         assert_eq!(written["nodes"][0]["operator_merge"], "직접 보고 머지");

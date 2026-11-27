@@ -338,6 +338,10 @@ impl Runtime {
             pages: Vec::new(),
         }));
         self.read_session_thread();
+        // A session opened beside Desk is one of 한눈에's.
+        if self.desk_glance_opened(&payload.pane_id) {
+            self.save_desk();
+        }
         // A session that is no job of Desk's gets its card for the thread's head (D-87).
         self.compose_desk_jobs();
         true

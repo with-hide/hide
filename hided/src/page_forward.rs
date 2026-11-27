@@ -164,8 +164,7 @@ async fn accept(
         let local = match accepted {
             Ok((local, _)) => local,
             Err(error) => {
-                eprintln!(
-                    "{}",
+                hide_core::diagnostic!(
                     serde_json::json!({"component":"page_forward","kind":"accept.failed","node":link.target(),"reason":error.to_string()})
                 );
                 break;
@@ -211,8 +210,7 @@ async fn carry(
                 Ok(carried) => carried.ended().await,
                 Err(error) => {
                     if !reported.swap(true, Ordering::Relaxed) {
-                        eprintln!(
-                            "{}",
+                        hide_core::diagnostic!(
                             serde_json::json!({"component":"page_forward","kind":"stream.refused","node":target,"reason":error.to_string()})
                         );
                     }
@@ -231,8 +229,7 @@ async fn carry(
         Ok(Ok(stream)) => stream,
         Ok(Err(error)) => {
             if !reported.swap(true, Ordering::Relaxed) {
-                eprintln!(
-                    "{}",
+                hide_core::diagnostic!(
                     serde_json::json!({"component":"page_forward","kind":"stream.refused","node":target,"reason":error.to_string()})
                 );
             }

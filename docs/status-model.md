@@ -335,7 +335,8 @@ A new target a page opens on its own (a link to a new tab) is the page's, not a 
 The record is the View's own (`Display::unseen` in `view_layout.rs`, `Unseen` in `view_feedback.rs`): when the open happened, as a generation that moves on each open, and whether an ancestor has read it; it is stored with the checkout's View layout, so it survives a restart, and it goes with the View, so there are never more records than open Views (D-09, D-12).
 A stored record that does not read leaves the View unseen and the load's repair says so in the diagnostic log; a View stored before the record existed reads as seen (D-27, B18, B33).
 
-A View is seen when, in one window, all of these hold (D-07): the window holds the keyboard on the Workspace screen (the shell's `window_focus`, which hided aggregates across windows and lets go with a connection), the View's checkout is in front, the lane shows the desk, the View is the selected tab of the active View area, and the Files strip of the session in front shows it.
+A View is seen when, in one window, all of these hold (D-07): the window holds the keyboard on the Workspace screen (the shell's `window_focus` naming the `workspace` screen, which hided aggregates across windows, the window that took the keyboard last, and lets go with a connection), the View's checkout is in front, the lane shows the desk, the View is the selected tab of the active View area, and the Files strip of the session in front shows it.
+The tab in front of Desk's desk is seen the same way while the window holding the keyboard draws that desk (`window_focus` naming the `desk` screen).
 The core decides it on every snapshot (`settle_unseen_views` in `runtime/unseen_views.rs`), from state it already holds; the shell sends only the window's focus, and only when it changes.
 An open of a View that is already looked at in the same event is never unseen, so nothing flickers (B5, B14), and an open again of a seen View is news again (D-11).
 

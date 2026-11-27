@@ -2816,7 +2816,7 @@ fn a_close_hands_the_pull_to_a_worker_off_the_lock_and_its_line_ends_the_report(
     });
     assert_eq!(
         report().as_deref(),
-        Some("Done.\n\n내 폴더도 최신으로 당겨왔어요 (2커밋)")
+        Some("Done.\n\nYour folder is up to date too (pulled 2 commits)")
     );
     assert_eq!(node.calls(), ["fetch", "read", "catch_up"]);
 }
@@ -2858,7 +2858,7 @@ fn a_second_close_that_finds_the_checkout_current_keeps_the_pulled_line() {
     wait_for("the first pull", || node.calls().len() == 3 && read().0);
     assert_eq!(
         read().1.as_deref(),
-        Some("Done.\n\n내 폴더도 최신으로 당겨왔어요 (2커밋)")
+        Some("Done.\n\nYour folder is up to date too (pulled 2 commits)")
     );
 
     *node.behind.lock().unwrap() = 0;
@@ -2874,7 +2874,7 @@ fn a_second_close_that_finds_the_checkout_current_keeps_the_pulled_line() {
     assert_eq!(node.calls(), ["fetch", "read", "catch_up", "fetch", "read"]);
     assert_eq!(
         read().1.as_deref(),
-        Some("Final.\n\n내 폴더도 최신으로 당겨왔어요 (2커밋)")
+        Some("Final.\n\nYour folder is up to date too (pulled 2 commits)")
     );
 }
 
@@ -12073,7 +12073,7 @@ fn the_operator_closes_a_refused_mission_as_done_passing_the_empty_lines() {
     assert_eq!(check.state, CriterionState::Skipped);
     assert_eq!(
         check.skip.as_ref().map(|skip| skip.reason.as_str()),
-        Some("운영자 판단")
+        Some("your decision")
     );
     assert_eq!(
         check.by.as_ref().map(|by| by.role),
@@ -14406,7 +14406,7 @@ fn a_start_gate_asks_once_its_node_could_start_and_holds_its_worker_until_passed
     runtime.missions.book_edit += 1;
     runtime.drive_mission_health(crate::runtime::unix_milliseconds());
     let (line, asked) = asked_gate(&runtime).expect("a start gate reached asks");
-    assert!(line.contains("배포해도 될지"), "{line}");
+    assert!(line.contains("whether to deploy"), "{line}");
     assert_eq!(asked.as_deref(), Some("ship"));
     assert_eq!(
         gate(&runtime),
@@ -14780,7 +14780,11 @@ fn the_operators_done_passes_a_gate_through_its_one_entry() {
     let gate = fix.gate.unwrap();
     assert_eq!(
         (gate.state, gate.via, gate.said.as_deref()),
-        (GateState::Passed, Some(GateVia::Card), Some("운영자 판단"))
+        (
+            GateState::Passed,
+            Some(GateVia::Card),
+            Some("your decision")
+        )
     );
     assert!(
         fix.criteria

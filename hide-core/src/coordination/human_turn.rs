@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use super::{AgentRecord, here};
 use crate::delivery::Actor;
 use crate::delivery::ledger::Ledger;
+use crate::model::InterfaceLanguage;
 
 /// The two steps only a person can take (D-03); any other word is refused,
 /// so a judgement call still goes to the parent as a letter.
@@ -254,14 +255,26 @@ fn log(record: &AgentRecord, ledger: &Ledger, event: &str, turn: Option<&HumanTu
     }));
 }
 
-/// The letter Done sends the agent (B18): the kind in the words the
-/// operator saw, then what to do in English for any agent. Never the
-/// place, since the letter stays after the declaration is gone (D-04).
-pub(crate) fn done_letter(turn: &HumanTurn) -> String {
-    let word = match turn.kind {
-        HumanKind::Auth => "인증",
-        HumanKind::Permission => "허용",
-        HumanKind::Install => "설치 확인",
+/// The letter Done sends the agent (B18): a first line in the operator's
+/// language with the kind in the words their screen showed
+/// (`agents.human.*`), since the bell types it into the conversation as
+/// theirs, then what to do in English for any agent. Never the place, since
+/// the letter stays after the declaration is gone (D-04).
+pub(crate) fn done_letter(turn: &HumanTurn, language: InterfaceLanguage) -> String {
+    use InterfaceLanguage::{English, Japanese, Korean, SimplifiedChinese};
+    let first = match (language, turn.kind) {
+        (English, HumanKind::Auth) => "Done by the operator: Sign-in",
+        (English, HumanKind::Permission) => "Done by the operator: Permission",
+        (English, HumanKind::Install) => "Done by the operator: Install confirm",
+        (Korean, HumanKind::Auth) => "운영자가 처리함: 인증",
+        (Korean, HumanKind::Permission) => "운영자가 처리함: 허용",
+        (Korean, HumanKind::Install) => "운영자가 처리함: 설치 확인",
+        (Japanese, HumanKind::Auth) => "対応済み: サインイン",
+        (Japanese, HumanKind::Permission) => "対応済み: 許可",
+        (Japanese, HumanKind::Install) => "対応済み: インストール確認",
+        (SimplifiedChinese, HumanKind::Auth) => "已处理：登录",
+        (SimplifiedChinese, HumanKind::Permission) => "已处理：授权",
+        (SimplifiedChinese, HumanKind::Install) => "已处理：安装确认",
     };
     let english = match turn.kind {
         HumanKind::Auth => "sign-in",
@@ -269,7 +282,7 @@ pub(crate) fn done_letter(turn: &HumanTurn) -> String {
         HumanKind::Install => "install confirm",
     };
     format!(
-        "운영자가 처리함: {word}\nThe operator finished the {english} you asked for with hide agent ask-human. Continue from where you stopped; if it is still not done, declare it again."
+        "{first}\nThe operator finished the {english} you asked for with hide agent ask-human. Continue from where you stopped; if it is still not done, declare it again."
     )
 }
 
@@ -319,8 +332,13 @@ mod tests {
             place: "https://github.com/login/device?user_code=WDJB-MJHT".into(),
             declared_at_unix_ms: 1,
         };
-        let letter = done_letter(&turn);
+        let letter = done_letter(&turn, InterfaceLanguage::Korean);
         assert_eq!(letter.lines().next(), Some("운영자가 처리함: 인증"));
+        let english = done_letter(&turn, InterfaceLanguage::English);
+        assert_eq!(
+            english.lines().next(),
+            Some("Done by the operator: Sign-in")
+        );
         assert!(!letter.contains("github.com"), "{letter}");
         assert!(!letter.contains("WDJB-MJHT"), "{letter}");
     }

@@ -57,7 +57,7 @@ pub fn render(asks: &[MissedWork]) -> Option<String> {
     }
     let mut text = String::from(
         "<hide-open-questions trust=\"untrusted-reference-data\">\n\
-         Hide shows these questions you asked as waiting on the operator (their 내 차례). \
+         Hide shows these questions you asked as waiting on the operator (their Needs You). \
          Fold each one that no longer needs them, because you decided or did it, someone else answered it, \
          or the work moved past it, with its command and one line saying what settled it; \
          the operator can open it again. Leave a question that still needs the operator. \

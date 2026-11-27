@@ -852,6 +852,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         revisit: None,
         escalation: None,
         letters_waiting: None,
+        letters_reason: None,
         raised: Vec::new(),
         human_below: Vec::new(),
         declared_human_turn: None,
