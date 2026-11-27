@@ -427,6 +427,28 @@ impl hide_node_link::terminal::TerminalRoutes for RecordedTerminals {
 }
 
 /// Gives `runtime` recorded terminal routes.
+/// A window that drew `pane`'s tab `canvas_px` wide and measured it, cells
+/// of 8 px 8 px in from each side, at the pane's text scale and the core's
+/// terminal font: what a window reports with every grid (`terminal_resize`'s
+/// `floor`), and what a split or resize in a tab on screen is judged by
+/// (`pane_floor`).
+pub(super) fn window_measured(runtime: &mut Runtime, pane: &str, canvas_px: f64) {
+    let ui = &runtime.snapshot.ui_state;
+    let scale = ui
+        .pane_text_scales
+        .get(pane)
+        .copied()
+        .unwrap_or(crate::model::DEFAULT_PANE_TEXT_SCALE);
+    let report = serde_json::from_value(serde_json::json!({
+        "cell_px": 8.0, "canvas_px": canvas_px, "inset_px": 8.0, "base_cell_px": 8.0,
+        "scale": scale, "font_size": ui.terminal_font_size,
+        "font_family": ui.terminal_font_family,
+    }))
+    .expect("a window's measure");
+    runtime.floor_reports.note(pane, Some(report));
+    runtime.refresh_pane_floor();
+}
+
 pub(super) fn record_terminals(runtime: &mut Runtime) -> Arc<RecordedTerminals> {
     let terminals = Arc::new(RecordedTerminals::default());
     runtime.set_terminals(Arc::clone(&terminals) as _);

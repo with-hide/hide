@@ -640,46 +640,49 @@ fn a_beside_spawn_with_a_parent_creates_nothing() {
 /// the caller's pane as the core names it, as the window names it.
 fn caller_drawn(spawner: &Spawner, canvas: Option<f64>) {
     let mut guard = spawner.runtime.lock().unwrap();
-    let tab = format!("remote:{DEVICE}:tab:w2:t0");
-    let checkout = format!("remote:{DEVICE}:checkout:c0");
-    guard.snapshot.status.remote[0].session = Some(RemoteSessionSnapshot {
-        workspaces: Vec::new(),
-        agents: Vec::new(),
-        active_tab_ids: Default::default(),
-        focused_workspace_id: None,
-        focused_checkout_id: None,
-        focused_tab_id: None,
-        focused_pane_id: None,
-        pane_layouts: vec![crate::model::RemotePaneLayoutSnapshot {
-            workspace_id: format!("remote:{DEVICE}:workspace:w2"),
-            tab_id: tab.clone(),
-            focused_pane_id: spawner.actor.pane_id.clone(),
-            zoomed: false,
-            frames: vec![crate::model::RemotePaneLayoutFrame {
-                pane_id: spawner.actor.pane_id.clone(),
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            }],
+    // The caller's tab and checkout in the device's pass (`spawner`), which
+    // keeps its workspaces: the caller is found in them.
+    let tab = format!("remote:{DEVICE}:tab:w2:t1");
+    let checkout = format!("remote:{DEVICE}:checkout:w2");
+    let session = guard.snapshot.status.remote[0]
+        .session
+        .as_mut()
+        .expect("the device's pass");
+    session.pane_layouts = vec![crate::model::RemotePaneLayoutSnapshot {
+        workspace_id: format!("remote:{DEVICE}:workspace:w2"),
+        tab_id: tab.clone(),
+        focused_pane_id: spawner.actor.pane_id.clone(),
+        zoomed: false,
+        frames: vec![crate::model::RemotePaneLayoutFrame {
+            pane_id: spawner.actor.pane_id.clone(),
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
         }],
-        pane_hook_tokens: Default::default(),
-        issue_tokens: Default::default(),
-        issue_links: Default::default(),
-    });
+    }];
     guard.snapshot.navigator.focused_workspace_id = None;
     guard.snapshot.navigator.focused_checkout_id = Some(checkout.clone());
     guard.visible_tab_ids.insert(checkout, tab.clone());
     guard.ui_attached = true;
     assert_eq!(guard.shown_agent_tabs(), [tab]);
+    // The window reports the caller's grid as it reports every pane's: the
+    // same `terminal_resize`, its measure filed under the core's own name for
+    // the device's pane, the frame's.
     if let Some(canvas) = canvas {
-        let report = serde_json::from_value(json!({
-            "cell_px": 8.0, "canvas_px": canvas, "inset_px": 8.0, "base_cell_px": 8.0,
+        let (font_size, font_family) = (
+            guard.snapshot.ui_state.terminal_font_size,
+            guard.snapshot.ui_state.terminal_font_family.clone(),
+        );
+        let resize = serde_json::to_vec(&json!({
+            "schema_version": SCHEMA_VERSION, "kind": "terminal_resize",
+            "payload": {"pane_id": spawner.actor.pane_id, "rows": 24, "cols": 30, "floor": {
+                "cell_px": 8.0, "canvas_px": canvas, "inset_px": 8.0, "base_cell_px": 8.0,
+                "scale": 1.0, "font_size": font_size, "font_family": font_family,
+            }},
         }))
         .unwrap();
-        guard
-            .floor_reports
-            .note(&spawner.actor.pane_id, Some(report));
+        guard.dispatch_json(&resize);
     }
 }
 
@@ -717,7 +720,7 @@ fn a_beside_spawn_from_a_pane_too_narrow_to_split_creates_nothing() {
 #[test]
 fn a_beside_spawn_on_a_core_no_window_draws_splits() {
     let spawner = spawner();
-    assert!(!spawner.runtime.lock().unwrap().ui_attached);
+    spawner.runtime.lock().unwrap().ui_attached = false;
     assert_eq!(
         spawner.spawn("windowless", BESIDE).unwrap()["pane"],
         "w2:p1"

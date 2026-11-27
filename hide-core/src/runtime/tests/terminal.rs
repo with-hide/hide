@@ -481,6 +481,7 @@ fn retiring_a_pane_clears_every_pane_keyed_terminal_state() {
 fn floor_report(canvas: f64) -> crate::runtime::pane_floor::FloorReport {
     serde_json::from_value(serde_json::json!({
         "cell_px": 8.0, "canvas_px": canvas, "inset_px": 8.0, "base_cell_px": 8.0,
+        "scale": 1.0, "font_size": 14.0, "font_family": "",
     }))
     .unwrap()
 }
@@ -544,11 +545,16 @@ fn a_device_pane_splits_right_on_its_devices_rectangles_by_the_cores_name() {
         Err(crate::model::PaneFloorRefusal::Unmeasured)
     );
     // 1280 px: the wide pane splits into halves of 480, the narrow one into 160 less a pixel.
+    let (font_size, font_family) = (
+        runtime.snapshot.ui_state.terminal_font_size,
+        runtime.snapshot.ui_state.terminal_font_family.clone(),
+    );
     runtime.dispatch_json(
         &serde_json::to_vec(&serde_json::json!({
             "schema_version": SCHEMA_VERSION, "kind": "terminal_resize",
             "payload": {"pane_id": narrow, "rows": 24, "cols": 30, "floor": {
                 "cell_px": 8.0, "canvas_px": 1276.0, "inset_px": 8.0, "base_cell_px": 8.0,
+                "scale": 1.0, "font_size": font_size, "font_family": font_family,
             }},
         }))
         .unwrap(),

@@ -508,6 +508,7 @@ impl Prepared {
             } => {
                 let turn = crate::runtime::BesideTurn::take(&runtime, &pane)
                     .map_err(|refusal| refusal.code("pane_"))?;
+                turn.confirm().map_err(|refusal| refusal.code("pane_"))?;
                 let raw = engine
                     .split_beside(wait, &caller, Some(&cwd), Default::default())
                     .map_err(|error| {

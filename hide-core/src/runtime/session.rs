@@ -2721,6 +2721,12 @@ impl Runtime {
         let tab_move_timed_out = self.expire_tab_moves(now_unix_ms);
         let close_timed_out = self.expire_close_operations(now_unix_ms);
         let pane_operation_timed_out = self.expire_pane_operations(now_unix_ms);
+        // An operation the confirmations below settle sends the next one in
+        // its tab's line, which is judged on what the engine confirmed: this
+        // pass's layout, not the one drawn before it (`pane_floor`).
+        if let Ok(payload) = &fetched {
+            self.confirm_engine_layouts(payload);
+        }
         let close_topology_changed = fetched
             .as_ref()
             .is_ok_and(|payload| self.observe_close_topology(payload));

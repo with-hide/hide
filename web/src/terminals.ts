@@ -508,12 +508,27 @@ function disposeInstance(paneId: string, instance: Instance) {
  * What the core's pane floor judges this pane's tab by (docs/UI_BEHAVIOR.md,
  * The pane floor), in CSS pixels: the pane's own cell, and the width of the
  * tab's canvas its panes are laid out in, the inset a terminal stands from
- * each side of its pane and the cell at no per-pane scale. Null for a pane
- * drawn outside a tab's canvas, a pair view's, and where a cell cannot be
- * measured; the core then takes the tab as not measured, which refuses a
- * split right rather than allowing one it cannot judge.
+ * each side of its pane and the cell at no per-pane scale; with the text
+ * scale, Terminal text size and Terminal font they were measured at, so the
+ * core takes no measure of a setting it has since changed.
  */
-function floorMeasure(instance: Instance): { cell_px: number; canvas_px: number; inset_px: number; base_cell_px: number } | null {
+export type FloorMeasure = {
+  cell_px: number;
+  canvas_px: number;
+  inset_px: number;
+  base_cell_px: number;
+  scale: number;
+  font_size: number | null;
+  font_family: string;
+};
+
+/**
+ * The pane's measure (`FloorMeasure`). Null for a pane drawn outside a tab's
+ * canvas, a pair view's, and where a cell cannot be measured; the core then
+ * takes the tab as not measured, which refuses a split right rather than
+ * allowing one it cannot judge.
+ */
+function floorMeasure(instance: Instance): FloorMeasure | null {
   const canvas = instance.host?.closest<HTMLElement>("[data-canvas]");
   if (!canvas || canvas.dataset.pairedCanvas === "true" || canvas.clientWidth <= 0) return null;
   try {
@@ -524,6 +539,9 @@ function floorMeasure(instance: Instance): { cell_px: number; canvas_px: number;
       canvas_px: canvas.clientWidth,
       inset_px: tokenPx("--spacing-sm"),
       base_cell_px: cellWidth(fontSizeAt(1), family, mono),
+      scale: instance.scale,
+      font_size: baseFontSize,
+      font_family: family,
     };
   } catch {
     return null;
@@ -551,14 +569,20 @@ function sendGrid(paneId: string, instance: Instance, newView: boolean, onlyChan
     kind: "terminal_viewport",
     payload: { pane_id: paneId, cols: term.cols, rows: term.rows, new_view: newView },
   });
-  // Another machine's pane is sized by its own node from the view above
-  // (hided's tap); the core, which holds no such pane, is sent no resize.
-  if (isGuestPaneId(paneId)) return;
-  instance.dispatch({
-    schema_version: 2,
-    kind: "terminal_resize",
-    payload: { pane_id: paneId, cols: term.cols, rows: term.rows, ...(measured ? { floor: measured } : {}) },
-  });
+  const resize = resizeEvent(paneId, term.cols, term.rows, measured);
+  if (resize) instance.dispatch(resize);
+}
+
+/**
+ * The core's `terminal_resize` for a pane's grid, with what the window
+ * measured to fit it. A device's pane (`remote:`) carries its measure as this
+ * machine's do, since the core judges its splits too; another machine's pane
+ * running here (`guest:`) is sized by its own node from the view (hided's
+ * tap), so the core, which holds no such pane, is sent nothing.
+ */
+export function resizeEvent(paneId: string, cols: number, rows: number, floor: FloorMeasure | null) {
+  if (isGuestPaneId(paneId)) return null;
+  return { schema_version: 2, kind: "terminal_resize", payload: { pane_id: paneId, cols, rows, ...(floor ? { floor } : {}) } };
 }
 
 

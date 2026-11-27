@@ -2495,6 +2495,7 @@ fn beside_pane(
         return Ok((pane.pane_id.clone(), None));
     }
     let turn = take_turn()?;
+    turn.confirm().map_err(|refusal| refusal.code("beside_"))?;
     let refused = |detail: String| {
         crate::diagnostic!(json!({
             "component": "spawn", "kind": "beside.split_failed", "spawn": spawn,

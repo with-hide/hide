@@ -255,23 +255,40 @@ pub(crate) fn resize_amount(
     ) {
         return amount;
     }
-    let narrowest_after = |amount: f32| {
+    let columns_after = |amount: f32| {
         let mut root = layout.root.clone();
         if let Some(ratio) = resized(&root, pane, direction, amount) {
             set_resized_ratio(&mut root, pane, direction, ratio);
         }
-        narrowest(&tree_shares(&root), measure, &cell_of).map_or(u16::MAX, |(_, cols)| cols)
+        tree_shares(&root)
+            .into_iter()
+            .map(|(pane, share)| {
+                let cols = measure.columns(share, cell_of(&pane));
+                (pane, cols)
+            })
+            .collect::<HashMap<_, _>>()
     };
-    let keep = narrowest_after(0.0).min(PANE_FLOOR_COLUMNS);
-    if narrowest_after(amount) >= keep {
+    // Each pane keeps the floor, or the columns it already has when the
+    // window drew it under the floor: a pane already narrow is not narrowed
+    // further, and no other pane is taken down to its width.
+    let keep = columns_after(0.0)
+        .into_iter()
+        .map(|(pane, cols)| (pane, cols.min(PANE_FLOOR_COLUMNS)))
+        .collect::<HashMap<_, _>>();
+    let keeps = |amount: f32| {
+        columns_after(amount)
+            .iter()
+            .all(|(pane, cols)| keep.get(pane).is_none_or(|kept| cols >= kept))
+    };
+    if keeps(amount) {
         return amount;
     }
-    // The pane that shrinks only shrinks as the amount grows, so the amounts
-    // that keep the floor are the ones below a bound, found by halving.
+    // A pane that shrinks only shrinks as the amount grows, so the amounts
+    // that keep every pane are the ones below a bound, found by halving.
     let (mut kept, mut lost) = (0.0_f32, amount);
     for _ in 0..24 {
         let middle = (kept + lost) / 2.0;
-        if narrowest_after(middle) >= keep {
+        if keeps(middle) {
             kept = middle;
         } else {
             lost = middle;
@@ -282,16 +299,40 @@ pub(crate) fn resize_amount(
 
 /// What a window measured for one pane along with its grid
 /// (`terminal_resize`'s `floor`), in CSS pixels: the pane's own cell, and the
-/// tab's canvas, inset and cell at no per-pane scale. It reaches the core
-/// only from the screen whose grid the pane runs at (`hided::pane_sizes`),
-/// so the latest one is the window's that draws it.
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+/// tab's canvas, inset and cell at no per-pane scale, with the text scale,
+/// terminal font size and font it measured them at. It reaches the core only
+/// from the screen whose grid the pane runs at (`hided::pane_sizes`), so the
+/// latest one is the window's that draws it; one measured at another scale
+/// or font than the core's now is stale and judges nothing
+/// (`FloorReport::current`).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct FloorReport {
     pub(super) cell_px: f64,
     pub(super) canvas_px: f64,
     pub(super) inset_px: f64,
     pub(super) base_cell_px: f64,
+    pub(super) scale: f64,
+    /// Appearance's Terminal text size the window applied; none while it
+    /// drew at the token's.
+    pub(super) font_size: Option<f64>,
+    pub(super) font_family: String,
+}
+
+impl FloorReport {
+    /// Whether the tab's canvas and cell at no scale were measured at the
+    /// terminal font the core has now.
+    fn at_font(&self, ui: &crate::model::UiStateSnapshot) -> bool {
+        self.font_size
+            .is_some_and(|size| (size - f64::from(ui.terminal_font_size)).abs() < 1e-3)
+            && self.font_family == ui.terminal_font_family
+    }
+
+    /// Whether the pane's own cell was measured at the font and at `scale`,
+    /// the pane's text scale now.
+    fn current(&self, ui: &crate::model::UiStateSnapshot, scale: f32) -> bool {
+        self.at_font(ui) && (self.scale - f64::from(scale)).abs() < 1e-3
+    }
 }
 
 /// Each pane's latest report, numbered in the order they came, so a tab's
@@ -401,11 +442,15 @@ impl Runtime {
         if !self.ui_attached || !self.shown_agent_tabs().iter().any(|shown| shown == tab) {
             return FloorTab::Undrawn;
         }
+        let ui = &self.snapshot.ui_state;
+        // The canvas is the one the tab's panes reported last at the font
+        // the core has now; a report at another font measured another tab.
         let Some(latest) = panes
             .iter()
             .filter_map(|pane| self.floor_reports.panes.get(*pane))
+            .filter(|(_, report)| report.at_font(ui))
             .max_by_key(|(order, _)| *order)
-            .map(|(_, report)| *report)
+            .map(|(_, report)| report)
         else {
             return FloorTab::Unmeasured;
         };
@@ -415,18 +460,24 @@ impl Runtime {
         };
         let mut cells = HashMap::new();
         for pane in panes {
+            let scale = ui
+                .pane_text_scales
+                .get(*pane)
+                .copied()
+                .unwrap_or(DEFAULT_PANE_TEXT_SCALE);
             match self.floor_reports.panes.get(*pane) {
-                Some((_, report)) if report.cell_px.is_finite() && report.cell_px > 0.0 => {
+                // Its own cell, measured at the scale and font it has now.
+                Some((_, report))
+                    if report.current(ui, scale)
+                        && report.cell_px.is_finite()
+                        && report.cell_px > 0.0 =>
+                {
                     cells.insert((*pane).to_owned(), report.cell_px);
                 }
-                // A pane with no report of its own draws at the tab's cell
-                // only while it has no text scale of its own.
-                _ if self
-                    .snapshot
-                    .ui_state
-                    .pane_text_scales
-                    .get(*pane)
-                    .is_none_or(|scale| *scale == DEFAULT_PANE_TEXT_SCALE) => {}
+                // A pane with no current report draws at the tab's cell only
+                // while it has no text scale of its own; one with a scale of
+                // its own waits for the window to measure it at that scale.
+                _ if scale == DEFAULT_PANE_TEXT_SCALE => {}
                 _ => return FloorTab::Unmeasured,
             }
         }
@@ -838,19 +889,37 @@ mod tests {
     }
 
     #[test]
-    fn a_tab_already_under_the_floor_may_widen_its_narrowest_pane_but_not_narrow_it() {
+    fn a_tab_already_under_the_floor_keeps_each_pane_at_the_floor_or_the_columns_it_has() {
         // At 256 px p1 holds 7 columns and p2 20, both drawn so by a window
         // made narrower after the panes were.
         let pair = tab(right(0.3, pane("p1"), pane("p2")));
         let at = measure(canvas_for(30));
-        // Widening p1 to 10 columns leaves p2 17: neither goes under the 7 there are.
+        // Widening p1 by 0.1 would leave p2 17 columns: p2 keeps the floor,
+        // so p1 widens only to a ratio of 0.375, where p2 holds 18.
+        let amount = resize_amount(&pair, "p1", PaneResizeDirection::Right, 0.1, &at, BASE);
+        assert!(amount > 0.07 && amount <= 0.0751, "{amount}");
         assert_eq!(
-            resize_amount(&pair, "p1", PaneResizeDirection::Right, 0.1, &at, BASE),
-            0.1
+            resize_amount(&pair, "p1", PaneResizeDirection::Right, 0.05, &at, BASE),
+            0.05,
+            "a move that keeps p2 at the floor goes whole"
         );
         // Narrowing p1 stops before it loses a column.
         let amount = resize_amount(&pair, "p1", PaneResizeDirection::Left, 0.1, &at, BASE);
         assert!(amount < 0.02, "{amount}");
+    }
+
+    #[test]
+    fn a_narrow_pane_in_another_row_does_not_lower_the_floor_of_the_others() {
+        // Top row: a at a fifth of 400 px holds 8 columns, b 38; bottom
+        // row: c and d hold 23 each.
+        let rows = tab(down(
+            right(0.2, pane("a"), pane("b")),
+            right(0.5, pane("c"), pane("d")),
+        ));
+        let at = measure(400.0);
+        // c narrows to 160 px, a ratio of 0.4, and no further toward a's 8.
+        let amount = resize_amount(&rows, "c", PaneResizeDirection::Left, 0.4, &at, BASE);
+        assert!(amount > 0.09 && amount <= 0.1001, "{amount}");
     }
 
     #[test]

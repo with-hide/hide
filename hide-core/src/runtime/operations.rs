@@ -213,6 +213,24 @@ impl BesideTurn {
         }
     }
 
+    /// Whether the turn is still this worker's, asked right before its split:
+    /// one past its deadline is not split in, and the tab is busy.
+    pub(crate) fn confirm(&self) -> Result<(), BesideRefusal> {
+        let Some(id) = &self.id else {
+            return Ok(());
+        };
+        let owner = self.runtime.upgrade().ok_or(BesideRefusal::Busy)?;
+        let current = owner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .beside_turn_current(id);
+        if current {
+            Ok(())
+        } else {
+            Err(BesideRefusal::Busy)
+        }
+    }
+
     /// A turn of no line: what a split of a device's pane, and a test,
     /// hold.
     pub(crate) fn detached() -> Self {
@@ -1405,6 +1423,15 @@ impl Runtime {
         Ok(Some((id, receiver)))
     }
 
+    /// Whether the turn `id` is still its worker's to split in: granted and
+    /// not past its deadline.
+    pub(crate) fn beside_turn_current(&self, id: &str) -> bool {
+        self.pane_operations.get(id).is_some_and(|operation| {
+            matches!(operation.request, GeometryRequest::Task { task: None, .. })
+                && operation.phase == "transmitting"
+        })
+    }
+
     /// Ends the turn `id`, its split made as `created` or not made: the made
     /// split is drawn and holds the line until the engine's layout lists it
     /// (`draw_answered_split`), in the same step that lets the turn go, so the
@@ -1414,7 +1441,8 @@ impl Runtime {
         if let Some((target, created)) = created {
             self.draw_answered_split(target, created);
         }
-        // A turn its deadline already took has nothing left to let go.
+        // A turn past its deadline is still here as unknown and lets the
+        // line go now; one its tab took with it has no line left.
         if let Some(operation) = operation {
             self.pump_geometry_queue(&operation.scope_id);
         }
@@ -1706,15 +1734,18 @@ impl Runtime {
 
     /// Whether an operation of the tab is still waiting for the engine, so the
     /// next one has to wait its turn. A result that became unknown does not
-    /// hold the line (D-09, D-12).
+    /// hold the line (D-09, D-12), except a split beside whose worker still
+    /// holds its turn: the worker may still split, so nothing goes before it
+    /// lets the turn go (`BesideTurn`).
     fn geometry_in_flight(&self, scope_id: &str) -> bool {
         self.pane_move_holds_tab(scope_id)
             || self.pane_operations.values().any(|operation| {
                 operation.scope_id == scope_id
-                    && matches!(
+                    && (matches!(
                         operation.phase.as_str(),
                         "transmitting" | "awaiting_topology"
-                    )
+                    ) || matches!(operation.request, GeometryRequest::Task { task: None, .. }))
+                    && operation.phase != "queued"
             })
             || self.close_operations.values().any(|operation| {
                 operation.scope_id == scope_id
@@ -2688,16 +2719,25 @@ impl Runtime {
                 continue;
             }
             if let GeometryRequest::Task { task: None, .. } = operation.request {
-                // A worker that never came back with its split gives its turn up.
-                self.pane_operations.remove(&id);
+                // A worker past its deadline is not known to have ended: its
+                // turn becomes unknown and keeps the line until the worker
+                // lets it go, and what waited behind it is dropped, as behind
+                // every operation whose result is unknown. A worker that has
+                // not split yet finds its turn gone (`BesideTurn::confirm`).
+                if let Some(current) = self.pane_operations.get_mut(&id) {
+                    current.phase = "unknown".to_owned();
+                    current.deadline_at_unix_ms = None;
+                    current.message =
+                        Some("The split beside took its turn past the deadline".to_owned());
+                }
                 self.push_diagnostic(
                     "pane.beside.turn_expired",
                     format!(
-                        "The split beside {} took its turn past the deadline",
+                        "The split beside {} took its turn past the deadline; the tab waits for it",
                         operation.target_id
                     ),
                 );
-                self.pump_geometry_queue(&operation.scope_id);
+                self.drop_geometry_queue(&operation.scope_id, "unknown");
                 changed = true;
                 continue;
             }

@@ -3656,12 +3656,6 @@ impl Runtime {
             Event::ReopenClosed => self.reopen_closed(),
             Event::ForkPane(payload) => {
                 let pane_id = payload.pane_id;
-                if matches!(payload.placement, crate::fork::ForkPlacement::Side)
-                    && let Err(refusal) = self.split_right_floor(&pane_id)
-                {
-                    self.set_error(refusal.event_code(), refusal.message(), false);
-                    return true;
-                }
                 if self.pane_move_holds_pane(&pane_id) {
                     self.set_error(
                         "pane.move_pending",
@@ -3708,6 +3702,14 @@ impl Runtime {
                         format!("Pane {pane_id} is already being forked"),
                         false,
                     );
+                    return true;
+                }
+                // A fork to the side splits the pane right, judged as Split
+                // right is (`pane_floor`).
+                if matches!(payload.placement, crate::fork::ForkPlacement::Side)
+                    && let Err(refusal) = self.split_right_floor(&pane_id)
+                {
+                    self.set_error(refusal.event_code(), refusal.message(), false);
                     return true;
                 }
                 // A choice the agent does not take is refused before any pane
