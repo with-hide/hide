@@ -38,11 +38,11 @@ const shown = () => deskShown(useUiStore.getState().deskRoom, 1);
 
 beforeEach(() => {
   useShellStore.setState({ rest, desk, agents: [], connection: "live", deskJobs: null });
-  useUiStore.setState({ screen: { kind: "desk" }, deskRoom: DESK_ROOM_CLOSED, deskReturn: null });
+  useUiStore.setState({ screen: { kind: "desk" }, deskRoom: DESK_ROOM_CLOSED, deskReturn: null, paneConversation: null });
   sent = [];
 });
 afterEach(() => {
-  useUiStore.setState({ deskRoom: DESK_ROOM_CLOSED });
+  useUiStore.setState({ deskRoom: DESK_ROOM_CLOSED, paneConversation: null });
 });
 const file = (path: string): DeskOpen => ({ kind: "file", device_id: "local", root: "/repo", path });
 
@@ -110,7 +110,7 @@ describe("what Desk opens on its own desk", () => {
     expect(shown()).toBe(true);
   });
 
-  it("starts the room closed the next time it is entered (B26), and ⌘J brings back the session it left for (B7)", () => {
+  it("starts the room closed the next time it is entered, while ⌘J toggles the pane it left for in place", () => {
     actions.openDeskSession("p-session");
     actions.deskOpen(mission);
     actions.deskTerminal();
@@ -118,13 +118,15 @@ describe("what Desk opens on its own desk", () => {
     useUiStore.getState().setScreen({ kind: "workspace" });
     expect(useUiStore.getState().deskRoom).toEqual(DESK_ROOM_CLOSED);
     expect(useUiStore.getState().deskReturn).toBe("p-session");
-    useShellStore.setState({ focusedPaneId: "p-session" });
+    // Pane conversation D-04/B10 replaces the old Desk round trip: the
+    // same chord switches this pane without reopening Desk's right side.
+    useShellStore.setState({ focusedPaneId: "p-session", agents: [{ pane_id: "p-session", thread_capability: "ready", thread_identity: "session-one" }] as never });
     actions.deskTerminal();
-    expect(useUiStore.getState().screen).toEqual({ kind: "desk" });
-    expect(useUiStore.getState().deskRoom.session).toBe("p-session");
-    // The round trip is spent: the pane no longer goes back to Desk with ⌘J (review m2).
-    expect(useUiStore.getState().deskReturn).toBeNull();
-    useUiStore.getState().setScreen({ kind: "workspace" });
+    expect(useUiStore.getState().screen).toEqual({ kind: "workspace" });
+    expect(useUiStore.getState().deskRoom).toEqual(DESK_ROOM_CLOSED);
+    expect(useUiStore.getState().paneConversation).toEqual({ paneId: "p-session", session: "session-one" });
+    actions.deskTerminal();
+    expect(useUiStore.getState().paneConversation).toBeNull();
     actions.openDesk();
     expect(useUiStore.getState().deskRoom).toEqual(DESK_ROOM_CLOSED);
   });
