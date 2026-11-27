@@ -5,6 +5,7 @@ import { closeCovering, installKeyboard, pressDeskRow } from "./keyboard";
 import type { AgentRow, DeskSection, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { workspaceKey } from "./viewLayout";
 
 vi.mock("./host", () => ({ hostKind: () => "electron", keySystem: () => "mac", hostBridge: () => null, browserBridge: () => null }));
 vi.mock("./viewFocus", () => ({
@@ -58,7 +59,6 @@ beforeEach(() => {
   vi.stubGlobal("HTMLInputElement", class {});
   vi.stubGlobal("HTMLTextAreaElement", class {});
   vi.stubGlobal("document", { ...events, visibilityState: "visible" });
-  // The sessions beside Desk are listed in the sidebar's rows, which ⌘E reopening reads.
   useShellStore.setState({ rest: null, desk: { settings: { enabled: true } } as unknown as DeskSection, agents: ["w1:p2", "w1:p3"].map((pane_id) => ({ pane_id })) as unknown as AgentRow[] });
   useUiStore.setState({ hint: null, cycle: null, overlay: "none", escapeLayers: [], workspaceDialog: null, pendingClose: null, pendingTrash: null, overviewOpen: false, screen: { kind: "desk" }, deskRoom: { ...DESK_ROOM_CLOSED, session: "w1:p2" } });
   remove = installKeyboard(actions);
@@ -107,71 +107,39 @@ describe("Desk with a session open beside it", () => {
   });
 });
 
-// Operator decision 2026-11-25: in Desk ⌘E is the work tab's right-lane toggle, the session panel being Desk's right side.
-describe("⌘E beside Desk", () => {
+// Operator decision 2026-11-27 (mission-109, replacing 2026-11-25's close and reopen of the session): ⌘E in Desk's room
+// opens and folds Desk's desk, as it opens and folds a work tab's right lane; the session beside Desk stays, and
+// Escape and `‹ 한눈에` close it.
+describe("⌘E in Desk's room", () => {
   const room = () => useUiStore.getState().deskRoom;
+  const layout = { root: { area: { id: "a2", active: "d1", displays: [{ id: "d1" }] } }, active_area: "a2", display_count: 1, limits: { areas: 6, depth: 3, displays: 32 } };
+  const withTabs = (count: number) => useShellStore.setState({ rest: { desk_view: { device_id: "mac", path: "hide:desk", layout: { ...layout, display_count: count }, opened: 0 } } as unknown as SnapshotRest });
 
-  it("closes the session panel, and the next ⌘E opens the same session again", () => {
+  it("opens Desk's desk with the keyboard in its area in front, folds it on the next ⌘E, and leaves the session beside Desk as it is", () => {
+    withTabs(1);
     emit("keydown", "KeyE", { metaKey: true });
-    expect(room().session).toBeNull();
+    expect([room().desk, room().session]).toEqual([true, "w1:p2"]);
+    expect(useUiStore.getState().viewFocusRequest).toEqual({ workspace: workspaceKey({ device_id: "mac", path: "hide:desk" }), areaId: "a2" });
     emit("keydown", "KeyE", { metaKey: true });
-    expect(room().session).toBe("w1:p2");
+    expect([room().desk, room().session]).toEqual([false, "w1:p2"]);
   });
 
-  it("opens the session a ✕ or Escape just closed, and the one pressed last", () => {
-    actions.deskCloseSession();
+  it("opens Desk's desk with no session beside Desk too, and nothing while the desk holds no tab", () => {
+    useUiStore.setState({ deskRoom: DESK_ROOM_CLOSED, viewFocusRequest: null });
+    withTabs(0);
     emit("keydown", "KeyE", { metaKey: true });
-    expect(room().session).toBe("w1:p2");
-    useUiStore.getState().setDeskRoom((now) => ({ ...now, session: "w1:p3" }));
+    expect([room().desk, useUiStore.getState().viewFocusRequest]).toEqual([false, null]);
+    withTabs(2);
     emit("keydown", "KeyE", { metaKey: true });
-    emit("keydown", "KeyE", { metaKey: true });
-    expect(room().session).toBe("w1:p3");
+    expect([room().desk, room().session]).toEqual([true, null]);
   });
 
-  it("gives the reopened session's input box the keyboard, as a work tab's ⌘E gives it to the pane", () => {
+  it("keeps the session beside Desk when the room is left and entered again, the desk folded", () => {
+    withTabs(1);
     emit("keydown", "KeyE", { metaKey: true });
-    const before = room().answer;
-    emit("keydown", "KeyE", { metaKey: true });
-    expect(room().session).toBe("w1:p2");
-    expect(room().answer).toBe(before + 1);
-  });
-
-  it("opens nothing when the session closed is gone, and forgets it", () => {
-    emit("keydown", "KeyE", { metaKey: true });
-    expect(room().closed).toBe("w1:p2");
-    useShellStore.setState({ agents: [] });
-    emit("keydown", "KeyE", { metaKey: true });
-    expect(room().session).toBeNull();
-    expect(room().closed).toBeNull();
-    // Nothing is left to open, and nothing pretends to be.
-    emit("keydown", "KeyE", { metaKey: true });
-    expect(room().session).toBeNull();
-  });
-
-  it("opens nothing when the session's agent ended and only its pane stays as a shell", () => {
-    emit("keydown", "KeyE", { metaKey: true });
-    // The pane is still listed in its tab, but no agent runs in it: an empty panel would open.
-    const rest = { navigator: { workspaces: [{ id: "w1", device_id: "mac", checkouts: [{ path: "/repo", tabs: [{ panes: [{ id: "w1:p2" }] }] }] }] } } as unknown as SnapshotRest;
-    useShellStore.setState({ rest, agents: [] });
-    emit("keydown", "KeyE", { metaKey: true });
-    expect(room().session).toBeNull();
-    expect(room().closed).toBeNull();
-  });
-
-  it("does nothing after leaving Desk's room and coming back", () => {
-    emit("keydown", "KeyE", { metaKey: true });
-    expect(room().closed).toBe("w1:p2");
     useUiStore.setState({ screen: { kind: "main" } });
     useUiStore.setState({ screen: { kind: "desk" } });
-    emit("keydown", "KeyE", { metaKey: true });
-    expect(room().session).toBeNull();
-  });
-
-  it("does nothing while no session was closed during this visit of the room", () => {
-    useUiStore.setState({ deskRoom: DESK_ROOM_CLOSED });
-    emit("keydown", "KeyE", { metaKey: true });
-    expect(room().session).toBeNull();
-    expect(room().closed).toBeNull();
+    expect([room().session, room().desk]).toEqual(["w1:p2", false]);
   });
 });
 

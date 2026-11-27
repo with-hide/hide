@@ -42,6 +42,7 @@ fn env(dir: &Path, tailscale: &Path) -> Env {
         peer_direct: None,
         peer_relay: None,
         peer_relay_only: false,
+        screen_net_hosts: Default::default(),
         search_path: None,
         install: None,
         access: None,

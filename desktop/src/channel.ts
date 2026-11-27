@@ -177,3 +177,24 @@ export const REMOTE_VISIBLE_CHANNEL = "hide-remote:visible";
 export const REMOTE_VIEWER_CHANNEL = "hide-remote:viewer";
 export const REMOTE_WORK_CHANNEL = "hide-remote:work";
 export const REMOTE_WORK_DONE_CHANNEL = "hide-remote:work-done";
+
+/**
+ * The browser displays of that screen (docs/BROWSER_DISPLAYS.md, A page in
+ * another computer's screen): the same five calls this window's shell makes
+ * of its own pages (`BROWSER_*_CHANNEL`), on names of their own, so the
+ * screen's page reaches only the pages it placed, and the main process
+ * answers each only from that screen's top frame (`RemoteScreens.screenOf`).
+ */
+export const REMOTE_BROWSER_SYNC_CHANNEL = "hide-remote:browser-sync";
+export const REMOTE_BROWSER_CAPTURE_CHANNEL = "hide-remote:browser-capture";
+export const REMOTE_BROWSER_COMMAND_CHANNEL = "hide-remote:browser-command";
+export const REMOTE_BROWSER_EVENT_CHANNEL = "hide-remote:browser-event";
+export const REMOTE_BROWSER_CYCLE_END_CHANNEL = "hide-remote:browser-cycle-end";
+
+/**
+ * The machines this window's operator has paired with, each by its device
+ * and the key it was paired under, as the shell's snapshot lists them
+ * (renderer -> main): the login storage of a screen's pages lives while its
+ * pair does and is cleared once the pair leaves the list.
+ */
+export const REMOTE_PAIRED_CHANNEL = "hide:remote-paired";

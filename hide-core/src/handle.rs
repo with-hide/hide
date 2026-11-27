@@ -731,14 +731,32 @@ impl Core {
         }))
     }
 
+    /// Dispatches an event that is no screen's choice: the daemon's own, a
+    /// tool's, or a client's that moves no part of the operator's look.
+    /// Whatever it moves of the look stays on the screen the look was chosen
+    /// on.
     pub fn dispatch_bytes(&self, bytes: &[u8]) -> bool {
+        self.dispatch_bytes_on(bytes, None)
+    }
+
+    /// Dispatches a window's or a view's event sent from `screen`, which is
+    /// where whatever it chooses of the operator's look is chosen
+    /// (`docs/status-model.md`, Hide owns the read axis).
+    pub fn dispatch_bytes_from(&self, bytes: &[u8], screen: crate::LookScreen) -> bool {
+        self.dispatch_bytes_on(bytes, Some(screen))
+    }
+
+    fn dispatch_bytes_on(&self, bytes: &[u8], screen: Option<crate::LookScreen>) -> bool {
         if !check_owner_thread(self, "dispatch") {
             notify_change(self);
             return false;
         }
         let (changed, retired_syncs) = {
             let mut runtime = lock_recover(&self.runtime);
-            let changed = runtime.dispatch_json(bytes);
+            let changed = match screen {
+                Some(screen) => runtime.dispatch_json_from(bytes, screen),
+                None => runtime.dispatch_json(bytes),
+            };
             (changed, runtime.take_retired_remote_syncs())
         };
         drop(retired_syncs);
@@ -857,10 +875,22 @@ impl Core {
     /// One change under one short lock; the book is saved by its own thread
     /// and the screens are told when the section moved.
     pub fn automation(&self, call: crate::automations::Call) -> Result<serde_json::Value, String> {
+        self.automation_from(call, None)
+    }
+
+    /// The automation screen's call sent from `screen`, where whatever it
+    /// chooses of the operator's look is chosen (`Runtime::on_screen`); none
+    /// for a tool's or a phone's.
+    pub fn automation_from(
+        &self,
+        call: crate::automations::Call,
+        screen: Option<crate::LookScreen>,
+    ) -> Result<serde_json::Value, String> {
         if !check_owner_thread(self, "automation.call") {
             return Err("automations_unavailable".into());
         }
-        let (answer, changed) = lock_recover(&self.runtime).automation_call(call);
+        let (answer, changed) =
+            lock_recover(&self.runtime).on_screen(screen, |runtime| runtime.automation_call(call));
         if changed {
             notify_change(self);
         }

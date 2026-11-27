@@ -248,9 +248,22 @@ pub(super) struct LanePayload {
     view_width: Option<u32>,
     #[serde(default)]
     session_width: Option<u32>,
-    /// 한눈에 folded (`⟩`) or unfolded.
+    /// 한눈에 folded (`▯|`) or unfolded.
     #[serde(default)]
     glance_folded: Option<bool>,
+    /// The tab 한눈에 shows.
+    #[serde(default)]
+    glance_tab: Option<crate::model::GlanceTab>,
+    /// One of 한눈에's session groups folded or unfolded from its head.
+    #[serde(default)]
+    glance_group: Option<GlanceGroupPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct GlanceGroupPayload {
+    group: crate::model::GlanceGroup,
+    folded: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -499,9 +512,9 @@ impl Runtime {
         changed || sent
     }
 
-    /// The widths the operator dragged Desk's panels to (B22, B23), and
-    /// whether 한눈에 is folded. One that names nothing, or a width outside
-    /// what the core keeps, is refused.
+    /// The widths the operator dragged Desk's panels to (B22, B23), whether
+    /// 한눈에 is folded, its tab and its session groups' folds. One that
+    /// names nothing, or a width outside what the core keeps, is refused.
     fn desk_lane(&mut self, payload: LanePayload) -> bool {
         let valid = |width: Option<u32>| {
             width.is_none_or(|width| (1..=crate::model::DESK_LANE_WIDTH_MAX).contains(&width))
@@ -509,6 +522,8 @@ impl Runtime {
         if payload.view_width.is_none()
             && payload.session_width.is_none()
             && payload.glance_folded.is_none()
+            && payload.glance_tab.is_none()
+            && payload.glance_group.is_none()
             || !valid(payload.view_width)
             || !valid(payload.session_width)
         {
@@ -519,6 +534,10 @@ impl Runtime {
         lane.view_width = payload.view_width.or(lane.view_width);
         lane.session_width = payload.session_width.or(lane.session_width);
         lane.glance_folded = payload.glance_folded.unwrap_or(lane.glance_folded);
+        lane.glance_tab = payload.glance_tab.unwrap_or(lane.glance_tab);
+        if let Some(GlanceGroupPayload { group, folded }) = payload.glance_group {
+            lane.glance_groups.set(group, folded);
+        }
         *lane != before
     }
 
@@ -4188,6 +4207,71 @@ mod tests {
             json!({"glance_folded": false})
         ));
         assert!(!lane(&runtime).glance_folded);
+    }
+
+    /// Operator decision 2026-11-27 (plan B): 한눈에's tab and its session
+    /// groups' folds are the core's, kept with the widths, the same in every
+    /// window and after a restart; 끝남 starts folded.
+    #[test]
+    fn glances_tab_and_group_folds_are_kept_with_the_lane_and_survive_a_restart() {
+        use crate::model::{GlanceFolds, GlanceTab};
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _) = runtime(root.path());
+        assert_eq!(
+            lane(&runtime).glance_groups,
+            GlanceFolds {
+                turn: false,
+                working: false,
+                ended: true
+            },
+            "끝남 starts folded"
+        );
+        assert!(event(
+            &mut runtime,
+            "desk_lane",
+            json!({"glance_tab": "files"})
+        ));
+        assert!(event(
+            &mut runtime,
+            "desk_lane",
+            json!({"glance_group": {"group": "ended", "folded": false}})
+        ));
+        assert!(event(
+            &mut runtime,
+            "desk_lane",
+            json!({"glance_group": {"group": "turn", "folded": true}})
+        ));
+        assert!(!event(
+            &mut runtime,
+            "desk_lane",
+            json!({"glance_group": {"group": "turn", "folded": true}})
+        ));
+        let kept = crate::model::DeskLane {
+            glance_tab: GlanceTab::Files,
+            glance_groups: GlanceFolds {
+                turn: true,
+                working: false,
+                ended: false,
+            },
+            ..Default::default()
+        };
+        assert_eq!(lane(&runtime), kept);
+        let read =
+            crate::desk::decode_for_test(&crate::desk::encode_for_test(&runtime.desk.stored))
+                .unwrap();
+        assert_eq!(read.lane, kept, "a restart keeps the tab and the folds");
+        // A tab or group this build does not know, or a fold with no side, is no event.
+        for payload in [
+            json!({"glance_tab": "threads"}),
+            json!({"glance_group": {"group": "later", "folded": true}}),
+            json!({"glance_group": {"group": "turn"}}),
+        ] {
+            assert!(
+                DeskEvent::decode("desk_lane", payload.clone()).is_none(),
+                "{payload}"
+            );
+        }
+        assert_eq!(lane(&runtime), kept);
     }
 
     #[test]

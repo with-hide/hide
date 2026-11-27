@@ -13,7 +13,9 @@ import type { CycleItem } from "./recent";
 import type { NumberedFamily } from "./shortcuts";
 import type { ViewFocusRequest, ViewWorkspace } from "./viewLayout";
 import type { KeyboardOwner } from "./viewFocus";
-import { DESK_ROOM_CLOSED, type DeskRoomWindow } from "./deskRoom";
+import { DESK_ROOM_CLOSED, leaveRoom, type DeskRoomWindow } from "./deskRoom";
+import { keepSessionDraft, NO_SESSION_DRAFTS, sendSessionDraft, sessionDraftsLeft, sessionDraftTakes, settleSessionSend, type SessionDrafts } from "./sessionDrafts";
+import type { RemoteStatus } from "./snapshot";
 import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
 import { NO_CALLS_SEEN, NO_DRAWN_PAGES, type CallsSeen, type DrawnPages, type LaneMode, type LaneSide, type LaneView } from "./workspace";
@@ -315,7 +317,10 @@ type UiStore = {
   /**
    * The paired machine whose own Hide screen this window shows in place of
    * its sidebar and center (PRD device-connect-iroh B17), by its id; null
-   * while this window shows its own. The window's choice, kept by no core.
+   * while this window shows its own. The window's choice, kept by no core;
+   * it is changed through `actions.showScreen`, which tells the daemon
+   * which screen this window shows (`windowScreen.ts`), never by its setter
+   * alone.
    */
   remoteScreen: string | null;
   setRemoteScreen: (device: string | null) => void;
@@ -324,7 +329,17 @@ type UiStore = {
   setSharing: (sharing: boolean) => void;
   deskDraft: DeskDraft;
   setDeskDraft: (draft: DeskDraft) => void;
-  /** Desk's room in this window: the session open beside Desk and Desk's desk (`deskRoom.ts`); closed each time the room is left (PRD desk-2-ui B26). */
+  /** What each session's input beside Desk holds, kept across opening another session and leaving Desk (`sessionDrafts.ts`). */
+  sessionDrafts: SessionDrafts;
+  /** Keeps `pane`'s words unless the edit makes them longer past one send (`sessionDraftTakes`); false when it did not take them. */
+  setSessionDraft: (pane: string, device: string | null, text: string) => boolean;
+  /** `pane`'s box sent its words as `request`; they wait beside the draft for the pane's answer (`sessionDraftSends.ts`). */
+  sendSessionDraft: (pane: string, device: string | null, request: string, words: string) => void;
+  /** The pane answered `request`: taken, its words go; refused, they come back to its box. */
+  settleSessionSend: (request: string, taken: boolean) => void;
+  /** Lets go of the drafts whose pane its machine says is gone (`sessionDraftsLeft`). */
+  keepSessionDraftsOf: (local: readonly { pane_id: string }[], remote: readonly RemoteStatus[] | undefined) => void;
+  /** Desk's room in this window: the session open beside Desk and Desk's desk (`deskRoom.ts`); its desk folds each time the room is left (PRD desk-2-ui B26), the session staying (`leaveRoom`). */
   deskRoom: DeskRoomWindow;
   setDeskRoom: (change: (room: DeskRoomWindow) => DeskRoomWindow) => void;
   /** One pane's conversation choice and bounded thread cache, kept only in this window. */
@@ -587,6 +602,23 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setSharing: (sharing) => set({ sharing }),
   deskDraft: { text: "", mentions: [] },
   setDeskDraft: (deskDraft) => set({ deskDraft }),
+  sessionDrafts: NO_SESSION_DRAFTS,
+  setSessionDraft: (pane, device, text) => {
+    if (!sessionDraftTakes(get().sessionDrafts, pane, text)) return false;
+    set((state) => ({ sessionDrafts: keepSessionDraft(state.sessionDrafts, pane, device, text) }));
+    return true;
+  },
+  sendSessionDraft: (pane, device, request, words) => set((state) => ({ sessionDrafts: sendSessionDraft(state.sessionDrafts, pane, device, request, words) })),
+  settleSessionSend: (request, taken) => {
+    const drafts = get().sessionDrafts;
+    const next = settleSessionSend(drafts, request, taken);
+    if (next !== drafts) set({ sessionDrafts: next });
+  },
+  keepSessionDraftsOf: (local, remote) => {
+    const drafts = get().sessionDrafts;
+    const left = sessionDraftsLeft(drafts, local, remote);
+    if (left !== drafts) set({ sessionDrafts: left });
+  },
   deskRoom: DESK_ROOM_CLOSED,
   setDeskRoom: (change) => set((state) => ({ deskRoom: change(state.deskRoom) })),
   paneConversation: null,
@@ -779,13 +811,15 @@ export const useUiStore = create<UiStore>((set, get) => ({
   },
 }));
 
-// Desk's room is this window's and closes whenever the screen leaves Desk
-// (PRD desk-2-ui B26), whichever way the screen moved: a setter, a restore or
-// a direct `setState`. Coming back to Desk, by ⌘J or any other way, spends
+// Desk's room is this window's and folds its desk whenever the screen leaves
+// Desk (PRD desk-2-ui B26), whichever way the screen moved: a setter, a
+// restore or a direct `setState`; the session beside Desk stays for the
+// return (`leaveRoom`). Coming back to Desk, by ⌘J or any other way, spends
 // the pane `터미널 ⌘J` left for: its `Desk로` and ⌘J are one round trip (B7).
 useUiStore.subscribe((state, previous) => {
-  if (previous.screen?.kind === "desk" && state.screen?.kind !== "desk" && state.deskRoom !== DESK_ROOM_CLOSED) {
-    useUiStore.setState({ deskRoom: DESK_ROOM_CLOSED });
+  if (previous.screen?.kind === "desk" && state.screen?.kind !== "desk") {
+    const left = leaveRoom(state.deskRoom);
+    if (left !== state.deskRoom) useUiStore.setState({ deskRoom: left });
   }
   if (previous.screen?.kind !== "desk" && state.screen?.kind === "desk" && state.deskReturn !== null) {
     useUiStore.setState({ deskReturn: null });

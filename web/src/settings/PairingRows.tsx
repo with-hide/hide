@@ -228,6 +228,7 @@ export function PeerRow({ peer, request, actions, own, onRemove, onDetails, onRe
   const direct = peer.path === "local" ? "wsl" : "ssh";
   const signedOut = !peer.connected && switching.look?.state === "read" && switching.look.condition.kind === "signed_out";
   const act = (verb: "pause" | "resume" | "retry", direction?: Direction) => actions.pairing(verb, direction ? { device: named, direction } : { device: named });
+  const tip = relayTip(peer);
   const ask = () => {
     if (request) actions.pairing("dismiss_request", { device: named });
     actions.pairing("request", { device: named });
@@ -257,7 +258,19 @@ export function PeerRow({ peer, request, actions, own, onRemove, onDetails, onRe
           {system ? <span className="text-caption text-muted-foreground" data-peer-system={device}>{system}</span> : null}
           {state.reason ? <Note tone="warn" data-peer-reason={device}>{t(state.reason)}</Note> : null}
           {signedOut ? <Note tone="warn" data-device-reason={device}>{t("devices.ways.loginReconnects", { device: peer.name })}</Note> : null}
-          {relayTip(peer) ? <Note data-peer-relay-tip={device}>{t("devices.relayTip")}</Note> : null}
+          {tip ? (
+            <Note data-peer-relay-tip={device} data-peer-ssh-blocked={peer.ssh?.blocked}>
+              {t(tip.key, { name: peer.name })}
+              {tip.retry && own ? (
+                <>
+                  {" "}
+                  <Button variant="text" size="inline" data-peer-ssh-retry={device} onClick={() => act("retry")}>
+                    {t("pairing.action.retry")}
+                  </Button>
+                </>
+              ) : null}
+            </Note>
+          ) : null}
           {asked ? <Note tone={request?.state === "waiting" ? "pending" : "warn"} data-peer-request={request?.state}>{t(asked)}</Note> : null}
           <DeviceNotCarriedLine deviceId={device} />
         </span>

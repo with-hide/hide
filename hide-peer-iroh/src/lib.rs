@@ -262,6 +262,11 @@ fn to_endpoint_addr(to: &PeerAddr) -> Result<EndpointAddr, TransportError> {
         .map_err(|error| unreachable(format!("not a key iroh can dial: {error}")))?;
     let mut addrs = Vec::with_capacity(to.candidates.len());
     for candidate in &to.candidates {
+        // An SSH alias is this machine's carrier's (`hide_peer::pipe`), not
+        // an address of the endpoint's.
+        if matches!(candidate, Candidate::Ssh(_)) {
+            continue;
+        }
         addrs.push(match candidate {
             Candidate::Ip(address) => TransportAddr::Ip(*address),
             Candidate::Relay(url) => TransportAddr::Relay(
@@ -275,6 +280,7 @@ fn to_endpoint_addr(to: &PeerAddr) -> Result<EndpointAddr, TransportError> {
                     "a WSL distribution is reached through wsl.exe".to_owned(),
                 ));
             }
+            Candidate::Ssh(_) => unreachable!("skipped above"),
         });
     }
     Ok(EndpointAddr::from_parts(id, addrs))
@@ -447,6 +453,16 @@ impl PeerConn for IrohConn {
         kind_of(selected.as_ref())
     }
 
+    /// The path of the address iroh selected; none before it selected one,
+    /// where [`PeerConn::path`] reads direct.
+    fn chosen_path(&self) -> Option<PathKind> {
+        self.conn
+            .paths()
+            .iter()
+            .find(|path| path.is_selected())
+            .map(|path| kind_of(Some(&path.remote_addr().clone())))
+    }
+
     async fn path_changed(&self, from: PathKind) -> PathKind {
         // The first list is the paths now, so a change between two calls is
         // not missed.
@@ -615,6 +631,8 @@ mod tests {
             vec![
                 Candidate::Ip("192.168.0.9:4433".parse().unwrap()),
                 Candidate::Relay("https://relay.example./".into()),
+                // The SSH carrier's, never the endpoint's.
+                Candidate::Ssh("studio".into()),
             ],
         );
         let addr = to_endpoint_addr(&to).unwrap();

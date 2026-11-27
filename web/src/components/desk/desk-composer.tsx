@@ -1,5 +1,5 @@
 import { ArrowUpIcon, ChevronDownIcon, HandIcon, LoaderCircleIcon, PaperclipIcon, ShieldIcon, SquareIcon, XIcon, type LucideIcon } from "lucide-react";
-import { useRef, type ClipboardEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode, type Ref, type UIEvent } from "react";
 import { MAX_BATCH_BYTES, MAX_FILE_BYTES, MAX_FILES } from "../../attachments";
 import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskPermission, DeskSelection } from "../../desk";
 import { agentPickable, deskAgentWord } from "../../desk";
@@ -27,6 +27,13 @@ import { useFileDropOver } from "./file-drop";
 import { MentionInput, type MentionInputHandle } from "./mention-input";
 
 const MIB = MAX_FILE_BYTES / (1024 * 1024);
+
+/**
+ * The words' height in both composers, Desk's and a session's: two lines at
+ * rest, growing with the words up to about eight lines, then scrolling
+ * inside, so the files above and the bar under them stay in view.
+ */
+const TEXT_HEIGHT = "max-h-(--size-desk-composer-text-max) min-h-[calc(var(--text-body)*1.5*2+var(--spacing-xxs)*2)]";
 const BATCH_MIB = MAX_BATCH_BYTES / (1024 * 1024);
 
 function useByteSize(): (bytes: number) => string {
@@ -164,6 +171,10 @@ export function DeskComposer({ value, draft, inputRef, textRef, label, placehold
     event.preventDefault();
     tray.add([...event.clipboardData.files]);
   };
+  // Words scrolled past the box's top fade out there, so the line cut under the files reads as more above.
+  const [above, setAbove] = useState(false);
+  const scrolled = (event: UIEvent<HTMLElement>) => setAbove(event.currentTarget.scrollTop > 0);
+  const text = cn(TEXT_HEIGHT, above && "mask-t-from-75%");
   // A notice in the window's corner stands above the box, never over it.
   const box = useRef<HTMLDivElement>(null);
   useNoticeFloor(box);
@@ -177,14 +188,15 @@ export function DeskComposer({ value, draft, inputRef, textRef, label, placehold
             onPasteCapture={paste}
           >
             {files.length > 0 ? (
-              <ul className="flex min-w-0 flex-wrap gap-sm pt-xs pr-xs" data-desk-attachments={files.length}>
+              // The files stand on a row of their own, clear of the words under them; the space above keeps each `✕` inside the frame.
+              <ul className="flex min-w-0 flex-wrap gap-sm pt-xs pr-xs pb-sm" data-desk-attachments={files.length}>
                 {files.map((file) => <AttachmentTile key={file.id} name={file.name} size={file.size} preview={file.preview} state={file.state} read={file.read} onRemove={() => tray?.remove(file.id)} />)}
               </ul>
             ) : null}
             {draft ? (
-              <MentionInput ref={inputRef} draft={draft} label={label} placeholder={placeholder} autoFocus={focused} className="max-h-(--size-search-sheet-h) min-h-[calc(var(--text-body)*1.5*2+var(--spacing-xxs)*2)]" onChange={onChange} onCaret={onCaret} onKeyDown={keyDown} />
+              <MentionInput ref={inputRef} draft={draft} label={label} placeholder={placeholder} autoFocus={focused} className={text} onScroll={scrolled} onChange={onChange} onCaret={onCaret} onKeyDown={keyDown} />
             ) : (
-              <Textarea ref={textRef} bare rows={1} value={value} aria-label={label} onSelect={(event) => onCaret?.(event.currentTarget.selectionStart)} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-[calc(var(--text-body)*1.5*2+var(--spacing-xxs)*2)] py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value, event.target.selectionStart)} data-desk-composer-input="true" onKeyDown={keyDown} />
+              <Textarea ref={textRef} bare rows={1} value={value} aria-label={label} onSelect={(event) => onCaret?.(event.currentTarget.selectionStart)} placeholder={placeholder} className={cn("field-sizing-content overflow-y-auto py-xxs", text)} onScroll={scrolled} autoFocus={focused} onChange={(event) => onChange(event.target.value, event.target.selectionStart)} data-desk-composer-input="true" onKeyDown={keyDown} />
             )}
             <div className="flex min-w-0 items-center gap-xs">
               {tray ? (

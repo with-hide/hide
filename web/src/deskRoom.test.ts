@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closeSession, rightSide, DESK_ROOM_CLOSED, deskShown, followFrom, followMoved, hideDesk, namesView, newSessionBeside, openSession, outputNamed, panelPlace, roomWidths, showDesk, toggleExpanded, toggleExplorer, type DeskRoomWindow, type NewSessionFollow } from "./deskRoom";
+import { closeSession, rightSide, DESK_ROOM_CLOSED, deskOpener, deskShown, followFrom, followMoved, hideDesk, leaveRoom, namesView, newSessionBeside, openSession, outputNamed, panelPlace, roomWidths, showDesk, toggleExpanded, toggleExplorer, type DeskRoomWindow, type NewSessionFollow } from "./deskRoom";
 import type { DeskItem, DeskJob, DeskOutput } from "./snapshot";
 
 // Expected answers are PRD desk-2-ui D-05, D-15, B16-B26 and PRD
@@ -30,13 +30,21 @@ describe("Desk's room", () => {
   it("hides the desk alone on ✕, Escape or the dim, and keeps it with the session panel's ✕ (B13, B18)", () => {
     const room = toggleExpanded(showDesk(openSession(DESK_ROOM_CLOSED, "p1")));
     expect(hideDesk(room)).toEqual({ ...room, desk: false, expanded: false });
-    expect(closeSession(room)).toEqual({ ...room, session: null, closed: "p1" });
+    expect(closeSession(room)).toEqual({ ...room, session: null });
     expect(hideDesk(DESK_ROOM_CLOSED)).toBe(DESK_ROOM_CLOSED);
   });
 
-  it("keeps the session just closed when ✕ is pressed with none open", () => {
+  it("leaves the room as it is when ✕ is pressed with no session open", () => {
     const closed = closeSession(openSession(DESK_ROOM_CLOSED, "p1"));
     expect(closeSession(closed)).toBe(closed);
+  });
+
+  // Operator request 2026-11-27 (mission-109): ⌃⇥ away from Desk and back finds the session still beside Desk.
+  it("keeps the session beside Desk when the room is left, folding only the desk, its ⤢ and its Explorer", () => {
+    const room = toggleExplorer(toggleExpanded(showDesk(openSession(DESK_ROOM_CLOSED, "p1", { answer: true }))), 2);
+    expect(leaveRoom(room)).toEqual({ ...DESK_ROOM_CLOSED, session: "p1", answer: 1 });
+    const bare = openSession(DESK_ROOM_CLOSED, "p1");
+    expect(leaveRoom(bare)).toBe(bare);
   });
 
   it("draws the desk only while it shows and holds a tab or the Explorer's column, so its last tab closing closes it (B6)", () => {
@@ -239,13 +247,12 @@ describe("a session a Desk turn starts (frame J)", () => {
 
 // The review's S1: once a gone session runs again in another pane, the room itself is that pane, so every action of the panel reaches it.
 describe("the room after a gone session runs again", () => {
-  it("moves the open session and the one ⌘E reopens to the live pane, and keeps the desk", () => {
+  it("moves the open session to the live pane, and keeps the desk", () => {
     const moved = [{ pane_id: "w1:p9", live_pane_id: "w1:p20" }];
     const room: DeskRoomWindow = { ...DESK_ROOM_CLOSED, session: "w1:p9", desk: true, explorer: true, answer: 2 };
     expect(followMoved(room, moved)).toEqual({ ...room, session: "w1:p20" });
-    expect(followMoved({ ...DESK_ROOM_CLOSED, closed: "w1:p9" }, moved).closed).toBe("w1:p20");
     // Another pane, or no pair, leaves the very same room.
-    const other: DeskRoomWindow = { ...DESK_ROOM_CLOSED, session: "w1:p3", desk: true, closed: "w1:p4" };
+    const other: DeskRoomWindow = { ...DESK_ROOM_CLOSED, session: "w1:p3", desk: true };
     expect(followMoved(other, moved)).toBe(other);
     expect(followMoved(room, [])).toBe(room);
   });
@@ -257,5 +264,17 @@ describe("rightSide", () => {
     expect(rightSide(DESK_ROOM_CLOSED, false)).toBe("glance");
     expect(rightSide(closeSession(openSession(DESK_ROOM_CLOSED, "p1")), false)).toBe("glance");
     expect(rightSide(DESK_ROOM_CLOSED, true)).toBeNull();
+  });
+});
+
+describe("deskOpener", () => {
+  it("counts the desk's tabs while it is folded and holds some, and stands nowhere while it shows or is empty", () => {
+    const beside = openSession(DESK_ROOM_CLOSED, "p1");
+    expect(deskOpener(DESK_ROOM_CLOSED, 3)).toBe(3);
+    expect(deskOpener(beside, 1)).toBe(1);
+    expect(deskOpener(showDesk(beside), 2)).toBeNull();
+    expect(deskOpener(DESK_ROOM_CLOSED, 0)).toBeNull();
+    // A desk shown only for the Explorer's column holds no tab: nothing to open.
+    expect(deskOpener(toggleExplorer(beside, 0), 0)).toBeNull();
   });
 });

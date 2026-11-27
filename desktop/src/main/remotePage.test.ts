@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchPath, MAX_PROMPT, MAX_QUEUED_BYTES, MAX_SEND_BYTES, parseGo, parseShow, parseWorkResult, queueAllows, requestAllowed, socketAddress } from "./remotePage";
+import { fetchPath, MAX_PROMPT, MAX_QUEUED_BYTES, MAX_SEND_BYTES, parseGo, parsePaired, parseShow, parseWorkResult, queueAllows, requestAllowed, socketAddress } from "./remotePage";
 
 const KEY = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -110,5 +110,19 @@ describe("a page's answer for a start", () => {
     expect(parseWorkResult({ request: "r-1", outcome: "failed", code: 3 })).toBeUndefined();
     expect(parseWorkResult({ request: "x".repeat(129), outcome: "started" })).toBeUndefined();
     expect(parseWorkResult(null)).toBeUndefined();
+  });
+});
+
+describe("the paired set the shell names", () => {
+  it("is read with the core that holds it, and nothing is read from a set out of shape", () => {
+    const core = "14ad0319-60d7-5a7c-ae5a-f71550dc8a60";
+    expect(parsePaired({ core, pairs: [{ device: "mini", key: KEY }] })).toEqual({ core, pairs: new Set([`mini\u0000${KEY}`]) });
+    expect(parsePaired({ core, pairs: [] })).toEqual({ core, pairs: new Set() });
+    // The shape before the core was named, a set with no core, a bad row: nothing is cleared on them.
+    expect(parsePaired([{ device: "mini", key: KEY }])).toBeNull();
+    expect(parsePaired({ pairs: [] })).toBeNull();
+    expect(parsePaired({ core: "", pairs: [] })).toBeNull();
+    expect(parsePaired({ core, pairs: [{ device: "mini", key: "short" }] })).toBeNull();
+    expect(parsePaired({ core, pairs: Array.from({ length: 257 }, (_, n) => ({ device: `m${n}`, key: KEY })) })).toBeNull();
   });
 });

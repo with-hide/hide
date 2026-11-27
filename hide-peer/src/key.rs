@@ -59,6 +59,17 @@ fn random<const N: usize>() -> io::Result<[u8; N]> {
     Ok(bytes)
 }
 
+/// A connection's name (`Hello::dial`): random, never `0`, which names
+/// nothing.
+pub fn dial_name() -> io::Result<u64> {
+    loop {
+        let name = u64::from_be_bytes(random()?);
+        if name != 0 {
+            return Ok(name);
+        }
+    }
+}
+
 impl MachineKey {
     pub fn generate() -> io::Result<Self> {
         let secret = Zeroizing::new(random::<SECRET_BYTES>()?);

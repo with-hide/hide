@@ -255,6 +255,15 @@ pub fn next_action(code: &str) -> Option<&'static str> {
         "pane_open_unconfirmed" => {
             "Run hide ps to see whether the pane opened before you open another"
         }
+        "pane_too_narrow" => {
+            "Your pane is too narrow to split: each side would be under the narrowest pane an agent's input box reads in, so nothing was opened; ask the operator to widen it, or run the command in a pane of its own"
+        }
+        "pane_unmeasured" => {
+            "The panes of your tab are not drawn yet, so nothing was opened; run the same command again in a moment"
+        }
+        "pane_tab_busy" => {
+            "Your tab is still busy with the splits and moves ahead of this one, so nothing was opened; run the same command again in a moment"
+        }
         "shell_not_ready" => {
             "The pane opened but its shell did not take the command; type it with hide pane send <pane> <command> --enter"
         }
@@ -352,6 +361,9 @@ pub(crate) enum Step {
     /// A read another machine's core answers (`Runtime::core_pane_forward`).
     Core(Box<crate::core_calls::Forward>),
     Open {
+        /// The caller's pane as the core names it, whose tab's line the
+        /// split waits its turn in (`runtime::BesideTurn`).
+        pane: String,
         caller: String,
         cwd: String,
         command: String,
@@ -488,11 +500,15 @@ impl Prepared {
                 }
             }
             Step::Open {
+                pane,
                 caller,
                 cwd,
                 command,
                 focus,
             } => {
+                let turn = crate::runtime::BesideTurn::take(&runtime, &pane)
+                    .map_err(|refusal| refusal.code("pane_"))?;
+                turn.confirm().map_err(|refusal| refusal.code("pane_"))?;
                 let raw = engine
                     .split_beside(wait, &caller, Some(&cwd), Default::default())
                     .map_err(|error| {
@@ -503,6 +519,9 @@ impl Prepared {
                         };
                         failed("open", &caller, &error, unknown)
                     })?;
+                // Drawn and holding the tab's line until the engine's layout
+                // lists it, in the step that lets the turn go.
+                turn.finish(Some((pane.as_str(), raw.as_str())));
                 crate::diagnostic!(
                     json!({"component":"pane_command","kind":"pane_command.opened",
                     "pane_id":caller,"created":raw,"focus":focus})
@@ -956,6 +975,9 @@ mod tests {
             "target_ambiguous",
             "pane_required",
             "pane_open_unconfirmed",
+            "pane_too_narrow",
+            "pane_unmeasured",
+            "pane_tab_busy",
             "shell_not_ready",
             "nothing_to_send",
             "text_invalid",

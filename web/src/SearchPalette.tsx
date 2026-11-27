@@ -29,6 +29,8 @@ import { keyboardOwner } from "./viewFocus";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { ToolMark } from "./components/tool-mark";
+import { markOf } from "./guestWork";
+import { usePeerRows } from "./GuestWorkRows";
 
 // ⌘K (PRD cmdk-navigation): a palette that goes to things. A query finds an
 // agent, project, checkout, device, issue or pull request by name or #number;
@@ -68,6 +70,9 @@ export function SearchPalette({ actions }: { actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const rest = useShellStore((s) => s.rest);
+  // Another computer's agents, as its rows in the lists show them, on this computer's own window only (D-50).
+  const peerNeedsYou = usePeerRows("needs_you");
+  const peerDone = usePeerRows("done");
   const linkSummaries = useShellStore((s) => s.linkSummaries);
   const workSearch = useShellStore((s) => s.sessionWorkSearch);
   const summaries = summariesEnabled(rest?.status?.background_ai);
@@ -109,7 +114,12 @@ export function SearchPalette({ actions }: { actions: Actions }) {
     return () => observer.disconnect();
   }, [box]);
 
-  const entries = useMemo(() => (rest ? [...searchEntries(rest, t), ...(front.desk ? missionEntries(rest) : [])] : []), [rest, t, front.desk]);
+  const entries = useMemo(() => {
+    if (!rest) return [];
+    // Desk's ⌘K opens a session beside Desk, which another computer's agent cannot be, so it lists none (docs/INSTALL.md, What each system supports).
+    const peers = front.desk ? [] : [...peerNeedsYou, ...peerDone];
+    return [...searchEntries(rest, t, peers), ...(front.desk ? missionEntries(rest) : [])];
+  }, [rest, peerNeedsYou, peerDone, t, front.desk]);
   const related = useMemo<Relations | null>(() => (front.target ? relationsOf(rest, front.target, t, true) : null), [rest, front, t]);
   const trimmed = query.trim();
   useEffect(() => { actions.searchSessionWork(trimmed); }, [actions, trimmed, summaries]);
@@ -169,6 +179,8 @@ export function SearchPalette({ actions }: { actions: Actions }) {
       case "device":
         return entry.deviceId ? actions.focusDevice(entry.deviceId) : undefined;
       case "agent":
+        // Another computer's agent opens on that computer's screen, as its row in the lists does.
+        if (entry.peer) return actions.openComputerAgent(entry.peer.deviceId, entry.peer.row.id);
         return entry.paneId ? actions.openAgent(entry.paneId) : undefined;
       case "project":
         return entry.deviceId && entry.workspaceId ? actions.openProjectById(entry.deviceId, entry.workspaceId) : undefined;
@@ -300,7 +312,7 @@ function EntryIcon({ entry }: { entry: SearchEntry }) {
   if (entry.kind === "agent" || entry.kind === "session") {
     return (
       <span className="flex w-(--size-agent-badge-compact) shrink-0 justify-center" aria-hidden="true">
-        {entry.agent ? <StatusMark mark={entry.agent.mark} human={entry.agent.human_turn !== undefined} className={markTone(entry.agent)} /> : null}
+        {entry.agent ? <StatusMark mark={entry.agent.mark} human={entry.agent.human_turn !== undefined} className={markTone(entry.agent)} /> : entry.peer ? <StatusMark mark={markOf(entry.peer.row.mark)} read={entry.peer.row.read === true} /> : null}
       </span>
     );
   }

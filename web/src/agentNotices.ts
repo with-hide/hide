@@ -8,8 +8,10 @@
 // operator has seen takes its notification back. A notice a machine this
 // computer may open handed over, because someone is here and no one is
 // there (PRD device-connect-iroh D-60), is worded the same way and a click
-// selects that machine's tile, as does the notice that a phone was paired
-// with such a machine (D-70). The app icon counts root agents in each
+// opens that agent on that machine's screen with its pane chosen, as pressing
+// its row does, or selects that machine's tile in a window that draws no
+// screen of it; the notice that a phone was paired with such a machine
+// selects that tile (D-70). The app icon counts root agents in each
 // notification group whose switch is on. A once automation whose run ended
 // is a Needs You line no agent row carries (mission-104 S-4), so this window
 // notifies it itself, once, when the line appears; a click opens that run.
@@ -40,6 +42,25 @@ function lookTag(look: AutomationLook): string {
 
 /** How hided tags a notice another machine handed over: `peer:<connection id>|<that machine's tag>`. */
 const PEER_TAG_PREFIX = "peer:";
+
+/**
+ * What a handed-over notice's tag names, the prefix taken off: the
+ * connection it came by and, for an agent's notice, whose tag is
+ * `<device id>|<pane id>` there, the pane that machine's core knows the agent
+ * by; a new phone of that machine (`phone|<name>`) names no pane. The click
+ * carries the tag alone, so the word `phone` tells the two apart: a device
+ * that runs an agent is named by its machine id, and only an SSH device not
+ * yet connected, which runs none, goes by an id its alias makes
+ * (docs/ARCHITECTURE.md, A machine has one id).
+ */
+export function peerNoticePane(tag: string): { key: string; pane: string | null } {
+  const bar = tag.indexOf("|");
+  if (bar < 0) return { key: tag, pane: null };
+  const theirs = tag.slice(bar + 1);
+  const at = theirs.indexOf("|");
+  const pane = at < 0 || theirs.startsWith("phone|") ? "" : theirs.slice(at + 1);
+  return { key: tag.slice(0, bar), pane: pane || null };
+}
 
 type Listener = (notice: AgentNotice) => void;
 const listeners = new Set<Listener>();
@@ -176,14 +197,17 @@ export function useAgentNotifications(actions: Actions) {
       const tag = id.slice(AGENT_NOTICE_PREFIX.length);
       if (tag.startsWith(LOOK_TAG_PREFIX)) {
         const [automation, run] = tag.slice(LOOK_TAG_PREFIX.length).split("|");
-        if (automation) actions.openAutomation(automation, run ? Number(run) : null);
+        if (automation) actions.showScreen(null, () => actions.openAutomation(automation, run ? Number(run) : null));
         return;
       }
-      // Another machine's work opens in that machine's tile, as pressing its row does (D-50).
+      // Another machine's agent opens on that machine's screen with its pane chosen, as pressing its row does (D-50, D-78);
+      // a new phone of it, or a window that cannot draw its screen, selects its tile.
       if (tag.startsWith(PEER_TAG_PREFIX)) {
-        const key = tag.slice(PEER_TAG_PREFIX.length, tag.indexOf("|"));
-        const machine = useShellStore.getState().rest?.navigator?.peers?.find((peer) => peer.key === key);
-        if (machine) actions.focusDevice(machine.device_id);
+        const handed = peerNoticePane(tag.slice(PEER_TAG_PREFIX.length));
+        const machine = useShellStore.getState().rest?.navigator?.peers?.find((peer) => peer.key === handed.key);
+        if (!machine) return;
+        if (handed.pane) actions.openComputerAgent(machine.device_id, handed.pane);
+        else actions.focusDevice(machine.device_id);
         return;
       }
       // The tag is `<device id>|<pane id>`; the pane id names the agent wherever it runs.
@@ -191,10 +215,13 @@ export function useAgentNotifications(actions: Actions) {
       if (!paneId) return;
       // A 볼 것 notice names the View, so it opens that View as the row's chip does; every other notice goes to the agent
       // (operator decision 2026-11-23). A row's notice is its newest, so the row's mark now says which one was clicked.
+      // It is this machine's work, so a window on another computer's screen shows its own again, told after the open.
       const state = useShellStore.getState();
       const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
-      if (agent?.mark === "look" && agent.look) actions.openLook(paneId, agent.look);
-      else actions.openListedAgent(paneId);
+      actions.showScreen(null, () => {
+        if (agent?.mark === "look" && agent.look) actions.openLook(paneId, agent.look);
+        else actions.openListedAgent(paneId);
+      });
     });
   }, [bridge, actions]);
 }

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use hide_peer_protocol::hello::GrantState;
 use hide_peer_protocol::pairing::ConfirmState;
-use hide_peer_protocol::{Candidate, PeerKey};
+use hide_peer_protocol::{Candidate, PeerAddr, PeerKey};
 use hide_platform::fs::{Access, atomic, private};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -554,6 +554,69 @@ pub struct Host {
     /// until the account has one (PRD device-connect-iroh B23).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started: Option<Login>,
+    /// How this machine reaches the host over SSH when no direct path opens:
+    /// an alias of this account's SSH configuration, recorded
+    /// only once a carrier over it proved the host's key, or `Off` once an
+    /// alias reached a Hide that proved another key. Absent, the alias of
+    /// [`Host::started`] is read ([`Host::ssh_alias`]). A field, not a
+    /// candidate, so a build before this one still reads the record (and
+    /// drops it on its next write).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<SshRoute>,
+}
+
+/// The SSH route of a host this machine is a guest of.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SshRoute {
+    /// Dialed through this alias when no direct path opens.
+    Alias(String),
+    /// Not dialed over SSH: the alias reached a Hide that proved another
+    /// key. The next `hide device add <alias>` records one again.
+    Off,
+}
+
+/// Whether `alias` is a name `ssh` reads as a destination and never as an
+/// option: what an alias is checked against wherever one is read or saved.
+pub fn valid_alias(alias: &str) -> bool {
+    !alias.is_empty()
+        && alias.len() <= 255
+        && !alias.starts_with('-')
+        && !alias
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+}
+
+impl Host {
+    /// The alias this machine dials the host by over SSH, when it has one:
+    /// the recorded route, else the login it was switched through, unless
+    /// the route was turned off. An alias that is not one `ssh` reads as a
+    /// destination is none.
+    pub fn ssh_alias(&self) -> Option<&str> {
+        let alias = match &self.ssh {
+            Some(SshRoute::Alias(alias)) => alias.as_str(),
+            Some(SshRoute::Off) => return None,
+            None => match &self.started {
+                Some(Login::Ssh(alias)) => alias.as_str(),
+                Some(Login::Wsl(_)) | None => return None,
+            },
+        };
+        valid_alias(alias).then_some(alias)
+    }
+
+    /// The address the keeper dials: the saved candidates, then the SSH
+    /// alias last, built in memory and never saved. A distribution of this
+    /// PC is reached through `wsl.exe` alone and takes no alias.
+    pub fn dial_addr(&self) -> PeerAddr {
+        let mut candidates = self.candidates.clone();
+        let distribution = candidates
+            .iter()
+            .any(|candidate| matches!(candidate, Candidate::Wsl(_)));
+        if !distribution && let Some(alias) = self.ssh_alias() {
+            candidates.push(Candidate::Ssh(alias.to_owned()));
+        }
+        PeerAddr::new(self.key, candidates)
+    }
 }
 
 /// An account on another machine as this one signs in to it without Hide.
@@ -683,6 +746,50 @@ impl Known {
             return Ok(false);
         }
         host.name = name.to_owned();
+        self.commit(next)?;
+        Ok(true)
+    }
+
+    /// Records `alias` as the SSH route of the host under `key`: only once a
+    /// carrier over it proved that host's key. Whether
+    /// anything changed.
+    pub fn record_ssh(&mut self, key: &PeerKey, alias: &str) -> Result<bool, StoreError> {
+        if !valid_alias(alias) {
+            return Err(StoreError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not an alias ssh reads as a destination",
+            )));
+        }
+        let mut next = self.record.clone();
+        let host = next
+            .hosts
+            .iter_mut()
+            .find(|host| host.key == *key)
+            .ok_or(StoreError::Unknown)?;
+        let route = Some(SshRoute::Alias(alias.to_owned()));
+        if host.ssh == route {
+            return Ok(false);
+        }
+        host.ssh = route;
+        self.commit(next)?;
+        Ok(true)
+    }
+
+    /// Turns the SSH route of the host under `key` off, when it is still
+    /// `alias`: the alias reached a Hide that proved another key. A route
+    /// that changed since the attempt that found it is left as it is, so an
+    /// attempt never writes over a newer alias. [`Host::started`] stays, so
+    /// a Hide this machine started there is still brought to its build.
+    /// Whether it was turned off.
+    pub fn refuse_ssh(&mut self, key: &PeerKey, alias: &str) -> Result<bool, StoreError> {
+        let mut next = self.record.clone();
+        let Some(host) = next.hosts.iter_mut().find(|host| host.key == *key) else {
+            return Ok(false);
+        };
+        if host.ssh_alias() != Some(alias) {
+            return Ok(false);
+        }
+        host.ssh = Some(SshRoute::Off);
         self.commit(next)?;
         Ok(true)
     }
@@ -938,6 +1045,7 @@ mod tests {
             state: KnownState::Confirming,
             candidates: vec![Candidate::Relay("https://relay.example".into())],
             started: None,
+            ssh: None,
         };
         known.put(host.clone()).unwrap();
         known.set_state(&key(7), KnownState::Active).unwrap();
@@ -951,6 +1059,7 @@ mod tests {
         let started = Host {
             state: KnownState::Active,
             started: Some(Login::Ssh("studio".into())),
+            ssh: None,
             ..host.clone()
         };
         known.put(started.clone()).unwrap();
@@ -1001,6 +1110,7 @@ mod tests {
             state: KnownState::Active,
             candidates: Vec::new(),
             started: chosen_name.map(|_| Login::Ssh("mini".into())),
+            ssh: None,
         };
         known.put(host(key(7), None)).unwrap();
         known.put(host(key(8), Some("작업실 Mac mini"))).unwrap();
@@ -1039,6 +1149,7 @@ mod tests {
             state: KnownState::Active,
             candidates: Vec::new(),
             started,
+            ssh: None,
         };
         known
             .put(host(key(7), Some(Login::Wsl("Ubuntu".into()))))
@@ -1105,6 +1216,7 @@ mod tests {
             state: KnownState::Active,
             candidates: Vec::new(),
             started: None,
+            ssh: None,
         };
         known.put(host.clone()).unwrap();
         assert!(known.rename(&key(7), Some("회사 PC")).unwrap());
@@ -1121,5 +1233,89 @@ mod tests {
             (kept.name.as_str(), kept.shown_name(), kept.state),
             ("DESKTOP-7Q2", "회사 PC", KnownState::Active)
         );
+    }
+
+    fn kept(started: Option<Login>, ssh: Option<SshRoute>) -> Host {
+        Host {
+            key: key(9),
+            device: "studio".into(),
+            name: "Studio".into(),
+            chosen_name: None,
+            grant: "g9".into(),
+            state: KnownState::Active,
+            candidates: vec![Candidate::Relay("https://relay.example./".into())],
+            started,
+            ssh,
+        }
+    }
+
+    /// The alias a host is dialed by is kept in its record, a record written
+    /// before it reads without one, and the address the keeper dials names
+    /// it last, built in memory and never written.
+    #[test]
+    fn an_alias_field_is_kept_and_a_record_without_it_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known.json");
+        let mut known = Known::open(path.clone()).unwrap();
+        known.put(kept(None, None)).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("\"ssh\""), "{written}");
+        assert!(known.record_ssh(&key(9), "studio").unwrap());
+        assert!(!known.record_ssh(&key(9), "studio").unwrap(), "already so");
+        assert!(known.record_ssh(&key(9), "-oProxyCommand=x").is_err());
+        let read = Known::open(path.clone()).unwrap();
+        let host = read.of(&key(9)).unwrap();
+        assert_eq!(host.ssh_alias(), Some("studio"));
+        let to = host.dial_addr();
+        assert_eq!(to.candidates.last(), Some(&Candidate::Ssh("studio".into())));
+        // A record an older build wrote, with no route, reads.
+        let mut older: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        older["hosts"][0].as_object_mut().unwrap().remove("ssh");
+        std::fs::write(&path, older.to_string()).unwrap();
+        let read = Known::open(path).unwrap();
+        assert_eq!(read.of(&key(9)).unwrap().ssh, None);
+        // A distribution is reached through `wsl.exe` alone.
+        let mut distribution = kept(Some(Login::Ssh("studio".into())), None);
+        distribution.candidates = vec![Candidate::Wsl("Ubuntu".into())];
+        assert!(
+            !distribution
+                .dial_addr()
+                .candidates
+                .iter()
+                .any(|candidate| matches!(candidate, Candidate::Ssh(_)))
+        );
+    }
+
+    /// A route turned off gives no alias to dial and keeps the login a Hide
+    /// this machine started there is brought to its build through; it is
+    /// turned off only while it is still the alias the attempt dialed (R3).
+    #[test]
+    fn an_alias_refused_by_its_key_stays_off_and_leaves_the_started_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut known = Known::open(dir.path().join("known.json")).unwrap();
+        known
+            .put(kept(Some(Login::Ssh("studio".into())), None))
+            .unwrap();
+        assert_eq!(known.of(&key(9)).unwrap().ssh_alias(), Some("studio"));
+        assert!(
+            !known.refuse_ssh(&key(9), "another").unwrap(),
+            "a newer alias stays"
+        );
+        assert!(known.refuse_ssh(&key(9), "studio").unwrap());
+        let host = known.of(&key(9)).unwrap();
+        assert_eq!(host.ssh, Some(SshRoute::Off));
+        assert_eq!(host.ssh_alias(), None);
+        assert_eq!(host.started, Some(Login::Ssh("studio".into())));
+        assert!(
+            !host
+                .dial_addr()
+                .candidates
+                .iter()
+                .any(|candidate| matches!(candidate, Candidate::Ssh(_)))
+        );
+        // Recorded again by a later add, it is dialed again.
+        assert!(known.record_ssh(&key(9), "studio").unwrap());
+        assert_eq!(known.of(&key(9)).unwrap().ssh_alias(), Some("studio"));
     }
 }

@@ -17,9 +17,13 @@ import { sameDisplayPreferences, type DisplayPreferences } from "../../../web/sr
 import type { InterfaceLanguage } from "../../../web/src/i18n/locale";
 import { HAND_WITHIN_MS, type RemoteWorkResult } from "../../../web/src/remoteView";
 import { matchHost, type Command } from "../../../web/src/shortcuts";
-import { COMMAND_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_STATE_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
-import { toBounds } from "./browserSync";
+import { COMMAND_CHANNEL, REMOTE_BROWSER_CAPTURE_CHANNEL, REMOTE_BROWSER_COMMAND_CHANNEL, REMOTE_BROWSER_CYCLE_END_CHANNEL, REMOTE_BROWSER_SYNC_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_STATE_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
+import { PRESS_WITHIN_MS, toBounds } from "./browserSync";
+import type { BrowserRect } from "../../../web/src/host";
+import { isLocalNetworkHost } from "../../../web/src/loopbackHost";
+import type { BrowserViews, RemoteRoute, RemoteSource } from "./browser";
 import type { HostLog } from "./log";
+import { pairName, type RemoteEgress, type RemoteStorage } from "./remoteEgress";
 import { fetchPath, HIDDEN_CLOSE, MAX_SEND_BYTES, ofPage, pageAddress, pagePath, parseWorkResult, queueAllows, REMOTE_SCHEME, requestAllowed, socketAddress, type GoRequest, type ShowRequest } from "./remotePage";
 
 /** Registered before the app is ready, as Electron requires of a privileged scheme. */
@@ -56,6 +60,13 @@ type Screen = {
   name: string | null;
   /** This window's View menu choices, as the shell last said, which the page draws with. */
   display: DisplayPreferences | null;
+  /** Its tile in the window, in window points, as last shown. */
+  bounds: BrowserRect;
+  /** The browser displays its page places, drawn by this window (`BrowserViews`). */
+  source: RemoteSource;
+  /** When the operator last pressed in its view, and when it last handed an address to this computer's browser. */
+  pressedAt: number;
+  openedAt: number;
 };
 
 export type RemoteScreensDeps = {
@@ -70,6 +81,13 @@ export type RemoteScreensDeps = {
   log: HostLog;
   /** The clock an ask's wait is read on; `Date.now` unless a test sets it. */
   now?: () => number;
+  /** The pages of browser displays, which draw the displays a screen's page places. */
+  browsers?: () => BrowserViews | null;
+  /** Where a screen's pages send their requests, and their login storage. */
+  egress?: RemoteEgress;
+  storage?: RemoteStorage;
+  /** Hands a web address to this computer's default browser. */
+  openExternal?: (url: string) => void;
 };
 
 export class RemoteScreens {
@@ -118,6 +136,23 @@ export class RemoteScreens {
       this.deps.log.event("remote.work_result", { device: screen.device, outcome: result.outcome });
       this.toShell(screen.device, result);
     });
+    // The browser displays the screen's page places, as this window's shell places its own.
+    ipcMain.on(REMOTE_BROWSER_SYNC_CHANNEL, (event: IpcMainEvent, value: unknown) => {
+      const screen = this.screenOf(event);
+      if (screen) this.deps.browsers?.()?.remoteSync(screen.source, value);
+    });
+    ipcMain.handle(REMOTE_BROWSER_CAPTURE_CHANNEL, (event: IpcMainInvokeEvent, value: unknown) => {
+      const screen = this.screenOf(event);
+      return screen ? (this.deps.browsers?.()?.remoteCapture(screen.source, value) ?? null) : null;
+    });
+    ipcMain.on(REMOTE_BROWSER_COMMAND_CHANNEL, (event: IpcMainEvent, value: unknown, name: unknown) => {
+      const screen = this.screenOf(event);
+      if (screen) this.deps.browsers?.()?.remoteCommand(screen.source, value, name);
+    });
+    ipcMain.on(REMOTE_BROWSER_CYCLE_END_CHANNEL, (event: IpcMainEvent, cycleId: unknown) => {
+      const screen = this.screenOf(event);
+      if (screen) this.deps.browsers?.()?.remoteCycleEnd(screen.source, cycleId);
+    });
     ipcMain.handle(REMOTE_CLIPBOARD_CHANNEL, (event: IpcMainInvokeEvent, text: unknown) => {
       const screen = this.screenOf(event);
       // A screen writes the clipboard only while it shows and holds the keyboard, as a page in front would.
@@ -153,7 +188,8 @@ export class RemoteScreens {
       screen.display = request.display;
       this.tellViewer(screen);
     }
-    screen.view.setBounds(toBounds(request.rect, window.webContents.getZoomFactor()));
+    screen.bounds = toBounds(request.rect, window.webContents.getZoomFactor());
+    screen.view.setBounds(screen.bounds);
     screen.shownAt = ++this.clock;
     const shown = screen.visible;
     screen.visible = true;
@@ -170,6 +206,8 @@ export class RemoteScreens {
     }
     this.front = screen.device;
     this.trim(window);
+    // Its pages follow the tile, from its page's last sync.
+    if (screen.state === "shown") this.deps.browsers?.()?.remoteShown(screen.source);
   }
 
   /**
@@ -263,6 +301,20 @@ export class RemoteScreens {
     return true;
   }
 
+  /**
+   * The machines core `core` holds now, by `pairName`, as this window's
+   * shell names them: the login storage of every other one of that core's is
+   * cleared, with its pages, and its proxy is let go.
+   */
+  keepPaired(core: string, paired: ReadonlySet<string>): void {
+    for (const screen of this.screens.values()) {
+      if (paired.has(pairName(screen.device, screen.key))) continue;
+      this.deps.browsers?.()?.closeRemotePages(screen.device, screen.key);
+      this.deps.egress?.release(screen.device, screen.key);
+    }
+    this.deps.storage?.keep(core, paired);
+  }
+
   /** Every screen closes: the window went, or this computer's daemon is another one now. */
   closeAll(): void {
     const window = this.deps.window();
@@ -288,13 +340,91 @@ export class RemoteScreens {
     // The window's own color until the page paints, so a screen never flashes white.
     view.setBackgroundColor(this.deps.background);
     view.setVisible(false);
-    const screen: Screen = { device, key, view, socket: null, visible: true, state: "opening", shownAt: 0, name: null, display: null };
+    const screen: Screen = { device, key, view, socket: null, visible: true, state: "opening", shownAt: 0, name: null, display: null, bounds: { x: 0, y: 0, width: 0, height: 0 }, source: null as unknown as RemoteSource, pressedAt: 0, openedAt: 0 };
+    screen.source = this.sourceFor(screen);
     this.guard(screen);
     window.contentView.addChildView(view);
+    const browsers = this.deps.browsers?.();
+    browsers?.viewAdded();
+    browsers?.addRemote(screen.source);
     this.screens.set(device, screen);
     this.load(screen);
     this.deps.log.event("remote.view_created", { device, live: this.screens.size });
     return screen;
+  }
+
+  /** The screen as the browser displays its page places need it. */
+  private sourceFor(screen: Screen): RemoteSource {
+    const { device, key, view } = screen;
+    const contents = view.webContents;
+    return {
+      device,
+      key,
+      contents: () => (contents.isDestroyed() ? null : contents),
+      area: () => (screen.visible && screen.state === "shown" && !contents.isDestroyed() ? { bounds: screen.bounds, zoom: contents.getZoomFactor() } : null),
+      focused: () => !contents.isDestroyed() && contents.isFocused(),
+      ready: () => this.deps.egress?.ready(device, key) ?? false,
+      ensure: () => this.deps.egress?.ensure(device, key) ?? Promise.resolve("remote_update_here"),
+      partition: () => this.deps.egress?.partition(device, key) ?? null,
+      storage: () => {
+        const pairing = this.deps.egress?.pairing(device, key) ?? null;
+        if (!this.deps.storage) return "live";
+        return pairing === null ? "waiting" : this.deps.storage.admit(device, key, pairing);
+      },
+      route: (workspace, id, load) => this.route(device, key, workspace, id, load),
+    };
+  }
+
+  /**
+   * Where a display a screen's page placed loads from, as that computer's
+   * core answers through this computer's daemon (`/page-route`): an older
+   * daemon there answers 404, and its page says to update that computer.
+   */
+  private async route(device: string, key: string, workspace: string, id: string, load: number): Promise<RemoteRoute> {
+    const daemon = this.deps.daemon();
+    const at = workspace.indexOf("\u0000");
+    if (!daemon || at <= 0) return { refused: "not_connected" };
+    let answer: Response;
+    try {
+      answer = await fetch(`${daemon.origin}/peer-screen/${encodeURIComponent(device)}/page-route?key=${encodeURIComponent(key)}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${daemon.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ device: workspace.slice(0, at), checkout: workspace.slice(at + 1), view: id, load }),
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch {
+      return { refused: "not_connected" };
+    }
+    if (answer.status === 404) return { refused: "remote_update_there" };
+    const body: unknown = await answer.json().catch(() => null);
+    const fields = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+    if (!answer.ok) return { refused: typeof fields.reason === "string" && fields.reason.length <= 64 ? fields.reason : "not_connected" };
+    const { url, source_url, own } = fields;
+    if (typeof url !== "string" || typeof source_url !== "string" || fields.load !== load || typeof own !== "boolean" || url.length > 8192) return { refused: "remote_route_invalid" };
+    return { url, source_url, load, own };
+  }
+
+  /**
+   * An address the screen's page hands this computer's default browser (a
+   * page's Open in default browser, a help link): a public web address
+   * only, right after the operator pressed in the screen while it shows and
+   * holds the keyboard, and one a second. That computer's loopback and
+   * network are not this one's, so their addresses go nowhere here.
+   */
+  private openOutside(screen: Screen, url: string): void {
+    const now = this.deps.now?.() ?? Date.now();
+    const refuse = (reason: string) => this.deps.log.event("remote.window_refused", { device: screen.device, reason, scheme: url.split(":", 1)[0] ?? "" });
+    let address: URL;
+    try { address = new URL(url); } catch { return refuse("unparsable"); }
+    if (address.protocol !== "http:" && address.protocol !== "https:") return refuse("scheme");
+    if (isLocalNetworkHost(address.hostname)) return refuse("local_network");
+    const window = this.deps.window();
+    const contents = screen.view.webContents;
+    if (!screen.visible || screen.state !== "shown" || !window?.isFocused() || contents.isDestroyed() || !contents.isFocused()) return refuse("not_shown");
+    if (now - screen.pressedAt > PRESS_WITHIN_MS) return refuse("no_press");
+    if (now - screen.openedAt < PRESS_WITHIN_MS) return refuse("too_soon");
+    screen.openedAt = now;
+    this.deps.openExternal?.(address.href);
   }
 
   /** Loads the page, shown once it loaded while the shell still wants it; a failure stands aside for the stage's words. */
@@ -309,6 +439,7 @@ export class RemoteScreens {
         this.handWaiting(screen);
         if (!screen.visible) return;
         screen.view.setVisible(true);
+        this.deps.browsers?.()?.remoteShown(screen.source);
         const window = this.deps.window();
         if (window?.isFocused()) screen.view.webContents.focus();
       },
@@ -365,6 +496,7 @@ export class RemoteScreens {
     const screen = this.screens.get(device);
     if (!screen || screen.key !== key) return;
     screen.view.setVisible(false);
+    this.deps.browsers?.()?.remoteHidden(screen.source);
     this.closeSocket(screen, null);
     // An ask for a page that did not load goes with it: it is not made later, unseen.
     this.drop(device, reason);
@@ -384,21 +516,32 @@ export class RemoteScreens {
     contents.on("will-redirect", stay);
     contents.on("will-frame-navigate", (event) => stay(event, event.url));
     contents.on("will-attach-webview", (event) => event.preventDefault());
-    contents.setWindowOpenHandler(() => {
-      this.deps.log.event("remote.window_refused", { device });
+    // No window opens from the screen; a public address may go to this computer's default browser.
+    contents.setWindowOpenHandler(({ url }) => {
+      this.openOutside(screen, url);
       return { action: "deny" };
     });
+    contents.on("input-event", (_event, input) => {
+      if (input.type === "mouseDown" || input.type === "touchStart" || input.type === "gestureTapDown") screen.pressedAt = this.deps.now?.() ?? Date.now();
+    });
+    contents.on("focus", () => this.deps.browsers?.()?.viewFocused(contents));
     contents.on("did-fail-load", (_event, code, _description, _url, mainFrame) => {
       if (!mainFrame || code === -3) return; // -3: a load another load replaced
       if (screen.state !== "failed") this.failed(device, screen.key, "not_connected");
     });
     contents.on("render-process-gone", () => this.failed(device, screen.key, "page_gone"));
-    // A page loaded again knows none of the starts the one before it was following.
+    // A page loaded again knows none of the starts the one before it was
+    // following, and has placed none of its pages yet.
     contents.on("did-start-navigation", (details) => {
-      if (details.isMainFrame && !details.isSameDocument) this.forget(device, "reloaded");
+      if (!details.isMainFrame || details.isSameDocument) return;
+      this.forget(device, "reloaded");
+      this.deps.browsers?.()?.remoteReset(screen.source);
     });
     // ⌥⌘n chooses a computer tile, which is this window's rail, not the screen's (B47).
     contents.on("before-input-event", (event, input: Input) => {
+      if (input.type === "keyDown" && !input.isAutoRepeat && (input.key === "Enter" || input.key === " ")) screen.pressedAt = this.deps.now?.() ?? Date.now();
+      // A hold that started in one of its pages ends here as it would in the page.
+      this.deps.browsers?.()?.remoteInput(screen.source, event, input);
       if (input.type !== "keyDown" || input.isComposing) return;
       const command = matchHost({ code: input.code, metaKey: input.meta, altKey: input.alt, shiftKey: input.shift, ctrlKey: input.control }, this.deps.registry(), "electron");
       if (!command?.id.startsWith("select_device_")) return;
@@ -453,6 +596,7 @@ export class RemoteScreens {
     if (!screen.visible) return;
     screen.visible = false;
     screen.view.setVisible(false);
+    this.deps.browsers?.()?.remoteHidden(screen.source);
     screen.view.webContents.send(REMOTE_VISIBLE_CHANNEL, false);
     this.closeSocket(screen, { code: HIDDEN_CLOSE, reason: "hidden" });
   }
@@ -466,6 +610,9 @@ export class RemoteScreens {
     this.forget(screen.device, "closed");
     this.closeSocket(screen, null);
     this.screens.delete(screen.device);
+    // Its pages go with it, and the listener their proxy pointed at.
+    this.deps.browsers?.()?.removeRemote(screen.source);
+    this.deps.egress?.release(screen.device, screen.key);
     if (window && !window.isDestroyed()) window.contentView.removeChildView(screen.view);
     if (!screen.view.webContents.isDestroyed()) screen.view.webContents.close();
   }

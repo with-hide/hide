@@ -140,6 +140,37 @@ describe("which pages the keyboard follows", () => {
   });
 });
 
+// In another computer's screen a ⌘-click or Open in default browser on that
+// computer's loopback, LAN or local name would reach nothing: the showing
+// window's default browser opens only public addresses. Such a link opens
+// as a page in the Workspace in front, which reaches it through that
+// computer (docs/BROWSER_DISPLAYS.md, A page in another computer's screen).
+describe("a link of another computer's screen", () => {
+  it("opens that computer's local address as a page in front, and a public one in the default browser", () => {
+    const saved = useShellStore.getState();
+    const savedUi = useUiStore.getState();
+    const opened = vi.fn();
+    vi.stubGlobal("hideRemote", { bridge: 1, socket: {}, clipboardWrite: async () => true, onMenuCommand: () => {}, onVisible: () => {} });
+    vi.spyOn(window, "open").mockImplementation((...args) => { opened(...args); return null; });
+    try {
+      useShellStore.setState({ rest: { workspace_view: { device_id: "mini", path: "/web", layout: null } } as never });
+      useUiStore.setState({ screen: { kind: "workspace" } as never });
+      const sent: Parameters<DispatchFn>[0][] = [];
+      const actions = createActions((event) => { sent.push(event); return true; });
+      for (const url of ["http://localhost:5173/", "http://192.168.0.4:8080/", "http://printer.local/"]) actions.openLink(url, true);
+      expect(sent.filter((event) => event.kind === "browser_open").map((event) => (event.payload as { url: string; workspace: unknown }).url)).toEqual(["http://localhost:5173/", "http://192.168.0.4:8080/", "http://printer.local/"]);
+      expect(opened).not.toHaveBeenCalled();
+      actions.openLink("https://github.com/with-hide/hide", true);
+      expect(opened).toHaveBeenCalledExactlyOnceWith("https://github.com/with-hide/hide", "_blank", "noopener,noreferrer");
+    } finally {
+      useShellStore.setState(saved, true);
+      useUiStore.setState(savedUi, true);
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("Find while an agent answers its own search request", () => {
   it.each([false, true])("follows the answer only while the keyboard stays at its origin (moved: %s)", async (moved) => {
     const { act, createElement } = await import("react");
@@ -587,5 +618,106 @@ describe("a pane command pressed without pointing at a pane", () => {
 
   it.each<KeyboardOwner>([{ kind: "none" }, { kind: "pane", workspace: "c", paneId: "elsewhere" }])("acts on the core's focused pane with the keyboard on no pane of the tab on screen ($kind)", (owner) => {
     expect(pressed(owner)).toEqual([["toggle_zoom", "left"], ["create_pane", "/fixture/left"]]);
+  });
+});
+
+// The mirror of remote-look on this machine (docs/status-model.md, Hide owns the read axis): a look chosen here counts
+// only while a window of this machine shows its own screen, so the window tells which one it shows. The action that
+// changes it tells it after its own events, on the same socket, so the core never reads a look the action passes through.
+describe("which machine's screen this window shows", () => {
+  const mini = "mini-machine";
+  const live = (remoteScreen: string | null) => {
+    useShellStore.setState({
+      connection: "live",
+      rest: {
+        navigator: {
+          focused_device_id: "core",
+          devices: [{ id: "core", kind: "local" }, { id: "ssh-box", kind: "remote" }],
+          workspaces: [],
+          tools: [],
+          peers: [{ key: "k".repeat(64), device_id: mini, name: "mini", opens: "open" }],
+        },
+        status: { remote: [] },
+      } as never,
+    });
+    useUiStore.setState({ screen: { kind: "main" }, remoteScreen } as never);
+  };
+  const told = (sent: Parameters<DispatchFn>[0][]) => sent.map((event) => event.kind === "window_screen" ? `screen:${(event.payload as { screen: string }).screen}` : event.kind);
+  afterEach(() => {
+    window.hideHost = undefined;
+    useUiStore.setState({ remoteScreen: null });
+  });
+
+  it("brings the device a tile chose forward before it says this machine's screen shows again", () => {
+    live(mini);
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.noteWindowScreen();
+    actions.focusDevice("ssh-box");
+    expect(told(sent)).toEqual(["screen:computer", "focus_device", "screen:own"]);
+    expect(useUiStore.getState().remoteScreen).toBeNull();
+
+    // The device already in front sends no focus, and the screen is told once.
+    sent.length = 0;
+    actions.showScreen(mini);
+    actions.focusDevice("core");
+    actions.focusDevice("core");
+    expect(told(sent)).toEqual(["screen:computer", "screen:own"]);
+  });
+
+  it("says another computer's screen when its tile or its work shows it, and this machine's again from a tool's tile", () => {
+    live(null);
+    const go = vi.fn();
+    window.hideHost = { kind: "electron", platform: "darwin", remoteScreens: { show: vi.fn(), go, onState: () => () => {}, onWorkResult: () => () => {} } } as never;
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.noteWindowScreen();
+    actions.selectComputer(mini);
+    expect(useUiStore.getState().remoteScreen).toBe(mini);
+    actions.focusTool("tool-connection");
+    expect(actions.openComputerWork(mini, { op: "show", pane: "p" })).toBe("handed");
+    expect(go).toHaveBeenCalledOnce();
+    expect(told(sent)).toEqual(["screen:own", "screen:computer", "screen:own", "screen:computer"]);
+  });
+
+  it("tells after the action's own events, however the action ends", () => {
+    live(mini);
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.noteWindowScreen();
+    expect(() => actions.showScreen(null, () => {
+      actions.openAgent("w1:p1");
+      throw new Error("the open failed");
+    })).toThrow("the open failed");
+    expect(told(sent)).toEqual(["screen:computer", "focus_pane", "screen:own"]);
+  });
+
+  it("opens this machine's agent on this machine's own screen when it is asked for from another computer's", () => {
+    live(mini);
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.noteWindowScreen();
+    actions.openAgent("w1:p1");
+    expect(useUiStore.getState().remoteScreen).toBeNull();
+    actions.openAgent("w1:p1");
+    expect(told(sent)).toEqual(["screen:computer", "focus_pane", "screen:own", "focus_pane"]);
+  });
+
+  it("tells a new connection first, then only what changes, and nothing while none is live", () => {
+    live(mini);
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    // Before the connection's first report a change is the report's to tell.
+    actions.focusDevice("core");
+    expect(told(sent)).toEqual([]);
+    actions.showScreen(mini);
+    actions.noteWindowScreen();
+    actions.showScreen(mini);
+    useShellStore.setState({ connection: "connecting" } as never);
+    actions.noteWindowScreen();
+    useShellStore.setState({ connection: "live" } as never);
+    actions.showScreen(mini);
+    actions.noteWindowScreen();
+    expect(told(sent)).toEqual(["screen:computer", "screen:computer"]);
   });
 });

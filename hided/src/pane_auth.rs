@@ -1486,7 +1486,7 @@ fn answer_bootstrap(
             // The stream itself is what is asked for: once the answer is
             // written it carries a connection to this core, and its
             // admission from then on is the peer transport's (D-27).
-            (Some(operators), Ok(crate::pairing::Ask::Carry)) => {
+            (Some(operators), Ok(crate::pairing::Ask::Carry { over })) => {
                 let caller = match crate::access::in_a_pane(peer, request, engine, core) {
                     Ok(true) => crate::pairing::Caller::Pane,
                     Ok(false) => crate::pairing::Caller::Operator,
@@ -1504,11 +1504,21 @@ fn answer_bootstrap(
                     .block_on(operators.pairing.carrier(caller))
                 {
                     Ok(peers) => {
-                        let handed = writeln!(stream, "{}", json!({ "ok": true })).is_ok()
+                        // A carrier over SSH is answered with its word back:
+                        // what tells `carry --ssh` this build runs here.
+                        // One with none is a distribution's.
+                        let (answer, path) = match over {
+                            Some(crate::pairing::CarryOver::Ssh) => (
+                                json!({ "ok": true, "over": "ssh" }),
+                                hide_peer::protocol::PathKind::Ssh,
+                            ),
+                            None => (json!({ "ok": true }), hide_peer::protocol::PathKind::Local),
+                        };
+                        let handed = writeln!(stream, "{answer}").is_ok()
                             && stream.set_read_timeout(None).is_ok()
                             && stream.set_write_timeout(None).is_ok();
                         if handed {
-                            peers.transport().pipe().arrived(stream.into());
+                            peers.transport().pipe().arrived(stream.into(), path);
                         }
                         return;
                     }

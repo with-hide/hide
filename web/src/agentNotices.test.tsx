@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { createActions, type Actions } from "./actions";
-import { notificationBadgeCount, receiveAgentNotice, useAgentNotifications } from "./agentNotices";
+import { notificationBadgeCount, peerNoticePane, receiveAgentNotice, useAgentNotifications } from "./agentNotices";
 import type { AgentScope } from "./agentScope";
 import { clientI18n } from "./i18n/translator";
 import { useShellStore } from "./store";
@@ -146,7 +146,7 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
   expect(events.slice(beforeLook)).toEqual([{ schema_version: 2, kind: "pair_view", payload: { pane_id: "w1:p1", display_id: "v3", bring_forward: true } }]);
   await act(async () => useShellStore.setState({ agents: [] }));
 
-  // A notice another machine handed over is worded like this machine's own, and a click selects that machine's tile (PRD device-connect-iroh D-50, D-60).
+  // A notice another machine handed over is worded like this machine's own; a window that draws no screen of it selects that machine's tile on a click (PRD device-connect-iroh D-50, D-60).
   await act(async () => {
     useShellStore.setState({ rest: { ui_state: { desktop_notifications: true }, navigator: { devices: [], peers: [{ key: "ab12", device_id: "device-mini", name: "Mac mini" }] } } } as never);
   });
@@ -324,6 +324,99 @@ it("notifies a once automation's ended run once, takes it back when it is opened
     expect(useUiStore.getState().automations).toMatchObject({ selected: "db", run: 1 });
   } finally {
     await act(async () => root.unmount());
+    useShellStore.setState(saved, true);
+  }
+});
+
+// docs/status-model.md, Hide owns the read axis: a turn of this machine's agent that ended while the window showed
+// another computer's screen is news; a click on its notice is the way back, so the window shows this machine's screen
+// again and the daemon hears it after the open, which then reads the row.
+it("comes back to this machine's own screen when its agent's notice is clicked from another computer's", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  let open: ((id: string) => void) | null = null;
+  window.hideHost = {
+    kind: "electron", platform: "darwin", notify: vi.fn(), reportBadge: vi.fn(), onComputerUse: () => () => undefined,
+    onNotificationOpen: (listener: (id: string) => void) => ((open = listener), () => undefined),
+  } as never;
+  const sent: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { sent.push(event); return true; });
+  try {
+    await act(async () => {
+      useShellStore.setState({ connection: "live", agents: [], rest: { navigator: { devices: [], workspaces: [], peers: [] }, status: { remote: [] }, ui_state: {} } } as never);
+      useUiStore.setState({ screen: { kind: "workspace" }, remoteScreen: "mini" } as never);
+    });
+    actions.noteWindowScreen();
+    const root = createRoot(document.body.appendChild(document.createElement("div")));
+    await act(async () => root.render(<Probe actions={actions} />));
+    await act(async () => open!("agent:core|w1:p1"));
+    expect(useUiStore.getState().remoteScreen).toBeNull();
+    const kinds = sent.map((event) => event.kind === "window_screen" ? `screen:${(event.payload as { screen: string }).screen}` : event.kind);
+    expect(kinds.filter((kind) => kind.startsWith("screen:") || kind === "focus_pane")).toEqual(["screen:computer", "focus_pane", "screen:own"]);
+    await act(async () => root.unmount());
+  } finally {
+    useUiStore.setState({ remoteScreen: null });
+  }
+});
+
+it("reads which pane a handed-over notice names, and none for a new phone", () => {
+  expect(peerNoticePane("ab12|node|w1:p1")).toEqual({ key: "ab12", pane: "w1:p1" });
+  // The pane id is that machine's own address of it, whatever device of it runs the agent.
+  expect(peerNoticePane("ab12|ssh-box|remote:ssh-box:pane:w2:p3")).toEqual({ key: "ab12", pane: "remote:ssh-box:pane:w2:p3" });
+  expect(peerNoticePane("ab12|phone|Pixel")).toEqual({ key: "ab12", pane: null });
+  expect(peerNoticePane("ab12|node|")).toEqual({ key: "ab12", pane: null });
+  expect(peerNoticePane("ab12")).toEqual({ key: "ab12", pane: null });
+});
+
+it("opens another computer's agent from its notice on that computer's screen with the agent's pane chosen, and its tile where no screen of it can be drawn", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  let open: ((id: string) => void) | null = null;
+  const go = vi.fn();
+  const host = (remoteScreens: unknown) => ({
+    kind: "electron", platform: "darwin", notify: () => undefined, withdrawNotifications: () => undefined, reportBadge: () => undefined,
+    onNotificationOpen: (listener: (id: string) => void) => ((open = listener), () => (open = null)),
+    remoteScreens,
+  }) as never;
+  const key = "ab".repeat(32);
+  const rest = {
+    ui_state: { desktop_notifications: true },
+    navigator: {
+      devices: [{ id: "this-mac", kind: "local", label: "This Mac", state: "local", agent_scope: { raised: [] } }, { id: "mini", kind: "remote", label: "Mac mini", state: "ready", peer_key: key, agent_scope: { raised: [] } }],
+      peers: [{ key, device_id: "mini", name: "Mac mini", connected: true, opens: "active" }],
+    },
+  };
+  const events: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => (events.push(event), true));
+  const saved = useShellStore.getState();
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  try {
+    // The desktop app: the clicked agent's pane is handed to that computer's screen, which comes forward, and nothing moves here.
+    window.hideHost = host({ show: vi.fn(), go, onState: () => () => {}, onWorkResult: () => () => {} });
+    await act(async () => {
+      useShellStore.setState({ connection: "live", rest } as never);
+      useUiStore.setState({ remoteScreen: null });
+      root.render(<Probe actions={actions} />);
+    });
+    await act(async () => open?.(`agent:peer:${key}|node|w1:p2`));
+    expect(go.mock.calls).toEqual([[{ device: "mini", key, work: { op: "show", pane: "w1:p2" } }]]);
+    expect(useUiStore.getState().remoteScreen).toBe("mini");
+    expect(events.filter((event) => event.kind !== "desktop_notices")).toEqual([]);
+    // A new phone of that machine names no agent: its tile, as before.
+    await act(async () => open?.(`agent:peer:${key}|phone|Pixel`));
+    expect(go).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.kind === "focus_device")).toEqual([{ schema_version: 2, kind: "focus_device", payload: { device_id: "mini" } }]);
+    await act(async () => root.unmount());
+
+    // A window that cannot draw that computer's screen (a browser tab, an older desktop app): its tile, as before.
+    events.length = 0;
+    window.hideHost = host(undefined);
+    const again = createRoot(document.body.appendChild(document.createElement("div")));
+    await act(async () => again.render(<Probe actions={actions} />));
+    await act(async () => open?.(`agent:peer:${key}|node|w1:p2`));
+    expect(events.filter((event) => event.kind === "focus_device")).toEqual([{ schema_version: 2, kind: "focus_device", payload: { device_id: "mini" } }]);
+    expect(go).toHaveBeenCalledTimes(1);
+    await act(async () => again.unmount());
+  } finally {
+    useUiStore.setState({ remoteScreen: null });
     useShellStore.setState(saved, true);
   }
 });

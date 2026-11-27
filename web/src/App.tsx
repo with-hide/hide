@@ -11,6 +11,7 @@ import { pruneDrafts, settleDraft } from "./editor/draft";
 import { ConnectionBadge } from "./badge";
 import { configureFileBytes } from "./fileBytes";
 import { installKeyboard, observeRecent, reconcileHeldCycle } from "./keyboard";
+import { installWindowScreen } from "./windowScreen";
 import { noteOperatorPointer, observeInputRequests } from "./keyTarget";
 import { OverviewModal, OverviewPage } from "./Overview";
 import { AgentCloseNotice, ConfirmClose, ConfirmTrash, ConfirmViewsClose, CycleOverlay, NoticeToasts } from "./Overlays";
@@ -69,6 +70,7 @@ const noop: DispatchFn = () => {};
 
 export function App() {
   const dispatchRef = useRef<DispatchFn>(noop);
+  const socketOpenRef = useRef<() => boolean>(() => false);
   const actions: Actions = useMemo(() => createActions((event) => dispatchRef.current(event)), []);
   useUsageWindowHint(actions);
   useAgentNotifications(actions);
@@ -84,6 +86,7 @@ export function App() {
       rest: () => useShellStore.getState().rest,
       subscribe: (listener) => useShellStore.subscribe(listener),
       connected: () => useShellStore.getState().connection === "live",
+      open: () => socketOpenRef.current(),
       note: (message) => useShellStore.getState().noteDiagnostic(message),
     });
   }, [actions]);
@@ -99,12 +102,16 @@ export function App() {
       onCopy: (copy) => void takeProgramCopy(copy, { inFront: document.hasFocus(), shows: terminalShown }, actions.copyText, (message) => useShellStore.getState().noteDiagnostic(message)),
     });
     dispatchRef.current = session.dispatch;
+    socketOpenRef.current = session.open;
     configureFileBytes(session.dispatch);
     configureAutomationCalls(session.dispatch);
     configureAccessCalls(session.dispatch);
     configureGuestCloseCalls(session.dispatch);
     configurePlaceVisits(actions.placeVisit);
     const keyboard = installKeyboard(actions);
+    // Which machine's screen this window shows, told to each new connection;
+    // an action that changes it tells it after its own events.
+    const windowScreen = installWindowScreen(() => actions.noteWindowScreen());
     if (probeEnabled()) {
       installProbe(
         () => terminalFor(useShellStore.getState().focusedPaneId),
@@ -203,7 +210,9 @@ export function App() {
       unsubscribe();
       unsubscribeHeldPlaces();
       keyboard();
+      windowScreen();
       configurePlaceVisits(() => {});
+      socketOpenRef.current = () => false;
       session.close();
     };
   }, [actions]);

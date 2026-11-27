@@ -333,10 +333,12 @@ mod tests {
         let ready = Event::DeviceConnected {
             outcome: DeviceOutcome::Ready,
             platform: DevicePlatform::LinuxAarch64,
+            path: None,
         };
         let failed = Event::DeviceConnected {
             outcome: DeviceOutcome::Failed(DeviceFailure::Download),
             platform: DevicePlatform::MacosAarch64,
+            path: None,
         };
         worker.client.capture(ready);
         worker.client.set_enabled(false);
@@ -360,6 +362,7 @@ mod tests {
         worker.client.capture(Event::DeviceConnected {
             outcome: DeviceOutcome::Ready,
             platform: DevicePlatform::MacosX86_64,
+            path: None,
         });
         release.send(()).unwrap();
         let sixth = bodies.recv_timeout(Duration::from_secs(10)).unwrap();

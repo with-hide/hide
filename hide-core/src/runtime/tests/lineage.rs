@@ -3341,6 +3341,8 @@ fn device_child(runtime: &mut Runtime, status: &str, seq: u64) {
 fn a_parent_read_with_its_device_child_stays_read_on_every_pass_until_the_child_finishes_again() {
     let mut runtime = runtime();
     runtime.node = crate::node::NodeId::parse("machine-local").unwrap();
+    // This Mac in front, under its own id: its focus counts only while it is.
+    runtime.set_front_device(Some("machine-local".to_owned()));
     runtime
         .device_machine_ids
         .insert("mini".to_owned(), "machine-mini".to_owned());

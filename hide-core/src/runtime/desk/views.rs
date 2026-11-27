@@ -58,10 +58,14 @@ pub(in crate::runtime) enum OpenPayload {
     Card { card: DetailItem },
     /// A View a session opened (D-12): the same file or address opens as a
     /// tab of Desk's own, and the session's View is seen where it is.
+    /// `request_id` names the open: its receipt (`status.browser_opens`)
+    /// carries the display it placed, which the keyboard follows.
     Output {
         device_id: String,
         checkout: String,
         id: String,
+        #[serde(default)]
+        request_id: Option<String>,
     },
 }
 
@@ -199,7 +203,8 @@ impl Runtime {
                 device_id,
                 checkout,
                 id,
-            } => self.desk_open_output((device_id, checkout), &id),
+                request_id,
+            } => self.desk_open_output((device_id, checkout), &id, request_id),
         }
     }
 
@@ -308,8 +313,15 @@ impl Runtime {
     /// since Desk's desk has no diff tab. The session's View stays where it
     /// is, and is seen once it opened here (B25, B34); one that did not open
     /// stays to look at.
-    fn desk_open_output(&mut self, key: WorkspaceKey, id: &str) -> bool {
+    fn desk_open_output(
+        &mut self,
+        key: WorkspaceKey,
+        id: &str,
+        request_id: Option<String>,
+    ) -> bool {
+        let desk = self.desk_key();
         let Some(display) = self.view_display(&key, id).cloned() else {
+            self.desk_open_receipt(request_id, Err("desk_output_gone"));
             return super::refused("desk_output_gone");
         };
         // A View already on Desk's desk (one Desk's agent opened, listed in
@@ -317,27 +329,61 @@ impl Runtime {
         if self.is_desk_key(&key) {
             let focused =
                 self.change_desk_views(|layout, stamp| Ok(((), layout.focus(id, stamp)?)));
-            if let Err(error) = focused {
+            if let Err(error) = &focused {
                 crate::diagnostic!(serde_json::json!({
                     "component": "desk",
                     "kind": "desk_views.output_focus_failed",
                     "error": error.kind(),
                 }));
             }
+            let outcome = focused
+                .map(|()| id.to_owned())
+                .map_err(|error| error.kind());
+            self.desk_open_receipt(request_id, outcome);
             self.mark_view_seen(&key, id);
             return true;
         }
         let opened = match display.kind {
             DisplayKind::File | DisplayKind::Diff => {
                 match self.display_source(&key, &display.path) {
-                    Some((workspace_id, checkout_id)) => self.desk_open_file(
-                        &workspace_id,
-                        &checkout_id,
-                        &display.path,
-                        false,
-                        false,
-                    ),
-                    None => super::refused("desk_output_gone"),
+                    Some((workspace_id, checkout_id)) => {
+                        let opened = self.desk_open_file(
+                            &workspace_id,
+                            &checkout_id,
+                            &display.path,
+                            false,
+                            false,
+                        );
+                        if opened {
+                            // A file still being read is placed when the
+                            // read lands, and its receipt is written then.
+                            let request_id = request_id.and_then(|request_id| {
+                                self.hold_open_receipt(
+                                    &desk,
+                                    &Place::Desk,
+                                    (&workspace_id, &checkout_id, &display.path),
+                                    request_id,
+                                )
+                            });
+                            let origin = self.desk_origin(&desk, &workspace_id, &checkout_id);
+                            let shown = self.view_showing(
+                                &desk,
+                                &Place::Desk,
+                                origin.as_ref(),
+                                &display.path,
+                                DisplayKind::File,
+                                None,
+                            );
+                            self.desk_open_receipt(request_id, shown.ok_or("desk_output_unplaced"));
+                        } else {
+                            self.desk_open_receipt(request_id, Err("desk_output_refused"));
+                        }
+                        opened
+                    }
+                    None => {
+                        self.desk_open_receipt(request_id, Err("desk_output_gone"));
+                        super::refused("desk_output_gone")
+                    }
                 }
             }
             DisplayKind::Browser => {
@@ -349,15 +395,39 @@ impl Runtime {
                     device_id: key.0.clone(),
                     path: key.1.clone(),
                 };
-                self.desk_open_page(&url, origin)
+                let page = self.desk_open_page(&url, origin);
+                let opened = page.is_ok();
+                self.desk_open_receipt(request_id, page);
+                opened
             }
             DisplayKind::Card => match display.card.clone() {
-                Some(card) => self.place_card_on(&self.desk_key(), &Place::Desk, card),
-                None => super::refused("desk_output_gone"),
+                Some(card) => {
+                    let opened = self.place_card_on(&desk, &Place::Desk, card.clone());
+                    let shown = self
+                        .desk_views()
+                        .and_then(|layout| {
+                            layout
+                                .displays()
+                                .find(|shown| shown.card.as_ref() == Some(&card))
+                        })
+                        .map(|shown| shown.id.clone());
+                    self.desk_open_receipt(
+                        request_id,
+                        shown.filter(|_| opened).ok_or("desk_output_refused"),
+                    );
+                    opened
+                }
+                None => {
+                    self.desk_open_receipt(request_id, Err("desk_output_gone"));
+                    super::refused("desk_output_gone")
+                }
             },
             // An outside file is the desktop window's grant, which only its
             // own Workspace's tab stands on.
-            DisplayKind::External => super::refused("desk_output_external"),
+            DisplayKind::External => {
+                self.desk_open_receipt(request_id, Err("desk_output_external"));
+                super::refused("desk_output_external")
+            }
         };
         if opened {
             self.mark_view_seen(&key, id);
@@ -366,21 +436,39 @@ impl Runtime {
         true
     }
 
+    /// The receipt of an output open that named itself: the display of
+    /// Desk's desk it placed, or why not. `None` writes nothing.
+    fn desk_open_receipt(
+        &mut self,
+        request_id: Option<String>,
+        outcome: Result<String, &'static str>,
+    ) {
+        let Some(request_id) = request_id else {
+            return;
+        };
+        let desk = self.desk_key();
+        let outcome = outcome
+            .map(|display_id| (desk, display_id))
+            .map_err(|kind| crate::runtime::view_areas::LayoutRefusal {
+                kind,
+                message: "The view could not be opened on Desk's desk".to_owned(),
+            });
+        self.record_open_receipt(request_id, outcome);
+    }
+
     /// A new page of Desk's at `url` from the checkout `origin`, or the page
     /// Desk's desk holds at it from there brought in front and loaded again.
-    /// Returns whether it opened; a refusal is the window's error.
-    fn desk_open_page(&mut self, url: &str, origin: ViewOrigin) -> bool {
-        match self.open_browser_at(url, self.desk_key(), Some(origin)) {
-            Ok(_) => true,
-            Err(kind) => {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "desk",
-                    "kind": "desk_views.page_refused",
-                    "reason": kind,
-                }));
-                false
-            }
+    /// Its display, or why it was refused, a refusal being the window's error.
+    fn desk_open_page(&mut self, url: &str, origin: ViewOrigin) -> Result<String, &'static str> {
+        let opened = self.open_browser_at(url, self.desk_key(), Some(origin));
+        if let Err(kind) = &opened {
+            crate::diagnostic!(serde_json::json!({
+                "component": "desk",
+                "kind": "desk_views.page_refused",
+                "reason": kind,
+            }));
         }
+        opened
     }
 
     /// Desk was switched on or off (B33): off lets every document of Desk's

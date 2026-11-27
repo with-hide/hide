@@ -1013,6 +1013,9 @@ pub const COMMANDS: &[Spec] = &[
             "beside_other_checkout",
             "beside_other_machine",
             "beside_needs_agent_pane",
+            "beside_too_narrow",
+            "beside_unmeasured",
+            "beside_tab_busy",
             "beside_with_parent",
             "beside_pane_unavailable",
             "plan_missing",
@@ -1494,16 +1497,18 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["device_looked"],
         refusals: &["hide_unavailable", "request_timeout"],
     },
-    // What the PC of a WSL distribution runs in it through wsl.exe: this
-    // command's input and output become the carrier of the connection to
-    // this account's core. It answers nothing: what it writes is the
-    // connection's bytes, and a refusal is the code it ends with.
+    // What the PC of a WSL distribution runs in it through wsl.exe, and a
+    // paired machine over its SSH login with `--ssh`: this command's input
+    // and output become the carrier of the connection to this account's
+    // core. It answers nothing: what it writes is the connection's bytes,
+    // and a refusal is the code it ends with, over SSH also a JSON line on
+    // its error output.
     Spec {
         words: &["device", "carry"],
         arguments: &[],
         repeats: None,
         needs_one_of: &[],
-        options: &[],
+        options: &[switch("--ssh")],
         rest: None,
         answers: &[],
         refusals: &[
@@ -1511,6 +1516,8 @@ pub const COMMANDS: &[Spec] = &[
             "hide_unavailable",
             "request_timeout",
             "peer_unavailable",
+            "hide_not_running",
+            "ssh_update_there",
         ],
     },
     // What a machine pairing over SSH or wsl.exe runs on its target, with
@@ -1761,6 +1768,9 @@ pub const COMMANDS: &[Spec] = &[
             "command_too_long",
             "pane_unavailable",
             "pane_open_unconfirmed",
+            "pane_too_narrow",
+            "pane_unmeasured",
+            "pane_tab_busy",
             "shell_not_ready",
         ],
     },

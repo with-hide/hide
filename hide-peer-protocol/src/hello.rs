@@ -32,7 +32,15 @@ pub const NEWEST_LINK: u32 = 1;
 
 /// What this build can do beyond its device connection number. A sender
 /// uses an act only when the peer listed its capability.
-pub const CAPABILITIES: &[&str] = &[];
+pub const CAPABILITIES: &[&str] = &[SSH_PATH];
+
+/// A connection may run over SSH: this build names each
+/// connection it dials and the one a move replaces ([`Hello::dial`],
+/// [`Hello::replaces`]), knows [`crate::CloseCode::Probe`], answers `hide
+/// device carry --ssh`, and beats on an SSH connection
+/// ([`HelloFrame::Beat`]). An SSH connection exists only between two builds
+/// that both name it.
+pub const SSH_PATH: &str = "ssh_path";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinkRange {
@@ -69,6 +77,29 @@ pub struct Hello {
     /// none and keeps the name it paired under.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The dialer's name for this connection, drawn at random for each one
+    /// it dials; the accepting side sends none. Both ends read it from the
+    /// dialer's hello, so both name the connection alike for its life.
+    /// `0` names nothing: a build before [`SSH_PATH`] sends none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dial: u64,
+    /// The [`Hello::dial`] of the connection this one replaces, when the
+    /// dialer moved a live connection to another path; `0` otherwise.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub replaces: u64,
+    /// The names of the connections the dialer knows a move replaced
+    /// lately, beside [`Hello::replaces`]: an end that never saw a link of a
+    /// chain still refuses the ones before it when they arrive late. At most
+    /// [`MAX_SUPERSEDES`] are read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supersedes: Vec<u64>,
+}
+
+/// The most names [`Hello::supersedes`] carries.
+pub const MAX_SUPERSEDES: usize = 8;
+
+fn is_zero(number: &u64) -> bool {
+    *number == 0
 }
 
 impl Hello {
@@ -87,6 +118,9 @@ impl Hello {
             contract: (!release).then(crate::contract::hash),
             update: false,
             name: None,
+            dial: 0,
+            replaces: 0,
+            supersedes: Vec::new(),
         }
     }
 
@@ -215,10 +249,14 @@ pub enum HelloFrame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    /// "This end still hears you": sent on an SSH connection between two
+    /// builds that name [`SSH_PATH`], so a carrier that went silent is
+    /// closed on both ends, where neither `sshd` nor the pipe would notice.
+    Beat,
 }
 
 impl HelloFrame {
-    pub const TYPES: [&'static str; 3] = ["grant", "update", "update_answer"];
+    pub const TYPES: [&'static str; 4] = ["grant", "update", "update_answer", "beat"];
 
     /// `None` for a type this build does not know.
     pub fn parse(body: &[u8]) -> Result<Option<Self>, FrameError> {
@@ -243,6 +281,9 @@ mod tests {
             contract: contract.map(str::to_owned),
             update: false,
             name: None,
+            dial: 0,
+            replaces: 0,
+            supersedes: Vec::new(),
         }
     }
 
@@ -314,6 +355,23 @@ mod tests {
         let bytes = asking.encode().unwrap();
         assert!(Hello::decode(&bytes[PREFIX_BYTES..]).unwrap().update);
         assert_eq!(HelloFrame::parse(br#"{"t":"later_thing"}"#).unwrap(), None);
+        assert_eq!(
+            HelloFrame::parse(br#"{"t":"beat"}"#).unwrap(),
+            Some(HelloFrame::Beat)
+        );
+        // A connection's names travel only when there are some, and read
+        // back as written; a hello without them names nothing.
+        assert!(!String::from_utf8_lossy(&ours.encode().unwrap()).contains("dial"));
+        let moved = Hello {
+            dial: 7,
+            replaces: 5,
+            supersedes: vec![3],
+            ..ours.clone()
+        };
+        let bytes = moved.encode().unwrap();
+        let read = Hello::decode(&bytes[PREFIX_BYTES..]).unwrap();
+        assert_eq!((read.dial, read.replaces, read.supersedes), (7, 5, vec![3]));
+        assert_eq!(Hello::decode(later).unwrap().dial, 0);
         assert_eq!(body_length(*b"NOTHIDE!\0\0\0\x01"), None);
     }
 }

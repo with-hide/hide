@@ -12,19 +12,19 @@ use super::*;
 use crate::model::LinkOrigin;
 use serde_json::json;
 
-const DEVICE: &str = "look-device";
+pub(super) const DEVICE: &str = "look-device";
 
 fn tab(id: &str) -> String {
     format!("remote:{DEVICE}:tab:{id}")
 }
 
-fn pane_id(id: &str) -> String {
+pub(super) fn pane_id(id: &str) -> String {
     format!("remote:{DEVICE}:pane:{id}")
 }
 
 /// A node that dialed this core arranges several Agent areas; a device this
 /// core dials keeps one area per group. The read must not depend on which.
-fn origins() -> [LinkOrigin; 2] {
+pub(super) fn origins() -> [LinkOrigin; 2] {
     [
         LinkOrigin::Inbound,
         LinkOrigin::Dialed {
@@ -35,8 +35,18 @@ fn origins() -> [LinkOrigin; 2] {
 }
 
 /// A connected device with Agent areas, `in_front` or behind this machine.
-fn device(origin: LinkOrigin, in_front: bool) -> (Runtime, tempfile::TempDir) {
+pub(super) fn device(origin: LinkOrigin, in_front: bool) -> (Runtime, tempfile::TempDir) {
     let mut runtime = runtime();
+    let views = add_device(&mut runtime, origin, in_front);
+    (runtime, views)
+}
+
+/// Connects the device to `runtime`, `in_front` or behind this machine.
+pub(super) fn add_device(
+    runtime: &mut Runtime,
+    origin: LinkOrigin,
+    in_front: bool,
+) -> tempfile::TempDir {
     runtime
         .snapshot
         .ui_state
@@ -66,12 +76,12 @@ fn device(origin: LinkOrigin, in_front: bool) -> (Runtime, tempfile::TempDir) {
         crate::node::TEST_NODE.into()
     }));
     runtime.begin_read_connection(Some(DEVICE));
-    (runtime, views)
+    views
 }
 
 /// The device's engine with one tab per `(tab, status, seq)`, an agent in
 /// each tab's pane, and its own keyboard on `focused`'s pane.
-fn device_session(
+pub(super) fn device_session(
     path: &str,
     agents: &[(&str, &str, u64)],
     focused: &str,
@@ -108,7 +118,7 @@ fn publish(runtime: &mut Runtime) {
 }
 
 /// Whether the device row of `id`'s pane is in 읽을 것.
-fn unread(runtime: &Runtime, id: &str) -> bool {
+pub(super) fn unread(runtime: &Runtime, id: &str) -> bool {
     runtime
         .snapshot
         .status
@@ -275,6 +285,46 @@ fn a_device_behind_is_not_read_and_bringing_this_mac_forward_reads_none_of_its_p
     }
 }
 
+/// Rule, the mirror of the one above: this Mac's focus is read only while
+/// this Mac is in front. A turn that ends on the pane the operator chose here
+/// while a device's tile is in front stays 읽을 것, as it does while a paired
+/// computer's screen shows (`own_screen.rs`), and bringing this Mac forward
+/// again reads it.
+#[test]
+fn this_mac_s_pane_behind_a_device_is_not_read_and_bringing_this_mac_forward_reads_it() {
+    for origin in origins() {
+        let path = "/private/tmp/hide-look-mac-behind";
+        let mut runtime = two_finished_tabs(path);
+        let _views = add_device(&mut runtime, origin.clone(), false);
+        dispatch(
+            &mut runtime,
+            "focus_pane",
+            json!({"pane_id": T1, "origin": "operator"}),
+        );
+        assert!(
+            !unread_panes(&runtime).contains(&T1.to_owned()),
+            "{origin:?}: read here"
+        );
+
+        dispatch(&mut runtime, "focus_device", json!({"device_id": DEVICE}));
+        runtime.ingest_session(Ok(local_two_tabs(path, [2, 1])));
+        assert!(
+            unread_panes(&runtime).contains(&T1.to_owned()),
+            "{origin:?}: the operator's pane is here, but the device is in front"
+        );
+
+        dispatch(
+            &mut runtime,
+            "focus_device",
+            json!({"device_id": crate::node::TEST_NODE}),
+        );
+        assert!(
+            !unread_panes(&runtime).contains(&T1.to_owned()),
+            "{origin:?}: this Mac in front again reads its pane"
+        );
+    }
+}
+
 /// Rule: a device that stopped answering keeps its last rows but shows none
 /// of its panes. Bringing it forward reads nothing on it, on the event or on
 /// a snapshot read; once it answers again, in front with its keyboard on the
@@ -420,7 +470,7 @@ fn reads_follow_the_look_with_no_window_pulling_snapshots() {
 
 /// This machine with two tabs, a finished turn in each at `turns`, its
 /// engine's keyboard on `t1`'s pane.
-fn local_two_tabs(path: &str, turns: [u64; 2]) -> SessionSnapshotPayload {
+pub(super) fn local_two_tabs(path: &str, turns: [u64; 2]) -> SessionSnapshotPayload {
     let tab = |tab_id: &str| {
         json!({
             "workspace_id": "w-look", "tab_id": tab_id, "zoomed": false,
@@ -455,11 +505,11 @@ fn local_two_tabs(path: &str, turns: [u64; 2]) -> SessionSnapshotPayload {
     .expect("two tabs with a finished turn each")
 }
 
-const T1: &str = "w-look:t1:p";
-const T2: &str = "w-look:t2:p";
+pub(super) const T1: &str = "w-look:t1:p";
+pub(super) const T2: &str = "w-look:t2:p";
 
 /// This machine's two finished tabs, both 읽을 것: nobody has looked yet.
-fn two_finished_tabs(path: &str) -> Runtime {
+pub(super) fn two_finished_tabs(path: &str) -> Runtime {
     let (mut runtime, _checkout) = live_tab_order_runtime(path);
     runtime.ingest_session(Ok(local_two_tabs(path, [1, 1])));
     assert_eq!(unread_panes(&runtime), vec![T1, T2], "nobody has looked");

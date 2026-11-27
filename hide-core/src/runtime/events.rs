@@ -139,6 +139,16 @@ pub(super) struct WindowFocusPayload {
     pub(super) screen: super::unseen_views::FocusScreen,
 }
 
+/// What this machine's windows show, as the daemon sums every window's
+/// report: its own screen in one window at least, or another computer's in
+/// every window that reports; sent only when that changes, and released with
+/// a window's connection (`look.rs`, `WindowScreen`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct WindowScreenPayload {
+    pub(super) screen: super::look::WindowScreen,
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct CreateWorkspacePayload {
     /// The device that holds the folder; this machine when absent. A
@@ -437,6 +447,15 @@ pub(super) struct HumanTurnDonePayload {
 #[serde(deny_unknown_fields)]
 pub(super) struct PhoneViewingPayload {
     pub(super) pane_ids: Vec<String>,
+}
+
+/// Every paired machine whose view of this one shows now, by its key; hided
+/// sends the whole list each time a view is seated or ends, so a repeat
+/// converges (`look.rs`, `LookScreen::View`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RemoteViewsPayload {
+    pub(super) machines: Vec<String>,
 }
 
 /// Fork agent from the pane menu: where the fork goes, chosen at the press,
@@ -1759,6 +1778,10 @@ pub(super) struct TerminalResizePayload {
     pub(super) pane_id: String,
     pub(super) cols: u16,
     pub(super) rows: u16,
+    /// What the window measured with the grid, which the pane floor judges
+    /// by; none from a page that does not measure.
+    #[serde(default)]
+    pub(super) floor: Option<super::pane_floor::FloorReport>,
 }
 
 pub(super) enum Event {
@@ -2008,8 +2031,10 @@ pub(super) enum Event {
     OverviewRefresh(OverviewRefreshPayload),
     OverviewOpenResult(PaneTargetPayload),
     PhoneViewing(PhoneViewingPayload),
+    RemoteViews(RemoteViewsPayload),
     RequestView(RequestViewPayload),
     WindowFocus(WindowFocusPayload),
+    WindowScreen(WindowScreenPayload),
     /// The card's refresh button, opening the delete confirmation, and a
     /// completed worktree removal. All three say "read again now" about a
     /// different set of readers, and none needs a target: the card is always
@@ -2413,8 +2438,10 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "overview_refresh" => decode!(OverviewRefreshPayload, OverviewRefresh),
         "overview_open_result" => decode!(PaneTargetPayload, OverviewOpenResult),
         "phone_viewing" => decode!(PhoneViewingPayload, PhoneViewing),
+        "remote_views" => decode!(RemoteViewsPayload, RemoteViews),
         "request_view" => decode!(RequestViewPayload, RequestView),
         "window_focus" => decode!(WindowFocusPayload, WindowFocus),
+        "window_screen" => decode!(WindowScreenPayload, WindowScreen),
         "cleanup_review" => decode!(CleanupReviewPayload, CleanupReview),
         "cleanup_confirm" => decode!(CleanupConfirmPayload, CleanupConfirm),
         "cleanup_dismiss" => Ok(Event::CleanupDismiss),
@@ -2741,6 +2768,10 @@ impl Runtime {
             // Nothing drawn changes; the coordinator reads it on its next wake.
             Event::UiAttached(payload) => {
                 let attached = payload.attached && !self.ui_attached;
+                if payload.attached != self.ui_attached {
+                    // What an earlier window measured is not the next one's.
+                    self.floor_reports.clear();
+                }
                 self.ui_attached = payload.attached;
                 if attached {
                     self.session_thread_screen_attached();
@@ -3540,6 +3571,12 @@ impl Runtime {
                     return true;
                 }
                 let direction = payload.direction;
+                if direction == crate::live::PaneSplitDirection::Right
+                    && let Err(refusal) = self.split_right_floor(&pane_id)
+                {
+                    self.set_error(refusal.event_code(), refusal.message(), false);
+                    return true;
+                }
                 let action = PaneControlAction::Split {
                     pane_id: pane_id.clone(),
                     direction,
@@ -3693,6 +3730,14 @@ impl Runtime {
                     );
                     return true;
                 }
+                // A fork to the side splits the pane right, judged as Split
+                // right is (`pane_floor`).
+                if matches!(payload.placement, crate::fork::ForkPlacement::Side)
+                    && let Err(refusal) = self.split_right_floor(&pane_id)
+                {
+                    self.set_error(refusal.event_code(), refusal.message(), false);
+                    return true;
+                }
                 // A choice the agent does not take is refused before any pane
                 // is made for the fork.
                 let launch = self.launch_choice_of(agent);
@@ -3741,6 +3786,7 @@ impl Runtime {
                         // where they are now, and the fork does not take it.
                         issued_serial: self.control_lane.issued_serial(),
                         origin: payload.origin,
+                        screen: self.look.pressed_on(),
                         tab_id: None,
                         pane_id: None,
                         tab_label: tab_label.clone(),
@@ -4203,7 +4249,10 @@ impl Runtime {
                 if previous != Some(size) {
                     self.send_terminal_size(&payload.pane_id);
                 }
-                false
+                // The floor's answers are drawn from what the window measured,
+                // so a report that moves them is published.
+                self.floor_reports.note(&payload.pane_id, payload.floor)
+                    && self.refresh_pane_floor()
             }
             Event::PaneFind(payload) => {
                 if payload.term.is_empty() {
@@ -4344,6 +4393,7 @@ impl Runtime {
             }
             Event::OverviewOpenResult(payload) => self.open_result(&payload.pane_id),
             Event::PhoneViewing(payload) => self.set_phone_viewing(payload.pane_ids),
+            Event::RemoteViews(payload) => self.set_remote_views(payload.machines),
             Event::RequestView(payload) => {
                 self.observe_request_view(payload.observing, std::time::Instant::now());
                 false
@@ -4351,6 +4401,7 @@ impl Runtime {
             Event::WindowFocus(payload) => {
                 self.set_window_focus(payload.focused.then_some(payload.screen))
             }
+            Event::WindowScreen(payload) => self.set_window_screen(payload.screen),
             Event::OverviewRefresh(payload) => {
                 let project = self
                     .snapshot

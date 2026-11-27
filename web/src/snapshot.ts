@@ -1230,6 +1230,15 @@ export type LayoutNode =
   | { type: "pane"; pane_id: string }
   | { type: "split"; direction: "right" | "down"; ratio: number; first: LayoutNode; second: LayoutNode };
 
+/** Why a split right is refused: a pane would be under the floor, or the window has not measured the tab yet. */
+export type PaneFloorRefusal = "too_narrow" | "unmeasured";
+
+/** The pane floor's answers (`hide-core` `PaneFloorSnapshot`): each pane whose split right is refused, and each tab's least width in CSS pixels. */
+export type PaneFloor = {
+  split_right: Record<string, PaneFloorRefusal>;
+  min_width_px: Record<string, number>;
+};
+
 export type PaneLayout = {
   workspace_id: string;
   tab_id: string;
@@ -3491,7 +3500,21 @@ export type DeskOutputKind = "image" | "page" | "doc" | "pr";
  */
 export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thumb: string | null; seen: boolean; pr_state: PrState | null; device_id: string | null; checkout: string | null; path: string | null; url: string | null };
 /** The widths of Desk's two panels as the operator last dragged them, in CSS pixels; null until dragged (PRD desk-2-ui B22, B23). */
-export type DeskLane = { view_width: number | null; session_width: number | null; /** 한눈에 folded (`⟩`); absent while unfolded. */ glance_folded?: boolean };
+export type DeskLane = {
+  view_width: number | null;
+  session_width: number | null;
+  /** 한눈에 folded (`▯|`); absent while unfolded. */
+  glance_folded?: boolean;
+  /** 한눈에's tab; absent for `sessions`. */
+  glance_tab?: GlanceTab;
+  /** Which of 한눈에's session groups are folded; absent while 끝남 alone is, as they start. */
+  glance_groups?: GlanceFolds;
+};
+/** 한눈에's two tabs. */
+export type GlanceTab = "sessions" | "files";
+/** 한눈에's session groups as the core keeps their folds: 내 차례, 일하는 중, 끝남. */
+export type GlanceGroupKey = "turn" | "working" | "ended";
+export type GlanceFolds = Record<GlanceGroupKey, boolean>;
 /** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
 /** What of an open mission waits on the operator, as every mission chip marks it: its decision, or a node raised to the operator (a stall among them). */
 export type MissionTurn = "decision" | "attention";
@@ -4144,6 +4167,8 @@ export type SnapshotRest = {
     operator_focus?: { client_id: string; sequence: number }[];
   };
   pane_layouts?: PaneLayout[];
+  /** What the core's pane floor says of the tabs on screen (docs/UI_BEHAVIOR.md, The pane floor); the shell only draws it. */
+  pane_floor?: PaneFloor;
   terminal?: { headers?: Record<string, PaneHeader>; pane_id?: string | null; panes?: TerminalPane[]; input_requests?: InputRequest[] };
   ui_state?: {
     left_sidebar_visible?: boolean;

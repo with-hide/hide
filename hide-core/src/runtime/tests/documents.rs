@@ -3031,3 +3031,74 @@ fn a_followed_change_on_disk_replaces_only_a_tab_that_holds_nothing_of_its_own()
     );
     assert_eq!(f.last_error(), None, "nothing reaches the screen");
 }
+
+// Operator request 2026-11-27 (mission-109): a session's file opened on Desk's desk while its read still runs has no
+// display yet; the open's receipt waits with the read and names the display once the file is placed, so the window's
+// keyboard follows it there.
+#[test]
+fn a_named_desk_open_of_a_file_still_being_read_gets_its_receipt_when_the_read_lands() {
+    let f = Fixture::with(|runtime| {
+        let mut runtime = super::workspace_view::with_new_views(runtime, "documents-desk-receipt");
+        runtime.start_test_desk();
+        runtime
+    });
+    let key = (DEVICE.to_owned(), f.root.to_string_lossy().into_owned());
+    let path = f.path("a.txt");
+    let view = {
+        let mut runtime = f.shared.lock().unwrap();
+        let layout = &mut runtime
+            .workspace_views
+            .as_mut()
+            .expect("views")
+            .views
+            .entry(&key.0, &key.1)
+            .tray_entry(crate::workspace_views::PENDING_TRAY)
+            .layout;
+        let display = layout.new_display(&path, crate::view_layout::DisplayKind::File, None, false);
+        let id = display.id.clone();
+        let area = layout.active_area().id.clone();
+        layout.append(&area, display).expect("room");
+        id
+    };
+    f.device.hold_read("a.txt");
+    f.dispatch(
+        "desk_view_open",
+        serde_json::json!({"kind": "output", "device_id": key.0, "checkout": key.1, "id": view, "request_id": "follow:held"}),
+    );
+    f.wait("the read to wait", |runtime| {
+        runtime.document_opens_path(WORKSPACE, &f.checkout, &path)
+    });
+    let receipt = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .status
+            .browser_opens
+            .iter()
+            .find(|receipt| receipt.request_id == "follow:held")
+            .cloned()
+    };
+    assert_eq!(
+        receipt(&f.shared.lock().unwrap()),
+        None,
+        "no display yet, so no receipt"
+    );
+
+    f.device.release_read("a.txt");
+    f.wait("the receipt", |runtime| receipt(runtime).is_some());
+    let runtime = f.shared.lock().unwrap();
+    let receipt = receipt(&runtime).unwrap();
+    let desk = runtime.desk_views().expect("Desk's desk");
+    let front = desk
+        .active_area()
+        .active
+        .clone()
+        .expect("the file in front");
+    assert_eq!(
+        (receipt.ok, receipt.display_id.as_deref()),
+        (true, Some(front.as_str()))
+    );
+    assert_eq!(
+        desk.display(&front).map(|display| display.path.as_str()),
+        Some(path.as_str())
+    );
+}

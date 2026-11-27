@@ -17,11 +17,12 @@ import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-update
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type ExternalGrant } from "../../../web/src/host";
 import { keySystemOf, pageKeepsKeyboard, systemRegistry } from "../../../web/src/shortcuts";
 import type { MenuCommand } from "./menu";
-import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WHATS_NEW_SAVE_CHANNEL, WHATS_NEW_STATE_CHANNEL, WHATS_NEW_STATE_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL, REMOTE_GO_CHANNEL, REMOTE_SETTINGS_CHANNEL, REMOTE_SHOW_CHANNEL } from "../channel";
+import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WHATS_NEW_SAVE_CHANNEL, WHATS_NEW_STATE_CHANNEL, WHATS_NEW_STATE_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL, REMOTE_GO_CHANNEL, REMOTE_PAIRED_CHANNEL, REMOTE_SETTINGS_CHANNEL, REMOTE_SHOW_CHANNEL } from "../channel";
 import { ComputerUse } from "./computerUse";
 import { BrowserViews, type ResolvedPage } from "./browser";
 import { RemoteScreens, type Daemon } from "./remoteScreens";
-import { parseGo, parseShow } from "./remotePage";
+import { RemoteEgress, RemoteStorage } from "./remoteEgress";
+import { parseGo, parsePaired, parseShow } from "./remotePage";
 import { practiceBounds, practiceUrl } from "./practice";
 import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpScope } from "./browserCdp";
 import {
@@ -395,9 +396,39 @@ export class DesktopHost {
    * shell says which one shows where, and only this window's shell is heard.
    */
   private listenRemoteScreens(): void {
-    const remote = new RemoteScreens({ window: () => this.window, daemon: () => this.remoteDaemon(), registry: () => this.registry, background: __HIDE_BACKGROUND__, language: () => this.language.language, log: this.log });
+    const egress = new RemoteEgress({
+      daemon: () => this.remoteDaemon(), log: this.log,
+      // A pairing made again under the same key: its pages move to the new pairing's storage.
+      repaired: (device, key) => {
+        this.browsers?.closeRemotePages(device, key);
+        this.browsers?.remoteRetry(device, key);
+      },
+    });
+    const storage = RemoteStorage.at(app.getPath("userData"), this.log, (partition) => this.browsers?.closeRemotePartition(partition), (device, key) => this.browsers?.remoteRetry(device, key));
+    const remote = new RemoteScreens({
+      window: () => this.window, daemon: () => this.remoteDaemon(), registry: () => this.registry, background: __HIDE_BACKGROUND__, language: () => this.language.language, log: this.log,
+      browsers: () => this.browsers, egress, storage, openExternal: (url) => this.openExternal(url),
+    });
     this.remote = remote;
     remote.listen();
+    // The proxy of a screen's pages asks for its secret; it needs no page,
+    // so a service worker's request is answered too. Any other login is
+    // Chromium's to ask.
+    app.on("login", (event, _contents, _details, authInfo, callback) => {
+      if (!authInfo.isProxy) return;
+      const credentials = egress.credentials(authInfo.host, authInfo.port);
+      if (!credentials) return;
+      event.preventDefault();
+      callback(credentials.username, credentials.password);
+    });
+    // The machines paired now, once the shell holds a snapshot; a shell with
+    // none names nothing, so a reload clears nothing.
+    ipcMain.on(REMOTE_PAIRED_CHANNEL, (event: IpcMainEvent, reported: unknown) => {
+      if (!this.fromShell(event)) return;
+      const paired = parsePaired(reported);
+      if (!paired) return this.log.event("remote.paired_refused", {});
+      remote.keepPaired(paired.core, paired.pairs);
+    });
     ipcMain.on(REMOTE_SHOW_CHANNEL, (event: IpcMainEvent, reported: unknown) => {
       if (!this.fromShell(event)) return;
       const request = parseShow(reported);
@@ -952,7 +983,9 @@ export class DesktopHost {
     // A chord the page of a browser display left unhandled reaches the menu;
     // the command's surface (the palette, a dialog) needs the keyboard, unless
     // the command leaves the operator in the page (Expand).
-    if (this.browsers?.hasFocus() && !(command && pageKeepsKeyboard(command))) this.window.webContents.focus();
+    // A page of another computer's screen gives it back to that screen, which takes the command.
+    const holder = this.browsers?.focusHolder();
+    if (holder && !(command && pageKeepsKeyboard(command))) holder.focus();
     // A paired machine's screen in front takes the menu's commands (B20).
     if (command && this.remote?.sendCommand(id)) return;
     this.window.webContents.send(COMMAND_CHANNEL, id);

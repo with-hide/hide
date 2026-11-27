@@ -12,6 +12,11 @@ pub enum Event {
     DeviceConnected {
         outcome: DeviceOutcome,
         platform: DevicePlatform,
+        /// The path a paired machine's connection came up on, sent with a
+        /// ready outcome of that machine's device only;
+        /// none for an SSH or WSL helper device, whose link is its own, and
+        /// for every failure.
+        path: Option<DevicePath>,
     },
     /// A mission's plan was started (Planning to Running), with its size.
     MissionStarted {
@@ -386,6 +391,40 @@ pub enum DevicePlatform {
     Unknown,
 }
 
+/// The path a paired machine's connection takes, as the `path` property
+/// names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DevicePath {
+    Direct,
+    Tailscale,
+    Ssh,
+    Relay,
+    Local,
+}
+
+impl DevicePath {
+    pub(crate) fn of(path: crate::peer_machines::PeerPath) -> Self {
+        use crate::peer_machines::PeerPath;
+        match path {
+            PeerPath::Direct => Self::Direct,
+            PeerPath::Tailscale => Self::Tailscale,
+            PeerPath::Ssh => Self::Ssh,
+            PeerPath::Relay => Self::Relay,
+            PeerPath::Local => Self::Local,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Tailscale => "tailscale",
+            Self::Ssh => "ssh",
+            Self::Relay => "relay",
+            Self::Local => "local",
+        }
+    }
+}
+
 impl DevicePlatform {
     pub(crate) fn of(os: &str, arch: &str) -> Self {
         match (os, arch) {
@@ -436,8 +475,12 @@ impl Event {
                 }
                 properties
             }
-            Self::DeviceConnected { outcome, platform } => {
-                let mut properties = Vec::with_capacity(4);
+            Self::DeviceConnected {
+                outcome,
+                platform,
+                path,
+            } => {
+                let mut properties = Vec::with_capacity(5);
                 match outcome {
                     DeviceOutcome::Ready => properties.push(("outcome", "ready")),
                     DeviceOutcome::Failed(failure) => {
@@ -462,6 +505,11 @@ impl Event {
                         DevicePlatform::Unknown => "unknown",
                     },
                 ));
+                // A paired machine's ready device says the path it came up
+                // on; a helper device and a failure say none.
+                if let (DeviceOutcome::Ready, Some(path)) = (outcome, path) {
+                    properties.push(("path", path.name()));
+                }
                 properties
             }
             Self::MissionStarted { nodes } => vec![(
@@ -776,6 +824,46 @@ mod tests {
         );
     }
 
+    /// A paired machine's ready device names the path its connection came
+    /// up on; a helper device names none, and no failure names a path.
+    #[test]
+    fn a_ready_paired_machine_says_its_path_and_a_helper_device_says_none() {
+        let ready = |path| {
+            Event::DeviceConnected {
+                outcome: DeviceOutcome::Ready,
+                platform: DevicePlatform::MacosAarch64,
+                path,
+            }
+            .properties()
+        };
+        assert_eq!(
+            ready(Some(DevicePath::Ssh)),
+            [
+                ("outcome", "ready"),
+                ("platform", "macos-aarch64"),
+                ("path", "ssh")
+            ]
+        );
+        assert_eq!(
+            ready(None),
+            [("outcome", "ready"), ("platform", "macos-aarch64")]
+        );
+        for path in [
+            DevicePath::Direct,
+            DevicePath::Tailscale,
+            DevicePath::Relay,
+            DevicePath::Local,
+        ] {
+            assert!(ready(Some(path)).iter().any(|(name, _)| *name == "path"));
+        }
+        let failed = Event::DeviceConnected {
+            outcome: DeviceOutcome::Failed(DeviceFailure::KitFailed),
+            platform: DevicePlatform::Unknown,
+            path: Some(DevicePath::Ssh),
+        };
+        assert!(!failed.properties().iter().any(|(name, _)| *name == "path"));
+    }
+
     #[test]
     fn a_device_failure_names_its_class_and_never_its_text() {
         let event = Event::DeviceConnected {
@@ -783,6 +871,7 @@ mod tests {
                 hide_node_link::device::SshProblem::Unreachable,
             )),
             platform: DevicePlatform::Unknown,
+            path: None,
         };
         assert_eq!(
             event.properties(),
@@ -809,6 +898,7 @@ mod tests {
             let event = Event::DeviceConnected {
                 outcome: DeviceOutcome::Failed(DeviceFailure::Install(stop)),
                 platform: DevicePlatform::Unknown,
+                path: None,
             };
             assert_eq!(
                 event.properties(),
@@ -850,6 +940,7 @@ mod tests {
             let event = Event::DeviceConnected {
                 outcome: DeviceOutcome::Failed(DeviceFailure::Unsupported(cause)),
                 platform: DevicePlatform::Unknown,
+                path: None,
             };
             assert_eq!(
                 event.properties(),
@@ -879,6 +970,7 @@ mod tests {
             let event = Event::DeviceConnected {
                 outcome: DeviceOutcome::Failed(DeviceFailure::Ssh(problem)),
                 platform: DevicePlatform::Unknown,
+                path: None,
             };
             assert!(
                 event.properties().contains(&("failure", name)),

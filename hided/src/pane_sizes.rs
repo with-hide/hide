@@ -12,12 +12,17 @@
 //! at the grid its views name, so a screen that does not size the pane
 //! views it at the grid it runs at, and a pane that changes screens is
 //! viewed and sized at the new grid together.
+//!
+//! A grid comes with what the screen measured to fit it (`floor`, which the
+//! core's pane floor judges by and this table does not read), and the
+//! measure goes on with the grid it came with: the core only ever holds the
+//! measure of the screen whose grid the pane runs at.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use hide_node_link::terminal::GridSize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// The panes whose screens' grids are kept. A pane leaves when the core
 /// forgets it; past the cap a screen's grid goes on at once, as with one
@@ -28,10 +33,23 @@ const MAX_PANES: usize = 1024;
 struct Pane {
     /// Each screen's grid for the pane, the latest said last.
     grids: Vec<(u64, GridSize)>,
+    /// What each screen measured with its grid, when it did.
+    floors: Vec<(u64, Value)>,
     /// The screen that last sent the pane input, while it is connected.
     sizing: Option<u64>,
     /// The grid last sent on to the core.
     applied: Option<GridSize>,
+    /// The measure sent on with it.
+    applied_floor: Option<Value>,
+}
+
+impl Pane {
+    fn floor_of(&self, screen: u64) -> Option<Value> {
+        self.floors
+            .iter()
+            .find(|(held, _)| *held == screen)
+            .map(|(_, floor)| floor.clone())
+    }
 }
 
 #[derive(Default)]
@@ -45,6 +63,17 @@ impl PaneSizes {
     /// `screen` draws `pane` at `size`: the grid to send on now, or `None`
     /// while another screen sizes the pane.
     pub fn resized(&self, screen: u64, pane: &str, size: GridSize) -> Option<GridSize> {
+        self.resized_measured(screen, pane, size, None)
+    }
+
+    /// [`Self::resized`], with what the screen measured to fit `size`.
+    pub fn resized_measured(
+        &self,
+        screen: u64,
+        pane: &str,
+        size: GridSize,
+        floor: Option<Value>,
+    ) -> Option<GridSize> {
         let mut panes = self.lock();
         if !panes.contains_key(pane) && panes.len() >= MAX_PANES {
             if !self.full.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -60,11 +89,24 @@ impl PaneSizes {
         let entry = panes.entry(pane.to_owned()).or_default();
         entry.grids.retain(|(held, _)| *held != screen);
         entry.grids.push((screen, size));
+        entry.floors.retain(|(held, _)| *held != screen);
+        if let Some(floor) = &floor {
+            entry.floors.push((screen, floor.clone()));
+        }
         if entry.sizing.is_some_and(|sizing| sizing != screen) {
             return None;
         }
         entry.applied = Some(size);
+        entry.applied_floor = floor;
         Some(size)
+    }
+
+    /// The measure the pane's grid went on with, for a grid this table
+    /// sends on itself (`input`, `left`).
+    pub fn applied_floor(&self, pane: &str) -> Option<Value> {
+        self.lock()
+            .get(pane)
+            .and_then(|entry| entry.applied_floor.clone())
     }
 
     /// The grid `screen`'s view of `pane` at `size` is drawn at: its own,
@@ -90,10 +132,12 @@ impl PaneSizes {
         }
         let (_, size) = *entry.grids.iter().find(|(held, _)| *held == screen)?;
         entry.sizing = Some(screen);
-        if entry.applied == Some(size) {
+        let floor = entry.floor_of(screen);
+        if entry.applied == Some(size) && entry.applied_floor == floor {
             return None;
         }
         entry.applied = Some(size);
+        entry.applied_floor = floor;
         Some(size)
     }
 
@@ -104,13 +148,16 @@ impl PaneSizes {
         let mut resized = Vec::new();
         panes.retain(|pane, entry| {
             entry.grids.retain(|(held, _)| *held != screen);
+            entry.floors.retain(|(held, _)| *held != screen);
             if entry.sizing == Some(screen) {
                 entry.sizing = None;
-                if let Some(&(_, size)) = entry.grids.last()
-                    && entry.applied != Some(size)
-                {
-                    entry.applied = Some(size);
-                    resized.push((pane.clone(), size));
+                if let Some(&(next, size)) = entry.grids.last() {
+                    let floor = entry.floor_of(next);
+                    if entry.applied != Some(size) || entry.applied_floor != floor {
+                        entry.applied = Some(size);
+                        entry.applied_floor = floor;
+                        resized.push((pane.clone(), size));
+                    }
                 }
             }
             !entry.grids.is_empty()
@@ -201,6 +248,31 @@ mod tests {
         sizes.resized(2, "p", WIDE);
         assert_eq!(sizes.input(1, "p"), None, "the typing screen said no grid");
         assert_eq!(sizes.resized(2, "p", NARROW), Some(NARROW));
+    }
+
+    /// The core judges the pane floor by the measure of the screen whose
+    /// grid the pane runs at, so a switch of screens sends that screen's
+    /// measure even when the two grids match.
+    #[test]
+    fn a_grid_goes_on_with_the_measure_its_screen_took() {
+        let sizes = PaneSizes::default();
+        let wide = Some(json!({"canvas_px": 1200.0}));
+        let narrow = Some(json!({"canvas_px": 600.0}));
+        assert_eq!(
+            sizes.resized_measured(1, "p", WIDE, wide.clone()),
+            Some(WIDE)
+        );
+        assert_eq!(sizes.applied_floor("p"), wide);
+        assert_eq!(sizes.input(1, "p"), None);
+        // Another screen's measure waits with its grid.
+        assert_eq!(sizes.resized_measured(2, "p", WIDE, narrow.clone()), None);
+        assert_eq!(sizes.applied_floor("p"), wide);
+        // That screen types: the grid is the same, its measure is not.
+        assert_eq!(sizes.input(2, "p"), Some(WIDE));
+        assert_eq!(sizes.applied_floor("p"), narrow);
+        // It closes: the first screen's grid and measure come back.
+        assert_eq!(sizes.left(2), vec![("p".to_owned(), WIDE)]);
+        assert_eq!(sizes.applied_floor("p"), wide);
     }
 
     #[test]

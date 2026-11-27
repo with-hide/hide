@@ -129,12 +129,7 @@ pub enum Looked {
 /// Whether `alias` is a name `ssh` reads as a destination and never as an
 /// option.
 pub fn valid_alias(alias: &str) -> bool {
-    !alias.is_empty()
-        && alias.len() <= 255
-        && !alias.starts_with('-')
-        && !alias
-            .chars()
-            .any(|character| character.is_whitespace() || character.is_control())
+    hide_peer::store::valid_alias(alias)
 }
 
 /// The channel a target's account is reached on.
@@ -256,6 +251,27 @@ pub fn raise(
     raised
 }
 
+/// The target's `hide` as the command folder names it: whether its path is
+/// under the account's home (and so relative to it), and that path, in wire
+/// spelling. The one rule [`program`] and [`carry_argv`] read, so the
+/// command that paired is the command that carries.
+fn folder_program(reach: &Reach, system: &str) -> (bool, String) {
+    let folder = reach.command_folder.as_deref().unwrap_or(COMMAND_FOLDER);
+    let (under_home, folder) = match folder.strip_prefix("~/") {
+        Some(under) => (true, under),
+        None => (false, folder),
+    };
+    let name = if system == "windows" {
+        "hide.cmd"
+    } else {
+        "hide"
+    };
+    (
+        under_home,
+        format!("{}/{name}", folder.trim_end_matches('/')),
+    )
+}
+
 /// The words that start the target's `hide` in a run step. A folder under
 /// the account's home is read from that account's own `HOME` on a POSIX
 /// system; a Windows session starts in the profile folder, which a path
@@ -264,21 +280,36 @@ fn program(reach: &Reach, system: &str) -> Vec<String> {
     if let Some(hide) = &reach.hide {
         return hide.clone();
     }
-    let folder = reach.command_folder.as_deref().unwrap_or(COMMAND_FOLDER);
-    let under_home = folder.strip_prefix("~/");
+    let (under_home, path) = folder_program(reach, system);
     if system == "windows" {
-        let folder = under_home.unwrap_or(folder).replace('/', "\\");
-        return vec![format!("{folder}\\hide.cmd")];
+        return vec![path.replace('/', "\\")];
     }
     match under_home {
-        Some(folder) => vec![
+        true => vec![
             "sh".to_owned(),
             "-c".to_owned(),
             "exec \"$HOME/$0\" \"$@\"".to_owned(),
-            format!("{folder}/hide"),
+            path,
         ],
-        None => vec![format!("{folder}/hide")],
+        false => vec![path],
     }
+}
+
+/// The words that start the target's `hide device carry --ssh` in the start
+/// script's place: the `hide` [`program`] runs, made absolute
+/// from the account's `home` (wire spelling), since the script execs it
+/// rather than running it through a shell. Named words that do not start
+/// with an absolute program are read through the command folder instead.
+pub(crate) fn carry_argv(reach: &Reach, home: &str, system: &str) -> Vec<String> {
+    let mut argv = match reach.hide.as_deref() {
+        Some(words @ [hide, ..]) if hide_platform::path::is_wire_absolute(hide) => words.to_vec(),
+        _ => match folder_program(reach, system) {
+            (true, path) => vec![format!("{}/{path}", home.trim_end_matches('/'))],
+            (false, path) => vec![path],
+        },
+    };
+    argv.extend(["device", "carry", "--ssh"].map(str::to_owned));
+    argv
 }
 
 /// How one command on the target ended.
@@ -1025,7 +1056,7 @@ fn hand_projects(login: &dyn Login, switch: &Switch<'_>) {
 fn login_addresses(host: &str, own: &[Candidate]) -> Vec<Candidate> {
     let Some(port) = own.iter().find_map(|candidate| match candidate {
         Candidate::Ip(address) => Some(address.port()),
-        Candidate::Relay(_) | Candidate::Wsl(_) => None,
+        Candidate::Relay(_) | Candidate::Wsl(_) | Candidate::Ssh(_) => None,
     }) else {
         return Vec::new();
     };

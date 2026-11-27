@@ -72,19 +72,48 @@ async fn view_socket(port: u16, token: &str, host: &str, key: &str) -> Result<So
 /// The desktop's view socket on the guest daemon, its handshake sent as a
 /// page that holds no token of the host sends it.
 async fn open_view(port: u16, token: &str, host: &str, key: &str) -> Socket {
+    open_view_saying(port, token, host, key, json!({})).await
+}
+
+/// `open_view` with `more` added to the handshake.
+async fn open_view_saying(port: u16, token: &str, host: &str, key: &str, more: Value) -> Socket {
     let mut socket = view_socket(port, token, host, key)
         .await
         .unwrap_or_else(|status| panic!("the view socket was refused: {status}"));
+    let mut handshake = json!({"token": "", "schema_version": 2, "client_kind": "desktop",
+        "snapshot_format": "semantic-rest-v1"});
+    for (name, value) in more.as_object().unwrap() {
+        handshake[name] = value.clone();
+    }
     socket
-        .send(Message::Text(
-            json!({"token": "", "schema_version": 2, "client_kind": "desktop",
-                "snapshot_format": "semantic-rest-v1"})
-            .to_string()
-            .into(),
-        ))
+        .send(Message::Text(handshake.to_string().into()))
         .await
         .unwrap();
     socket
+}
+
+/// What the host's daemon counts as drawing its browser displays now (`/health`).
+async fn page_renderers(running: &hided::RunningDaemon) -> u64 {
+    let (_, body) = get(running.port, "/health", None).await;
+    serde_json::from_str::<Value>(&body).unwrap()["page_renderers"]
+        .as_u64()
+        .unwrap()
+}
+
+/// Waits until the host counts `wanted` page renderers.
+async fn page_renderers_become(running: &hided::RunningDaemon, wanted: u64) {
+    let deadline = Instant::now() + WITHIN;
+    loop {
+        let now = page_renderers(running).await;
+        if now == wanted {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "page renderers stayed {now}, not {wanted}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await; // wait-ok: the host counts a view once its handshake lands and uncounts it once its socket closes
+    }
 }
 
 async fn send(socket: &mut Socket, kind: &str, payload: Value) {
@@ -424,4 +453,640 @@ async fn a_view_asked_under_a_device_s_earlier_key_is_refused_once_another_host_
         other.path().join("host-state").display().to_string(),
         "{daemon}"
     );
+}
+
+/// A POST on the guest daemon, with its token.
+async fn post(port: u16, path: &str, token: &str) -> (u16, Value) {
+    use http_body_util::{BodyExt, Empty};
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::TokioExecutor;
+    let client = Client::builder(TokioExecutor::new()).build_http::<Empty<hyper::body::Bytes>>();
+    let request = hyper::Request::post(format!("http://127.0.0.1:{port}{path}"))
+        .header("authorization", format!("Bearer {token}"))
+        .body(Empty::new())
+        .unwrap();
+    let response = client.request(request).await.unwrap();
+    let status = response.status().as_u16();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+
+/// An origin on this machine's loopback that answers `ok` and keeps, for
+/// each request, its path and the local port it came from.
+async fn origin() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<(String, u16)>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = std::sync::Arc::clone(&seen);
+    tokio::spawn(async move {
+        while let Ok((mut stream, from)) = listener.accept().await {
+            let kept = std::sync::Arc::clone(&kept);
+            tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                loop {
+                    let Ok(read) = stream.read(&mut buffer).await else {
+                        return;
+                    };
+                    if read == 0 {
+                        return;
+                    }
+                    head.extend_from_slice(&buffer[..read]);
+                    while let Some(end) = head.windows(4).position(|window| window == b"\r\n\r\n") {
+                        let text = String::from_utf8_lossy(&head[..end]).into_owned();
+                        head.drain(..end + 4);
+                        let path = text.split(' ').nth(1).unwrap_or_default().to_owned();
+                        kept.lock().unwrap().push((path, from.port()));
+                        if stream
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    (port, seen)
+}
+
+/// One request a page's browser sends through the guest's listener, and the
+/// status line of its answer; `secret` is None for a request on a connection
+/// that already carried it.
+async fn through(
+    stream: &mut tokio::net::TcpStream,
+    origin: u16,
+    path: &str,
+    secret: Option<&str>,
+) -> String {
+    use base64::Engine as _;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let auth = secret.map_or_else(String::new, |secret| {
+        format!(
+            "Proxy-Authorization: Basic {}\r\n",
+            base64::engine::general_purpose::STANDARD.encode(format!("hide:{secret}"))
+        )
+    });
+    stream
+        .write_all(format!("GET http://127.0.0.1:{origin}{path} HTTP/1.1\r\nHost: 127.0.0.1:{origin}\r\n{auth}\r\n").as_bytes())
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    let mut byte = [0_u8; 1];
+    let deadline = Instant::now() + WITHIN;
+    while !answer.ends_with(b"\r\n\r\n") {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let read = tokio::time::timeout(left, stream.read(&mut byte))
+            .await
+            .expect("an answer")
+            .unwrap();
+        assert_eq!(
+            read,
+            1,
+            "the connection closed: {}",
+            String::from_utf8_lossy(&answer)
+        );
+        answer.push(byte[0]);
+    }
+    let text = String::from_utf8_lossy(&answer).into_owned();
+    if text.to_ascii_lowercase().contains("content-length: 2") {
+        let mut body = [0_u8; 2];
+        stream.read_exact(&mut body).await.unwrap();
+    }
+    text.lines().next().unwrap_or_default().to_owned()
+}
+
+/// The local ports the host's proxy logged dialing from.
+async fn dialed(state: &std::path::Path, wanted: usize) -> Vec<u16> {
+    let deadline = Instant::now() + WITHIN;
+    loop {
+        let log = std::fs::read_to_string(state.join("Logs/core.jsonl")).unwrap_or_default();
+        let ports: Vec<u16> = log
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|row| row["kind"] == "screen_net.dialed")
+            .filter_map(|row| {
+                row["local_port"]
+                    .as_u64()
+                    .and_then(|port| u16::try_from(port).ok())
+            })
+            .collect();
+        if ports.len() >= wanted || Instant::now() > deadline {
+            return ports;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await; // wait-ok: the host's log has a dialed row for each request
+    }
+}
+
+// docs/BROWSER_DISPLAYS.md, A page in another computer's screen: a page the
+// guest draws of its host's screen reaches the host's network through the
+// host. Two daemons on one machine share a loopback, so the proof is the
+// connection: every request the origin records came from a local port the
+// host's proxy logged dialing, the second of a kept-alive connection too,
+// whose credentials only its first request carried. A pause refuses the
+// next request with no stream and nothing reaching the origin, and the same
+// listener carries again once the host resumes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_screen_page_request_comes_from_a_port_the_host_dialed() {
+    let root = crate::fixtures::fixture_root("hn");
+    let running = hided::start_daemon(host_env(root.path())).await.unwrap();
+    let host = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
+    let _stop = StopOnDrop(&guest);
+    let connected = guest.run(&["connect"]);
+    assert!(connected.ok, "the guest daemon: {}", connected.text());
+    let (window, host_id, _) = pair_by_link(&running, &host, &guest).await;
+    drop(window);
+    let (port, token) = daemon_of(&guest);
+    let key = host_key(&guest);
+    let net = format!(
+        "/peer-screen/{host_id}/net?key={key}&owner={}",
+        std::process::id()
+    );
+    let (status, listener) = post(port, &net, &token).await;
+    assert_eq!(status, 200, "{listener}");
+    assert_eq!(listener["state"], "ready", "{listener}");
+    let listen = u16::try_from(listener["port"].as_u64().unwrap()).unwrap();
+    let secret = listener["secret"].as_str().unwrap().to_owned();
+    let (status, _) = post(
+        port,
+        &format!("/peer-screen/{host_id}/net?key={key}&owner=0"),
+        &token,
+    )
+    .await;
+    assert_eq!(status, 400, "no owner is no listener");
+    let (status, refused) = post(
+        port,
+        &format!(
+            "/peer-screen/no-such-machine/net?key={key}&owner={}",
+            std::process::id()
+        ),
+        &token,
+    )
+    .await;
+    assert_eq!(
+        (status, refused["reason"].as_str()),
+        (503, Some("not_paired"))
+    );
+
+    let (origin_port, seen) = origin().await;
+    let mut page = tokio::net::TcpStream::connect(("127.0.0.1", listen))
+        .await
+        .unwrap();
+    assert_eq!(
+        through(&mut page, origin_port, "/one", Some(&secret)).await,
+        "HTTP/1.1 200 OK"
+    );
+    assert_eq!(
+        through(&mut page, origin_port, "/two", None).await,
+        "HTTP/1.1 200 OK"
+    );
+    let arrived = seen.lock().unwrap().clone();
+    assert_eq!(
+        arrived
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>(),
+        ["/one", "/two"]
+    );
+    // A `CONNECT` tunnel, as Chromium opens for `https` and WebSockets:
+    // the host dials the origin and joins the two, and what the page then
+    // sends inside it reaches the origin from that dialed port.
+    {
+        use base64::Engine as _;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut tunnel = tokio::net::TcpStream::connect(("127.0.0.1", listen))
+            .await
+            .unwrap();
+        tunnel
+            .write_all(
+                format!(
+                    "CONNECT 127.0.0.1:{origin_port} HTTP/1.1\r\nHost: 127.0.0.1:{origin_port}\r\nProxy-Authorization: Basic {}\r\n\r\n",
+                    base64::engine::general_purpose::STANDARD.encode(format!("hide:{secret}"))
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut answer = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !answer.ends_with(b"\r\n\r\n") {
+            let read = tokio::time::timeout(WITHIN, tunnel.read(&mut byte))
+                .await
+                .expect("the tunnel's answer")
+                .unwrap();
+            assert_eq!(read, 1, "{}", String::from_utf8_lossy(&answer));
+            answer.push(byte[0]);
+        }
+        assert!(
+            String::from_utf8_lossy(&answer).starts_with("HTTP/1.1 200"),
+            "{}",
+            String::from_utf8_lossy(&answer)
+        );
+        tunnel
+            .write_all(b"GET /tunneled HTTP/1.1\r\nHost: origin\r\n\r\n")
+            .await
+            .unwrap();
+        let mut ok = [0_u8; 40];
+        let read = tokio::time::timeout(WITHIN, tunnel.read(&mut ok))
+            .await
+            .expect("the origin's answer")
+            .unwrap();
+        assert!(ok[..read].starts_with(b"HTTP/1.1 200 OK"));
+    }
+    let arrived = seen.lock().unwrap().clone();
+    assert_eq!(
+        arrived.last().map(|(path, _)| path.as_str()),
+        Some("/tunneled")
+    );
+    let ports = dialed(&root.path().join("host-state"), arrived.len()).await;
+    for (path, from) in &arrived {
+        assert!(
+            ports.contains(from),
+            "{path} came from port {from}, which the host's proxy never dialed: {ports:?}"
+        );
+    }
+
+    let paused = host.run(&["device", "pause", GUEST, "--incoming"]);
+    assert!(paused.ok, "{}", paused.text());
+    let (_, during) = post(port, &net, &token).await;
+    assert_eq!(during["state"], "paused_there", "{during}");
+    assert_eq!(
+        during["port"], listener["port"],
+        "a pause keeps the listener"
+    );
+    assert_eq!(
+        during["pairing"], listener["pairing"],
+        "a pause keeps the pairing its sign-ins are stored under"
+    );
+    assert_eq!(listener["pairing"].as_str().map(str::len), Some(32));
+    let mut later = tokio::net::TcpStream::connect(("127.0.0.1", listen))
+        .await
+        .unwrap();
+    assert_eq!(
+        through(&mut later, origin_port, "/paused", Some(&secret)).await,
+        "HTTP/1.1 503 Service Unavailable"
+    );
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        3,
+        "nothing reached the origin while paused"
+    );
+
+    let resumed = host.run(&["device", "resume", GUEST, "--incoming"]);
+    assert!(resumed.ok, "{}", resumed.text());
+    let deadline = Instant::now() + WITHIN;
+    loop {
+        let (_, now) = post(port, &net, &token).await;
+        if now["state"] == "ready" {
+            assert_eq!(
+                (now["port"].clone(), now["secret"].clone()),
+                (listener["port"].clone(), listener["secret"].clone())
+            );
+            break;
+        }
+        assert!(Instant::now() < deadline, "the grant came back: {now}");
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the guest's listener reads ready once the resumed grant reaches it
+    }
+    let mut again = tokio::net::TcpStream::connect(("127.0.0.1", listen))
+        .await
+        .unwrap();
+    assert_eq!(
+        through(&mut again, origin_port, "/resumed", Some(&secret)).await,
+        "HTTP/1.1 200 OK"
+    );
+    drop(running);
+}
+
+/// A POST of `body` on the guest daemon, with its token.
+async fn post_json(port: u16, path: &str, token: &str, body: &Value) -> (u16, Value) {
+    use http_body_util::{BodyExt, Full};
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::TokioExecutor;
+    let client = Client::builder(TokioExecutor::new()).build_http::<Full<hyper::body::Bytes>>();
+    let request = hyper::Request::post(format!("http://127.0.0.1:{port}{path}"))
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Full::new(hyper::body::Bytes::from(body.to_string())))
+        .unwrap();
+    let response = client.request(request).await.unwrap();
+    let status = response.status().as_u16();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+
+// docs/BROWSER_DISPLAYS.md, A page in another computer's screen: the guest
+// asks the host where a display of the host's screen loads from, over that
+// screen's own stream, so the host's core is the one that decides. Nothing is
+// asked while the guest shows no screen of the host; once it shows one, the
+// host reads the question (one out of shape is refused, which it does only
+// for a live view of this guest) and asks its core, which answers a display
+// it does not have as gone. The core's answers for a display that is there,
+// the host's own and a third machine's, are `remote_screen::tests`' (a
+// display needs a pane, which this fixture's daemon has no holder for).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_screen_asks_its_host_where_a_display_loads_from() {
+    let root = crate::fixtures::fixture_root("hr");
+    let running = hided::start_daemon(host_env(root.path())).await.unwrap();
+    let host = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
+    let _stop = StopOnDrop(&guest);
+    let connected = guest.run(&["connect"]);
+    assert!(connected.ok, "the guest daemon: {}", connected.text());
+    let (window, host_id, _) = pair_by_link(&running, &host, &guest).await;
+    drop(window);
+    let (port, token) = daemon_of(&guest);
+    let key = host_key(&guest);
+    let route = format!("/peer-screen/{host_id}/page-route?key={key}");
+    let ask = json!({"device": host_id, "checkout": "/web", "view": "d999", "load": 1});
+
+    let (status, answer) = post_json(port, &route, &token, &ask).await;
+    assert_eq!(
+        (status, answer["reason"].as_str()),
+        (503, Some("not_shown")),
+        "{answer}"
+    );
+    let mut view = open_view(port, &token, &host_id, &key).await;
+    until(&mut view, "the host's snapshot", |frame| {
+        frame["type"] == "snapshot"
+    })
+    .await;
+    let (status, answer) = post_json(port, &route, &token, &json!({"device": ""})).await;
+    assert_eq!(
+        status, 400,
+        "the host read the question of a live view: {answer}"
+    );
+    let (status, answer) = post_json(port, &route, &token, &ask).await;
+    assert_eq!(
+        (status, answer["reason"].as_str()),
+        (410, Some("view_unavailable")),
+        "{answer}"
+    );
+    drop(view);
+    drop(running);
+}
+
+// docs/BROWSER_DISPLAYS.md, A machine with no window of its own: a view of
+// the host whose app draws pages counts on the host beside its desktop
+// windows, which is what lets an agent there open a page with no window of
+// the host's own (`page_renderers`, the gate of `hide browser open`); a view
+// that does not say so, and a window of the host that says so, count
+// nothing; the count goes with the view.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guest_view_that_draws_pages_counts_on_its_host_while_it_lives() {
+    let root = crate::fixtures::fixture_root("hd");
+    let running = hided::start_daemon(host_env(root.path())).await.unwrap();
+    let host = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
+    let _stop = StopOnDrop(&guest);
+    let connected = guest.run(&["connect"]);
+    assert!(connected.ok, "the guest daemon: {}", connected.text());
+    let (window, host_id, _) = pair_by_link(&running, &host, &guest).await;
+    drop(window);
+    let (port, token) = daemon_of(&guest);
+    let key = host_key(&guest);
+    page_renderers_become(&running, 0).await;
+
+    // A window of the host that says it draws pages is not one of its
+    // desktop windows, and counts nothing.
+    let mut own = Window::open_saying(
+        running.port,
+        &running.token,
+        json!({"client_kind": "web", "draws_pages": true}),
+    )
+    .await;
+    own.frame("the host's snapshot", |frame| frame["type"] == "snapshot")
+        .await;
+    assert_eq!(
+        page_renderers(&running).await,
+        0,
+        "a window of the host saying it draws pages"
+    );
+    let mut older = open_view(port, &token, &host_id, &key).await;
+    until(&mut older, "the host's snapshot", |frame| {
+        frame["type"] == "snapshot"
+    })
+    .await;
+    assert_eq!(
+        page_renderers(&running).await,
+        0,
+        "a view that does not say it draws pages"
+    );
+    drop(older);
+
+    let mut drawing =
+        open_view_saying(port, &token, &host_id, &key, json!({"draws_pages": true})).await;
+    until(&mut drawing, "the host's snapshot", |frame| {
+        frame["type"] == "snapshot"
+    })
+    .await;
+    page_renderers_become(&running, 1).await;
+    drop(drawing);
+    page_renderers_become(&running, 0).await;
+    drop(own);
+    drop(running);
+}
+
+/// The host core's log records of `kind`, in order.
+fn logged(state: &std::path::Path, kind: &str) -> Vec<Value> {
+    std::fs::read_to_string(state.join("Logs/core.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| record["kind"] == kind)
+        .collect()
+}
+
+/// What the host's core was told of the machines showing their view of it,
+/// in order (`look.remote_views`, each machine by the start of its key).
+fn views_told(state: &std::path::Path) -> Vec<Vec<String>> {
+    logged(state, "look.remote_views")
+        .iter()
+        .map(|record| {
+            record["machines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|key| key.as_str().unwrap().to_owned())
+                .collect()
+        })
+        .collect()
+}
+
+/// The screens the host's core recorded the operator's look chosen on, in
+/// order (`look.chosen_on`: `own`, or a viewing machine by the start of its
+/// key).
+fn chosen_on(state: &std::path::Path) -> Vec<String> {
+    logged(state, "look.chosen_on")
+        .iter()
+        .map(|record| record["screen"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Waits until `read` of the host's log ends with `wanted`, and answers all
+/// of it.
+async fn ends_with<T: PartialEq + std::fmt::Debug>(
+    state: &std::path::Path,
+    read: fn(&std::path::Path) -> Vec<T>,
+    wanted: &T,
+) -> Vec<T> {
+    let deadline = Instant::now() + WITHIN;
+    loop {
+        let told = read(state);
+        if told.last() == Some(wanted) {
+            return told;
+        }
+        assert!(Instant::now() < deadline, "never {wanted:?}: {told:?}");
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the view's seat, its end and its events cross the connection; the record is the host core's own
+    }
+}
+
+/// A look the operator chooses in the view counts only while the guest shows
+/// it (operator report 2026-11-27, `docs/status-model.md`, Hide owns the read
+/// axis): the host's core is told which machines show their view as each one
+/// is seated and as it ends, so leaving the tile, which closes the view's
+/// socket, ends the guest's look there, and showing the tile again starts
+/// it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_host_s_core_hears_which_machines_show_their_view() {
+    let root = crate::fixtures::fixture_root("hw");
+    let running = hided::start_daemon(host_env(root.path())).await.unwrap();
+    let host_state = root.path().join("host-state");
+    let host = Terminal::new(root.path().join("host-home"), host_state.clone(), None);
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
+    let _stop = StopOnDrop(&guest);
+    let connected = guest.run(&["connect"]);
+    assert!(connected.ok, "the guest daemon: {}", connected.text());
+    let (window, host_id, _) = pair_by_link(&running, &host, &guest).await;
+    drop(window);
+    let (port, token) = daemon_of(&guest);
+    let key = host_key(&guest);
+    let guest_key = host_key(&host);
+    let showing = vec![guest_key[..16].to_owned()];
+    assert!(views_told(&host_state).is_empty(), "no view yet");
+
+    let mut view = open_view(port, &token, &host_id, &key).await;
+    until(&mut view, "the host's snapshot", |frame| {
+        frame["type"] == "snapshot"
+    })
+    .await;
+    ends_with(&host_state, views_told, &showing).await;
+
+    // A choice made in the view is the guest's: the daemon dispatches the
+    // view's event as sent from its machine, so it is chosen there.
+    send(&mut view, "focus_device", json!({"device_id": &host_id})).await;
+    ends_with(&host_state, chosen_on, &showing[0]).await;
+    // ... and one made on the host's own window is the host's.
+    let mut own = Window::open(&running, "web").await;
+    own.frame("the host's snapshot", |frame| frame["type"] == "snapshot")
+        .await;
+    own.send("focus_device", json!({"device_id": &host_id}))
+        .await;
+    let chosen = ends_with(&host_state, chosen_on, &"own".to_owned()).await;
+    assert_eq!(chosen, vec![showing[0].clone(), "own".to_owned()]);
+    drop(own);
+
+    // The tile hidden: the desktop closes the socket.
+    drop(view);
+    let told = ends_with(&host_state, views_told, &Vec::new()).await;
+    assert_eq!(told, vec![showing.clone(), Vec::new()]);
+
+    // The tile shown again.
+    let mut shown = open_view(port, &token, &host_id, &key).await;
+    until(&mut shown, "the host's snapshot again", |frame| {
+        frame["type"] == "snapshot"
+    })
+    .await;
+    let told = ends_with(&host_state, views_told, &showing).await;
+    assert_eq!(told, vec![showing.clone(), Vec::new(), showing.clone()]);
+}
+
+/// What this machine's core was told its windows show, in order
+/// (`look.window_screen`: `own` or `computer`).
+fn screens_told(state: &std::path::Path) -> Vec<String> {
+    logged(state, "look.window_screen")
+        .iter()
+        .map(|record| record["screen"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The mirror of the view's rule on this machine (`docs/status-model.md`,
+/// Hide owns the read axis): a look chosen on this machine's window counts
+/// only while a window of it shows its own screen, so the core hears another
+/// computer's screen while every window that reports shows one, this
+/// machine's own again the moment one window does, and a window that goes
+/// lets go of its report with its socket; the last one going leaves the core
+/// where it was, and the app opened again opens on this machine's own screen.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn this_machine_s_core_hears_whether_a_window_shows_its_own_screen() {
+    let root = crate::fixtures::fixture_root("ws");
+    let running = hided::start_daemon(host_env(root.path())).await.unwrap();
+    let state = root.path().join("host-state");
+    let snapshot = |frame: &Value| frame["type"] == "snapshot";
+    let before = host_clients(&running).await;
+
+    let mut desktop = Window::open(&running, "desktop").await;
+    desktop.frame("the desktop's snapshot", snapshot).await;
+    desktop
+        .send("window_screen", json!({"screen": "computer"}))
+        .await;
+    ends_with(&state, screens_told, &"computer".to_owned()).await;
+
+    let mut tab = Window::open(&running, "web").await;
+    tab.frame("the tab's snapshot", snapshot).await;
+    tab.send("window_screen", json!({"screen": "own"})).await;
+    ends_with(&state, screens_told, &"own".to_owned()).await;
+
+    drop(tab);
+    ends_with(&state, screens_told, &"computer".to_owned()).await;
+    // The last window goes while it shows another computer's screen: its
+    // report is let go once the daemon has counted it gone.
+    drop(desktop);
+    let deadline = Instant::now() + WITHIN;
+    while host_clients(&running).await != before {
+        assert!(
+            Instant::now() < deadline,
+            "the closed window stayed counted"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the closed socket's end crosses the connection; the count is the daemon's own, taken after it lets go of the window's reports (`client_gone`)
+    }
+    // The app opened again opens on this machine's own screen and says so.
+    let mut reopened = Window::open(&running, "desktop").await;
+    reopened.frame("the reopened snapshot", snapshot).await;
+    reopened
+        .send("window_screen", json!({"screen": "own"}))
+        .await;
+    let told = ends_with(&state, screens_told, &"own".to_owned()).await;
+    assert_eq!(told, ["computer", "own", "computer", "own"]);
 }

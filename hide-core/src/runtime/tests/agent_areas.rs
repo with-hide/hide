@@ -1574,6 +1574,7 @@ fn pending_fork(runtime: &mut Runtime, source: &str, request_id: Option<&str>) {
             generation: runtime.live_generation,
             issued_serial: runtime.control_lane.issued_serial(),
             origin: super::events::ForkOrigin::Operator,
+            screen: None,
             tab_id: None,
             pane_id: None,
             tab_label: Some("claude".into()),

@@ -1701,7 +1701,7 @@ fn sleep_defaults_to_12_hours_and_an_earlier_stores_choice_moves_once() {
 }
 
 /// A runtime started again on the state file at `path`, as a relaunch does.
-fn restarted_on(path: &std::path::Path) -> Runtime {
+pub(super) fn restarted_on(path: &std::path::Path) -> Runtime {
     Runtime::new(
         CoreOptions {
             schema_version: SCHEMA_VERSION,

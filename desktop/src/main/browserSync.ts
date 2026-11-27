@@ -7,7 +7,9 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { Parameters as EmulationParameters } from "electron";
 import type { BrowserCommand, BrowserDevicePlacement, BrowserPlacement, BrowserRect, BrowserSync } from "../../../web/src/host";
-import { isLoopbackHost } from "../../../web/src/loopbackHost";
+import { isLocalNetworkHost, isLoopbackHost } from "../../../web/src/loopbackHost";
+
+export { isLocalNetworkHost };
 
 /** A Workspace holds at most this many displays (`MAX_VIEW_DISPLAYS` is 32);
  * the bound is kept wider than the core's. */
@@ -25,6 +27,33 @@ export const IDLE_UNLOAD_MS = 12 * 60 * 60 * 1000;
 export const IDLE_CHECK_MS = 60_000;
 /** Popup windows open at once across every page; a page asking for one more is refused. */
 export const MAX_POPUPS = 4;
+
+/**
+ * What one other computer's screen may hold of this window's pages: a
+ * page there is that computer's to place, so each repeatable thing it asks
+ * for is bounded on its own, apart from this window's `MAX_LIVE_VIEWS`.
+ */
+export const REMOTE_BOUNDS = {
+  /** Live pages at once; a placement past it gets no page and says why. */
+  pages: 4,
+  /** Pages made within `creationWindowMs`; past it a display waits. */
+  creations: 8,
+  creationWindowMs: 10_000,
+  /** Popups open at once, within `MAX_POPUPS`. */
+  popups: 2,
+  /** Placements and retained rows one sync may name. */
+  placements: 64,
+  retained: 1024,
+  /** The least time between two syncs applied; the latest waiting wins. */
+  syncEveryMs: 16,
+  /** Stills a second, one at a time. */
+  capturesPerSecond: 10,
+  /** Toolbar commands a second. */
+  commandsPerSecond: 20,
+} as const;
+
+/** How long after the operator's press a page may open a window or this Mac's browser. */
+export const PRESS_WITHIN_MS = 1_000;
 const MAX_TEXT = 8192;
 /** Outside-file grants one sync may name: the host holds at most 32 (`MAX_EXTERNAL_GRANTS`), and the shell's opens on their way add a few. */
 const MAX_EXTERNAL_LISTED = 256;
@@ -154,6 +183,24 @@ export function parseSync(value: unknown): BrowserSync | null {
   };
 }
 
+/**
+ * A sync from another computer's screen: within that screen's
+ * bounds and with nothing that grants this window's authority. A display
+ * that names an outside file's grant drops the whole sync; the CDP scopes,
+ * the attachment epoch and the outside grants it may name are dropped, since
+ * no page of that screen enters CDP or reads this Mac's files.
+ */
+export function parseRemoteSync(value: unknown): BrowserSync | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { displays, retained } = value as Record<string, unknown>;
+  if (!Array.isArray(displays) || displays.length > REMOTE_BOUNDS.placements) return null;
+  if (!Array.isArray(retained) || retained.length > REMOTE_BOUNDS.retained) return null;
+  if (displays.some((display) => typeof display !== "object" || display === null || "grant" in display)) return null;
+  const sync = parseSync({ ...(value as Record<string, unknown>), authorized_scopes: undefined, attachment_epoch: undefined, external_grants: undefined });
+  if (!sync) return null;
+  return { workspace: sync.workspace, displays: sync.displays, retained: sync.retained, ...(sync.node ? { node: sync.node } : {}), ...(sync.inventoried ? { inventoried: true as const } : {}) };
+}
+
 /** A display named by the shell for a still or a command. */
 export function parseTarget(value: unknown): { workspace: string; id: string } | null {
   if (typeof value !== "object" || value === null) return null;
@@ -244,6 +291,56 @@ export function browserPartition(workspace: string, url: string, node: string | 
   return "persist:hide-browser-web";
 }
 
+/**
+ * The login storage of the pages another computer's screen shows here: one
+ * persistent partition per machine, the key it was paired under and the
+ * pairing itself (the daemon's name for the grant that machine gave),
+ * shared with no page of this window, of another machine, of that machine
+ * under another key, or of an earlier pairing of it.
+ */
+export function remotePagePartition(device: string, key: string, pairing: string): string {
+  return `persist:hide-remote-page-${createHash("sha256").update(`${device}\u0000${key}\u0000${pairing}`).digest("hex").slice(0, 32)}`;
+}
+
+/**
+ * Where a page another computer's screen placed draws in this window:
+ * its rect in that screen's page, scaled by the screen's zoom, moved to the
+ * screen's place in the window and cut to it, or null when nothing of it is
+ * inside, so no page of that computer ever covers this window's own rail.
+ */
+export function placeIn(placed: BrowserRect, zoom: number, area: BrowserRect): BrowserRect | null {
+  const inner = toBounds(placed, zoom);
+  const x = Math.max(area.x, area.x + inner.x);
+  const y = Math.max(area.y, area.y + inner.y);
+  const right = Math.min(area.x + area.width, area.x + inner.x + inner.width);
+  const bottom = Math.min(area.y + area.height, area.y + inner.y + inner.height);
+  return right > x && bottom > y ? { x, y, width: right - x, height: bottom - y } : null;
+}
+
+/**
+ * Whether a page of another computer's screen may reach `raw`: a page
+ * reaches that computer's loopback and network only from a document that is
+ * itself there. Chromium cannot tell a public page from a private one behind
+ * a loopback proxy, so a subresource, fetch or socket to a local-network
+ * host is refused unless `top`, the document that asks, is on one; a request
+ * with no known document (a service worker) counts as a public page's. A
+ * top-level navigation decides its own document and is allowed.
+ */
+export function localNetworkReach(raw: string, top: string | null, mainFrame: boolean): boolean {
+  if (mainFrame) return true;
+  let target: URL;
+  try { target = new URL(raw); } catch { return false; }
+  if (!["http:", "https:", "ws:", "wss:"].includes(target.protocol)) return true;
+  if (!isLocalNetworkHost(target.hostname)) return true;
+  if (!top) return false;
+  try {
+    const document = new URL(top);
+    return (document.protocol === "http:" || document.protocol === "https:") && isLocalNetworkHost(document.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /** A page's address (`source_url`, the one the core keeps) and the address this Mac loads it from (`url`). */
 export type PageRoute = { url: string; source_url: string };
 
@@ -305,52 +402,6 @@ export function remoteRequest(route: PageRoute, raw: string): { redirectURL?: st
   } catch {
     return { cancel: true };
   }
-}
-
-/**
- * Whether `hostname` (as a URL spells it, an IPv6 literal in brackets) names
- * this machine or a private network: loopback, link-local, private and
- * shared ranges, and the names a resolver answers from the local network
- * rather than the internet (`localhost`, `.local`, and a name with no dot).
- */
-export function isLocalNetworkHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/\.$/, "");
-  if (host === "" || host === "localhost" || /\.(localhost|local|localdomain|internal|lan|home\.arpa|intranet)$/.test(host)) return true;
-  const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host);
-  if (v4) return privateV4(v4.slice(1).map(Number) as [number, number, number, number]);
-  if (host.startsWith("[")) return privateV6(host.slice(1, -1));
-  // A name with no dot is the local network's (a router, a NAS, a build host).
-  return !host.includes(".");
-}
-
-function privateV4([a, b, c]: [number, number, number, number]): boolean {
-  return a === 0 || a === 10 || a === 127 || a >= 224
-    || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
-    || (a === 192 && b === 168) || (a === 192 && b === 0 && c === 0) || (a === 198 && (b === 18 || b === 19));
-}
-
-function privateV6(address: string): boolean {
-  const groups = expandV6(address);
-  if (!groups) return true;
-  const [g0, g1, , , , g5, g6, g7] = groups as [number, number, number, number, number, number, number, number];
-  if (groups.every((group) => group === 0) || (groups.slice(0, 7).every((group) => group === 0) && g7 === 1)) return true;
-  if ((g0 & 0xffc0) === 0xfe80 || (g0 & 0xfe00) === 0xfc00 || (g0 & 0xffc0) === 0xfec0 || (g0 & 0xff00) === 0xff00) return true;
-  // IPv4-mapped (::ffff:a.b.c.d) and the NAT64 prefix carry an IPv4 address in their last 32 bits.
-  const embedded = groups.slice(0, 5).every((group) => group === 0) && g5 === 0xffff || (g0 === 0x64 && g1 === 0xff9b);
-  return embedded && privateV4([g6 >> 8, g6 & 255, g7 >> 8, g7 & 255]);
-}
-
-/** Eight 16-bit groups of an IPv6 literal, or null when it does not parse. */
-function expandV6(address: string): number[] | null {
-  const [head, tail, extra] = address.split("::");
-  if (extra !== undefined) return null;
-  const read = (part: string) => part === "" ? [] : part.split(":").map((group) => (/^[0-9a-f]{1,4}$/.test(group) ? Number.parseInt(group, 16) : Number.NaN));
-  const first = read(head ?? "");
-  const last = tail === undefined ? [] : read(tail);
-  const missing = 8 - first.length - last.length;
-  if (tail === undefined ? missing !== 0 : missing < 1) return null;
-  const groups = [...first, ...Array<number>(Math.max(0, missing)).fill(0), ...last];
-  return groups.length === 8 && groups.every(Number.isInteger) ? groups : null;
 }
 
 export type LocalPageVerdict = { cancel: false } | { cancel: true; boundary: "file" | "network" } | { resolve: string };

@@ -386,7 +386,7 @@ impl NoCarrier {
 /// answers that stream: every byte after the daemon's answer line is the
 /// carrier's. The answer is read a byte at a time, so nothing of the
 /// carrier is taken with it.
-pub fn carrier(env: &Env) -> Result<LocalStream, NoCarrier> {
+pub fn carrier(env: &Env, over_ssh: bool) -> Result<LocalStream, NoCarrier> {
     let no_daemon = |code: &str| NoCarrier::NoDaemon(code.to_owned());
     let mut nonce = [0u8; 16];
     getrandom::getrandom(&mut nonce).map_err(|_| no_daemon("reference_unavailable"))?;
@@ -397,7 +397,10 @@ pub fn carrier(env: &Env) -> Result<LocalStream, NoCarrier> {
         hook: None,
         install: None,
         access: None,
-        device: Some(serde_json::json!({ "verb": "carry" })),
+        device: Some(match over_ssh {
+            true => serde_json::json!({ "verb": "carry", "over": "ssh" }),
+            false => serde_json::json!({ "verb": "carry" }),
+        }),
         phone: None,
     })
     .map_err(|_| no_daemon("reference_unavailable"))?;
@@ -422,6 +425,11 @@ pub fn carrier(env: &Env) -> Result<LocalStream, NoCarrier> {
                 .unwrap_or("hide_unavailable")
                 .to_owned(),
         ));
+    }
+    // A daemon that carries over SSH says so: one before it accepted the
+    // ask without hearing the word, and carries nothing over SSH.
+    if over_ssh && answer["over"] != "ssh" {
+        return Err(NoCarrier::Refused("ssh_update_there".to_owned()));
     }
     // From here the stream is the connection's, as long as it lives.
     stream.clear_deadline();
@@ -2632,6 +2640,7 @@ mod tests {
             peer_relay: None,
             peer_relay_only: false,
             search_path: None,
+            screen_net_hosts: std::collections::HashMap::new(),
         }
     }
 

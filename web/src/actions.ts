@@ -85,6 +85,8 @@ import {
   type LookAt,
   type RecentPlace,
   type SignInReply,
+  type GlanceGroupKey,
+  type GlanceTab,
 } from "./snapshot";
 import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
@@ -96,12 +98,14 @@ import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
 import { deskOn, laneCards } from "./desk";
-import { closeSession as closeDeskSession, hideDesk, openSession as openDeskSession, showDesk, toggleExpanded as toggleDeskExpanded, toggleExplorer as toggleDeskExplorer } from "./deskRoom";
+import { closeSession as closeDeskSession, deskShown, hideDesk, openSession as openDeskSession, showDesk, toggleExpanded as toggleDeskExpanded, toggleExplorer as toggleDeskExplorer } from "./deskRoom";
 import { deskOpenSend, deskTabCount, deskViewOf, deskWorkspaceOf, DESK_SCREEN, isDeskWorkspace, type DeskOpen } from "./deskDesk";
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type ExplorerTarget, type PendingClose, type PendingViewsClose } from "./ui";
+import { windowScreen, type WindowScreen } from "./windowScreen";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
-import { remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
+import { isRemoteView, remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
+import { isLocalNetworkHost } from "./loopbackHost";
 import type { PairingVerb } from "./pairing";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
@@ -181,6 +185,42 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const remote = remoteBridge();
   const board = clipboard ?? (remote ? remoteClipboard(remote, diagnostic) : browserClipboard(diagnostic));
   const ui = () => useUiStore.getState();
+  /** What this page's live connection was last told of the screen it shows, null before it was told anything. */
+  let toldScreen: WindowScreen | null = null;
+  /**
+   * Tells the daemon which machine's screen this window shows: `again` to a
+   * new connection (`installWindowScreen`), then each change, which an
+   * action tells after its own events, so the core never reads a look the
+   * action passes through (`windowScreen.ts`). Another machine's view is no
+   * window of this machine (D-60, D-67).
+   */
+  const tellWindowScreen = (again = false) => {
+    if (remote) return;
+    if (useShellStore.getState().connection !== "live") {
+      toldScreen = null;
+      return;
+    }
+    const screen = windowScreen();
+    if (!again && (toldScreen === null || screen === toldScreen)) return;
+    toldScreen = screen;
+    dispatch({ schema_version: 2, kind: "window_screen", payload: { screen } });
+  };
+  /**
+   * The one way this window enters another computer's screen, `device`'s,
+   * or leaves it for its own with null (PRD device-connect-iroh B17): it
+   * shows that screen, runs `then`, the action's own events, and tells the
+   * daemon the screen it then shows after them, whichever way `then` ends,
+   * so the core never reads a look the action passes through
+   * (`windowScreen.ts`).
+   */
+  const showScreen = (device: string | null, then?: () => void) => {
+    ui().setRemoteScreen(device);
+    try {
+      then?.();
+    } finally {
+      tellWindowScreen();
+    }
+  };
 
 
 
@@ -638,6 +678,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * focus mode (`openLook`, operator decision 2026-11-23).
    */
   const openAgent = (paneId: string, look?: LookAt) => {
+    // A pane of this machine or of its devices shows on this machine's own
+    // screen: from another computer's screen (an overlay such as the palette
+    // drawn over it, or a key), the window shows its own again, told after
+    // the open (`showScreen`).
+    if (ui().remoteScreen !== null) return showScreen(null, () => openAgentHere(paneId, look));
+    openAgentHere(paneId, look);
+  };
+  const openAgentHere = (paneId: string, look?: LookAt) => {
     beginOpening({ paneId });
     // A request id makes the core answer this click, a pane that is gone
     // or a device's refusal included, so the opening says why at once
@@ -1642,6 +1690,19 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (remote) return;
       dispatch({ schema_version: 2, kind: "window_focus", payload: screen ? { focused: true, screen } : { focused: false } });
     },
+    /** Which machine's screen this window shows, told to a new connection, which has heard nothing yet (`windowScreen.ts`). */
+    noteWindowScreen() {
+      tellWindowScreen(true);
+    },
+    /**
+     * Shows `device`'s screen in this window, or this machine's own with
+     * null, and runs `then`, the action's own events, before the daemon is
+     * told which screen shows; the one way to enter or leave another
+     * computer's screen.
+     */
+    showScreen(device: string | null, then?: () => void) {
+      showScreen(device, then);
+    },
     /** Whether this page shows the request view; while one does, the core re-reads running checks (PRD overview-request-view D-32). */
     observeRequestView(observing: boolean) {
       dispatch({ schema_version: 2, kind: "request_view", payload: { observing } });
@@ -1921,22 +1982,23 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * the cell in front is read from what the center shows.
      */
     focusDevice(deviceId: string) {
-      // The window shows its own screen again (PRD device-connect-iroh B17).
-      ui().setRemoteScreen(null);
-      const screen = ui().screen;
-      // The mission screen follows the rail to the device chosen (PRD mission-screen D-06), a tool's mission screen too (B40).
-      if (screen?.kind === "missions") {
-        ui().setMissions({ deviceId: null });
-        if (screen.tool !== undefined) ui().setScreen({ kind: "missions" });
-      } else if (frontTool(rest(), screen) !== null) {
-        if (showDeviceFromTool(deviceId)) return;
-      } else if (screen?.kind === "main" && screen.deviceId !== deviceId) {
-        // The rail's choice replaces a device the Overview's own switch picked earlier (D-02, D-17).
-        ui().setOverview({ deviceId: null, projectId: null, panel: null });
-        ui().setScreen({ kind: "main", deviceId });
-      }
-      if (frontDeviceId(rest()) === deviceId) return;
-      dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: deviceId } });
+      // The window shows its own screen again, told once the device it chose is sent.
+      showScreen(null, () => {
+        const screen = ui().screen;
+        // The mission screen follows the rail to the device chosen (PRD mission-screen D-06), a tool's mission screen too (B40).
+        if (screen?.kind === "missions") {
+          ui().setMissions({ deviceId: null });
+          if (screen.tool !== undefined) ui().setScreen({ kind: "missions" });
+        } else if (frontTool(rest(), screen) !== null) {
+          if (showDeviceFromTool(deviceId)) return;
+        } else if (screen?.kind === "main" && screen.deviceId !== deviceId) {
+          // The rail's choice replaces a device the Overview's own switch picked earlier (D-02, D-17).
+          ui().setOverview({ deviceId: null, projectId: null, panel: null });
+          ui().setScreen({ kind: "main", deviceId });
+        }
+        if (frontDeviceId(rest()) === deviceId) return;
+        dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: deviceId } });
+      });
     },
 
     /**
@@ -1956,7 +2018,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     selectComputer(id: string) {
       const tile = computerTiles(rest()).find((row) => row.id === id);
       if (tile?.screen && hostBridge()?.remoteScreens) {
-        ui().setRemoteScreen(tile.screen.device_id);
+        showScreen(tile.screen.device_id);
         return;
       }
       if (tile?.screen && tile.screen.device_id === id && !rest()?.navigator?.devices?.some((device) => device.id === id)) {
@@ -1980,25 +2042,39 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const computer = pairedComputer(rest(), deviceId);
       if (!computer) return "not_paired";
       const remote = hostBridge()?.remoteScreens;
-      if (!computer.screen || !remote?.go || !remote.onWorkResult) return "no_screen";
-      ui().setRemoteScreen(computer.screen.device_id);
-      remote.go({ device: computer.screen.device_id, key: computer.screen.key, work });
+      const screen = computer.screen;
+      if (!screen || !remote?.go || !remote.onWorkResult) return "no_screen";
+      const go = remote.go;
+      showScreen(screen.device_id, () => go({ device: screen.device_id, key: screen.key, work }));
       return "handed";
     },
 
+    /**
+     * Another computer's agent chosen here, by a row of that computer's own
+     * work or the notice it handed over: that computer's screen comes
+     * forward on the agent's pane, as an SSH device's agent opens on its
+     * pane; `pane` is the pane that computer's core knows it by. Where no
+     * screen of it can be drawn here (a browser tab, an older desktop app),
+     * its tile comes forward as before.
+     */
+    openComputerAgent(deviceId: string, pane: string) {
+      if (this.openComputerWork(deviceId, { op: "show", pane }) !== "handed") this.focusDevice(deviceId);
+    },
+
     focusTool(connection: string) {
-      ui().setRemoteScreen(null);
-      const screen = ui().screen;
-      if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
-      // Under the cell stands this window's own machine, which the window shows again once the cell goes (B44).
-      const own = windowDeviceId(rest()?.navigator?.devices);
-      // The Overview's own pick and the page's named device both give way, as a rail tile's choice does, so the cell gone leaves the Overview on the rail's machine.
-      ui().setOverview({ deviceId: null, projectId: null, panel: null });
-      // The tool's Overview is the center's page, not a layer over the Workspace (D-54, B47): its agents, its missions
-      // and the Views it opened, each one press from its pane or View. A device tile takes the center back (`focusDevice`).
-      // It names this window's own machine, which the page shows again once the cell goes.
-      useUiStore.setState({ screen: { kind: "main", deviceId: own, tool: connection }, overviewOpen: false, overviewReturnFocus: null, overviewReveal: null, overlay: "none", opening: null });
-      if (frontDeviceId(rest()) !== own) dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: own } });
+      showScreen(null, () => {
+        const screen = ui().screen;
+        if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
+        // Under the cell stands this window's own machine, which the window shows again once the cell goes (B44).
+        const own = windowDeviceId(rest()?.navigator?.devices);
+        // The Overview's own pick and the page's named device both give way, as a rail tile's choice does, so the cell gone leaves the Overview on the rail's machine.
+        ui().setOverview({ deviceId: null, projectId: null, panel: null });
+        // The tool's Overview is the center's page, not a layer over the Workspace (D-54, B47): its agents, its missions
+        // and the Views it opened, each one press from its pane or View. A device tile takes the center back (`focusDevice`).
+        // It names this window's own machine, which the page shows again once the cell goes.
+        useUiStore.setState({ screen: { kind: "main", deviceId: own, tool: connection }, overviewOpen: false, overviewReturnFocus: null, overviewReveal: null, overlay: "none", opening: null });
+        if (frontDeviceId(rest()) !== own) dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: own } });
+      });
     },
 
     /** Every entry point of Add device (the rail's `+`, the hidden rail's menu, Add project's Host list) opens the one dialog (D-11); `computer` skips its computer-or-phone question. */
@@ -2828,8 +2904,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (ui().screen?.kind !== "desk") this.openDesk();
       ui().setDeskRoom(showDesk);
       const desk = deskWorkspaceOf(rest());
-      if (sent.focus && desk) ui().setViewFocusRequest("card" in sent.focus ? sent.focus : { workspace: workspaceKey(desk), opened: sent.focus.opened });
-      dispatch({ schema_version: 2, kind: "desk_view_open", payload: sent.send });
+      let payload = sent.send;
+      if ("card" in sent.focus) ui().setViewFocusRequest(sent.focus);
+      else if (desk && "receipt" in sent.focus) payload = { ...payload, request_id: followBrowserOpen(desk) };
+      else if (desk && "opened" in sent.focus) ui().setViewFocusRequest({ workspace: workspaceKey(desk), opened: sent.focus.opened });
+      dispatch({ schema_version: 2, kind: "desk_view_open", payload });
     },
 
     /**
@@ -2867,9 +2946,19 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().setDeskRoom(closeDeskSession);
     },
 
-    /** `⟩` on 한눈에, or its button in Desk's head: 한눈에 folds or unfolds, which the core keeps with the panels' widths. */
+    /** `▯|` on 한눈에, or the same icon in Desk's head: 한눈에 folds or unfolds, which the core keeps with the panels' widths. */
     deskGlanceFold(folded: boolean) {
       dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_folded: folded } });
+    },
+
+    /** 한눈에's `세션` or `파일` tab, which the core keeps, the same in every window. */
+    deskGlanceTab(tab: GlanceTab) {
+      dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_tab: tab } });
+    },
+
+    /** A session group's head on 한눈에: the group folds or unfolds, which the core keeps. */
+    deskGlanceGroup(group: GlanceGroupKey, folded: boolean) {
+      dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_group: { group, folded } } });
     },
 
     /** `‹ 한눈에` above the session beside Desk: the session closes, kept for ⌘E, and 한눈에 stands there again, unfolded. */
@@ -4077,29 +4166,24 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     closeLane,
 
     toggleLane() {
-      // In Desk's room the right side is the session panel, which `deskToggleSession` closes and opens.
-      if (ui().screen?.kind === "desk") return this.deskToggleSession();
+      // In Desk's room the right side is Desk's desk, which `deskToggleDesk` opens and folds.
+      if (ui().screen?.kind === "desk") return this.deskToggleDesk();
       return toggleLane();
     },
 
     /**
-     * ⌘E in Desk's room (B6; operator decision 2026-11-25, replacing PRD desk-2-ui D-13's nothing): the session
-     * panel closes as `‹ 한눈에` does, and pressed again opens the session just closed, as a
-     * sidebar row's press does, with the keyboard in its input box as a work tab's ⌘E gives it back to the pane. A
-     * session whose pane is gone since (closed, archived, woken in another pane) is not reopened as an empty
-     * panel: the memory is cleared and only the log says so.
+     * ⌘E in Desk's room (operator decision 2026-11-27, replacing 2026-11-25's close and reopen of the session): Desk's
+     * desk shows, with the keyboard in its area in front, as a work tab's ⌘E opens its right lane, and pressed again
+     * folds it, its tabs kept, the keyboard going back to where it was. The session beside Desk stays as it is; `‹ 한눈에`
+     * and Escape close it. A desk with no tab has nothing to show, which only the log says.
      */
-    deskToggleSession() {
-      const room = ui().deskRoom;
-      if (room.session) return ui().setDeskRoom(closeDeskSession);
-      const pane = room.closed;
-      if (!pane) return diagnostic("toggle_lane: no session was closed beside Desk to open again");
-      const state = useShellStore.getState();
-      if (!agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).has(pane)) {
-        ui().setDeskRoom((now) => ({ ...now, closed: null }));
-        return diagnostic(`toggle_lane: the session closed beside Desk (${pane}) is gone`);
-      }
-      this.openDeskSession(pane, { answer: true });
+    deskToggleDesk() {
+      const view = deskViewOf(rest());
+      const tabs = deskTabCount(view);
+      if (deskShown(ui().deskRoom, tabs)) return ui().setDeskRoom(hideDesk);
+      if (!view || tabs === 0) return diagnostic("toggle_lane: Desk's desk holds no tab to show");
+      ui().setDeskRoom(showDesk);
+      ui().setViewFocusRequest({ workspace: workspaceKey(view), areaId: view.layout.active_area });
     },
 
     setWorkspaceView,
@@ -4346,6 +4430,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       // The core keeps a Workspace in front while the page shows All projects
       // or an Overview; a display opened there would land out of sight.
       const inFront = ui().screen?.kind === "workspace" ? frontViewWorkspace() : null;
+      // In another computer's screen the default browser is the showing
+      // window's, which never opens this machine's loopback, LAN or local
+      // names; such a link opens as a page here, which reaches them through
+      // this machine (docs/BROWSER_DISPLAYS.md, A page in another computer's screen).
+      if (external && inFront && isRemoteView() && localNetworkLink(url)) {
+        this.openBrowser(url, undefined, undefined, undefined, openerPane);
+        return;
+      }
       if (external || !inFront) {
         window.open(url, "_blank", "noopener,noreferrer");
         return;
@@ -4623,4 +4715,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       });
     },
   };
+}
+
+/** Whether `url` is a web address on its machine's loopback, its LAN or a local name. */
+export function localNetworkLink(url: string): boolean {
+  try {
+    const address = new URL(url);
+    return (address.protocol === "http:" || address.protocol === "https:") && isLocalNetworkHost(address.hostname);
+  } catch {
+    return false;
+  }
 }
