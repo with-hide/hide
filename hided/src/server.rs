@@ -582,6 +582,9 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "program": state.program.as_deref(),
         "schema_version": SCHEMA_VERSION,
         "clients": state.clients.load(Ordering::SeqCst),
+        // What draws this machine's browser displays now: its desktop
+        // windows and the views of it whose app draws pages (`draws_pages`).
+        "page_renderers": state.page_renderers.load(Ordering::SeqCst),
         "open_handlers_in_flight": state.opener.in_flight(),
         "idle_remaining_secs": idle_remaining_secs(&state),
         "instance": state.seat.instance(),

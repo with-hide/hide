@@ -72,19 +72,48 @@ async fn view_socket(port: u16, token: &str, host: &str, key: &str) -> Result<So
 /// The desktop's view socket on the guest daemon, its handshake sent as a
 /// page that holds no token of the host sends it.
 async fn open_view(port: u16, token: &str, host: &str, key: &str) -> Socket {
+    open_view_saying(port, token, host, key, json!({})).await
+}
+
+/// `open_view` with `more` added to the handshake.
+async fn open_view_saying(port: u16, token: &str, host: &str, key: &str, more: Value) -> Socket {
     let mut socket = view_socket(port, token, host, key)
         .await
         .unwrap_or_else(|status| panic!("the view socket was refused: {status}"));
+    let mut handshake = json!({"token": "", "schema_version": 2, "client_kind": "desktop",
+        "snapshot_format": "semantic-rest-v1"});
+    for (name, value) in more.as_object().unwrap() {
+        handshake[name] = value.clone();
+    }
     socket
-        .send(Message::Text(
-            json!({"token": "", "schema_version": 2, "client_kind": "desktop",
-                "snapshot_format": "semantic-rest-v1"})
-            .to_string()
-            .into(),
-        ))
+        .send(Message::Text(handshake.to_string().into()))
         .await
         .unwrap();
     socket
+}
+
+/// What the host's daemon counts as drawing its browser displays now (`/health`).
+async fn page_renderers(running: &hided::RunningDaemon) -> u64 {
+    let (_, body) = get(running.port, "/health", None).await;
+    serde_json::from_str::<Value>(&body).unwrap()["page_renderers"]
+        .as_u64()
+        .unwrap()
+}
+
+/// Waits until the host counts `wanted` page renderers.
+async fn page_renderers_become(running: &hided::RunningDaemon, wanted: u64) {
+    let deadline = Instant::now() + WITHIN;
+    loop {
+        let now = page_renderers(running).await;
+        if now == wanted {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "page renderers stayed {now}, not {wanted}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await; // wait-ok: the host counts a view once its handshake lands and uncounts it once its socket closes
+    }
 }
 
 async fn send(socket: &mut Socket, kind: &str, payload: Value) {
@@ -631,6 +660,56 @@ async fn a_screen_page_request_comes_from_a_port_the_host_dialed() {
             .collect::<Vec<_>>(),
         ["/one", "/two"]
     );
+    // A `CONNECT` tunnel, as Chromium opens for `https` and WebSockets:
+    // the host dials the origin and joins the two, and what the page then
+    // sends inside it reaches the origin from that dialed port.
+    {
+        use base64::Engine as _;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut tunnel = tokio::net::TcpStream::connect(("127.0.0.1", listen))
+            .await
+            .unwrap();
+        tunnel
+            .write_all(
+                format!(
+                    "CONNECT 127.0.0.1:{origin_port} HTTP/1.1\r\nHost: 127.0.0.1:{origin_port}\r\nProxy-Authorization: Basic {}\r\n\r\n",
+                    base64::engine::general_purpose::STANDARD.encode(format!("hide:{secret}"))
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut answer = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !answer.ends_with(b"\r\n\r\n") {
+            let read = tokio::time::timeout(WITHIN, tunnel.read(&mut byte))
+                .await
+                .expect("the tunnel's answer")
+                .unwrap();
+            assert_eq!(read, 1, "{}", String::from_utf8_lossy(&answer));
+            answer.push(byte[0]);
+        }
+        assert!(
+            String::from_utf8_lossy(&answer).starts_with("HTTP/1.1 200"),
+            "{}",
+            String::from_utf8_lossy(&answer)
+        );
+        tunnel
+            .write_all(b"GET /tunneled HTTP/1.1\r\nHost: origin\r\n\r\n")
+            .await
+            .unwrap();
+        let mut ok = [0_u8; 40];
+        let read = tokio::time::timeout(WITHIN, tunnel.read(&mut ok))
+            .await
+            .expect("the origin's answer")
+            .unwrap();
+        assert!(ok[..read].starts_with(b"HTTP/1.1 200 OK"));
+    }
+    let arrived = seen.lock().unwrap().clone();
+    assert_eq!(
+        arrived.last().map(|(path, _)| path.as_str()),
+        Some("/tunneled")
+    );
     let ports = dialed(&root.path().join("host-state"), arrived.len()).await;
     for (path, from) in &arrived {
         assert!(
@@ -661,7 +740,7 @@ async fn a_screen_page_request_comes_from_a_port_the_host_dialed() {
     );
     assert_eq!(
         seen.lock().unwrap().len(),
-        2,
+        3,
         "nothing reached the origin while paused"
     );
 
@@ -763,5 +842,74 @@ async fn a_screen_asks_its_host_where_a_display_loads_from() {
         "{answer}"
     );
     drop(view);
+    drop(running);
+}
+
+// docs/BROWSER_DISPLAYS.md, A machine with no window of its own: a view of
+// the host whose app draws pages counts on the host beside its desktop
+// windows, which is what lets an agent there open a page with no window of
+// the host's own (`page_renderers`, the gate of `hide browser open`); a view
+// that does not say so, and a window of the host that says so, count
+// nothing; the count goes with the view.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guest_view_that_draws_pages_counts_on_its_host_while_it_lives() {
+    let root = crate::fixtures::fixture_root("hd");
+    let running = hided::start_daemon(host_env(root.path())).await.unwrap();
+    let host = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
+    let _stop = StopOnDrop(&guest);
+    let connected = guest.run(&["connect"]);
+    assert!(connected.ok, "the guest daemon: {}", connected.text());
+    let (window, host_id, _) = pair_by_link(&running, &host, &guest).await;
+    drop(window);
+    let (port, token) = daemon_of(&guest);
+    let key = host_key(&guest);
+    page_renderers_become(&running, 0).await;
+
+    // A window of the host that says it draws pages is not one of its
+    // desktop windows, and counts nothing.
+    let mut own = Window::open_saying(
+        running.port,
+        &running.token,
+        json!({"client_kind": "web", "draws_pages": true}),
+    )
+    .await;
+    own.frame("the host's snapshot", |frame| frame["type"] == "snapshot")
+        .await;
+    assert_eq!(
+        page_renderers(&running).await,
+        0,
+        "a window of the host saying it draws pages"
+    );
+    let mut older = open_view(port, &token, &host_id, &key).await;
+    until(&mut older, "the host's snapshot", |frame| {
+        frame["type"] == "snapshot"
+    })
+    .await;
+    assert_eq!(
+        page_renderers(&running).await,
+        0,
+        "a view that does not say it draws pages"
+    );
+    drop(older);
+
+    let mut drawing =
+        open_view_saying(port, &token, &host_id, &key, json!({"draws_pages": true})).await;
+    until(&mut drawing, "the host's snapshot", |frame| {
+        frame["type"] == "snapshot"
+    })
+    .await;
+    page_renderers_become(&running, 1).await;
+    drop(drawing);
+    page_renderers_become(&running, 0).await;
+    drop(own);
     drop(running);
 }
