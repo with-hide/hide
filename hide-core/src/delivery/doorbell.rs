@@ -4994,9 +4994,7 @@ mod tests {
                 } else {
                     assert!(bell.reads() >= 1, "{name}: the composer was read");
                     assert!(
-                        reasons
-                            .iter()
-                            .all(|reason| reason == "composer_unreadable"),
+                        reasons.iter().all(|reason| reason == "composer_unreadable"),
                         "{name}: {reasons:?}"
                     );
                 }
