@@ -512,8 +512,9 @@ export class BrowserViews {
   private command(source: Source, value: unknown, name: unknown): void {
     const target = parseTarget(value);
     const command = parseCommand(name);
-    const page = target ? this.pages.get(pageKey(source, target.workspace, target.id)) : undefined;
-    if (!page || !command) return;
+    if (!target || !command) return;
+    const page = this.pages.get(pageKey(source, target.workspace, target.id));
+    if (!page && !(source.remote && command === "reload")) return;
     if (source.remote) {
       const now = this.idle.now();
       source.commanded = recent(source.commanded, now, 1_000);
@@ -524,7 +525,11 @@ export class BrowserViews {
       }
       source.commandsRefused = false;
       source.commanded.push(now);
+      // A slot that failed before its page was made (its proxy, its storage,
+      // the page bound) has its Reload apply the screen's last sync again.
+      if (!page) return this.applyRemote(source);
     }
+    if (!page) return;
     const contents = page.view.webContents;
     const zoom = SHELL_ZOOM_COMMANDS[command];
     if (zoom) this.zoom(page, zoom);
@@ -536,8 +541,10 @@ export class BrowserViews {
     else if (command === "forward" && contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
     else if (command === "stop") contents.stop();
     else if (command === "reload") {
-      // A page that failed to load has nothing to reload; its address loads again.
-      if (page.state.failure) this.load(page, page.state.url);
+      // A page that failed to load has nothing to reload; its address loads
+      // again. A remote screen's page asks that computer's core again for the
+      // address it last routed, the display's, not a link that failed in it.
+      if (page.state.failure) this.load(page, source.remote ? (page.route?.url ?? page.state.url) : page.state.url);
       else contents.reload();
     }
   }

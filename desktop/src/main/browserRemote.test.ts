@@ -57,7 +57,7 @@ function screen() {
     loadURL: vi.fn(() => new Promise(() => undefined)), setWindowOpenHandler: vi.fn(), setWebRTCIPHandlingPolicy: vi.fn(),
     setVisualZoomLevelLimits: vi.fn().mockResolvedValue(undefined), enableDeviceEmulation: vi.fn(), disableDeviceEmulation: vi.fn(),
     capturePage: vi.fn(async () => ({ isEmpty: () => false, toDataURL: () => "data:still" })), isCurrentlyAudible: () => false,
-    navigationHistory: { canGoBack: () => false, canGoForward: () => false }, focus: vi.fn(),
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false }, focus: vi.fn(), stop: vi.fn(),
   }) as unknown as Contents;
   native.make = (options) => {
     const view: View = { contents: contentsOf(++nextId), options: options as View["options"], setBounds: vi.fn(), setVisible: vi.fn() };
@@ -153,6 +153,33 @@ describe("a remote screen's pages", () => {
     expect(events().filter((event) => event.kind === "state").at(-1)?.state?.failure).toBe(english("native.browser.routeUnavailable"));
   });
 
+  // A slot that failed before its page was made has a Reload that works.
+  it("apply the screen's last sync again on a failed slot's Reload", async () => {
+    const { subject, remote, state, sync, display, views, settle } = screen();
+    state.storage = "clearing";
+    sync([display("d1")]);
+    await settle();
+    expect(views).toHaveLength(0);
+    state.storage = "live";
+    subject.remoteCommand(remote, { workspace, id: "d1" }, "reload");
+    await settle();
+    expect(views).toHaveLength(1);
+  });
+
+  // After a link in the page failed, Reload asks that computer's core for the
+  // display's address again, which its answer matches, not the failed link.
+  it("reload a page whose link failed at the address its route gave", async () => {
+    const { subject, remote, sync, display, views, route, settle } = screen();
+    sync([display("d1")]);
+    await settle();
+    views[0]!.contents.emit("did-fail-load", {}, -105, "NAME_NOT_RESOLVED", "https://broken.example/", true);
+    subject.remoteCommand(remote, { workspace, id: "d1" }, "reload");
+    await settle();
+    expect(route.mock.calls.at(-1)).toEqual([workspace, "d1", 3]);
+    expect(views[0]!.contents.loadURL.mock.calls.at(-1)?.[0]).toBe("https://d1.example/");
+    expect(views[0]!.contents.loadURL).toHaveBeenCalledTimes(2);
+  });
+
   it("refuse a file display of that computer before asking anything", async () => {
     const { sync, display, views, route, events, settle } = screen();
     sync([display("f1", true, RECT, "file:///Users/me/report.html")]);
@@ -170,6 +197,66 @@ describe("a remote screen's pages", () => {
     expect(shellSend.mock.calls.filter(([, event]) => (event as { id?: string }).id === "d1")).toEqual([]);
     ipc.get(BROWSER_SYNC_CHANNEL)!({}, { workspace, displays: [], retained: [] });
     expect(views[0]!.contents.close).not.toHaveBeenCalled();
+  });
+
+  // Two screens and this window may show displays of the same Workspace and
+  // id: a command, a still, the keyboard and an event of one reach its own
+  // page alone.
+  it("keep two screens' and this window's pages of the same id apart in commands, stills, focus and events", async () => {
+    const { subject, remote, sync, display, views, shellSend, events, settle, screenContents } = screen();
+    sync([display("d1")]);
+    await settle();
+    const otherContents = Object.assign(new EventEmitter(), { id: 2, isDestroyed: () => false, isFocused: () => false, send: vi.fn(), focus: vi.fn() });
+    let otherFocused = false;
+    const other: RemoteSource = {
+      device: "pc", key: KEY,
+      contents: () => otherContents as never,
+      area: () => ({ bounds: TILE, zoom: 1 }),
+      focused: () => otherFocused,
+      ready: () => true,
+      ensure: vi.fn(async () => "ready"),
+      partition: () => remotePagePartition("pc", KEY, PAIRING),
+      storage: () => "live",
+      route: async (_workspace, id, load) => ({ url: `https://${id}.example/`, source_url: `https://${id}.example/`, load, own: true }),
+    };
+    subject.addRemote(other);
+    subject.remoteSync(other, { workspace, displays: [display("d1")], retained: [{ workspace, id: "d1", area_id: "a1", url: "https://d1.example/", load: 3 }] });
+    await settle();
+    expect(views).toHaveLength(2);
+    const [mine, theirs] = views as [View, View];
+    const target = { workspace, id: "d1" };
+
+    subject.remoteCommand(other, target, "stop");
+    expect(theirs.contents.stop).toHaveBeenCalledOnce();
+    expect(mine.contents.stop).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await subject.remoteCapture(remote, target);
+    expect(mine.contents.capturePage).toHaveBeenCalled();
+    expect(theirs.contents.capturePage).not.toHaveBeenCalled();
+
+    // The keyboard goes to a page only from inside its own screen.
+    subject.remoteCommand(other, target, "focus");
+    expect(theirs.contents.focus).not.toHaveBeenCalled();
+    otherFocused = true;
+    subject.remoteCommand(other, target, "focus");
+    expect(theirs.contents.focus).toHaveBeenCalled();
+    expect(mine.contents.focus).not.toHaveBeenCalled();
+
+    // Each screen hears of its own page alone, and this window of neither.
+    theirs.contents.emit("page-title-updated", {}, "Theirs");
+    await settle();
+    const heard = (contents: { send: ReturnType<typeof vi.fn> }) => contents.send.mock.calls.filter(([channel]) => channel === REMOTE_BROWSER_EVENT_CHANNEL).map(([, event]) => event as { state?: { title?: string } });
+    expect(heard(otherContents).some((event) => event.state?.title === "Theirs")).toBe(true);
+    expect(events().some((event) => (event as { state?: { title?: string } }).state?.title === "Theirs")).toBe(false);
+    expect(shellSend.mock.calls.some(([, event]) => (event as { state?: { title?: string } }).state?.title === "Theirs")).toBe(false);
+    expect(screenContents.send.mock.calls.length).toBeGreaterThan(0);
+
+    // A sync of one closes nothing of the other.
+    subject.remoteSync(other, { workspace, displays: [], retained: [] });
+    await settle();
+    expect(theirs.contents.close).toHaveBeenCalled();
+    expect(mine.contents.close).not.toHaveBeenCalled();
   });
 
   it("are no CDP target", async () => {
@@ -322,9 +409,12 @@ describe("a remote screen's pages", () => {
     route.mockImplementationOnce(async (_workspace, _id, load) => ({ url: "https://d1.example/", source_url: "https://d1.example/", load, own: false }));
     sync([display("d1")]);
     await settle();
-    let answer: { cancel: boolean } | undefined;
-    sessions.get(PARTITION)!.beforeRequest({ url: "http://localhost:3000/", resourceType: "mainFrame", webContentsId: views[0]!.contents.id }, (given) => { answer = given; });
-    expect(answer?.cancel).toBe(true);
+    // The unspecified addresses reach the machine that dials them, as its loopback does.
+    for (const url of ["http://localhost:3000/", "http://[::]:3000/", "http://[::ffff:0.0.0.0]:3000/", "http://0.0.0.0:3000/"]) {
+      let answer: { cancel: boolean } | undefined;
+      sessions.get(PARTITION)!.beforeRequest({ url, resourceType: "mainFrame", webContentsId: views[0]!.contents.id }, (given) => { answer = given; });
+      expect(answer?.cancel, url).toBe(true);
+    }
   });
 
   it("close with their screen, and keep their screen's place through a clear", async () => {

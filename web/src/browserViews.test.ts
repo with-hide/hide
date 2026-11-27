@@ -41,7 +41,7 @@ describe("open in default browser", () => {
   });
 
   it("offers no loopback page of another machine, whose localhost the default browser would read as this one's", () => {
-    for (const address of ["http://localhost:8765/", "http://LOCALHOST.:8765/", "http://127.0.0.1:8765/a", "http://127.42.0.9/", "http://[::1]:8765/", "http://[::ffff:127.0.0.1]:8765/", "http://[::127.0.0.1]/", "http://0.0.0.0:8765/"]) {
+    for (const address of ["http://localhost:8765/", "http://LOCALHOST.:8765/", "http://127.0.0.1:8765/a", "http://127.42.0.9/", "http://[::1]:8765/", "http://[::ffff:127.0.0.1]:8765/", "http://[::127.0.0.1]/", "http://0.0.0.0:8765/", "http://[::]:8765/", "http://[::ffff:0.0.0.0]:8765/"]) {
       expect(defaultBrowserAddress(address, "devbox", "mac")).toBeNull();
       expect(defaultBrowserAddress(address, "mac", "mac")).not.toBeNull();
     }
