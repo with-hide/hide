@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { closeSession, rightSide, DESK_ROOM_CLOSED, deskOpener, deskShown, followFrom, followMoved, hideDesk, leaveRoom, namesView, newSessionBeside, openSession, outputNamed, panelPlace, roomWidths, showDesk, toggleExpanded, toggleExplorer, type DeskRoomWindow, type NewSessionFollow } from "./deskRoom";
-import type { DeskItem, DeskJob, DeskOutput } from "./snapshot";
+import { closeSession, rightSide, DESK_ROOM_CLOSED, deskOpener, deskShown, followFrom, followMoved, hideDesk, leaveRoom, namesView, newSessionBeside, openSession, outputNamed, panelPlace, roomWidths, showDesk, takeAnswer, toggleExpanded, toggleExplorer, type DeskRoomWindow, type NewSessionFollow } from "./deskRoom";
+import type { DeskItem, DeskJob, DeskMoved, DeskOutput } from "./snapshot";
 
 // Expected answers are PRD desk-2-ui D-05, D-15, B16-B26 and PRD
 // desk-own-desk D-02, D-03, D-05, D-14, D-16, B6, B9, B13, B16, B18,
@@ -21,10 +21,21 @@ describe("Desk's room", () => {
     expect(openSession(room, "p2")).toEqual({ ...room, session: "p2", explorer: false });
   });
 
-  it("asks for the input box once per 답하기", () => {
-    const once = openSession(DESK_ROOM_CLOSED, "p1", { answer: true });
-    expect(openSession(once, "p1", { answer: true }).answer).toBe(2);
-    expect(openSession(once, "p1").answer).toBe(1);
+  // Mission-109's walk on main: a 답하기 on a card whose session was not open gave no keyboard (regression of #3076).
+  it("names the session a 답하기 was pressed for until that session's box takes it, and lets it go on any other open", () => {
+    const pressed = openSession(DESK_ROOM_CLOSED, "p1", { answer: true });
+    expect(pressed).toMatchObject({ session: "p1", answer: "p1" });
+    expect(takeAnswer(pressed, "p2")).toBe(pressed);
+    expect(takeAnswer(pressed, "p1").answer).toBeNull();
+    // Pressed again while open, it asks again.
+    expect(openSession(takeAnswer(pressed, "p1"), "p1", { answer: true }).answer).toBe("p1");
+    // Another session opened, the same one opened for another reason, or the session closed: nothing is left to take.
+    expect(openSession(pressed, "p2").answer).toBeNull();
+    expect(openSession(pressed, "p1").answer).toBeNull();
+    expect(closeSession(pressed).answer).toBeNull();
+    expect(leaveRoom(pressed).answer).toBeNull();
+    // A session that moved to another pane takes its press with it.
+    expect(followMoved(pressed, [{ pane_id: "p1", live_pane_id: "p9" } satisfies DeskMoved])).toMatchObject({ session: "p9", answer: "p9" });
   });
 
   it("hides the desk alone on ✕, Escape or the dim, and keeps it with the session panel's ✕ (B13, B18)", () => {
@@ -42,7 +53,7 @@ describe("Desk's room", () => {
   // Operator request 2026-11-27 (mission-109): ⌃⇥ away from Desk and back finds the session still beside Desk.
   it("keeps the session beside Desk when the room is left, folding only the desk, its ⤢ and its Explorer", () => {
     const room = toggleExplorer(toggleExpanded(showDesk(openSession(DESK_ROOM_CLOSED, "p1", { answer: true }))), 2);
-    expect(leaveRoom(room)).toEqual({ ...DESK_ROOM_CLOSED, session: "p1", answer: 1 });
+    expect(leaveRoom(room)).toEqual({ ...DESK_ROOM_CLOSED, session: "p1" });
     const bare = openSession(DESK_ROOM_CLOSED, "p1");
     expect(leaveRoom(bare)).toBe(bare);
   });
@@ -249,8 +260,8 @@ describe("a session a Desk turn starts (frame J)", () => {
 describe("the room after a gone session runs again", () => {
   it("moves the open session to the live pane, and keeps the desk", () => {
     const moved = [{ pane_id: "w1:p9", live_pane_id: "w1:p20" }];
-    const room: DeskRoomWindow = { ...DESK_ROOM_CLOSED, session: "w1:p9", desk: true, explorer: true, answer: 2 };
-    expect(followMoved(room, moved)).toEqual({ ...room, session: "w1:p20" });
+    const room: DeskRoomWindow = { ...DESK_ROOM_CLOSED, session: "w1:p9", desk: true, explorer: true, answer: "w1:p9" };
+    expect(followMoved(room, moved)).toEqual({ ...room, session: "w1:p20", answer: "w1:p20" });
     // Another pane, or no pair, leaves the very same room.
     const other: DeskRoomWindow = { ...DESK_ROOM_CLOSED, session: "w1:p3", desk: true };
     expect(followMoved(other, moved)).toBe(other);

@@ -15,7 +15,7 @@ import { answerPlace, type AnswerPlace, type FoundAnswerPath } from "./answerPat
 import { hostBridge } from "./host";
 import { keepScroll, keptScroll, placeAt, scrollPlace, stillAt } from "./conversationScroll";
 import { deskOn, deskPhase, holdsFoot, laneCards, livePane, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
-import { deskOpener, deskShown, followFrom, followMoved, newSessionBeside, openSession, outputNamed, rightSide, showDesk, type NewSessionFollow } from "./deskRoom";
+import { deskOpener, deskShown, followFrom, followMoved, newSessionBeside, openSession, outputNamed, rightSide, showDesk, takeAnswer, type NewSessionFollow } from "./deskRoom";
 import { deskViewOf, DESK_SCREEN } from "./deskDesk";
 import { CardPlaceContext, type CardPlace } from "./deskFront";
 import { DeskViewAreas } from "./ViewAreas";
@@ -766,7 +766,7 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
   const machine = useShellStore((s) => (row && row.device_id !== localDeviceId(s.rest) ? machineName(s.rest?.navigator?.devices, row.device_id, t) : null));
   const pulls = useMemo(() => (row ? rowPulls(row) : []), [row]);
   const explorer = useUiStore((s) => s.deskRoom.explorer);
-  const answer = useUiStore((s) => s.deskRoom.answer);
+  const answer = useUiStore((s) => s.deskRoom.answer === paneId);
   const filesChord = useShellStore((s) => commandLabel("toggle_lane_explorer", s.rest?.ui_state)) || null;
   const terminalChord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state)) || null;
   // Who the session is, kept while its row is listed: a session that sleeps or whose pane closes loses its row and its
@@ -797,6 +797,7 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
       actions={actions}
       startedByDesk={ownJob}
       answer={answer}
+      onAnswered={() => useUiStore.getState().setDeskRoom((now) => takeAnswer(now, paneId))}
       head={
         <>
         <SessionHead
