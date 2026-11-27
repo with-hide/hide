@@ -305,15 +305,17 @@ function sizeAt(base: number | null, scale: number): number {
 /**
  * Applies Appearance's Terminal text size to every terminal, each still
  * multiplied by its own pane's scale; a pane whose size moved sends its new
- * fit as `terminal_resize`, as a pane's own zoom does.
+ * fit as `terminal_resize`, as a pane's own zoom does. A pane whose size
+ * rounds to the one it had still sends its measure, taken at the new size,
+ * since the core judges no measure of a size it no longer has.
  */
 export function applyTerminalFontSize(size: number | null) {
   if (baseFontSize === size) return;
   baseFontSize = size;
   warmTerminalFonts();
   for (const instance of instances.values()) {
-    if (instance.term.options.fontSize === fontSizeAt(instance.scale)) continue;
-    applyFont(instance, false);
+    if (instance.term.options.fontSize === fontSizeAt(instance.scale)) sendGrid(instance.paneId, instance, false, true);
+    else applyFont(instance, false);
   }
 }
 
