@@ -1737,28 +1737,29 @@ fn spawn(
                     // The engine's own shell runs in the split, as in a fork's.
                     (Some(caller), _) => {
                         shell = ShellStart::Plain;
-                        let (pane, split) = beside_pane(
+                        // A caller of this machine splits in its turn of its
+                        // tab's line; a device's caller was judged at the
+                        // request, and its device's own line orders the split.
+                        let (pane, turn) = beside_pane(
                             engine.as_ref(),
                             &snapshot,
                             caller,
                             &existing,
                             &reserved.id,
                             &child_device,
+                            || {
+                                if !on_node {
+                                    return Ok(crate::runtime::BesideTurn::detached());
+                                }
+                                crate::runtime::BesideTurn::take(&client.runtime, caller)
+                                    .map_err(|refusal| refusal.code("beside_"))
+                            },
                         )?;
-                        // Drawing ahead is only the screen's: the engine's layout
-                        // replaces it, so a runtime that cannot draw it now
-                        // never fails the spawn.
-                        if split
-                            && on_node
-                            && let Some(runtime) = client.runtime.upgrade()
-                        {
-                            match runtime.lock() {
-                                Ok(mut runtime) => runtime.draw_answered_split(caller, &pane),
-                                Err(_) => crate::diagnostic!(json!({
-                                    "component": "spawn", "kind": "beside.draw_skipped",
-                                    "spawn": reserved.id, "pane_id": pane,
-                                })),
-                            }
+                        // The split is drawn and holds the tab's line until the
+                        // engine's layout lists it, in the step that lets the
+                        // turn go; the agent starts after that.
+                        if let Some(turn) = turn {
+                            turn.finish(Some((caller, pane.as_str())));
                         }
                         pane
                     }
@@ -2439,6 +2440,20 @@ fn beside_target(
     let Some((repo, branch, path)) = target else {
         return Ok(pane);
     };
+    // A split that would leave a pane under the pane floor, or one its
+    // window has not measured yet, is refused before anything is made, as
+    // the terminal menu's Split right is (`Runtime::split_right_floor`); a
+    // local caller's turn judges it again (`beside_pane`).
+    if let Some(runtime) = client.runtime.upgrade()
+        && let Err(refusal) = runtime
+            .lock()
+            .map_err(|_| "delivery_unavailable")?
+            .split_right_floor(&actor.pane_id)
+    {
+        return Err(refused(
+            &crate::runtime::BesideRefusal::Floor(refusal).code("beside_"),
+        ));
+    }
     let existing = match branch {
         Some(branch) => {
             let CoordinationContext { engine, .. } = context(client, &actor.device_id)?;
@@ -2455,12 +2470,13 @@ fn beside_target(
     Ok(pane)
 }
 
-/// The pane a spawn beside `caller` runs in, and whether it was split now:
-/// the pane an earlier attempt split and labelled, else a new split right of
-/// the caller, labelled before anything else so that, once labelled, a retry
-/// finds it rather than splitting again. A split that cannot be labelled is
-/// closed; one whose own reply was lost is never labelled, and a retry makes
-/// its own.
+/// The pane a spawn beside `caller` runs in, and the turn of the caller's
+/// tab line its split was made in, when it was split now: the pane an
+/// earlier attempt split and labelled, else a new split right of the caller,
+/// in its turn (`take_turn`, `runtime::BesideTurn`), labelled before anything
+/// else so that, once labelled, a retry finds it rather than splitting
+/// again. A split that cannot be labelled is closed; one whose own reply was
+/// lost is never labelled, and a retry makes its own.
 fn beside_pane(
     engine: &dyn Engine,
     snapshot: &crate::session_sync::ProjectionState,
@@ -2468,15 +2484,18 @@ fn beside_pane(
     cwd: &str,
     spawn: &str,
     machine: &str,
-) -> Result<(String, bool), String> {
+    take_turn: impl FnOnce() -> Result<crate::runtime::BesideTurn, String>,
+) -> Result<(String, Option<crate::runtime::BesideTurn>), String> {
     let label = crate::start_claim::spawn_label(spawn);
     if let Some(pane) = snapshot
         .panes
         .iter()
         .find(|pane| pane.label.as_deref() == Some(label.as_str()))
     {
-        return Ok((pane.pane_id.clone(), false));
+        return Ok((pane.pane_id.clone(), None));
     }
+    let turn = take_turn()?;
+    turn.confirm().map_err(|refusal| refusal.code("beside_"))?;
     let refused = |detail: String| {
         crate::diagnostic!(json!({
             "component": "spawn", "kind": "beside.split_failed", "spawn": spawn,
@@ -2513,7 +2532,7 @@ fn beside_pane(
         "component": "spawn", "kind": "beside.split", "spawn": spawn,
         "pane_id": caller, "created": pane,
     }));
-    Ok((pane, true))
+    Ok((pane, Some(turn)))
 }
 
 /// Whether the engine has let go of `name`. The engine holds the name of a start whose

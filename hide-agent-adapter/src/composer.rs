@@ -7,6 +7,14 @@
 //! declaration cannot place, is content or not found, so a misread screen
 //! holds a letter rather than ringing over the operator's words.
 
+/// The narrowest pane, in columns, in which every declared composer reads
+/// both empty and holding text, measured for each agent at this width
+/// (`tests/fixtures/composer/*-18-columns-*`); under 27 Codex cuts its
+/// placeholder, which its declaration reads as cut ([`Placeholder::cut`]).
+/// Hide never draws, sizes or splits a terminal pane under it
+/// (`docs/UI_BEHAVIOR.md`, The pane floor).
+pub const PANE_FLOOR_COLUMNS: u16 = 18;
+
 /// How an agent's composer sits on the screen and what it may show when it
 /// holds nothing of the operator's.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -128,6 +136,12 @@ pub enum Region {
 pub struct Placeholder {
     pub text: &'static str,
     pub style: Style,
+    /// The agent cuts the placeholder at the pane's right edge rather than
+    /// wrapping it, as Codex does under 27 columns (`Ask Codex to do`, `Ask
+    /// Codex to do anyth`), so a line whose visible text is a start of
+    /// `text`, never nothing, reads as the placeholder too. Every character
+    /// still has to be in `style`: typed text, even the same words, is not.
+    pub cut: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -452,9 +466,13 @@ impl Placeholder {
                 })
     }
 
-    /// Whether the line's text is this placeholder's, whatever its style.
+    /// Whether the line's text is this placeholder's, or for a placeholder
+    /// the agent cuts a start of it, whatever its style.
     fn shows_text(&self, line: &Cells) -> bool {
-        visible(line).trim().starts_with(self.text)
+        let shown = visible(line);
+        let shown = shown.trim();
+        shown.starts_with(self.text)
+            || (self.cut && !shown.is_empty() && self.text.starts_with(shown))
     }
 }
 

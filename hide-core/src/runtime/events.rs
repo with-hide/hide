@@ -1759,6 +1759,10 @@ pub(super) struct TerminalResizePayload {
     pub(super) pane_id: String,
     pub(super) cols: u16,
     pub(super) rows: u16,
+    /// What the window measured with the grid, which the pane floor judges
+    /// by; none from a page that does not measure.
+    #[serde(default)]
+    pub(super) floor: Option<super::pane_floor::FloorReport>,
 }
 
 pub(super) enum Event {
@@ -2741,6 +2745,10 @@ impl Runtime {
             // Nothing drawn changes; the coordinator reads it on its next wake.
             Event::UiAttached(payload) => {
                 let attached = payload.attached && !self.ui_attached;
+                if payload.attached != self.ui_attached {
+                    // What an earlier window measured is not the next one's.
+                    self.floor_reports.clear();
+                }
                 self.ui_attached = payload.attached;
                 if attached {
                     self.session_thread_screen_attached();
@@ -3540,6 +3548,12 @@ impl Runtime {
                     return true;
                 }
                 let direction = payload.direction;
+                if direction == crate::live::PaneSplitDirection::Right
+                    && let Err(refusal) = self.split_right_floor(&pane_id)
+                {
+                    self.set_error(refusal.event_code(), refusal.message(), false);
+                    return true;
+                }
                 let action = PaneControlAction::Split {
                     pane_id: pane_id.clone(),
                     direction,
@@ -3691,6 +3705,14 @@ impl Runtime {
                         format!("Pane {pane_id} is already being forked"),
                         false,
                     );
+                    return true;
+                }
+                // A fork to the side splits the pane right, judged as Split
+                // right is (`pane_floor`).
+                if matches!(payload.placement, crate::fork::ForkPlacement::Side)
+                    && let Err(refusal) = self.split_right_floor(&pane_id)
+                {
+                    self.set_error(refusal.event_code(), refusal.message(), false);
                     return true;
                 }
                 // A choice the agent does not take is refused before any pane
@@ -4203,7 +4225,10 @@ impl Runtime {
                 if previous != Some(size) {
                     self.send_terminal_size(&payload.pane_id);
                 }
-                false
+                // The floor's answers are drawn from what the window measured,
+                // so a report that moves them is published.
+                self.floor_reports.note(&payload.pane_id, payload.floor)
+                    && self.refresh_pane_floor()
             }
             Event::PaneFind(payload) => {
                 if payload.term.is_empty() {

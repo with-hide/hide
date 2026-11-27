@@ -1224,6 +1224,15 @@ export type LayoutNode =
   | { type: "pane"; pane_id: string }
   | { type: "split"; direction: "right" | "down"; ratio: number; first: LayoutNode; second: LayoutNode };
 
+/** Why a split right is refused: a pane would be under the floor, or the window has not measured the tab yet. */
+export type PaneFloorRefusal = "too_narrow" | "unmeasured";
+
+/** The pane floor's answers (`hide-core` `PaneFloorSnapshot`): each pane whose split right is refused, and each tab's least width in CSS pixels. */
+export type PaneFloor = {
+  split_right: Record<string, PaneFloorRefusal>;
+  min_width_px: Record<string, number>;
+};
+
 export type PaneLayout = {
   workspace_id: string;
   tab_id: string;
@@ -4138,6 +4147,8 @@ export type SnapshotRest = {
     operator_focus?: { client_id: string; sequence: number }[];
   };
   pane_layouts?: PaneLayout[];
+  /** What the core's pane floor says of the tabs on screen (docs/UI_BEHAVIOR.md, The pane floor); the shell only draws it. */
+  pane_floor?: PaneFloor;
   terminal?: { headers?: Record<string, PaneHeader>; pane_id?: string | null; panes?: TerminalPane[]; input_requests?: InputRequest[] };
   ui_state?: {
     left_sidebar_visible?: boolean;
