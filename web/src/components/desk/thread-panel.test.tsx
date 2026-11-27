@@ -173,6 +173,38 @@ it("gives words refused while its panel was closed back to the box when the sess
   expect(back.box().value).toBe("not delivered, must not vanish");
 });
 
+// Review round 3 F1: the core's own order when another session opened while the words were on their way: the
+// closed thread and the new one carry no answer, then the late answer lands on the new one by its request id.
+it("frees the box and gives refused words back when the answer lands on a thread opened after the send", async () => {
+  const first = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await first.type("늦은 답");
+  await first.enter();
+  const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
+  await act(async () => first.root.unmount());
+  await act(async () => useShellStore.setState({ sessionThread: section({ state: "closed", pane_id: null }) }));
+  const back = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section({ generation: 5 }) }));
+  expect(back.container.querySelector<HTMLButtonElement>('[data-desk-composer-send="true"]')?.disabled).toBe(true);
+  await act(async () => useShellStore.setState({ sessionThread: section({ generation: 5, input: { request_id: request, state: "refused", reason: "closed" } }) }));
+  expect(back.box().value).toBe("늦은 답");
+  await back.enter();
+  expect(events.filter((event) => event.kind === "thread_input")).toHaveLength(2);
+});
+
+// Review round 3 F7: words refused at the cap and words written since both come back, nothing cut.
+it("gives back refused words at the cap together with every word written since", async () => {
+  const { box, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  const full = "x".repeat(SESSION_DRAFT_BYTES);
+  await type(full);
+  await enter();
+  const request = events[0]!.payload.request_id as string;
+  await type("new words");
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "asleep" } }) }));
+  expect(box().value).toBe(`${full}\nnew words`);
+});
+
 it("holds the next send while one the closed panel sent is still unanswered", async () => {
   const first = await mount();
   await act(async () => useShellStore.setState({ sessionThread: section() }));

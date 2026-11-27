@@ -2,8 +2,9 @@
 // words wait for the pane's answer (`sending` in `sessionDrafts.ts`), and a gone pane's words go with it. A panel can
 // close before the pane answers, so the answer is read here, once for the window, rather than in the panel.
 //
-// The core never drops a thread's input answer: closing a thread leaves a closed thread section, so an answer that
-// lands after the panel closed is still read from it, or from the next thread opened, by its request id.
+// The core answers every input through the thread section that stands when the answer lands, a closed one or another
+// pane's included, and carries the last answer into the section that replaces it, so an answer that lands after the
+// panel closed is still read here by its request id and no send waits for ever.
 
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";

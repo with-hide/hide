@@ -293,6 +293,7 @@ impl Runtime {
             pane_id: Some(payload.pane_id.clone()),
             failure: Some(ThreadFailure::NoRecord),
             connected: true,
+            input: self.last_thread_input(),
             ..SessionThreadSnapshot::default()
         };
         if let Some(observation) = observed {
@@ -360,6 +361,7 @@ impl Runtime {
         let generation = self.session_thread.generation;
         self.snapshot.session_thread = Some(Arc::new(SessionThreadSnapshot {
             generation,
+            input: self.last_thread_input(),
             ..SessionThreadSnapshot::default()
         }));
         self.snapshot.session_thread_history = Some(Arc::new(SessionThreadHistorySnapshot {
@@ -1144,7 +1146,12 @@ impl Runtime {
             .as_mut()
             .filter(|open| open.generation == generation)
         else {
-            return false;
+            // The thread closed or another opened while the words were on
+            // their way: the answer still reaches the screen by its request
+            // id, through whichever thread section stands now, so the box
+            // that sent them learns whether they went and is never left
+            // waiting.
+            return self.settle_thread_input(request_id, sent);
         };
         open.inputting = false;
         let pane_id = open.pane_id.clone();
@@ -1188,6 +1195,20 @@ impl Runtime {
             ThreadPane::Changed => Err("pane_changed"),
             ThreadPane::Gone => Err("pane_gone"),
         }
+    }
+
+    /// The last input's answer, carried into the thread section that
+    /// replaces this one, so an answer that landed just before a close or an
+    /// open is not wiped before the screen reads it; the next input replaces
+    /// it. An input still on its way is not carried: it would hold the new
+    /// thread's box, and its answer reaches whichever thread stands when it
+    /// lands.
+    fn last_thread_input(&self) -> Option<ThreadInputSnapshot> {
+        self.snapshot
+            .session_thread
+            .as_ref()
+            .and_then(|thread| thread.input.clone())
+            .filter(|input| input.state != ThreadInputState::Sending)
     }
 
     fn settle_thread_input(&mut self, request_id: &str, sent: Result<(), &'static str>) -> bool {
@@ -2474,6 +2495,76 @@ mod tests {
                 Some("closed".to_owned())
             ))
         );
+    }
+
+    /// Words on their way when their thread closes and opens again are
+    /// answered through the thread that stands then, by their request id,
+    /// and the answer stays across the next close and open, so the box that
+    /// sent them is never left waiting (mission-109 review round 3).
+    #[test]
+    fn an_input_answered_after_its_thread_closed_and_opened_again_reaches_the_thread_that_stands() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        let terminals = Arc::new(GrantingTerminals::default());
+        terminals
+            .hold
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        runtime.set_terminals(Arc::clone(&terminals) as _);
+        let fake = crate::engine::fake::FakeEngine::start(|method, _| {
+            panic!("nothing reaches the engine, asked {method}");
+        });
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
+        open(&mut runtime);
+        let generation = thread(&runtime).generation;
+        let shared = crate::runtime::tests::SharedRuntime::new(runtime);
+        {
+            let mut runtime = shared.lock().unwrap();
+            runtime.worker_context = Some(RuntimeWorkerContext {
+                runtime: shared.weak(),
+                notifier: crate::handle::ChangeNotifier::noop(),
+            });
+            runtime.send_session_thread_input(ThreadInputPayload {
+                generation,
+                pane_id: "w1:p1".to_owned(),
+                request_id: INPUT.to_owned(),
+                text: "계속".to_owned(),
+                paths: Vec::new(),
+            });
+        }
+        crate::runtime::tests::wait_for("the input's permit ask", || {
+            terminals.held.lock().unwrap().is_some()
+        });
+        {
+            let mut runtime = shared.lock().unwrap();
+            runtime.close_session_thread();
+            node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
+            open(&mut runtime);
+            assert_ne!(thread(&runtime).generation, generation);
+        }
+        let grant = terminals.held.lock().unwrap().take().unwrap();
+        grant(Ok(()));
+        let answered = |runtime: &Runtime| {
+            thread(runtime)
+                .input
+                .map(|input| (input.request_id, input.state, input.reason))
+        };
+        let refused = Some((
+            INPUT.to_owned(),
+            ThreadInputState::Refused,
+            Some("closed".to_owned()),
+        ));
+        crate::runtime::tests::wait_for("the input's answer", || {
+            answered(&shared.lock().unwrap()) == refused
+        });
+        assert!(fake.calls_of("prompt_agent").is_empty());
+        let mut runtime = shared.lock().unwrap();
+        runtime.close_session_thread();
+        assert_eq!(answered(&runtime), refused);
+        node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
+        open(&mut runtime);
+        assert_eq!(answered(&runtime), refused);
     }
 
     /// A device thread's words go to that device's engine, addressed by the

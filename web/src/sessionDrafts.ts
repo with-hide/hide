@@ -15,7 +15,7 @@ export type SessionDraft = { pane: string; device: string | null; text: string; 
 /** At most this many panes keep their words; a new one past it lets the one written in longest ago go. */
 export const SESSION_DRAFTS_KEPT = 32;
 
-/** A draft holds at most what a session takes in one send, in UTF-8 bytes (`operator_input::LIMIT_BYTES` in hide-core): more is cut. */
+/** What is typed into a draft is cut to what a session takes in one send, in UTF-8 bytes (`operator_input::LIMIT_BYTES` in hide-core); refused words given back to it ride on top (`settleSessionSend`). */
 export const SESSION_DRAFT_BYTES = 16 * 1024;
 
 export const NO_SESSION_DRAFTS: SessionDrafts = [];
@@ -51,13 +51,14 @@ export function sendSessionDraft(drafts: SessionDrafts, pane: string, device: st
 
 /**
  * The pane answered `request`: taken, its words go, so they never come back to go twice; refused, they come back to
- * the pane's box, before any words written since, so neither is lost.
+ * the pane's box, before any words written since, so neither is lost. Nothing is cut here: each part holds at most
+ * one send's worth, so the box holds at most two, and a send of more is refused as too long.
  */
 export function settleSessionSend(drafts: SessionDrafts, request: string, taken: boolean): SessionDrafts {
   const draft = drafts.find((one) => one.sending?.request === request);
   if (!draft?.sending) return drafts;
   const { words } = draft.sending;
-  const text = taken ? draft.text : fitSessionDraft(draft.text === "" ? words : `${words}\n${draft.text}`).text;
+  const text = taken ? draft.text : draft.text === "" ? words : `${words}\n${draft.text}`;
   return drafts.map((one) => (one === draft ? { pane: one.pane, device: one.device, text } : one)).filter((one) => one.text !== "" || one.sending);
 }
 

@@ -57,4 +57,10 @@ describe("the words kept per session's input", () => {
     // An answer to another request changes nothing.
     expect(settleSessionSend(sent, "r9", false)).toBe(sent);
   });
+
+  it("cuts nothing when refused words come back on top of words written since", () => {
+    const full = "x".repeat(SESSION_DRAFT_BYTES);
+    const written = keepSessionDraft(sendSessionDraft(NO_SESSION_DRAFTS, "w1:p2", null, "r1", full), "w1:p2", null, "new words");
+    expect(sessionDraft(settleSessionSend(written, "r1", false), "w1:p2")).toBe(`${full}\nnew words`);
+  });
 });
