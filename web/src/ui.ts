@@ -14,7 +14,7 @@ import type { NumberedFamily } from "./shortcuts";
 import type { ViewFocusRequest, ViewWorkspace } from "./viewLayout";
 import type { KeyboardOwner } from "./viewFocus";
 import { DESK_ROOM_CLOSED, leaveRoom, type DeskRoomWindow } from "./deskRoom";
-import { fitSessionDraft, keepSessionDraft, NO_SESSION_DRAFTS, sessionDraftsLeft, type SessionDrafts } from "./sessionDrafts";
+import { fitSessionDraft, keepSessionDraft, NO_SESSION_DRAFTS, sendSessionDraft, sessionDraftsLeft, settleSessionSend, type SessionDrafts } from "./sessionDrafts";
 import type { RemoteStatus } from "./snapshot";
 import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
@@ -326,6 +326,10 @@ type UiStore = {
   sessionDrafts: SessionDrafts;
   /** Keeps `pane`'s words, cut to what one send takes; true when they were cut. */
   setSessionDraft: (pane: string, device: string | null, text: string) => boolean;
+  /** `pane`'s box sent its words as `request`; they wait beside the draft for the pane's answer (`sessionDraftSends.ts`). */
+  sendSessionDraft: (pane: string, device: string | null, request: string, words: string) => void;
+  /** The pane answered `request`: taken, its words go; refused, they come back to its box. */
+  settleSessionSend: (request: string, taken: boolean) => void;
   /** Lets go of the drafts whose pane its machine says is gone (`sessionDraftsLeft`). */
   keepSessionDraftsOf: (local: readonly { pane_id: string }[], remote: readonly RemoteStatus[] | undefined) => void;
   /** Desk's room in this window: the session open beside Desk and Desk's desk (`deskRoom.ts`); its desk folds each time the room is left (PRD desk-2-ui B26), the session staying (`leaveRoom`). */
@@ -593,6 +597,12 @@ export const useUiStore = create<UiStore>((set, get) => ({
     const fit = fitSessionDraft(text);
     set((state) => ({ sessionDrafts: keepSessionDraft(state.sessionDrafts, pane, device, fit.text) }));
     return fit.cut;
+  },
+  sendSessionDraft: (pane, device, request, words) => set((state) => ({ sessionDrafts: sendSessionDraft(state.sessionDrafts, pane, device, request, words) })),
+  settleSessionSend: (request, taken) => {
+    const drafts = get().sessionDrafts;
+    const next = settleSessionSend(drafts, request, taken);
+    if (next !== drafts) set({ sessionDrafts: next });
   },
   keepSessionDraftsOf: (local, remote) => {
     const drafts = get().sessionDrafts;

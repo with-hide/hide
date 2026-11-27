@@ -6,9 +6,11 @@ import type { RemoteStatus } from "./snapshot";
 
 /**
  * The words written in each pane's input, the one written in last at the end, with the device the pane is on
- * (null for this machine's), so a pane is let go only when its own machine says it is gone.
+ * (null for this machine's), so a pane is let go only when its own machine says it is gone, and the words of a send
+ * the pane has not answered yet (`sending`), kept here rather than in the panel so they outlive it.
  */
-export type SessionDrafts = readonly { pane: string; device: string | null; text: string }[];
+export type SessionDrafts = readonly SessionDraft[];
+export type SessionDraft = { pane: string; device: string | null; text: string; sending?: { request: string; words: string } };
 
 /** At most this many panes keep their words; a new one past it lets the one written in longest ago go. */
 export const SESSION_DRAFTS_KEPT = 32;
@@ -37,11 +39,32 @@ export function sessionDraft(drafts: SessionDrafts, pane: string): string {
   return drafts.find((draft) => draft.pane === pane)?.text ?? "";
 }
 
-/** `pane`'s input now holds `text` (already fitted): kept as the newest, or forgotten when empty (a send clears it). */
+/** `pane`'s input now holds `text` (already fitted): kept as the newest, or forgotten once empty with no send waiting. */
 export function keepSessionDraft(drafts: SessionDrafts, pane: string, device: string | null, text: string): SessionDrafts {
-  const others = drafts.filter((draft) => draft.pane !== pane);
-  if (text === "") return others.length === drafts.length ? drafts : others;
-  const next = [...others, { pane, device, text }];
+  return put(drafts, { ...drafts.find((draft) => draft.pane === pane), pane, device, text });
+}
+
+/** `pane`'s input sent `words` as `request`: the box empties, and the words wait here for the pane's answer. */
+export function sendSessionDraft(drafts: SessionDrafts, pane: string, device: string | null, request: string, words: string): SessionDrafts {
+  return put(drafts, { pane, device, text: "", sending: { request, words } });
+}
+
+/**
+ * The pane answered `request`: taken, its words go, so they never come back to go twice; refused, they come back to
+ * the pane's box, before any words written since, so neither is lost.
+ */
+export function settleSessionSend(drafts: SessionDrafts, request: string, taken: boolean): SessionDrafts {
+  const draft = drafts.find((one) => one.sending?.request === request);
+  if (!draft?.sending) return drafts;
+  const { words } = draft.sending;
+  const text = taken ? draft.text : fitSessionDraft(draft.text === "" ? words : `${words}\n${draft.text}`).text;
+  return drafts.map((one) => (one === draft ? { pane: one.pane, device: one.device, text } : one)).filter((one) => one.text !== "" || one.sending);
+}
+
+function put(drafts: SessionDrafts, draft: SessionDraft): SessionDrafts {
+  const others = drafts.filter((one) => one.pane !== draft.pane);
+  if (draft.text === "" && !draft.sending) return others.length === drafts.length ? drafts : others;
+  const next = [...others, draft];
   return next.length > SESSION_DRAFTS_KEPT ? next.slice(next.length - SESSION_DRAFTS_KEPT) : next;
 }
 

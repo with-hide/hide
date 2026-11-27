@@ -13,6 +13,7 @@ import { checkoutOfPane, type DeskAgentId } from "../../snapshot";
 import { useSessionThread } from "../../sessionThread";
 import { sessionDraft } from "../../sessionDrafts";
 import { remoteTargetOfPane } from "../../remote";
+import "../../sessionDraftSends";
 import { useShellStore } from "../../store";
 import { useUiStore } from "../../ui";
 import { threadInputHeld, threadScreen } from "../../threadView";
@@ -83,46 +84,44 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   const [caret, setCaret] = useState(0);
   const box = useRef<HTMLTextAreaElement>(null);
   const tray = useComposerTray();
-  // The request a send is waiting on, the tiles it carried and the words it took out of the box (none for a change
-  // of model or effort, which keeps the words).
-  const [sent, setSent] = useState<{ request: string; tiles: string[]; words?: string } | null>(null);
+  // The request a send is waiting on and the tiles it carried, while this panel stands; its words wait beside the
+  // pane's draft (`sessionDraftSends.ts`), so a send still unanswered when the panel closed holds the next one too.
+  const [sent, setSent] = useState<{ request: string; tiles: string[] } | null>(null);
+  const waiting = useUiStore((s) => (paneId ? s.sessionDrafts.some((draft) => draft.pane === paneId && draft.sending) : false));
   const [notice, setNotice] = useState<string | null>(null);
   const words = (reason: string) => (INPUT_WORDS.has(reason) ? t(`desk.thread.input.${reason}` as MessageKey) : refusalText(reason, t));
 
-  // A send takes the words out of the box at once, so a send the pane took while this panel was closed can never
-  // come back as a draft and go twice. A refusal seen here puts them back, only into a box still empty: words
-  // written since stay. The answer names its request, so it is read from whichever thread the core holds: an
-  // input that arrived after another pane's thread opened is answered there, as closed.
+  // A send takes the words out of the box at once, and `sessionDraftSends.ts` gives them back on a refusal or lets
+  // them go once the pane took them, whether this panel still stands or not; here only the line and the files the
+  // send carried follow the answer. The answer names its request, so it is read from whichever thread the core
+  // holds: an input that arrived after another pane's thread opened is answered there, as closed.
   const input = useShellStore((s) => s.sessionThread?.input ?? null);
-  const refused = (one: NonNullable<typeof sent>, reason: string | undefined) => {
-    setSent(null);
-    if (one.words && paneId && sessionDraft(useUiStore.getState().sessionDrafts, paneId) === "") setText(one.words);
-    setNotice(reason ? words(reason) : null);
-  };
   useEffect(() => {
     if (!sent || input?.request_id !== sent.request || input.state === "sending") return;
-    if (input.state === "refused") return refused(sent, input.reason);
     setSent(null);
+    if (input.state === "refused") return setNotice(input.reason ? words(input.reason) : null);
     // Only the files this send carried: one dropped since stays for the next.
     sent.tiles.forEach(tray.remove);
     setNotice(null);
   }, [input, sent]);
   useEffect(() => {
-    if (sent && refusal?.request_id === sent.request) refused(sent, refusal.reason);
+    if (!sent || refusal?.request_id !== sent.request) return;
+    setSent(null);
+    setNotice(words(refusal.reason));
   }, [refusal, sent]);
 
   const held = threadInputHeld(thread);
   const send = () => {
     const files = tray.outgoing();
-    if (!thread?.pane_id || held !== null || sent || !files) return;
+    if (!thread?.pane_id || !paneId || held !== null || sent || waiting || !files) return;
     const request = submitThreadInput(thread.generation, thread.pane_id, text, files.map(({ name, bytes }) => ({ name, bytes })));
     if (request && typeof request === "object") {
       setNotice(words(request.refused));
     } else if (request) {
       // The bubble the record will show names these files by their stages, here and on a device.
       files.forEach((file, index) => keepSent(`${request}-${index}`, file.name, file.image));
-      setSent({ request, tiles: files.map((file) => file.id), words: text });
-      setText("");
+      setSent({ request, tiles: files.map((file) => file.id) });
+      useUiStore.getState().sendSessionDraft(paneId, remoteTargetOfPane(useShellStore.getState().rest, paneId), request, text);
       setNotice(null);
     } else {
       setNotice(words("forward_failed"));
@@ -256,7 +255,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
           value: text,
           tray,
           focused,
-          held: held !== null || sent !== null,
+          held: held !== null || sent !== null || waiting,
           notice: held === "pane_changed" || held === "pane_gone" ? words(held) : notice,
           textRef: box,
           menus,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fitSessionDraft, keepSessionDraft, NO_SESSION_DRAFTS, SESSION_DRAFT_BYTES, SESSION_DRAFTS_KEPT, sessionDraft, sessionDraftsLeft } from "./sessionDrafts";
+import { fitSessionDraft, keepSessionDraft, NO_SESSION_DRAFTS, sendSessionDraft, SESSION_DRAFT_BYTES, SESSION_DRAFTS_KEPT, sessionDraft, sessionDraftsLeft, settleSessionSend } from "./sessionDrafts";
 import type { RemoteStatus } from "./snapshot";
 
 // Operator request 2026-11-27 (mission-109): a session's input keeps its words per pane, capped, the pane written in
@@ -44,5 +44,17 @@ describe("the words kept per session's input", () => {
     // Connected again without the pane, the device's draft goes; this machine's pane closed, its draft goes.
     expect(sessionDraftsLeft(kept, [{ pane_id: "w1:p2" }], device("connected", []))).toEqual([{ pane: "w1:p2", device: null, text: "here" }]);
     expect(sessionDraftsLeft(kept, [], device("connected", ["remote:mini:pane:w2:p7"]))).toEqual([{ pane: "remote:mini:pane:w2:p7", device: "mini", text: "there" }]);
+  });
+
+  it("keeps a send's words until the pane answers: taken they go, refused they come back before words written since", () => {
+    const sent = sendSessionDraft(NO_SESSION_DRAFTS, "w1:p2", null, "r1", "보낸 말");
+    expect(sessionDraft(sent, "w1:p2")).toBe("");
+    // The pane took them: nothing is left for the box, and the pane is forgotten.
+    expect(settleSessionSend(sent, "r1", true)).toEqual([]);
+    // Refused after new words were written: both stay, the refused ones first.
+    const written = keepSessionDraft(sent, "w1:p2", null, "새 말");
+    expect(sessionDraft(settleSessionSend(written, "r1", false), "w1:p2")).toBe("보낸 말\n새 말");
+    // An answer to another request changes nothing.
+    expect(settleSessionSend(sent, "r9", false)).toBe(sent);
   });
 });

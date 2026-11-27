@@ -149,7 +149,7 @@ it("cuts words past what one send takes and says so", async () => {
   expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe("Too long to send in one go");
 });
 
-it("puts refused words back only into a box still empty, leaving words written since", async () => {
+it("puts refused words back before any words written since, so neither is lost", async () => {
   const { box, type, enter } = await mount();
   await act(async () => useShellStore.setState({ sessionThread: section() }));
   await type("계속");
@@ -157,7 +157,33 @@ it("puts refused words back only into a box still empty, leaving words written s
   const request = events[0]!.payload.request_id as string;
   await type("다른 말");
   await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "asleep" } }) }));
-  expect(box().value).toBe("다른 말");
+  expect(box().value).toBe("계속\n다른 말");
+});
+
+// Review round 2 F1 (mission-109): words the pane refused after their panel closed come back when it opens again.
+it("gives words refused while its panel was closed back to the box when the session opens again", async () => {
+  const first = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await first.type("not delivered, must not vanish");
+  await first.enter();
+  const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
+  await act(async () => first.root.unmount());
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "closed" } }) }));
+  const back = await mount();
+  expect(back.box().value).toBe("not delivered, must not vanish");
+});
+
+it("holds the next send while one the closed panel sent is still unanswered", async () => {
+  const first = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await first.type("first");
+  await first.enter();
+  await act(async () => first.root.unmount());
+  const back = await mount();
+  await back.type("second");
+  await back.enter();
+  expect(events.filter((event) => event.kind === "thread_input")).toHaveLength(1);
+  expect(back.box().value).toBe("second");
 });
 
 it("keeps the words and says why when the pane refused them, and holds send while the pane runs another session", async () => {
