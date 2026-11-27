@@ -15,9 +15,12 @@
 //! side, in whole cells. The share is read from the core's own layout (the
 //! engine's arithmetic, `engine/own/layout.rs`); the window reports only what
 //! the core cannot know: the width the tab's panes are laid out in, the inset
-//! and the cell widths (`Event::TerminalResize`). A tab no window has measured
-//! is judged by nothing: nothing has drawn it, so nothing is drawn under the
-//! floor (`docs/INSTALL.md`, What each system supports).
+//! and the cell widths (`Event::TerminalResize`). A tab no window draws is
+//! judged by nothing: nothing has drawn it, so nothing is drawn under the
+//! floor (`docs/INSTALL.md`, What each system supports). A window draws a tab
+//! that is on screen once it has sent a grid for one of its panes; until then
+//! the tab may be the front checkout's while the window shows another screen
+//! (Home, the desk), which the core does not see.
 
 use std::collections::HashMap;
 
@@ -335,33 +338,43 @@ impl FloorReport {
     }
 }
 
-/// Each pane's latest report, numbered in the order they came, so a tab's
-/// canvas is the one its panes reported last.
+/// Each pane the window has sent a grid for since it attached, with the
+/// latest report that came with it, numbered in the order they came, so a
+/// tab's canvas is the one its panes reported last. A pane drawn where it
+/// cannot be measured (a pair view, a page that does not measure) is held
+/// with no report: the window draws it, so its tab is not judged as undrawn.
 #[derive(Debug, Default)]
 pub(super) struct FloorReports {
-    panes: HashMap<String, (u64, FloorReport)>,
+    panes: HashMap<String, (u64, Option<FloorReport>)>,
     next: u64,
 }
 
 impl FloorReports {
-    /// Notes `pane`'s report; a grid without one, from a page that does not
-    /// measure, takes the pane's away. Whether anything changed.
+    /// Notes the grid the window sent for `pane` and what it measured with
+    /// it, if anything. Whether anything changed.
     pub(super) fn note(&mut self, pane: &str, report: Option<FloorReport>) -> bool {
-        match report {
-            Some(report) => {
-                if self
-                    .panes
-                    .get(pane)
-                    .is_some_and(|(_, held)| *held == report)
-                {
-                    return false;
-                }
-                self.next += 1;
-                self.panes.insert(pane.to_owned(), (self.next, report));
-                true
-            }
-            None => self.panes.remove(pane).is_some(),
+        if self
+            .panes
+            .get(pane)
+            .is_some_and(|(_, held)| *held == report)
+        {
+            return false;
         }
+        self.next += 1;
+        self.panes.insert(pane.to_owned(), (self.next, report));
+        true
+    }
+
+    /// Whether the window has drawn any of `panes`.
+    fn drew(&self, panes: &[&str]) -> bool {
+        panes.iter().any(|pane| self.panes.contains_key(*pane))
+    }
+
+    /// `pane`'s latest report and when it came, if the window measured it.
+    fn report(&self, pane: &str) -> Option<(u64, &FloorReport)> {
+        self.panes
+            .get(pane)
+            .and_then(|(order, report)| Some((*order, report.as_ref()?)))
     }
 
     /// Kept for the panes that still exist, as every pane-keyed terminal
@@ -386,9 +399,9 @@ enum FloorTab {
     /// No window draws the tab, so nothing is drawn under the floor and
     /// nothing is judged (`docs/INSTALL.md`, What each system supports).
     Undrawn,
-    /// A window draws it but has not said its size yet, or not the cell of
-    /// a pane with a text scale of its own: a width-changing operation waits
-    /// for it, refused as `unmeasured`.
+    /// A window draws it but has not measured it at the terminal font the
+    /// core has now, or not the cell of a pane with a text scale of its own:
+    /// a width-changing operation waits for it, refused as `unmeasured`.
     Unmeasured,
     Measured {
         measure: TabMeasure,
@@ -437,9 +450,14 @@ impl Runtime {
             .find(|layout| layout.frames.iter().any(|frame| frame.pane_id == pane))
     }
 
-    /// Where `tab`, holding `panes`, stands under the floor.
+    /// Where `tab`, holding `panes`, stands under the floor. A window draws
+    /// it while it is on screen and the window has sent a grid for one of its
+    /// panes since it attached.
     fn floor_tab(&self, tab: &str, panes: &[&str]) -> FloorTab {
-        if !self.ui_attached || !self.shown_agent_tabs().iter().any(|shown| shown == tab) {
+        if !self.ui_attached
+            || !self.floor_reports.drew(panes)
+            || !self.shown_agent_tabs().iter().any(|shown| shown == tab)
+        {
             return FloorTab::Undrawn;
         }
         let ui = &self.snapshot.ui_state;
@@ -447,7 +465,7 @@ impl Runtime {
         // the core has now; a report at another font measured another tab.
         let Some(latest) = panes
             .iter()
-            .filter_map(|pane| self.floor_reports.panes.get(*pane))
+            .filter_map(|pane| self.floor_reports.report(pane))
             .filter(|(_, report)| report.at_font(ui))
             .max_by_key(|(order, _)| *order)
             .map(|(_, report)| report)
@@ -465,7 +483,7 @@ impl Runtime {
                 .get(*pane)
                 .copied()
                 .unwrap_or(DEFAULT_PANE_TEXT_SCALE);
-            match self.floor_reports.panes.get(*pane) {
+            match self.floor_reports.report(pane) {
                 // Its own cell, measured at the scale and font it has now.
                 Some((_, report))
                     if report.current(ui, scale)
