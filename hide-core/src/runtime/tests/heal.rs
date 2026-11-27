@@ -159,6 +159,7 @@ fn mission_with_worker(worker: &str) -> crate::missions::Mission {
             &[],
         )]),
         2,
+        crate::model::InterfaceLanguage::Korean,
     )
     .unwrap();
     mission.nodes[0].agent_id = Some(worker.into());

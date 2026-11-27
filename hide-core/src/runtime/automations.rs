@@ -35,6 +35,7 @@ use crate::automations::{
 };
 use crate::coordination::SPAWN_BUSY;
 use crate::latest_file::{LatestFile, read_capped};
+use crate::model::InterfaceLanguage;
 use crate::view_layout::{DisplayKind, KeptView};
 
 /// Hide's own identity the runs start under (D-22).
@@ -95,8 +96,16 @@ const ZONE_READ_MS: u64 = 60_000;
 const VIEWING_HOLD_MS: u64 = 30 * 60 * 1000;
 /// Terminals marked on screen at once; past it the oldest mark goes.
 const VIEWING_CAP: usize = 16;
-/// The line a retry's resumed conversation is handed (D-17).
-const CONTINUE_PROMPT: &str = "이어서 해줘. 하던 일을 마저 끝내 줘.";
+/// The line a retry's resumed conversation is handed (D-17), typed as the
+/// operator's words, so in the operator's language.
+fn continue_prompt(language: InterfaceLanguage) -> &'static str {
+    match language {
+        InterfaceLanguage::English => "Continue. Finish what you were doing.",
+        InterfaceLanguage::Korean => "이어서 해줘. 하던 일을 마저 끝내 줘.",
+        InterfaceLanguage::Japanese => "続けて。やりかけの作業を最後まで終えて。",
+        InterfaceLanguage::SimplifiedChinese => "继续。把没做完的事做完。",
+    }
+}
 /// How long the core's own node may take to make an automation's folder.
 const FOLDER_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -1182,6 +1191,7 @@ impl Runtime {
     /// D-17). It is kept on the run (`Run::ask`) until the start ended.
     fn make_attempt(&mut self, key: &RunKey, folder: Folder, branch: Option<String>) {
         let zone = self.zone();
+        let language = self.interface_language();
         let Some(automation) = self.automations.book.find(&key.0) else {
             return;
         };
@@ -1190,10 +1200,10 @@ impl Runtime {
         };
         let attempt = run.attempt;
         let (args, brief) = match (attempt, run.conversation.as_ref()) {
-            (1, _) | (_, None) => (Vec::new(), automation.prompt(key.1, &zone)),
+            (1, _) | (_, None) => (Vec::new(), automation.prompt(key.1, &zone, language)),
             (_, Some(conversation)) => match resume_arguments(conversation) {
-                Some(args) => (args, CONTINUE_PROMPT.to_owned()),
-                None => (Vec::new(), automation.prompt(key.1, &zone)),
+                Some(args) => (args, continue_prompt(language).to_owned()),
+                None => (Vec::new(), automation.prompt(key.1, &zone, language)),
             },
         };
         let command = crate::coordination::Command::Spawn {

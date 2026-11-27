@@ -8,7 +8,7 @@ import { startHided, type Daemon } from "./hided-fixture";
 import { FakeTailscale } from "./fake-tailscale";
 import { pairDirectPhone } from "./phone-direct-pair";
 import { enterWorkspace, screenshot } from "./wire";
-import { withControl } from "./daemon-actions";
+import { chooseCoreLanguage, withControl } from "./daemon-actions";
 import type { HideAnswer } from "./agent-pane";
 
 type Hide = (args: string[]) => Promise<HideAnswer>;
@@ -56,6 +56,8 @@ test("general nodes end in their preset's icon and name, a deploy node's start g
     const conductor = fixture.runAs(fixture.panes[0]);
     await withControl(daemon, async (control) => {
       await control.until((rest) => rest.git_worktrees_loading === false, "the project catalog read");
+      // The deploy preset's gate is written in the operator's language when the node is planned.
+      await chooseCoreLanguage(control, "en");
     });
     await mission(conductor, ["create", "--title", "1.2.8 출시"]);
     await mission(conductor, ["plan", "--json", JSON.stringify(PLAN)]);
@@ -71,7 +73,7 @@ test("general nodes end in their preset's icon and name, a deploy node's start g
     }
     // The deploy node's start gate shows ahead as the faint band, the operator's turn not yet (B3).
     const ship = map.locator('[data-mission-node="ship"]');
-    await expect(ship.locator('[data-node-gate="ahead"]')).toHaveText("배포해도 될지");
+    await expect(ship.locator('[data-node-gate="ahead"]')).toHaveText("whether to deploy");
     await expect(ship.locator("[data-node-turn], [data-node-gate-tag]")).toHaveCount(0);
     // The waiting node has no worker: its head's mark is how its wait stands and its line is what it waits for, its pull request
     // in one sentence (B12; option A of the operator's decision on pull request 2848). Without a code host to read, its wait may
@@ -97,7 +99,7 @@ test("general nodes end in their preset's icon and name, a deploy node's start g
     await expect(foot("check")).toHaveAttribute("data-line-tone", "failed");
     await expect(map.locator('[data-mission-node="check"] [data-node-mark-failed]')).toBeVisible();
     // Its dependency done, the deploy node asks: the band is the operator's turn, and no worker binds before the pass (B3).
-    await expect(ship.locator('[data-node-gate="open"]')).toHaveText("배포해도 될지");
+    await expect(ship.locator('[data-node-gate="open"]')).toHaveText("whether to deploy");
     await expect(ship.locator('[data-node-gate-tag="open"]')).toHaveText("Needs you");
     const early = await run(conductor, ["node", "ship", "--status", "working"]);
     expect([early.ok, early.line.includes("mission_gate_before_start")], early.line).toEqual([false, true]);
@@ -116,7 +118,7 @@ test("general nodes end in their preset's icon and name, a deploy node's start g
       await expect(phoneFoot(key).locator("[data-line-icon]")).toHaveAttribute("data-line-icon", icon);
       await expect(phoneFoot(key)).toHaveText(name);
     }
-    await expect(phone.locator('[data-mission-node="ship"] [data-node-gate="open"]')).toHaveText("배포해도 될지");
+    await expect(phone.locator('[data-mission-node="ship"] [data-node-gate="open"]')).toHaveText("whether to deploy");
     const phoneWait = phone.locator('[data-mission-node="wait"]');
     await expect(phoneWait.locator("[data-node-wait-state]")).toHaveAttribute("data-node-wait-state", /^(waiting|unread)$/);
     await expect(phoneWait.locator("[data-wait-condition]")).toHaveText("if #77 merges");

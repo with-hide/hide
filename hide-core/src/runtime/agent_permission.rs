@@ -87,7 +87,7 @@ impl Runtime {
             (AgentPermissionMode::Custom, None) | (_, Some(_)) => {
                 self.set_error(
                     "agent_permission.invalid",
-                    "Only 직접 입력 takes typed options",
+                    "Only the custom mode takes typed options",
                     false,
                 );
                 return true;

@@ -32,6 +32,7 @@ use serde_json::json;
 use super::Runtime;
 use super::mission_landing::{NodeLanding, node_landing};
 use crate::missions::{FolderLine, MissionStatus, NodeKind};
+use crate::model::InterfaceLanguage;
 use crate::node_access::NodeLink;
 
 /// How long the checkout's read may take: the node bounds `CheckoutGit` at
@@ -181,20 +182,63 @@ impl Pulled {
 
     /// The report's line for the operator, in the words the PRD fixes
     /// (D-26, D-31); none when nothing was done for a reason only the log
-    /// keeps (D-28).
-    pub(crate) fn line(&self, destination: &str) -> Option<String> {
-        match self {
-            Self::Updated { commits } => {
-                Some(format!("내 폴더도 최신으로 당겨왔어요 ({commits}커밋)"))
+    /// keeps (D-28). It joins the report the Conductor wrote for the
+    /// operator, so it is in the operator's language and keeps it after.
+    pub(crate) fn line(&self, destination: &str, language: InterfaceLanguage) -> Option<String> {
+        use InterfaceLanguage::{English, Japanese, Korean, SimplifiedChinese};
+        let line = match (self, language) {
+            (Self::Updated { commits: 1 }, English) => {
+                "Your folder is up to date too (pulled 1 commit)".to_owned()
             }
-            Self::Current => Some("내 폴더도 이미 최신이에요".to_owned()),
-            Self::Behind { commits, .. } => Some(format!("내 폴더 {commits}커밋 뒤 · git pull")),
-            Self::Elsewhere { branch } => Some(format!(
-                "결과는 {destination}에 들어갔어요 · 내 폴더는 {}",
-                branch.as_deref().unwrap_or("detached HEAD")
-            )),
-            Self::Skipped { .. } => None,
-        }
+            (Self::Updated { commits }, English) => {
+                format!("Your folder is up to date too (pulled {commits} commits)")
+            }
+            (Self::Updated { commits }, Korean) => {
+                format!("내 폴더도 최신으로 당겨왔어요 ({commits}커밋)")
+            }
+            (Self::Updated { commits }, Japanese) => {
+                format!("自分のフォルダも最新にしました（{commits}コミット）")
+            }
+            (Self::Updated { commits }, SimplifiedChinese) => {
+                format!("你的文件夹也已更新到最新（{commits} 个提交）")
+            }
+            (Self::Current, English) => "Your folder was already up to date".to_owned(),
+            (Self::Current, Korean) => "내 폴더도 이미 최신이에요".to_owned(),
+            (Self::Current, Japanese) => "自分のフォルダはすでに最新です".to_owned(),
+            (Self::Current, SimplifiedChinese) => "你的文件夹已经是最新的".to_owned(),
+            (Self::Behind { commits: 1, .. }, English) => {
+                "Your folder is 1 commit behind · git pull".to_owned()
+            }
+            (Self::Behind { commits, .. }, English) => {
+                format!("Your folder is {commits} commits behind · git pull")
+            }
+            (Self::Behind { commits, .. }, Korean) => {
+                format!("내 폴더 {commits}커밋 뒤 · git pull")
+            }
+            (Self::Behind { commits, .. }, Japanese) => {
+                format!("自分のフォルダは{commits}コミット遅れ · git pull")
+            }
+            (Self::Behind { commits, .. }, SimplifiedChinese) => {
+                format!("你的文件夹落后 {commits} 个提交 · git pull")
+            }
+            (Self::Elsewhere { branch }, _) => {
+                let branch = branch.as_deref().unwrap_or("detached HEAD");
+                match language {
+                    English => {
+                        format!("The result went into {destination} · your folder is on {branch}")
+                    }
+                    Korean => format!("결과는 {destination}에 들어갔어요 · 내 폴더는 {branch}"),
+                    Japanese => {
+                        format!("結果は{destination}に入りました · 自分のフォルダは{branch}")
+                    }
+                    SimplifiedChinese => {
+                        format!("结果已进入 {destination} · 你的文件夹在 {branch}")
+                    }
+                }
+            }
+            (Self::Skipped { .. }, _) => return None,
+        };
+        Some(line)
     }
 }
 
@@ -416,7 +460,8 @@ impl Runtime {
             "destination": job.map(|job| job.destination.as_str()),
             "message": detail,
         }));
-        let Some(text) = job.and_then(|job| pulled.line(&job.destination)) else {
+        let language = self.interface_language();
+        let Some(text) = job.and_then(|job| pulled.line(&job.destination, language)) else {
             return false;
         };
         let Some(mission) = self.missions.book.get_mut(id).filter(|mission| {
@@ -614,8 +659,17 @@ mod tests {
         assert_eq!(pull(&own_host(), &job), Pulled::Updated { commits: 3 });
         assert_eq!(repos.head(), repos.origin_head());
         assert_eq!(
-            Pulled::Updated { commits: 3 }.line("feat/login").as_deref(),
+            Pulled::Updated { commits: 3 }
+                .line("feat/login", InterfaceLanguage::Korean)
+                .as_deref(),
             Some("내 폴더도 최신으로 당겨왔어요 (3커밋)")
+        );
+        assert_eq!(
+            Pulled::Updated { commits: 3 }
+                .line("feat/login", InterfaceLanguage::English)
+                .as_deref(),
+            Some("Your folder is up to date too (pulled 3 commits)"),
+            "the line joins the operator's report in the operator's language"
         );
         let before = repos.head();
         assert_eq!(pull(&own_host(), &job), Pulled::Current);
@@ -642,7 +696,9 @@ mod tests {
         assert_eq!(pulled, Pulled::Current);
         assert_eq!(repos.head(), head);
         assert_eq!(
-            pulled.line("feat/login").as_deref(),
+            pulled
+                .line("feat/login", InterfaceLanguage::Korean)
+                .as_deref(),
             Some("내 폴더도 이미 최신이에요")
         );
     }
@@ -656,7 +712,7 @@ mod tests {
         let head = repos.head();
         let pulled = pull(&own_host(), &repos.job());
         assert_eq!(pulled, Pulled::skipped(Skip::NoOrigin));
-        assert_eq!(pulled.line("feat/login"), None);
+        assert_eq!(pulled.line("feat/login", InterfaceLanguage::Korean), None);
         assert_eq!(repos.head(), head);
     }
 
@@ -679,7 +735,9 @@ mod tests {
         );
         assert_eq!(repos.head(), head);
         assert_eq!(
-            pulled.line("feat/login").as_deref(),
+            pulled
+                .line("feat/login", InterfaceLanguage::Korean)
+                .as_deref(),
             Some("내 폴더 2커밋 뒤 · git pull")
         );
 
@@ -719,7 +777,9 @@ mod tests {
         assert_eq!(git(&repos.checkout, &["branch", "--show-current"]), "main");
         assert_eq!(repos.head(), head);
         assert_eq!(
-            pulled.line("feat/login").as_deref(),
+            pulled
+                .line("feat/login", InterfaceLanguage::Korean)
+                .as_deref(),
             Some("결과는 feat/login에 들어갔어요 · 내 폴더는 main")
         );
 
@@ -728,7 +788,9 @@ mod tests {
         assert_eq!(pulled, Pulled::Elsewhere { branch: None });
         assert_eq!(repos.head(), head);
         assert_eq!(
-            pulled.line("feat/login").as_deref(),
+            pulled
+                .line("feat/login", InterfaceLanguage::Korean)
+                .as_deref(),
             Some("결과는 feat/login에 들어갔어요 · 내 폴더는 detached HEAD")
         );
     }
@@ -760,7 +822,7 @@ mod tests {
         assert_eq!(repos.head(), head);
         assert_eq!(repos.branch(), "topic");
         assert_eq!(
-            pulled.line("main").as_deref(),
+            pulled.line("main", InterfaceLanguage::Korean).as_deref(),
             Some("결과는 main에 들어갔어요 · 내 폴더는 topic")
         );
     }
@@ -789,7 +851,9 @@ mod tests {
         assert_eq!(repos.branch(), "other");
         assert_eq!(git(&repos.checkout, &["rev-parse", "feat/login"]), head);
         assert_eq!(
-            pulled.line("feat/login").as_deref(),
+            pulled
+                .line("feat/login", InterfaceLanguage::Korean)
+                .as_deref(),
             Some("결과는 feat/login에 들어갔어요 · 내 폴더는 other")
         );
     }
@@ -817,7 +881,7 @@ mod tests {
             ),
             "{pulled:?}"
         );
-        assert_eq!(pulled.line("feat/login"), None);
+        assert_eq!(pulled.line("feat/login", InterfaceLanguage::Korean), None);
         assert_eq!(repos.head(), head);
     }
 
@@ -831,7 +895,7 @@ mod tests {
         let link = Between(own_host(), move || commit(&checkout, "meanwhile", "x\n"));
         let pulled = pull(&link, &repos.job());
         assert_eq!(pulled, Pulled::skipped(Skip::HeadMoved));
-        assert_eq!(pulled.line("feat/login"), None);
+        assert_eq!(pulled.line("feat/login", InterfaceLanguage::Korean), None);
         assert_eq!(
             git(&repos.checkout, &["log", "-1", "--format=%s"]),
             "meanwhile"

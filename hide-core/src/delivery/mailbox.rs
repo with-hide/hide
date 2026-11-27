@@ -935,7 +935,7 @@ fn operator_prompt_intake(ledger: &Ledger, actor: &Actor) -> Result<Intake, Stri
         .count();
     let mut intake = Intake::default();
     if waiting > 0 && prompt_hook(&actor.kind) {
-        intake.context = format!("Hide 편지 {waiting}통 대기 중, 이 턴이 끝난 뒤 전달\n");
+        intake.context = format!("Hide letters waiting: {waiting}, delivered after this turn\n");
     }
     Ok(intake)
 }
@@ -1257,7 +1257,7 @@ fn render(mut pending: Vec<&Letter>, language: InterfaceLanguage, bundling: Bund
     let remaining = pending.len().saturating_sub(ids.len());
     if remaining > 0 {
         context.push_str(&format!(
-            "\n대기 {remaining}통 더 있음. hide inbox로 확인하세요.\n"
+            "\n{remaining} more letters waiting. Read them with hide inbox.\n"
         ));
     }
     Intake {
@@ -1615,7 +1615,7 @@ mod tests {
         let intake = pull(&ledger, &b).unwrap();
         assert!(intake.context.len() <= HOOK_LIMIT);
         assert_eq!(intake.ids, vec![ledger.letters[0].id.clone()]);
-        assert!(intake.context.contains("대기 6통 더 있음"));
+        assert!(intake.context.contains("6 more letters waiting"));
         assert!(intake.context.contains("hide request show letter-1"));
         assert_eq!(ledger.letters[0].body.len(), (BODY_LIMIT / 3) * 3);
     }
@@ -2310,13 +2310,13 @@ mod tests {
         assert!(operator.ids.is_empty(), "nothing to confirm");
         assert_eq!(
             operator.context.trim(),
-            "Hide 편지 2통 대기 중, 이 턴이 끝난 뒤 전달"
+            "Hide letters waiting: 2, delivered after this turn"
         );
         assert!(!operator.context.contains("body-"));
         let bell = pull_for(&mut ledger, &recipient, &format!("{LINE}\n"));
         assert_eq!(bell.ids, ids);
         assert!(bell.context.contains("body-0") && bell.context.contains("body-1"));
-        assert!(!bell.context.contains("대기 중"));
+        assert!(!bell.context.contains("letters waiting"));
         // Neither pull confirms anything.
         assert_eq!(
             ledger
@@ -2345,7 +2345,8 @@ mod tests {
             2,
         )
         .unwrap();
-        let counted = |intake: Intake| intake.ids.is_empty() && intake.context.contains("대기 중");
+        let counted =
+            |intake: Intake| intake.ids.is_empty() && intake.context.contains("letters waiting");
         // A person typing what a bell would say, before any bell rang.
         assert!(counted(pull_for(&mut ledger, &recipient, LINE)));
         ring(&mut ledger, 0, LINE);
@@ -2416,7 +2417,11 @@ mod tests {
         .id;
         let counted = pull_for(&mut ledger, &recipient, "the operator's own prompt");
         assert!(counted.ids.is_empty());
-        assert!(counted.context.contains("1통"), "{}", counted.context);
+        assert!(
+            counted.context.contains("waiting: 1,"),
+            "{}",
+            counted.context
+        );
         let line = "🦉 sender 보고: body-next";
         ring(&mut ledger, 1, line);
         assert_eq!(
@@ -2577,7 +2582,7 @@ mod tests {
         assert!(operator.ids.is_empty());
         assert_eq!(
             operator.context.trim(),
-            "Hide 편지 1통 대기 중, 이 턴이 끝난 뒤 전달"
+            "Hide letters waiting: 1, delivered after this turn"
         );
         ledger.letters[2].bell_attempts = Some(3);
         let operator = pull_for(&mut ledger, &recipient, "operator");
@@ -2601,7 +2606,7 @@ mod tests {
         let operator = pull_for(&mut ledger, &conductor, "operator");
         assert_eq!(
             operator.context.trim(),
-            "Hide 편지 1통 대기 중, 이 턴이 끝난 뒤 전달"
+            "Hide letters waiting: 1, delivered after this turn"
         );
         ring(&mut ledger, 1, LINE);
         let bell = pull_for(&mut ledger, &conductor, &format!("{LINE}\n"));
@@ -2727,7 +2732,7 @@ mod tests {
             let intake = pull_for(&mut ledger, &recipient, prompt);
             assert_eq!(intake.ids, ids, "{prompt}");
             assert!(intake.context.contains("body-0") && intake.context.contains("body-1"));
-            assert!(!intake.context.contains("대기 중"));
+            assert!(!intake.context.contains("letters waiting"));
         }
         // A pull is not a receipt: the plugin confirms after OpenCode stored
         // the prompt, and a prompt lost before that leaves them pending.
@@ -4186,7 +4191,7 @@ mod tests {
         assert!(
             intake
                 .context
-                .contains("대기 5통 더 있음. hide inbox로 확인하세요.")
+                .contains("5 more letters waiting. Read them with hide inbox.")
         );
         apply(
             &mut ledger,
