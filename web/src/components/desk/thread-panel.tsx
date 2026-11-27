@@ -207,6 +207,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
       state={thread.queue.state}
       lines={thread.queue.lines}
       cleared={thread.queue.cleared}
+      stalled={thread.queue.stalled === true}
       sendable={row?.state.working === false && !row.state.asking}
       dimmed={!thread.connected}
       onAction={(action, id) => actions.inputQueue(paneId, action, id)}

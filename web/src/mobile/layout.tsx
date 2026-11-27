@@ -144,7 +144,7 @@ export function Composer({ value, onChange, onSubmit, placeholder, disabled, sen
   lead?: ReactNode;
   input?: Omit<ComponentProps<typeof Input>, "value" | "onChange" | "placeholder" | "disabled"> & DataProps;
   send?: DataProps;
-  /** ■ in send's place while the agent works (PRD desk-queue B33); the keyboard's send still sends, to the waiting line. */
+  /** ■ beside send while the agent works (PRD desk-queue B33); send then puts the words in the waiting line (B32). */
   onStop?: () => void;
 }) {
   const { t } = useInterfaceTranslation();
@@ -185,11 +185,10 @@ export function Composer({ value, onChange, onSubmit, placeholder, disabled, sen
         <Button variant="secondary" size="icon" type="button" aria-label={t("desk.composer.stop")} disabled={disabled} onClick={onStop} className="size-(--size-touch-target) shrink-0 rounded-full" data-phone-stop="true">
           <SquareIcon aria-hidden="true" className="size-(--size-icon) fill-current" />
         </Button>
-      ) : (
-        <Button {...send} variant="secondary" size="icon" type="submit" aria-label={t("mobile.send")} disabled={sendDisabled} className="size-(--size-touch-target) shrink-0 rounded-full">
-          <ArrowUpIcon aria-hidden="true" className="size-(--size-icon-lg)" />
-        </Button>
-      )}
+      ) : null}
+      <Button {...send} variant="secondary" size="icon" type="submit" aria-label={t("mobile.send")} disabled={sendDisabled} className="size-(--size-touch-target) shrink-0 rounded-full">
+        <ArrowUpIcon aria-hidden="true" className="size-(--size-icon-lg)" />
+      </Button>
     </form>
   );
 }

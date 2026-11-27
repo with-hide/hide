@@ -46,6 +46,8 @@ async function openDetail(hello: Partial<Extract<ServerFrame, { type: "hello" }>
   const connection = await import("./connection");
   const { patch } = await import("./store");
   const container = document.createElement("div");
+  // In the document, so a click on send submits its form as a finger's does.
+  document.body.append(container);
   const root = createRoot(container);
   patch({ screen: "pair", pair: { v: 1, endpoint: "https://mac.example.ts.net", code: "code" } });
   connection.pairNow();
@@ -76,6 +78,7 @@ async function openDetail(hello: Partial<Extract<ServerFrame, { type: "hello" }>
     act(async () => {
       root.unmount();
       connection.stop();
+      container.remove();
     });
   return { container, socket, serve, field, type, submit, inputs, send, unmount };
 }
@@ -89,11 +92,13 @@ const working = agent({ status_code: "working" });
 const line = (id: number, text: string) => ({ id, text, files: [], sending: false });
 
 it("waits a reply sent while the agent works over the bar, takes ✕ on a line, and stops the turn with ■", async () => {
-  const { container, socket, serve, type, submit, inputs, field, unmount } = await openDetail({ answer: true, queue: true }, working);
-  // ■ stands in send's place; the keyboard's send still sends, to the line.
-  expect(container.querySelector("[data-phone-send]")).toBeNull();
+  const { container, socket, serve, type, send, inputs, field, unmount } = await openDetail({ answer: true, queue: true }, working);
+  // ■ stands beside send while the agent works; send puts the words in the line.
+  expect(container.querySelector("[data-phone-stop]")).not.toBeNull();
+  expect(send().disabled).toBe(true);
   await type("테스트도 같이 돌려 줘");
-  await submit();
+  expect(send().disabled).toBe(false);
+  await act(async () => send().click());
   const [reply] = inputs();
   expect(reply).toMatchObject({ text: "테스트도 같이 돌려 줘" });
   await serve({ type: "input_result", request_id: reply!.request_id as string, ok: true, reason: null, queued: true });
@@ -130,6 +135,14 @@ it("offers 모두 지우기, 이어 보내기 and each line's 보내기 once pau
   expect(container.querySelector("[data-phone-queue-cleared]")?.textContent).toContain("Cleared 2");
   await act(async () => container.querySelector<HTMLElement>("[data-phone-queue-restore]")!.click());
   expect(queues().at(-1)).toEqual({ action: "restore", id: undefined });
+  // A 되돌리기 the line could not hold keeps what was cleared and says why.
+  await serve({ type: "queue", device_id: "local", pane_id: "w1:p1", queue: { state: "waiting", lines: [line(5, "새 말")], max: 8, full: false, cleared: { count: 2, until_unix_ms: Date.now() + 10_000, refused: "queue_full" } } });
+  expect(container.querySelector("[data-phone-queue-restore-refused='queue_full']")?.textContent).toContain("The waiting line is full");
+  // A line typed last that opened no turn: ▶ lets the next go.
+  expect(container.querySelector("[data-phone-queue-resume]")).toBeNull();
+  await serve({ type: "queue", device_id: "local", pane_id: "w1:p1", queue: { state: "waiting", lines: [line(5, "새 말")], max: 8, full: false, stalled: true } });
+  await act(async () => container.querySelector<HTMLElement>("[data-phone-queue-resume]")!.click());
+  expect(queues().at(-1)).toEqual({ action: "resume", id: undefined });
   // A press hided could not hand to the core says why under the bar.
   await serve({ type: "queue_result", request_id: "x", ok: false, reason: "gone" });
   expect(container.querySelector("[data-phone-input-error]")?.textContent).toBe("This pane is no longer open.");

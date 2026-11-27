@@ -1005,6 +1005,20 @@ it("offers 모두 지우기, 이어 보내기 and each line's 보내기 once pau
   expect(container.querySelector("[data-queue-group]")).toBeNull();
 });
 
+it("offers 이어 보내기 on a waiting line only once the core says its last words opened no turn, and says why a 되돌리기 brought nothing back", async () => {
+  const { actions, container } = await mount();
+  const waiting = { state: "waiting" as const, lines: [line(1, "끝나면 PR 열어 줘")], max: 8, full: false };
+  await act(async () => useShellStore.setState({ agents: [claudeRow], sessionThread: section({ queue: waiting }) }));
+  expect(container.querySelector("[data-queue-group='waiting']")).not.toBeNull();
+  expect(container.querySelector("[data-queue-resume]")).toBeNull();
+  await act(async () => useShellStore.setState({ sessionThread: section({ queue: { ...waiting, stalled: true } }) }));
+  await act(async () => container.querySelector<HTMLElement>("[data-queue-resume]")!.click());
+  expect(actions.inputQueue).toHaveBeenLastCalledWith("w1:p2", "resume", undefined);
+  const cleared = { count: 2, until_unix_ms: Date.now() + 10_000, refused: "queue_full" as const };
+  await act(async () => useShellStore.setState({ sessionThread: section({ queue: { ...waiting, cleared } }) }));
+  expect(container.querySelector("[data-queue-restore-refused='queue_full']")?.textContent).toContain("The waiting line is full");
+});
+
 it("words a refusal of a full line and of its files under the box (B8, B9)", async () => {
   const { container, type, enter } = await mount();
   await act(async () => useShellStore.setState({ agents: [workingRow()], sessionThread: section() }));

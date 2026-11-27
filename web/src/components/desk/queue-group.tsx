@@ -25,6 +25,12 @@ export const QUEUE_FAILURE: Record<InputQueueFailure, MessageKey> = {
   refused: "desk.queue.failure.refused",
 };
 
+/** Why a `되돌리기` could not bring the cleared lines back, the words a send past the same cap says. */
+export const QUEUE_REFUSED: Record<NonNullable<InputQueueCleared["refused"]>, MessageKey> = {
+  queue_full: "desk.queued.full",
+  queue_files_full: "panes.attachment.deskFull",
+};
+
 export const QUEUE_HEAD: Record<QueueGroupState, MessageKey> = {
   waiting: "desk.queue.waiting",
   paused: "desk.queue.paused",
@@ -35,13 +41,16 @@ export const QUEUE_HEAD: Record<QueueGroupState, MessageKey> = {
  * The operator's words that wait for the agent to rest, standing over the input box of a session and of Desk alike
  * (PRD desk-queue D-05, B1-B7, B14-B17, B30, B31): `대기 중 · n ⌃`, which folds, and each line's words, files and ✕;
  * once paused, `모두 지우기` and `▶ 이어 보내기` on its head and `보내기` on each line, which waits while the agent
- * works (`sendable` false). `모두 지우기` leaves `n개 지움 · 되돌리기` until `cleared` runs out. The lines and their
- * state are the core's; every move is one `onAction`. `dimmed` draws a line whose device is not connected (B25).
+ * works (`sendable` false). A waiting line whose last typed words opened no turn (`stalled`) offers `▶ 이어 보내기`
+ * too, for the next to go. `모두 지우기` leaves `n개 지움 · 되돌리기` until `cleared` runs out, with why a `되돌리기`
+ * could not bring them back. The lines and their state are the core's; every move is one `onAction`. `dimmed` draws a
+ * line whose device is not connected (B25).
  */
-export function QueueGroup({ state, lines, cleared = null, sendable, dimmed = false, onAction }: {
+export function QueueGroup({ state, lines, cleared = null, stalled = false, sendable, dimmed = false, onAction }: {
   state: QueueGroupState;
   lines: readonly QueueGroupLine[];
   cleared?: InputQueueCleared | null;
+  stalled?: boolean;
   sendable: boolean;
   dimmed?: boolean;
   onAction: (action: QueueAction, id?: number) => void;
@@ -51,6 +60,7 @@ export function QueueGroup({ state, lines, cleared = null, sendable, dimmed = fa
   const undo = useUndoShown(cleared);
   if (lines.length === 0 && !undo) return null;
   const paused = state === "paused";
+  const resumable = paused || (state === "waiting" && stalled);
   return (
     <section
       aria-label={t(QUEUE_HEAD[state], { count: lines.length })}
@@ -62,6 +72,7 @@ export function QueueGroup({ state, lines, cleared = null, sendable, dimmed = fa
         <p className="flex min-w-0 items-center gap-xs px-md py-xs text-caption text-muted-foreground" data-queue-cleared={undo.count}>
           {t("desk.queue.cleared", { count: undo.count })} ·
           <Button variant="text-link" size="inline" onClick={() => onAction("restore")} data-queue-restore="true">{t("desk.queue.restore")}</Button>
+          {undo.refused ? <span className="text-warning" data-queue-restore-refused={undo.refused}>· {t(QUEUE_REFUSED[undo.refused])}</span> : null}
         </p>
       ) : null}
       {lines.length > 0 ? (
@@ -80,12 +91,8 @@ export function QueueGroup({ state, lines, cleared = null, sendable, dimmed = fa
               {folded ? <ChevronDownIcon className="size-(--size-icon-sm)" /> : <ChevronUpIcon className="size-(--size-icon-sm)" />}
             </Button>
             <span className="flex-1" />
-            {paused ? (
-              <>
-                <Button variant="text" size="inline" className="text-caption" onClick={() => onAction("clear")} data-queue-clear="true">{t("desk.queue.clear")}</Button>
-                <Button size="sm" className="h-auto gap-xxs px-sm py-xxs text-caption" onClick={() => onAction("resume")} data-queue-resume="true"><PlayIcon className="size-(--size-icon-sm) fill-current" />{t("desk.queue.resume")}</Button>
-              </>
-            ) : null}
+            {paused ? <Button variant="text" size="inline" className="text-caption" onClick={() => onAction("clear")} data-queue-clear="true">{t("desk.queue.clear")}</Button> : null}
+            {resumable ? <Button size="sm" className="h-auto gap-xxs px-sm py-xxs text-caption" onClick={() => onAction("resume")} data-queue-resume="true"><PlayIcon className="size-(--size-icon-sm) fill-current" />{t("desk.queue.resume")}</Button> : null}
           </div>
           {folded ? <span className="pb-xxs" /> : (
             <ol className="flex max-h-(--size-desk-queue-list) min-w-0 flex-col overflow-y-auto px-xs pb-xs" data-queue-lines={lines.length}>

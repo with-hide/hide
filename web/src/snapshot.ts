@@ -3972,14 +3972,16 @@ export type InputQueueFailure = "uncertain" | "device_unreachable" | "file_missi
 /** One of the operator's waiting lines: its words and the names of its files; `sending` is on its way and has no ✕. */
 export type InputQueueLine = { id: number; text: string; files: string[]; sending: boolean; failure?: InputQueueFailure };
 /** What `모두 지우기` took, while `되돌리기` brings it back (until `until_unix_ms`). */
-export type InputQueueCleared = { count: number; until_unix_ms: number };
+/** What `모두 지우기` took, while `되돌리기` can bring it back; `refused` says why the last `되돌리기` could not, the lines kept. */
+export type InputQueueCleared = { count: number; until_unix_ms: number; refused?: "queue_full" | "queue_files_full" };
 /**
  * The operator's words that wait for the pane's agent to rest (PRD desk-queue D-01, D-05): `waiting` sends one at
  * each rest, `paused` none until a line's `보내기` or `▶ 이어 보내기` (`input_queue_state`). `full` holds `max`.
  */
 /** A move on a waiting line: ✕ and `보내기` take a line's id; `▶ 이어 보내기`, `모두 지우기` and `되돌리기` the whole line. */
 export type QueueAction = "remove" | "send" | "resume" | "clear" | "restore";
-export type InputQueue = { state: "waiting" | "paused"; lines: InputQueueLine[]; max: number; full: boolean; cleared?: InputQueueCleared };
+/** `stalled`: the line typed last opened no turn the core could see, so the next waits for `▶ 이어 보내기` or the agent's next move. */
+export type InputQueue = { state: "waiting" | "paused"; lines: InputQueueLine[]; max: number; full: boolean; stalled?: boolean; cleared?: InputQueueCleared };
 export type SessionThreadSection = {
   /** Advances with every open; an older page or an input answers only this one. */
   generation: number;

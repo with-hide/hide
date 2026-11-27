@@ -1,6 +1,6 @@
 import { ChevronDownIcon, ChevronUpIcon, PlayIcon, XIcon } from "lucide-react";
 import { useState } from "react";
-import { QUEUE_FAILURE, QUEUE_HEAD, useUndoShown } from "../components/desk/queue-group";
+import { QUEUE_FAILURE, QUEUE_HEAD, QUEUE_REFUSED, useUndoShown } from "../components/desk/queue-group";
 import { Button } from "../components/ui/button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
@@ -19,6 +19,8 @@ export function PhoneQueueGroup({ queue, working, disabled }: { queue: InputQueu
   const { lines } = queue;
   if (lines.length === 0 && !undo) return null;
   const paused = queue.state === "paused";
+  // A waiting line whose last typed words opened no turn lets the next go by ▶ too.
+  const resumable = paused || queue.stalled === true;
   const head = t(QUEUE_HEAD[queue.state], { count: lines.length });
   return (
     <section aria-label={head} className={cn("mb-xs flex min-w-0 flex-col rounded-xl border border-border bg-secondary", disabled && "opacity-(--opacity-dimmed)")} data-phone-queue={queue.state}>
@@ -26,6 +28,7 @@ export function PhoneQueueGroup({ queue, working, disabled }: { queue: InputQueu
         <p className="flex min-w-0 items-center gap-xs px-md text-body text-muted-foreground" data-phone-queue-cleared={undo.count}>
           {t("desk.queue.cleared", { count: undo.count })} ·
           <Button variant="text-link" className="h-(--size-touch-target) px-xs text-body" disabled={disabled} onClick={() => sendQueue("restore")} data-phone-queue-restore="true">{t("desk.queue.restore")}</Button>
+          {undo.refused ? <span className="text-warning" data-phone-queue-restore-refused={undo.refused}>· {t(QUEUE_REFUSED[undo.refused])}</span> : null}
         </p>
       ) : null}
       {lines.length > 0 ? (
@@ -36,12 +39,8 @@ export function PhoneQueueGroup({ queue, working, disabled }: { queue: InputQueu
               {folded ? <ChevronDownIcon aria-hidden="true" /> : <ChevronUpIcon aria-hidden="true" />}
             </Button>
             <span className="flex-1" />
-            {paused ? (
-              <>
-                <Button variant="text" className="h-(--size-touch-target) px-sm text-body" disabled={disabled} onClick={() => sendQueue("clear")} data-phone-queue-clear="true">{t("desk.queue.clear")}</Button>
-                <Button size="sm" className="h-(--size-touch-target) gap-xxs rounded-full px-md" disabled={disabled} onClick={() => sendQueue("resume")} data-phone-queue-resume="true"><PlayIcon aria-hidden="true" className="fill-current" />{t("desk.queue.resume")}</Button>
-              </>
-            ) : null}
+            {paused ? <Button variant="text" className="h-(--size-touch-target) px-sm text-body" disabled={disabled} onClick={() => sendQueue("clear")} data-phone-queue-clear="true">{t("desk.queue.clear")}</Button> : null}
+            {resumable ? <Button size="sm" className="h-(--size-touch-target) gap-xxs rounded-full px-md" disabled={disabled} onClick={() => sendQueue("resume")} data-phone-queue-resume="true"><PlayIcon aria-hidden="true" className="fill-current" />{t("desk.queue.resume")}</Button> : null}
           </div>
           {paused && working && !folded ? <p className="px-md text-caption text-muted-foreground" data-phone-queue-later="true">{t("desk.queue.sendLater")}</p> : null}
           {folded ? null : (
