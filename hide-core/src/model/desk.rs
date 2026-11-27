@@ -380,11 +380,39 @@ impl DeskJobFailure {
 /// a session's input its session's agent's (docs/ARCHITECTURE.md, Desk's
 /// commands). A list is the agent's last session's, saved in
 /// `desk/commands.json` across a restart, so a new conversation's first `/`
-/// has it before its session opens. An agent is absent until it has ever
-/// sent a list, and its list empty while its open session has sent none.
+/// has it before its session opens, and Hide reads each agent's list ahead
+/// of the operator, so an agent Desk never talked to has one too. An agent
+/// is absent until it has ever sent a list, with why in `unread`, and its
+/// list empty while its open session has sent none.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct DeskCommandsSnapshot {
     pub lists: std::collections::BTreeMap<AdapterId, Vec<hide_desk::commands::Command>>,
+    /// Why each of Desk's agents absent from `lists` has no list yet, which
+    /// the `/` menu says in its one line; Hide reads every agent's list
+    /// ahead of the operator (`runtime/desk/lists.rs`).
+    pub unread: std::collections::BTreeMap<AdapterId, DeskCommandsUnread>,
+}
+
+/// Why an agent has no command list yet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeskCommandsUnread {
+    /// Hide is reading it, or will once the agent is in place.
+    Reading,
+    /// The agent refused to open a session until the operator signs in.
+    SignIn,
+    /// The agent's program is not on this machine.
+    NotInstalled,
+    /// The agent is switched off in Settings › Agents, so Hide starts it
+    /// for nothing.
+    AgentOff,
+    /// The agent opened a session and sent no list.
+    NoList,
+    /// Its adapter could not be prepared, or its process did not answer;
+    /// why is in the diagnostic log.
+    Failed,
+    /// Desk is switched off, and Hide reads lists only while it is on.
+    DeskOff,
 }
 
 /// A compaction the agent told outside its reply (OpenCode's), shown as the

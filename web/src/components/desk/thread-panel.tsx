@@ -9,7 +9,7 @@ import type { MessageKey } from "../../i18n/catalogs";
 import { allAgents } from "../../paneAgents";
 import { fileWords, keepSent, mentionAt, pickCommand, pickWords, useComposerTray } from "../../deskComposer";
 import { sessionBarSlots, sessionMentions, sessionWords, switchCommand, useMentionFiles } from "../../sessionInput";
-import { checkoutOfPane } from "../../snapshot";
+import { checkoutOfPane, type DeskAgentId } from "../../snapshot";
 import { useSessionThread } from "../../sessionThread";
 import { useShellStore } from "../../store";
 import { threadInputHeld, threadScreen } from "../../threadView";
@@ -121,7 +121,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   // files above Desk's sessions. A pick is written as the agent reads it in its terminal.
   const kind = rows.find((row) => row.pane_id === paneId)?.agent_kind ?? null;
   const adapter = kind ? agentAdapter(kind) : undefined;
-  const lists = useShellStore((s) => s.deskCommands?.lists);
+  const commandSection = useShellStore((s) => s.deskCommands);
   const deskMentions = useShellStore((s) => s.deskMentions);
   const rest = useShellStore((s) => s.rest);
   const named = useMemo(() => sessionMentions(deskMentions, rest, paneId), [deskMentions, rest, paneId]);
@@ -146,8 +146,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   const menus = useComposerMenus({
     text,
     caret,
-    commands: adapter ? { agent: adapter.picker_label, list: lists?.[adapter.agent_cli as keyof typeof lists] ?? null } : null,
-    noList: "unknown",
+    commands: adapter ? { agent: adapter.picker_label, list: commandSection?.lists[adapter.agent_cli as DeskAgentId] ?? null, unread: commandSection?.unread[adapter.agent_cli as DeskAgentId] ?? null } : null,
     mentions: named,
     projects: false,
     files,

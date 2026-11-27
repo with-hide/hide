@@ -10,6 +10,7 @@ mod escapes;
 pub mod host;
 pub mod install;
 pub mod permission;
+pub mod read_ahead;
 pub mod rpc;
 pub mod session;
 

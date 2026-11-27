@@ -288,8 +288,10 @@ pub struct Paths<'a> {
     pub account: Option<&'a [(OsString, OsString)]>,
     /// Desk's own folder, which holds the process's working folder.
     pub desk: &'a Path,
-    /// The Workspace capability reference the `hide` CLI presents.
-    pub capability: &'a Path,
+    /// The Workspace capability reference the `hide` CLI presents; none for
+    /// a process that is never prompted, such as one that only reads the
+    /// agent's commands ([`crate::read_ahead`]), so it can act on nothing.
+    pub capability: Option<&'a Path>,
 }
 
 /// The program, arguments and environment one Desk process starts with.
@@ -317,10 +319,10 @@ pub fn launch(adapter: AdapterId, paths: &Paths<'_>) -> Result<Launch, String> {
         search.push(if cfg!(windows) { ";" } else { ":" });
         search.push(account);
     }
-    let mut env: Vec<(OsString, OsString)> = vec![
-        ("PATH".into(), search),
-        ("HIDE_CAP_REF".into(), paths.capability.into()),
-    ];
+    let mut env: Vec<(OsString, OsString)> = vec![("PATH".into(), search)];
+    if let Some(capability) = paths.capability {
+        env.push(("HIDE_CAP_REF".into(), capability.into()));
+    }
     let own_cli = || {
         paths
             .own_cli
@@ -430,7 +432,7 @@ mod tests {
             search: account,
             account: None,
             desk,
-            capability: Path::new("/state/pane-capabilities/desk.json"),
+            capability: Some(Path::new("/state/pane-capabilities/desk.json")),
         }
     }
 

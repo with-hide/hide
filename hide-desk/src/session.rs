@@ -63,6 +63,21 @@ impl OpenError {
     }
 }
 
+/// What Desk says of itself in `initialize`: ACP v1, and no client methods
+/// the agent may call.
+pub fn initialize_params() -> Value {
+    json!({
+        "protocolVersion": 1,
+        "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}, "terminal": false},
+        "clientInfo": {"name": "hide-desk", "version": env!("CARGO_PKG_VERSION")},
+    })
+}
+
+/// The params of a `session/new` in `cwd`, with no MCP servers of Desk's.
+pub fn new_session_params(cwd: &Path) -> Value {
+    json!({"cwd": cwd, "mcpServers": []})
+}
+
 /// Opens a session in `cwd`: loads `resume` when the agent can, else starts
 /// a new one, in the agent's own mode (D-92).
 pub fn open(
@@ -71,21 +86,13 @@ pub fn open(
     resume: Option<&str>,
 ) -> Result<Opened, OpenError> {
     let initialized = connection
-        .call(
-            "initialize",
-            json!({
-                "protocolVersion": 1,
-                "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}, "terminal": false},
-                "clientInfo": {"name": "hide-desk", "version": env!("CARGO_PKG_VERSION")},
-            }),
-            CONTROL_TIMEOUT,
-        )
+        .call("initialize", initialize_params(), CONTROL_TIMEOUT)
         .map_err(|error| OpenError::from_call("initialize", error))?;
     let can_load = initialized
         .pointer("/agentCapabilities/loadSession")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let params = json!({"cwd": cwd, "mcpServers": []});
+    let params = new_session_params(cwd);
     let mut resume_failed = resume.is_some() && !can_load;
     let mut opened = None;
     if let Some(session_id) = resume.filter(|_| can_load) {

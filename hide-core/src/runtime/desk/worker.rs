@@ -15,6 +15,7 @@ use hide_desk::adapter::{self, Paths};
 use hide_desk::host::{Host, MAX_DESCENDANTS, MAX_RSS_BYTES};
 use hide_desk::install::{self, InstallError};
 use hide_desk::permission;
+use hide_desk::read_ahead::Unread;
 use hide_desk::rpc::{CallError, Incoming, Sink};
 use hide_desk::session::{self, Choices, OpenError, Update};
 use hide_platform::programs;
@@ -34,9 +35,15 @@ const MAX_QUEUED_INCOMING: usize = 4096;
 const MAX_ANNOUNCED: usize = 256;
 
 pub(super) enum Order {
-    /// Look at every agent (its adapter, Node, its own CLI) and install
-    /// every adapter not in place (D-80).
-    Check,
+    /// Look at every agent (its adapter, Node, its own CLI), install every
+    /// adapter not in place (D-80), and read the commands of each agent in
+    /// place and switched on in Settings › Agents (`on`) whose list is not
+    /// read yet or is stale against its last read ahead (`marks`,
+    /// [`super::lists`]).
+    Check {
+        marks: crate::desk::ReadMarks,
+        on: Vec<AdapterId>,
+    },
     /// Install `adapter`'s adapter; `asked` when the operator pressed
     /// `다시 받기`.
     Install {
@@ -64,6 +71,12 @@ pub(super) enum Order {
     /// ([`session::Arrivals`]).
     Incoming(u64, Incoming),
     Installed(AdapterId, Result<(), InstallError>),
+    /// A read of `adapter`'s commands ahead of the operator ended
+    /// ([`super::lists`]).
+    ListRead {
+        adapter: AdapterId,
+        result: Result<(hide_desk::commands::Commands, crate::desk::ReadMark), Unread>,
+    },
     /// The runtime is gone: end the process and the worker.
     Shutdown,
 }
@@ -149,10 +162,17 @@ pub(super) enum Report {
         adapter: AdapterId,
         choices: Choices,
     },
-    /// The agent's commands, the whole list again.
+    /// The agent's commands, the whole list again: from its Desk session,
+    /// or read ahead with what the read depended on (`read`).
     Commands {
         adapter: AdapterId,
         commands: hide_desk::commands::Commands,
+        read: Option<crate::desk::ReadMark>,
+    },
+    /// A read of the agent's commands ahead of the operator brought none.
+    Unread {
+        adapter: AdapterId,
+        why: crate::model::DeskCommandsUnread,
     },
     /// The turn compacted the conversation, or failed to, as its adapter
     /// told outside the reply; sent just before the turn ends.
@@ -258,6 +278,8 @@ pub(super) fn start(
         on: false,
         running: None,
         installing: Vec::new(),
+        lists: None,
+        switched_on: Vec::new(),
     };
     std::thread::Builder::new()
         .name("hide-core-desk".into())
@@ -289,6 +311,12 @@ struct Worker {
     on: bool,
     running: Option<Running>,
     installing: Vec<AdapterId>,
+    /// The thread that reads each agent's commands ahead of the operator,
+    /// one agent at a time, while Desk is on; dropping it stops it.
+    lists: Option<super::lists::Reader>,
+    /// The agents switched on in Settings › Agents at the last look: Hide
+    /// starts no other agent to read its commands.
+    switched_on: Vec<AdapterId>,
 }
 
 /// The Desk process and its session.
@@ -331,12 +359,16 @@ impl Worker {
             self.handle(order);
         }
         self.stop.store(true, Ordering::SeqCst);
+        self.lists = None;
         self.end_process(false);
     }
 
     fn handle(&mut self, order: Order) {
         match order {
-            Order::Check => self.check(),
+            Order::Check { marks, on } => {
+                self.switched_on = on;
+                self.check(marks);
+            }
             Order::Install { adapter, asked } => self.install(adapter, asked),
             Order::Send(send) => self.send(send),
             Order::Cancel => {
@@ -355,6 +387,7 @@ impl Worker {
             Order::End => self.end_process(false),
             Order::Off => {
                 self.on = false;
+                self.lists = None;
                 self.stop.store(true, Ordering::SeqCst);
                 self.stop = Arc::new(AtomicBool::new(false));
                 self.end_process(false);
@@ -389,8 +422,75 @@ impl Worker {
                     DeskAgentState::Ready,
                     None,
                 )]));
+                self.read_ahead(None, vec![adapter]);
+            }
+            Order::ListRead { adapter, result } => self.list_read(adapter, result),
+        }
+    }
+
+    /// Hands `agents` to the thread that reads their commands, started on
+    /// the first; `marks` are the last reads the core keeps.
+    fn read_ahead(&mut self, marks: Option<crate::desk::ReadMarks>, mut agents: Vec<AdapterId>) {
+        agents.retain(|agent| self.switched_on.contains(agent));
+        if !self.on || agents.is_empty() {
+            return;
+        }
+        if self.lists.is_none() {
+            match super::lists::Reader::start(self.platform.places(), self.orders.clone()) {
+                Ok(reader) => self.lists = Some(reader),
+                Err(error) => {
+                    crate::diagnostic!(json!({
+                        "component": "desk",
+                        "kind": "desk.lists_start_failed",
+                        "error": error.to_string(),
+                    }));
+                    return;
+                }
             }
         }
+        if let Some(reader) = &self.lists {
+            reader.read(marks, agents);
+        }
+    }
+
+    /// A list read ahead reaches the core; the list of an agent whose Desk
+    /// session is open is that session's to send, so a read that ended
+    /// meanwhile is not told.
+    fn list_read(
+        &mut self,
+        adapter: AdapterId,
+        result: Result<(hide_desk::commands::Commands, crate::desk::ReadMark), Unread>,
+    ) {
+        if self
+            .running
+            .as_ref()
+            .is_some_and(|running| running.adapter == adapter)
+        {
+            return;
+        }
+        let why = match result {
+            Ok((commands, read)) => {
+                self.report(Report::Commands {
+                    adapter,
+                    commands,
+                    read: Some(read),
+                });
+                return;
+            }
+            Err(Unread::Stopped) => return,
+            Err(Unread::SignIn) => crate::model::DeskCommandsUnread::SignIn,
+            Err(Unread::NoList) => crate::model::DeskCommandsUnread::NoList,
+            Err(Unread::Failed(detail)) => {
+                crate::diagnostic!(json!({
+                    "component": "desk",
+                    "kind": "desk.commands_unread",
+                    "adapter": adapter.as_str(),
+                    "error": detail,
+                }));
+                crate::model::DeskCommandsUnread::Failed
+            }
+        };
+        self.report(Report::Unread { adapter, why });
     }
 
     fn report(&self, report: Report) {
@@ -410,7 +510,7 @@ impl Worker {
     /// Looks at every agent and installs each adapter that is not in
     /// place, all at once (D-80): an agent is never left waiting for its
     /// adapter until it is chosen.
-    fn check(&mut self) {
+    fn check(&mut self, marks: crate::desk::ReadMarks) {
         self.on = true;
         let places = self.platform.places();
         let node = programs::find_cli("node");
@@ -419,7 +519,7 @@ impl Worker {
             Some(node) => install::check_node(node),
         };
         let mut missing = Vec::new();
-        let states = AdapterId::all()
+        let states: Vec<_> = AdapterId::all()
             .filter(|adapter| !self.installing.contains(adapter))
             .filter_map(|adapter| {
                 match look(
@@ -436,10 +536,16 @@ impl Worker {
                 }
             })
             .collect();
+        let ready = states
+            .iter()
+            .filter(|(_, state, _)| *state == DeskAgentState::Ready)
+            .map(|(adapter, _, _)| *adapter)
+            .collect();
         self.report(Report::Availability(states));
         for adapter in missing {
             self.install(adapter, false);
         }
+        self.read_ahead(Some(marks), ready);
     }
 
     fn install(&mut self, adapter: AdapterId, asked: bool) {
@@ -559,46 +665,9 @@ impl Worker {
     fn open(&mut self, send: &Send) -> Result<(Running, bool, Choices), OpenError> {
         let adapter = send.adapter;
         let places = self.platform.places();
-        let failed = |what: &str| OpenError::Failed(what.to_owned());
-        let package = match adapter.pin() {
-            Some(_) => Some((
-                install::installed(&places.adapters, adapter)
-                    .ok_or_else(|| failed("the agent's adapter is not installed"))?,
-                programs::find_cli("node")
-                    .ok_or_else(|| failed("node is missing"))?
-                    .into_path(),
-            )),
-            None => None,
-        };
-        let own_cli = match adapter.own_cli() {
-            Some(cli) => Some(
-                programs::find_cli(cli)
-                    .ok_or_else(|| failed(&format!("{cli} is missing")))?
-                    .into_path(),
-            ),
-            None => None,
-        };
-        let search = programs::account_path();
-        // From the same login shell read as the search, kept until a
-        // startup file changes, so a start asks no shell of its own.
-        let account = programs::account_environment();
         let credential = self.platform.issue().map_err(OpenError::Failed)?;
-        let launch = adapter::launch(
-            adapter,
-            &Paths {
-                package: package
-                    .as_ref()
-                    .map(|(package, node)| (package.as_path(), node.as_path())),
-                own_cli: own_cli.as_deref(),
-                hide_dir: &places.hide_dir,
-                search: search.as_ref(),
-                account: account.as_deref(),
-                desk: &places.desk,
-                capability: &credential.reference,
-            },
-        );
-        let launch = match launch {
-            Ok(launch) => launch,
+        let launch = match launch_for(adapter, &places, Some(&credential.reference)) {
+            Ok((launch, _)) => launch,
             Err(error) => {
                 self.platform.revoke(&credential);
                 return Err(OpenError::Failed(error));
@@ -758,6 +827,7 @@ impl Worker {
                     Update::Commands(update) => self.report(Report::Commands {
                         adapter,
                         commands: hide_desk::commands::read(adapter, &update),
+                        read: None,
                     }),
                     Update::Text { .. } | Update::Break | Update::Info(_) | Update::Other => {}
                 }
@@ -1060,6 +1130,55 @@ fn merge_choices(choices: &mut Choices, answer: Choices) {
     }
 }
 
+/// How `adapter`'s process starts on this machine, with the agent's own
+/// CLI it found: what Desk's process and a read of its commands
+/// ([`super::lists`]) both start. `capability` is the reference the
+/// process's `hide` presents; none for a process that is never prompted.
+/// Refused, with why, when a piece its route needs is not in place.
+pub(super) fn launch_for(
+    adapter: AdapterId,
+    places: &crate::desk::DeskPlaces,
+    capability: Option<&std::path::Path>,
+) -> Result<(adapter::Launch, Option<std::path::PathBuf>), String> {
+    let package = match adapter.pin() {
+        Some(_) => Some((
+            install::installed(&places.adapters, adapter)
+                .ok_or("the agent's adapter is not installed")?,
+            programs::find_cli("node")
+                .ok_or("node is missing")?
+                .into_path(),
+        )),
+        None => None,
+    };
+    let own_cli = match adapter.own_cli() {
+        Some(cli) => Some(
+            programs::find_cli(cli)
+                .ok_or_else(|| format!("{cli} is missing"))?
+                .into_path(),
+        ),
+        None => None,
+    };
+    let search = programs::account_path();
+    // From the same login shell read as the search, kept until a startup
+    // file changes, so a start asks no shell of its own.
+    let account = programs::account_environment();
+    let launch = adapter::launch(
+        adapter,
+        &Paths {
+            package: package
+                .as_ref()
+                .map(|(package, node)| (package.as_path(), node.as_path())),
+            own_cli: own_cli.as_deref(),
+            hide_dir: &places.hide_dir,
+            search: search.as_ref(),
+            account: account.as_deref(),
+            desk: &places.desk,
+            capability,
+        },
+    )?;
+    Ok((launch, own_cli))
+}
+
 /// What looking at one agent found: its state, or an adapter to install.
 #[derive(Debug, PartialEq)]
 enum Look {
@@ -1240,6 +1359,8 @@ mod tests {
                 now: None,
             }),
             installing: Vec::new(),
+            lists: None,
+            switched_on: Vec::new(),
         }
     }
 

@@ -3527,13 +3527,22 @@ export type DeskCompaction = { done: boolean; reason: string | null };
 export type DeskCommand = { name: string; description: string; hint?: string };
 
 /**
- * The `desk_commands` section, the `/` menus: each agent's commands as its
- * last session listed them, saved across a restart, with what Desk keeps from
- * the agent already gone. Desk's composer reads its selected agent's, and a
- * session's input its session's agent's. An agent is absent until it has ever
- * sent a list, and its list empty while its open session has sent none.
+ * Why one of Desk's agents has no command list yet: Hide is reading it (or will once the agent is in place), the agent
+ * wants its sign-in, it is not installed on this computer, it is switched off in Settings › Agents (Hide starts it for
+ * nothing), it sent none, the read failed (why is in the log), or Desk is off.
  */
-export type DeskCommands = { lists: Partial<Record<DeskAgentId, DeskCommand[]>> };
+export type DeskCommandsUnread = "reading" | "sign_in" | "not_installed" | "agent_off" | "no_list" | "failed" | "desk_off";
+
+/**
+ * The `desk_commands` section, the `/` menus: each agent's commands as it
+ * last listed them, read by Hide ahead of the operator or sent by its Desk
+ * session, saved across a restart, with what Desk keeps from the agent already
+ * gone. Desk's composer reads its selected agent's, and a session's input its
+ * session's agent's. An agent is absent from `lists` until it has ever sent
+ * one, with why in `unread`, and its list empty while its open session has
+ * sent none.
+ */
+export type DeskCommands = { lists: Partial<Record<DeskAgentId, DeskCommand[]>>; unread: Partial<Record<DeskAgentId, DeskCommandsUnread>> };
 
 /**
  * The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes.

@@ -542,7 +542,7 @@ const key = (box: HTMLTextAreaElement, name: string) => act(async () => { box.di
 
 it("opens the session's agent's own commands on `/`, in Desk's panel, and writes the one picked into the box", async () => {
   const { box, type } = await mount();
-  await act(async () => useShellStore.setState({ sessionThread: section(), agents: [claudeRow], deskCommands: { lists: { claude: [{ name: "/compact", description: "Free up context" }, { name: "/review", description: "Review the diff" }], codex: [{ name: "/codex-only", description: "" }] } } }));
+  await act(async () => useShellStore.setState({ sessionThread: section(), agents: [claudeRow], deskCommands: { lists: { claude: [{ name: "/compact", description: "Free up context" }, { name: "/review", description: "Review the diff" }], codex: [{ name: "/codex-only", description: "" }] }, unread: {} } }));
   await type("/re");
   const rows = Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-command]")).map((row) => row.dataset.deskCommand);
   expect(rows).toEqual(["/review"]);
@@ -552,11 +552,13 @@ it("opens the session's agent's own commands on `/`, in Desk's panel, and writes
   expect(events).toEqual([]);
 });
 
-it("says an agent that never listed its commands has none known, and sends `/` words as typed", async () => {
+it("says why the session's agent has no list yet, the same as Desk's box, and sends `/` words as typed", async () => {
   const { box, type, enter } = await mount();
-  await act(async () => useShellStore.setState({ sessionThread: section(), agents: [claudeRow], deskCommands: { lists: {} } }));
+  await act(async () => useShellStore.setState({ sessionThread: section(), agents: [claudeRow], deskCommands: { lists: {}, unread: { claude: "reading" } } }));
   await type("/compact");
-  expect(document.body.querySelector('[data-desk-command-menu="unknown"]')).not.toBeNull();
+  expect(document.body.querySelector('[data-desk-command-menu="waiting"]')).not.toBeNull();
+  await act(async () => useShellStore.setState({ deskCommands: { lists: {}, unread: { claude: "sign_in" } } }));
+  expect(document.body.querySelector('[data-desk-command-unread="sign_in"]')).not.toBeNull();
   await enter();
   expect(events[0]).toMatchObject({ kind: "thread_input", payload: { text: "/compact" } });
   expect(box().value).toBe("/compact");

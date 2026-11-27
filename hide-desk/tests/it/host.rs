@@ -373,7 +373,7 @@ fn a_command_desk_s_agent_runs_finds_desk_s_own_hide_before_the_account_s() {
             search: Some(&account.clone().into_os_string()),
             account: None,
             desk: &desk,
-            capability: &root.path().join("desk.json"),
+            capability: Some(&root.path().join("desk.json")),
         },
     )
     .unwrap();
@@ -421,7 +421,7 @@ fn the_agent_has_the_account_s_environment_but_no_pane_identity_or_hide_s_own() 
             search: None,
             account: Some(&account),
             desk: &desk,
-            capability: &root.path().join("desk.json"),
+            capability: Some(&root.path().join("desk.json")),
         },
     )
     .unwrap();

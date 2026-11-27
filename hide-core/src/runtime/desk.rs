@@ -16,6 +16,7 @@
 
 mod files;
 pub(super) mod jobs;
+mod lists;
 mod named;
 mod opens;
 mod worker;
@@ -96,6 +97,12 @@ pub(super) struct Desk {
     commands: crate::desk::CommandLists,
     /// The file each list the agents send is saved to, off the lock.
     commands_store: Option<crate::desk::DeskCommandsStore>,
+    /// When each list read ahead of the operator was read, and what it
+    /// depended on (`desk/lists.rs`), saved with the lists.
+    read_marks: crate::desk::ReadMarks,
+    /// Why a read ahead of the operator brought no list, by agent, until a
+    /// list comes; never stored, since the next start reads it again.
+    unread: BTreeMap<AdapterId, crate::model::DeskCommandsUnread>,
     /// The session that opened new on a command and has not been told
     /// Desk's guide yet, which goes with its first ordinary message
     /// (`hide_desk::Guide`). It joins `stored.sessions` only once that
@@ -366,10 +373,11 @@ impl Runtime {
     pub(crate) fn install_desk_commands(
         &mut self,
         store: crate::desk::DeskCommandsStore,
-        lists: crate::desk::CommandLists,
+        saved: crate::desk::SavedCommands,
     ) {
         self.desk.commands_store = Some(store);
-        self.desk.commands = lists;
+        self.desk.commands = saved.lists;
+        self.desk.read_marks = saved.read;
         self.compose_desk_commands();
     }
 
@@ -389,7 +397,7 @@ impl Runtime {
             Ok(handle) => {
                 // Desk switched off looks at no agent (D-76).
                 if self.desk.stored.settings.enabled {
-                    let _ = handle.orders.send(Order::Check);
+                    let _ = handle.orders.send(self.desk_check());
                     self.ask_ai_catalog_read();
                 }
                 self.desk.worker = Some(handle);
@@ -978,7 +986,7 @@ impl Runtime {
     fn desk_restart(&mut self) -> bool {
         self.end_desk_process();
         self.forget_stopped();
-        self.order(Order::Check);
+        self.order(self.desk_check());
         self.desk.held = false;
         true
     }
@@ -1163,10 +1171,11 @@ impl Runtime {
             self.desk_start_queued();
         }
         if enabled != before.enabled {
+            self.compose_desk_commands();
             if enabled {
                 // Every adapter is installed now, not when it is chosen
                 // (D-80), and the sign-ins are read (D-81).
-                self.order(Order::Check);
+                self.order(self.desk_check());
                 self.ask_ai_catalog_read();
                 self.desk_start_queued();
             } else {
@@ -1324,6 +1333,7 @@ impl Runtime {
                 if !changed {
                     return false;
                 }
+                self.compose_desk_commands();
             }
             Report::Installing { adapter, asked } => {
                 self.desk
@@ -1597,8 +1607,30 @@ impl Runtime {
                 });
                 self.save_desk();
             }
-            Report::Commands { adapter, commands } => {
+            Report::Unread { adapter, why } => {
+                if self.desk.unread.get(&adapter) == Some(&why) {
+                    return false;
+                }
+                self.desk.unread.insert(adapter, why);
+                self.compose_desk_commands();
+                return true;
+            }
+            Report::Commands {
+                adapter,
+                commands,
+                read,
+            } => {
+                self.desk.unread.remove(&adapter);
+                let marked = match read {
+                    Some(read) => self.desk.read_marks.insert(adapter, read.clone()) != Some(read),
+                    None => false,
+                };
                 if self.desk.commands.get(&adapter) == Some(&commands.commands) {
+                    // A list read again unchanged keeps when it was read.
+                    if marked {
+                        self.save_desk_commands();
+                    }
+                    self.compose_desk_commands();
                     return false;
                 }
                 if commands.cut > 0 {
@@ -1611,14 +1643,7 @@ impl Runtime {
                     }));
                 }
                 self.desk.commands.insert(adapter, commands.commands);
-                // The lists the agents sent, not the empty ones an open
-                // stands in with: an agent never heard from still says the
-                // list comes with the first message.
-                if let Some(store) = &self.desk.commands_store {
-                    let mut sent = self.desk.commands.clone();
-                    sent.retain(|_, list| !list.is_empty());
-                    store.save(sent);
-                }
+                self.save_desk_commands();
                 self.compose_desk_commands();
                 return true;
             }
@@ -1842,8 +1867,40 @@ impl Runtime {
     /// This machine's kit or Hide AI's read of its agents moved: the bar is
     /// composed again when what it says of Desk's agents moved.
     pub(in crate::runtime) fn desk_catalog_moved(&mut self) {
-        if self.desk.worker.is_some() && self.desk_catalog() != self.desk.catalog {
-            self.compose_desk();
+        if self.desk.worker.is_none() {
+            return;
+        }
+        let catalog = self.desk_catalog();
+        if catalog == self.desk.catalog {
+            return;
+        }
+        let on = |catalog: &[CatalogAgent]| -> BTreeSet<AdapterId> {
+            catalog
+                .iter()
+                .filter(|agent| agent.enabled)
+                .map(|agent| agent.id)
+                .collect()
+        };
+        // An agent switched on is looked at, and its commands read.
+        let switched_on = !on(&catalog).is_subset(&on(&self.desk.catalog));
+        self.compose_desk();
+        self.compose_desk_commands();
+        if switched_on && self.desk.stored.settings.enabled {
+            self.order(self.desk_check());
+        }
+    }
+
+    /// The look at every agent Desk orders: with the last reads ahead and
+    /// the agents switched on, whose commands are read (`desk/lists.rs`).
+    fn desk_check(&self) -> Order {
+        Order::Check {
+            marks: self.desk.read_marks.clone(),
+            on: self
+                .desk_catalog()
+                .into_iter()
+                .filter(|agent| agent.enabled)
+                .map(|agent| agent.id)
+                .collect(),
         }
     }
 
@@ -1875,22 +1932,67 @@ impl Runtime {
         self.desk.commands.get(&agent).map_or(&[], Vec::as_slice)
     }
 
-    /// The `desk_commands` section, every agent's last list, sent again
-    /// only when a list moved.
+    /// Saves the lists the agents sent, not the empty ones an open stands
+    /// in with, and when each list read ahead was read.
+    fn save_desk_commands(&self) {
+        if let Some(store) = &self.desk.commands_store {
+            let mut lists = self.desk.commands.clone();
+            lists.retain(|_, list| !list.is_empty());
+            store.save(crate::desk::SavedCommands {
+                lists,
+                read: self.desk.read_marks.clone(),
+            });
+        }
+    }
+
+    /// Why each of Desk's agents with no list has none: Desk is off, the
+    /// agent is switched off in Settings › Agents or not in place on this
+    /// machine, its read is under way or waits, or the read's own answer.
+    fn desk_commands_unread(&self) -> BTreeMap<AdapterId, crate::model::DeskCommandsUnread> {
+        use crate::model::DeskCommandsUnread as Why;
+        let enabled = self.desk.stored.settings.enabled;
+        AdapterId::all()
+            .filter(|agent| !self.desk.commands.contains_key(agent))
+            .map(|agent| {
+                let why = if !enabled {
+                    Why::DeskOff
+                } else {
+                    match self.desk_agent_state(agent) {
+                        DeskAgentState::Off => Why::AgentOff,
+                        DeskAgentState::CliMissing => Why::NotInstalled,
+                        DeskAgentState::NodeMissing | DeskAgentState::InstallFailed => Why::Failed,
+                        DeskAgentState::Ready => self
+                            .desk
+                            .unread
+                            .get(&agent)
+                            .copied()
+                            .unwrap_or(Why::Reading),
+                        DeskAgentState::Checking | DeskAgentState::Preparing => Why::Reading,
+                    }
+                };
+                (agent, why)
+            })
+            .collect()
+    }
+
+    /// The `desk_commands` section, every agent's last list and why each
+    /// other agent has none, sent again only when one moved.
     fn compose_desk_commands(&mut self) {
         if self.desk.worker.is_none() {
             return;
         }
+        let unread = self.desk_commands_unread();
         if self
             .snapshot
             .desk_commands
             .as_deref()
-            .is_some_and(|shown| shown.lists == self.desk.commands)
+            .is_some_and(|shown| shown.lists == self.desk.commands && shown.unread == unread)
         {
             return;
         }
         self.snapshot.desk_commands = Some(Arc::new(crate::model::DeskCommandsSnapshot {
             lists: self.desk.commands.clone(),
+            unread,
         }));
     }
 
@@ -2696,6 +2798,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received) = runtime(root.path());
         runtime.desk.stored.settings.enabled = false;
+        // The fixture's own look, from switching its agents on.
+        while received.try_recv().is_ok() {}
         for (kind, payload) in [
             ("desk_select", json!({"agent": "claude"})),
             ("desk_send", json!({"text": "start something"})),
@@ -2710,7 +2814,7 @@ mod tests {
             "desk_settings_set",
             json!({"enabled": true})
         ));
-        assert!(matches!(received.try_recv(), Ok(Order::Check)));
+        assert!(matches!(received.try_recv(), Ok(Order::Check { .. })));
         assert!(runtime.snapshot.desk.as_ref().unwrap().settings.enabled);
         assert!(event(
             &mut runtime,
@@ -3021,7 +3125,7 @@ mod tests {
         assert!(
             received
                 .try_iter()
-                .any(|order| matches!(order, Order::Check))
+                .any(|order| matches!(order, Order::Check { .. }))
         );
         // `다시 받기` installs the one agent, as the operator's own ask.
         event(&mut runtime, "desk_install", json!({"agent": "codex"}));
@@ -3949,7 +4053,11 @@ mod tests {
         assert!(event(&mut runtime, "desk_restart", json!({})));
         let orders: Vec<Order> = received.try_iter().collect();
         assert!(orders.iter().any(|order| matches!(order, Order::End)));
-        assert!(orders.iter().any(|order| matches!(order, Order::Check)));
+        assert!(
+            orders
+                .iter()
+                .any(|order| matches!(order, Order::Check { .. }))
+        );
         let closed = items(&runtime).into_iter().find(|item| item.id() == card);
         assert!(matches!(
             closed,
@@ -4103,6 +4211,7 @@ mod tests {
         runtime.desk_report(Report::Commands {
             adapter,
             commands: hide_desk::commands::read(adapter, &update),
+            read: None,
         });
     }
 
@@ -4207,13 +4316,170 @@ mod tests {
         assert_eq!(slash(&runtime).1, ["/compact", "/context"]);
         let saved = crate::desk::DeskCommandsStore::new(path.clone()).restore();
         assert_eq!(
-            saved.keys().copied().collect::<Vec<_>>(),
+            saved.lists.keys().copied().collect::<Vec<_>>(),
             [AdapterId::CLAUDE]
         );
         listed(&mut runtime, AdapterId::CLAUDE, &["review"]);
         drop(runtime);
         let (runtime, _received) = start(root.path());
         assert_eq!(slash(&runtime).1, ["/review"]);
+    }
+
+    fn read_ahead(runtime: &mut Runtime, adapter: AdapterId, names: &[&str], facts: &str) {
+        let update = json!({"sessionUpdate": "available_commands_update", "availableCommands":
+            names.iter().map(|name| json!({"name": name, "description": format!("{name} it")})).collect::<Vec<_>>()});
+        runtime.desk_report(Report::Commands {
+            adapter,
+            commands: hide_desk::commands::read(adapter, &update),
+            read: Some(crate::desk::ReadMark::of(facts, 1_000)),
+        });
+    }
+
+    fn unread(runtime: &Runtime, adapter: AdapterId) -> Option<crate::model::DeskCommandsUnread> {
+        runtime
+            .snapshot
+            .desk_commands
+            .as_ref()
+            .expect("desk_commands")
+            .unread
+            .get(&adapter)
+            .copied()
+    }
+
+    /// mission-106 command-lists: an agent Desk never talked to has its list
+    /// once Hide read it ahead, and each other agent says why it has none:
+    /// read under way, the agent's sign-in, not installed, no list sent, or
+    /// Desk off.
+    #[test]
+    fn an_agent_desk_never_opened_has_its_list_read_ahead_or_says_why_not() {
+        use crate::model::DeskCommandsUnread as Why;
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        // Every agent in place is read, none yet answered.
+        for agent in AdapterId::all() {
+            assert_eq!(unread(&runtime, agent), Some(Why::Reading), "{agent:?}");
+        }
+        read_ahead(
+            &mut runtime,
+            AdapterId::GROK,
+            &["compact", "memory"],
+            "grok v1",
+        );
+        let section = runtime.snapshot.desk_commands.as_ref().unwrap();
+        assert_eq!(
+            section.lists[&AdapterId::GROK]
+                .iter()
+                .map(|command| command.name.as_str())
+                .collect::<Vec<_>>(),
+            ["/compact", "/memory"]
+        );
+        assert_eq!(unread(&runtime, AdapterId::GROK), None);
+
+        for why in [Why::SignIn, Why::NoList] {
+            runtime.desk_report(Report::Unread {
+                adapter: AdapterId::OMP,
+                why,
+            });
+            assert_eq!(unread(&runtime, AdapterId::OMP), Some(why));
+        }
+        runtime.desk_report(Report::Availability(vec![(
+            AdapterId::ANTIGRAVITY,
+            DeskAgentState::CliMissing,
+            Some("agy".into()),
+        )]));
+        assert_eq!(
+            unread(&runtime, AdapterId::ANTIGRAVITY),
+            Some(Why::NotInstalled)
+        );
+
+        // A list the agent's own Desk session sends answers its read too.
+        listed(&mut runtime, AdapterId::OMP, &["session"]);
+        assert_eq!(unread(&runtime, AdapterId::OMP), None);
+
+        // An agent switched off in Settings › Agents is never started to be
+        // read; switched on again, the next look reads it.
+        let all: Vec<&str> = AdapterId::all().map(|agent| agent.catalog().id).collect();
+        let without_pi: Vec<&str> = all.iter().copied().filter(|id| *id != "pi").collect();
+        kit_on(&mut runtime, &without_pi);
+        assert_eq!(unread(&runtime, AdapterId::PI), Some(Why::AgentOff));
+        while received.try_recv().is_ok() {}
+        kit_on(&mut runtime, &all);
+        assert_eq!(unread(&runtime, AdapterId::PI), Some(Why::Reading));
+        let on = std::iter::from_fn(|| received.try_recv().ok())
+            .find_map(|order| match order {
+                Order::Check { on, .. } => Some(on),
+                _ => None,
+            })
+            .expect("a look once Pi is switched on");
+        assert!(on.contains(&AdapterId::PI));
+
+        event(&mut runtime, "desk_settings_set", json!({"enabled": false}));
+        assert_eq!(unread(&runtime, AdapterId::CLAUDE), Some(Why::DeskOff));
+        // A list read before still shows with Desk off.
+        assert!(
+            runtime
+                .snapshot
+                .desk_commands
+                .as_ref()
+                .unwrap()
+                .lists
+                .contains_key(&AdapterId::GROK)
+        );
+    }
+
+    /// A list read ahead is kept with what it depended on across a restart,
+    /// and the next look hands that to the reader, so an unchanged agent is
+    /// not started again; reading it again unchanged keeps the newer mark.
+    #[test]
+    fn a_list_read_ahead_and_its_mark_outlive_a_restart_and_reach_the_next_look() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("state/desk/commands.json");
+        let start = |root: &std::path::Path| {
+            let (mut runtime, received) = runtime(root);
+            let store = crate::desk::DeskCommandsStore::new(path.clone());
+            let saved = store.restore();
+            runtime.install_desk_commands(store, saved);
+            (runtime, received)
+        };
+        let (mut runtime, _received) = start(root.path());
+        read_ahead(
+            &mut runtime,
+            AdapterId::OPENCODE,
+            &["init", "review"],
+            "opencode 2.0.29",
+        );
+        drop(runtime);
+        let (mut runtime, received) = start(root.path());
+        assert_eq!(
+            runtime.snapshot.desk_commands.as_ref().unwrap().lists[&AdapterId::OPENCODE].len(),
+            2
+        );
+        while received.try_recv().is_ok() {}
+        event(&mut runtime, "desk_restart", json!({}));
+        let marks = std::iter::from_fn(|| received.try_recv().ok())
+            .find_map(|order| match order {
+                Order::Check { marks, .. } => Some(marks),
+                _ => None,
+            })
+            .expect("a look");
+        assert_eq!(
+            marks[&AdapterId::OPENCODE],
+            crate::desk::ReadMark::of("opencode 2.0.29", 1_000)
+        );
+
+        // The same list read again under a new version keeps the new mark.
+        read_ahead(
+            &mut runtime,
+            AdapterId::OPENCODE,
+            &["init", "review"],
+            "opencode 2.0.30",
+        );
+        drop(runtime);
+        let saved = crate::desk::DeskCommandsStore::new(path).restore();
+        assert_eq!(
+            saved.read[&AdapterId::OPENCODE],
+            crate::desk::ReadMark::of("opencode 2.0.30", 1_000)
+        );
     }
 
     /// A message whose first word is a command the agent listed goes as
