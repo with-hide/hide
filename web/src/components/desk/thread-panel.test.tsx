@@ -12,7 +12,7 @@ import type { DeskJob } from "../../desk";
 import type { AgentRow, DeskMentions, SessionThreadSection, SnapshotRest, ThreadPage } from "../../snapshot";
 import { useShellStore } from "../../store";
 import { useUiStore } from "../../ui";
-import { NO_SESSION_DRAFTS } from "../../sessionDrafts";
+import { NO_SESSION_DRAFTS, SESSION_DRAFT_BYTES } from "../../sessionDrafts";
 import { TooltipProvider } from "../ui/tooltip";
 import { ThreadPanel } from "./thread-panel";
 import { clearPreviews } from "../../filePreview";
@@ -111,7 +111,7 @@ it("keeps a sleeping session's record above the foot that wakes it once its card
   expect(container.querySelector("textarea")).toBeNull();
 });
 
-it("sends the box's words on Enter, keeps them until the pane took them, and never sends mid-composition", async () => {
+it("sends the box's words on Enter, takes them out of the box at once, and never sends mid-composition", async () => {
   const { box, type, enter } = await mount();
   await act(async () => useShellStore.setState({ sessionThread: section() }));
   await type("다크도 부탁해");
@@ -121,10 +121,43 @@ it("sends the box's words on Enter, keeps them until the pane took them, and nev
   expect(events).toHaveLength(1);
   expect(events[0]).toMatchObject({ kind: "thread_input", payload: { generation: 4, pane_id: "w1:p2", text: "다크도 부탁해", stages: [] } });
   const request = events[0]!.payload.request_id as string;
+  expect(box().value).toBe("");
   await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sending" } }) }));
-  expect(box().value).toBe("다크도 부탁해");
   await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sent" } }) }));
   expect(box().value).toBe("");
+});
+
+// Review round 1 F1 (mission-109): a send the pane took while its panel was closed never comes back as a draft to go twice.
+it("brings no sent words back when the panel closed before the pane took them", async () => {
+  const first = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await first.type("accepted once");
+  await first.enter();
+  const request = events.find((event) => event.kind === "thread_input")!.payload.request_id as string;
+  await act(async () => first.root.unmount());
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "sent" } }) }));
+  const back = await mount();
+  expect(back.box().value).toBe("");
+});
+
+// Review round 1 F2: a draft holds at most what one send takes, and the line says the rest was cut.
+it("cuts words past what one send takes and says so", async () => {
+  const { container, box, type } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await type("x".repeat(SESSION_DRAFT_BYTES + 10));
+  expect(box().value).toHaveLength(SESSION_DRAFT_BYTES);
+  expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe("Too long to send in one go");
+});
+
+it("puts refused words back only into a box still empty, leaving words written since", async () => {
+  const { box, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await type("계속");
+  await enter();
+  const request = events[0]!.payload.request_id as string;
+  await type("다른 말");
+  await act(async () => useShellStore.setState({ sessionThread: section({ input: { request_id: request, state: "refused", reason: "asleep" } }) }));
+  expect(box().value).toBe("다른 말");
 });
 
 it("keeps the words and says why when the pane refused them, and holds send while the pane runs another session", async () => {
@@ -568,7 +601,8 @@ it("says why the session's agent has no list yet, the same as Desk's box, and se
   expect(document.body.querySelector('[data-desk-command-unread="sign_in"]')).not.toBeNull();
   await enter();
   expect(events[0]).toMatchObject({ kind: "thread_input", payload: { text: "/compact" } });
-  expect(box().value).toBe("/compact");
+  // Sent, the words leave the box at once.
+  expect(box().value).toBe("");
 });
 
 it("lists the project's files above Desk's sessions on `@`, without the session itself, and writes each as its agent reads it", async () => {
