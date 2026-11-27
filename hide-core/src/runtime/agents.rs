@@ -351,6 +351,7 @@ impl Runtime {
         terminal_intent: bool,
         report: FailureReport,
     ) -> bool {
+        let selects = chooses_on_device(&payload.request);
         let target_id = payload.target_id;
         let request_id = payload.request_id;
         let focus_device = payload.focus_device;
@@ -1102,14 +1103,14 @@ impl Runtime {
         }
         if chooses_focus {
             self.supersede_start_navigation();
-            // A choice on the device in front is the operator's look chosen
-            // on this request's screen, though neither the front nor the
-            // focus moves (`docs/status-model.md`, Hide owns the read axis).
-            // One that brings the device forward records it below; one on a
-            // device behind claims nothing of the look in front.
-            if self.device_in_front(&target_id) {
-                self.choose_look_screen();
-            }
+        }
+        // A choice on the device in front is the operator's look chosen on
+        // this request's screen, though neither the front nor the focus moves
+        // here (`docs/status-model.md`, Hide owns the read axis). One that
+        // brings the device forward records it below; one on a device behind
+        // claims nothing of the look in front.
+        if selects && self.device_in_front(&target_id) {
+            self.choose_look_screen();
         }
         if let Some(key) = chosen_key {
             if let Some((tab, delegated)) = focused_tab {
@@ -4643,6 +4644,26 @@ pub(super) struct ForkFocus {
     pub(super) prior_intent_serial: u64,
     /// The press that fork answered (`PendingFork::press`).
     pub(super) press: u64,
+}
+
+/// Whether a device request chooses where the device's keyboard goes, by
+/// what the operator asked for and not by what the engine is asked to do for
+/// it: a pane, a tab, a Workspace (an unopened one opens its owner) or a new
+/// terminal there, as a tab or a split. Accepted for the device in front,
+/// such a request is the operator's look chosen on the screen it was sent
+/// from (`Runtime::choose_look_screen`); a zoom or a close chooses nothing.
+/// Every kind is named, so a new one is classified where it is added.
+pub(super) fn chooses_on_device(request: &RemoteControlRequest) -> bool {
+    match request {
+        RemoteControlRequest::FocusPane { .. }
+        | RemoteControlRequest::FocusTab { .. }
+        | RemoteControlRequest::FocusWorkspace { .. }
+        | RemoteControlRequest::CreateTab { .. }
+        | RemoteControlRequest::SplitPane { .. } => true,
+        RemoteControlRequest::TogglePaneZoom { .. }
+        | RemoteControlRequest::ClosePane { .. }
+        | RemoteControlRequest::CloseTab { .. } => false,
+    }
 }
 
 /// A fork the operator asked for, until its worker answers.

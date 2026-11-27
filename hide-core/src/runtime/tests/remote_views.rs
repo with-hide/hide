@@ -373,6 +373,99 @@ fn a_device_a_view_brought_forward_counts_again_once_this_window_chooses_in_it()
     }
 }
 
+/// Review round 2, R1: a device request is a choice of the look by what the
+/// operator asked for, not by what the engine is asked to do for it: an
+/// unopened Workspace, which opens its owner, and a new terminal, as a tab
+/// (`request_remote_terminal`) or a split, choose as a pane or a tab does; a
+/// zoom or a close chooses nothing.
+#[test]
+fn a_device_request_chooses_by_what_the_operator_asked_for() {
+    for (asked, chooses) in [
+        (json!({"action": "focus_pane", "pane_id": "p"}), true),
+        (json!({"action": "focus_tab", "tab_id": "t"}), true),
+        (
+            json!({"action": "focus_workspace", "workspace_id": "w", "checkout_id": "c"}),
+            true,
+        ),
+        (
+            json!({"action": "create_tab", "workspace_id": "w", "cwd": "/w", "label": "l"}),
+            true,
+        ),
+        (
+            json!({"action": "split_pane", "pane_id": "p", "direction": "right"}),
+            true,
+        ),
+        (json!({"action": "toggle_pane_zoom", "pane_id": "p"}), false),
+        (
+            json!({"action": "close_pane", "pane_id": "p", "confirmed": true}),
+            false,
+        ),
+        (
+            json!({"action": "close_tab", "tab_id": "t", "confirmed": true}),
+            false,
+        ),
+    ] {
+        let request =
+            serde_json::from_value::<super::events::RemoteControlRequest>(asked.clone()).unwrap();
+        assert_eq!(
+            super::agents::chooses_on_device(&request),
+            chooses,
+            "{asked}"
+        );
+    }
+}
+
+/// Review round 2, R1, read end to end: after a view brought the device
+/// forward and ended, this machine's window opening a new terminal there (a
+/// split, which the engine is asked as no focus) makes the device's look this
+/// machine's, so the pane its keyboard holds is read.
+#[test]
+fn a_new_terminal_on_the_device_in_front_chooses_as_a_pick_does() {
+    for origin in origins() {
+        let t = tree();
+        let (mut runtime, _views) = device(origin.clone(), false);
+        runtime.ingest_remote_session(
+            DEVICE,
+            Ok(device_session(&t.main, &[("t1", "working", 1)], "t1")),
+        );
+        views(&mut runtime, &[guest()]);
+        runtime.dispatch_json_from(
+            &event("focus_device", json!({"device_id": DEVICE})),
+            LookScreen::View(guest()),
+        );
+        views(&mut runtime, &[]);
+        runtime.ingest_remote_session(
+            DEVICE,
+            Ok(device_session(&t.main, &[("t1", "done", 2)], "t1")),
+        );
+        assert!(
+            unread(&runtime, "t1"),
+            "{origin:?}: news after the view left"
+        );
+        runtime.install_remote_control(RemoteControlContext::new(
+            DEVICE,
+            recording_engine(Arc::new(Mutex::new(Vec::new()))),
+            Weak::new(),
+            ChangeNotifier::noop(),
+        ));
+        runtime.dispatch_json_from(
+            &event(
+                "remote_control",
+                json!({
+                    "target_id": DEVICE, "request_id": "split", "focus_device": true,
+                    "action": "split_pane", "pane_id": format!("remote:{DEVICE}:pane:t1"),
+                    "direction": "right",
+                }),
+            ),
+            LookScreen::Own,
+        );
+        assert!(
+            !unread(&runtime, "t1"),
+            "{origin:?}: the new terminal is this machine's choice on the device"
+        );
+    }
+}
+
 /// Review round 1, R1, its limit: a choice on a device behind, which does
 /// not bring it forward, claims nothing of the look of what is in front.
 #[test]
