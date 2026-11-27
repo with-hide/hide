@@ -3714,7 +3714,7 @@ A build before this one cannot read a `known.json` that holds such an address, w
 Pairing and switching run the commands an SSH pairing runs, through `wsl.exe` in place of a login (`pairing_ssh::Login`, implemented by `Ssh` and by `pairing_wsl::Wsl`): `look-ssh`, `accept-ssh --wsl`, `connect` to start a core, and the same answers; `wsl_not_reached` is the one code that differs, and at most four such steps run at once, counted with the `ssh` ones.
 
 **Diagnostics.**
-The daemon records every log line of its own through `hide_core::diagnostic!`, and only the commands and entry points that print to a terminal use `eprintln!` (`scripts/check-daemon-stderr.py`): a write that fails (a full disk behind a login item's `Logs/core.log`) loses the line, where `eprintln!` panics, and a panic under a connection lock poisons it for every later caller. The holds in `hided/src/demand.rs` also take their locks through `PoisonError::into_inner`, so a callback that panics under one leaves it usable.
+The daemon records every log line of its own through `hide_core::diagnostic!`, and only the commands and entry points that print to a terminal use `eprintln!` (`hided/clippy.toml` disallows it, `scripts/verify-cargo.sh lint` enforces it): a write that fails (a full disk behind a login item's `Logs/core.log`) loses the line, where `eprintln!` panics, and a panic under a connection lock poisons it for every later caller. The holds in `hided/src/demand.rs` also take their locks through `PoisonError::into_inner`, so a callback that panics under one leaves it usable.
 `hide-peer` writes its diagnostics through `hide_peer::log`, which `hided` points at the core's diagnostic log at start; a program that sets no sink gets them on stderr.
 
 ### Another machine's screen

@@ -973,7 +973,6 @@ POLICY_ONLY = (
     "scripts/check-core-touches-no-machine.py",
     "scripts/check-iroh-stays-behind-the-seam.py",
     "scripts/check-code-host-seam.py",
-    "scripts/check-daemon-stderr.py",
     "scripts/check-timed-waits.py", "scripts/timed-waits-baseline.json",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py", "scripts/check-device-kits-single-source.py",

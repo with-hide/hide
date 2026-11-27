@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros)] // the terminal is this command's output: it prints to the operator's own terminal and holds no lock
+
 use std::io;
 use std::path::Path;
 use std::process::Command;

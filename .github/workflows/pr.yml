@@ -256,7 +256,6 @@ jobs:
           python3 scripts/check-core-touches-no-machine.py
           python3 scripts/check-iroh-stays-behind-the-seam.py
           python3 scripts/check-code-host-seam.py
-          python3 scripts/check-daemon-stderr.py
           python3 scripts/check-timed-waits.py --base HEAD^1
           python3 scripts/check-ai-prompt-language.py
           python3 scripts/check-agent-screen-rules.py

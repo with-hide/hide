@@ -1,6 +1,8 @@
 //! Pane-scoped Workspace CLI transport. Bootstrap attests the caller over a
 //! local socket; commands and results use hided's authenticated `/ws`.
 
+#![allow(clippy::disallowed_macros)] // the terminal is this command's output: it prints to the operator's own terminal and holds no lock
+
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};

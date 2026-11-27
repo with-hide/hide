@@ -14,6 +14,8 @@
 //! for its guest, a link for its words, a retry for its outcome), and
 //! prints the answer: one JSON line with `--json`, lines for a person
 //! without.
+#![allow(clippy::disallowed_macros)] // the terminal is this command's output: it prints to the operator's own terminal and holds no lock
+
 use crate::env::Env;
 use hide_core::device_command::DeviceCommand;
 use serde_json::{Value, json};

@@ -12,6 +12,8 @@
 //! so a join whose answer was lost finishes when run again with the same
 //! code; a home keeps one unfinished join at a time.
 
+#![allow(clippy::disallowed_macros)] // the terminal is this command's output: it prints to the operator's own terminal and holds no lock
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
