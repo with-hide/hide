@@ -438,9 +438,7 @@ fn initial_operator_requests(
         .iter()
         .map(|event| format!("user: {}", event.text))
         .collect::<Vec<_>>();
-    lines.push(format!(
-        "<omitted-requests>{omitted} requests omitted</omitted-requests>"
-    ));
+    lines.push(format!("<omitted-requests>{omitted}</omitted-requests>"));
     lines.extend(
         requests[recent_start..]
             .iter()
@@ -1055,7 +1053,7 @@ mod tests {
             );
         }
         assert!(!context.contains("user: turn 5\n"));
-        assert!(context.contains("<omitted-requests>4 requests omitted</omitted-requests>"));
+        assert!(context.contains("<omitted-requests>4</omitted-requests>"));
     }
 
     #[test]

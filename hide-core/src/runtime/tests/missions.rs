@@ -12073,7 +12073,7 @@ fn the_operator_closes_a_refused_mission_as_done_passing_the_empty_lines() {
     assert_eq!(check.state, CriterionState::Skipped);
     assert_eq!(
         check.skip.as_ref().map(|skip| skip.reason.as_str()),
-        Some("the operator decided")
+        Some("your decision")
     );
     assert_eq!(
         check.by.as_ref().map(|by| by.role),
@@ -14783,7 +14783,7 @@ fn the_operators_done_passes_a_gate_through_its_one_entry() {
         (
             GateState::Passed,
             Some(GateVia::Card),
-            Some("the operator decided")
+            Some("your decision")
         )
     );
     assert!(

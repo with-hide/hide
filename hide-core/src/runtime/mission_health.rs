@@ -344,13 +344,15 @@ pub(super) fn settle_refused_close(mission: &mut Mission, by: &str) {
 
 /// The words a gate is passed with when the operator's `끝으로` goes past
 /// it with the node's other open lines, as each skipped line's reason is.
-/// They are recorded as the operator's, so in the operator's language.
+/// They are recorded as the operator's, so in the operator's language, in
+/// the words the mission screen names that decision by
+/// (`mission.work.on.decision`).
 fn operator_decision(language: InterfaceLanguage) -> &'static str {
     match language {
-        InterfaceLanguage::English => "the operator decided",
+        InterfaceLanguage::English => "your decision",
         InterfaceLanguage::Korean => "운영자 판단",
-        InterfaceLanguage::Japanese => "オペレーターの判断",
-        InterfaceLanguage::SimplifiedChinese => "操作者的决定",
+        InterfaceLanguage::Japanese => "あなたの判断",
+        InterfaceLanguage::SimplifiedChinese => "你的决定",
     }
 }
 
