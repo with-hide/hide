@@ -120,6 +120,8 @@ impl Drop for Seat {
         let mut seats = lock(&self.screens.seats);
         if seats.get(&self.key).is_some_and(|held| held.0 == self.id) {
             seats.remove(&self.key);
+            // Its machine shows this one no more: a look chosen there ends.
+            self.screens.tell_core(&seats);
         }
         self.screens.views.fetch_sub(1, Ordering::SeqCst);
     }
@@ -258,6 +260,34 @@ impl RemoteScreens {
         let _ = self.state.set(state);
     }
 
+    /// The machines whose view is seated now, by key, sorted: what the core
+    /// is told of them (`remote_views`).
+    fn showing(seats: &HashMap<PeerKey, (u64, Arc<Notify>)>) -> Vec<String> {
+        let mut machines = seats.keys().map(PeerKey::to_hex).collect::<Vec<_>>();
+        machines.sort();
+        machines
+    }
+
+    /// Tells the core which machines show this one now, a look chosen in a
+    /// view counting only while its machine does (`docs/status-model.md`,
+    /// Hide owns the read axis). Called under the seats' lock, so two changes
+    /// reach the core in the order they happened; before the daemon's state
+    /// is built there is no view and no core to tell.
+    fn tell_core(&self, seats: &HashMap<PeerKey, (u64, Arc<Notify>)>) {
+        let Some(state) = self.state.get() else {
+            return;
+        };
+        let event = json!({
+            "schema_version": hide_core::SCHEMA_VERSION, "kind": "remote_views",
+            "payload": {"machines": Self::showing(seats)},
+        });
+        if let Err(error) = state.core.dispatch(event.to_string().into_bytes()) {
+            hide_core::diagnostic!(json!({
+                "component": "remote_screen", "kind": "views.untold", "error": error,
+            }));
+        }
+    }
+
     /// Seats a view of `viewer`'s guest, taking the place of the one it had.
     pub fn seat(self: &Arc<Self>, viewer: Viewer) -> Result<Seat, SeatRefused> {
         let mut seats = lock(&self.seats);
@@ -269,6 +299,7 @@ impl RemoteScreens {
             }
             return Err(SeatRefused::Full);
         }
+        let shown = replacing.is_none();
         if let Some((_, taken)) = replacing {
             taken.notify_one();
         }
@@ -276,6 +307,11 @@ impl RemoteScreens {
         let taken = Arc::new(Notify::new());
         seats.insert(viewer.key, (id, Arc::clone(&taken)));
         self.views.fetch_add(1, Ordering::SeqCst);
+        // Its machine shows this one again: a look chosen there counts again.
+        // A view taking its own machine's earlier place changes nothing.
+        if shown {
+            self.tell_core(&seats);
+        }
         Ok(Seat {
             screens: Arc::clone(self),
             key: viewer.key,
@@ -761,6 +797,28 @@ mod tests {
         let again = screens.seat(viewer(2)).unwrap();
         drop((second, others, again));
         assert_eq!(screens.seated(), 0);
+    }
+
+    /// The machines the core is told show this one (`remote_views`) are the
+    /// guests seated now: a guest's view that takes its own earlier place
+    /// keeps it showing, the earlier view's end does not take it away, and
+    /// its last view's end does.
+    #[tokio::test]
+    async fn the_machines_showing_this_one_are_the_guests_seated_now() {
+        let screens = RemoteScreens::new();
+        let showing = || RemoteScreens::showing(&lock(&screens.seats));
+        let key = |byte: u8| PeerKey::from_bytes([byte; 32]).to_hex();
+        assert!(showing().is_empty());
+        let first = screens.seat(viewer(2)).unwrap();
+        let other = screens.seat(viewer(1)).unwrap();
+        assert_eq!(showing(), vec![key(1), key(2)], "by key, sorted");
+        let second = screens.seat(viewer(2)).unwrap();
+        drop(first);
+        assert_eq!(showing(), vec![key(1), key(2)], "the replaced view's end");
+        drop(second);
+        assert_eq!(showing(), vec![key(1)], "its last view's end");
+        drop(other);
+        assert!(showing().is_empty());
     }
 
     fn asset(host: u8, build: &str, path: &str) -> AssetKey {

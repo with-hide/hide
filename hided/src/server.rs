@@ -1099,6 +1099,10 @@ async fn screen_loop(
     // A linked node's screen and another machine's view are both a screen
     // another machine shows of this one (D-53, D-70).
     let own_screen = relay.is_none() && !remote;
+    // Where this screen's choices of the operator's look are made: a view's
+    // count only while its machine shows it (`remote_screen`, the core's
+    // `remote_views`), and a tool's are no choice.
+    let look_screen = client.look_screen(seat.as_ref().map(|seat| seat.viewer.key.to_hex()));
     if renderer {
         let frame = mobile_frame(&mobile_frames.borrow_and_update(), own_screen);
         if socket
@@ -1353,7 +1357,7 @@ async fn screen_loop(
                         {
                             terminals.keyed(&pane);
                         }
-                        match handle_client_text(&state, &text, connection, client, own_screen) {
+                        match handle_client_text(&state, &text, connection, client, own_screen, &look_screen) {
                             // A view's file bytes go on its bulk stream, from
                             // their own task (D-67).
                             Ok(ClientAction::FileBytes(event)) if remote => {
@@ -1470,7 +1474,7 @@ async fn screen_loop(
                                 file_search.ask(&state, device_frames_tx.clone(), |waiting| { *waiting = Some(event); Ok(()) }, file_index_all);
                             }
                             Ok(ClientAction::Automation(event)) => {
-                                crate::automation_screen::spawn(&state.core, event, device_frames_tx.clone());
+                                crate::automation_screen::spawn(&state.core, event, look_screen.clone(), device_frames_tx.clone());
                             }
                             Ok(ClientAction::Access(event)) => {
                                 crate::access_screen::spawn(&state.core, event, device_frames_tx.clone());
@@ -2876,6 +2880,7 @@ fn handle_client_text(
     connection: u64,
     client: Client,
     own_screen: bool,
+    look_screen: &Option<hide_core::LookScreen>,
 ) -> Result<ClientAction, String> {
     let value: Value =
         serde_json::from_str(text).map_err(|error| format!("client json: {error}"))?;
@@ -3168,7 +3173,7 @@ fn handle_client_text(
         let bytes = serde_json::to_vec(&event).map_err(|error| format!("event encode: {error}"))?;
         return state
             .core
-            .dispatch(bytes)
+            .dispatch_from(bytes, look_screen.clone())
             .map(|()| ClientAction::Replies(Vec::new()));
     }
     if let Some(reply) = admit_event(&state.boundary, &mut event, || roots_current(&state.roots)) {
@@ -3179,7 +3184,7 @@ fn handle_client_text(
     let bytes = serde_json::to_vec(&event).map_err(|error| format!("event encode: {error}"))?;
     state
         .core
-        .dispatch(bytes)
+        .dispatch_from(bytes, look_screen.clone())
         .map(|()| ClientAction::Replies(Vec::new()))
 }
 
