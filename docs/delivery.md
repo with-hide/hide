@@ -502,7 +502,7 @@ Counting keys cannot tell a draft from an erased one: Claude Code folds a paste 
 So the screen decides, and only when it says the composer is empty.
 
 When the doorbell's verdict for a pending letter, or for the operator's answer to a mission's decision, is `draft` and input is quiet (the engine reports it `idle`, `done` or `working` and current, with no key and no change of status for the 30-second quiet period), the doorbell asks the engine once for the pane's visible screen with its styling (`Engine::read_screen`).
-The read runs on the doorbell's own thread, off `Mutex<Runtime>` and never on the session-sync thread, at most once per observed draft, state generation and pane size (the grid the pane's view last reported, `Runtime::delivery_pane_size`), and counts against the doorbell's eight engine calls a pass; a cut screen is a failed read.
+The read runs on the doorbell's own thread, off `Mutex<Runtime>` and never on the session-sync thread, once per observed draft, state generation and pane size (the grid the pane's view last reported, `Runtime::delivery_pane_size`), again on the bell's backoff only while the screen shows no composer (below), and counts against the doorbell's eight engine calls a pass; a cut screen is a failed read.
 The screen is judged by the agent's composer declaration (below).
 Only a positive `empty` releases the draft, as [Deliver now](#delivering-a-held-letter-now) does: the input up to the read is no draft (`released_input_at_unix_ms`), the composer mark goes, and the doorbell's next pass rings with every guard it always applies.
 A key, even with the same timestamp, a session change or a change of status or state sequence between the read and the release keeps the hold (`composer.release_refused`).

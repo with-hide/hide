@@ -12,9 +12,10 @@
 //! that instead of a draft, and anything else keeps the hold as before; each
 //! read is logged without the screen's text.
 //!
-//! The read runs on the doorbell's thread, off the runtime lock, at most
-//! once per observed draft, state generation and pane size, and within
-//! the doorbell's per-pass budget of the engine calls. The same read checks each
+//! The read runs on the doorbell's thread, off the runtime lock, once per
+//! observed draft, state generation and pane size, again on the bell's
+//! backoff only while the screen shows no composer, and within the
+//! doorbell's per-pass budget of the engine calls. The same read checks each
 //! agent version at moments its composer is known empty, and only a version
 //! seen read empty there is released, so a screen that changed under the
 //! declaration keeps holding rather than ringing over the operator's words.
