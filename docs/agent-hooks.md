@@ -388,7 +388,7 @@ It goes in Hide's own `<hide-global-instruction trust="operator-approved">` bloc
 A file over the cap or not UTF-8 is given to no session, never cut, and each start it would have reached leaves a `global_instruction.not_given` diagnostic (B5); an empty file gives nothing.
 The read is one bounded file read on hided's request task, outside Memory's one-second deadline, and the hook's own 1,250 ms Memory wait is unchanged (B31).
 Claude Code, Codex and Antigravity get it at `SessionStart`; OpenCode, Pi and omp get it with their session's first prompt, beside the start guidance, once a session.
-There the script puts the start text before the core's answer, so those three read the start text, then the global instruction, the Memory index and the open sessions: the same text in another order.
+There the script puts the start text before the core's answer, so those three read the start text, then the global instruction, the Memory index and the open sessions: the same text in another order, and their open sessions give way by the same limit (`open_sessions_within_limit`).
 Grok's `SessionStart` cannot add context and an Antigravity session's own child sessions run no Hide hook, so neither gets it ([INSTALL.md](INSTALL.md#what-each-system-supports)).
 A session on a device whose link is down gets no answer from the core, so it starts without the instruction and the hook records `memory.unavailable`, as it does for Memory; the next session after the link returns gets it (B3).
 A session started outside a Hide pane has no Hide hook identity and gets nothing.
