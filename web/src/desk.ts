@@ -487,7 +487,8 @@ export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonl
       case "tool_call": {
         const part = parts[update.toolCallId];
         if (part) {
-          lines.push({ kind: "hide", id: update.toolCallId, part, command: commandOf(update.rawInput) });
+          // Every reader titles a shell call by its command, whatever input it keeps (Codex's `cmd`, Antigravity's `CommandLine`, none at all).
+          lines.push({ kind: "hide", id: update.toolCallId, part, command: commandOf(update.rawInput) ?? (update.title || null) });
           return;
         }
         const line: Extract<ThreadLine, { kind: "tool" }> = { kind: "tool", id: update.toolCallId, title: update.title, toolKind: "other", status: "pending", input: null, subject: null, output: null, diffs: [], images: [], startedAtMs: update._meta?.hide?.at_ms ?? null };

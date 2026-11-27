@@ -413,6 +413,12 @@ it("names a running turn's newest call whatever it was: a Hide call by its comma
   // A call drawn as a Hide part is still the newest step, as the command it was.
   await running([shell("r", "rg old-step"), shell("m", "hide mission show --mission mission-3")], { m: { kind: "mission", mission: "mission-3" } });
   expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe("hide mission show --mission mission-3");
+  // The same where a reader keeps the command under another input word or none, titling the call by it (Codex, Antigravity).
+  const hide = "hide mission show --mission mission-3";
+  for (const shape of [{ rawInput: { cmd: hide } }, { rawInput: { CommandLine: hide } }, {}]) {
+    await running([shell("r", "rg old-step"), { sessionUpdate: "tool_call", toolCallId: "m", kind: "execute", title: hide, status: "completed", ...shape }], { m: { kind: "mission", mission: "mission-3" } });
+    expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe(hide);
+  }
   // A search whose reader titles it by the tool alone keeps its term from the input (Pi, OpenCode).
   await running([{ sessionUpdate: "tool_call", toolCallId: "g", kind: "search", title: "grep", status: "completed", rawInput: { pattern: "needle", path: "src" } }]);
   expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe("grep needle");
