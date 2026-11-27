@@ -210,7 +210,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
 
   if (!job && !foot) {
     // The thread opened from the first frame and its card is on its way, or the session has no card any more (its
-    // pane closed): the head and its `✕` stand either way (B6).
+    // pane closed): the head and the way back above it stand either way (B6).
     return (
       <div ref={root} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""} data-desk-thread-pending="true">
         {head}

@@ -4054,9 +4054,12 @@ impl Runtime {
                     )
                 })
         });
+        // Desk's agent, the opener of a View on Desk's own desk, is no pane
+        // to go to, and on its own desk names nothing new.
         let opener = display
             .opener
             .as_ref()
+            .filter(|opener| !self.is_desk_opener(opener))
             .map(|opener| self.view_opener_snapshot(opener));
         let none = [];
         let sessions = if display.card.is_some() {

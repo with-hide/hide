@@ -14,6 +14,7 @@
 //! operator and keeps no allowance of its own. A new conversation, a restart
 //! or the process's end closes a waiting card as a refusal.
 
+mod glance;
 pub(super) mod jobs;
 mod lists;
 mod named;
@@ -258,6 +259,9 @@ pub(super) struct LanePayload {
     view_width: Option<u32>,
     #[serde(default)]
     session_width: Option<u32>,
+    /// 한눈에 folded (`⟩`) or unfolded.
+    #[serde(default)]
+    glance_folded: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -519,13 +523,16 @@ impl Runtime {
         changed || sent
     }
 
-    /// The widths the operator dragged Desk's panels to (B22, B23). A drag
-    /// that names no width, or one outside what the core keeps, is refused.
+    /// The widths the operator dragged Desk's panels to (B22, B23), and
+    /// whether 한눈에 is folded. One that names nothing, or a width outside
+    /// what the core keeps, is refused.
     fn desk_lane(&mut self, payload: LanePayload) -> bool {
         let valid = |width: Option<u32>| {
             width.is_none_or(|width| (1..=crate::model::DESK_LANE_WIDTH_MAX).contains(&width))
         };
-        if payload.view_width.is_none() && payload.session_width.is_none()
+        if payload.view_width.is_none()
+            && payload.session_width.is_none()
+            && payload.glance_folded.is_none()
             || !valid(payload.view_width)
             || !valid(payload.session_width)
         {
@@ -535,6 +542,7 @@ impl Runtime {
         let before = *lane;
         lane.view_width = payload.view_width.or(lane.view_width);
         lane.session_width = payload.session_width.or(lane.session_width);
+        lane.glance_folded = payload.glance_folded.unwrap_or(lane.glance_folded);
         *lane != before
     }
 
@@ -1781,7 +1789,7 @@ impl Runtime {
         changed
     }
 
-    fn save_desk(&self) {
+    pub(super) fn save_desk(&self) {
         if let Some(store) = &self.desk.store {
             store.save(self.desk.stored.clone());
         }
@@ -4195,12 +4203,51 @@ mod tests {
         let expected = crate::model::DeskLane {
             view_width: Some(720),
             session_width: Some(480),
+            ..Default::default()
         };
         assert_eq!(lane(&runtime), expected);
         assert_eq!(
             runtime.desk.stored.lane, expected,
             "the store saves what the room shows"
         );
+    }
+
+    #[test]
+    fn folding_glance_is_kept_with_the_widths_and_leaves_them_as_they_were() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _) = runtime(root.path());
+        assert!(event(
+            &mut runtime,
+            "desk_lane",
+            json!({"session_width": 480})
+        ));
+        assert!(event(
+            &mut runtime,
+            "desk_lane",
+            json!({"glance_folded": true})
+        ));
+        assert!(!event(
+            &mut runtime,
+            "desk_lane",
+            json!({"glance_folded": true})
+        ));
+        let folded = crate::model::DeskLane {
+            session_width: Some(480),
+            glance_folded: true,
+            ..Default::default()
+        };
+        assert_eq!(lane(&runtime), folded);
+        assert_eq!(runtime.desk.stored.lane, folded);
+        let read =
+            crate::desk::decode_for_test(&crate::desk::encode_for_test(&runtime.desk.stored))
+                .unwrap();
+        assert!(read.lane.glance_folded, "a restart keeps it folded");
+        assert!(event(
+            &mut runtime,
+            "desk_lane",
+            json!({"glance_folded": false})
+        ));
+        assert!(!lane(&runtime).glance_folded);
     }
 
     #[test]

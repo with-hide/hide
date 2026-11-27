@@ -18,6 +18,8 @@ import { DESK_ROOM_CLOSED } from "./deskRoom";
 import { emptyScope } from "../test/legacyAgentScope";
 import type { DispatchFn } from "./ws";
 
+const NO_GLANCE = { sessions: [], files: [], files_more: 0 };
+
 const browserCanvas = vi.hoisted(() => {
   const original = HTMLCanvasElement.prototype.getContext;
   HTMLCanvasElement.prototype.getContext = () => null;
@@ -85,7 +87,7 @@ describe("Desk's room", () => {
   async function render(section: DeskSection, mentions: DeskMentions = { sessions: [], projects: [] }) {
     actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
-      useShellStore.setState({ connection: "live", rest, desk: section, deskLive: null, deskJobs: { jobs: [], workers: [], named: [], records: [], moved: [] }, deskMentions: mentions });
+      useShellStore.setState({ connection: "live", rest, desk: section, deskLive: null, deskJobs: { jobs: [], workers: [], named: [], records: [], moved: [], glance: NO_GLANCE }, deskMentions: mentions });
       root.render(<TooltipProvider><DeskScreen actions={actions} /></TooltipProvider>);
     });
   }
@@ -555,7 +557,7 @@ describe("Desk's room", () => {
       const card: DeskJob = { id: "pane:d:p1", pane_id: "d:p1", title: "remote worker", agent_kind: "claude", project: { workspace_id: "w-deep", label: "deep" }, location: { kind: "checkout", label: "main" },
         state: "working", queue_position: null, now: "쓰는 중", plan: null, question: null, summary: null, pull_requests: [], outputs, joined: false, reason: null, failure: null, ask: null,
         mark: "going", mark_read: false, machine: "deepbox", disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null };
-      useShellStore.setState({ rest: remoteRest, agents: [row], deskJobs: { jobs: [], workers: [], named: [card], records: [], moved: [] } });
+      useShellStore.setState({ rest: remoteRest, agents: [row], deskJobs: { jobs: [], workers: [], named: [card], records: [], moved: [], glance: NO_GLANCE } });
       useUiStore.getState().setDeskRoom((now) => ({ ...now, session: "d:p1" }));
     });
     // The core answers the open with the session's thread.
@@ -915,7 +917,8 @@ describe("Desk's room", () => {
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([{ kind: "user", id: 1, text: "@session(w1:p2 fixer) 어디까지 왔어?", at_ms: 0, mentions: [fixer] }]));
     await act(async () => useShellStore.setState({ agents: [row] }));
-    expect(document.body.querySelector("[data-desk-room]")?.getAttribute("data-desk-room")).toBe("closed");
+    // With no session open, 한눈에 stands at Desk's right.
+    expect(document.body.querySelector("[data-desk-room]")?.getAttribute("data-desk-room")).toBe("glance");
 
     await press("[data-desk-session-chip]");
     expect(useUiStore.getState().deskRoom.session).toBe("w1:p2");
@@ -924,7 +927,7 @@ describe("Desk's room", () => {
     expect(document.body.querySelector("[data-desk-room]")?.getAttribute("data-desk-room")).toBe("session");
 
     // The core sends the session's card with the open conversation; the head reads it.
-    await act(async () => useShellStore.setState({ deskJobs: { jobs: [], workers: [], named: [card], records: [], moved: [] } }));
+    await act(async () => useShellStore.setState({ deskJobs: { jobs: [], workers: [], named: [card], records: [], moved: [], glance: NO_GLANCE } }));
     expect(document.body.querySelector("[data-desk-session-head]")?.textContent).toContain("fixer");
     expect(sent("session_thread_open")).toHaveLength(1);
 
@@ -947,6 +950,8 @@ describe("Desk's room", () => {
     await escape();
     expect(useUiStore.getState().deskRoom.session).toBeNull();
     expect(sent("session_thread_close")).toHaveLength(1);
+    // Escape went back to 한눈에.
+    expect(document.body.querySelector("[data-desk-room]")?.getAttribute("data-desk-room")).toBe("glance");
   });
 
   // Expected answers are feedback 2's frame K (가, 다) and the mission brief.
@@ -960,7 +965,7 @@ describe("Desk's room", () => {
     };
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([{ kind: "user", id: 1, text: "@session(w1:p9 agent-9) @session(w1:p8 agent-8) 어제 뭐 했어?", at_ms: 0, mentions: [built, lost] }]));
-    await act(async () => useShellStore.setState({ deskJobs: { jobs: [], workers: [], named: [], records: [record], moved: [] } }));
+    await act(async () => useShellStore.setState({ deskJobs: { jobs: [], workers: [], named: [], records: [record], moved: [], glance: NO_GLANCE } }));
     // A chip is named by what it shows: the record's title, or the words that named a session with no record.
     const chip = (name: string) => document.body.querySelector<HTMLElement>(`[data-desk-session-chip="${name}"]`);
     expect(chip(record.title)?.getAttribute("data-desk-session-ended")).toBe("true");
@@ -975,9 +980,9 @@ describe("Desk's room", () => {
     expect(head?.getAttribute("data-desk-session-head")).toBe("ended");
     expect(head?.textContent).toContain(record.title);
     expect(head?.querySelector('[data-desk-session-pr="2930"]')).not.toBeNull();
-    // It has no pane: no terminal, files, own tab or menu, only `✕`.
+    // It has no pane: no terminal, files, own tab or menu; `‹ 한눈에` above it is the way back.
     expect(head?.querySelector("[data-desk-session-terminal], [data-desk-session-files], [data-desk-session-own-tab], [data-desk-session-menu]")).toBeNull();
-    expect(head?.querySelector("[data-desk-session-close]")).not.toBeNull();
+    expect(document.body.querySelector("[data-desk-glance-crumb]")?.textContent).toContain(record.title);
     // Its worktree is gone: the app's one line takes `이어서 하기`'s place, and no input box stands.
     expect(document.body.querySelector("[data-desk-session-record-foot]")?.getAttribute("data-desk-session-record-foot")).toBe("blocked");
     expect(document.body.querySelector("[data-desk-session-resume-blocked]")?.textContent).toBe("The worktree was cleaned up, so this session can't resume");
@@ -996,7 +1001,7 @@ describe("Desk's room", () => {
     // The checkout the session ran in is still there, so the record row's rule lets it resume.
     const navigator = rest.navigator!;
     const kept = { ...rest, navigator: { ...navigator, workspaces: navigator.workspaces!.map((workspace) => ({ ...workspace, checkouts: workspace.checkouts.map((checkout) => ({ ...checkout, exists: true })) })) } } as SnapshotRest;
-    await act(async () => useShellStore.setState({ rest: kept, deskJobs: { jobs: [], workers: [], named: [], records: [record], moved: [] } }));
+    await act(async () => useShellStore.setState({ rest: kept, deskJobs: { jobs: [], workers: [], named: [], records: [record], moved: [], glance: NO_GLANCE } }));
     await press(`[data-desk-session-chip="${record.title}"]`);
     const foot = document.body.querySelector("[data-desk-session-record-foot]");
     expect(foot?.getAttribute("data-desk-session-record-foot")).toBe("resume");
@@ -1021,13 +1026,13 @@ describe("Desk's room", () => {
     };
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([{ kind: "user", id: 1, text: "@session(w1:p9 agent-9) 어제 뭐 했어?", at_ms: 0, mentions: [built] }]));
-    await act(async () => useShellStore.setState({ deskJobs: { jobs: [], workers: [], named: [], records: [record], moved: [] } }));
+    await act(async () => useShellStore.setState({ deskJobs: { jobs: [], workers: [], named: [], records: [record], moved: [], glance: NO_GLANCE } }));
     await press(`[data-desk-session-chip="${record.title}"]`);
     expect(document.body.querySelector("[data-desk-session-head]")?.getAttribute("data-desk-session-head")).toBe("ended");
 
     // The core found the same session running in w1:p20 (its record is no longer sent).
     const row = { pane_id: "w1:p20", device_id: "local", identity_label: "후보 빌드 이어서", agent_kind: "codex", mark: "going" } as never;
-    await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [], workers: [], named: [], records: [], moved: [{ pane_id: "w1:p9", live_pane_id: "w1:p20" }] } }));
+    await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [], workers: [], named: [], records: [], moved: [{ pane_id: "w1:p9", live_pane_id: "w1:p20" }], glance: NO_GLANCE } }));
     const chip = document.body.querySelector<HTMLElement>('[data-desk-session-chip="후보 빌드 이어서"]');
     expect(chip).not.toBeNull();
     expect(chip?.getAttribute("data-desk-session-ended")).toBeNull();
@@ -1071,7 +1076,7 @@ describe("Desk's room", () => {
     };
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([{ kind: "user", id: 1, text: "@session(d:p4 agent-4) 어떻게 됐어?", at_ms: 0, mentions: [{ kind: "session", id: "d:p4", name: "agent-4" }] }]));
-    await act(async () => useShellStore.setState({ rest: remoteRest, agents: [], deskJobs: { jobs: [], workers: [], named: [], records: [record], moved: [] } }));
+    await act(async () => useShellStore.setState({ rest: remoteRest, agents: [], deskJobs: { jobs: [], workers: [], named: [], records: [record], moved: [], glance: NO_GLANCE } }));
     await press(`[data-desk-session-chip="${record.title}"]`);
     const thread = { generation: 1, state: "ready", pane_id: "d:p4", machine: "deepbox", failure: null, pane: "gone", connected: true, has_older: false, older: "idle", input: null,
       tail: { updates: [
@@ -1094,9 +1099,9 @@ describe("Desk's room", () => {
       mark: null, mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null });
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([{ kind: "user", id: 1, text: "고쳐 줘", at_ms: 0, mentions: [] }]));
-    await act(async () => useShellStore.setState({ desk: desk([{ kind: "user", id: 1, text: "고쳐 줘", at_ms: 0, mentions: [] }, { kind: "job", id: 2, job_id: "intent-1" }]), deskJobs: { jobs: [card(null)], workers: [], named: [], records: [], moved: [] } }));
+    await act(async () => useShellStore.setState({ desk: desk([{ kind: "user", id: 1, text: "고쳐 줘", at_ms: 0, mentions: [] }, { kind: "job", id: 2, job_id: "intent-1" }]), deskJobs: { jobs: [card(null)], workers: [], named: [], records: [], moved: [], glance: NO_GLANCE } }));
     expect(useUiStore.getState().deskRoom.session).toBeNull();
-    await act(async () => useShellStore.setState({ deskJobs: { jobs: [card("w1:p5")], workers: [], named: [], records: [], moved: [] } }));
+    await act(async () => useShellStore.setState({ deskJobs: { jobs: [card("w1:p5")], workers: [], named: [], records: [], moved: [], glance: NO_GLANCE } }));
     expect(useUiStore.getState().deskRoom.session).toBe("w1:p5");
   });
 
@@ -1107,7 +1112,7 @@ describe("Desk's room", () => {
       mark: "turn", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 5, read: true, mission: null, workers: [], agent_id: null };
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([]));
-    await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [], workers: [], named: [card], records: [], moved: [] } }));
+    await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [], workers: [], named: [card], records: [], moved: [], glance: NO_GLANCE } }));
     await act(async () => useUiStore.getState().setDeskRoom(() => ({ ...DESK_ROOM_CLOSED, session: "w1:p2" })));
     expect(sent("pane_ask")).toEqual([{ device_id: "local", pane_id: "w1:p2" }]);
     // Until the screen is read, no card stands at the conversation's end: what the agent asked stays in its

@@ -127,13 +127,16 @@ pub(super) struct RequestViewPayload {
     pub(super) observing: bool,
 }
 
-/// Whether any window holding the keyboard draws the Workspace screen, as
-/// the daemon sums every window's report; sent only when that changes (PRD
-/// unseen-agent-views D-07).
+/// Whether a window holds the keyboard, and the screen it draws, as the
+/// daemon sums every window's report (the window that took the keyboard
+/// last); sent only when that changes (PRD unseen-agent-views D-07; 한눈에
+/// for Desk's desk). A report that names no screen is the Workspace's.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WindowFocusPayload {
     pub(super) focused: bool,
+    #[serde(default)]
+    pub(super) screen: super::unseen_views::FocusScreen,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4345,7 +4348,9 @@ impl Runtime {
                 self.observe_request_view(payload.observing, std::time::Instant::now());
                 false
             }
-            Event::WindowFocus(payload) => self.set_window_focused(payload.focused),
+            Event::WindowFocus(payload) => {
+                self.set_window_focus(payload.focused.then_some(payload.screen))
+            }
             Event::OverviewRefresh(payload) => {
                 let project = self
                     .snapshot

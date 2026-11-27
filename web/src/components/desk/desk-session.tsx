@@ -1,4 +1,4 @@
-import { ArrowUpRightIcon, CircleAlertIcon, EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, WaypointsIcon, XIcon } from "lucide-react";
+import { ArrowUpRightIcon, CircleAlertIcon, EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, WaypointsIcon } from "lucide-react";
 import { useMemo, useRef, type ReactNode } from "react";
 import type { Actions } from "../../actions";
 import type { DeskJob, DeskPullRequest } from "../../desk";
@@ -31,7 +31,8 @@ import { StatusMark } from "../status-mark";
  * session as the pane head draws it: its status, its agent, its ancestors
  * (each opening that session beside Desk), its work name as the sidebar row
  * names it, the children chip on a parent, then ↗ to its own tab, `파일` and `터미널` as icons
- * (the terminal hidden while it sleeps), the pane's menu and `✕`. A quiet
+ * (the terminal hidden while it sleeps) and the pane's menu; `‹ 한눈에` above
+ * it closes it (`GlanceCrumb`), so it has no `✕` of its own. A quiet
  * second line stands only when there is something to know: the machine when
  * it is another device (this machine is never named), a device that is not
  * connected, the mission it conducts as the app's mission chip and its name,
@@ -39,11 +40,11 @@ import { StatusMark } from "../status-mark";
  * pane's plan chip. What it made and its PRs are on the shelf below.
  *
  * A session whose pane is gone, opened from its record (`ended`, feedback 2,
- * frame K), reads `끝남` after its title and keeps only `✕`: it has no pane,
+ * frame K), reads `끝남` after its title and keeps nothing more: it has no pane,
  * terminal, files or menu; its second line names its machine and its pull
  * requests, which no shelf lists for it.
  */
-export function SessionHead({ paneId, title, job, row, pane, machine, disconnected, sleeping, ended = null, explorerOpen, filesChord, terminalChord, deskActions, onFiles, onTerminal, onOwnTab, onClose }: {
+export function SessionHead({ paneId, title, job, row, pane, machine, disconnected, sleeping, ended = null, explorerOpen, filesChord, terminalChord, deskActions, onFiles, onTerminal, onOwnTab }: {
   paneId: string;
   /** The session's work name, kept by the panel when its row and card are gone. */
   title: string;
@@ -66,7 +67,6 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
   onTerminal: () => void;
   /** ↗, `원래 화면에서 보기` in its hint (feedback 1 D2): the session's own tab, its terminal with the sidebar and files, as a sidebar row's ⌘-click (Ctrl on Windows and Linux) opens it; Desk leaves the front. */
   onOwnTab: () => void;
-  onClose: () => void;
 }) {
   const { t } = useInterfaceTranslation();
   const conducts = usePaneMission(paneId);
@@ -80,7 +80,7 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
   const pulls = ended?.pulls ?? [];
   const known = machine !== null || disconnected || conducts !== null || works !== null || plan !== null || pulls.length > 0;
   const tool = "text-muted-foreground";
-  // A session with no pane has nothing but its record to show and its `✕`.
+  // A session with no pane has nothing but its record to show.
   const live = ended === null;
   return (
     <header className="flex shrink-0 flex-col gap-xxs border-b border-border px-md py-xs text-caption" data-desk-session-head={ended ? "ended" : sleeping ? "sleeping" : (job?.state ?? "pending")}>
@@ -111,9 +111,6 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
           </Hint>
         )}
         {pane && !sleeping ? <SessionPaneMenu pane={pane} title={title} actions={deskActions} /> : null}
-        <Hint label={t("desk.room.closeSession")}>
-          <Button variant="ghost" size="icon-sm" className={tool} aria-label={t("desk.room.closeSession")} data-desk-session-close="true" onClick={onClose}><XIcon /></Button>
-        </Hint>
       </div>
       {known ? (
         <div className="flex min-w-0 items-center gap-xs pl-(--size-control-sm) text-caption text-muted-foreground" data-desk-session-meta="true">

@@ -1865,11 +1865,11 @@ pub struct Runtime {
     /// Whether a window draws the snapshot (`ui_attached`); a core no daemon
     /// told otherwise is drawn.
     ui_attached: bool,
-    /// Whether a window holding the keyboard draws the Workspace screen, as
-    /// the daemon summed every window's report (`window_focus`); no window
-    /// told it, nothing is in front of the operator (PRD unseen-agent-views
-    /// D-07).
-    window_focused: bool,
+    /// The screen the window holding the keyboard draws, the Workspace or
+    /// Desk's desk, as the daemon summed every window's report
+    /// (`window_focus`); with none, nothing is in front of the operator (PRD
+    /// unseen-agent-views D-07).
+    window_focus: Option<unseen_views::FocusScreen>,
     /// The View store's generation the rows' unseen Views were last laid
     /// against (`settle_unseen_views`).
     unseen_laid_generation: u64,
@@ -2748,7 +2748,7 @@ impl Runtime {
             restore_hint_pending: true,
             last_session_spaces: Vec::new(),
             ui_attached: true,
-            window_focused: false,
+            window_focus: None,
             unseen_laid_generation: 0,
             label_overlay: Default::default(),
             hook_facts: Default::default(),
