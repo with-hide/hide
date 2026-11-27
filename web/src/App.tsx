@@ -69,6 +69,7 @@ const noop: DispatchFn = () => {};
 
 export function App() {
   const dispatchRef = useRef<DispatchFn>(noop);
+  const socketOpenRef = useRef<() => boolean>(() => false);
   const actions: Actions = useMemo(() => createActions((event) => dispatchRef.current(event)), []);
   useUsageWindowHint(actions);
   useAgentNotifications(actions);
@@ -84,6 +85,7 @@ export function App() {
       rest: () => useShellStore.getState().rest,
       subscribe: (listener) => useShellStore.subscribe(listener),
       connected: () => useShellStore.getState().connection === "live",
+      open: () => socketOpenRef.current(),
       note: (message) => useShellStore.getState().noteDiagnostic(message),
     });
   }, [actions]);
@@ -99,6 +101,7 @@ export function App() {
       onCopy: (copy) => void takeProgramCopy(copy, { inFront: document.hasFocus(), shows: terminalShown }, actions.copyText, (message) => useShellStore.getState().noteDiagnostic(message)),
     });
     dispatchRef.current = session.dispatch;
+    socketOpenRef.current = session.open;
     configureFileBytes(session.dispatch);
     configureAutomationCalls(session.dispatch);
     configureAccessCalls(session.dispatch);
@@ -204,6 +207,7 @@ export function App() {
       unsubscribeHeldPlaces();
       keyboard();
       configurePlaceVisits(() => {});
+      socketOpenRef.current = () => false;
       session.close();
     };
   }, [actions]);
