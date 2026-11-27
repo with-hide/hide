@@ -1899,6 +1899,7 @@ mod tests {
                 relay: None,
                 relay_only: false,
                 wsl: None,
+                ssh: None,
             },
         };
         assert!(splits(Some(&updates)));

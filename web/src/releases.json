@@ -2,6 +2,265 @@
   "schema": 1,
   "versions": [
     {
+      "version": "1.2.13",
+      "date": "2026-11-27",
+      "highlights": [],
+      "changes": [
+        {
+          "kind": "change",
+          "text": {
+            "en": "An automation can run once at a date and time you pick, such as a check in a week. Its run waits in Needs You until you open it, and it shows on the phone too.",
+            "ko": "자동화를 고른 날짜와 시각에 한 번만 실행할 수 있어요. 일주일 뒤 점검 같은 일에 쓰고, 실행 결과는 열어 볼 때까지 내 차례에 있어요. 폰에서도 보여요.",
+            "zh-CN": "自动化可以在你选的日期和时间只运行一次，比如一周后再检查一遍。它的运行结果会留在“轮到你”里，直到你打开，手机上也能看到。",
+            "ja": "自動化を、選んだ日時に 1 回だけ実行できます。1 週間後にもう一度確認する、といった使い方です。実行結果は開くまで「自分の番」に残り、スマホでも見られます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Desk in Settings › Labs got many improvements: sessions open beside it, files can be dropped anywhere in it, and its box lists each agent's own / commands.",
+            "ko": "설정 › 실험실의 Desk가 많이 좋아졌어요. 세션을 Desk 옆에 열어 보고, 파일을 아무 데나 끌어다 놓고, 입력창의 /에서 에이전트 고유 명령을 불러와요.",
+            "zh-CN": "设置 › 实验室 中的 Desk 有了许多改进：会话可以在它旁边打开，文件可以拖到它的任意位置，输入框里的 / 会列出各个智能体自己的命令。",
+            "ja": "設定 › ラボ の Desk が大きく良くなりました。セッションを横に開き、ファイルをどこにでもドロップでき、入力欄の / で各エージェント固有のコマンドが出ます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Another computer's screen opens with a loading ring and its name, draws with this window's View menu choices, and comes forward with the clicked agent's pane selected.",
+            "ko": "다른 컴퓨터의 화면이 열릴 때 로딩 링과 컴퓨터 이름이 보여요. 그 화면은 이 창의 보기 메뉴 선택대로 그려지고, 에이전트를 누르면 그 에이전트의 패널이 선택된 채로 앞에 나와요.",
+            "zh-CN": "打开其他电脑的画面时会显示加载圈和电脑名称；画面按本窗口视图菜单的选择绘制；点按某个智能体后，会带着选中的该智能体窗格切到前面。",
+            "ja": "ほかのコンピュータの画面を開くとき、読み込みのリングとコンピュータ名が出ます。画面はこのウィンドウの表示メニューの選択どおりに描かれ、エージェントを押すとそのペインが選ばれた状態で前面に出ます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Work another computer started here shows inside its project under one foldable head per computer, in line with the project's own rows.",
+            "ko": "다른 컴퓨터가 여기서 시킨 일이 프로젝트 안에 컴퓨터마다 접고 펼 수 있는 머리 하나로 묶여, 프로젝트 자신의 줄과 나란히 보여요.",
+            "zh-CN": "其他电脑在这里启动的工作会显示在对应项目内，每台电脑一个可折叠的标题，与项目自己的行对齐。",
+            "ja": "ほかのコンピュータがここで始めた作業は、プロジェクトの中にコンピュータごとの折りたたみ見出しでまとまり、プロジェクト自身の行と並んで表示されます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Ctrl+Tab also goes back to the missions and automations you had open, and to Desk, in one recent order with agent panes.",
+            "ko": "Ctrl+Tab이 에이전트 패널뿐 아니라 열어 본 미션, 자동화, Desk까지 최근에 본 순서대로 돌아가요.",
+            "zh-CN": "Ctrl+Tab 现在除了智能体窗格，也会按最近的顺序切回你打开过的任务、自动化和 Desk。",
+            "ja": "Ctrl+Tab が、エージェントのペインに加えて、開いたミッションや自動化、Desk まで、最近見た順に戻れるようになりました。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "When an agent waits for your confirm of a skill or MCP, a notice in the lower right corner shows the request and opens it.",
+            "ko": "에이전트가 스킬이나 MCP를 추가하려고 확인을 기다리면 오른쪽 아래 알림에 요청과 확인하기가 떠요.",
+            "zh-CN": "智能体等待你确认添加技能或 MCP 时，右下角会弹出通知，显示请求内容并可直接打开。",
+            "ja": "エージェントがスキルや MCP の追加の確認を待っているとき、右下の通知に依頼内容が出て、そこから開けます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "An agent that makes a report or page now opens it in your Views and says in one line what it opened, instead of printing a path or asking. An automation run does the same, and an HTML result opens as a drawn page.",
+            "ko": "에이전트가 보고서나 페이지를 만들면 경로만 알려 주거나 묻지 않고 바로 보기에 열고 한 줄로 알려 줘요. 자동화 실행도 마찬가지고, HTML 결과는 그려진 페이지로 열려요.",
+            "zh-CN": "智能体做出报告或页面后，不再只打印路径或先询问，而是直接在视图中打开，并用一句话告诉你打开了什么。自动化运行也一样，HTML 结果会以渲染后的页面打开。",
+            "ja": "エージェントがレポートやページを作ると、パスを表示したり確認したりせず、そのまま表示で開いて、何を開いたかを 1 行で伝えます。自動化の実行も同じで、HTML の結果は描画されたページで開きます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Settings has a Models by purpose page, the agents and models you want work handed to. Missions, Desk and agents read it as advice, and nothing outside it is refused.",
+            "ko": "설정에 용도별 모델 페이지가 생겼어요. 일을 맡길 에이전트와 모델을 적어 두면 미션, Desk, 에이전트가 참고하고, 목록 밖의 모델도 거절하지 않아요.",
+            "zh-CN": "设置中新增了“用途模型”页面，列出你希望把工作交给的智能体和模型。任务、Desk 和智能体把它当作建议来参考，列表之外的模型也不会被拒绝。",
+            "ja": "設定に「用途別モデル」のページができました。仕事を任せたいエージェントとモデルを並べておくと、ミッション、Desk、エージェントが参考にし、一覧にないモデルも断りません。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "In Settings › Devices, a device reached over SSH shows its two ways to connect, directly over SSH or as a server, side by side, led by what keeps running while this computer sleeps.",
+            "ko": "설정 › 기기에서 SSH로 쓰는 기기의 두 방법, SSH로 바로 연결과 서버로 연결이 나란히 보이고, 이 컴퓨터가 잠들 때 무엇이 계속 도는지가 먼저 나와요.",
+            "zh-CN": "在 设置 › 设备 中，通过 SSH 使用的设备会并排显示两种连接方式（通过 SSH 直接连接、作为服务器连接），并先说明这台电脑休眠时什么会继续运行。",
+            "ja": "設定 › デバイス で、SSH で使うデバイスの 2 つの接続方法（SSH で直接接続、サーバーとして接続）が並んで表示され、このコンピュータがスリープしても何が動き続けるかが先に示されます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Needs You counts by one rule everywhere, and orange means your turn only; the lane's Project and Hide AI numbers are gray.",
+            "ko": "내 차례를 어디서나 한 가지 규칙으로 세고, 주황색 숫자는 내 차례만 뜻해요. 오른쪽 레인의 프로젝트와 Hide AI 숫자는 회색이에요.",
+            "zh-CN": "“轮到你”在所有地方都按同一规则计数，橙色只表示轮到你；右侧面板里项目和 Hide AI 的数字改为灰色。",
+            "ja": "「自分の番」はどこでも同じ規則で数え、オレンジ色は自分の番だけを表します。右のレーンのプロジェクトと Hide AI の数字は灰色です。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "In the Tasks list, Resting is ordered by time, newest first, with read questions among the rest, and an automation's last opened run rests there until a newer one replaces it.",
+            "ko": "태스크 목록의 쉬는 중이 최근 것이 위인 시간순으로 정렬되고, 읽은 질문도 그 사이에 섞여요. 자동화의 마지막으로 연 실행은 새 실행이 올 때까지 쉬는 중에 남아요.",
+            "zh-CN": "任务列表的“空闲”按时间排序，最新的在前，已读的提问也混排其中；自动化最近打开过的一次运行会留在这里，直到有新的运行取代它。",
+            "ja": "タスクの一覧の「休止中」は新しい順に並び、読んだ質問もその中に混ざります。自動化の最後に開いた実行は、新しい実行に替わるまでここに残ります。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "A Local issue can be closed and reopened from its detail with Close issue and Reopen issue.",
+            "ko": "로컬 이슈를 상세 화면의 이슈 닫기, 이슈 다시 열기로 닫고 다시 열 수 있어요.",
+            "zh-CN": "本地议题可以在详情中用“关闭议题”和“重新打开议题”关闭、重开。",
+            "ja": "ローカルの Issue を、詳細の「Issue を閉じる」と「Issue を再度開く」で閉じたり開き直したりできます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Grey boxes such as badges, secondary buttons, picked tabs and hovered rows are now see-through fills with a hairline edge, and shortcut keycaps are outlined.",
+            "ko": "배지, 보조 버튼, 선택한 탭, 마우스를 올린 줄 같은 회색 상자가 얇은 테두리의 투명한 면으로 바뀌고, 단축키 표시는 테두리만 그려져요.",
+            "zh-CN": "徽标、次要按钮、选中的标签页、悬停的行等灰色底块，改为带细边线的半透明填充；快捷键键帽改为只描边。",
+            "ja": "バッジ、サブボタン、選んだタブ、ポインタを重ねた行などの灰色の面が、細い縁の透ける塗りになり、ショートカットのキー表示は枠線だけになりました。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "On the phone, you start an agent by choosing project then branch, the device picker has two-line rows and a choice before adding, and chips take the desktop's shape.",
+            "ko": "폰에서 에이전트를 시작할 때 프로젝트와 브랜치를 차례로 고르고, 기기 선택은 한 기기에 두 줄로 보이며 추가하기 전에 방법을 골라요. 칩은 데스크톱과 같은 모양이에요.",
+            "zh-CN": "手机上启动智能体时依次选择项目和分支；设备选择里每台设备占两行，添加前先选方式；标记的外形与桌面一致。",
+            "ja": "スマホでエージェントを始めるときにプロジェクトとブランチを順に選べます。デバイスの選択は 1 台 2 行になり、追加する前に方法を選びます。チップはデスクトップと同じ形になりました。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "Pasting several lines into a terminal pane reaches the program as one paste instead of running each line as its own command.",
+            "ko": "터미널 패널에 여러 줄을 붙여 넣으면 줄마다 따로 실행되지 않고 한 번에 붙여 넣은 것으로 프로그램에 전달돼요.",
+            "zh-CN": "向终端窗格粘贴多行内容时，会作为一次粘贴交给程序，而不再每行各自当作一条命令执行。",
+            "ja": "ターミナルのペインに複数行を貼り付けても、1 行ずつ別のコマンドとして実行されず、1 回の貼り付けとしてプログラムに渡ります。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "After you pick an agent on another computer's screen and go back to your own, that agent's next finished turn notifies you instead of being silently counted as seen.",
+            "ko": "다른 컴퓨터 화면에서 에이전트를 골랐다가 내 화면으로 돌아오면, 그 에이전트가 다음에 일을 끝낼 때 조용히 본 것으로 처리되지 않고 알림이 와요.",
+            "zh-CN": "在其他电脑的画面里选过某个智能体后回到自己的画面，该智能体下一次完成时会通知你，而不是被悄悄算作已看过。",
+            "ja": "ほかのコンピュータの画面でエージェントを選んでから自分の画面に戻ると、そのエージェントが次に終えたときに、見たことにされず通知が届きます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "No terminal pane is drawn or split narrower than 18 columns, and a letter held for a pane too narrow to read is delivered once the pane is widened.",
+            "ko": "터미널 패널이 18열보다 좁게 그려지거나 나뉘지 않고, 너무 좁아 읽을 수 없어 대기 중이던 편지는 패널을 넓히면 전달돼요.",
+            "zh-CN": "终端窗格不会再被绘制或拆分到窄于 18 列；因窗格太窄无法读取而被搁置的信件，在窗格变宽后会送出。",
+            "ja": "ターミナルのペインが 18 桁より狭く描かれたり分割されたりしなくなり、狭すぎて読めず止まっていた手紙は、ペインを広げると届きます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "A question rings once instead of each time its row returns to Needs You, a row you read stays read through a Hide AI usage-limit pause, and an allowed request leaves Needs You when answered.",
+            "ko": "같은 질문은 내 차례로 돌아올 때마다 울리지 않고 한 번만 알려요. 읽은 줄은 Hide AI가 사용 한도로 쉬었다 와도 읽은 채로 있고, 허락한 요청은 답하는 즉시 내 차례에서 빠져요.",
+            "zh-CN": "同一个提问只会通知一次，不会每次回到“轮到你”都再响；已读的行在 Hide AI 因用量上限暂停后也保持已读；已允许的请求在回答后立刻离开“轮到你”。",
+            "ja": "同じ質問は「自分の番」に戻るたびではなく 1 回だけ通知されます。読んだ行は、Hide AI が使用上限で一時停止しても読んだままで、許可した依頼は答えた時点で「自分の番」から外れます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "On the phone, a Codex CLI approval card shows the command it asks to run, as Claude Code's does.",
+            "ko": "폰에서 Codex CLI의 허락 카드에도 Claude Code처럼 실행하려는 명령이 보여요.",
+            "zh-CN": "在手机上，Codex CLI 的许可卡片也像 Claude Code 一样显示它要运行的命令。",
+            "ja": "スマホで、Codex CLI の許可カードにも Claude Code と同じく実行しようとするコマンドが表示されます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "A file's View shows its new contents within a moment when an agent, an editor or a command changes it on disk.",
+            "ko": "에이전트나 편집기, 명령이 디스크의 파일을 바꾸면 그 파일의 보기가 잠시 뒤 새 내용으로 바뀌어요.",
+            "zh-CN": "智能体、编辑器或命令改动磁盘上的文件后，该文件的视图会很快显示新内容。",
+            "ja": "エージェントやエディタ、コマンドがディスク上のファイルを変えると、そのファイルの表示がすぐに新しい内容になります。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "An agent can show a file or page of another checkout of the same computer in its Views, and a web link in a local HTML page opens as a browser display beside it.",
+            "ko": "에이전트가 같은 컴퓨터의 다른 체크아웃에 있는 파일이나 페이지도 보기에 열 수 있고, 로컬 HTML 페이지의 웹 링크는 그 옆에 웹 페이지로 열려요.",
+            "zh-CN": "智能体可以在视图中打开同一台电脑上另一个检出目录里的文件或页面；本地 HTML 页面中的网页链接会在它旁边以浏览器页面打开。",
+            "ja": "エージェントは、同じコンピュータの別のチェックアウトにあるファイルやページも表示で開けます。ローカルの HTML ページ内の Web リンクは、その横にブラウザ表示として開きます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "Lines Hide writes itself, such as a worktree's hand-off and an automation run's result and retry lines, follow your interface language instead of being Korean for everyone.",
+            "ko": "Hide가 직접 쓰는 줄, 예를 들어 워크트리 인계와 자동화 실행의 결과와 재시도 줄이 모두에게 한국어로 나오지 않고 화면 언어를 따라요.",
+            "zh-CN": "Hide 自己写入的内容，例如工作树的交接、自动化运行的结果和重试提示，会跟随界面语言，不再对所有人都是韩语。",
+            "ja": "Hide が自分で書く行、たとえばワークツリーの引き継ぎや自動化の実行結果と再試行の行が、全員に韓国語ではなく、画面の言語に合わせて出ます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "After a network change, an SSH device's panes come back on their own and agents can be started there again, with nothing to kill by hand.",
+            "ko": "네트워크가 바뀐 뒤에도 SSH 기기의 패널이 저절로 돌아오고, 거기서 에이전트를 다시 시작할 수 있어요. 손으로 프로세스를 끌 필요가 없어요.",
+            "zh-CN": "网络变化后，SSH 设备上的窗格会自动恢复，也能再次在那里启动智能体，不必手动结束旧进程。",
+            "ja": "ネットワークが変わったあとも、SSH デバイスのペインは自動で戻り、そこでエージェントをまた起動できます。手でプロセスを止める必要はありません。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "On a connected computer, an agent started with a first message sends it, and a Claude session at its folder-trust question shows its terminal instead of a start form.",
+            "ko": "연결된 컴퓨터에서 첫 메시지와 함께 시작한 에이전트가 그 메시지를 보내고, 폴더 신뢰 질문에서 멈춘 Claude 세션은 시작 안내 대신 터미널을 보여 줘요.",
+            "zh-CN": "在已连接的电脑上带着第一条消息启动的智能体会把它发出去；停在“是否信任此文件夹”的 Claude 会话会显示终端，而不是启动表单。",
+            "ja": "つながったコンピュータで最初のメッセージ付きで起動したエージェントはそれを送信し、フォルダを信頼するかの確認で止まった Claude セッションは、開始フォームの代わりにターミナルを表示します。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "Connecting an SSH device that has no Hide app as a server no longer stops with a refusal, and agents started on a computer connected as a server report their session like agents here.",
+            "ko": "Hide 앱이 없는 SSH 기기를 서버로 연결해도 더는 거절되며 멈추지 않고, 서버로 연결한 컴퓨터에서 시작한 에이전트도 여기 에이전트처럼 세션을 보고해요.",
+            "zh-CN": "把没有安装 Hide 应用的 SSH 设备作为服务器连接时，不再因被拒绝而停住；在以服务器方式连接的电脑上启动的智能体，也会像这里的智能体一样报告会话。",
+            "ja": "Hide アプリのない SSH デバイスをサーバーとして接続しても、拒否されて止まらなくなりました。サーバーとして接続したコンピュータで起動したエージェントも、ここと同じようにセッションを報告します。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "A full disk no longer makes Hide's background process panic on every connection event.",
+            "ko": "디스크가 가득 차도 Hide의 백그라운드 프로세스가 연결 이벤트마다 오류로 죽지 않아요.",
+            "zh-CN": "磁盘写满时，Hide 的后台进程不会再在每次连接事件上崩溃。",
+            "ja": "ディスクがいっぱいになっても、Hide のバックグラウンドプロセスが接続のたびにクラッシュしなくなりました。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "On a Mac, a right-click on a file in the Explorer shows its menu and no longer runs the menu's first item before you click.",
+            "ko": "Mac에서 탐색기의 파일을 오른쪽 클릭하면 메뉴만 보이고, 클릭하기 전에는 첫 항목이 실행되지 않아요.",
+            "zh-CN": "在 Mac 上右键点击文件浏览器中的文件，只会显示菜单，点击之前不会执行第一项。",
+            "ja": "Mac で、エクスプローラーのファイルを右クリックすると、メニューが出るだけで、クリックするまで最初の項目が実行されることはありません。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "On Windows, `hide` typed in a pane now runs the installed app's own build; it kept running an older one.",
+            "ko": "Windows에서 패널에 친 `hide`가 예전 빌드 대신 설치된 앱의 빌드로 실행돼요.",
+            "zh-CN": "在 Windows 上，窗格中输入的 `hide` 现在运行已安装应用自己的版本，而不是旧版本。",
+            "ja": "Windows で、ペインに入力した `hide` が古いビルドではなく、インストールされたアプリのビルドで動きます。"
+          }
+        }
+      ]
+    },
+    {
       "version": "1.2.12",
       "date": "2026-11-25",
       "highlights": [],

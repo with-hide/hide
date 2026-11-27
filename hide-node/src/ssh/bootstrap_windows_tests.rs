@@ -1027,3 +1027,34 @@ fn attach_hands_the_pipes_to_the_core_program() {
         Err(StepError::Refused(_))
     ));
 }
+
+/// The carry step starts the `hide.cmd` it names in the script's place,
+/// with fixed words, under every login shell a Windows sshd may have: from
+/// its answer on the connection's pipes are that program's.
+#[test]
+fn the_carry_step_hands_its_stdio_to_the_program() {
+    for shell in SHELLS {
+        let device = Device::new();
+        let program = device.home().join(".local").join("bin").join("hide.cmd");
+        device.echoing_program(&program);
+        let mut pipe = device.connect_through(shell);
+        device.probe(&mut pipe);
+        carry(
+            &mut pipe,
+            &words(&[&Device::wire(&program), "device", "carry", "--ssh"]),
+        )
+        .unwrap_or_else(|error| panic!("{shell:?}: {error}"));
+        assert_eq!(line(&mut pipe), "args:device carry", "{shell:?}");
+        assert_eq!(line(&mut pipe), "third:--ssh", "{shell:?}");
+    }
+    let device = Device::new();
+    let mut pipe = device.connect();
+    device.probe(&mut pipe);
+    assert!(matches!(
+        carry(
+            &mut pipe,
+            &words(&["C:/no/such/hide.cmd", "device", "carry"])
+        ),
+        Err(StepError::Refused(_))
+    ));
+}

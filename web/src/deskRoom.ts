@@ -4,8 +4,9 @@
 // edge, or at the window's right edge when none is open. The desk's tabs are
 // the core's (`desk_view`, `deskDesk.ts`); the window keeps only whether it
 // shows, whether it covers Desk's chat, and its Explorer column, all of which
-// start closed every time the room is entered. The core keeps the two
-// panels' widths (`desk.lane`).
+// fold every time the room is left, and the session beside Desk, which stays
+// for the return (`leaveRoom`). The core keeps the two panels' widths
+// (`desk.lane`).
 
 import { ENDED_JOB_STATES, livePane } from "./desk";
 import type { DeskItem, DeskJob, DeskMoved, DeskOutput } from "./snapshot";
@@ -20,13 +21,11 @@ export type DeskRoomWindow = {
   expanded: boolean;
   /** The Explorer's column at the desk's left, the session's checkout (B37). */
   explorer: boolean;
-  /** The session the last close took away in this visit of the room, which ⌘E opens again; the web's memory alone, the core keeps no open session (operator decision 2026-11-25). */
-  closed: string | null;
   /** Moves each time `답하기` or `직접 쓰기` asks for the session's input box, so it takes the keyboard once per press. */
   answer: number;
 };
 
-export const DESK_ROOM_CLOSED: DeskRoomWindow = { session: null, desk: false, expanded: false, explorer: false, closed: null, answer: 0 };
+export const DESK_ROOM_CLOSED: DeskRoomWindow = { session: null, desk: false, expanded: false, explorer: false, answer: 0 };
 
 /** Where the desk stands: attached to the session panel's left edge, or at the window's right edge with no session open (B16). */
 export type DeskPanelPlace = "beside_session" | "window_edge";
@@ -53,7 +52,7 @@ export function openSession(room: DeskRoomWindow, pane: string, options: { answe
 
 /**
  * What stands at Desk's right: the session open beside Desk, else 한눈에
- * unless the operator folded it (`desk.lane.glance_folded`), else nothing
+ * unless the operator folded it (`desk.lane.glance_folded`, `▯|`), else nothing
  * and Desk's chat takes the room's width.
  */
 export type RightSide = "session" | "glance" | null;
@@ -61,6 +60,15 @@ export type RightSide = "session" | "glance" | null;
 export function rightSide(room: DeskRoomWindow, folded: boolean): RightSide {
   if (room.session !== null) return "session";
   return folded ? null : "glance";
+}
+
+/**
+ * The `‹ 뷰 n` tab on the right side's left edge, where Desk's desk opens
+ * (operator decision 2026-11-27, C3): the desk's tab count while it is folded
+ * and holds tabs, else null and no tab stands there.
+ */
+export function deskOpener(room: DeskRoomWindow, tabs: number): number | null {
+  return tabs > 0 && !deskShown(room, tabs) ? tabs : null;
 }
 
 /** Something opened on Desk's desk: the desk shows with every tab it holds (B9-B11, B14). */
@@ -134,20 +142,27 @@ export function newSessionBeside(follow: NewSessionFollow, generation: number, i
 
 /**
  * The room once a gone session runs again in another pane (`desk_jobs.moved`,
- * one `이어서 하기` resumed): the session open beside Desk, and the one ⌘E
- * opens again, are that pane, so the panel's files, terminal and input reach
- * the live session.
+ * one `이어서 하기` resumed): the session open beside Desk is that pane, so the
+ * panel's files, terminal and input reach the live session.
  */
 export function followMoved(room: DeskRoomWindow, moved: readonly DeskMoved[]): DeskRoomWindow {
   const session = room.session === null ? null : livePane(moved, room.session);
-  const closed = room.closed === null ? null : livePane(moved, room.closed);
-  return session === room.session && closed === room.closed ? room : { ...room, session, closed };
+  return session === room.session ? room : { ...room, session };
 }
 
-/** `‹ 한눈에`, Escape or ⌘E (B6): 한눈에 stands there again and the session is kept for ⌘E to open again; Desk's desk stays as it was (B13). */
+/** `‹ 한눈에` or Escape (B6): 한눈에 stands there again; Desk's desk stays as it was (B13). */
 export function closeSession(room: DeskRoomWindow): DeskRoomWindow {
   if (!room.session) return room;
-  return { ...room, session: null, explorer: false, closed: room.session };
+  return { ...room, session: null, explorer: false };
+}
+
+/**
+ * The room left for another screen: the session beside Desk stays for the
+ * operator's return, as Desk's desk keeps its tabs, and the desk, which
+ * floats over the room, is folded (operator decision 2026-11-27).
+ */
+export function leaveRoom(room: DeskRoomWindow): DeskRoomWindow {
+  return room.desk || room.expanded || room.explorer ? { ...room, desk: false, expanded: false, explorer: false } : room;
 }
 
 /**

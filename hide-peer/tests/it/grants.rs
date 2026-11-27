@@ -139,6 +139,7 @@ async fn a_connection_kept_by_a_pending_grant_closes_when_that_grant_stops_waiti
                 state: KnownState::Confirming,
                 candidates: Vec::new(),
                 started: None,
+                ssh: None,
             })
         })
         .unwrap();

@@ -610,7 +610,9 @@ async fn a_pairing_over_ssh_settles_over_the_connection() {
     ));
 
     // The guest saves what it was told, connects and confirms on its own.
-    mac.pairings.adopt(accepted.clone(), Vec::new()).unwrap();
+    mac.pairings
+        .adopt(accepted.clone(), Vec::new(), None)
+        .unwrap();
     mac.saves("the confirmed pairing", |peers| {
         peers
             .host(&accepted.key)
@@ -626,13 +628,13 @@ async fn a_pairing_over_ssh_settles_over_the_connection() {
 
     // The same answer adopted again changes nothing; another pairing with
     // a machine already connected is refused, and there is one grant.
-    mac.pairings.adopt(accepted, Vec::new()).unwrap();
+    mac.pairings.adopt(accepted, Vec::new(), None).unwrap();
     let second = pc
         .pairings
         .accept_ssh("req-3", mac.key(), "macbook", "MacBook", Via::Ssh)
         .unwrap();
     assert!(matches!(
-        mac.pairings.adopt(second, Vec::new()),
+        mac.pairings.adopt(second, Vec::new(), None),
         Err(AcceptError::Already)
     ));
     assert_eq!(pc.grants(&mac.key()), GrantState::Active);
@@ -650,7 +652,7 @@ async fn a_grant_the_host_no_longer_holds_shows_as_pair_again_and_a_new_link_tak
         .accept_ssh("req-1", mac.key(), "macbook", "MacBook", Via::Ssh)
         .unwrap();
     pc.pairings.remove_guest(&mac.key()).unwrap();
-    mac.pairings.adopt(accepted, Vec::new()).unwrap();
+    mac.pairings.adopt(accepted, Vec::new(), None).unwrap();
     let host = pc.key();
     mac.saves("the dropped pairing", |peers| {
         peers
@@ -1025,4 +1027,41 @@ async fn the_seventh_confirm_or_removal_in_a_minute_goes_unanswered() {
         read(&mut pairing).await,
         Pairing::Confirmed { .. }
     ));
+}
+
+/// The alias this machine signs in to a host by is its own: an answer
+/// that names one, or a distribution, has it dropped, and the alias saved
+/// is the one this machine's pairing signed in through.
+#[tokio::test]
+async fn a_peer_never_names_how_this_machine_signs_in() {
+    use hide_peer::protocol::Candidate;
+    use hide_peer::store::SshRoute;
+    let net = Net::new();
+    let pc = Desk::new(&net, "windows-pc", "Windows PC");
+    let mac = Desk::new(&net, "macbook", "MacBook");
+    let mut accepted = pc
+        .pairings
+        .accept_ssh("req-1", mac.key(), "macbook", "MacBook", Via::Ssh)
+        .unwrap();
+    accepted.candidates.extend([
+        Candidate::Ssh("the-peers-alias".to_owned()),
+        Candidate::Wsl("Ubuntu".to_owned()),
+    ]);
+    mac.pairings
+        .adopt(accepted.clone(), Vec::new(), Some("studio".to_owned()))
+        .unwrap();
+    let host = mac.peers().host(&accepted.key).unwrap();
+    assert!(
+        !host
+            .candidates
+            .iter()
+            .any(|candidate| matches!(candidate, Candidate::Ssh(_) | Candidate::Wsl(_))),
+        "{:?}",
+        host.candidates
+    );
+    assert_eq!(host.ssh, Some(SshRoute::Alias("studio".to_owned())));
+    assert_eq!(
+        host.dial_addr().candidates.last(),
+        Some(&Candidate::Ssh("studio".to_owned()))
+    );
 }

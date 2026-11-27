@@ -1,4 +1,4 @@
-import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type ClipboardEvent, type KeyboardEvent, type Ref } from "react";
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type ClipboardEvent, type KeyboardEvent, type Ref, type UIEvent } from "react";
 import { createPortal } from "react-dom";
 import { markedMention } from "../../desk";
 import { chipDelete, chipStep, draftChips, replaceRange, type DraftChip } from "../../deskComposer";
@@ -116,7 +116,7 @@ function placeCaret(box: HTMLElement, caret: number) {
  * Shift+↵ starts a line, a paste comes in as plain text, and the keys the
  * composer needs (↵, the `@` menu's) reach `onKeyDown` first.
  */
-export function MentionInput({ draft, label, placeholder, autoFocus = false, className, onChange, onCaret, onKeyDown, ref }: {
+export function MentionInput({ draft, label, placeholder, autoFocus = false, className, onChange, onCaret, onKeyDown, onScroll, ref }: {
   draft: DeskDraft;
   label: string;
   placeholder: string;
@@ -127,6 +127,8 @@ export function MentionInput({ draft, label, placeholder, autoFocus = false, cla
   /** The caret moved without the words changing. */
   onCaret?: (caret: number) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+  /** The words scrolled inside the box. */
+  onScroll?: (event: UIEvent<HTMLDivElement>) => void;
   ref?: Ref<MentionInputHandle>;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -277,6 +279,7 @@ export function MentionInput({ draft, label, placeholder, autoFocus = false, cla
           onChange(readBox(element), selectionIn(element)?.end ?? readBox(element).length);
         }}
         onKeyDown={keyDown}
+        onScroll={onScroll}
         onPaste={paste}
         onDrop={(event) => event.preventDefault()}
         data-desk-composer-input="true"

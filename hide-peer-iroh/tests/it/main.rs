@@ -65,6 +65,8 @@ impl Machine {
             release: false,
             name: None,
             clock: Clock::system(),
+            pacing: Default::default(),
+            capabilities: hide_peer::protocol::hello::CAPABILITIES,
         };
         let (peers, incoming) = Peers::start(transport, config).unwrap();
         let events = peers.events();
@@ -140,6 +142,7 @@ fn pair(host: &Machine, guest: &Machine) {
                 state: KnownState::Active,
                 candidates: host.addr().candidates,
                 started: None,
+                ssh: None,
             })
         })
         .unwrap();
@@ -302,7 +305,7 @@ async fn a_handshake_that_never_finishes_holds_up_no_other_connection() {
         .into_iter()
         .find_map(|candidate| match candidate {
             Candidate::Ip(address) => Some(address),
-            Candidate::Relay(_) | Candidate::Wsl(_) => None,
+            Candidate::Relay(_) | Candidate::Wsl(_) | Candidate::Ssh(_) => None,
         })
         .expect("a bound endpoint has an address");
 

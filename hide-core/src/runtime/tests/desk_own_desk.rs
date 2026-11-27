@@ -743,6 +743,38 @@ fn open_output(runtime: &mut Runtime, key: &(String, String), id: &str) {
     ));
 }
 
+/// `open_output` naming itself, as the window does to follow the open with the keyboard.
+fn open_output_named(runtime: &mut Runtime, key: &(String, String), id: &str, request_id: &str) {
+    runtime.dispatch_json(&explorer_event(
+        "desk_view_open",
+        serde_json::json!({"kind": "output", "device_id": key.0, "checkout": key.1, "id": id, "request_id": request_id}),
+    ));
+}
+
+/// The receipt the core wrote for the open named `request_id`, if any.
+fn open_receipt(
+    runtime: &Runtime,
+    request_id: &str,
+) -> Option<crate::model::BrowserOpenReceiptSnapshot> {
+    runtime
+        .snapshot
+        .status
+        .browser_opens
+        .iter()
+        .find(|receipt| receipt.request_id == request_id)
+        .cloned()
+}
+
+/// The display in front of Desk's desk's area in use.
+fn desk_front(runtime: &Runtime) -> String {
+    let layout = runtime.desk_views().expect("Desk's desk");
+    layout
+        .active_area()
+        .active
+        .clone()
+        .expect("a display in front")
+}
+
 fn unseen(runtime: &Runtime, key: &(String, String), id: &str) -> bool {
     runtime
         .view_display(key, id)
@@ -1026,4 +1058,84 @@ fn a_file_desk_cannot_read_opens_as_a_tab_saying_why_and_retry_reads_it_once_it_
         .expect("the tab stays");
     assert_eq!(tab.unavailable_reason, None, "Retry read the file");
     assert_eq!(desk_views(&mut runtime).len(), 1);
+}
+
+// Operator request 2026-11-27 (mission-109): a session's page or file opened on Desk's desk lands under a display id
+// the window cannot know ahead, so an open that names itself gets the receipt a page open gets, naming the display
+// placed in front, and the window's keyboard follows it there; a refused open's receipt says so.
+#[test]
+fn a_named_output_open_gets_a_receipt_naming_the_display_it_placed_in_front_of_desks_desk() {
+    use crate::view_layout::DisplayKind;
+    let (mut runtime, _, directory) = desk_runtime("own-desk-output-receipt");
+    runtime.snapshot.status.engine.state = "connected".into();
+    let key = (
+        runtime.node.as_str().to_owned(),
+        directory.to_string_lossy().into_owned(),
+    );
+    let desk = (runtime.node.as_str().to_owned(), "hide:desk".to_owned());
+
+    let page = session_view(
+        &mut runtime,
+        &key,
+        DisplayKind::Browser,
+        "https://example.com/",
+    );
+    open_output_named(&mut runtime, &key, &page, "follow:page");
+    let receipt = open_receipt(&runtime, "follow:page").expect("the page's receipt");
+    assert!(receipt.ok);
+    assert_eq!(
+        (receipt.device_id, receipt.path, receipt.display_id),
+        (
+            Some(desk.0.clone()),
+            Some(desk.1.clone()),
+            Some(desk_front(&runtime))
+        ),
+        "the page Desk's desk shows in front"
+    );
+
+    let plan = directory.join("plan.md");
+    std::fs::write(&plan, "plan\n").expect("fixture");
+    let file = session_view(
+        &mut runtime,
+        &key,
+        DisplayKind::File,
+        &plan.to_string_lossy(),
+    );
+    open_output_named(&mut runtime, &key, &file, "follow:file");
+    let receipt = open_receipt(&runtime, "follow:file").expect("the file's receipt");
+    assert!(receipt.ok);
+    let front = desk_front(&runtime);
+    assert_eq!(receipt.display_id, Some(front.clone()));
+    let shown = runtime
+        .desk_views()
+        .unwrap()
+        .display(&front)
+        .expect("the front display");
+    assert_eq!(
+        (shown.kind, shown.path.as_str()),
+        (DisplayKind::File, plan.to_string_lossy().as_ref())
+    );
+
+    // An open without a name writes no receipt; a refused one says it was refused.
+    let before = runtime.snapshot.status.browser_opens.len();
+    let other = session_view(
+        &mut runtime,
+        &key,
+        DisplayKind::Browser,
+        "https://example.com/other",
+    );
+    open_output(&mut runtime, &key, &other);
+    assert_eq!(runtime.snapshot.status.browser_opens.len(), before);
+    let shot = directory
+        .with_file_name("own-desk-outside-receipt")
+        .join("shot.png");
+    let outside = session_view(
+        &mut runtime,
+        &key,
+        DisplayKind::External,
+        &shot.to_string_lossy(),
+    );
+    open_output_named(&mut runtime, &key, &outside, "follow:outside");
+    let refused = open_receipt(&runtime, "follow:outside").expect("the refusal's receipt");
+    assert_eq!((refused.ok, refused.display_id), (false, None));
 }

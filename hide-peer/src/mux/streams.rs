@@ -94,7 +94,7 @@ const BACKLOG: usize = 16;
 /// How long a close waits for its last frame to be written before the
 /// carrier is ended without it, and how long an end whose write failed
 /// waits to read the other end's.
-pub(super) const BYE_WITHIN: Duration = Duration::from_secs(2);
+pub(super) const BYE_WITHIN: Duration = crate::limits::BYE_WITHIN;
 
 /// What a connection closed with when its carrier ended without a word:
 /// `CloseCode::Lost`.

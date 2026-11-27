@@ -61,8 +61,13 @@ export function placeAt(box: HTMLElement, place: ScrollPlace): boolean {
   return true;
 }
 
-/** Whether `place`'s item still stands where it was left: a scroll that moved it was the operator's. */
+/**
+ * Whether `place`'s item still stands where it was left: a scroll that moved it was the operator's. While the
+ * conversation draws no item at all, as when its lines are read again, the scroll the emptied box makes is no one's,
+ * so the place is still held.
+ */
 export function stillAt(box: HTMLElement, place: ScrollPlace): boolean {
   const off = drift(box, place);
-  return off !== null && Math.abs(off) < 2;
+  if (off === null) return anchors(box).length === 0;
+  return Math.abs(off) < 2;
 }

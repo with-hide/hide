@@ -892,6 +892,68 @@ fn attach_hands_the_pipes_to_the_core_program() {
     assert!(attach(&mut pipe, "hided", None).is_err());
 }
 
+/// The carry step starts the program it names in the script's place, with
+/// its words, from the account's home: from its answer on the connection's
+/// pipes are that program's. A program that is not there, or
+/// a path that is not absolute, carries nothing.
+#[test]
+fn the_carry_step_hands_its_stdio_to_the_program() {
+    let device = Device::new();
+    let program = device.dir.path().join("hide");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\necho \"args:$* in:$(pwd -P)\"\nexec cat\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let spelled = program.to_str().unwrap();
+
+    let mut pipe = device.connect("");
+    probe(&mut pipe, soon()).unwrap();
+    carry(&mut pipe, &words(&[spelled, "device", "carry", "--ssh"])).unwrap();
+    let home = device.home().canonicalize().unwrap();
+    assert_eq!(
+        String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
+        format!("args:device carry --ssh in:{}", home.display())
+    );
+    pipe.send(b"carried\n", soon()).unwrap();
+    assert_eq!(pipe.line(soon()).unwrap(), b"carried");
+
+    let mut pipe = device.connect("");
+    probe(&mut pipe, soon()).unwrap();
+    assert!(matches!(
+        carry(&mut pipe, &words(&["/no/such/hide", "device", "carry"])),
+        Err(StepError::Refused(_))
+    ));
+    let mut pipe = device.connect("");
+    probe(&mut pipe, soon()).unwrap();
+    assert!(matches!(
+        carry(&mut pipe, &words(&["hide", "device", "carry"])),
+        Err(StepError::Refused(_))
+    ));
+    assert!(matches!(carry(&mut pipe, &[]), Err(StepError::Refused(_))));
+}
+
+/// A server that answers the carry step with more than a start script's
+/// line ends the session at the bound, rather than growing this machine.
+#[test]
+fn a_carry_step_answer_past_its_bound_ends_the_session() {
+    let device = Device::new();
+    let hostile = device.dir.path().join("hostile-sh");
+    std::fs::write(
+        &hostile,
+        "#!/bin/sh\nIFS= read -r script\nprintf 'HIDE1\\tprobe\\tme\\t%s\\tLinux\\tx86_64\\tabcdef\\tyes\\tgzip\\n' \"$HOME\"\nIFS= read -r step\nhead -c 1000000 /dev/zero | tr '\\0' x\nsleep 30\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&hostile, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut pipe = device.connect_through(&hostile, "", &[]);
+    probe(&mut pipe, soon()).unwrap();
+    let started = Instant::now();
+    let carried = carry(&mut pipe, &words(&["/bin/cat"]));
+    assert!(matches!(carried, Err(StepError::Lost(_))), "{carried:?}");
+    assert!(started.elapsed() < Duration::from_secs(20));
+}
+
 /// A command that writes past the cap is refused while it writes, not
 /// after: one that never stops writing ends, the connection stays in step,
 /// and nothing is left in the temporary folder.
