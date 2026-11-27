@@ -2308,6 +2308,7 @@ mod tests {
         node.answer(Err(not_written()));
         runtime.open_session_thread(ThreadOpenPayload {
             pane_id: "w1:p7".to_owned(),
+            pane_conversation: false,
         });
         assert_eq!(node.asked(), vec![ThreadRead::Newest]);
         let shown = thread(&runtime);
