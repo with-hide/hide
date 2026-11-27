@@ -158,6 +158,15 @@ impl LookInputs {
         self.front.as_deref()
     }
 
+    /// Whether the look was last chosen on this machine's own window, so the
+    /// front is this machine's to keep across a restart. A front a view
+    /// chose is that view's and ends with it: it is never saved, so a
+    /// restart, which restores the front with no view showing, never brings
+    /// it back as this machine's own (`Runtime::persist_current_ui_state`).
+    pub(super) fn chosen_here(&self) -> bool {
+        self.chosen == LookScreen::Own
+    }
+
     pub(super) fn phones(&self) -> &BTreeSet<String> {
         &self.phones
     }
@@ -259,6 +268,22 @@ impl Runtime {
             runtime.look.choose_on(chosen);
         })
         .1
+    }
+
+    /// The operator chose on the screen the step running now was sent from,
+    /// in a way that moves neither the focus nor the front: a pane, tab or
+    /// Workspace of a device already in front (`request_remote_control`).
+    /// The look is chosen there from now on, so a device a view brought
+    /// forward counts again once this machine's window chooses in it; a
+    /// tool's or the daemon's request keeps the screen it was chosen on.
+    /// Outside a selection this is one by itself and reads at once; answers
+    /// whether that read moved a row.
+    pub(super) fn choose_look_screen(&mut self) -> bool {
+        let chosen = self.look.choosing();
+        if self.look.chosen == chosen {
+            return false;
+        }
+        self.change_look(|runtime| runtime.look.choose_on(chosen)).1
     }
 
     /// Exactly `machines` show their view of this one now (`remote_views`,

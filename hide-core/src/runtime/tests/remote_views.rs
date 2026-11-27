@@ -7,7 +7,7 @@
 //! for this Mac's own tile, was read the moment its agent finished, so no
 //! notification came.
 
-use super::device_catalog::tree;
+use super::device_catalog::{recording_engine, tree};
 use super::read_on_look::{
     DEVICE, T1, T2, device, device_session, local_two_tabs, origins, two_finished_tabs, unread,
 };
@@ -292,6 +292,105 @@ fn a_device_brought_forward_in_a_view_is_looked_at_while_the_view_shows() {
         assert!(
             !unread(&runtime, "t1"),
             "{origin:?}: a device brought forward here is looked at as before"
+        );
+    }
+}
+
+/// The operator chooses `id`'s pane on the device, as a click on its row
+/// does (`remote_control`), from this machine's window (`Some(Own)`) or as a
+/// tool's command (`None`).
+fn choose_device_pane(runtime: &mut Runtime, id: &str, screen: Option<LookScreen>) {
+    runtime.install_remote_control(RemoteControlContext::new(
+        DEVICE,
+        recording_engine(Arc::new(Mutex::new(Vec::new()))),
+        Weak::new(),
+        ChangeNotifier::noop(),
+    ));
+    let pressed = event(
+        "remote_control",
+        json!({
+            "target_id": DEVICE, "request_id": format!("row-{id}"), "focus_device": true,
+            "action": "focus_pane", "pane_id": format!("remote:{DEVICE}:pane:{id}"),
+        }),
+    );
+    match screen {
+        Some(screen) => runtime.dispatch_json_from(&pressed, screen),
+        None => runtime.dispatch_json(&pressed),
+    };
+}
+
+/// Review round 1, R1: a device a view brought forward counts again once
+/// this machine's window chooses in it, the pane its own keyboard already
+/// holds included. The device is in front already, so neither the front nor
+/// the focus moves; the choice itself records its screen. A tool's choice
+/// there keeps the view's screen.
+#[test]
+fn a_device_a_view_brought_forward_counts_again_once_this_window_chooses_in_it() {
+    for origin in origins() {
+        let t = tree();
+        let (mut runtime, _views) = device(origin.clone(), false);
+        runtime.ingest_remote_session(
+            DEVICE,
+            Ok(device_session(&t.main, &[("t1", "working", 1)], "t1")),
+        );
+        views(&mut runtime, &[guest()]);
+        runtime.dispatch_json_from(
+            &event("focus_device", json!({"device_id": DEVICE})),
+            LookScreen::View(guest()),
+        );
+        views(&mut runtime, &[]);
+        runtime.ingest_remote_session(
+            DEVICE,
+            Ok(device_session(&t.main, &[("t1", "done", 2)], "t1")),
+        );
+        assert!(
+            unread(&runtime, "t1"),
+            "{origin:?}: news after the view left"
+        );
+
+        choose_device_pane(&mut runtime, "t1", None);
+        assert!(
+            unread(&runtime, "t1"),
+            "{origin:?}: a tool's choice keeps the view's screen"
+        );
+        choose_device_pane(&mut runtime, "t1", Some(LookScreen::Own));
+        assert!(
+            !unread(&runtime, "t1"),
+            "{origin:?}: read once this machine's window chose the pane it already holds"
+        );
+    }
+}
+
+/// Review round 1, R2: a front a view chose is never saved, so a restart,
+/// which restores the saved front with no view showing, does not bring it
+/// back as this machine's own; a front this machine's window chooses is
+/// saved as before.
+#[test]
+fn a_front_a_view_chose_is_not_saved_for_a_restart() {
+    for origin in origins() {
+        let (mut runtime, _views) = device(origin.clone(), false);
+        let saved = |runtime: &Runtime| persistence::load(&runtime.state_path).0.focused_device_id;
+        assert_ne!(saved(&runtime).as_deref(), Some(DEVICE), "{origin:?}");
+        views(&mut runtime, &[guest()]);
+        runtime.dispatch_json_from(
+            &event("focus_device", json!({"device_id": DEVICE})),
+            LookScreen::View(guest()),
+        );
+        assert!(runtime.device_in_front(DEVICE), "{origin:?}");
+        assert_ne!(
+            saved(&runtime).as_deref(),
+            Some(DEVICE),
+            "{origin:?}: the view's front is not saved"
+        );
+
+        runtime.dispatch_json_from(
+            &event("focus_device", json!({"device_id": DEVICE})),
+            LookScreen::Own,
+        );
+        assert_eq!(
+            saved(&runtime).as_deref(),
+            Some(DEVICE),
+            "{origin:?}: this machine's own front is saved"
         );
     }
 }

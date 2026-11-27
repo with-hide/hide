@@ -1102,6 +1102,10 @@ impl Runtime {
         }
         if chooses_focus {
             self.supersede_start_navigation();
+            // A choice on the device is the operator's look chosen on this
+            // request's screen, whether or not the device needs bringing
+            // forward below (`docs/status-model.md`, Hide owns the read axis).
+            self.choose_look_screen();
         }
         if let Some(key) = chosen_key {
             if let Some((tab, delegated)) = focused_tab {
