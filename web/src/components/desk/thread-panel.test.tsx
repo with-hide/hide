@@ -602,12 +602,86 @@ it("keeps every message's view while the operator types and while the last messa
 const answer = (text: string, at: number) => ({ sessionUpdate: "agent_message_chunk", messageId: text, content: { type: "text", text }, _meta: { hide: { at_ms: at } } });
 const asked = (...updates: ThreadPage["updates"]) => ({ updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, ...updates], parts: {}, sessions: {} });
 
+/** JSDOM has no layout; the browser boundary reports which messages approach the viewport. */
+function conversationVisibility() {
+  const observers: { callback: IntersectionObserverCallback; targets: Set<Element>; disconnected: boolean; root: Element | Document | null }[] = [];
+  vi.stubGlobal("IntersectionObserver", class {
+    readonly state;
+    constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+      this.state = { callback, targets: new Set<Element>(), disconnected: false, root: options?.root ?? null };
+      observers.push(this.state);
+    }
+    observe(target: Element) { this.state.targets.add(target); }
+    unobserve(target: Element) { this.state.targets.delete(target); }
+    disconnect() { this.state.disconnected = true; this.state.targets.clear(); }
+    takeRecords() { return []; }
+  });
+  const conversation = () => observers.filter((one) => one.root instanceof Element && one.root.hasAttribute("data-desk-thread-conversation"));
+  return {
+    conversation,
+    see: (target: Element, shown: boolean) => act(async () => {
+      const observer = conversation().find((one) => one.targets.has(target));
+      expect(observer, "the conversation watches this message").toBeDefined();
+      observer!.callback([{ target, isIntersecting: shown } as IntersectionObserverEntry], {} as IntersectionObserver);
+    }),
+  };
+}
+
+it("releases offscreen Markdown in one long turn, restoring it on return and retaining a selected message until copying ends", async () => {
+  const visibility = conversationVisibility();
+  const { container, type, root } = await mount();
+  const updates = Array.from({ length: 40 }, (_, index) => [
+    answer(`Past **answer ${index}**`, index + 1),
+    { sessionUpdate: "tool_call", toolCallId: `call-${index}`, kind: "execute", title: "echo work", status: "completed" },
+  ]).flat();
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: asked(...updates, answer("Newest **answer**", 100)) }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  expect(container.querySelectorAll(".cm-editor")).toHaveLength(0);
+  const messages = Array.from(container.querySelectorAll<HTMLElement>("[data-thread-markdown]"));
+  expect(messages).toHaveLength(41);
+  const first = messages[0]!, last = messages.at(-1)!;
+  expect(first.textContent).toContain("answer 0");
+  await visibility.see(last, true);
+  const latestEditor = last.querySelector(".cm-editor");
+  expect(latestEditor).not.toBeNull();
+  await type("keep my draft");
+  expect(last.querySelector(".cm-editor")).toBe(latestEditor);
+  await visibility.see(first, true);
+  expect(first.querySelector(".cm-editor")).not.toBeNull();
+  await visibility.see(first, false);
+  expect(first.querySelector(".cm-editor")).toBeNull();
+  expect(first.textContent).toContain("answer 0");
+  await visibility.see(first, true);
+  const selectedEditor = first.querySelector(".cm-editor");
+  await act(async () => {
+    const range = document.createRange();
+    range.selectNodeContents(first.querySelector(".cm-content")!);
+    document.getSelection()!.removeAllRanges();
+    document.getSelection()!.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  await visibility.see(first, false);
+  expect(first.querySelector(".cm-editor")).toBe(selectedEditor);
+  await act(async () => {
+    document.getSelection()!.removeAllRanges();
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  expect(first.querySelector(".cm-editor")).toBeNull();
+  expect(last.querySelector(".cm-editor")).toBe(latestEditor);
+  expect(visibility.conversation()).toHaveLength(1);
+  await act(async () => root.unmount());
+  mounted = [];
+  expect(visibility.conversation()[0]!.disconnected).toBe(true);
+  expect(visibility.conversation()[0]!.targets.size).toBe(0);
+});
+
 it("shows a question in the agent's own sentence above the box and lights only that sentence in its message for 2 s (Doop N3 가)", async () => {
+  conversationVisibility();
   const scrolled: string[] = [];
   vi.stubGlobal("CSS", { escape: (value: string) => value });
   Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this.textContent ?? ""); };
   const { container } = await mount(job, null, { asks: [{ id: "missed-1-0", text: "다크 화면을 넣을지", at_unix_ms: 1_500, quote: "다크 화면도 넣을까요?" }] });
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: asked(answer("라이트를 찍었어요. 다크 화면도 넣을까요? 넣으면 두 배예요.", 1_000)) }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  expect(container.querySelector(".cm-editor")).toBeNull();
   const line = container.querySelector("[data-desk-thread-asks]")!;
   const row = line.querySelector('[data-desk-thread-ask-row="missed-1-0"]')!;
   // One row above the box: 확인할 것, the agent's sentence, when it was asked and ×; no message unfolds under it.
@@ -632,6 +706,7 @@ it("shows a question in the agent's own sentence above the box and lights only t
     expect(lit()).toHaveLength(1);
     await act(async () => vi.advanceTimersByTime(1));
     expect(lit()).toEqual([]);
+    expect(container.querySelector(".cm-editor")).toBeNull();
     expect(row.getAttribute("data-lit")).toBeNull();
   } finally {
     vi.useRealTimers();

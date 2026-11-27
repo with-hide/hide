@@ -6,7 +6,7 @@ import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, 
 import { askPlace, callName, namedMention, threadPhase, threadTurns } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
-import { MarkdownText, type MarkdownChip, type MarkdownMark } from "../../MarkdownText";
+import type { MarkdownChip, MarkdownMark } from "../../MarkdownText";
 import type { CopyText } from "../human-turn-copy";
 import type { AskLine } from "../open-asks";
 import { useRunningClock } from "../elapsed";
@@ -25,6 +25,7 @@ import { DeskOutputs } from "./desk-outputs";
 import type { AnswerPlace, FoundAnswerPath } from "../../answerPaths";
 import { useFilePathChips } from "./file-path-chip";
 import { ThreadAsks } from "./thread-asks";
+import { ThreadMarkdown, ThreadMarkdownWindow } from "./thread-markdown";
 import { keepScroll, keptScroll, placeAt, scrollPlace, stillAt, type ScrollPlace } from "../../conversationScroll";
 
 const TOOL_ICON: Partial<Record<AcpToolKind, typeof WrenchIcon>> = {
@@ -261,7 +262,7 @@ function AgentWords({ line, words, lit, live }: { line: Extract<ThreadLine, { ki
   const chips = useMemo(() => (files.length ? [...words.chips, ...files] : words.chips), [words.chips, files]);
   return (
     <div className="-mx-xs min-w-0 rounded-md px-xs" data-desk-thread-line="agent" data-desk-thread-message={line.id} data-desk-thread-lit={lit ? "true" : undefined}>
-      <MarkdownText text={line.text} size="chat" chips={chips} copyCode={words.copy} mark={lit} />
+      <ThreadMarkdown text={line.text} size="chat" chips={chips} copyCode={words.copy} mark={lit} />
     </div>
   );
 }
@@ -443,16 +444,20 @@ function useThreadScroll(lines: readonly ThreadLine[], scrollKey: string | null,
   const before = useRef<{ first: string | null; height: number }>({ first: null, height: 0 });
   useLayoutEffect(() => {
     const box = ref.current;
-    if (!box || scrollKey === null) return;
-    anchor.current = keptScroll(scrollKey);
+    if (!box) return;
+    anchor.current = scrollKey === null ? null : keptScroll(scrollKey);
     atEnd.current = anchor.current === null;
     // The lines' words fill their editors after the pass that draws them, so the held turn is placed again as they grow.
     const observer = new ResizeObserver(() => {
       if (anchor.current) placeAt(box, anchor.current);
+      else if (atEnd.current) box.scrollTop = box.scrollHeight;
+      before.current.height = box.scrollHeight;
     });
     resized.current = observer;
+    const content = box.querySelector("[data-thread-content]");
+    if (content) observer.observe(content);
     return () => {
-      keepScroll(scrollKey, atEnd.current ? null : (anchor.current ?? scrollPlace(box)));
+      if (scrollKey !== null) keepScroll(scrollKey, atEnd.current ? null : (anchor.current ?? scrollPlace(box)));
       observer.disconnect();
       resized.current = null;
     };
@@ -605,56 +610,60 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
     };
   }, [lit, scroller.ref]);
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job?.id ?? ""}>
-      <div ref={scroller.ref} onScroll={scroller.onScroll} data-desk-thread-conversation="true" className="flex min-h-0 min-w-0 flex-1 flex-col gap-md overflow-y-auto px-md py-md">
-        {failure ? (
-          <p role="alert" className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" data-desk-thread-failure={failure}>
-            <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-warning" />
-            <span className="min-w-0 text-subtle-foreground">{t(failure === "no_record" ? "desk.thread.readFailed.no_record" : "desk.thread.readFailed.refused")}</span>
-            {onTerminal ? <Button variant="text-link" size="inline" onClick={onTerminal}>{t("desk.thread.toTerminal")}</Button> : null}
-          </p>
-        ) : reading ? (
-          <p role="status" className="animate-pulse text-caption text-muted-foreground" data-desk-thread-reading="true">{t("desk.thread.reading")}</p>
-        ) : lines.length === 0 ? (
-          <p className="text-caption text-muted-foreground" data-desk-thread-empty="true">{t("desk.thread.empty")}</p>
-        ) : (
-          <ol className="flex min-w-0 flex-col gap-lg" data-desk-thread-lines={lines.length}>
-            {turns.map((turn, index) => <Turn key={turn.key} turn={turn} live={running && index === turns.length - 1} handed={startedByDesk && index === 0} words={words} lit={lit} actions={actions} />)}
-          </ol>
-        )}
-        {/* The working line Desk's conversation draws too (feedback 1 c3), until the turn ends or waits on the operator. */}
-        {running && !reading && !failure ? <WorkingLine phase={threadPhase(turns.at(-1))} since={workingSince} /> : null}
-        {ask}
-      </div>
-      {onAsk ? <ThreadAsks asks={asks} onGo={goTo} onSet={onAsk} lit={seek?.id ?? lit?.ask ?? null} gone={gone} /> : null}
-      {foot ?? (
-        <div className="flex shrink-0 flex-col gap-xs px-sm pb-sm">
-          {composer.queue}
-          <DeskComposer
-            value={composer.value}
-            label={t("desk.thread.composerLabel", { title: job?.title ?? "" })}
-            placeholder={t("desk.thread.placeholder")}
-            textRef={composer.textRef}
-            tray={composer.tray}
-            focused={composer.focused || composer.menus?.menuOpen}
-            held={composer.held}
-            notice={composer.notice}
-            menu={composer.menus?.menu}
-            menuOpen={composer.menus?.menuOpen}
-            menuEmpty={composer.menus?.menuEmpty}
-            onMenuOpenChange={composer.menus?.onMenuOpenChange}
-            onKeyDown={composer.menus?.onKeyDown}
-            onChange={composer.onChange}
-            onCaret={composer.onCaret}
-            onSend={composer.onSend}
-            answering={composer.onStop !== undefined}
-            stopHint={t("desk.queue.stopHint")}
-            onStop={composer.onStop}
-          >
-            {composer.bar}
-          </DeskComposer>
+    <ThreadMarkdownWindow root={scroller.ref}>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job?.id ?? ""}>
+        <div ref={scroller.ref} onScroll={scroller.onScroll} data-desk-thread-conversation="true" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-md py-md">
+          <div className="flex min-w-0 shrink-0 flex-col gap-md" data-thread-content="true">
+            {failure ? (
+              <p role="alert" className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" data-desk-thread-failure={failure}>
+                <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-warning" />
+                <span className="min-w-0 text-subtle-foreground">{t(failure === "no_record" ? "desk.thread.readFailed.no_record" : "desk.thread.readFailed.refused")}</span>
+                {onTerminal ? <Button variant="text-link" size="inline" onClick={onTerminal}>{t("desk.thread.toTerminal")}</Button> : null}
+              </p>
+            ) : reading ? (
+              <p role="status" className="animate-pulse text-caption text-muted-foreground" data-desk-thread-reading="true">{t("desk.thread.reading")}</p>
+            ) : lines.length === 0 ? (
+              <p className="text-caption text-muted-foreground" data-desk-thread-empty="true">{t("desk.thread.empty")}</p>
+            ) : (
+              <ol className="flex min-w-0 flex-col gap-lg" data-desk-thread-lines={lines.length}>
+                {turns.map((turn, index) => <Turn key={turn.key} turn={turn} live={running && index === turns.length - 1} handed={startedByDesk && index === 0} words={words} lit={lit} actions={actions} />)}
+              </ol>
+            )}
+            {/* The working line Desk's conversation draws too (feedback 1 c3), until the turn ends or waits on the operator. */}
+            {running && !reading && !failure ? <WorkingLine phase={threadPhase(turns.at(-1))} since={workingSince} /> : null}
+            {ask}
+          </div>
         </div>
-      )}
-    </div>
+        {onAsk ? <ThreadAsks asks={asks} onGo={goTo} onSet={onAsk} lit={seek?.id ?? lit?.ask ?? null} gone={gone} /> : null}
+        {foot ?? (
+          <div className="flex shrink-0 flex-col gap-xs px-sm pb-sm">
+            {composer.queue}
+            <DeskComposer
+              value={composer.value}
+              label={t("desk.thread.composerLabel", { title: job?.title ?? "" })}
+              placeholder={t("desk.thread.placeholder")}
+              textRef={composer.textRef}
+              tray={composer.tray}
+              focused={composer.focused || composer.menus?.menuOpen}
+              held={composer.held}
+              notice={composer.notice}
+              menu={composer.menus?.menu}
+              menuOpen={composer.menus?.menuOpen}
+              menuEmpty={composer.menus?.menuEmpty}
+              onMenuOpenChange={composer.menus?.onMenuOpenChange}
+              onKeyDown={composer.menus?.onKeyDown}
+              onChange={composer.onChange}
+              onCaret={composer.onCaret}
+              onSend={composer.onSend}
+              answering={composer.onStop !== undefined}
+              stopHint={t("desk.queue.stopHint")}
+              onStop={composer.onStop}
+            >
+              {composer.bar}
+            </DeskComposer>
+          </div>
+        )}
+      </div>
+    </ThreadMarkdownWindow>
   );
 }

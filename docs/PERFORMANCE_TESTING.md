@@ -177,6 +177,9 @@ Hook diagnosis uses the existing kit worker so a held read no longer blocks topo
 | Elapsed display clock: `web/src/components/elapsed.tsx` | One shared 1 s timer per window while subscribed. | Update the time and notify elapsed-span subscribers in memory; no core snapshot. | One timer; listener count has no fixed numeric cap and fan-out follows the mounted elapsed spans. | Last unsubscribe clears the timer; window destruction ends it. |
 Pane conversation selection keeps one window-local bounded copy of the core's thread pages, and observes existing snapshot changes without a timer.
 A changed agent catalog composes the `@` tree once only while a thread is open or Desk's worker runs; toggles add one open or close event and no terminal attach or geometry work.
+The conversation owns one `IntersectionObserver` for its retained Markdown messages, with one initial viewport of overscan on each side; only intersecting messages, at most two selection endpoints and the one lit question own editors, so a single turn containing many messages is bounded by the viewport too.
+Leaving that window destroys the editor and its theme registration, retaining only the message's existing text and one height measurement; a changed text invalidates that height, and closing the conversation disconnects its visibility and content-size observers and removes its selection listener.
+Visibility callbacks update only changed messages, selection changes visit at most four endpoints, and one content-size observer follows the bottom or restores the held turn; no timer, transcript reader, terminal input work or snapshot publication is added.
 
 
 Agent notice sentences add one copy of the published `detail` (at most 80 characters) per phone-projected row, outside the runtime lock; the notice judgment borrows those rows and copies title, status, sentence and project only for a root transition that announces.

@@ -111,3 +111,51 @@ test("another window takes the thread once and only an explicit press reclaims i
   } catch (error) { failures.push(error); }
   await finishNative(failures, [["close the second app", () => second?.close()], ["close the first app", () => first?.close()], ["stop the stack", () => stack.stop()]]);
 });
+
+// The native scroll viewport owns which Markdown editors are alive. A long
+// history must stay readable while the expensive views follow the reader.
+test("long conversation history releases offscreen editors and restores Markdown at the reading position", async () => {
+  const stack = await startStack("pane-conversation-history");
+  let app: ElectronApplication | undefined;
+  const failures: unknown[] = [];
+  try {
+    const { fixture, run } = stack;
+    const at = Date.now() - 120_000;
+    for (let index = 0; index < 120; index++) continueFixtureTranscript(fixture, "fixture-one", { task: `History ${index}: **한국어 대화**를 읽고 돌아와요`, at: at + index * 1000 });
+    const opened = await launchShell(run.env); app = opened.app;
+    const page = opened.page;
+    await fitWindow(app, { width: 1440, height: 1000 });
+    await enterWorkspace(page, "fixture");
+    await page.locator(`[data-pane-conversation-toggle="${fixture.panes[0]}"]`).click();
+    const cover = page.locator("[data-pane-conversation]");
+    const scroll = cover.locator("[data-desk-thread-conversation]");
+    const first = cover.locator('[data-desk-thread-line="agent"]').filter({ hasText: "History 0:" });
+    const last = cover.locator('[data-desk-thread-line="agent"]').filter({ hasText: "History 119:" });
+    await expect(last.locator(".cm-editor")).toHaveCount(1);
+    await expect(first).toHaveCount(1);
+    await expect(first.locator(".cm-editor")).toHaveCount(0);
+    // A real scroll, rather than scrollIntoView's implicit programmatic jump,
+    // establishes the reading position before the next answer arrives.
+    await scroll.evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")); });
+    await expect(first.locator(".cm-editor")).toHaveCount(1);
+    await expect(last.locator(".cm-editor")).toHaveCount(0);
+    await expect(first).toBeInViewport();
+    const firstEditor = await first.locator(".cm-editor").elementHandle();
+    await cover.locator("[data-desk-composer-input]").fill("읽던 곳을 유지해요");
+    expect(await first.locator(".cm-editor").evaluate((element, before) => element === before, firstEditor)).toBe(true);
+    continueFixtureTranscript(fixture, "fixture-one", { task: "History 120: 새 답변이 왔어요", at: Date.now() });
+    await expect(cover).toContainText("History 120:");
+    await expect(first).toBeInViewport();
+    await compositorPresents(page);
+    await captureElectronWindow(app, "pane-conversation-history", { turns: 121, state: run.env.HIDE_STATE_DIR, condition: "reading oldest answer while a new answer arrives" });
+    await scroll.evaluate((element) => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event("scroll")); });
+    const newest = cover.locator('[data-desk-thread-line="agent"]').filter({ hasText: "History 120:" });
+    await expect(newest.locator(".cm-editor")).toHaveCount(1);
+    await expect(first.locator(".cm-editor")).toHaveCount(0);
+    continueFixtureTranscript(fixture, "fixture-one", { task: "History 121: 아래에서는 새 글을 따라가요", at: Date.now() + 1000 });
+    const following = cover.locator('[data-desk-thread-line="agent"]').filter({ hasText: "History 121:" });
+    await expect(following.locator(".cm-editor")).toHaveCount(1);
+    await expect(following).toBeInViewport();
+  } catch (error) { failures.push(error); }
+  await finishNative(failures, [["close the app", () => app?.close()], ["stop the stack", () => stack.stop()]]);
+});
