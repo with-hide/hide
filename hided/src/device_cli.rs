@@ -809,19 +809,20 @@ fn add_alias(
         .and_then(|looked| looked["looked"]["state"].as_str())
     {
         Some("ready") => {
-            let asked = json!({"verb":"pair_ssh","alias":alias});
-            let answer = crate::workspace_cli::pairing_ask(env, asked.clone())
-                .map_err(Refused::Unreachable)?;
-            // A machine paired already: what became of the alias (mission-107).
+            let answer =
+                crate::workspace_cli::pairing_ask(env, json!({"verb":"pair_ssh","alias":alias}))
+                    .map_err(Refused::Unreachable)?;
+            // A machine paired already: the refusal says what became of the
+            // alias (mission-107).
             if answer["reason"] == "device_already_connected"
                 && let Some(ssh) = answer["ssh"].as_str()
             {
-                return Ok(Printed::Value(
-                    json!({ "already_connected": true, "ssh": ssh }),
-                    alias_line(alias, ssh),
-                ));
+                return Err(Refused::Answer {
+                    code: "device_already_connected".to_owned(),
+                    message: alias_line(alias, ssh).trim_end().to_owned(),
+                });
             }
-            let mut value = pairing(env, asked)?;
+            let mut value = answered(answer)?;
             value["paired"] = json!("ssh");
             let name = value["name"].as_str().unwrap_or(alias).to_owned();
             return Ok(Printed::Value(
@@ -881,7 +882,11 @@ fn dialed_by(env: &Env, alias: &str) -> Option<Value> {
 
 /// One ask of this machine's daemon about pairing.
 fn pairing(env: &Env, ask: Value) -> Result<Value, Refused> {
-    let mut answer = crate::workspace_cli::pairing_ask(env, ask).map_err(Refused::Unreachable)?;
+    answered(crate::workspace_cli::pairing_ask(env, ask).map_err(Refused::Unreachable)?)
+}
+
+/// A pairing's answer as a value, or its refusal.
+fn answered(mut answer: Value) -> Result<Value, Refused> {
     if answer["ok"] == true {
         if let Some(fields) = answer.as_object_mut() {
             fields.remove("ok");

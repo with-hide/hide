@@ -1017,10 +1017,18 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
         .collect();
     assert_eq!(linked, ["hide"]);
 
-    // The same machine added again is the one it already is.
-    guest
-        .run(&["device", "add", "studio", "--json"])
-        .refused("device_already_connected");
+    // The same machine added again is the one it already is, and its key,
+    // proved over the alias, keeps the alias as its SSH route.
+    let again = guest.run(&["device", "add", "studio", "--json"]);
+    assert!(!again.ok, "{}", again.text());
+    assert_eq!(again.json()["error"]["code"], "device_already_connected");
+    assert!(
+        again.json()["error"]["message"]
+            .as_str()
+            .is_some_and(|said| said.contains("connect over SSH through studio")),
+        "{}",
+        again.text()
+    );
     assert_eq!(guest.peers().len(), 1);
 
     let removed = guest.run(&["device", "remove", "studio", "--json"]);
