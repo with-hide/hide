@@ -914,6 +914,8 @@ mod tests {
 
     fn agent(pane_id: &str) -> SidebarAgentSnapshot {
         SidebarAgentSnapshot {
+            thread_capability: crate::model::ThreadCapability::Pending,
+            thread_identity: None,
             profile: None,
             device_id: Default::default(),
             device_pane_id: Default::default(),

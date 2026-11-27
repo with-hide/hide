@@ -64,18 +64,60 @@ pub(crate) struct ThreadReference {
 }
 
 impl ThreadReference {
+    /// The same admission used by `of`, without account-specific read data.
+    pub(crate) fn capability(
+        agent: &crate::sidebar::SessionAgentPayload,
+    ) -> crate::model::ThreadCapability {
+        use crate::model::ThreadCapability;
+        let Some(kind) = agent
+            .agent
+            .as_deref()
+            .and_then(hide_session::Agent::from_kind)
+        else {
+            return ThreadCapability::None;
+        };
+        if !hide_session::thread::reads(kind.format()) {
+            return ThreadCapability::None;
+        }
+        if agent.agent_session.as_ref().is_some_and(|session| {
+            !session.value.trim().is_empty()
+                && session.value.len() <= 4096
+                && matches!(session.kind.as_str(), "id" | "path")
+        }) {
+            ThreadCapability::Ready
+        } else {
+            ThreadCapability::Pending
+        }
+    }
+
+    /// Opaque session identity for window-local mode invalidation, including path-based readers.
+    pub(crate) fn identity(agent: &crate::sidebar::SessionAgentPayload) -> Option<String> {
+        use sha2::{Digest, Sha256};
+        if Self::capability(agent) != crate::model::ThreadCapability::Ready {
+            return None;
+        }
+        let session = agent.agent_session.as_ref()?;
+        let mut digest = Sha256::new();
+        digest.update(agent.agent.as_deref()?.as_bytes());
+        digest.update([0]);
+        digest.update(session.kind.as_bytes());
+        digest.update([0]);
+        digest.update(session.value.as_bytes());
+        Some(format!("{:x}", digest.finalize()))
+    }
+
     /// The reference of an agent whose runtime has a thread reader and that
     /// reported its session, read in `account`; `None` otherwise.
     pub(crate) fn of(
         agent: &crate::sidebar::SessionAgentPayload,
         account: hide_agent_adapter::AccountKey,
     ) -> Option<Self> {
+        if Self::capability(agent) != crate::model::ThreadCapability::Ready {
+            return None;
+        }
         let kind = hide_session::Agent::from_kind(agent.agent.as_deref()?)?;
         let session = agent.agent_session.as_ref()?;
-        (hide_session::thread::reads(kind.format())
-            && session.value.len() <= 4096
-            && matches!(session.kind.as_str(), "id" | "path"))
-        .then(|| Self {
+        Some(Self {
             agent: kind,
             account,
             reference_kind: session.kind.clone(),
@@ -203,6 +245,8 @@ impl OpenThread {
 #[serde(deny_unknown_fields)]
 pub(super) struct ThreadOpenPayload {
     pub pane_id: String,
+    #[serde(default)]
+    pub pane_conversation: bool,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -277,7 +321,14 @@ enum ReadKind {
 }
 
 impl Runtime {
+    pub(in crate::runtime) fn session_thread_is_open(&self) -> bool {
+        self.session_thread.open.is_some()
+    }
+
     pub(super) fn open_session_thread(&mut self, payload: ThreadOpenPayload) -> bool {
+        if payload.pane_conversation {
+            self.note_feature_used(crate::product_analytics::Feature::PaneConversation);
+        }
         if let Some(open) = &self.session_thread.open
             && open.pane_id == payload.pane_id
         {
@@ -340,6 +391,7 @@ impl Runtime {
         self.read_session_thread();
         // A session that is no job of Desk's gets its card for the thread's head (D-87).
         self.compose_desk_jobs();
+        self.compose_desk_mentions();
         true
     }
 
@@ -1594,7 +1646,45 @@ mod tests {
     fn open(runtime: &mut Runtime) {
         runtime.open_session_thread(ThreadOpenPayload {
             pane_id: "w1:p1".to_owned(),
+            pane_conversation: false,
         });
+    }
+
+    /// The approved reader set controls row admission, before any file read or web rendering.
+    #[test]
+    fn reader_capability_and_identity_follow_the_reported_session() {
+        use crate::model::ThreadCapability::{None, Pending, Ready};
+        for name in [
+            "claude",
+            "codex",
+            "opencode",
+            "pi",
+            "omp",
+            "grok",
+            "antigravity",
+        ] {
+            let mut agent: crate::sidebar::SessionAgentPayload =
+                serde_json::from_value(json!({"id":"worker", "pane_id":"w1:p1", "agent":name}))
+                    .unwrap();
+            assert_eq!(ThreadReference::capability(&agent), Pending, "{name}");
+            assert!(ThreadReference::identity(&agent).is_none());
+            agent.agent_session =
+                Some(serde_json::from_value(json!({"kind":"id", "value":SESSION})).unwrap());
+            assert_eq!(ThreadReference::capability(&agent), Ready, "{name}");
+            let identity = ThreadReference::identity(&agent).unwrap();
+            agent.agent_session.as_mut().unwrap().value.push('2');
+            assert_ne!(
+                ThreadReference::identity(&agent).as_deref(),
+                Some(identity.as_str())
+            );
+            agent.agent_session.as_mut().unwrap().value.clear();
+            assert_eq!(ThreadReference::capability(&agent), Pending);
+        }
+        let agent = serde_json::from_value(
+            json!({"id":"worker", "pane_id":"w1:p1", "agent":"unsupported"}),
+        )
+        .unwrap();
+        assert_eq!(ThreadReference::capability(&agent), None);
     }
 
     #[test]
@@ -1895,6 +1985,7 @@ mod tests {
         // Another pane, never seen: no record, and no pane.
         runtime.open_session_thread(ThreadOpenPayload {
             pane_id: "w9:p9".to_owned(),
+            pane_conversation: false,
         });
         let shown = thread(&runtime);
         assert_eq!(
@@ -1919,6 +2010,7 @@ mod tests {
         runtime.observe_delivery_laid("mini", &payload, None, None);
         runtime.open_session_thread(ThreadOpenPayload {
             pane_id: "remote:mini:pane:w1:p1".to_owned(),
+            pane_conversation: false,
         });
         let shown = thread(&runtime);
         assert_eq!(shown.machine.as_deref(), Some("mini"));
@@ -2518,6 +2610,7 @@ mod tests {
         let pane = "remote:mini:pane:w1:p1";
         runtime.open_session_thread(ThreadOpenPayload {
             pane_id: pane.to_owned(),
+            pane_conversation: false,
         });
         let generation = thread(&runtime).generation;
         runtime.send_session_thread_input(ThreadInputPayload {

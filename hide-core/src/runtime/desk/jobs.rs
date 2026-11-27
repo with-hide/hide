@@ -1511,6 +1511,7 @@ impl Runtime {
     /// section is sent again only when a card moved.
     pub(in crate::runtime) fn refresh_desk_jobs(&mut self) {
         if self.desk.worker.is_none() {
+            self.compose_desk_mentions();
             return;
         }
         let mut marked = false;
@@ -1711,7 +1712,7 @@ impl Runtime {
 
     /// The `desk_mentions` section, sent again when the `@` menu moved.
     pub(in crate::runtime) fn compose_desk_mentions(&mut self) {
-        if self.desk.worker.is_none() {
+        if self.desk.worker.is_none() && !self.session_thread_is_open() {
             return;
         }
         let mentions = self.desk_mentions();
@@ -2636,6 +2637,7 @@ mod tests {
         assert!(
             runtime.open_session_thread(crate::runtime::session_thread::ThreadOpenPayload {
                 pane_id: "p9".into(),
+                pane_conversation: false,
             })
         );
         assert_eq!(named(&runtime), ["p9"]);

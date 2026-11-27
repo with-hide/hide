@@ -106,6 +106,8 @@ pub enum AutomationTrigger {
 /// an event of its own ([`MEASURES`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Feature {
+    /// A pane conversation opened in place.
+    PaneConversation,
     /// Focus mode turned on.
     Focus,
     /// A skill or MCP server added, changed, switched or removed, from
@@ -124,7 +126,8 @@ pub enum Feature {
 }
 
 impl Feature {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
+        Self::PaneConversation,
         Self::Focus,
         Self::SkillsMcp,
         Self::HidesPaired,
@@ -135,6 +138,7 @@ impl Feature {
 
     fn name(self) -> &'static str {
         match self {
+            Self::PaneConversation => "pane_conversation",
             Self::Focus => "focus",
             Self::SkillsMcp => "skills_mcp",
             Self::HidesPaired => "hides_paired",
@@ -290,6 +294,7 @@ pub enum PracticeChapter {
     Gitlab,
     Answer,
     Attachments,
+    Conversation,
 }
 
 impl PracticeChapter {
@@ -307,6 +312,7 @@ impl PracticeChapter {
             "gitlab" => Self::Gitlab,
             "answer" => Self::Answer,
             "attachments" => Self::Attachments,
+            "conversation" => Self::Conversation,
             _ => return None,
         })
     }
@@ -488,6 +494,7 @@ impl Event {
                         PracticeChapter::Gitlab => "gitlab",
                         PracticeChapter::Answer => "answer",
                         PracticeChapter::Attachments => "attachments",
+                        PracticeChapter::Conversation => "conversation",
                     },
                 ),
                 (

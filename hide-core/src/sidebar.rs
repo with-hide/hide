@@ -780,6 +780,7 @@ pub(crate) fn provider_name(kind: Option<&str>) -> String {
 }
 
 pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, String> {
+    let thread_capability = crate::runtime::ThreadReference::capability(&agent);
     let pane_id = non_empty(agent.pane_id.as_deref().or(agent.id.as_deref()))
         .map(str::to_owned)
         .ok_or_else(|| "session agent is missing a pane id".to_owned())?;
@@ -828,7 +829,10 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         })
     });
     let identity_label = title.unwrap_or_else(|| provider_name(agent.agent.as_deref()));
+    let thread_identity = crate::runtime::ThreadReference::identity(&agent);
     let projected = SidebarAgentSnapshot {
+        thread_capability,
+        thread_identity,
         device_id: Default::default(),
         device_pane_id: Default::default(),
         telemetry_stale: agent.telemetry_stale,

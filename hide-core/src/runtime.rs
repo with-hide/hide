@@ -11,6 +11,7 @@ mod agent_asks;
 mod agent_catalog;
 pub(crate) mod agent_choice;
 mod agent_close;
+mod agent_commands;
 mod agent_definitions;
 mod agent_profiles;
 pub(crate) mod automations;
@@ -1543,6 +1544,7 @@ pub struct Runtime {
     herdr_import: herdr_import::Import,
     /// The Desk room and its one Desk process (`runtime/desk.rs`).
     desk: desk::Desk,
+    agent_commands: crate::agent_commands::AgentCommands,
     /// External tools' connections (PRD hide-external-control).
     access: access::AccessRuntime,
     automations: automations::AutomationsRuntime,
@@ -2615,6 +2617,7 @@ impl Runtime {
             first_run_apply: None,
             herdr_import: herdr_import::Import::default(),
             desk: desk::Desk::default(),
+            agent_commands: Default::default(),
             access: access::AccessRuntime::default(),
             automations: automations::AutomationsRuntime::default(),
             local_kit_next_status: None,

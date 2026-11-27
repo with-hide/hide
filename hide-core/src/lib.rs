@@ -28,6 +28,7 @@ pub mod coordination;
 pub mod core_calls;
 pub mod dag;
 pub mod delivery;
+mod agent_commands;
 pub mod desk;
 mod device_catalog;
 pub mod device_command;

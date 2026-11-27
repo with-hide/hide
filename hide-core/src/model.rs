@@ -2149,6 +2149,15 @@ impl<T> PartialEq for Derived<T> {
 
 impl<T> Eq for Derived<T> {}
 
+/// Whether the pane's agent has a conversation reader and a usable session reference.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadCapability {
+    None,
+    Pending,
+    Ready,
+}
+
 /// An agent's state on four independent lifecycle axes, plus the values the shell draws
 /// from them.
 ///
@@ -2160,6 +2169,11 @@ impl<T> Eq for Derived<T> {}
 /// rule 4).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SidebarAgentSnapshot {
+    /// From the session reader boundary, for this machine and connected devices alike.
+    pub thread_capability: ThreadCapability,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_identity: Option<String>,
+
     /// The machine the row's pane is on (the core's own node id, or a
     /// device's) and the id that machine gives the pane (`w1:p2`), read from
     /// `pane_id` by the one address owner (`crate::address`) before every
@@ -12137,6 +12151,14 @@ mod wire_enum_tests {
             &[DeskJobLocationKind::Checkout, DeskJobLocationKind::Worktree],
         );
         checked.insert("desk_job_location");
+        let capabilities = [ThreadCapability::None, ThreadCapability::Pending, ThreadCapability::Ready];
+        for capability in capabilities {
+            match capability {
+                ThreadCapability::None | ThreadCapability::Pending | ThreadCapability::Ready => {}
+            }
+        }
+        assert_wire(&contract, "thread_capability", &capabilities);
+        checked.insert("thread_capability");
         let thread_states = [
             ThreadState::Closed,
             ThreadState::Loading,

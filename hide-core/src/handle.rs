@@ -538,7 +538,10 @@ impl Core {
             let desk = crate::desk::DeskStore::new(hide_kit::layout::desk_store(directory));
             let desk_restored = desk.restore();
             let desk_commands =
-                crate::desk::DeskCommandsStore::new(hide_kit::layout::desk_commands(directory));
+                crate::agent_commands::AgentCommandsStore::with_legacy(
+                    hide_kit::layout::agent_commands(directory),
+                    hide_kit::layout::desk_commands(directory),
+                );
             let desk_commands_restored = desk_commands.restore();
             let (access, access_restored) =
                 crate::runtime::access::restore(hide_kit::layout::access_store(directory));
@@ -554,7 +557,7 @@ impl Core {
                 guard.save_missions();
             }
             guard.install_desk_store(desk, desk_restored);
-            guard.install_desk_commands(desk_commands, desk_commands_restored);
+            guard.install_agent_commands(desk_commands, desk_commands_restored);
             guard.install_access_store(access, access_restored);
             guard.install_automations_store(automations, automations_restored, zone);
             drop(guard);
