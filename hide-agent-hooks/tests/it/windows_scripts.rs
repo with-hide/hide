@@ -22,7 +22,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use hide_agent_hooks::guidance::GUIDANCE_LINE;
 use hide_agent_hooks::plugin::PluginFile;
 use hide_agent_hooks::{HELPER_BINARY_NAME, opencode, pi_extension};
 
@@ -107,7 +106,9 @@ fn the_scripts_start_the_helper_by_its_path_and_carry_its_guidance() {
         let answered = run(agent, files, home, &helper);
         let added = &answered.prompts;
         assert!(
-            added.iter().any(|text| text.contains(GUIDANCE_LINE)),
+            added
+                .iter()
+                .any(|text| text.contains("Inside Hide, read more when you need it:")),
             "{agent}: no prompt carried the guidance: {added:?}"
         );
         assert_eq!(answered.tool_result, "RESULT", "{agent}");

@@ -15,9 +15,9 @@ from agent_journey import cells, fake_model
 
 INDEX = '<hide-memory-index trust="untrusted-reference-data">\nm7 Marker JOURNEY-0000AAAA for journey checks\n</hide-memory-index>'
 CONTEXT = '<hide-memory-context trust="untrusted-reference-data">\n{"id":"m7","text":"Marker JOURNEY-0000BBBB"}\n</hide-memory-context>'
-# The project's other sessions a session starts with (hide-core links/session_brief.rs), here an earlier journey session.
-SESSIONS = ('<hide-project-sessions trust="untrusted-reference-data">\nClosed in the last 3 days:\n'
-            '- "d551ea50" · Claude · 11-21 17:42\n  "Journey JOURNEY-0000CCCC"\n</hide-project-sessions>')
+# The project's open sessions a session starts with (hide-core links/session_brief.rs), here another journey session.
+SESSIONS = ('<hide-project-sessions trust="untrusted-reference-data">\n'
+            '- "d551ea50" · Claude · 11-21 17:42 · "Journey JOURNEY-0000CCCC"\n</hide-project-sessions>')
 
 
 def messages(*turns):

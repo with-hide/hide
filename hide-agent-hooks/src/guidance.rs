@@ -51,16 +51,11 @@ use crate::install::{
     helper_exists, read_document, write_document,
 };
 use crate::route::HookTarget;
-use crate::runtime::{HookEvent, PURPOSE_CONTEXT, marker_version_of};
+use crate::runtime::{HookEvent, marker_version_of};
 
 /// The marker Hide stamps into every guidance hook it installs, carried as
 /// the `--source` argument of the command like the other hooks' marker.
 pub const GUIDANCE_SOURCE_NAME: &str = "hide-guidance";
-
-/// The one line every guidance hook adds after the shared instruction, so an
-/// agent that Hide cannot place in a Workspace still learns where the usage
-/// lives. The text itself is read from the binary, not written here.
-pub const GUIDANCE_LINE: &str = "Hide is installed on this machine: run `hide browser help` to learn how to read and drive a browser display from here, and `hide workspace info` to see what this checkout's Workspace offers.";
 
 /// How long the agent waits for the hook, in seconds.
 const TIMEOUT_SECONDS: u32 = 8;
@@ -422,16 +417,6 @@ impl Layout {
 }
 
 // --- What the hook prints --------------------------------------------------------
-
-/// The context a guidance hook delivers: the shared instruction, the
-/// pointer at `hide browser help`, and the Workspace guidance when the
-/// daemon answered for this checkout.
-pub fn session_context(workspace: Option<&str>) -> String {
-    match workspace.filter(|context| !context.is_empty()) {
-        Some(workspace) => format!("{PURPOSE_CONTEXT}\n\n{GUIDANCE_LINE}\n\n{workspace}"),
-        None => format!("{PURPOSE_CONTEXT}\n\n{GUIDANCE_LINE}"),
-    }
-}
 
 /// What the agent's session-start hook writes to stdout for `context`, in
 /// the form its documentation says it reads: Gemini CLI and Copilot CLI

@@ -6,10 +6,15 @@ Hide runs the terminals: each pane, its split, its working folder, the agent in 
 Hide draws them and keeps the rest: which tab and pane the operator sees, the letters and watches between agents, who started whom, Project Memory, the Views each Agent tab keeps in the right lane, the browser displays, and a Conductor's missions.
 You change Hide only through the `hide` commands below; what you print in your own pane is read by the operator, not by Hide.
 Every pane, agent and letter command here is a `hide` command; there is no other program to call.
+`hide guide <topic>` prints one section of this guide; the topics are {topics}.
+
+## What the operator asks
+
+{intent_table}
 
 ## Before the first command
 
-- Your session's start note from Hide, when there is one, names your checkout, the commands this pane may run and the exact prefix to run them with; use that prefix, and when the note and this guide differ, the note is right for this pane.
+- Your session's start note from Hide, when there is one, names your checkout and points at the commands you need most; when the note and this guide differ, the note is right for this pane.
 - `hide workspace info` answers the same for this checkout now: the Workspace, the checkout, the device id and the commands available.
 - `hide --help` lists every command's syntax, `hide agent spawn --help` explains spawning, `hide browser help`, `hide mission help` and `hide wait help` are the guides to their topics.
 - The agent, letter and Workspace commands print one JSON line, `{"ok":true,...}` or `{"ok":false,"reason":...,"next_action":...}`; follow `next_action`, and after a timeout read the state before you run the command again.
@@ -50,8 +55,10 @@ hide agent archive <id> [--actor <id>]
 hide agent end <id> [--actor <id>] [--keep-pane]
 ```
 
-{session_rules}
-
+- Delegate work you will supervise with `hide agent spawn --parent here …`: it records that you answer for the child and starts an automatic watch on it. Hand independent work the operator will handle to `hide agent spawn …` without `--parent`: it becomes an operator-owned root with no automatic watch. Both record you as origin and leave the operator's screen and keyboard focus unchanged.
+- Without `--beside`, `hide agent spawn` opens the agent in a tab of its own. `hide agent spawn --beside …` starts it in a pane beside yours, in your own checkout only; it is the operator's to watch, so it takes no `--parent`.
+- Never start an agent with `hide pane open` or by typing its program into a pane: that agent has no parent, letters or watch.
+- From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the `device_id` `hide workspace info` shows, the `machine` `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`.
 - See current panes and agents with `hide ps`: one tree of the live panes and the agents in them; `--here` keeps this project, `--all` adds ended registrations, `--json` gives the flat list.
 - `hide agent list` shows the agents Hide knows, with their machine and their `runtime`: `running`, `asleep` while Hide holds one asleep (a `request` or `block` letter wakes it), or `ended`; `hide ps` says the same; `hide agent show here` is your own registration: your id, parent, origin, machine and the watch on you.
 - `hide agent show <id>` adds `state`, what the agent is doing now as the sidebar reads it: `activity` (`working`, `stopped` or `unknown`; a state Hide cannot read now is `unknown`, never ready), `waiting` (null when it waits on nothing; otherwise its `cause`, such as `question`, `approval`, `blocked`, `input_unconfirmed` or `human_turn` (with `human`: its kind, place and time), and `on`, `operator` or the agent id that should answer) and `pending_inputs` (a brief or letter Hide typed that the agent has not recorded, with its `attempts` and `phase`).
@@ -110,7 +117,8 @@ hide agent read <agent> [--lines <n>] [--json]
 hide workspace purpose <text>
 ```
 
-- A pane is a pane id of your machine, as `hide ps` lists it; an agent is its name, registration id or pane, as a letter's target.
+- A bare pane id such as `w1:p2` names a pane of your own machine, as `hide ps` lists it; an agent is its name, registration id or pane, as a letter's target.
+- A pane of another machine is named by its full address: `remote:<device id>:pane:<id>` for one your Hide runs there and `core:<device id>:pane:<id>` for one that machine's own Hide keeps (`hide device list` shows the device ids). `hide ps`, `hide agent list` and `hide agent spawn` print every pane in the form to pass as written, and an `@name (pane <address> · task)` reference the operator pastes gives that address, which `hide pane read`, `hide pane send` and `hide request send` take as it stands; a pane that is no registered agent takes `hide pane send` and no letter.
 - A read prints the pane's last 120 lines, unwrapped (`--lines` up to 2000); `--json` prints the answer line instead.
   To keep the whole visible screen's rows and styling, use `hide pane read <pane> --source visible --format ansi`; this form does not take `--lines`.
 - `hide pane send` types the text (one line, 16 KiB at most), then presses each `--key` in order (`esc`, `enter`, `tab`, `shift-tab`, `up`, `down`, `left`, `right`, `backspace`, `ctrl-c`, 32 at most), then Enter with `--enter`; keys alone or Enter alone are fine. It answers what landed: `text_sent`, `keys_sent` and `enter_sent`, an Enter written, not a prompt the agent took.
@@ -119,6 +127,7 @@ hide workspace purpose <text>
   It is input, not a letter: Hide logs that it happened, never what was typed, and keeps no reply or retry, so hand an agent work with `hide request send`.
 - `hide pane open --beside -- <command>` opens a pane right of yours in your checkout, runs the command there and answers the new pane's id; the command is one line of 1000 bytes at most, and one that needs its shell's own quoting goes as one quoted argument. Your keyboard focus stays where it is unless `--focus`.
 - `hide workspace purpose <text>` sets the one-line purpose of the checkout it runs in, 40 characters at most, which the sidebar shows, and `""` clears it.
+  When you create a worktree, set its purpose in that worktree's folder: `cd <worktree> && hide workspace purpose "…"`.
   Run in a worktree of your project, such as one you just made, it names that worktree, not your pane's checkout; a folder Hide lists in no checkout of your project yet is refused with `purpose_checkout_unlisted`.
 - A refusal is one line with its `code` and the step to take: a pane or agent that is not there, a limit passed, or a shell outside a Hide pane.
 
@@ -141,8 +150,9 @@ hide automation edit <id|name> …        hide automation preview --schedule <wh
 ```
 
 - When the operator asks for a task to run again at set times with no one present ("tidy the issues every morning at 9"), make an automation: each time comes, Hide starts one agent on the task, in the automation's own folder unless a project is named, and the operator sees its runs under Automations in the sidebar.
-  A wait or a check inside this conversation is not one; keep doing it yourself.
-- Run `hide automation help` first: it names the schedule forms (`daily 09:00`, `weekdays 09:00`, `weekly mon,thu 09:00`, `every 15m`, `every 3h 09:00`, `cron 0 9 * * 1-5`), how to write the task and which folder and agent to choose.
+  One task at a later time ("check it in 7 days", "look at this again next Tuesday") is an automation too, with `--schedule "once in 7d 09:00"`.
+  Not a cron job, an OS scheduler or a script of your own. A wait or a check shorter than five minutes, or one inside this conversation, is not one; keep doing it yourself.
+- Run `hide automation help` first: it names the schedule forms (`daily 09:00`, `weekdays 09:00`, `weekly mon,thu 09:00`, `every 15m`, `every 3h 09:00`, `cron 0 9 * * 1-5`, `once in 7d 09:00`), how to write the task and which folder and agent to choose.
 - The answer gives `reads_as_text` and `next_run_at` on the wall clock of the machine that runs Hide; tell the operator both in one line. A refusal's `message` says what to change, such as a period under five minutes.
 - Remove an automation only when the operator asked for it.
 
@@ -209,6 +219,8 @@ hide view move <view-id> --area <area-id> --index <n>
 - `file open` and `diff open` show a file or its changes in a View, and `browser open` a page; the same file, diff or address already open is that View again rather than a second one. Only the operator splits the View areas, and open takes no `--beside`.
 - Where an open lands depends on whether the operator watches your pane, the pane they are in on the Workspace on their screen. From that pane it goes onto your Agent tab's Views as a tab of the active View area, in front when the right lane is open; a closed lane stays closed. From any other pane, or while the operator is on another Workspace, nothing on their screen moves: the View waits in your pane's Views list (`N views` on your pane's header) until they open it. `view select` follows the same rule.
 - Open is how you show the operator a result: until they look at it, your row waits in their Needs You as To look at, even while you keep working. Open only what the operator should look at, and say what you opened.
+- Something you made for the operator to look at (an HTML page, an image, a PDF, a diagram, a long report), asked for or not, you open as soon as it is ready, without asking whether to, and say in one line what you opened: from a pane the operator is not watching it only waits in your Views list, so it interrupts nothing.
+- Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`): it lands in an app outside Hide with no trace of who opened it, and Hide refuses the call. Use `browser open` for a page or a URL and `file open` for anything else, for a file outside the checkout too.
 - `browser snapshot`, `click`, `fill` and the rest read and drive a page already open in a View, by its id from `view list`, from a pane on a connected device exactly as from one on the machine that runs Hide; `workspace info` lists each as `browser.<command>`, and `hide browser help` explains them.
 - Check a page for yourself with your own browser tool, such as `aside`, not `browser open`: a page you open in Hide waits for the operator like any result.
 - What you open belongs to your session: it stays in your pane's Views list, and it closes when your pane closes or your session is archived.

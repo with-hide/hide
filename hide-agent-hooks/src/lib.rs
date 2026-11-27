@@ -59,5 +59,5 @@ pub use install::{
 };
 pub use runtime::{
     AgentRuntime, HELPER_BINARY_NAME, HOOK_ENTRY_VERSION, HOOK_SOURCE_NAME, HOOK_VERSION,
-    HookEvent, PURPOSE_CONTEXT, hook_source_id, hook_stdout,
+    HookEvent, START_CONTEXT, hook_source_id, hook_stdout, session_start_context,
 };

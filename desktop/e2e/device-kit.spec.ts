@@ -178,7 +178,7 @@ test("a device gets this Mac's kit, keeps a part the operator removed out until 
     const session = await inDevicePane(device, `printf '{}' | HIDE_STATE_DIR=${quote(path.dirname(bridge))} sh -c ${quote(hideCommand(readSettings(claudeSettings(home)), "SessionStart", hooks))}`, "device-session-start");
     expect(session.status).toBe(0);
     const context = (JSON.parse(session.stdout) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
-    expect(context).toContain("Hide Workspace control is available for this session's checkout");
+    expect(context).toContain("Hide Workspace: this session's checkout is");
     expect(context).not.toContain("hide-memory-context");
 
     // D-26, B8: an entry the operator deleted stays deleted until Reinstall, which puts back only that part.

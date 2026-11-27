@@ -20,7 +20,7 @@ use hide_agent_adapter::{AgentAdapter, HookDialect, PluginDialect};
 use hide_agent_hooks::delivery::{self, Intake, Prompt};
 use hide_agent_hooks::memory::{self, HookMemoryOutcome, MemoryRequest, memory_context_until};
 use hide_agent_hooks::runtime::HookEvent;
-use hide_agent_hooks::{counters, guardrails, guidance, report};
+use hide_agent_hooks::{counters, guardrails, report};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -197,7 +197,12 @@ fn session(input: &Input) -> Option<String> {
 /// prompt.
 fn start() -> Value {
     json!({
-        "context": guidance::session_context(workspace_context::live_context().as_deref()),
+        "context": hide_agent_hooks::session_start_context(
+            None,
+            None,
+            None,
+            workspace_context::live_context().as_deref(),
+        ),
     })
 }
 
@@ -293,7 +298,12 @@ fn prompt_memory(
         // capsule when the guidance came first; Memory off answers no
         // capsule, so a later prompt does not carry it again.
         global = index.global.filter(|_| input.first || start);
-        sessions = index.sessions.filter(|_| input.first || start);
+        sessions = hide_agent_hooks::runtime::open_sessions_within_limit(
+            global.as_deref(),
+            index.context.as_deref(),
+            index.sessions.as_deref().filter(|_| input.first || start),
+        )
+        .map(str::to_owned);
     }
     let prompt = memory_context_until(request(HookEvent::UserPromptSubmit), home, deadline);
     let body = prompt.context.as_deref().unwrap_or_default();

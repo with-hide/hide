@@ -125,8 +125,9 @@ pub enum CommandKind {
     BrowserPage(crate::browser_page::Command),
     /// `hide browser help`: the agent guide for the page commands.
     BrowserHelp,
-    /// `hide guide`: the agent's guide to Hide (`crate::guide`).
-    Guide,
+    /// `hide guide [<topic>]`: the agent's guide to Hide (`crate::guide`),
+    /// or the one section a topic names, as it prints.
+    Guide(Option<String>),
     /// `hide issue help`: the guide for reporting a bug in Hide itself.
     IssueHelp,
     WorkspaceBootstrap,
@@ -259,7 +260,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "always-on" => crate::always_on::cli::USAGE.to_owned(),
         "open" => OPEN_USAGE.to_owned(),
         "version" => "usage: hide version [--json]".to_owned(),
-        "guide" => "usage: hide guide".to_owned(),
+        "guide" => crate::guide::USAGE.to_owned(),
         "issue" => usage(crate::issue_cli::USAGE),
         "contract" => "usage: hide contract --json".to_owned(),
         _ => return None,
@@ -274,7 +275,7 @@ fn help_text() -> String {
     let indent =
         |lines: &str| -> String { lines.lines().map(|line| format!("  {line}\n")).collect() };
     let mut text = String::from(
-        "usage: hide [command]\n\nFor you\n  hide                      open Hide\n  hide <path>, hide .       open a folder as a project in Hide, adding it if it is not one yet\n  hide status [--json]      show whether Hide is running\n  hide stop                 stop Hide's background service\n  hide version [--json]     show this build's version\n\nFor agents in a Hide pane\n  hide guide                the agent guide to everything below\n  hide issue help           how to report a bug in Hide itself\n  hide contract --json      the commands tools call, as JSON\n",
+        "usage: hide [command]\n\nFor you\n  hide                      open Hide\n  hide <path>, hide .       open a folder as a project in Hide, adding it if it is not one yet\n  hide status [--json]      show whether Hide is running\n  hide stop                 stop Hide's background service\n  hide version [--json]     show this build's version\n\nFor agents in a Hide pane\n  hide guide [<topic>]      the agent guide to everything below, or one topic of it\n  hide issue help           how to report a bug in Hide itself\n  hide contract --json      the commands tools call, as JSON\n",
     );
     for lines in [
         crate::delivery_cli::USAGE,
@@ -379,9 +380,12 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             (Some("--json"), None) => Ok(CommandKind::Version { json: true }),
             _ => Err("usage: hide version [--json]".to_owned()),
         },
-        Some("guide") => match iter.next() {
-            None => Ok(CommandKind::Guide),
-            Some(_) => Err("usage: hide guide".to_owned()),
+        Some("guide") => match (iter.next(), iter.next()) {
+            (None, _) => Ok(CommandKind::Guide(None)),
+            (Some(topic), None) => crate::guide::section(topic)
+                .map(|section| CommandKind::Guide(Some(section)))
+                .ok_or_else(|| crate::guide::unknown_topic(topic)),
+            _ => Err(crate::guide::USAGE.to_owned()),
         },
         Some("issue") => match (iter.next().map(String::as_str), iter.next()) {
             (Some("help" | "--help"), None) => Ok(CommandKind::IssueHelp),
@@ -1020,8 +1024,11 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         print!("{}", crate::browser_page::HELP);
         return Ok(());
     }
-    if kind == CommandKind::Guide {
-        print!("{}", crate::guide::text());
+    if let CommandKind::Guide(section) = &kind {
+        match section {
+            Some(section) => print!("{section}"),
+            None => print!("{}", crate::guide::text()),
+        }
         return Ok(());
     }
     if kind == CommandKind::IssueHelp {
@@ -1111,7 +1118,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         | CommandKind::AgentSpawnHelp
         | CommandKind::Usage(_)
         | CommandKind::BrowserHelp
-        | CommandKind::Guide
+        | CommandKind::Guide(_)
         | CommandKind::IssueHelp
         | CommandKind::Version { .. }
         | CommandKind::Contract => unreachable!("handled above"),
@@ -4031,6 +4038,44 @@ mod tests {
         assert!(error.starts_with(
             "unknown flag for hide agent spawn: --no-watch\nusage:\n  hide agent register"
         ));
+    }
+
+    /// `hide guide` alone is the whole guide, `hide guide <topic>` the one
+    /// section it names, and a topic no section is named by is refused with
+    /// the list of topics.
+    #[test]
+    fn hide_guide_prints_the_whole_guide_or_one_topic() {
+        let parse = |words: &[&str]| {
+            let args: Vec<String> = ["hide", "guide"]
+                .iter()
+                .chain(words)
+                .map(|word| (*word).to_owned())
+                .collect();
+            parse_args(&args)
+        };
+        assert_eq!(parse(&[]).unwrap(), CommandKind::Guide(None));
+        assert_eq!(
+            parse(&["letters"]).unwrap(),
+            CommandKind::Guide(crate::guide::section("letters"))
+        );
+        assert!(
+            crate::guide::section("letters")
+                .unwrap()
+                .starts_with("## Letters\n")
+        );
+        let refused = parse(&["nothing-like-it"]).unwrap_err();
+        assert!(
+            refused.contains("the topics are what-the-operator-asks,"),
+            "{refused}"
+        );
+        assert_eq!(
+            parse(&["letters", "agents"]).unwrap_err(),
+            crate::guide::USAGE
+        );
+        assert_eq!(
+            parse(&["--help"]).unwrap(),
+            CommandKind::Usage(crate::guide::USAGE.to_owned())
+        );
     }
 
     /// `hide access --help` sends a bot to the guide's section on what each

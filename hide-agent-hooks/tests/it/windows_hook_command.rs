@@ -12,7 +12,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-use hide_agent_hooks::{AgentRuntime, HELPER_BINARY_NAME, PURPOSE_CONTEXT};
+use hide_agent_hooks::{AgentRuntime, HELPER_BINARY_NAME, START_CONTEXT};
 use serde_json::Value;
 
 /// Codex prefers PowerShell 7 and falls back to Windows PowerShell
@@ -257,7 +257,7 @@ fn the_windows_entries_run_the_helper_through_powershell_only_while_it_is_there(
                 .as_str()
                 .unwrap();
             assert!(
-                context.starts_with(PURPOSE_CONTEXT),
+                context.starts_with(START_CONTEXT),
                 "{runtime:?} under {how}: the context's `…` crossed PowerShell intact: {context}"
             );
             let recorded: Value =
@@ -598,7 +598,7 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
         answer["injectSteps"][0]["systemMessage"]["systemMessage"]
             .as_str()
             .unwrap()
-            .contains(PURPOSE_CONTEXT),
+            .contains(START_CONTEXT),
         "{answer}"
     );
     let recorded: Value =
