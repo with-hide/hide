@@ -74,22 +74,54 @@ pub const START_CONTEXT: &str = "Inside Hide, read more when you need it:\n\
 | complex work: planning or review first, several PRs or parallel work, another agent reviewing | first ask in one line: Shall I run this as a mission, or do it directly? A mission is `hide mission help` |\n\
 | Hide itself misbehaves | `hide issue help` |";
 
+/// The characters a session start's context keeps at most: under the
+/// 10,000 or so past which Claude Code shows the model only the first 2,000,
+/// with room left for the Workspace note that follows it.
+pub const START_CONTEXT_LIMIT_CHARS: usize = 9_000;
+
+/// What stands in for the Project's open sessions when the start has no room
+/// for them.
+pub const SESSIONS_LEFT_OUT: &str =
+    "The Project's open sessions are left out to keep this short: `hide session list` lists them.";
+
+/// What stands in for [`START_CONTEXT`] when the operator's global
+/// instruction and the Memory index leave no room for it either.
+pub const START_LEFT_OUT: &str = "Inside Hide, `hide guide` prints how to work here.";
+
 /// A session start's whole context, most important first: the operator's
 /// global instruction and the Project Memory index, each only when the core
 /// answered with it, then [`START_CONTEXT`], then the Project's open
 /// sessions. Every agent gets this text; a live pane's Workspace note and
 /// the letters waiting for it follow ([`append_session_context`]).
+///
+/// Past [`START_CONTEXT_LIMIT_CHARS`] the least important part gives way
+/// first: the open sessions become [`SESSIONS_LEFT_OUT`], then the start
+/// text becomes [`START_LEFT_OUT`]. The global instruction and the Memory
+/// index are always given whole; their own caps keep the two under the
+/// limit (`hide-core`'s worst-case session start test holds that).
 pub fn session_start_context(
     global: Option<&str>,
     memory: Option<&str>,
     sessions: Option<&str>,
 ) -> String {
+    let sessions = sessions.filter(|sessions| !sessions.is_empty());
+    let left_out = sessions.map(|_| SESSIONS_LEFT_OUT);
+    [
+        (START_CONTEXT, sessions),
+        (START_CONTEXT, left_out),
+        (START_LEFT_OUT, left_out),
+    ]
+    .into_iter()
+    .map(|(start, sessions)| joined([global, memory, Some(start), sessions]))
+    .find(|context| context.chars().count() <= START_CONTEXT_LIMIT_CHARS)
+    .unwrap_or_else(|| joined([global, memory, Some(START_LEFT_OUT), left_out]))
+}
+
+/// `parts` one after another, a blank line between two, leaving out a
+/// missing or empty one.
+fn joined<const N: usize>(parts: [Option<&str>; N]) -> String {
     let mut context = String::new();
-    for part in [global, memory, Some(START_CONTEXT), sessions]
-        .into_iter()
-        .flatten()
-        .filter(|part| !part.is_empty())
-    {
+    for part in parts.into_iter().flatten().filter(|part| !part.is_empty()) {
         if !context.is_empty() {
             context.push_str(if context.ends_with('\n') {
                 "\n"
@@ -672,6 +704,35 @@ mod tests {
             session_start_context(None, Some(""), Some("<sessions/>\n")),
             format!("{START_CONTEXT}\n\n<sessions/>\n")
         );
+    }
+
+    /// Past the limit the open sessions give way to one line, then the
+    /// start text to one line; the global instruction and the Memory index
+    /// stay whole.
+    #[test]
+    fn past_its_limit_a_session_start_drops_the_sessions_then_the_start_text() {
+        let global = format!("<global>{}</global>\n", "g".repeat(3_000));
+        let memory = format!("<memory>{}</memory>\n", "m".repeat(3_000));
+        let sessions = format!("<sessions>{}</sessions>\n", "s".repeat(3_000));
+        let context = session_start_context(Some(&global), Some(&memory), Some(&sessions));
+        assert_eq!(
+            context,
+            format!("{global}\n{memory}\n{START_CONTEXT}\n\n{SESSIONS_LEFT_OUT}")
+        );
+        let memory = format!("<memory>{}</memory>\n", "m".repeat(5_000));
+        let context = session_start_context(Some(&global), Some(&memory), Some(&sessions));
+        assert_eq!(
+            context,
+            format!("{global}\n{memory}\n{START_LEFT_OUT}\n\n{SESSIONS_LEFT_OUT}")
+        );
+        // Nothing stands in for sessions the core did not give.
+        let context = session_start_context(Some(&global), Some(&memory), None);
+        assert_eq!(context, format!("{global}\n{memory}\n{START_LEFT_OUT}"));
+        // Over the limit with the instruction and the index alone, both are
+        // still given whole.
+        let memory = format!("<memory>{}</memory>\n", "m".repeat(9_000));
+        let context = session_start_context(Some(&global), Some(&memory), Some(&sessions));
+        assert!(context.starts_with(&format!("{global}\n{memory}")));
     }
 
     #[test]

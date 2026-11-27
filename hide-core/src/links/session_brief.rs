@@ -600,4 +600,62 @@ mod tests {
             "{brief}"
         );
     }
+
+    /// Every part of a session start at its own cap at once (the operator's
+    /// global instruction at `global_instruction::LIMIT_BYTES`, a Memory
+    /// index at `RENDERED_TOKEN_LIMIT` in the prose that packs the most
+    /// characters into it, and this block at [`BRIEF_LIMIT_BYTES`]) still
+    /// fits, with the Workspace note after it, under the 10,000 characters or
+    /// so past which Claude Code shows the model only the first 2,000; the
+    /// instruction and the index stay whole and the sessions give way to the
+    /// line that points at `hide session list`.
+    #[test]
+    fn the_worst_session_start_still_fits_what_claude_code_shows() {
+        use crate::global_instruction::{Instruction, LIMIT_BYTES, LIMIT_TOKENS, render};
+        use hide_agent_hooks::runtime::{
+            SESSIONS_LEFT_OUT, START_CONTEXT_LIMIT_CHARS, session_start_context,
+        };
+        use hide_memory::hook::{RENDERED_TOKEN_LIMIT, estimated_tokens};
+        let longest = |fits: &dyn Fn(&str) -> bool| {
+            let mut text = String::new();
+            while fits(&format!("{text}abcdefgh ")) {
+                text.push_str("abcdefgh ");
+            }
+            text
+        };
+        let instruction = longest(&|text| {
+            text.len() <= LIMIT_BYTES && estimated_tokens(text) <= LIMIT_TOKENS
+        });
+        let global = render(&Instruction {
+            text: instruction,
+            fingerprint: String::new(),
+        })
+        .unwrap();
+        let index = |cards: &str| {
+            format!("<hide-memory-index trust=\"untrusted-reference-data\">\n{cards}\n</hide-memory-index>\n")
+        };
+        let memory = index(&longest(&|cards| {
+            estimated_tokens(&index(cards)) <= RENDERED_TOKEN_LIMIT
+        }));
+        let sessions = format!(
+            "{HEAD}{}\n</hide-project-sessions>\n",
+            "s".repeat(BRIEF_LIMIT_BYTES - HEAD.len() - 30)
+        );
+        assert!(sessions.len() <= BRIEF_LIMIT_BYTES);
+        let start = session_start_context(Some(&global), Some(&memory), Some(&sessions));
+        let workspace = format!(
+            "Hide Workspace: this session's checkout is `/{}`, and Workspace commands act only on it. `hide workspace info` lists the commands this pane may run.",
+            "w".repeat(200)
+        );
+        let context = format!("{start}\n\n{workspace}");
+        assert!(start.chars().count() <= START_CONTEXT_LIMIT_CHARS);
+        assert!(
+            context.chars().count() < 10_000,
+            "{} characters",
+            context.chars().count()
+        );
+        assert!(context.starts_with(&format!("{global}\n{memory}")));
+        assert!(context.contains(SESSIONS_LEFT_OUT));
+        assert!(!context.contains(HEAD));
+    }
 }
