@@ -34,3 +34,21 @@ export function RevisitStarShape({ slot = false, className, ...rest }: { slot?: 
 export function starred(agent: Pick<AgentRow, "revisit">): boolean {
   return agent.revisit?.starred === true;
 }
+
+/** 다시 볼 것 on a root agent (PRD revisit-group D-08, B10): `star` offers the ★, `done` offers 다시 볼 것에서 빼기. */
+export type RevisitOffer = "hidden" | "star" | "done";
+
+/**
+ * What an agent's menu offers about 다시 볼 것, the same in its pane's menu and
+ * its sidebar row's: the ★ is offered on a root the operator owns, and Hide AI,
+ * a delegated agent and a child are offered none (the core itself refuses only a child's).
+ */
+export function revisitOffer(agent: Pick<AgentRow, "hide_ai" | "delegated" | "lineage_parent_pane_id" | "revisit">): RevisitOffer {
+  if (agent.hide_ai || agent.delegated || agent.lineage_parent_pane_id) return "hidden";
+  return starred(agent) ? "done" : "star";
+}
+
+/** The menu item for an offer that is not `hidden`: 다시 볼 것으로 표시, or 다시 볼 것에서 빼기 on a task that wears the ★. */
+export function revisitMenuItem(offer: Exclude<RevisitOffer, "hidden">, t: (key: "taskLens.menu.revisit" | "taskLens.menu.revisitDone") => string) {
+  return { id: "revisit" as const, icon: offer === "done" ? ("unstar" as const) : ("star" as const), label: t(offer === "done" ? "taskLens.menu.revisitDone" : "taskLens.menu.revisit"), unavailable: null };
+}

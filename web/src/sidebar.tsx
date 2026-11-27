@@ -63,6 +63,7 @@ import { commandLabel } from "./shortcutLabels";
 import type { Digit } from "./shortcuts";
 import { contextAgents, contextWorkspaces, deviceCatalogLine, remoteContext, remoteView } from "./remote";
 import { agentReference } from "./agentReference";
+import { starred } from "./components/revisit-mark";
 import { agentMenu, checkoutMenu, checkoutRemoving, FOLDER_CHECKOUT_ITEMS, folderMenu, primaryCheckout, projectMenu, type MenuHost, type MenuItem } from "./workspaceManage";
 import { projectIssueSource, settingsTarget } from "./projectSettings";
 import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
@@ -1875,6 +1876,8 @@ function useAgentRowMenu(actions: Actions): AgentRowMenu {
         switch (item) {
           case "show_agent":
             return actions.openAgent(agent.pane_id);
+          case "revisit":
+            return starred(agent) ? actions.finishRevisit(agent.pane_id) : actions.starSession(agent.pane_id);
           case "copy_reference":
             return actions.copyText(agentReference(agent), "agent reference");
           case "copy_session_id":

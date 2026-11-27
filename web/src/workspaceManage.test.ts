@@ -294,9 +294,19 @@ describe("row menus", () => {
 
   it("draws an agent's menu with its ⌥n and without Mark as seen or Stop agent (B7, B8)", () => {
     const agent = legacyAgentRow({ id: "a", pane_id: "p1", identity_label: "배포 전 확인", agent_kind: "claude", mark: "going", group: "working", status_code: "working" as const, changed_at_unix_ms: null, emphasized: false, unread: false, session_id: "0b5e-session" });
-    expect(drawn(agentMenu(agent, "⌥3"))).toEqual(["Show ⌥3", "─", "Copy name and ID", "Copy session id", "─", "Close tab…"]);
+    expect(drawn(agentMenu(agent, "⌥3"))).toEqual(["Show ⌥3", "─", "Revisit later", "─", "Copy name and ID", "Copy session id", "─", "Close tab…"]);
     expect(drawn(agentMenu(agent, ""))[0]).toBe("Show");
     expect(agentMenu({ ...agent, session_id: null }, "").find((item) => item.id === "copy_session_id")?.unavailable).toMatch(/no session id/);
+  });
+
+  it("offers 다시 볼 것 on a root agent's row as its pane's menu does, and none on a child, a delegated agent or Hide AI", () => {
+    const agent = legacyAgentRow({ id: "a", pane_id: "p1", identity_label: "배포 전 확인", agent_kind: "claude", mark: "going", group: "working", status_code: "working" as const, changed_at_unix_ms: null, emphasized: false, unread: false, session_id: "0b5e-session" });
+    const revisit = (row: typeof agent) => agentMenu(row, "").find((item) => item.id === "revisit");
+    expect(revisit(agent)).toMatchObject({ label: "Revisit later", icon: "star", unavailable: null });
+    expect(revisit({ ...agent, revisit: { starred: true, read_ask: false, since_unix_ms: 1 } })).toMatchObject({ label: "Done revisiting", icon: "unstar" });
+    expect(revisit({ ...agent, lineage_parent_pane_id: "p0" })).toBeUndefined();
+    expect(revisit({ ...agent, delegated: true })).toBeUndefined();
+    expect(revisit({ ...agent, hide_ai: { home: "automations" } })).toBeUndefined();
   });
 });
 

@@ -316,7 +316,7 @@ test("the agent row's menu copies the session id and the agent's reference with 
     // B7, B8
     await expect(agentRow).toBeVisible();
     let menu = await openMenu(page, agentRow, "사이드바 메뉴 구현 actions");
-    expect(await menuLines(menu)).toEqual(["Show", "─", "Copy name and ID", "Copy session id", "─", "Close tab…"]);
+    expect(await menuLines(menu)).toEqual(["Show", "─", "Revisit later", "─", "Copy name and ID", "Copy session id", "─", "Close tab…"]);
     await screenshot(page, "sidebar-menus-agent-dark");
     await page.locator('[data-menu-item="copy_session_id"]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(SESSION);

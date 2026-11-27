@@ -11,6 +11,7 @@ import { statusText } from "./agentStatus";
 import type { MessageKey } from "./i18n/catalogs";
 import { shownPullRequest } from "./projects";
 import { revealExternalEntry, type RevealHost } from "./revealExternal";
+import { revisitMenuItem, revisitOffer } from "./components/revisit-mark";
 import { issueSourceChoices } from "./settings";
 import type { AgentRow, Checkout, TaskOperation, Workspace, WorktreeRemoval } from "./snapshot";
 
@@ -279,7 +280,7 @@ export function checkoutMenu(workspace: Workspace, checkout: Checkout, host: Men
 }
 
 export type AgentMenuItem = MenuPresentation & {
-  id: "show_agent" | "copy_reference" | "copy_session_id" | "close_tab";
+  id: "show_agent" | "revisit" | "copy_reference" | "copy_session_id" | "close_tab";
   label: string;
   unavailable: string | null;
   separated?: boolean;
@@ -288,14 +289,17 @@ export type AgentMenuItem = MenuPresentation & {
 
 /**
  * An agent row's menu (PRD sidebar-context-menus D-04, D-06): go to its pane,
+ * put a root in 다시 볼 것 or take it out, as its pane's menu does (`revisitOffer`),
  * copy its reference (name and pane id) or its session id, close the tab it is in through the tab close
  * confirmation. `showChord` is the ⌥n that selects the same row, or "" when
  * it holds no number on this host. The engine can neither mark a pane seen
  * nor stop an agent from this menu, so neither is offered (D-05).
  */
 export function agentMenu(agent: AgentRow, showChord: string, t: TFunction<"translation">): AgentMenuItem[] {
+  const revisit = revisitOffer(agent);
   return [
     { id: "show_agent", icon: "terminal", label: t("workspace.menu.showAgent"), unavailable: null, shortcut: showChord },
+    ...(revisit === "hidden" ? [] : [{ ...revisitMenuItem(revisit, (key) => t(key)), separated: true }]),
     { id: "copy_reference", icon: "copy", label: t("panes.menu.copyReference"), unavailable: null, separated: true },
     { id: "copy_session_id", icon: "id", label: t("workspace.menu.copySession"), unavailable: agent.session_id ? null : t("workspace.unavailable.noSession") },
     { id: "close_tab", icon: "close", label: t("workspace.menu.closeTab"), unavailable: null, separated: true },
