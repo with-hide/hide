@@ -62,6 +62,11 @@ export function cellBox(metrics: PrimaryMetrics, dpr: number, lineHeight = 1): C
   return { width: charWidth / dpr, above: baseline / dpr, below: (cellHeight - baseline) / dpr };
 }
 
+/** The width of a terminal cell at `size` CSS pixels in `chosen` (the operator's Terminal font, "" for none) ahead of `token`, as `cellBox` lays it out at this display's pixel ratio. */
+export function cellWidth(size: number, chosen: string, token: string): number {
+  return cellBox(measurePrimary(size, primaryFamily(chosen, token)), window.devicePixelRatio || 1).width;
+}
+
 /** A fallback font's glyphs per em of its size: the widest advance and the highest and lowest ink among its samples. */
 export type GlyphEm = { advance: number; ascent: number; descent: number };
 

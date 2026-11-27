@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { paneMenuItems, terminalMenuItems, type TerminalMenuContext } from "./PaneRelations";
+import { paneMenuItems, refuseNarrowSplits, terminalMenuItems, type TerminalMenuContext } from "./PaneRelations";
+import { PANE_FLOOR } from "./paneFloor";
 import type { PaneRow } from "./snapshot";
 
 const pane = { id: "w1:p1", children: null, lineage_path: [] } as unknown as PaneRow;
@@ -83,6 +84,33 @@ describe("the pane menu's Fork agent items", () => {
     const items = paneMenuItems({ id: "w1:p1", children: null, lineage_path: [], fork: { available: true }, sleep_action: { available: true } } as unknown as PaneRow, "reviewer");
     expect(items.map((item) => item.id)).toEqual(["sleep_agent", "fork_agent", "fork_agent_side", "copy_reference", "close_pane"]);
     expect(items.filter((item) => item.separated).map((item) => item.id)).toEqual(["copy_reference", "close_pane"]);
+  });
+});
+
+// docs/UI_BEHAVIOR.md, The pane floor: a split right that would leave a half
+// under the floor stays listed, disabled with its reason; Split down is the height's.
+describe("the terminal menu of a pane too narrow to split right", () => {
+  const agent = { id: "w1:p1", children: null, lineage_path: [], fork: { available: true } } as unknown as PaneRow;
+  const offered = (cols: number | null) => refuseNarrowSplits(terminalMenuItems(agent, "reviewer", context({})), cols).filter((item) => ["split_right", "split_down", "fork_agent_side"].includes(item.id));
+  const reason = "Too narrow to split: an agent's input box would not fit beside it";
+
+  it("disables Split right and Fork agent to the side with the reason, and leaves Split down", () => {
+    expect(offered(PANE_FLOOR.split_right_columns - 1)).toMatchObject([
+      { id: "split_right", unavailable: reason },
+      { id: "split_down", unavailable: null },
+      { id: "fork_agent_side", unavailable: reason },
+    ]);
+  });
+
+  it("offers them on a pane wide enough, and on a terminal not drawn yet", () => {
+    for (const cols of [PANE_FLOOR.split_right_columns, null]) {
+      expect(offered(cols).map((item) => item.unavailable)).toEqual([null, null, null]);
+    }
+  });
+
+  it("keeps the reason an item already has", () => {
+    const busy = refuseNarrowSplits([{ id: "split_right", label: "Split right", unavailable: "busy" }], 2);
+    expect(busy[0]?.unavailable).toBe("busy");
   });
 });
 

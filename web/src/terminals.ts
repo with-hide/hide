@@ -35,7 +35,7 @@ import { keySystem } from "./host";
 import { terminalKey } from "./keys";
 import { noteWriteComplete, probeEnabled } from "./probe";
 import { loadTerminalRenderer } from "./terminalRenderer";
-import { holdTerminalFont, setTerminalFontFamily, watchPixelRatio, type TerminalFont } from "./terminalFonts";
+import { cellWidth, holdTerminalFont, setTerminalFontFamily, watchPixelRatio, type TerminalFont } from "./terminalFonts";
 import { remoteControl, remoteTargetOfPane } from "./remote";
 import { keyPayload, noteTerminalFocus } from "./keyTarget";
 import { autoscrollRows, bufferRow, drawnSelection, orderPoints, selectionToText, type CellRow, type HistoryPoint } from "./selection";
@@ -292,7 +292,24 @@ function tokenPx(name: string): number {
 let baseFontSize: number | null = null;
 
 function fontSizeAt(scale: number): number {
-  return Math.round((baseFontSize ?? tokenPx("--text-terminal-base")) * scale);
+  return sizeAt(baseFontSize, scale);
+}
+
+/** A terminal's font size for a pane at `scale`, with Appearance's Terminal text size `base` (null for the token's). */
+function sizeAt(base: number | null, scale: number): number {
+  return Math.round((base ?? tokenPx("--text-terminal-base")) * scale);
+}
+
+/**
+ * A terminal cell's width, in CSS pixels, for a pane at `scale`, with
+ * Appearance's Terminal text size `base` (null for the token's) and
+ * General's Terminal font `family` ("" for the token's): what the pane
+ * floor's pixel width is counted in (`paneFloor.ts`). Taken from the
+ * settings themselves rather than from a terminal drawn, so a tab is laid
+ * out before its terminals are.
+ */
+export function terminalCellWidth(base: number | null, family: string, scale: number): number {
+  return cellWidth(sizeAt(base, scale), family, token("--font-mono"));
 }
 
 /**
@@ -521,6 +538,11 @@ function sendGrid(paneId: string, instance: Instance, newView: boolean, onlyChan
     kind: "terminal_resize",
     payload: { pane_id: paneId, cols: term.cols, rows: term.rows },
   });
+}
+
+/** The columns the pane's terminal was last fitted to, the grid its view reported to the core; null while it is not drawn. */
+export function terminalCols(paneId: string): number | null {
+  return instances.get(paneId)?.grid?.cols ?? null;
 }
 
 /** Asks the core for a full frame of the pane; used after every self-contained snapshot. */

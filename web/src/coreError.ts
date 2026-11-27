@@ -119,6 +119,7 @@ const KEYS = new Map<string, MessageKey>([
   // A pane asked for by an open (a row, 터미널로 이동) that closed or never was.
   ["pane.focus_target_unavailable", "coreError.pane.gone"],
   ["pane.control_unavailable", "coreError.engineNotConnected"],
+  ["pane.too_narrow", "panes.menu.splitTooNarrow"],
   ["agent_group.start_pending", "coreError.group.startPending"],
   ["agent_group.checkout_missing", "coreError.group.checkoutGone"],
   ["agent_group.workspace_unavailable", "coreError.group.checkoutGone"],
