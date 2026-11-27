@@ -3494,7 +3494,21 @@ export type DeskOutputKind = "image" | "page" | "doc" | "pr";
  */
 export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thumb: string | null; seen: boolean; pr_state: PrState | null; device_id: string | null; checkout: string | null; path: string | null; url: string | null };
 /** The widths of Desk's two panels as the operator last dragged them, in CSS pixels; null until dragged (PRD desk-2-ui B22, B23). */
-export type DeskLane = { view_width: number | null; session_width: number | null; /** 한눈에 folded (`⟩`); absent while unfolded. */ glance_folded?: boolean };
+export type DeskLane = {
+  view_width: number | null;
+  session_width: number | null;
+  /** 한눈에 folded (`▯|`); absent while unfolded. */
+  glance_folded?: boolean;
+  /** 한눈에's tab; absent for `sessions`. */
+  glance_tab?: GlanceTab;
+  /** Which of 한눈에's session groups are folded; absent while 끝남 alone is, as they start. */
+  glance_groups?: GlanceFolds;
+};
+/** 한눈에's two tabs. */
+export type GlanceTab = "sessions" | "files";
+/** 한눈에's session groups as the core keeps their folds: 내 차례, 일하는 중, 끝남. */
+export type GlanceGroupKey = "turn" | "working" | "ended";
+export type GlanceFolds = Record<GlanceGroupKey, boolean>;
 /** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
 /** What of an open mission waits on the operator, as every mission chip marks it: its decision, or a node raised to the operator (a stall among them). */
 export type MissionTurn = "decision" | "attention";

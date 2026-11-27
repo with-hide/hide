@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closeSession, rightSide, DESK_ROOM_CLOSED, deskShown, followFrom, followMoved, hideDesk, leaveRoom, namesView, newSessionBeside, openSession, outputNamed, panelPlace, roomWidths, showDesk, toggleExpanded, toggleExplorer, type DeskRoomWindow, type NewSessionFollow } from "./deskRoom";
+import { closeSession, rightSide, DESK_ROOM_CLOSED, deskOpener, deskShown, followFrom, followMoved, hideDesk, leaveRoom, namesView, newSessionBeside, openSession, outputNamed, panelPlace, roomWidths, showDesk, toggleExpanded, toggleExplorer, type DeskRoomWindow, type NewSessionFollow } from "./deskRoom";
 import type { DeskItem, DeskJob, DeskOutput } from "./snapshot";
 
 // Expected answers are PRD desk-2-ui D-05, D-15, B16-B26 and PRD
@@ -264,5 +264,17 @@ describe("rightSide", () => {
     expect(rightSide(DESK_ROOM_CLOSED, false)).toBe("glance");
     expect(rightSide(closeSession(openSession(DESK_ROOM_CLOSED, "p1")), false)).toBe("glance");
     expect(rightSide(DESK_ROOM_CLOSED, true)).toBeNull();
+  });
+});
+
+describe("deskOpener", () => {
+  it("counts the desk's tabs while it is folded and holds some, and stands nowhere while it shows or is empty", () => {
+    const beside = openSession(DESK_ROOM_CLOSED, "p1");
+    expect(deskOpener(DESK_ROOM_CLOSED, 3)).toBe(3);
+    expect(deskOpener(beside, 1)).toBe(1);
+    expect(deskOpener(showDesk(beside), 2)).toBeNull();
+    expect(deskOpener(DESK_ROOM_CLOSED, 0)).toBeNull();
+    // A desk shown only for the Explorer's column holds no tab: nothing to open.
+    expect(deskOpener(toggleExplorer(beside, 0), 0)).toBeNull();
   });
 });

@@ -15,7 +15,7 @@ import { answerPlace, type AnswerPlace, type FoundAnswerPath } from "./answerPat
 import { hostBridge } from "./host";
 import { keepScroll, keptScroll, placeAt, scrollPlace, stillAt } from "./conversationScroll";
 import { deskOn, deskPhase, holdsFoot, laneCards, livePane, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
-import { deskShown, followFrom, followMoved, newSessionBeside, openSession, outputNamed, rightSide, showDesk, type NewSessionFollow } from "./deskRoom";
+import { deskOpener, deskShown, followFrom, followMoved, newSessionBeside, openSession, outputNamed, rightSide, showDesk, type NewSessionFollow } from "./deskRoom";
 import { deskViewOf, DESK_SCREEN } from "./deskDesk";
 import { CardPlaceContext, type CardPlace } from "./deskFront";
 import { DeskViewAreas } from "./ViewAreas";
@@ -529,6 +529,7 @@ function DeskRoomView({ actions, room, chat }: { actions: Actions; room: RoomAct
   const scope = useMemo<ExplorerScope | null>(() => (scopeCheckout && scopeDevice ? { device: scopeDevice, checkout: scopeCheckout } : null), [scopeCheckout, scopeDevice]);
   const deskActions = useDeskPartActions(actions, room, scope);
   const shown = deskShown(place, view?.layout.display_count ?? 0);
+  const openerChord = useShellStore((s) => commandLabel("toggle_lane", s.rest?.ui_state)) || null;
   const side = rightSide(place, lane.glance_folded ?? false);
   // The session beside Desk covers nothing, so it is no Escape layer: Escape closes it from the shell's Escape owner once no
   // layer is open (keyboard.ts). The desk dims the rest and Escape hides it first; it is where the operator works, so it
@@ -553,6 +554,9 @@ function DeskRoomView({ actions, room, chat }: { actions: Actions; room: RoomAct
       glance={side === "glance"}
       session={side === "session" && place.session ? <DeskSessionPanel key={place.session} paneId={place.session} actions={actions} deskActions={deskActions} room={room} /> : side === "glance" ? <DeskGlance actions={actions} room={room} /> : null}
       panel={shown ? <DeskDeskView view={view} actions={deskActions} room={room} scope={place.explorer ? scope : null} expanded={place.expanded} /> : null}
+      opener={deskOpener(place, view?.layout.display_count ?? 0)}
+      openerChord={openerChord}
+      onOpener={() => actions.deskToggleDesk()}
       onDim={() => actions.deskHideDesk()}
       onWidth={(panel, width) => actions.deskLaneWidth(panel, width)}
     />
@@ -562,16 +566,23 @@ function DeskRoomView({ actions, room, chat }: { actions: Actions; room: RoomAct
 /**
  * 한눈에 at Desk's right while no session is open beside it: a session row
  * opens that session beside Desk, a file row opens it in front of Desk's desk
- * and turns it seen, and `⟩` folds it, which the core keeps.
+ * and turns it seen; its tab, its groups' folds and `▯|`, which folds it
+ * whole, are the core's.
  */
 function DeskGlance({ actions, room }: { actions: Actions; room: RoomActions }) {
   const section = useShellStore((s) => s.deskJobs);
+  const tab = useShellStore((s) => s.desk?.lane.glance_tab);
+  const folds = useShellStore((s) => s.desk?.lane.glance_groups);
   const cards = useMemo(() => laneCards(section), [section]);
   if (!section) return null;
   return (
     <GlancePanel
       glance={section.glance}
       cards={cards}
+      tab={tab}
+      folds={folds}
+      onTab={(next) => actions.deskGlanceTab(next)}
+      onGroup={(group, folded) => actions.deskGlanceGroup(group, folded)}
       onSession={(pane) => room.session({ name: "", mark: null, agent_kind: null, pane_id: pane })}
       onFile={(file) => actions.deskOpen({ kind: "output", output: file })}
       onFold={() => actions.deskGlanceFold(true)}

@@ -2,12 +2,15 @@ import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
+import { setAgentState } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
 // 한눈에 at Desk's right (the approved picture's sections
-// 1 and 2): shown whenever no session is open beside Desk, listing the
-// sessions opened beside Desk and the files they opened; a session open
+// 1 and 2, and plan B of Desk 다듬기 2): shown whenever no session is open
+// beside Desk, listing the sessions opened beside Desk in its 세션 tab and
+// the files they opened in its 파일 tab, its tab and group folds kept by the
+// core, and `‹ 뷰 n` opening the folded desk; a session open
 // beside Desk shows `‹ 한눈에 › <session>` above it, whose `‹` and Escape go
 // back, and its head has no `✕`; the width dragged on 한눈에's edge is the
 // session panel's width too. The family fixture's agents run `hide` from
@@ -58,11 +61,17 @@ test("한눈에 lists the sessions opened beside Desk and the file one opened, w
     const opened = await engine.runAs(child!)(["file", "open", notes]);
     expect(opened.status, opened.out).toBe(0);
 
+    await setAgentState(daemon, parent!, "working");
+    await setAgentState(daemon, child!, "working");
     await page.locator("[data-desk-glance-back]").click();
     await expect(room(page)).toHaveAttribute("data-desk-room", "glance");
-    // Both work, so the newest opened is first; the file names its session as the sidebar does.
+    // Both work, so the newest opened is first under 작업 중, and each row says its state under its name.
     await expect(page.locator("[data-desk-glance-session]")).toHaveCount(2);
     await expect(page.locator("[data-desk-glance-session]").first()).toHaveAttribute("data-desk-glance-session", child!);
+    await expect(page.locator('[data-desk-glance-group-head="working"]')).toContainText("2");
+    await expect(page.locator("[data-desk-glance-session] [data-desk-job-line]")).toHaveCount(2);
+    // The file is on the 파일 tab, naming its session as the sidebar does.
+    await page.locator('[data-desk-glance-tab-trigger="files"]').click();
     const file = page.locator("[data-desk-glance-file]");
     await expect(file).toHaveCount(1);
     await expect(file).toContainText("notes.md");
@@ -77,6 +86,16 @@ test("한눈에 lists the sessions opened beside Desk and the file one opened, w
     await expect(page.locator("[data-desk-tab-panel]")).toHaveCount(0);
     await expect(file).not.toHaveAttribute("data-desk-glance-unseen", "true");
 
+    // The desk is folded and holds the file: `‹ 뷰 1` on 한눈에's left edge opens it there, as ⌘E does.
+    const opener = page.locator("[data-desk-opener]");
+    await expect(opener).toHaveAttribute("data-desk-opener", "1");
+    await opener.locator("[data-desk-opener-button]").click();
+    await expect(page.locator("[data-desk-tab-panel]")).toBeVisible();
+    await expect(opener).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(opener).toBeVisible();
+
+    await page.locator('[data-desk-glance-tab-trigger="sessions"]').click();
     await page.locator(`[data-desk-glance-session="${parent}"]`).click();
     await expect(page.locator(`[data-desk-thread-panel="${parent}"]`)).toBeVisible();
   } finally {
@@ -85,7 +104,7 @@ test("한눈에 lists the sessions opened beside Desk and the file one opened, w
   }
 });
 
-test("⟩ folds 한눈에 so Desk's chat takes the room, the core keeps it folded across a reload, and Desk's head unfolds it @platform", async ({ page }) => {
+test("▯| folds 한눈에 so Desk's chat takes the room, the core keeps it folded across a reload, and Desk's head unfolds it @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const { engine, daemon } = await startGlance(page, "desk-glance-fold");
   try {
@@ -106,6 +125,49 @@ test("⟩ folds 한눈에 so Desk's chat takes the room, the core keeps it folde
   }
 });
 
+test("한눈에's open tab and folded groups are the core's: a search keeps the rows by name, and a reload keeps the tab and the folds @platform", async ({ page }) => {
+  test.setTimeout(150_000);
+  const { engine, daemon } = await startGlance(page, "desk-glance-tabs");
+  try {
+    const [parent, child] = engine.panes;
+    await openBeside(page, engine, parent!);
+    await openBeside(page, engine, child!);
+    await page.locator("[data-desk-glance-back]").click();
+    // At rest both are 끝남, which starts folded; at work they are listed under 작업 중.
+    const ended = page.locator('[data-desk-glance-group-head="ended"]');
+    await expect(ended).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("[data-desk-glance-session]")).toHaveCount(0);
+    await setAgentState(daemon, parent!, "working");
+    await setAgentState(daemon, child!, "working");
+    const working = page.locator('[data-desk-glance-group-head="working"]');
+    await expect(working).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("[data-desk-glance-session]")).toHaveCount(2);
+
+    // The search keeps the sessions whose name holds the typed words, ignoring case.
+    const search = page.locator('[data-desk-glance-search="sessions"]');
+    await search.fill("agent ONE");
+    await expect(page.locator("[data-desk-glance-session]")).toHaveCount(1);
+    await expect(page.locator("[data-desk-glance-session]")).toHaveAttribute("data-desk-glance-session", parent!);
+    await search.fill("");
+
+    await working.click();
+    await expect(working).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("[data-desk-glance-session]")).toHaveCount(0);
+    await page.locator('[data-desk-glance-tab-trigger="files"]').click();
+    await expect(page.locator("[data-desk-glance-tab]")).toHaveAttribute("data-desk-glance-tab", "files");
+
+    await page.reload();
+    await page.locator("[data-desk-sidebar-row]").click();
+    await expect(page.locator("[data-desk-glance-tab]")).toHaveAttribute("data-desk-glance-tab", "files");
+    await page.locator('[data-desk-glance-tab-trigger="sessions"]').click();
+    await expect(working).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("[data-desk-glance-session]")).toHaveCount(0);
+  } finally {
+    daemon.stop();
+    engine.stop();
+  }
+});
+
 test("a session beside Desk shows the way back to 한눈에 above it, whose ‹ and Escape go back there, and its head has no ✕ but keeps ↗ @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const { engine, daemon } = await startGlance(page, "desk-glance-crumb");
@@ -120,6 +182,7 @@ test("a session beside Desk shows the way back to 한눈에 above it, whose ‹ 
 
     await crumb.locator("[data-desk-glance-back]").click();
     await expect(room(page)).toHaveAttribute("data-desk-room", "glance");
+    await setAgentState(daemon, parent!, "working");
     await page.locator(`[data-desk-glance-session="${parent}"]`).click();
     await expect(room(page)).toHaveAttribute("data-desk-room", "session");
     await page.locator("[data-desk-chat-column] [data-desk-composer-input]").focus();

@@ -46,7 +46,7 @@ import { useBrowserStore } from "../browserViews";
 import { DeskViewAreas } from "../ViewAreas";
 import { cn } from "../lib/utils";
 import { useShellStore } from "../store";
-import type { DeskCommand, DeskGlanceFile, DeskRecord, SessionPull, SnapshotRest, ViewDisplaySnapshot, ViewLayoutSnapshot } from "../snapshot";
+import type { DeskCommand, DeskGlanceFile, DeskRecord, GlanceFolds, GlanceTab, SessionPull, SnapshotRest, ViewDisplaySnapshot, ViewLayoutSnapshot } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
   AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_CARD, PLAN_EXIT_OPTIONS, WAITING_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, endedScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
@@ -60,7 +60,10 @@ export const DESK_SCENES = [
   { state: "s2b", label: "2-1 현황 묻기 (B7, D-24)" },
   { state: "s3", label: "3 카드 상태 모음 (B16-B24, B36-B39)" },
   { state: "s4", label: "4 Desk 옆에 연 세션 (B2, B6, B8, B9)" },
-  { state: "glance", label: "한눈에: Desk 오른쪽의 세션과 파일" },
+  { state: "glance", label: "한눈에: 세션 탭, 끝남은 접힘" },
+  { state: "glance-open", label: "한눈에: 세 묶음을 모두 편 세션 탭" },
+  { state: "glance-files", label: "한눈에: 파일 탭" },
+  { state: "glance-opener", label: "한눈에: 접힌 데스크를 여는 ‹ 뷰 n" },
   { state: "glance-crumb", label: "한눈에: 세션 위 길 표시 ‹ 한눈에 ›" },
   { state: "s5", label: "5 세션이 물을 때: 에이전트 자신의 선택 카드 (B14, B34)" },
   { state: "s7", label: "7 결과물이 세션 옆 탭 패널에 (B16-B21)" },
@@ -275,12 +278,12 @@ const S7_DESK = [
 const MISSION_DESK = [display("map", { kind: "card", label: "Desk 1차", card: { kind: "mission", mission: "mission-1" } })];
 
 /** Desk's room as a scene sets it. */
-function Room({ chat, session = null, glance = false, panel = null }: { chat: ReactNode; session?: ReactNode; glance?: boolean; panel?: ReactNode }) {
-  return <DeskRoom chat={chat} session={session} glance={glance} panel={panel} widths={WIDTHS} onDim={noop} onWidth={noop} />;
+function Room({ chat, session = null, glance = false, panel = null, opener = null }: { chat: ReactNode; session?: ReactNode; glance?: boolean; panel?: ReactNode; opener?: number | null }) {
+  return <DeskRoom chat={chat} session={session} glance={glance} panel={panel} widths={WIDTHS} opener={opener} onOpener={noop} onDim={noop} onWidth={noop} />;
 }
 
 /** 한눈에 over the story's jobs: their Views, a file Desk's agent opened, and more than the list shows. */
-function SceneGlance({ jobs }: { jobs: Record<string, DeskJob> }) {
+function SceneGlance({ jobs, tab = "sessions", folds }: { jobs: Record<string, DeskJob>; tab?: GlanceTab; folds?: GlanceFolds }) {
   const cards = Object.values(jobs);
   const listed = ["gallery", "release", "mention", "record"].map((id) => jobs[id]!);
   const files: DeskGlanceFile[] = [
@@ -291,7 +294,7 @@ function SceneGlance({ jobs }: { jobs: Record<string, DeskJob> }) {
     { ...OUTPUTS.notes, pane_id: jobs.release!.pane_id },
     ...[1, 2, 3, 4].map((at) => ({ ...OUTPUTS.light1, id: `light-${at}`, label: `light-${at}.png`, pane_id: jobs.gallery!.pane_id })),
   ];
-  return <GlancePanel glance={{ sessions: listed.map((job) => job.pane_id!), files, files_more: 2 }} cards={cards} onSession={noop} onFile={noop} onFold={noop} />;
+  return <GlancePanel glance={{ sessions: listed.map((job) => job.pane_id!), files, files_more: 2 }} cards={cards} tab={tab} folds={folds} onTab={noop} onGroup={noop} onSession={noop} onFile={noop} onFold={noop} />;
 }
 
 export function DeskScene({ params }: { params: URLSearchParams }) {
@@ -354,6 +357,15 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     }
     case "glance":
       body = <Room chat={chat(statusItems(now), <ChatComposer selection={CLAUDE} />)} glance session={<SceneGlance jobs={jobs} />} />;
+      break;
+    case "glance-open":
+      body = <Room chat={chat(statusItems(now), <ChatComposer selection={CLAUDE} />)} glance session={<SceneGlance jobs={jobs} folds={{ turn: false, working: false, ended: false }} />} />;
+      break;
+    case "glance-files":
+      body = <Room chat={chat(statusItems(now), <ChatComposer selection={CLAUDE} />)} glance session={<SceneGlance jobs={jobs} tab="files" />} />;
+      break;
+    case "glance-opener":
+      body = <Room chat={chat(statusItems(now), <ChatComposer selection={CLAUDE} />)} glance session={<SceneGlance jobs={jobs} />} opener={3} />;
       break;
     case "glance-crumb": {
       const thread = galleryThread();

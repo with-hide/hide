@@ -1533,6 +1533,48 @@ mod tests {
         assert_eq!(restored.lane, crate::model::DeskLane::default());
     }
 
+    /// 한눈에's tab and group folds are read field by field: a value a later
+    /// Hide wrote (a third tab, a fold that is no bool) is that field's
+    /// default, and the widths and the rest of the store read as they were.
+    #[test]
+    fn a_glance_field_this_build_cannot_read_is_its_default_and_the_rest_of_the_lane_stays() {
+        let mut stored = Stored::default();
+        stored.conversation.push(user(1, "kept"));
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+        file["panel_widths"] = serde_json::json!({
+            "view_width": 720, "session_width": null, "glance_folded": true,
+            "glance_tab": "threads",
+            "glance_groups": {"turn": "yes", "working": true, "ended": false, "later": true},
+        });
+        let restored = decode(&serde_json::to_vec(&file).unwrap()).expect("the store reads");
+        assert_eq!(
+            restored.lane,
+            crate::model::DeskLane {
+                view_width: Some(720),
+                session_width: None,
+                glance_folded: true,
+                glance_tab: crate::model::GlanceTab::Sessions,
+                glance_groups: crate::model::GlanceFolds {
+                    turn: false,
+                    working: true,
+                    ended: false,
+                },
+            }
+        );
+        assert_eq!(
+            restored.conversation.items.len(),
+            1,
+            "the conversation stays"
+        );
+        file["panel_widths"]["glance_groups"] = serde_json::json!(["ended"]);
+        let restored = decode(&serde_json::to_vec(&file).unwrap()).expect("the store reads");
+        assert_eq!(
+            restored.lane.glance_groups,
+            crate::model::GlanceFolds::default()
+        );
+    }
+
     /// B29: a store Desk 1차 wrote, its lane pinned with sixteen kept tabs,
     /// opens as it was but for two unset widths, its conversation, queue,
     /// marks and settings kept, and the next save writes no tab.

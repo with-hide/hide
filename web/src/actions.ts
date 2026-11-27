@@ -84,6 +84,8 @@ import {
   type LookAt,
   type RecentPlace,
   type SignInReply,
+  type GlanceGroupKey,
+  type GlanceTab,
 } from "./snapshot";
 import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
@@ -2874,9 +2876,19 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().setDeskRoom(closeDeskSession);
     },
 
-    /** `⟩` on 한눈에, or its button in Desk's head: 한눈에 folds or unfolds, which the core keeps with the panels' widths. */
+    /** `▯|` on 한눈에, or the same icon in Desk's head: 한눈에 folds or unfolds, which the core keeps with the panels' widths. */
     deskGlanceFold(folded: boolean) {
       dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_folded: folded } });
+    },
+
+    /** 한눈에's `세션` or `파일` tab, which the core keeps, the same in every window. */
+    deskGlanceTab(tab: GlanceTab) {
+      dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_tab: tab } });
+    },
+
+    /** A session group's head on 한눈에: the group folds or unfolds, which the core keeps. */
+    deskGlanceGroup(group: GlanceGroupKey, folded: boolean) {
+      dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_group: { group, folded } } });
     },
 
     /** `‹ 한눈에` above the session beside Desk: the session closes, kept for ⌘E, and 한눈에 stands there again, unfolded. */

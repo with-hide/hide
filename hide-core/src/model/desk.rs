@@ -54,10 +54,110 @@ pub struct DeskLane {
     /// The session panel's width: the edge between it and Desk's desk.
     /// 한눈에 takes the same width, standing where the session panel does.
     pub session_width: Option<u32>,
-    /// 한눈에 is folded (`⟩`), so Desk's chat takes the room's width while
+    /// 한눈에 is folded (`▯|`), so Desk's chat takes the room's width while
     /// no session is open beside it.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        skip_serializing_if = "std::ops::Not::not",
+        deserialize_with = "lane_field_leniently"
+    )]
     pub glance_folded: bool,
+    /// The tab 한눈에 shows, `sessions` or `files`; written only for `files`.
+    #[serde(
+        skip_serializing_if = "GlanceTab::is_sessions",
+        deserialize_with = "lane_field_leniently"
+    )]
+    pub glance_tab: GlanceTab,
+    /// Which of 한눈에's session groups are folded; written only once one
+    /// differs from how they start (끝남 folded, the others open).
+    #[serde(
+        skip_serializing_if = "GlanceFolds::is_initial",
+        deserialize_with = "lane_field_leniently"
+    )]
+    pub glance_groups: GlanceFolds,
+}
+
+/// 한눈에's two tabs.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GlanceTab {
+    #[default]
+    Sessions,
+    Files,
+}
+
+impl GlanceTab {
+    fn is_sessions(&self) -> bool {
+        *self == Self::Sessions
+    }
+}
+
+/// 한눈에's session groups, each with its fold on its head.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GlanceGroup {
+    /// 내 차례: the sessions asking the operator.
+    Turn,
+    /// 일하는 중.
+    Working,
+    /// 끝남.
+    Ended,
+}
+
+/// Whether each of 한눈에's session groups is folded. Each is read on its
+/// own, so one a later Hide wrote in another shape starts as it would.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GlanceFolds {
+    #[serde(deserialize_with = "lane_field_leniently")]
+    pub turn: bool,
+    #[serde(deserialize_with = "lane_field_leniently")]
+    pub working: bool,
+    #[serde(deserialize_with = "lane_field_leniently")]
+    pub ended: bool,
+}
+
+impl Default for GlanceFolds {
+    /// 끝남 starts folded; the others open.
+    fn default() -> Self {
+        Self {
+            turn: false,
+            working: false,
+            ended: true,
+        }
+    }
+}
+
+impl GlanceFolds {
+    fn is_initial(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Folds or unfolds `group`.
+    pub fn set(&mut self, group: GlanceGroup, folded: bool) {
+        match group {
+            GlanceGroup::Turn => self.turn = folded,
+            GlanceGroup::Working => self.working = folded,
+            GlanceGroup::Ended => self.ended = folded,
+        }
+    }
+}
+
+/// Reads one field of the lane on its own: a value this build cannot read
+/// (a later Hide's tab, a wrong type) is the field's default and one
+/// diagnostic line, and the rest of Desk's store reads as it was.
+fn lane_field_leniently<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_else(|error| {
+        crate::diagnostic!(serde_json::json!({
+            "component": "desk", "kind": "desk_store.lane_field_unreadable",
+            "error": error.to_string(),
+        }));
+        T::default()
+    }))
 }
 
 /// The widest a stored panel width may be; a wider one is refused
