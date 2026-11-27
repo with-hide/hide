@@ -1031,3 +1031,62 @@ async fn the_host_s_core_hears_which_machines_show_their_view() {
     let told = ends_with(&host_state, views_told, &showing).await;
     assert_eq!(told, vec![showing.clone(), Vec::new(), showing.clone()]);
 }
+
+/// What this machine's core was told its windows show, in order
+/// (`look.window_screen`: `own` or `computer`).
+fn screens_told(state: &std::path::Path) -> Vec<String> {
+    logged(state, "look.window_screen")
+        .iter()
+        .map(|record| record["screen"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The mirror of the view's rule on this machine (`docs/status-model.md`,
+/// Hide owns the read axis): a look chosen on this machine's window counts
+/// only while a window of it shows its own screen, so the core hears another
+/// computer's screen while every window that reports shows one, this
+/// machine's own again the moment one window does, and a window that goes
+/// lets go of its report with its socket; the last one going leaves the core
+/// where it was, and the app opened again opens on this machine's own screen.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn this_machine_s_core_hears_whether_a_window_shows_its_own_screen() {
+    let root = crate::fixtures::fixture_root("ws");
+    let running = hided::start_daemon(host_env(root.path())).await.unwrap();
+    let state = root.path().join("host-state");
+    let snapshot = |frame: &Value| frame["type"] == "snapshot";
+    let before = host_clients(&running).await;
+
+    let mut desktop = Window::open(&running, "desktop").await;
+    desktop.frame("the desktop's snapshot", snapshot).await;
+    desktop
+        .send("window_screen", json!({"screen": "computer"}))
+        .await;
+    ends_with(&state, screens_told, &"computer".to_owned()).await;
+
+    let mut tab = Window::open(&running, "web").await;
+    tab.frame("the tab's snapshot", snapshot).await;
+    tab.send("window_screen", json!({"screen": "own"})).await;
+    ends_with(&state, screens_told, &"own".to_owned()).await;
+
+    drop(tab);
+    ends_with(&state, screens_told, &"computer".to_owned()).await;
+    // The last window goes while it shows another computer's screen: its
+    // report is let go once the daemon has counted it gone.
+    drop(desktop);
+    let deadline = Instant::now() + WITHIN;
+    while host_clients(&running).await != before {
+        assert!(
+            Instant::now() < deadline,
+            "the closed window stayed counted"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the closed socket's end crosses the connection; the count is the daemon's own, taken after it lets go of the window's reports (`client_gone`)
+    }
+    // The app opened again opens on this machine's own screen and says so.
+    let mut reopened = Window::open(&running, "desktop").await;
+    reopened.frame("the reopened snapshot", snapshot).await;
+    reopened
+        .send("window_screen", json!({"screen": "own"}))
+        .await;
+    let told = ends_with(&state, screens_told, &"own".to_owned()).await;
+    assert_eq!(told, ["computer", "own", "computer", "own"]);
+}

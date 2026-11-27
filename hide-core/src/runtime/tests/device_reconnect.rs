@@ -54,6 +54,8 @@ fn ingest_parent(runtime: &mut Runtime) {
 fn core_with_device(state: &std::path::Path) -> Runtime {
     let mut runtime = runtime();
     runtime.node = crate::node::NodeId::parse("machine-local").unwrap();
+    // This Mac in front, under its own id: its focus counts only while it is.
+    runtime.set_front_device(Some("machine-local".to_owned()));
     runtime
         .device_machine_ids
         .insert(DEVICE.to_owned(), "machine-mini".to_owned());

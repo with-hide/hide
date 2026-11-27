@@ -37,6 +37,16 @@ pub(super) fn origins() -> [LinkOrigin; 2] {
 /// A connected device with Agent areas, `in_front` or behind this machine.
 pub(super) fn device(origin: LinkOrigin, in_front: bool) -> (Runtime, tempfile::TempDir) {
     let mut runtime = runtime();
+    let views = add_device(&mut runtime, origin, in_front);
+    (runtime, views)
+}
+
+/// Connects the device to `runtime`, `in_front` or behind this machine.
+pub(super) fn add_device(
+    runtime: &mut Runtime,
+    origin: LinkOrigin,
+    in_front: bool,
+) -> tempfile::TempDir {
     runtime
         .snapshot
         .ui_state
@@ -66,7 +76,7 @@ pub(super) fn device(origin: LinkOrigin, in_front: bool) -> (Runtime, tempfile::
         crate::node::TEST_NODE.into()
     }));
     runtime.begin_read_connection(Some(DEVICE));
-    (runtime, views)
+    views
 }
 
 /// The device's engine with one tab per `(tab, status, seq)`, an agent in
@@ -271,6 +281,46 @@ fn a_device_behind_is_not_read_and_bringing_this_mac_forward_reads_none_of_its_p
         assert!(
             unread(&runtime, "t1"),
             "{origin:?}: this Mac in front again reads nothing on the device"
+        );
+    }
+}
+
+/// Rule, the mirror of the one above: this Mac's focus is read only while
+/// this Mac is in front. A turn that ends on the pane the operator chose here
+/// while a device's tile is in front stays 읽을 것, as it does while a paired
+/// computer's screen shows (`own_screen.rs`), and bringing this Mac forward
+/// again reads it.
+#[test]
+fn this_mac_s_pane_behind_a_device_is_not_read_and_bringing_this_mac_forward_reads_it() {
+    for origin in origins() {
+        let path = "/private/tmp/hide-look-mac-behind";
+        let mut runtime = two_finished_tabs(path);
+        let _views = add_device(&mut runtime, origin.clone(), false);
+        dispatch(
+            &mut runtime,
+            "focus_pane",
+            json!({"pane_id": T1, "origin": "operator"}),
+        );
+        assert!(
+            !unread_panes(&runtime).contains(&T1.to_owned()),
+            "{origin:?}: read here"
+        );
+
+        dispatch(&mut runtime, "focus_device", json!({"device_id": DEVICE}));
+        runtime.ingest_session(Ok(local_two_tabs(path, [2, 1])));
+        assert!(
+            unread_panes(&runtime).contains(&T1.to_owned()),
+            "{origin:?}: the operator's pane is here, but the device is in front"
+        );
+
+        dispatch(
+            &mut runtime,
+            "focus_device",
+            json!({"device_id": crate::node::TEST_NODE}),
+        );
+        assert!(
+            !unread_panes(&runtime).contains(&T1.to_owned()),
+            "{origin:?}: this Mac in front again reads its pane"
         );
     }
 }

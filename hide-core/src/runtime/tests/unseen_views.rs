@@ -261,6 +261,31 @@ fn a_view_stays_unseen_while_no_window_holds_the_keyboard_or_the_lane_shows_some
     assert!(!unseen(&guard, &view));
 }
 
+/// A window showing another computer's screen draws no View of this
+/// machine (`window_screen`): while no window of this machine shows its own
+/// screen a View in front stays unseen, even with a window naming the
+/// Workspace, as the shell does before it says it came back, and showing
+/// this machine's screen again sees it.
+#[test]
+fn a_view_stays_unseen_while_the_window_shows_another_computer() {
+    use super::super::look::WindowScreen;
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    keyboard(&mut guard, Some("recipient"));
+    guard.set_window_screen(WindowScreen::Computer);
+    let view = open(&mut guard, "recipient", "src/login.ts");
+    assert!(unseen(&guard, &view), "opened while another computer shows");
+    guard.set_window_focus(None);
+    guard.set_window_focus(Some(FocusScreen::Workspace));
+    guard.sync_workspace_view();
+    assert!(unseen(&guard, &view), "a window naming the Workspace first");
+    assert!(guard.set_window_screen(WindowScreen::Own));
+    assert!(
+        !unseen(&guard, &view),
+        "seen once this machine's screen shows"
+    );
+}
+
 #[test]
 fn a_view_in_an_area_that_is_not_active_stays_unseen() {
     let (_root, runtime) = fixture(false);

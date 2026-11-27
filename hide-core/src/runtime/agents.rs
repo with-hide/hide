@@ -6,10 +6,12 @@ const MAX_PHONE_VIEWED_PANES: usize = 16;
 
 /// The panes the operator looks at, per machine, as the read axis reads them
 /// (`Runtime::looked_at`): this machine's focus pane as the operator chose
-/// it, each device's own focus while that device is in front and its window
-/// shows the pane's tab (`remote_read_focus`), both only while the screen
-/// they were chosen on shows (`LookInputs::chosen_shows`: another machine's
-/// view counts while that machine shows it), and every agent a phone has
+/// it while this machine is in front, each device's own focus while that
+/// device is in front and its window shows the pane's tab
+/// (`remote_read_focus`), both only while the screen
+/// they were chosen on shows (`LookInputs::chosen_shows`: this machine's own
+/// while a window of it shows it, another machine's view while that machine
+/// shows it), and every agent a phone has
 /// open. One value, so a move of any of its parts is one comparison
 /// (`Runtime::follow_operator_look`).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -1489,10 +1491,13 @@ impl Runtime {
             .collect()
     }
 
-    /// This machine's look: the focus pane the operator chose, while the
-    /// screen they chose it on shows, and a phone's.
+    /// This machine's look: the focus pane the operator chose, while this
+    /// machine is in front and the screen they chose it on shows, and a
+    /// phone's. A device in front shows its own panes, not this machine's,
+    /// as a device behind shows none of its (`remote_read_focus`).
     fn local_look(&self) -> Vec<String> {
-        self.looked_at(self.look.looking_focus())
+        let in_front = self.device_in_front(self.node.as_str());
+        self.looked_at(self.look.looking_focus().filter(|_| in_front))
     }
 
     /// A device's look: its own focus, as `remote_read_focus` filters it,

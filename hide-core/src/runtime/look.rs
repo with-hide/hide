@@ -5,11 +5,13 @@
 //! A pane is read when it had the operator's look after its last state
 //! change (`docs/status-model.md`, Hide owns the read axis). The look is made
 //! of this machine's focus pane as the operator chose it, the device in front
-//! (whose own focus counts while its window shows that pane's tab), the views
-//! other machines show of this one, and the agents phones have open. The focus
-//! and the device in front count only while the screen they were chosen on
-//! shows: this machine's own windows always, another machine's view only
-//! while that machine shows it. One selection can move several of them, such as
+//! (whose own focus counts while its window shows that pane's tab), whether
+//! this machine's windows show its own screen, the views other machines show
+//! of this one, and the agents phones have open. The focus and the device in
+//! front count only while the screen they were chosen on shows: this
+//! machine's own screen while a window of it shows it rather than another
+//! computer's, another machine's view only while that machine shows it. One
+//! selection can move several of them, such as
 //! a device brought forward and then its tab chosen; it is read once, as it
 //! completes, and never at a value it passed through. Two selections are two
 //! reads, whatever runs between them and whether or not a window reads the
@@ -29,8 +31,9 @@ const MAX_VIEWING_MACHINES: usize = 32;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum LookScreen {
     /// This machine's own windows (a linked node's window it relays
-    /// included): a look chosen there counts as long as it stands. A tool's
-    /// event names no screen.
+    /// included): a look chosen there counts as long as it stands, while a
+    /// window of this machine shows its own screen rather than another
+    /// computer's (`WindowScreen`). A tool's event names no screen.
     #[default]
     Own,
     /// Another machine's view of this one (`hided/src/remote_screen.rs`), by
@@ -38,6 +41,19 @@ pub enum LookScreen {
     /// machine shows the view, so leaving its tile, its socket closing or its
     /// window going ends it, and showing the tile again starts it again.
     View(String),
+}
+
+/// What this machine's windows show, as hided sums every window's report
+/// (`window_screen`, `hided/src/demand.rs`): this machine's own screen, in
+/// one window at least, or another computer's screen (a paired machine's own
+/// Hide drawn in the rail's tile, `web/src/RemoteStage.tsx`) in every window
+/// that reports. A window shows a screen whether or not it holds the
+/// keyboard, so a window behind other apps shows what it showed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum WindowScreen {
+    Own,
+    Computer,
 }
 
 /// The inputs of the operator's look, and how many selections that move
@@ -69,6 +85,12 @@ pub(super) struct LookInputs {
     /// operator choosing somewhere: an agent's command after the operator
     /// left a view never makes the view's choice count again. Memory only.
     chosen: LookScreen,
+    /// Whether a window of this machine shows its own screen: false while
+    /// every window that reports shows another computer's screen
+    /// (`window_screen`), so a look chosen here waits, and true again the
+    /// moment one shows this machine's own. No window reporting is true, as
+    /// it was before windows reported. Memory only; a launch starts true.
+    own_shows: bool,
     /// The machines whose view of this one shows now, by key: hided names
     /// every one whenever a view is seated or ends (`remote_views`). Memory
     /// only; a launch starts with none.
@@ -95,6 +117,7 @@ impl LookInputs {
             focus: None,
             front,
             chosen: LookScreen::Own,
+            own_shows: true,
             views: BTreeSet::new(),
             phones: BTreeSet::new(),
             sent_from: None,
@@ -106,11 +129,18 @@ impl LookInputs {
         self.focus.as_deref()
     }
 
+    /// Whether a window of this machine shows its own screen
+    /// (`window_screen`).
+    pub(super) fn own_shows(&self) -> bool {
+        self.own_shows
+    }
+
     /// Whether the screen the focus and the front were chosen on shows now:
-    /// this machine's own always, another machine's view while it is seated.
+    /// this machine's own while a window of it shows it (`own_shows`),
+    /// another machine's view while it is seated.
     pub(super) fn chosen_shows(&self) -> bool {
         match &self.chosen {
-            LookScreen::Own => true,
+            LookScreen::Own => self.own_shows,
             LookScreen::View(machine) => self.views.contains(machine),
         }
     }
@@ -303,6 +333,26 @@ impl Runtime {
         }
     }
 
+    /// This machine's windows show `screen` now (`window_screen`), as hided
+    /// sums them. Outside a selection this is one by itself and reads at
+    /// once; answers whether that read moved a row or a View was seen.
+    pub(super) fn set_window_screen(&mut self, screen: WindowScreen) -> bool {
+        let own_shows = screen == WindowScreen::Own;
+        if self.look.own_shows == own_shows {
+            return false;
+        }
+        crate::diagnostic!(serde_json::json!({
+            "component": "runtime", "kind": "look.window_screen",
+            "screen": if own_shows { "own" } else { "computer" },
+        }));
+        let read = self
+            .change_look(|runtime| runtime.look.own_shows = own_shows)
+            .1;
+        // The View in front of the window with the keyboard is seen only
+        // while this machine's screen shows (`looked_at_view`).
+        self.settle_seen_views() | read
+    }
+
     /// Exactly `machines` show their view of this one now (`remote_views`,
     /// each by its key). Outside a selection this is one by itself and reads
     /// at once; answers whether that read moved a row.
@@ -344,7 +394,9 @@ impl Runtime {
     ///
     /// This is the one place a moved look is read, whatever moved it: a pane
     /// or tab chosen on this machine, a device brought forward or left, the
-    /// tab a device's window shows, a device's own keyboard, a phone. A
+    /// tab a device's window shows, a device's own keyboard, this machine's
+    /// windows going to another computer's screen or back, a view shown or
+    /// left, a phone. A
     /// device's own keyboard that already rests on a pane sends nothing new,
     /// so the read cannot wait for the device's next session.
     fn follow_operator_look(&mut self) -> bool {

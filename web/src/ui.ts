@@ -313,7 +313,10 @@ type UiStore = {
   /**
    * The paired machine whose own Hide screen this window shows in place of
    * its sidebar and center (PRD device-connect-iroh B17), by its id; null
-   * while this window shows its own. The window's choice, kept by no core.
+   * while this window shows its own. The window's choice, kept by no core;
+   * it is changed through `actions.showScreen`, which tells the daemon
+   * which screen this window shows (`windowScreen.ts`), never by its setter
+   * alone.
    */
   remoteScreen: string | null;
   setRemoteScreen: (device: string | null) => void;
