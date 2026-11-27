@@ -3,6 +3,8 @@
 //! catalog of what a machine's agents take. Both are answered by the core
 //! without a shell, through the pane capability a delivery command uses.
 
+#![allow(clippy::disallowed_macros)] // the terminal is this command's output: it prints to the operator's own terminal and holds no lock
+
 use crate::env::Env;
 use hide_core::missions::{
     Checks, HoldInput, MissionCommand, MissionEnd, MissionScope, NodePatch, NodeStatus, PlanInput,

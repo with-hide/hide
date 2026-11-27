@@ -3,6 +3,8 @@
 //! crate and all its dependencies again; docs/BUILD.md, "One integration
 //! test binary per crate", owns the rule.
 
+#![allow(clippy::disallowed_macros)] // a test prints to its own captured stderr and holds no daemon lock
+
 mod access;
 mod agent_exec;
 mod always_on_update;
