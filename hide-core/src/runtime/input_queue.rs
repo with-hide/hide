@@ -357,9 +357,9 @@ impl Runtime {
         if !crate::terminal_attachments::valid_request_id(&payload.request_id) {
             return false;
         }
-        let Some((raw_pane, device)) = (self.session_thread_pane()
-            == Some(payload.pane_id.as_str()))
-        .then(|| self.delivery_observations.get(&payload.pane_id))
+        let Some((raw_pane, device)) = self
+            .session_thread_is(payload.generation, &payload.pane_id)
+            .then(|| self.delivery_observations.get(&payload.pane_id))
         .flatten()
             .map(|observation| {
                 (

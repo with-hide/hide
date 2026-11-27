@@ -9,7 +9,7 @@ function page(texts: string[], parts: ThreadPage["parts"] = {}, sessions: Thread
 }
 
 function thread(extra: Partial<SessionThreadSection> = {}): SessionThreadSection {
-  return { generation: 2, state: "ready", pane_id: "w1:p1", machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: null, input: null, choice: {}, ...extra };
+  return { generation: 2, state: "ready", pane_id: "w1:p1", machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: null, input: null, queue: null, choice: {}, ...extra };
 }
 
 describe("a thread's conversation", () => {

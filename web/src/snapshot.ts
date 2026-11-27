@@ -3716,7 +3716,7 @@ export type DeskSection = {
   agents: DeskAgent[];
   host: { state: DeskHostState; detail: string | null };
   /** `generation` moves on 새 대화; `dropped` items left the front past the cap. */
-  conversation: { generation: number; items: DeskItem[]; dropped: number; queued: DeskQueuedMessage[]; /** The most messages that wait at once, and whether that many do now: one more is refused. */ queued_max: number; queued_full: boolean; /** The line stands still because the agent refused its first message (sign-in, a session that did not open): it goes on a new send or a restart. */ queued_held: boolean };
+  conversation: { generation: number; items: DeskItem[]; dropped: number; queued: DeskQueuedMessage[]; /** The most messages that wait at once, and whether that many do now: one more is refused. */ queued_max: number; queued_full: boolean; /** The line stands still because the agent refused its first message (sign-in, a session that did not open): it goes on a new send or a restart. */ queued_held: boolean; /** ■ stopped the line (`멈춤`): nothing goes until a message's `보내기` or `▶ 이어 보내기`. */ queued_paused: boolean; /** What `모두 지우기` took, while `되돌리기` brings it back. */ queued_cleared?: InputQueueCleared };
   approvals_waiting: number;
   /** `enabled` is Settings › Labs › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
   settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; /** How Desk answers its agent's requests, chosen under Desk's box (D-92). */ permission: DeskPermission };
@@ -3965,8 +3965,21 @@ export type SessionThreadFailure = "no_record" | "refused";
 export type SessionThreadPane = "same" | "changed" | "gone";
 /** The read of the page before the oldest (`session_thread_older`). */
 export type SessionThreadOlder = "idle" | "loading" | "capacity" | "failed";
-/** What became of the input box's words (`session_thread_input_state`); `reason` is a refusal's code. */
-export type SessionThreadInput = { request_id: string; state: "sending" | "sent" | "refused"; reason?: string };
+/** What became of the input box's words (`session_thread_input_state`): `queued` took them into the pane's waiting line; `reason` is a refusal's code. */
+export type SessionThreadInput = { request_id: string; state: "sending" | "sent" | "queued" | "refused"; reason?: string };
+/** Why a waiting line did not go (`input_queue_failure`, PRD desk-queue B23, B24). */
+export type InputQueueFailure = "uncertain" | "device_unreachable" | "file_missing" | "refused";
+/** One of the operator's waiting lines: its words and the names of its files; `sending` is on its way and has no ✕. */
+export type InputQueueLine = { id: number; text: string; files: string[]; sending: boolean; failure?: InputQueueFailure };
+/** What `모두 지우기` took, while `되돌리기` brings it back (until `until_unix_ms`). */
+export type InputQueueCleared = { count: number; until_unix_ms: number };
+/**
+ * The operator's words that wait for the pane's agent to rest (PRD desk-queue D-01, D-05): `waiting` sends one at
+ * each rest, `paused` none until a line's `보내기` or `▶ 이어 보내기` (`input_queue_state`). `full` holds `max`.
+ */
+/** A move on a waiting line: ✕ and `보내기` take a line's id; `▶ 이어 보내기`, `모두 지우기` and `되돌리기` the whole line. */
+export type QueueAction = "remove" | "send" | "resume" | "clear" | "restore";
+export type InputQueue = { state: "waiting" | "paused"; lines: InputQueueLine[]; max: number; full: boolean; cleared?: InputQueueCleared };
 export type SessionThreadSection = {
   /** Advances with every open; an older page or an input answers only this one. */
   generation: number;
@@ -3982,6 +3995,8 @@ export type SessionThreadSection = {
   /** The page the session is still writing. */
   tail: ThreadPage | null;
   input: SessionThreadInput | null;
+  /** The pane's waiting line; null while it holds none. */
+  queue: InputQueue | null;
   /** The model and effort the session runs with as Hide knows them: its start's, or the last the session input changed; each absent for the CLI's own. */
   choice: { model?: string; effort?: string };
 };

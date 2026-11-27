@@ -86,6 +86,7 @@ import {
   type SignInReply,
   type GlanceGroupKey,
   type GlanceTab,
+  type QueueAction,
 } from "./snapshot";
 import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
@@ -2947,9 +2948,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_send", payload: { text, mentions: mentions.map(({ kind, id, name }) => ({ kind, id, name })), ...(files ?? {}), ...(again === null ? {} : { again }) } });
     },
 
-    /** ✕ on a message waiting for the turn before it: it never goes (`desk_queued_remove`). */
-    deskQueuedRemove(id: number) {
-      dispatch({ schema_version: 2, kind: "desk_queued_remove", payload: { id } });
+    /**
+     * One move on Desk's waiting messages (PRD desk-queue B14-B17, B30, B31): ✕ (`remove`) or `보내기` (`send`) on
+     * message `id`, `▶ 이어 보내기` (`resume`), `모두 지우기` (`clear`) and `되돌리기` (`restore`).
+     */
+    deskQueue(action: QueueAction, id?: number) {
+      dispatch({ schema_version: 2, kind: `desk_queued_${action}`, payload: id === undefined ? {} : { id } });
     },
 
     /** `중지`: ends Desk's turn and nothing it started (B7). */
@@ -4040,6 +4044,20 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     switchThread(generation: number, paneId: string, change: { model: string } | { effort: string }): string | null {
       const requestId = crypto.randomUUID();
       const sent = dispatch({ schema_version: 2, kind: "session_thread_switch", payload: { generation, pane_id: paneId, request_id: requestId, ...change } });
+      return sent === false ? null : requestId;
+    },
+    /** The same moves on a pane's waiting line (PRD desk-queue B7, B14-B17), which every window and the phone share. */
+    inputQueue(paneId: string, action: QueueAction, id?: number) {
+      dispatch({ schema_version: 2, kind: `input_queue_${action}`, payload: id === undefined ? { pane_id: paneId } : { pane_id: paneId, id } });
+    },
+    /**
+     * ■ on the session input (B10-B12): the keys the agent's `[interrupt]` names, typed while it works, and its
+     * waiting line paused; answered on the thread's input state by the request id returned, or null when nothing
+     * could be sent.
+     */
+    interruptThread(generation: number, paneId: string): string | null {
+      const requestId = crypto.randomUUID();
+      const sent = dispatch({ schema_version: 2, kind: "session_thread_interrupt", payload: { generation, pane_id: paneId, request_id: requestId } });
       return sent === false ? null : requestId;
     },
     /** The Overview panel's record: read, without the lane moving. */

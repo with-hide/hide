@@ -1277,6 +1277,15 @@ impl Runtime {
             .map(|open| open.pane_id.as_str())
     }
 
+    /// Whether the open thread is `generation`'s, on `pane`: an answer to
+    /// an older open, or to another pane's, types nothing.
+    pub(super) fn session_thread_is(&self, generation: u64, pane: &str) -> bool {
+        self.session_thread
+            .open
+            .as_ref()
+            .is_some_and(|open| open.generation == generation && open.pane_id == pane)
+    }
+
     /// Changes the thread section, as a new value so a payload already
     /// handed out keeps the state it was taken at.
     pub(super) fn set_session_thread(&mut self, change: impl FnOnce(&mut SessionThreadSnapshot)) -> bool {

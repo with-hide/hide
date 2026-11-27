@@ -413,11 +413,6 @@ impl Queues {
         self.forget_empty() || changed
     }
 
-    /// The pane closed: its line goes with it (D-15, B27).
-    pub fn close(&mut self, pane: &str) -> bool {
-        self.panes.remove(pane).is_some()
-    }
-
     /// Lets go of the lines of every pane `keep` does not keep: the pane
     /// closed, and its line goes with it (D-15, B27). Whether any went.
     pub fn follow_panes(&mut self, keep: impl Fn(&str) -> bool) -> bool {
@@ -517,15 +512,6 @@ impl Queue {
             (files + line.paths.len(), bytes.saturating_add(line.bytes))
         })
     }
-}
-
-/// The machine a pane the core names `pane_id` is on: a device's pane is
-/// `remote:<device>:pane:<id>`, and any other is `own`'s.
-pub fn device_of<'a>(pane_id: &'a str, own: &'a str) -> &'a str {
-    pane_id
-        .strip_prefix("remote:")
-        .and_then(|rest| rest.split_once(":pane:"))
-        .map_or(own, |(device, _)| device)
 }
 
 /// The name a file had, from its kept path: hided keeps a file as

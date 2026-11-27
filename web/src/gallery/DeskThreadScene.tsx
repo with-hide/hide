@@ -23,6 +23,8 @@ export const DESK_THREAD_SCENES = [
   { state: "asking", label: "Thread from the store: code blocks, and the questions Hide found above the box (Doop B4, N)" },
   { state: "failed", label: "Thread from the store: a record it cannot read (B27)" },
   { state: "held", label: "Thread from the store: its pane runs another session (B29)" },
+  { state: "queued", label: "Thread from the store: words sent while the agent works wait over the box, ■ in send's place (PRD desk-queue B1, B10)" },
+  { state: "paused", label: "Thread from the store: the waiting line paused, a line Hide could not confirm (PRD desk-queue B14, B23)" },
 ] as const;
 
 type SceneState = (typeof DESK_THREAD_SCENES)[number]["state"];
@@ -38,7 +40,7 @@ const ASKS = [
 /** The answer the questions were asked in: code in a line, a one-line block and a block of several lines, one too long for the column (Doop N 1 가). */
 const ASKED_IN = "라이트 캡처를 찍었어요. 세션은 `hide agent ps`로 볼 수 있어요.\n\n```\nopen https://play.google.com/console\n```\n\n```bash\npnpm --dir web install\npnpm --dir web build\nhide agent list --json | jq -r '.value.items[] | select(.runtime == \"running\") | .name + \" \" + .project'\n```\n\n다크 모드도 찍을까요?";
 
-const row = (pane_id: string, identity_label: string, mark: AgentRow["mark"], agent_kind: string) => ({ pane_id, identity_label, mark, agent_kind }) as AgentRow;
+const row = (pane_id: string, identity_label: string, mark: AgentRow["mark"], agent_kind: string) => ({ pane_id, identity_label, mark, agent_kind, state: { working: mark === "going", asking: mark === "turn" } }) as AgentRow;
 const said = (text: string) => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
 const asked = (text: string) => ({ sessionUpdate: "user_message_chunk", content: { type: "text", text } });
 const shell = (toolCallId: string, command: string, status: "completed" | "in_progress", extra: Record<string, unknown> = {}) => ({ sessionUpdate: "tool_call", toolCallId, kind: "execute", title: command, status, rawInput: { command }, ...extra });
@@ -94,7 +96,7 @@ function conductorPage(now: number, mission: string): ThreadPage {
 }
 
 function thread(pane: string, page: ThreadPage | null, extra: Partial<SessionThreadSection> = {}): SessionThreadSection {
-  return { generation: 1, state: "ready", pane_id: pane, machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: page, input: null, choice: {}, ...extra };
+  return { generation: 1, state: "ready", pane_id: pane, machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: page, input: null, queue: null, choice: {}, ...extra };
 }
 
 export function DeskThreadScene({ params }: { params: URLSearchParams }) {
@@ -114,12 +116,20 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
   }, [jobs, plan, state]);
 
   useLayoutEffect(() => {
-    const rows = [row("w1:1a", "1a Desk 방", "done", "codex"), row("w1:1b", "1b 스레드 화면", "going", "codex"), row(job.pane_id!, job.title, job.mark ?? "going", job.agent_kind)];
+    const rows = [row("w1:1a", "1a Desk 방", "done", "codex"), row("w1:1b", "1b 스레드 화면", "going", "codex"), row(job.pane_id!, job.title, state === "paused" ? "done" : (job.mark ?? "going"), job.agent_kind)];
     const page: Record<SceneState, SessionThreadSection> = {
       live: thread(job.pane_id!, conductorPage(now, missions.mission.id)),
       asking: thread(job.pane_id!, { updates: [asked("gallery 캡처를 라이트·다크로 찍어서 나란히 비교해줘"), shell("c1", "node scripts/capture-gallery.mjs --theme light", "completed"), { ...said(ASKED_IN), _meta: { hide: { at_ms: Date.now() - 10 * 60_000 } } }], parts: {}, sessions: {} }),
       failed: thread(job.pane_id!, null, { state: "failed", failure: "no_record" }),
       held: thread(job.pane_id!, conductorPage(now, missions.mission.id), { pane: "changed" }),
+      queued: thread(job.pane_id!, conductorPage(now, missions.mission.id), { queue: { state: "waiting", max: 8, full: false, lines: [
+        { id: 1, text: "테스트도 같이 돌려 줘", files: [], sending: false },
+        { id: 2, text: "끝나면 PR 열어 주고, 본문에 라이트와 다크 캡처를 나란히 넣어 줘. 캡처는 갤러리에서 찍은 걸로 쓰고 크기는 패널만 잘라 줘.", files: ["thread-dark.png"], sending: false },
+      ] } }),
+      paused: thread(job.pane_id!, conductorPage(now, missions.mission.id), { queue: { state: "paused", max: 8, full: false, lines: [
+        { id: 1, text: "테스트도 같이 돌려 줘", files: [], sending: false, failure: "uncertain" },
+        { id: 2, text: "끝나면 PR 열어 줘", files: [], sending: false },
+      ] } }),
     };
     // The model Hide launched the Conductor with, which the head's second line names (letter-18465).
     const overview_graph = { sessions: [{ device_id: "mac", pane_id: job.pane_id!, session_digest: "d", launch_model: "opus", launch_effort: "high" }] };

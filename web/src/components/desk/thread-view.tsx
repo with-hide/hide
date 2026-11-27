@@ -536,9 +536,10 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   startedByDesk?: boolean;
   /**
    * The input box: its words and files, the `/` and `@` menus Desk's composer has (`useComposerMenus`), and the bar
-   * under it (`SessionAgentBar`).
+   * under it (`SessionAgentBar`); over it the pane's waiting line (`queue`, PRD desk-queue D-05), and with `onStop`
+   * ■ stands in send's place while the agent works, ↵ still sending (B10).
    */
-  composer: { value: string; tray: ComposerTray; focused?: boolean; held?: boolean; notice?: string | null; textRef?: Ref<HTMLTextAreaElement>; menus?: ComposerMenus; bar?: ReactNode; onChange: (value: string, caret: number) => void; onCaret?: (caret: number) => void; onSend: () => void };
+  composer: { value: string; tray: ComposerTray; focused?: boolean; held?: boolean; notice?: string | null; textRef?: Ref<HTMLTextAreaElement>; menus?: ComposerMenus; bar?: ReactNode; queue?: ReactNode; onStop?: () => void; onChange: (value: string, caret: number) => void; onCaret?: (caret: number) => void; onSend: () => void };
   /** What the agent's own screen asks, at the conversation's end, answered in place (the choice card, PRD desk-2-ui B14). */
   ask?: ReactNode;
   /** The questions Hide found that still wait on the operator, oldest first (`open_asks`, the list 내 차례 reads). */
@@ -627,7 +628,8 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
       </div>
       {onAsk ? <ThreadAsks asks={asks} onGo={goTo} onSet={onAsk} lit={seek?.id ?? lit?.ask ?? null} gone={gone} /> : null}
       {foot ?? (
-        <div className="shrink-0 px-sm pb-sm">
+        <div className="flex shrink-0 flex-col gap-xs px-sm pb-sm">
+          {composer.queue}
           <DeskComposer
             value={composer.value}
             label={t("desk.thread.composerLabel", { title: job?.title ?? "" })}
@@ -645,6 +647,9 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
             onChange={composer.onChange}
             onCaret={composer.onCaret}
             onSend={composer.onSend}
+            answering={composer.onStop !== undefined}
+            stopHint={t("desk.queue.stopHint")}
+            onStop={composer.onStop}
           >
             {composer.bar}
           </DeskComposer>

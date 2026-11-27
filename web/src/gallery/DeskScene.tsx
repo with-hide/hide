@@ -11,6 +11,7 @@ import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { createActions } from "../actions";
 import { AgentMark } from "../AgentMark";
 import { DeskAgentBar, DeskComposer, DeskPermissionMenu, SessionAgentBar } from "../components/desk/desk-composer";
+import { QueueGroup } from "../components/desk/queue-group";
 import { sampleShot } from "../components/sample-shot";
 import { DeskApprovalCard, DeskChat, DeskEmpty, DeskHandedLine, type DeskChatActions, type DeskLiveAnswer } from "../components/desk/desk-chat";
 import { DeskPaneReturn } from "../components/desk/desk-entry";
@@ -111,7 +112,7 @@ const copied = () => Promise.resolve(true);
 
 const CHAT_ACTIONS: DeskChatActions = {
   onOpen: noop, onAnswer: noop, onCancel: noop, onRequeue: noop, onRetry: noop, onOutput: noop, onMission: noop,
-  onApproval: noop, onQueuedRemove: noop, onNoticeAction: noop, onCopy: copied, onMention: noop, onHanded: noop,
+  onApproval: noop, onNoticeAction: noop, onCopy: copied, onMention: noop, onHanded: noop,
 };
 
 const PART_ACTIONS = { onMission: noop, outputOf: (output: DeskOutput) => output, onOutput: noop, onSession: noop, onCopy: copied };
@@ -148,15 +149,18 @@ function ChatHead() {
 }
 
 /** Desk's composer with its bar in the box's foot, as a scene sets them. */
-function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "", mentions = [], answering = false, mention = null, files = [], permission = "allow_all" }: { agents?: DeskAgent[]; selection: DeskSelection; menuOpen?: "agent" | "permissions" | null; value?: string; mentions?: DeskMention[]; answering?: boolean; mention?: ReactNode; files?: TrayFile[]; permission?: DeskPermission }) {
+function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "", mentions = [], answering = false, mention = null, files = [], permission = "allow_all", queued = [] }: { agents?: DeskAgent[]; selection: DeskSelection; menuOpen?: "agent" | "permissions" | null; value?: string; mentions?: DeskMention[]; answering?: boolean; mention?: ReactNode; files?: TrayFile[]; permission?: DeskPermission; queued?: DeskQueuedMessage[] }) {
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState(value);
   return (
+    <div className="flex min-w-0 flex-col gap-xs">
+    <QueueGroup state="waiting" lines={queued.map((one) => ({ id: one.id, text: one.text, files: [] }))} sendable={!answering} onAction={noop} />
     <DeskComposer value={text} draft={{ text, mentions }} label={t("desk.composer.label")} placeholder={t("desk.composer.placeholder")} tray={sceneTray(files)} answering={answering} focused={mention !== null} menu={mention} menuOpen={mention !== null} onChange={setText} onSend={noop} onStop={noop}>
       <DeskPermissionMenu permission={permission} agent={agents.find((agent) => agent.id === selection.agent)?.label ?? null} open={menuOpen === "permissions" ? true : undefined} onPermission={noop} />
       <Separator orientation="vertical" className="mx-xxs data-[orientation=vertical]:h-(--size-icon)" />
       <DeskAgentBar agents={agents} selection={selection} open={menuOpen === "agent" ? "agent" : null} onAgent={noop} onModel={noop} onEffort={noop} onAgentSettings={noop} />
     </DeskComposer>
+    </div>
   );
 }
 
@@ -493,7 +497,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       body = <OutputsCriteria />;
       break;
     case "chat-states":
-      body = <Room chat={chat(stateItems(now), <ChatComposer agents={AGENTS_PREPARING} selection={CODEX} answering />, { live: { text: "지금 돌고 있는 일은 세 개예요. @session(w1:record-now record-now)는 테스트를 돌리는 중이고 @session(w1:gallery 갤러리", mentions: [{ pane_id: "w1:record-now", name: "record-now", agent_kind: null, mark: null }], missions: [] }, queued: [{ id: 900, text: "끝나면 release 노트도 정리해줘", at_ms: now, mentions: [] }] })} />;
+      body = <Room chat={chat(stateItems(now), <ChatComposer agents={AGENTS_PREPARING} selection={CODEX} answering queued={[{ id: 900, text: "끝나면 release 노트도 정리해줘", at_ms: now, mentions: [] }]} />, { live: { text: "지금 돌고 있는 일은 세 개예요. @session(w1:record-now record-now)는 테스트를 돌리는 중이고 @session(w1:gallery 갤러리", mentions: [{ pane_id: "w1:record-now", name: "record-now", agent_kind: null, mark: null }], missions: [] } })} />;
       break;
     case "thread-states": {
       const fresh = deskJob(jobs.mention!, { id: "fresh", title: "로그 정리", state: "starting", now: null, plan: null, pull_requests: [], outputs: [] });

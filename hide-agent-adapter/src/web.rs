@@ -40,6 +40,9 @@ pub struct WebAdapter {
     /// (`definition::Switch`): absent for an agent that changes neither its
     /// model nor its effort by a typed line.
     pub switch: Option<WebSwitch>,
+    /// Whether the agent's definition names the keys that interrupt its turn
+    /// (`[interrupt]`), so a session input offers ■ while it works.
+    pub interrupt: bool,
 }
 
 /// The slots of a running session a session input can change, as the
@@ -122,5 +125,7 @@ pub fn web_contract() -> impl Iterator<Item = WebAdapter> {
                 efforts: &switch.efforts,
                 model_resets_effort: switch.model_resets_effort,
             }),
+        interrupt: super::definition::builtin(row.id)
+            .is_some_and(|definition| definition.interrupt.is_some()),
     })
 }
