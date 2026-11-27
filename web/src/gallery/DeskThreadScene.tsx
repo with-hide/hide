@@ -76,7 +76,7 @@ function conductorPage(now: number, mission: string): ThreadPage {
 }
 
 function thread(pane: string, page: ThreadPage | null, extra: Partial<SessionThreadSection> = {}): SessionThreadSection {
-  return { generation: 1, state: "ready", pane_id: pane, machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: page, input: null, ...extra };
+  return { generation: 1, state: "ready", pane_id: pane, machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: page, input: null, choice: {}, ...extra };
 }
 
 export function DeskThreadScene({ params }: { params: URLSearchParams }) {

@@ -613,6 +613,32 @@ impl Runtime {
             .unwrap_or_default()
     }
 
+    /// Puts `choice` on the launch record of `agent`'s pane when that record
+    /// describes it, as a session input's change of model or effort is
+    /// kept, so every restart Hide makes of it starts it with that choice;
+    /// whether a record described it.
+    pub(crate) fn keep_launch_choice(
+        &mut self,
+        agent: &SidebarAgentSnapshot,
+        choice: &hide_agent_adapter::LaunchChoice,
+    ) -> bool {
+        let Some(launch) = self
+            .snapshot
+            .ui_state
+            .pane_launches
+            .get_mut(&agent.pane_id)
+            .filter(|launch| describes(launch, agent))
+        else {
+            return false;
+        };
+        if launch.choice != *choice {
+            launch.choice = choice.clone();
+            self.missions.launches_edit = self.missions.launches_edit.wrapping_add(1);
+            self.persist_ui_state();
+        }
+        true
+    }
+
     /// Forgets the launch records of a device's panes once the device is
     /// removed: no pass of its own will settle them again.
     pub(super) fn forget_device_launches(&mut self, device: &str) {

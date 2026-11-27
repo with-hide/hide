@@ -89,6 +89,18 @@
         "⏺",
         "⎿"
       ]
+    },
+    "switch": {
+      "model": "/model {model}",
+      "effort": "/effort {effort}",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "model_resets_effort": false
     }
   },
   {
@@ -186,6 +198,18 @@
         "├",
         "│"
       ]
+    },
+    "switch": {
+      "model": "/model {model}",
+      "effort": "/model --reasoning={effort}",
+      "efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "model_resets_effort": true
     }
   },
   {
@@ -286,6 +310,17 @@
         "◈",
         "┃"
       ]
+    },
+    "switch": {
+      "model": "/model {model}",
+      "effort": "/model {model} {effort}",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "model_resets_effort": false
     }
   },
   {
@@ -375,7 +410,8 @@
     ],
     "hook_kind": "plugin",
     "account_by": "folder",
-    "bell_echo": null
+    "bell_echo": null,
+    "switch": null
   },
   {
     "usage": {
@@ -460,7 +496,20 @@
     "full_access": [],
     "hook_kind": "extension",
     "account_by": "folder",
-    "bell_echo": null
+    "bell_echo": null,
+    "switch": {
+      "model": "/model {model}",
+      "effort": "/thinking {effort}",
+      "efforts": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "model_resets_effort": false
+    }
   },
   {
     "usage": {
@@ -549,7 +598,21 @@
     ],
     "hook_kind": "extension",
     "account_by": "name",
-    "bell_echo": null
+    "bell_echo": null,
+    "switch": {
+      "model": null,
+      "effort": "/effort {effort}",
+      "efforts": [
+        "off",
+        "auto",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "model_resets_effort": false
+    }
   },
   {
     "usage": {
@@ -651,6 +714,18 @@
         "⎿",
         "┃"
       ]
+    },
+    "switch": {
+      "model": "/model {model}",
+      "effort": "/effort {effort}",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "model_resets_effort": false
     }
   }
 ]

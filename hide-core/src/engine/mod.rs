@@ -786,18 +786,20 @@ impl EngineHandle {
             .map(|read| read.text)
     }
 
-    /// Types the operator's `text` into the agent's input in `pane` and
-    /// submits it, as a letter's bell is typed ([`Engine::prompt_agent`]):
-    /// an agent reads a slash command sent this way as the command (#2354).
-    /// A refusal typed nothing.
+    /// Types `text` into the agent's input in `pane` and submits it, as a
+    /// letter's bell is typed ([`Engine::prompt_agent`]): an agent reads a
+    /// slash command sent this way as the command (#2354). `by` says whose
+    /// words they are, so a line Hide types for the operator waits for the
+    /// agent as a letter does. A refusal typed nothing.
     pub fn prompt_agent(
         &self,
         pane: &str,
         text: &str,
+        by: PromptBy,
         timeout: Duration,
     ) -> Result<(), EngineError> {
         self.engine
-            .prompt_agent(Wait::Each(timeout), pane, text, PromptBy::Operator)
+            .prompt_agent(Wait::Each(timeout), pane, text, by)
     }
 
     /// Presses one key in a pane.
