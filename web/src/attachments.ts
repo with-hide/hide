@@ -35,8 +35,10 @@ function rememberPane(requestId: string, paneId: string): void {
   }
 }
 
-export function configureAttachments(value: Sender): void {
+export function configureAttachments(value: Sender | null): Sender | null {
+  const previous = sender;
   sender = value;
+  return previous;
 }
 
 /** The Explorer folder each drop batch lands in, so a refusal is drawn under it. Capped like `paneByRequest`. */

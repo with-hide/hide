@@ -86,3 +86,32 @@ it("keeps the last thread after another pane takes it, including reconnect and r
     vi.unstubAllGlobals();
   }
 });
+
+// B17/B18: notifier coalescing can hide both the requested open and its replacement.
+it.each(["ready", "closed"] as const)("does not reclaim a superseded first open when only the replacement's %s snapshot is published", async (state) => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const saved = useShellStore.getState(), local = useUiStore.getState();
+  const calls: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { calls.push(event); return true; });
+  const container = document.createElement("div"), root = createRoot(container);
+  try {
+    useUiStore.setState({ threadLease: null });
+    useShellStore.setState({ connection: "live", sessionThread: null });
+    await act(async () => root.render(<ObservedPanel actions={actions} />));
+    const replacement: SessionThreadSection = { generation: 2, pane_id: state === "closed" ? null : "w1:p2", machine: "local", state, failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: null, choice: {}, input: null };
+    await act(async () => useShellStore.setState({ sessionThread: replacement }));
+    expect(container.querySelector("[data-taken]")?.getAttribute("data-taken")).toBe("true");
+    await act(async () => useShellStore.setState({ connection: "reconnecting" }));
+    await act(async () => useShellStore.setState({ connection: "live" }));
+    await act(async () => root.render(null));
+    await act(async () => root.render(<ObservedPanel actions={actions} />));
+    expect(calls.filter((call) => call.kind === "session_thread_open")).toHaveLength(1);
+    await act(async () => container.querySelector("button")!.click());
+    expect(calls.filter((call) => call.kind === "session_thread_open")).toHaveLength(2);
+  } finally {
+    await act(async () => root.unmount());
+    useUiStore.setState(local, true);
+    useShellStore.setState(saved, true);
+    vi.unstubAllGlobals();
+  }
+});

@@ -4266,7 +4266,7 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Toggle Hide AI tool | none | none | none | none |
 | Open Project Memory | `⇧⌘L` | `Alt+Shift+L` | `⇧⌘L` | `Alt+Shift+L` |
 | Open PR list | `⇧⌘R` | `Alt+Shift+R` | `⌥⇧R` | `Alt+Shift+R` |
-| Desk thread ⇄ terminal | `⌘J` | `Ctrl+Shift+J` | `⌥⇧J` | `Alt+Shift+J` |
+| Conversation ⇄ terminal | `⌘J` | `Ctrl+Shift+J` | `⌥⇧J` | `Alt+Shift+J` |
 | Toggle documents | none | none | none | none |
 | Toggle Changes tool | `⇧⌘G` | `Alt+Shift+G` | `⇧⌘G` | `Alt+Shift+G` |
 | Toggle Explorer tool | `⇧⌘E` | `Alt+Shift+E` | `⇧⌘E` | `Alt+Shift+E` |

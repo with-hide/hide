@@ -887,7 +887,7 @@ const WAKE_FOLLOW_MS = 60_000;
 /**
  * At the head of an Agent tab Desk sent the operator to (PRD desk-2-ui B7):
  * `나도 참여 중` once the operator typed into a Desk job's, and `Desk로`,
- * which ⌘J also presses, back to Desk with this session beside it.
+ * back to Desk with this session beside it. The shared chord toggles the pane in place.
  */
 export function PaneDeskReturn({ paneId, actions }: { paneId: string; actions: Actions }) {
   const job = useShellStore((s) => s.deskJobs?.jobs.find((one) => one.pane_id === paneId) ?? s.deskJobs?.workers.find((one) => one.pane_id === paneId) ?? null);

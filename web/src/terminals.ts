@@ -431,6 +431,15 @@ let followingSnapshot = false;
 /** Moves keyboard focus to the pane the snapshot names; not an operator action. */
 
 export function focusTerminal(paneId: string) {
+  // Every return to a pane follows its visible body, including lane/dialog
+  // closure and a device's unzoom, which keeps the pane mounted.
+  const cover = document.querySelector<HTMLElement>("[data-pane-conversation]");
+  if (cover?.dataset.paneConversation === paneId) {
+    const composer = cover.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]:not(:disabled)");
+    if (composer) composer.focus();
+    else cover.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    return;
+  }
   const instance = instances.get(paneId);
   if (!instance) return;
   followingSnapshot = true;

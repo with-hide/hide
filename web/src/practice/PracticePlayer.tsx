@@ -6,6 +6,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createActions } from "../actions";
+import { configureAttachments } from "../attachments";
 import { AutomationScreen } from "../AutomationScreen";
 import { configureAccessCalls, receiveAccessResult, type AccessCall } from "../accessCall";
 import { configureAutomationCalls, receiveAutomationResult, type AutomationCall } from "../automationCall";
@@ -111,6 +112,11 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   useEffect(() => holdPageClipboard(clipboard), [clipboard]);
   // A link, a window, a navigation or a host call the shell would have sent off the page goes to the world instead.
   useEffect(() => holdPageOutside(send), [send]);
+  // Composer input belongs to this world's page too, and never to a live socket.
+  useLayoutEffect(() => {
+    const previous = configureAttachments({ dispatch: send, sendBinary: () => undefined });
+    return () => void configureAttachments(previous);
+  }, [send]);
   // The automation form's calls go to the world, never to a daemon; what held them before is put back as the window closes.
   useLayoutEffect(() => {
     const before = configureAutomationCalls((event) => {

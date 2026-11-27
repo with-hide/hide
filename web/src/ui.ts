@@ -327,9 +327,10 @@ type UiStore = {
   /** Desk's room in this window: the session open beside Desk and Desk's desk (`deskRoom.ts`); closed each time the room is left (PRD desk-2-ui B26). */
   deskRoom: DeskRoomWindow;
   setDeskRoom: (change: (room: DeskRoomWindow) => DeskRoomWindow) => void;
-  /** The pane `터미널 ⌘J` left Desk for, which ⌘J on it brings back beside Desk (B7). */
+  /** One pane's conversation choice and bounded thread cache, kept only in this window. */
   paneConversation: { paneId: string; session: string } | null;
   threadLease: ThreadLease | null;
+  /** The pane opened from Desk, whose explicit return button brings Desk back. */
   deskReturn: string | null;
   setDeskReturn: (pane: string | null) => void;
   /** How far above the window's foot the corner's notices stand: the top of the input boxes drawn there (`noticeFloor.ts`). */

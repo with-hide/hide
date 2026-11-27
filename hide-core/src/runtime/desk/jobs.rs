@@ -1326,7 +1326,7 @@ impl Runtime {
     /// most; a row whose parent fell past the cap goes with it.
     pub(super) fn desk_mentions(&self) -> crate::model::DeskMentionsSnapshot {
         use crate::model::{DeskMentionProject, DeskMentionSession};
-        let rows = &self.snapshot.navigator.agents;
+        let rows: Vec<_> = self.agent_rows().collect();
         let listed: HashSet<&str> = rows.iter().map(|row| row.pane_id.as_str()).collect();
         let roots: HashSet<&str> = rows
             .iter()
@@ -1336,6 +1336,7 @@ impl Runtime {
             .collect();
         let mut kept: Vec<&SidebarAgentSnapshot> = rows
             .iter()
+            .copied()
             .filter(|row| {
                 let root = row
                     .lineage_path_pane_ids
@@ -1360,6 +1361,14 @@ impl Runtime {
             .navigator
             .workspaces
             .iter()
+            .chain(
+                self.snapshot
+                    .status
+                    .remote
+                    .iter()
+                    .filter_map(|remote| remote.session.as_ref())
+                    .flat_map(|session| &session.workspaces),
+            )
             .flat_map(|workspace| &workspace.checkouts)
             .flat_map(|checkout| {
                 checkout
@@ -2829,6 +2838,8 @@ mod tests {
             });
         assert!(runtime.desk_glance_opened(pane));
         assert_eq!(runtime.desk.stored.glance[0].pane_id, pane);
+        // B7/B20: the general session menu also includes a device's rows.
+        assert_eq!(runtime.desk_mentions().sessions[0].id, pane);
     }
 
     /// 한눈에's cap lets an ended session go before one at work (engineering

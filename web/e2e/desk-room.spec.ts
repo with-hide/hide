@@ -181,7 +181,7 @@ test("the session's 뷰 N list holds 볼 것 above 본 것, newest first, previe
   }
 });
 
-test("⌘J goes from the session beside Desk to its Agent tab and back to Desk with the session beside it again (PRD desk-2-ui B7) @platform", async ({ page }) => {
+test("⌘J goes from Desk's session to its Agent tab, then toggles that pane's conversation (pane-conversation-toggle B10) @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-room-terminal");
   try {
@@ -195,11 +195,11 @@ test("⌘J goes from the session beside Desk to its Agent tab and back to Desk w
     await expect(page.locator(`[data-pane-view="${desk.pane}"] [data-desk-pane-to-desk]`)).toBeVisible();
 
     await page.keyboard.press(chord("desk_terminal"));
-    await expect(page.locator("[data-desk-screen]")).toBeVisible();
-    await expect(panel).toBeVisible();
+    await expect(page.locator(`[data-pane-conversation="${desk.pane}"]`)).toBeVisible();
+    await expect(page.locator("[data-workspace-screen]")).toBeVisible();
 
-    // `터미널` in the session head does what ⌘J does.
-    await page.locator("[data-desk-session-terminal]").click();
+    await page.keyboard.press(chord("desk_terminal"));
+    await expect(page.locator(`[data-pane-conversation="${desk.pane}"]`)).toHaveCount(0);
     await expect(page.locator(`[data-pane-view="${desk.pane}"]`)).toHaveAttribute("data-focused", "true");
   } finally {
     desk.daemon.stop();

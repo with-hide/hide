@@ -1,6 +1,6 @@
 // Settings' Desk switch and the app menu (PRD session-docs-and-assistant
-// D-76, B41): the View menu carries Desk's command and its chord only while
-// Desk is on, on the real Electron build against a private engine and hided.
+// D-76, B41): Desk's row follows its switch, while Conversation ⇄ terminal
+// stays available (pane-conversation-toggle B10), on a private native stack.
 
 import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import { enterWorkspace } from "../../web/e2e/wire";
@@ -21,7 +21,7 @@ async function switchDesk(page: Page, on: boolean) {
   await page.locator("[data-settings-close]").click();
 }
 
-test("the View menu has no Desk command while Desk is off and gains it with its chord when Settings turns Desk on", { tag: "@platform" }, async () => {
+test("the View menu keeps Conversation ⇄ terminal and its chord while Settings switches Desk on and off", { tag: "@platform" }, async () => {
   const stack = await startStack("desk-switch", { agents: false });
   let app: ElectronApplication | null = null;
   try {
@@ -30,15 +30,16 @@ test("the View menu has no Desk command while Desk is off and gains it with its 
     const page = launched.page;
     await enterWorkspace(page, "fixture");
     await expect(page.locator("[data-desk-sidebar-row]")).toHaveCount(0);
-    expect(await deskItem(app)).toBeNull();
+    const command = { accelerator: process.platform === "darwin" ? "Command+J" : "Control+Shift+J" };
+    expect(await deskItem(app)).toEqual(command);
 
     await switchDesk(page, true);
     await expect(page.locator("[data-desk-sidebar-row]")).toBeVisible();
-    await expect.poll(() => deskItem(app!)).toEqual({ accelerator: process.platform === "darwin" ? "Command+J" : "Control+Shift+J" });
+    await expect.poll(() => deskItem(app!)).toEqual(command);
 
     await switchDesk(page, false);
     await expect(page.locator("[data-desk-sidebar-row]")).toHaveCount(0);
-    await expect.poll(() => deskItem(app!)).toBeNull();
+    await expect.poll(() => deskItem(app!)).toEqual(command);
   } finally {
     await app?.close().catch(() => undefined);
     stack.stop();

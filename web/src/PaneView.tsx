@@ -501,7 +501,7 @@ export const PaneView = memo(function PaneView({
         {!zoomed && paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-accent ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
         {recordAgent?.thread_capability && recordAgent.thread_capability !== "none" ? (
           <Hint label={t(recordAgent.thread_capability === "pending" ? "panes.conversation.pending" : "panes.conversation.show")} shortcut={conversationChord || undefined}>
-            <Button variant={selected ? "tint" : "ghost"} size="sm" className="shrink-0 px-xs text-caption" aria-label={t("panes.conversation.show")} aria-pressed={selected} disabled={moving || recordAgent.thread_capability !== "ready"} data-pane-conversation-toggle={paneId} onClick={() => actions.togglePaneConversation(paneId)}>
+            <Button variant={selected ? "tint" : "ghost"} size="sm" className="shrink-0 px-xs text-caption aria-disabled:opacity-(--opacity-disabled)" aria-label={t("panes.conversation.show")} aria-pressed={selected} aria-disabled={moving || recordAgent.thread_capability !== "ready"} data-pane-conversation-toggle={paneId} onClick={() => { if (!moving && recordAgent.thread_capability === "ready") actions.togglePaneConversation(paneId); }}>
               <MessageSquareIcon aria-hidden="true" /><span className="pane-head-narrow:hidden">{t("panes.conversation.label")}</span>
             </Button>
           </Hint>

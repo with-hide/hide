@@ -14,15 +14,19 @@ export function useSessionThread(actions: Pick<Actions, "openThread" | "closeThr
     if (!paneId) return;
     const previous = useUiStore.getState().threadLease;
     useUiStore.setState({ threadLease: previous?.paneId === paneId ? { ...previous, acquired: false } : { paneId, acquired: false, taken: false, thread: null, history: null } });
+    // The first published result may already be a later window's open: the
+    // core coalesces notifications, so seeing our own pane is not required.
+    const beforeOpen = useShellStore.getState().sessionThread;
     const observe = () => {
       const held = useUiStore.getState().threadLease;
       if (held?.paneId !== paneId || held.taken) return;
       const { sessionThread: thread, sessionThreadHistory: history } = useShellStore.getState();
+      const changedHold = thread && thread.generation > 0 && thread.generation !== (held.thread?.generation ?? beforeOpen?.generation ?? 0);
       if (thread?.pane_id === paneId && thread.state !== "closed") {
         if (!held.acquired || held.thread !== thread || held.history !== history) {
           useUiStore.setState({ threadLease: { ...held, acquired: true, thread, history } });
         }
-      } else if (held.acquired && thread?.pane_id && thread.state !== "closed") {
+      } else if (thread && (changedHold || (held.acquired && thread.pane_id && thread.state !== "closed"))) {
         useUiStore.setState({ threadLease: { ...held, taken: true } });
       }
     };
