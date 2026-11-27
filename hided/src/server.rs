@@ -1731,6 +1731,12 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "beside_too_narrow" => {
             "Your pane is too narrow to split: the agent's input box would not be readable beside you, so nothing was opened; run the command again without --beside to open the agent in a new tab"
         }
+        "beside_unmeasured" => {
+            "The panes of your tab are not drawn yet, so nothing was opened; run the command again without --beside to open the agent in a new tab"
+        }
+        "beside_tab_busy" => {
+            "Your tab is still busy with the splits and moves ahead of this one, so nothing was opened; run the command again without --beside to open the agent in a new tab"
+        }
         "beside_needs_agent_pane" => {
             "--beside opens the agent beside the pane that calls it; run the command from an agent pane Hide knows, or without --beside to open it in a new tab"
         }
@@ -2986,7 +2992,12 @@ fn handle_client_text(
         // that screen (`pane_sizes`).
         Some("terminal_resize") => {
             let (pane, size) = terminal_grid(&event)?;
-            if state.pane_sizes.resized(connection, &pane, size).is_none() {
+            let floor = event.pointer("/payload/floor").cloned();
+            if state
+                .pane_sizes
+                .resized_measured(connection, &pane, size, floor)
+                .is_none()
+            {
                 return Ok(ClientAction::Replies(Vec::new()));
             }
         }
@@ -5386,10 +5397,15 @@ fn screen_input(state: &AppState, connection: u64, pane: &str) {
 /// them.
 fn send_grid(state: &AppState, pane: &str, size: GridSize) {
     state.core.terminals.view(pane, size, false);
+    let mut payload = json!({"pane_id": pane, "cols": size.cols, "rows": size.rows});
+    // The measure the new screen took to fit this grid goes on with it.
+    if let Some(floor) = state.pane_sizes.applied_floor(pane) {
+        payload["floor"] = floor;
+    }
     let event = json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "terminal_resize",
-        "payload": {"pane_id": pane, "cols": size.cols, "rows": size.rows},
+        "payload": payload,
     });
     if let Err(error) = state.core.dispatch(event.to_string().into_bytes()) {
         hide_core::diagnostic!(json!({
@@ -6727,6 +6743,8 @@ mod tests {
             "beside_other_machine",
             "beside_needs_agent_pane",
             "beside_too_narrow",
+            "beside_unmeasured",
+            "beside_tab_busy",
             "beside_with_parent",
             "beside_pane_unavailable",
         ] {

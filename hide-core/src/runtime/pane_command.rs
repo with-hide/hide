@@ -179,15 +179,17 @@ impl Runtime {
                 )
             }
             PaneCommand::Open { command, focus } => {
-                // The split would leave a pane under the floor, so nothing
-                // is opened (`Runtime::too_narrow_to_split_right`).
-                if self.too_narrow_to_split_right(caller_pane).is_some() {
-                    return Err("pane_too_narrow".into());
+                // The split would leave a pane under the floor, or its window
+                // has not measured it yet, so nothing is opened
+                // (`Runtime::split_right_floor`); its turn judges it again.
+                if let Err(refusal) = self.split_right_floor(caller_pane) {
+                    return Err(super::BesideRefusal::Floor(refusal).code("pane_"));
                 }
                 let (_, raw) = crate::address::split_pane(node, caller_pane);
                 (
                     device.to_owned(),
                     Step::Open {
+                        pane: caller_pane.to_owned(),
                         caller: raw.to_owned(),
                         cwd: context.checkout_path.clone(),
                         command,

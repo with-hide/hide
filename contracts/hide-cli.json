@@ -6336,6 +6336,8 @@
                 "beside_other_machine",
                 "beside_needs_agent_pane",
                 "beside_too_narrow",
+                "beside_unmeasured",
+                "beside_tab_busy",
                 "beside_with_parent",
                 "beside_pane_unavailable",
                 "plan_missing",
@@ -7477,6 +7479,8 @@
                 "pane_unavailable",
                 "pane_open_unconfirmed",
                 "pane_too_narrow",
+                "pane_unmeasured",
+                "pane_tab_busy",
                 "shell_not_ready"
             ],
             "repeats_at_most": null,
@@ -9808,7 +9812,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:8160bca7802bc1f920d158c67327806283beb6544697eff7e0de9d1846a7c2ef",
+    "digest": "sha256:3d73bd38af8b2382fb85e5ad0d5d31ef90e51bf091ed0ed5f2fc78417606c888",
     "envelopes": {
         "access": {
             "answer": "value",

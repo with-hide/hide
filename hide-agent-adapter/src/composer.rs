@@ -15,13 +15,6 @@
 /// (`docs/UI_BEHAVIOR.md`, The pane floor).
 pub const PANE_FLOOR_COLUMNS: u16 = 18;
 
-/// The narrowest pane, in columns, that splits right into two panes of at
-/// least [`PANE_FLOOR_COLUMNS`]: a split gives each side half of the pane's
-/// width and its divider takes none, so a pane of this many columns leaves
-/// each half that many cells. `contracts/pane-floor.json` carries both
-/// numbers to the web shell.
-pub const SPLIT_RIGHT_COLUMNS: u16 = 2 * PANE_FLOOR_COLUMNS;
-
 /// How an agent's composer sits on the screen and what it may show when it
 /// holds nothing of the operator's.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

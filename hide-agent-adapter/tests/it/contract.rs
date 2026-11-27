@@ -1048,21 +1048,3 @@ fn today() -> String {
     let year = year_of_era + era * 400 + i64::from(month <= 2);
     format!("{year:04}-{month:02}-{day:02}")
 }
-
-/// The web shell lays panes out and offers Split right from
-/// `contracts/pane-floor.json`, so the file says what the core refuses on.
-#[test]
-fn the_pane_floor_contract_carries_the_core_s_numbers() {
-    use hide_agent_adapter::composer::{PANE_FLOOR_COLUMNS, SPLIT_RIGHT_COLUMNS};
-    let actual: Value =
-        serde_json::from_slice(&std::fs::read(root().join("contracts/pane-floor.json")).unwrap())
-            .unwrap();
-    assert_eq!(
-        actual,
-        serde_json::json!({
-            "columns": PANE_FLOOR_COLUMNS,
-            "split_right_columns": SPLIT_RIGHT_COLUMNS,
-        }),
-        "contracts/pane-floor.json drifted from hide_agent_adapter::composer"
-    );
-}
