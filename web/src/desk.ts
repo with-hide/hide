@@ -548,7 +548,7 @@ export function deskPhase(step: DeskStepKind | null | undefined, text: string | 
 export function threadPhase(turn: ThreadTurn | undefined): WorkingPhase {
   if (!turn) return "thinking";
   if (turn.answer.length > 0) return "answering";
-  const last = turn.work.at(-1);
+  const last = turn.last;
   if (last?.kind === "tool") {
     switch (last.toolKind) {
       case "read":
@@ -602,21 +602,69 @@ export type ThreadTurn = {
   key: string;
   /** The message that began the turn; the first turn may have none. */
   user: Extract<ThreadLine, { kind: "user" }> | null;
-  /** The work before the answer: thoughts, calls, plans and every Hide part. */
+  /** The work before the answer: thoughts, calls, plans and every Hide part, each part's target once (`onePerTarget`). */
   work: ThreadLine[];
+  /** The newest line of the work as the session wrote it, a repeated part included: what the working line says it does. */
+  last: ThreadLine | null;
   /** The agent's words after its last piece of work. */
   answer: Extract<ThreadLine, { kind: "agent" }>[];
-  /** The Hide parts the work made that lead somewhere: they stay in view while the work is folded (B26). */
+  /** The Hide parts the work made that lead somewhere, one per target: they stay in view while the work is folded (B26). */
   parts: Extract<ThreadLine, { kind: "hide" }>[];
   files: number;
   commands: number;
 };
 
 /**
+ * Where a Hide part leads: a mission, a session, a letter's peer, an output,
+ * a pull request, the plan. Two parts of one turn with one target are one
+ * thing the operator can go to, whatever kind it is.
+ */
+function partTarget(part: ThreadHidePart): string {
+  switch (part.kind) {
+    case "plan":
+      return "plan";
+    case "spawn":
+      return `spawn:${part.session.pane_id ?? part.session.name}`;
+    case "letter":
+      return `letter:${part.direction}:${part.peer.pane_id ?? part.peer.name}`;
+    case "view":
+      return `view:${part.output.id}`;
+    case "mission":
+      return `mission:${part.mission.id}`;
+    case "pr":
+      return `pr:${part.number}`;
+  }
+}
+
+/**
+ * A turn's lines with each Hide part's target drawn once: where the turn
+ * first reached it, so nothing moves as the session calls it again, with the
+ * newest call's state and command (six `hide mission` calls are one chip).
+ */
+function onePerTarget(lines: readonly ThreadLine[]): ThreadLine[] {
+  const newest = new Map<string, Extract<ThreadLine, { kind: "hide" }>>();
+  for (const line of lines) if (line.kind === "hide") newest.set(partTarget(line.part), line);
+  const drawn = new Set<string>();
+  const kept: ThreadLine[] = [];
+  for (const line of lines) {
+    if (line.kind !== "hide") {
+      kept.push(line);
+      continue;
+    }
+    const target = partTarget(line.part);
+    if (drawn.has(target)) continue;
+    drawn.add(target);
+    const last = newest.get(target)!;
+    kept.push(last === line ? line : { ...line, part: last.part, command: last.command });
+  }
+  return kept;
+}
+
+/**
  * A thread's lines as turns (B25): each message starts one, and its work
  * folds into one line, `파일 n · 명령 m`, above the answer. A new session, a
  * letter, an output, a mission or a PR it made stays in view under the
- * folded line; a plan change does not.
+ * folded line, once per target; a plan change does not.
  */
 export function threadTurns(lines: readonly ThreadLine[]): ThreadTurn[] {
   const turns: ThreadTurn[] = [];
@@ -625,13 +673,15 @@ export function threadTurns(lines: readonly ThreadLine[]): ThreadTurn[] {
     if (!open) return;
     let lastWork = open.body.length - 1;
     while (lastWork >= 0 && open.body[lastWork]!.kind === "agent") lastWork -= 1;
-    const work = open.body.slice(0, lastWork + 1);
+    const written = open.body.slice(0, lastWork + 1);
+    const work = onePerTarget(written);
     const answer = open.body.slice(lastWork + 1) as Extract<ThreadLine, { kind: "agent" }>[];
     const tools = work.filter((line): line is Extract<ThreadLine, { kind: "tool" }> => line.kind === "tool");
     turns.push({
       key: open.key,
       user: open.user,
       work,
+      last: written.at(-1) ?? null,
       answer,
       parts: work.filter((line): line is Extract<ThreadLine, { kind: "hide" }> => line.kind === "hide" && line.part.kind !== "plan"),
       files: tools.filter((line) => line.toolKind === "edit" || line.toolKind === "delete" || line.toolKind === "move").length,

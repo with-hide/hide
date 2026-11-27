@@ -42,8 +42,13 @@ const row = (pane_id: string, identity_label: string, mark: AgentRow["mark"], ag
 const said = (text: string) => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
 const asked = (text: string) => ({ sessionUpdate: "user_message_chunk", content: { type: "text", text } });
 const shell = (toolCallId: string, command: string, status: "completed" | "in_progress", extra: Record<string, unknown> = {}) => ({ sessionUpdate: "tool_call", toolCallId, kind: "execute", title: command, status, rawInput: { command }, ...extra });
+const edit = (toolCallId: string, path: string, oldText: string, newText: string, status: "completed" | "in_progress") => ({ sessionUpdate: "tool_call", toolCallId, kind: "edit", title: `Edit ${path}`, status, content: [{ type: "diff", path, oldText, newText }] });
 
-/** The Conductor's live page: Hide's parts, a letter each way and a command still running. */
+/**
+ * The Conductor's live page: a finished turn that looked at its mission four
+ * times among Hide's other parts (one chip), a letter each way, and a turn
+ * still at work whose newest call is an edit.
+ */
 function conductorPage(now: number, mission: string): ThreadPage {
   return {
     updates: [
@@ -54,10 +59,19 @@ function conductorPage(now: number, mission: string): ThreadPage {
       shell("l1", "hide request send agent-1a --intent desk:review --body '리뷰 지적 2개 반영해서 다시 올려줘'", "completed"),
       shell("v1", "hide file open shots/thread-dark.png", "completed"),
       shell("m1", `hide mission show --mission ${mission}`, "completed"),
+      shell("m2", `hide mission node add --mission ${mission} --key lane`, "completed"),
       shell("p2", "hide task node ui --status done", "completed"),
+      shell("m3", `hide mission show --mission ${mission}`, "completed"),
+      shell("m4", `hide mission record --mission ${mission} ui c1 --pass`, "completed"),
+      said("1b에 스레드를 맡겼고 미션에 lane 노드를 더했어요."),
       { sessionUpdate: "user_message_chunk", content: { type: "text", text: "반영했어요. CI 기다리는 중\n실패하면 다시 알릴게요." }, _meta: { hide: { origin: "letter", from: "1a-desk-room" } } },
-      said("CI가 끝나면 lane 노드를 띄울게요. 지금 캡처를 다시 찍어요."),
-      shell("r1", "node scripts/capture-gallery.mjs --theme dark", "in_progress", { _meta: { hide: { at_ms: now - 12_000 } } }),
+      said("CI가 끝나면 lane 노드를 띄울게요. 먼저 칩을 고쳐요."),
+      shell("r0", "rg -n \"mission\" web/src/threadView.ts", "completed"),
+      { sessionUpdate: "tool_call", toolCallId: "rd", kind: "read", title: "Read web/src/components/desk/thread-view.tsx", status: "completed" },
+      shell("m5", `hide mission show --mission ${mission}`, "completed"),
+      edit("e1", "web/src/desk.ts", "  const work = open.body.slice(0, lastWork + 1);", "  const written = open.body.slice(0, lastWork + 1);\n  const work = onePerTarget(written);", "completed"),
+      shell("r1", "node scripts/capture-gallery.mjs --theme dark\n  --scene desk-thread", "completed", { _meta: { hide: { at_ms: now - 12_000 } } }),
+      edit("e2", "web/src/components/desk/thread-view.tsx", "a\nb\nc", "a2\nb2\nc2", "in_progress"),
     ],
     parts: {
       p1: { kind: "plan" },
@@ -65,7 +79,11 @@ function conductorPage(now: number, mission: string): ThreadPage {
       l1: { kind: "letter", to: "agent-1a", body: "리뷰 지적 2개 반영해서 다시 올려줘" },
       v1: { kind: "view", view: "file", target: "shots/thread-dark.png" },
       m1: { kind: "mission", mission },
+      m2: { kind: "mission", mission },
       p2: { kind: "plan" },
+      m3: { kind: "mission", mission },
+      m4: { kind: "mission", mission },
+      m5: { kind: "mission", mission },
     },
     sessions: {
       "agent-1a": { pane_id: "w1:1a", machine: "mac" },

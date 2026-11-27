@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { glanceSessions, agentPickable, approvalButtons, askPlace, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, livePane, ENDED_JOB_STATES, jobDimmed, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
+import { glanceSessions, agentPickable, approvalButtons, askPlace, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadHidePart, type ThreadTurn, sessionFacts, livePane, ENDED_JOB_STATES, jobDimmed, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
 import type { AgentRow, DeskRecord } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -82,7 +82,7 @@ describe("what the working line says (feedback 1 c3)", () => {
   });
 
   it("says a session's newest line: its words, its call's kind, a Hide part, or thinking", () => {
-    const turn = (work: ThreadTurn["work"], answer: ThreadTurn["answer"] = []): ThreadTurn => ({ key: "t", user: null, work, answer, parts: [], files: 0, commands: 0 });
+    const turn = (work: ThreadTurn["work"], answer: ThreadTurn["answer"] = []): ThreadTurn => ({ key: "t", user: null, work, last: work.at(-1) ?? null, answer, parts: [], files: 0, commands: 0 });
     const tool = (toolKind: "read" | "edit" | "execute" | "think") => ({ kind: "tool" as const, id: toolKind, title: toolKind, toolKind, status: "in_progress" as const, input: null, output: null, diffs: [], images: [], startedAtMs: null });
     expect(threadPhase(undefined)).toBe("thinking");
     expect(threadPhase(turn([tool("read")]))).toBe("files");
@@ -90,6 +90,12 @@ describe("what the working line says (feedback 1 c3)", () => {
     expect(threadPhase(turn([tool("execute")]))).toBe("other");
     expect(threadPhase(turn([tool("think")]))).toBe("thinking");
     expect(threadPhase(turn([tool("read")], [{ kind: "agent", id: "a", message: null, text: "다 읽었어요", atMs: null }]))).toBe("answering");
+    // A part drawn once for its target still says what the newest call did.
+    const mission = { id: "mission-3", title: "Desk", status: "running", done: 0, total: 1, turn: null, delay: null } as Extract<ThreadHidePart, { kind: "mission" }>["mission"];
+    const looked = (id: string) => ({ kind: "hide" as const, id, part: { kind: "mission" as const, mission }, command: null });
+    const [read] = threadTurns([looked("m1"), tool("read"), looked("m2")]);
+    expect(read!.work.map((line) => line.id)).toEqual(["m1", "read"]);
+    expect(threadPhase(read)).toBe("sessions");
   });
 });
 
