@@ -46,12 +46,9 @@ pub fn cli_program() -> Option<OsString> {
     }
 }
 
-/// The few lines a session needs about its Workspace: which checkout the
-/// daemon bound it to, that its commands act only there, and where the
-/// commands this pane may run are listed. A bare `hide` reaches that
-/// checkout from the pane (it bootstraps its own one-shot credential), so
-/// the note gives no command prefix, and the command list and the rules
-/// for letters and Views live in `hide workspace info` and `hide guide`.
+/// The Workspace note ([`hide_agent_hooks::runtime::workspace_note`]) for
+/// the checkout the daemon answered for, when this pane may read its
+/// Workspace.
 fn format_context(answer: &Value) -> Option<String> {
     let result = answer.get("result")?;
     let identity = result.get("context")?;
@@ -65,9 +62,7 @@ fn format_context(answer: &Value) -> Option<String> {
     {
         return None;
     }
-    Some(format!(
-        "Hide Workspace: this session's checkout is `{checkout_path}`, and Workspace commands act only on it. `hide workspace info` lists the commands this pane may run."
-    ))
+    Some(hide_agent_hooks::runtime::workspace_note(checkout_path))
 }
 
 #[cfg(test)]
@@ -107,13 +102,11 @@ mod tests {
     /// 2,000, so a realistic start (a six-line global instruction, a full
     /// 20-card Memory index with its receipt, six open sessions with long
     /// titles, topics and results, and the Workspace note) stays well under
-    /// that cap, and the Memory index begins inside the first 2,000.
+    /// that cap whole, and the Memory index begins inside the first 2,000.
     #[test]
     fn a_realistic_claude_session_start_fits_what_claude_code_shows() {
-        use hide_agent_hooks::runtime::{
-            AgentRuntime, HookEvent, append_session_context, hook_stdout_with_context,
-            session_start_context,
-        };
+        use hide_agent_hooks::memory::{HookMemoryOutcome, MemoryContext, hook_output};
+        use hide_agent_hooks::runtime::{AgentRuntime, HookEvent};
         let global = format!(
             "<hide-global-instruction trust=\"operator-approved\">\nThe operator approved these instructions for every project and every agent. Follow them unless the operator says otherwise now.\n{}</hide-global-instruction>\n",
             "복잡한 구조나 흐름은 긴 줄글 대신 그림이나 표로 먼저 보여 주고, 설명은 쉬운 말과 예시로 핵심만 쓴다.\n"
@@ -160,14 +153,20 @@ mod tests {
             }
         }))
         .unwrap();
-        let start = session_start_context(Some(&global), Some(&memory), Some(&sessions));
-        let output = hook_stdout_with_context(
+        let answered = MemoryContext {
+            context: Some(memory),
+            outcome: HookMemoryOutcome::Provided { count: cards },
+            global: Some(global),
+            asks: None,
+            sessions: Some(sessions.clone()),
+        };
+        let output = hook_output(
             AgentRuntime::ClaudeCode,
             HookEvent::SessionStart,
-            Some(&start),
+            Some(&answered),
+            Some(&workspace),
         )
         .unwrap();
-        let output = append_session_context(&output, &workspace).unwrap();
         let value: Value = serde_json::from_str(&output).unwrap();
         let context = value["hookSpecificOutput"]["additionalContext"]
             .as_str()
@@ -181,7 +180,7 @@ mod tests {
             .count();
         assert!(index_at < 2_000, "the Memory index starts at {index_at}");
         assert!(context.contains(hide_agent_hooks::START_CONTEXT));
-        assert!(context.ends_with(&workspace));
+        assert!(context.ends_with(&format!("{workspace}\n\n{sessions}")));
     }
 
     #[test]

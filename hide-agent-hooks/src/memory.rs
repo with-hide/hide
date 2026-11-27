@@ -32,12 +32,6 @@ pub enum HookMemoryOutcome {
     ProjectUnresolved,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct HookMemoryResult {
-    pub stdout: Option<String>,
-    pub outcome: HookMemoryOutcome,
-}
-
 #[derive(Debug, Deserialize)]
 struct HookInput {
     prompt: Option<String>,
@@ -67,17 +61,17 @@ pub fn read_bounded(mut input: impl Read) -> io::Result<(Vec<u8>, bool)> {
     Ok((retained, exceeded))
 }
 
-/// The hook's output for `bytes`, the runtime's payload, with the Memory the
-/// core gives it before `deadline`; a failure is recorded under `home`.
-pub fn project_memory_output_until(
+/// The Memory the core gives the hook for `bytes`, the runtime's payload,
+/// before `deadline`; a failure is recorded under `home`.
+pub fn project_memory_until(
     runtime: AgentRuntime,
     event: HookEvent,
     bytes: &[u8],
     exceeded: bool,
     home: &Path,
     deadline: Instant,
-) -> HookMemoryResult {
-    let projected = if exceeded {
+) -> MemoryContext {
+    if exceeded {
         MemoryContext::without(HookMemoryOutcome::InputTooLarge)
     } else {
         match serde_json::from_slice::<HookInput>(bytes) {
@@ -93,18 +87,27 @@ pub fn project_memory_output_until(
             ),
             Err(_) => MemoryContext::without(HookMemoryOutcome::Unavailable),
         }
-    };
-    let context = match event {
-        HookEvent::SessionStart => Some(projected.session_start()),
-        _ => projected.joined(),
-    };
-    HookMemoryResult {
-        stdout: match &context {
-            Some(context) => hook_stdout_with_context(runtime, event, Some(context)),
-            None => crate::runtime::hook_stdout(runtime, event),
-        },
-        outcome: projected.outcome,
     }
+}
+
+/// The runtime's envelope for `event`, printed once with everything in it:
+/// at a session start the one context [`MemoryContext::session_start`]
+/// composes from `memory` (none when Memory was not asked) and `workspace`,
+/// the Workspace note of a live pane; at a prompt Memory's joined context.
+pub fn hook_output(
+    runtime: AgentRuntime,
+    event: HookEvent,
+    memory: Option<&MemoryContext>,
+    workspace: Option<&str>,
+) -> Option<String> {
+    let context = match event {
+        HookEvent::SessionStart => Some(match memory {
+            Some(memory) => memory.session_start(workspace),
+            None => crate::runtime::session_start_context(None, None, None, workspace),
+        }),
+        _ => memory.and_then(MemoryContext::joined),
+    };
+    hook_stdout_with_context(runtime, event, context.as_deref())
 }
 
 /// What one hook asks Project Memory for, whatever runtime's payload it came in.
@@ -149,14 +152,16 @@ impl MemoryContext {
         }
     }
 
-    /// A session start's whole context: the global instruction and Memory's
-    /// index around the start text, the open sessions after it
+    /// A session start's whole context: the global instruction, Memory's
+    /// index and the start text, then `workspace`, the Workspace note of a
+    /// live pane, and the open sessions, under one limit
     /// ([`crate::runtime::session_start_context`]).
-    pub fn session_start(&self) -> String {
+    pub fn session_start(&self, workspace: Option<&str>) -> String {
         crate::runtime::session_start_context(
             self.global.as_deref(),
             self.context.as_deref(),
             self.sessions.as_deref(),
+            workspace,
         )
     }
 
@@ -516,7 +521,7 @@ mod tests {
         }))
         .unwrap();
 
-        let result = project_memory_output_until(
+        let memory = project_memory_until(
             AgentRuntime::Codex,
             HookEvent::SessionStart,
             &payload,
@@ -525,9 +530,14 @@ mod tests {
             Instant::now(),
         );
 
-        assert_eq!(result.outcome, HookMemoryOutcome::Deadline);
-        let output: serde_json::Value =
-            serde_json::from_str(result.stdout.as_ref().unwrap()).unwrap();
+        assert_eq!(memory.outcome, HookMemoryOutcome::Deadline);
+        let output = hook_output(
+            AgentRuntime::Codex,
+            HookEvent::SessionStart,
+            Some(&memory),
+            None,
+        );
+        let output: serde_json::Value = serde_json::from_str(output.as_ref().unwrap()).unwrap();
         assert_eq!(
             output["hookSpecificOutput"]["additionalContext"],
             crate::runtime::START_CONTEXT

@@ -604,17 +604,25 @@ mod tests {
     /// Every part of a session start at its own cap at once (the operator's
     /// global instruction at `global_instruction::LIMIT_BYTES`, a Memory
     /// index at `RENDERED_TOKEN_LIMIT` in the prose that packs the most
-    /// characters into it, and this block at [`BRIEF_LIMIT_BYTES`]) still
-    /// fits, with the Workspace note after it, under the 10,000 characters or
-    /// so past which Claude Code shows the model only the first 2,000; the
-    /// instruction and the index stay whole and the sessions give way to the
-    /// line that points at `hide session list`.
+    /// characters into it, and this block at [`BRIEF_LIMIT_BYTES`]) with a
+    /// checkout path of any length a request takes (a short one, the 2,009
+    /// bytes of twenty 99-character folders under `/srv/` that a Linux
+    /// device holds, as review round 2 of pull request 3091 measured, and
+    /// `PATH_LIMIT`): Claude Code's whole output stays within the start's
+    /// one limit, under the 10,000 characters or so past which it shows the
+    /// model only the first 2,000. The instruction and the index stay whole;
+    /// the sessions, the Workspace note and the start text give way to their
+    /// one lines. Each part here is at least as long as in that review's
+    /// case (a 4,096-byte instruction, 20 Memory cards, six sessions in
+    /// 2,307 bytes), so its case is inside this one.
     #[test]
     fn the_worst_session_start_still_fits_what_claude_code_shows() {
         use crate::global_instruction::{Instruction, LIMIT_BYTES, LIMIT_TOKENS, render};
+        use crate::project_open::{PATH_LIMIT, valid_path};
+        use hide_agent_hooks::memory::{HookMemoryOutcome, MemoryContext, hook_output};
         use hide_agent_hooks::runtime::{
             AgentRuntime, HookEvent, SESSIONS_LEFT_OUT, START_CONTEXT_LIMIT_CHARS, START_LEFT_OUT,
-            append_session_context, hook_stdout_with_context, session_start_context,
+            WORKSPACE_LEFT_OUT, workspace_note,
         };
         use hide_memory::hook::{RENDERED_TOKEN_LIMIT, estimated_tokens};
         let longest = |fits: &dyn Fn(&str) -> bool| {
@@ -644,35 +652,42 @@ mod tests {
             "s".repeat(BRIEF_LIMIT_BYTES - HEAD.len() - 30)
         );
         assert!(sessions.len() <= BRIEF_LIMIT_BYTES);
-        let start = session_start_context(Some(&global), Some(&memory), Some(&sessions));
-        let workspace = format!(
-            "Hide Workspace: this session's checkout is `/{}`, and Workspace commands act only on it. `hide workspace info` lists the commands this pane may run.",
-            "w".repeat(200)
-        );
-        // Claude Code's envelope, with the Workspace note appended as the
-        // hook appends it.
-        let output = hook_stdout_with_context(
-            AgentRuntime::ClaudeCode,
-            HookEvent::SessionStart,
-            Some(&start),
-        )
-        .unwrap();
-        let output = append_session_context(&output, &workspace).unwrap();
-        let output: serde_json::Value = serde_json::from_str(&output).unwrap();
-        let context = output["hookSpecificOutput"]["additionalContext"]
-            .as_str()
+        let answered = MemoryContext {
+            context: Some(memory.clone()),
+            outcome: HookMemoryOutcome::Provided { count: 20 },
+            global: Some(global.clone()),
+            asks: None,
+            sessions: Some(sessions),
+        };
+        let linux_device = format!("/srv/{}/repo", vec!["a".repeat(99); 20].join("/"));
+        assert_eq!(linux_device.len(), 2_009);
+        let longest_path = format!("/{}", "w".repeat(PATH_LIMIT - 1));
+        for path in [format!("/{}", "w".repeat(200)), linux_device, longest_path] {
+            assert!(valid_path(&path));
+            let workspace = workspace_note(&path);
+            let output = hook_output(
+                AgentRuntime::ClaudeCode,
+                HookEvent::SessionStart,
+                Some(&answered),
+                Some(&workspace),
+            )
             .unwrap();
-        assert!(start.chars().count() <= START_CONTEXT_LIMIT_CHARS);
-        assert!(
-            context.chars().count() < 10_000,
-            "{} characters",
-            context.chars().count()
-        );
-        assert!(context.starts_with(&format!("{global}\n{memory}")));
-        assert!(context.contains(SESSIONS_LEFT_OUT));
-        assert!(!context.contains(HEAD));
-        // At every cap the start text gives way too, to its one line.
-        assert!(context.contains(START_LEFT_OUT));
-        assert!(context.ends_with(&workspace));
+            let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+            let context = output["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap();
+            let characters = context.chars().count();
+            assert!(
+                characters <= START_CONTEXT_LIMIT_CHARS,
+                "{characters} characters with a {}-byte path",
+                path.len()
+            );
+            assert!(context.starts_with(&format!("{global}\n{memory}")));
+            assert!(!context.contains(HEAD));
+            assert!(!context.contains(&path));
+            assert!(context.ends_with(&format!(
+                "{START_LEFT_OUT}\n\n{WORKSPACE_LEFT_OUT}\n\n{SESSIONS_LEFT_OUT}"
+            )));
+        }
     }
 }

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::runtime::START_CONTEXT;
+use crate::runtime::{START_CONTEXT, session_start_context};
 
 /// What an earlier build wrote, retired agents included: the public
 /// [`super::install`] refuses a retired agent.
@@ -495,9 +495,9 @@ fn the_installed_helper_is_read_back_from_the_entry() {
 
 #[test]
 fn each_agent_reads_context_in_the_field_its_documentation_names() {
-    let context = session_context(START_CONTEXT, Some("workspace guidance"));
+    let context = session_start_context(None, None, None, Some("workspace guidance"));
     assert_eq!(context, format!("{START_CONTEXT}\n\nworkspace guidance"));
-    assert_eq!(session_context(START_CONTEXT, None), START_CONTEXT);
+    assert_eq!(session_start_context(None, None, None, None), START_CONTEXT);
 
     let stdout = |agent| super::stdout(agent, &context).unwrap();
     let gemini: Value = serde_json::from_str(&stdout(GuidanceAgent::Gemini)).unwrap();
@@ -530,7 +530,7 @@ fn the_same_session_start_twice_prints_the_same_bytes() {
     // agent's hooks inside another agent, or two config layers) is told the
     // same thing twice: the output depends on nothing but the context.
     for agent in GuidanceAgent::ALL {
-        let context = session_context(START_CONTEXT, None);
+        let context = session_start_context(None, None, None, None);
         assert_eq!(
             stdout(agent, &context),
             stdout(agent, &context),

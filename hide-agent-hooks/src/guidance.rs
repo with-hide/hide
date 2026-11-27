@@ -418,17 +418,6 @@ impl Layout {
 
 // --- What the hook prints --------------------------------------------------------
 
-/// The context a guidance hook delivers: the session start's context
-/// ([`crate::runtime::session_start_context`], or [`crate::runtime::START_CONTEXT`] alone
-/// where Memory comes with the first prompt instead), then the Workspace
-/// guidance when the daemon answered for this checkout.
-pub fn session_context(start: &str, workspace: Option<&str>) -> String {
-    match workspace.filter(|context| !context.is_empty()) {
-        Some(workspace) => format!("{start}\n\n{workspace}"),
-        None => start.to_owned(),
-    }
-}
-
 /// What the agent's session-start hook writes to stdout for `context`, in
 /// the form its documentation says it reads: Gemini CLI and Copilot CLI
 /// parse exactly one JSON value, Qwen Code, Factory Droid and Augment read

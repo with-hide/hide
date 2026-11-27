@@ -74,9 +74,10 @@ pub const START_CONTEXT: &str = "Inside Hide, read more when you need it:\n\
 | complex work: planning or review first, several PRs or parallel work, another agent reviewing | first ask in one line: Shall I run this as a mission, or do it directly? A mission is `hide mission help` |\n\
 | Hide itself misbehaves | `hide issue help` |";
 
-/// The characters a session start's context keeps at most: under the
-/// 10,000 or so past which Claude Code shows the model only the first 2,000,
-/// with room left for the Workspace note that follows it.
+/// The characters a session start's whole context keeps at most, the one
+/// string the hook prints with everything in it: under the 10,000 or so
+/// past which Claude Code shows the model only the first 2,000 (the 1.2.13
+/// release candidate's start was saved to a file at 9.9 K).
 pub const START_CONTEXT_LIMIT_CHARS: usize = 9_000;
 
 /// What stands in for the Project's open sessions when the start has no room
@@ -84,40 +85,73 @@ pub const START_CONTEXT_LIMIT_CHARS: usize = 9_000;
 pub const SESSIONS_LEFT_OUT: &str =
     "The Project's open sessions are left out to keep this short: `hide session list` lists them.";
 
+/// What stands in for the Workspace note when the start has no room for it,
+/// a long checkout path being the usual cause.
+pub const WORKSPACE_LEFT_OUT: &str = "Hide Workspace: `hide workspace info` names this session's checkout and the commands this pane may run.";
+
 /// What stands in for [`START_CONTEXT`] when the operator's global
 /// instruction and the Memory index leave no room for it either.
 pub const START_LEFT_OUT: &str = "Inside Hide, `hide guide` prints how to work here.";
 
-/// A session start's whole context, most important first: the operator's
-/// global instruction and the Project Memory index, each only when the core
-/// answered with it, then [`START_CONTEXT`], then the Project's open
-/// sessions. Every agent gets this text; a live pane's Workspace note and
-/// the letters waiting for it follow ([`append_session_context`]).
+/// The few lines a session in a Hide pane needs about its Workspace: which
+/// checkout the daemon bound it to, that its commands act only there, and
+/// where the commands this pane may run are listed. A bare `hide` reaches
+/// that checkout from the pane (it bootstraps its own one-shot credential),
+/// so the note gives no command prefix, and the command list and the rules
+/// for letters and Views live in `hide workspace info` and `hide guide`.
+pub fn workspace_note(checkout_path: &str) -> String {
+    format!(
+        "Hide Workspace: this session's checkout is `{checkout_path}`, and Workspace commands act only on it. `hide workspace info` lists the commands this pane may run."
+    )
+}
+
+/// A session start's whole context, the one string the hook prints: first
+/// the parts whose length is fixed or capped, the operator's global
+/// instruction and the Project Memory index (each only when the core
+/// answered with it) and [`START_CONTEXT`], then the parts whose length
+/// follows their input, the Workspace note of a live pane
+/// ([`workspace_note`]) and the Project's open sessions. Every agent with a
+/// session-start route gets this text.
 ///
-/// Past [`START_CONTEXT_LIMIT_CHARS`] the least important part gives way
-/// first: the open sessions become [`SESSIONS_LEFT_OUT`], then the start
-/// text becomes [`START_LEFT_OUT`]. The global instruction and the Memory
-/// index are always given whole; their own caps keep the two under the
-/// limit (`hide-core`'s worst-case session start test holds that).
+/// Past [`START_CONTEXT_LIMIT_CHARS`] the parts give way from the back: the
+/// open sessions become [`SESSIONS_LEFT_OUT`], then the Workspace note
+/// [`WORKSPACE_LEFT_OUT`], then the start text [`START_LEFT_OUT`]. The
+/// global instruction and the Memory index are always given whole; their
+/// own caps keep the two under the limit (`hide-core`'s
+/// `the_worst_session_start_still_fits_what_claude_code_shows` holds that
+/// with every part at its cap and the longest checkout path a request
+/// takes).
 pub fn session_start_context(
     global: Option<&str>,
     memory: Option<&str>,
     sessions: Option<&str>,
+    workspace: Option<&str>,
 ) -> String {
-    let sessions = open_sessions_within_limit(global, memory, sessions);
-    let context = joined([global, memory, Some(START_CONTEXT), sessions]);
-    if within_limit(&context) {
-        return context;
-    }
-    joined([global, memory, Some(START_LEFT_OUT), sessions])
+    let sessions = sessions.filter(|sessions| !sessions.is_empty());
+    let workspace = workspace.filter(|workspace| !workspace.is_empty());
+    let sessions_left_out = sessions.map(|_| SESSIONS_LEFT_OUT);
+    let workspace_left_out = workspace.map(|_| WORKSPACE_LEFT_OUT);
+    let compose = |start: &str, workspace: Option<&str>, sessions: Option<&str>| {
+        joined([global, memory, Some(start), workspace, sessions])
+    };
+    [
+        (START_CONTEXT, workspace, sessions),
+        (START_CONTEXT, workspace, sessions_left_out),
+        (START_CONTEXT, workspace_left_out, sessions_left_out),
+    ]
+    .into_iter()
+    .map(|(start, workspace, sessions)| compose(start, workspace, sessions))
+    .find(|context| within_limit(context))
+    .unwrap_or_else(|| compose(START_LEFT_OUT, workspace_left_out, sessions_left_out))
 }
 
 /// The open sessions as the core gave them while they fit beside the
 /// global instruction, the Memory index and [`START_CONTEXT`] under
 /// [`START_CONTEXT_LIMIT_CHARS`], else [`SESSIONS_LEFT_OUT`]; none when the
 /// core gave none. OpenCode, Pi and omp, whose script puts the start text
-/// in front of the first prompt's context, keep their sessions by this
-/// same rule.
+/// and the Workspace note in front of the first prompt's context, keep
+/// their sessions by this rule; those hosts show the model the whole
+/// context, so the note's length is not counted there.
 pub fn open_sessions_within_limit<'a>(
     global: Option<&str>,
     memory: Option<&str>,
@@ -704,49 +738,63 @@ mod tests {
         );
     }
 
-    /// The operator's instruction and the Memory index come first, the
-    /// open sessions after the start text, and a part the core left out
-    /// leaves no gap.
+    /// The operator's instruction, the Memory index and the start text come
+    /// first, then the Workspace note and the open sessions, and a part
+    /// left out leaves no gap.
     #[test]
     fn a_session_start_reads_the_global_instruction_and_memory_first() {
         let context = session_start_context(
             Some("<global/>\n"),
             Some("<memory/>\n"),
             Some("<sessions/>\n"),
+            Some("<workspace/>"),
         );
         assert_eq!(
             context,
-            format!("<global/>\n\n<memory/>\n\n{START_CONTEXT}\n\n<sessions/>\n")
+            format!("<global/>\n\n<memory/>\n\n{START_CONTEXT}\n\n<workspace/>\n\n<sessions/>\n")
         );
-        assert_eq!(session_start_context(None, None, None), START_CONTEXT);
+        assert_eq!(session_start_context(None, None, None, None), START_CONTEXT);
         assert_eq!(
-            session_start_context(None, Some(""), Some("<sessions/>\n")),
+            session_start_context(None, Some(""), Some("<sessions/>\n"), Some("")),
             format!("{START_CONTEXT}\n\n<sessions/>\n")
         );
     }
 
-    /// Past the limit the open sessions give way to one line, then the
-    /// start text to one line; the global instruction and the Memory index
-    /// stay whole.
+    /// Past the limit the parts give way from the back, each to one line:
+    /// the open sessions, then the Workspace note, then the start text;
+    /// the global instruction and the Memory index stay whole.
     #[test]
-    fn past_its_limit_a_session_start_drops_the_sessions_then_the_start_text() {
+    fn past_its_limit_a_session_start_gives_way_from_the_back() {
         let global = format!("<global>{}</global>\n", "g".repeat(3_000));
         let memory = format!("<memory>{}</memory>\n", "m".repeat(3_000));
         let sessions = format!("<sessions>{}</sessions>\n", "s".repeat(3_000));
-        let context = session_start_context(Some(&global), Some(&memory), Some(&sessions));
+        let workspace = workspace_note(&"w".repeat(1_000));
+        let start = |memory: &str, workspace: &str, sessions: Option<&str>| {
+            session_start_context(Some(&global), Some(memory), sessions, Some(workspace))
+        };
         assert_eq!(
-            context,
-            format!("{global}\n{memory}\n{START_CONTEXT}\n\n{SESSIONS_LEFT_OUT}")
+            start(&memory, &workspace, Some(&sessions)),
+            format!("{global}\n{memory}\n{START_CONTEXT}\n\n{workspace}\n\n{SESSIONS_LEFT_OUT}")
+        );
+        let long_workspace = workspace_note(&"w".repeat(2_000));
+        assert_eq!(
+            start(&memory, &long_workspace, Some(&sessions)),
+            format!(
+                "{global}\n{memory}\n{START_CONTEXT}\n\n{WORKSPACE_LEFT_OUT}\n\n{SESSIONS_LEFT_OUT}"
+            )
         );
         let memory = format!("<memory>{}</memory>\n", "m".repeat(5_000));
-        let context = session_start_context(Some(&global), Some(&memory), Some(&sessions));
         assert_eq!(
-            context,
-            format!("{global}\n{memory}\n{START_LEFT_OUT}\n\n{SESSIONS_LEFT_OUT}")
+            start(&memory, &workspace, Some(&sessions)),
+            format!(
+                "{global}\n{memory}\n{START_LEFT_OUT}\n\n{WORKSPACE_LEFT_OUT}\n\n{SESSIONS_LEFT_OUT}"
+            )
         );
-        // Nothing stands in for sessions the core did not give.
-        let context = session_start_context(Some(&global), Some(&memory), None);
-        assert_eq!(context, format!("{global}\n{memory}\n{START_LEFT_OUT}"));
+        // Nothing stands in for a part there was none of.
+        assert_eq!(
+            session_start_context(Some(&global), Some(&memory), None, None),
+            format!("{global}\n{memory}\n{START_LEFT_OUT}")
+        );
         // The first-prompt route of OpenCode, Pi and omp keeps its sessions
         // by the same rule.
         let memory_small = format!("<memory>{}</memory>\n", "m".repeat(1_000));
@@ -765,8 +813,7 @@ mod tests {
         // Over the limit with the instruction and the index alone, both are
         // still given whole.
         let memory = format!("<memory>{}</memory>\n", "m".repeat(9_000));
-        let context = session_start_context(Some(&global), Some(&memory), Some(&sessions));
-        assert!(context.starts_with(&format!("{global}\n{memory}")));
+        assert!(start(&memory, &workspace, Some(&sessions)).starts_with(&format!("{global}\n{memory}")));
     }
 
     #[test]

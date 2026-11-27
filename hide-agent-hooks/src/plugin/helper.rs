@@ -20,7 +20,7 @@ use hide_agent_adapter::{AgentAdapter, HookDialect, PluginDialect};
 use hide_agent_hooks::delivery::{self, Intake, Prompt};
 use hide_agent_hooks::memory::{self, HookMemoryOutcome, MemoryRequest, memory_context_until};
 use hide_agent_hooks::runtime::HookEvent;
-use hide_agent_hooks::{counters, guardrails, guidance, report};
+use hide_agent_hooks::{counters, guardrails, report};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -197,8 +197,10 @@ fn session(input: &Input) -> Option<String> {
 /// prompt.
 fn start() -> Value {
     json!({
-        "context": guidance::session_context(
-            hide_agent_hooks::START_CONTEXT,
+        "context": hide_agent_hooks::session_start_context(
+            None,
+            None,
+            None,
             workspace_context::live_context().as_deref(),
         ),
     })
