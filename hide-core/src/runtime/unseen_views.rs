@@ -37,11 +37,26 @@ impl Runtime {
         true
     }
 
+    /// Whether a window holding the keyboard draws Desk's desk, as the
+    /// daemon summed every window's report: the tab in front of that desk is
+    /// then in front of the operator.
+    pub(super) fn set_desk_focused(&mut self, focused: bool) -> bool {
+        if self.desk_focused == focused {
+            return false;
+        }
+        self.desk_focused = focused;
+        self.settle_seen_views();
+        true
+    }
+
     /// An agent's open landed in `view_id` of `key`: the operator has a new
     /// View to look at, unless it is the one in front of them now, which is
     /// decided here, in the same event, so it never shows (B5, B14).
     pub(super) fn mark_view_unseen(&mut self, key: &WorkspaceKey, view_id: &str) {
-        if self.looked_at_view().as_ref() == Some(&(key.clone(), view_id.to_owned())) {
+        if self
+            .looked_at_views()
+            .any(|(at, id)| at == *key && id == view_id)
+        {
             return;
         }
         let now = unix_milliseconds();
@@ -131,27 +146,40 @@ impl Runtime {
         }
     }
 
-    /// The View in front of the operator now, if a window with the keyboard
-    /// shows one (D-07): the tab in front of the active area of the tray the
-    /// front Workspace draws, in the lane or in pair view (PRD
-    /// lane-desk-pair-view B2).
-    fn looked_at_view(&self) -> Option<(WorkspaceKey, String)> {
-        if !self.window_focused {
-            return None;
-        }
-        let key = self.front_workspace_key()?;
-        let layout = self.drawn_tray_layout(&key)?;
-        let id = layout.active_area().active.clone()?;
-        Some((key, id))
+    /// The Views in front of the operator now, each one a window with the
+    /// keyboard shows (D-07): the tab in front of the active area of the
+    /// tray the front Workspace draws, in the lane or in pair view (PRD
+    /// lane-desk-pair-view B2), and the tab in front of Desk's desk while a
+    /// window draws it.
+    fn looked_at_views(&self) -> impl Iterator<Item = (WorkspaceKey, String)> {
+        let workspace = self
+            .window_focused
+            .then(|| {
+                let key = self.front_workspace_key()?;
+                let id = self.drawn_tray_layout(&key)?.active_area().active.clone()?;
+                Some((key, id))
+            })
+            .flatten();
+        let desk = self
+            .desk_focused
+            .then(|| {
+                let id = self.desk_views()?.active_area().active.clone()?;
+                Some((self.desk_key(), id))
+            })
+            .flatten();
+        workspace.into_iter().chain(desk)
     }
 
-    /// Records the View in front of the operator as seen. Runs before every
-    /// snapshot read and costs one lookup when nothing is unseen there.
+    /// Records the Views in front of the operator as seen. Runs before every
+    /// snapshot read and costs one lookup per window kind when nothing is
+    /// unseen there.
     pub(super) fn settle_seen_views(&mut self) -> bool {
-        let Some((key, view_id)) = self.looked_at_view() else {
-            return false;
-        };
-        self.mark_view_seen(&key, &view_id)
+        let looked: Vec<_> = self.looked_at_views().collect();
+        let mut changed = false;
+        for (key, view_id) in looked {
+            changed |= self.mark_view_seen(&key, &view_id);
+        }
+        changed
     }
 
     /// An ancestor of the agent that opened `view_id` read it through the CLI

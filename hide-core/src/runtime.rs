@@ -1869,6 +1869,9 @@ pub struct Runtime {
     /// told it, nothing is in front of the operator (PRD unseen-agent-views
     /// D-07).
     window_focused: bool,
+    /// Whether a window holding the keyboard draws Desk's desk, as the
+    /// daemon summed every window's report (`desk_focus`).
+    desk_focused: bool,
     /// The View store's generation the rows' unseen Views were last laid
     /// against (`settle_unseen_views`).
     unseen_laid_generation: u64,
@@ -2748,6 +2751,7 @@ impl Runtime {
             last_session_spaces: Vec::new(),
             ui_attached: true,
             window_focused: false,
+            desk_focused: false,
             unseen_laid_generation: 0,
             label_overlay: Default::default(),
             hook_facts: Default::default(),

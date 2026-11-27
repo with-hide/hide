@@ -155,14 +155,68 @@ fn a_file_desks_agent_opens_is_listed_as_desks_to_look_at_until_seen_on_its_desk
         files(&glance(&mut runtime)),
         [("plan.md".into(), None, false)]
     );
-    seen_on_desk(
-        &mut runtime,
-        &node,
-        crate::workspace_control::DESK_CALLER,
-        &view,
-    );
+    // A window holding the keyboard with Desk's desk drawn has it in
+    // front of the operator, as a Workspace window has its tray's tab.
+    runtime.dispatch_json(&explorer_event("desk_focus", json!({"focused": true})));
     assert_eq!(
         files(&glance(&mut runtime)),
         [("plan.md".into(), None, true)]
     );
+    // Opened again while that window looks at it, it is seen at once.
+    agent_open(&mut runtime, "r-3", &file).expect("Desk opens it a third time");
+    assert_eq!(
+        files(&glance(&mut runtime)),
+        [("plan.md".into(), None, true)]
+    );
+}
+
+/// The core reads a file no tab holds yet on a worker (`handle.rs` installs
+/// the worker context), so Desk's agent's open is placed from what its host
+/// already read, in the same event: each file it opens is the View marked
+/// as its own, never the tab in front when the open came.
+#[test]
+fn every_file_desks_agent_opens_under_the_cores_worker_is_its_own_to_look_at() {
+    use std::sync::{Arc, Mutex};
+    let (runtime, other, _) = desk_runtime_with_other("glance-worker");
+    let first = other.join("first.md");
+    let second = other.join("second.md");
+    std::fs::write(&first, "first\n").expect("fixture");
+    std::fs::write(&second, "second\n").expect("fixture");
+    let runtime = Arc::new(Mutex::new(runtime));
+    let mut guard = runtime.lock().unwrap();
+    guard.install_worker_context(
+        Arc::downgrade(&runtime),
+        crate::handle::ChangeNotifier::noop(),
+    );
+
+    agent_open(&mut guard, "r-1", &first).expect("Desk opens first.md");
+    assert_eq!(
+        files(&glance(&mut guard)),
+        [("first.md".into(), None, false)]
+    );
+    agent_open(&mut guard, "r-2", &second).expect("Desk opens second.md");
+    assert_eq!(
+        files(&glance(&mut guard)),
+        [
+            ("second.md".into(), None, false),
+            ("first.md".into(), None, false),
+        ]
+    );
+    let views = desk_views(&mut guard);
+    assert_eq!(views.len(), 2);
+    assert!(
+        views.iter().all(|view| view.opener.is_none()),
+        "Desk's agent is no pane to go to, so its tab names no opener"
+    );
+}
+
+#[test]
+fn a_session_read_from_its_record_alone_takes_no_place_in_glance() {
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    guard.start_test_desk();
+    guard.open_session_thread(crate::runtime::session_thread::ThreadOpenPayload {
+        pane_id: "gone".into(),
+    });
+    assert!(guard.desk_stored_for_test().glance.is_empty());
 }

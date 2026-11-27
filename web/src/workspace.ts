@@ -393,15 +393,6 @@ export function frontCard(view: Pick<WorkspaceView, "layout"> | null): DetailIte
   return area?.displays.find((display) => display.id === area.active)?.card ?? null;
 }
 
-/** The View in front of the area in use when an agent opened it and the operator has not looked at it yet, by id, or null. */
-export function frontUnseen(view: Pick<WorkspaceView, "layout"> | null): string | null {
-  const layout = view?.layout;
-  if (!layout) return null;
-  const area = findArea(layout.root, layout.active_area);
-  const display = area?.displays.find((row) => row.id === area.active);
-  return display?.unseen ? display.id : null;
-}
-
 /** Engine tabs: the Agent area's strip, in the core's order. */
 export function agentEntries(checkout: Checkout): StripTab[] {
   return checkout.strip.filter((entry) => entry.kind === "engine");

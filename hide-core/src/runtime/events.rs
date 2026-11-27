@@ -2006,6 +2006,9 @@ pub(super) enum Event {
     PhoneViewing(PhoneViewingPayload),
     RequestView(RequestViewPayload),
     WindowFocus(WindowFocusPayload),
+    /// Whether any window holding the keyboard draws Desk's desk, summed
+    /// as `window_focus` is (한눈에).
+    DeskFocus(WindowFocusPayload),
     /// The card's refresh button, opening the delete confirmation, and a
     /// completed worktree removal. All three say "read again now" about a
     /// different set of readers, and none needs a target: the card is always
@@ -2405,6 +2408,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "phone_viewing" => decode!(PhoneViewingPayload, PhoneViewing),
         "request_view" => decode!(RequestViewPayload, RequestView),
         "window_focus" => decode!(WindowFocusPayload, WindowFocus),
+        "desk_focus" => decode!(WindowFocusPayload, DeskFocus),
         "cleanup_review" => decode!(CleanupReviewPayload, CleanupReview),
         "cleanup_confirm" => decode!(CleanupConfirmPayload, CleanupConfirm),
         "cleanup_dismiss" => Ok(Event::CleanupDismiss),
@@ -4338,6 +4342,7 @@ impl Runtime {
                 false
             }
             Event::WindowFocus(payload) => self.set_window_focused(payload.focused),
+            Event::DeskFocus(payload) => self.set_desk_focused(payload.focused),
             Event::OverviewRefresh(payload) => {
                 let project = self
                     .snapshot

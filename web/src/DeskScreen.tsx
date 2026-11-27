@@ -54,7 +54,6 @@ import { askingSession } from "./sessionWork";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { AgentMark } from "./AgentMark";
-import { frontUnseen } from "./workspace";
 import { windowIsActive } from "./viewFocus";
 
 const NO_JOBS: DeskJob[] = [];
@@ -668,7 +667,6 @@ function DeskRoomView({ actions, room, chat }: { actions: Actions; room: RoomAct
   const deskActions = useDeskPartActions(actions, room, scope);
   const shown = deskShown(place, view?.layout.display_count ?? 0);
   const side = rightSide(place, lane.glance_folded ?? false);
-  useDeskFrontSeen(actions, shown ? view : null);
   // The session beside Desk covers nothing, so it is no Escape layer: Escape closes it from the shell's Escape owner once no
   // layer is open (keyboard.ts). The desk dims the rest and Escape hides it first; it is where the operator works, so it
   // covers nothing for the close chords, and ⌘W closes its tab (B6).
@@ -723,13 +721,6 @@ function DeskGlance({ actions, room }: { actions: Actions; room: RoomActions }) 
  * operator, so a View there not looked at yet (one Desk's agent opened) is
  * seen, as a Workspace's View in front is.
  */
-function useDeskFrontSeen(actions: Actions, view: import("./snapshot").DeskViewSnapshot | null) {
-  const front = view ? frontUnseen(view) : null;
-  useEffect(() => {
-    if (front && view) actions.deskOutputSeen({ device_id: view.device_id, checkout: view.path, id: front });
-  }, [actions, front, view?.device_id, view?.path]);
-}
-
 /**
  * B35: a file Desk's agent puts on Desk's desk shows it while this window
  * shows Desk; on any other screen nothing moves, and the tab waits on the desk
@@ -786,21 +777,17 @@ const NO_WIDTHS: import("./snapshot").DeskLane = { view_width: null, session_wid
 function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: string; actions: Actions; deskActions: Actions; room: RoomActions }) {
   const listed = useShellStore((s) => agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(paneId));
   const record = useShellStore((s) => (listed ? null : ((s.deskJobs?.records ?? []).find((one) => one.pane_id === paneId) ?? null)));
-  // The way back to 한눈에 names the session as its head does: its row's name, else its card's, else its record's.
-  const name = useShellStore((s) => agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).get(paneId)?.identity_label ?? laneCards(s.deskJobs).find((one) => one.pane_id === paneId)?.title ?? null);
-  const kind = useShellStore((s) => agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).get(paneId)?.agent_kind ?? laneCards(s.deskJobs).find((one) => one.pane_id === paneId)?.agent_kind ?? null);
-  const crumb = <GlanceCrumb title={name ?? record?.title ?? ""} lead={(kind ?? record?.agent_kind) ? <AgentMark kind={kind ?? record!.agent_kind} /> : null} onBack={() => actions.deskGlanceBack()} />;
-  return (
-    <>
-      {crumb}
-      {record ? <DeskRecordPanel record={record} actions={actions} deskActions={deskActions} room={room} /> : <DeskLivePanel paneId={paneId} actions={actions} deskActions={deskActions} room={room} />}
-    </>
-  );
+  return record ? <DeskRecordPanel record={record} actions={actions} deskActions={deskActions} room={room} /> : <DeskLivePanel paneId={paneId} actions={actions} deskActions={deskActions} room={room} />;
+}
+
+/** The way back to 한눈에 above the session beside Desk, naming it as its head does: each panel hands it the title it gives its head. */
+function SessionCrumb({ title, kind, actions }: { title: string; kind: string | null; actions: Actions }) {
+  return <GlanceCrumb title={title} lead={kind ? <AgentMark kind={kind} /> : null} onBack={() => actions.deskGlanceBack()} />;
 }
 
 /**
  * A session whose pane is gone, opened beside Desk from Hide's record of it
- * (feedback 2, frame K, 다): its head with `끝남` and only `✕`, its machine
+ * (feedback 2, frame K, 다): its head with `끝남` and no buttons, `‹ 한눈에` above it, its machine
  * and pull requests under it, its conversation read where it ran as any
  * session's, and in the input box's place the session record row's
  * `이어서 하기`, which resumes it as that row does, or the one line the app
@@ -842,6 +829,8 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
     </>
   );
   return (
+    <>
+    <SessionCrumb title={record.title} kind={record.agent_kind} actions={actions} />
     <ThreadPanel
       job={job}
       paneId={record.pane_id}
@@ -876,6 +865,7 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
       onFile={(file) => openAnswerFile(actions, file)}
       place={place}
     />
+    </>
   );
 }
 
@@ -916,6 +906,8 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
   }, [actions, unread]);
   const write = () => useUiStore.getState().setDeskRoom((now) => openSession(now, paneId, { answer: true }));
   return (
+    <>
+    <SessionCrumb title={title} kind={row?.agent_kind ?? job?.agent_kind ?? null} actions={actions} />
     <ThreadPanel
       job={job}
       paneId={paneId}
@@ -984,6 +976,7 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
       onFile={(file) => openAnswerFile(actions, file)}
       place={place}
     />
+    </>
   );
 }
 

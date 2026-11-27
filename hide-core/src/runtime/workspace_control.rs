@@ -558,6 +558,82 @@ impl Runtime {
         result
     }
 
+    /// The tab of a file its host already read, for an agent's open: a tab
+    /// the file has already shows what the disk says now unless it holds the
+    /// operator's edit, save or conflict (`follows_disk`), as a page opened
+    /// again loads again; with none, the read is its new tab. A pane's and
+    /// Desk's agent's `hide file open` both take it.
+    pub(super) fn read_file_tab(
+        &mut self,
+        workspace_id: &str,
+        checkout_id: &str,
+        path: &str,
+        file: Option<(
+            crate::model::EditorDocumentSnapshot,
+            crate::files::DocumentPlace,
+        )>,
+    ) -> Result<String, Refusal> {
+        let existing = self.snapshot.editor.tabs.iter().find(|tab| {
+            tab.workspace_id == workspace_id
+                && tab.checkout_id == checkout_id
+                && tab.kind == crate::model::EditorTabKind::File
+                && tab.path == path
+                && tab.unavailable_reason.is_none()
+        });
+        if let Some(existing) = existing {
+            let tab_id = existing.id.clone();
+            if let Some((document, place)) = file
+                && self.follows_disk(&tab_id, &document)
+            {
+                self.replace_document(&tab_id, document, place);
+            }
+            return Ok(tab_id);
+        }
+        let Some((document, place)) = file else {
+            return Err(Refusal {
+                reason: "read_missing",
+                next_action: "Retry the command with the same request ID",
+            });
+        };
+        let tab_id = self.new_file_tab_id(workspace_id, checkout_id, path);
+        self.insert_file_tab(
+            super::editor::PreparedFileTab::Read {
+                tab_id,
+                document: Box::new(document),
+                place,
+            },
+            workspace_id,
+            checkout_id,
+            path,
+            false,
+        )
+        .ok_or(Refusal {
+            reason: "file_unavailable",
+            next_action: "Retry after refreshing the Workspace",
+        })
+    }
+
+    /// The View of `key` that shows `path` once an open placed it: the one
+    /// at `place`, else the one a tray kept when no tray took it (D-20). A
+    /// View of Desk's desk shows a file of its own checkout only (`origin`).
+    pub(super) fn view_showing(
+        &self,
+        key: &super::workspace_view::WorkspaceKey,
+        place: &Place,
+        origin: Option<&crate::view_layout::ViewOrigin>,
+        path: &str,
+        kind: DisplayKind,
+        committed: Option<bool>,
+    ) -> Option<String> {
+        let shows = |display: &&crate::view_layout::Display| {
+            display.shows_from(origin, path, kind, committed)
+        };
+        self.view_layout_at(key, place)
+            .and_then(|layout| layout.displays().find(shows))
+            .or_else(|| self.view_displays(key).find(shows))
+            .map(|display| display.id.clone())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn apply_workspace_action(
         &mut self,
@@ -709,49 +785,7 @@ impl Runtime {
                 .map(|store| store.generation)
                 .unwrap_or_default();
             let tab_id = if is_file {
-                let existing = self.snapshot.editor.tabs.iter().find(|tab| {
-                    tab.workspace_id == *workspace_id
-                        && tab.checkout_id == *checkout_id
-                        && tab.kind == crate::model::EditorTabKind::File
-                        && tab.path == *path
-                        && tab.unavailable_reason.is_none()
-                });
-                if let Some(existing) = existing {
-                    let tab_id = existing.id.clone();
-                    // An agent that opens a file again after writing it sees
-                    // what the file says now, as a page opened again loads
-                    // again; a tab holding the operator's edit, save or
-                    // conflict keeps it (`follow_document`).
-                    if let Some((document, place)) = material.file
-                        && self.follows_disk(&tab_id, &document)
-                    {
-                        self.replace_document(&tab_id, document, place);
-                    }
-                    tab_id
-                } else {
-                    let Some((document, place)) = material.file else {
-                        return Err(Refusal {
-                            reason: "read_missing",
-                            next_action: "Retry the command with the same request ID",
-                        });
-                    };
-                    let tab_id = self.new_file_tab_id(workspace_id, checkout_id, path);
-                    self.insert_file_tab(
-                        super::editor::PreparedFileTab::Read {
-                            tab_id: tab_id.clone(),
-                            document: Box::new(document),
-                            place,
-                        },
-                        workspace_id,
-                        checkout_id,
-                        path,
-                        false,
-                    )
-                    .ok_or(Refusal {
-                        reason: "file_unavailable",
-                        next_action: "Retry after refreshing the Workspace",
-                    })?
-                }
+                self.read_file_tab(workspace_id, checkout_id, path, material.file)?
             } else {
                 let tab_id = Self::diff_tab_id(workspace_id, checkout_id, path, false);
                 if !self.snapshot.editor.tabs.iter().any(|tab| tab.id == tab_id) {
@@ -766,20 +800,8 @@ impl Runtime {
                 DisplayKind::Diff
             };
             let committed = if is_file { None } else { Some(false) };
-            // The View that shows it: the one at `place`, else the one a tray
-            // kept when no tray took it (D-20).
             let view_id = self
-                .view_layout_at(key, place)
-                .and_then(|layout| {
-                    layout
-                        .displays()
-                        .find(|display| display.shows(path, kind, committed))
-                })
-                .or_else(|| {
-                    self.view_displays(key)
-                        .find(|display| display.shows(path, kind, committed))
-                })
-                .map(|display| display.id.clone())
+                .view_showing(key, place, None, path, kind, committed)
                 .ok_or(Refusal {
                     reason: "view_placement_failed",
                     next_action: "Run hide view list to inspect the Workspace and retry",

@@ -11,13 +11,13 @@
 //! The files are no list of their own: they are read, on every build of the
 //! cards, from the Views themselves, a session's by its openers as its `뷰 N`
 //! list reads them, and Desk's agent's by the opener its `hide file open`
-//! records on the View it lands in ([`Runtime::desk_note_agent_view`]); each
-//! View's own record says whether it was looked at.
+//! stamps on the View it lands in ([`Runtime::desk_opener`], in
+//! `desk_commit_open`); each View's own record says whether it was looked at.
 
 use super::super::Runtime;
 use super::jobs::{CardIndex, view_output};
 use crate::model::{DeskGlanceFile, DeskGlanceSnapshot, DeskJobSnapshot};
-use crate::view_feedback::{Opener, SessionScope, Unseen};
+use crate::view_feedback::{Opener, SessionScope};
 use crate::workspace_control::DESK_CALLER;
 
 /// The Views 한눈에 lists; past it the section counts the rest.
@@ -25,13 +25,52 @@ const MAX_GLANCE_FILES: usize = 32;
 
 impl Runtime {
     /// The operator opened `pane`'s session beside Desk: it is one of
-    /// 한눈에's, the newest. Whether the store changed, for a save.
+    /// 한눈에's, the newest, while its pane has a row; a session read from
+    /// its record alone (its pane gone) is never listed, so it takes no
+    /// place. Whether the store changed, for a save.
     pub(in crate::runtime) fn desk_glance_opened(&mut self, pane: &str) -> bool {
         self.desk.worker.is_some()
             && self
-                .desk
-                .stored
-                .keep_glance(pane, crate::runtime::unix_milliseconds())
+                .snapshot
+                .navigator
+                .agents
+                .iter()
+                .any(|row| row.pane_id == pane)
+            && self.keep_desk_glance(pane, crate::runtime::unix_milliseconds())
+    }
+
+    /// Keeps `pane` among 한눈에's sessions as of `at_ms`. A new one, with
+    /// the list full, first takes the place of the oldest kept session that
+    /// has ended (its state ended, or the last published 한눈에 no longer
+    /// shows it: its tab closed and no job of Desk's), so a session at work
+    /// or asking the operator goes last (engineering principle 15). Whether
+    /// the store changed.
+    pub(in crate::runtime) fn keep_desk_glance(&mut self, pane: &str, at_ms: u64) -> bool {
+        use crate::model::DeskJobState;
+        let stored = &mut self.desk.stored;
+        let room = !stored.glance.iter().any(|kept| kept.pane_id == pane) && {
+            let section = self.snapshot.desk_jobs.as_ref();
+            let going = |kept: &str| {
+                section.is_some_and(|section| {
+                    section.glance.sessions.iter().any(|listed| listed == kept)
+                        && [&section.jobs, &section.workers, &section.named]
+                            .into_iter()
+                            .flatten()
+                            .find(|card| card.pane_id.as_deref() == Some(kept))
+                            .is_some_and(|card| {
+                                matches!(
+                                    card.state,
+                                    DeskJobState::Queued
+                                        | DeskJobState::Starting
+                                        | DeskJobState::Working
+                                        | DeskJobState::Asking
+                                )
+                            })
+                })
+            };
+            stored.glance_room(|kept| !going(kept))
+        };
+        stored.keep_glance(pane, at_ms) || room
     }
 
     /// The opener Desk's own agent is recorded as on a View it opened: the
@@ -55,35 +94,9 @@ impl Runtime {
         }
     }
 
-    fn is_desk_opener(&self, opener: &Opener) -> bool {
+    /// Whether `opener` is Desk's own agent ([`Self::desk_opener`]).
+    pub(in crate::runtime) fn is_desk_opener(&self, opener: &Opener) -> bool {
         opener.device_id == self.node.as_str() && opener.terminal_id == DESK_CALLER
-    }
-
-    /// Desk's agent's `hide file open` placed a file in front of Desk's
-    /// desk: that View records Desk's agent as its opener and is one for the
-    /// operator to look at, until it is in front of the desk while the desk
-    /// shows (`desk_output_seen`) or opened from 한눈에.
-    pub(in crate::runtime) fn desk_note_agent_view(&mut self) {
-        let opener = self.desk_opener();
-        let now = crate::runtime::unix_milliseconds();
-        let marked = self.change_desk_views(|layout, stamp| {
-            let Some(id) = layout.active_area().active.clone() else {
-                return Ok(((), false));
-            };
-            let Some(display) = layout.display_mut(&id) else {
-                return Ok(((), false));
-            };
-            display.opened_by(opener, stamp);
-            display.unseen = Some(Unseen::opened(now, display.unseen.as_ref()));
-            Ok(((), true))
-        });
-        if let Err(error) = marked {
-            crate::diagnostic!(serde_json::json!({
-                "component": "desk",
-                "kind": "desk_glance.agent_view_unmarked",
-                "error": error.kind(),
-            }));
-        }
     }
 
     /// 한눈에's section from the cards one build made (`carded`: the jobs,

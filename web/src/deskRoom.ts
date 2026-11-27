@@ -144,7 +144,7 @@ export function followMoved(room: DeskRoomWindow, moved: readonly DeskMoved[]): 
   return session === room.session && closed === room.closed ? room : { ...room, session, closed };
 }
 
-/** The session panel's `✕`, Escape or ⌘E (B6): Desk widens again and the session is kept for ⌘E to open again; Desk's desk stays as it was (B13). */
+/** `‹ 한눈에`, Escape or ⌘E (B6): 한눈에 stands there again and the session is kept for ⌘E to open again; Desk's desk stays as it was (B13). */
 export function closeSession(room: DeskRoomWindow): DeskRoomWindow {
   if (!room.session) return room;
   return { ...room, session: null, explorer: false, closed: room.session };

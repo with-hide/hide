@@ -90,16 +90,16 @@ function rowSession(row: AgentRow): DeskSessionRef {
  */
 export const ENDED_JOB_STATES: ReadonlySet<DeskJob["state"]> = new Set<DeskJob["state"]>(["failed", "cancelled", "closed", "moved_out", "archived"]);
 
-/** Where a session stands in 한눈에: waiting on the operator, at work, or ended (its agent done, asleep, or the job over). */
-export type GlanceGroup = "turn" | "working" | "ended";
+/** Where a session stands in 한눈에: waiting on the operator, at work, or idle (its agent done or asleep, or its job ended, `ENDED_JOB_STATES`), shown as 끝남. */
+export type GlanceGroup = "turn" | "working" | "idle";
 
 export function glanceGroup(job: DeskJob): GlanceGroup {
   if (job.state === "asking") return "turn";
   if (job.state === "queued" || job.state === "starting" || job.state === "working") return "working";
-  return "ended";
+  return "idle";
 }
 
-const GLANCE_ORDER: Readonly<Record<GlanceGroup, number>> = { turn: 0, working: 1, ended: 2 };
+const GLANCE_ORDER: Readonly<Record<GlanceGroup, number>> = { turn: 0, working: 1, idle: 2 };
 
 /**
  * 한눈에's sessions as cards (`desk_jobs.glance.sessions`, newest first): 내

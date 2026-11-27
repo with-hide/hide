@@ -48,7 +48,7 @@ it("lists the sessions 내 차례 first and the files 볼 것 first, each file n
   const fold = vi.fn();
   await render(<GlancePanel glance={glance} cards={cards} onSession={(pane) => sessions.push(pane)} onFile={(one) => opened.push(one.id)} onFold={fold} />);
 
-  expect(all("[data-desk-glance-session]").map((row) => row.dataset.deskGlanceGroup)).toEqual(["turn", "working", "ended"]);
+  expect(all("[data-desk-glance-session]").map((row) => row.dataset.deskGlanceGroup)).toEqual(["turn", "working", "idle"]);
   expect(document.querySelector("[data-desk-glance-sessions]")?.textContent).toContain("Needs You 1");
   const files = all("[data-desk-glance-file]");
   expect(files.map((row) => row.dataset.deskGlanceFile)).toEqual(["hero", "plan", "roadmap"]);
@@ -73,6 +73,14 @@ it("shows a capped number of files with `… n개 더`, which shows the rest", a
   expect(all("[data-desk-glance-file]")).toHaveLength(GLANCE_FILE_ROWS + 3);
   expect(document.querySelector("[data-desk-glance-more]")).toBeNull();
   expect(document.querySelector("[data-desk-glance-older]")).not.toBeNull();
+});
+
+it("says a session on a device that is not connected is so, dimmed, as its card does", async () => {
+  const away = { ...card("p1", "기기 세션", "working"), disconnected: true };
+  await render(<GlancePanel glance={{ sessions: ["p1"], files: [], files_more: 0 }} cards={[away]} onSession={() => undefined} onFile={() => undefined} onFold={() => undefined} />);
+  const row = document.querySelector<HTMLElement>("[data-desk-glance-session]")!;
+  expect(row.dataset.deskGlanceDisconnected).toBe("true");
+  expect(row.textContent).toContain("Not connected");
 });
 
 it("says what gathers here while nothing has yet", async () => {

@@ -242,6 +242,54 @@ impl Runtime {
         placed
     }
 
+    /// Desk's agent's `hide file open`: the file its host already read, put
+    /// in front of Desk's desk now through the tab a pane's open takes
+    /// (`read_file_tab`), so the View it lands in is known here and can
+    /// carry who opened it. The View's id, or `None` when the open was
+    /// refused.
+    pub(in crate::runtime) fn desk_open_read_file(
+        &mut self,
+        workspace_id: &str,
+        checkout_id: &str,
+        material: crate::workspace_control::ActionMaterial,
+    ) -> Option<String> {
+        let path = material.path;
+        let key = self.desk_key();
+        let placed = self.catalog_checkout(workspace_id, checkout_id).is_some()
+            && match self.read_file_tab(workspace_id, checkout_id, &path, material.file) {
+                Ok(tab_id) => self.show_file_in_view(
+                    super::super::editor::PreparedFileTab::Open(tab_id),
+                    &key,
+                    workspace_id,
+                    checkout_id,
+                    &path,
+                    false,
+                    false,
+                ),
+                Err(refusal) => super::refused(refusal.reason),
+            };
+        let origin = self.desk_origin(&key, workspace_id, checkout_id);
+        let view = placed
+            .then(|| {
+                self.view_showing(
+                    &key,
+                    &Place::Desk,
+                    origin.as_ref(),
+                    &path,
+                    DisplayKind::File,
+                    None,
+                )
+            })
+            .flatten();
+        crate::diagnostic!(serde_json::json!({
+            "component": "desk",
+            "kind": "desk_views.agent_file_open",
+            "checkout": checkout_id,
+            "placed": view.is_some(),
+        }));
+        view
+    }
+
     /// A View a session opened, as a tab of Desk's desk (D-12): a file of
     /// its checkout, a page at its address as a new page of Desk's that loads
     /// on the session's machine, a card as itself; a diff shows its file,

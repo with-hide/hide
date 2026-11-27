@@ -1553,10 +1553,7 @@ impl Runtime {
                 continue;
             };
             // Every session Desk started is one of 한눈에's.
-            marked |= self
-                .desk
-                .stored
-                .keep_glance(&pane, spawn.reserved_at_unix_ms);
+            marked |= self.keep_desk_glance(&pane, spawn.reserved_at_unix_ms);
             let mark = self.desk_mark(&spawn.intent).cloned().unwrap_or_default();
             let mut next = mark.clone();
             next.intent.clone_from(&spawn.intent);
@@ -2725,6 +2722,52 @@ mod tests {
         assert!(named(&runtime).is_empty());
         assert!(listed(&runtime).is_empty());
         assert_eq!(runtime.desk.stored.glance.len(), 1);
+    }
+
+    /// 한눈에's cap lets an ended session go before one at work (engineering
+    /// principle 15): with 32 kept, alternately working and done, the next
+    /// one opened beside Desk takes the oldest done one's place, and the
+    /// oldest working one stays.
+    #[test]
+    fn a_full_glance_makes_room_with_its_oldest_ended_session() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &[]);
+        runtime.start_test_desk();
+        let max = crate::desk::MAX_GLANCE_SESSIONS;
+        runtime.snapshot.navigator.agents = (0..=max)
+            .map(|at| {
+                row(
+                    &format!("p{at}"),
+                    if at % 2 == 0 { "working" } else { "done" },
+                )
+            })
+            .collect();
+        let open = |runtime: &mut Runtime, pane: &str| {
+            assert!(runtime.open_session_thread(
+                crate::runtime::session_thread::ThreadOpenPayload {
+                    pane_id: pane.into()
+                }
+            ));
+            assert!(runtime.close_session_thread());
+        };
+        for at in 0..max {
+            open(&mut runtime, &format!("p{at}"));
+        }
+        runtime.compose_desk_jobs();
+        assert_eq!(runtime.desk.stored.glance.len(), max);
+
+        open(&mut runtime, &format!("p{max}"));
+        let kept: Vec<&str> = runtime
+            .desk
+            .stored
+            .glance
+            .iter()
+            .map(|kept| kept.pane_id.as_str())
+            .collect();
+        assert_eq!(kept.len(), max);
+        assert!(kept.contains(&"p0"), "the oldest working one stays");
+        assert!(!kept.contains(&"p1"), "the oldest done one went");
+        assert_eq!(kept.last(), Some(&format!("p{max}").as_str()));
     }
 
     #[test]

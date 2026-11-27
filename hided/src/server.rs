@@ -138,6 +138,9 @@ pub struct AppState {
     /// core counts a View in front of the operator as seen only while one
     /// does (PRD unseen-agent-views D-07, B6, B8).
     pub window_focus_demand: Arc<crate::demand::ObservationDemand>,
+    /// Which windows hold the keyboard and draw Desk's desk: the core counts
+    /// the View in front of that desk as seen only while one does (한눈에).
+    pub desk_focus_demand: Arc<crate::demand::ObservationDemand>,
     /// Which connections show which backlog item's origin: the core keeps
     /// an origin until the last of them closes it or leaves.
     pub origin_holds: Arc<crate::demand::OriginHolds>,
@@ -3044,22 +3047,26 @@ fn handle_client_text(
             });
             return Ok(ClientAction::Replies(Vec::new()));
         }
-        // A window that has the keyboard and draws the Workspace screen; the
-        // core hears whether any window does, and a window that leaves
-        // without saying so lets go of its focus with its connection.
-        Some("window_focus") => {
+        // A window that has the keyboard and draws the Workspace screen, or
+        // Desk's desk; the core hears whether any window does, and a window
+        // that leaves without saying so lets go of its focus with its
+        // connection.
+        Some(kind @ ("window_focus" | "desk_focus")) => {
+            let demand = if kind == "window_focus" {
+                Demand::WindowFocus
+            } else {
+                Demand::DeskFocus
+            };
             let Some(focused) = event
                 .get("payload")
                 .and_then(|payload| payload.get("focused"))
                 .and_then(Value::as_bool)
             else {
-                return Err("window_focus.focused must be a boolean".to_owned());
+                return Err(format!("{kind}.focused must be a boolean"));
             };
-            Demand::WindowFocus
-                .of(state)
-                .set(connection, focused, |aggregate| {
-                    dispatch_observation(&state.core, Demand::WindowFocus, connection, aggregate)
-                });
+            demand.of(state).set(connection, focused, |aggregate| {
+                dispatch_observation(&state.core, demand, connection, aggregate)
+            });
             return Ok(ClientAction::Replies(Vec::new()));
         }
         Some("request_view") => {
@@ -3665,6 +3672,9 @@ pub(crate) enum Demand {
     /// A window with the keyboard on the Workspace screen: what is in
     /// front of it is seen.
     WindowFocus,
+    /// A window with the keyboard drawing Desk's desk: the View in front of
+    /// that desk is seen.
+    DeskFocus,
 }
 
 impl Demand {
@@ -3674,6 +3684,7 @@ impl Demand {
             Self::Start => "start_observing",
             Self::RequestView => "request_view",
             Self::WindowFocus => "window_focus",
+            Self::DeskFocus => "desk_focus",
         }
     }
 
@@ -3683,6 +3694,7 @@ impl Demand {
             Self::Start => &state.start_demand,
             Self::RequestView => &state.request_view_demand,
             Self::WindowFocus => &state.window_focus_demand,
+            Self::DeskFocus => &state.desk_focus_demand,
         }
     }
 }
@@ -3744,9 +3756,9 @@ pub(crate) fn dispatch_observation(
             "kind": "request_view",
             "payload": {"observing": observing},
         }),
-        Demand::WindowFocus => json!({
+        Demand::WindowFocus | Demand::DeskFocus => json!({
             "schema_version": SCHEMA_VERSION,
-            "kind": "window_focus",
+            "kind": demand.field(),
             "payload": {"focused": observing},
         }),
         Demand::Settings | Demand::Start => json!({
@@ -6010,6 +6022,7 @@ pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, des
         Demand::Start,
         Demand::RequestView,
         Demand::WindowFocus,
+        Demand::DeskFocus,
     ] {
         demand.of(state).release(connection, |observing| {
             dispatch_observation(&state.core, demand, connection, observing)

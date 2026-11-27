@@ -469,7 +469,33 @@ impl Stored {
             },
         );
         let excess = self.glance.len().saturating_sub(MAX_GLANCE_SESSIONS);
-        self.glance.drain(..excess);
+        for dropped in self.glance.drain(..excess) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "desk_store",
+                "kind": "desk_store.glance_oldest_dropped",
+                "pane": dropped.pane_id,
+            }));
+        }
+        true
+    }
+
+    /// With 한눈에's list full, the oldest kept session that `ended` says has
+    /// ended goes, so the next one kept never pushes out a session at work
+    /// while an ended one keeps its place (engineering principle 15).
+    /// Whether one went.
+    pub(crate) fn glance_room(&mut self, ended: impl Fn(&str) -> bool) -> bool {
+        if self.glance.len() < MAX_GLANCE_SESSIONS {
+            return false;
+        }
+        let Some(at) = self.glance.iter().position(|kept| ended(&kept.pane_id)) else {
+            return false;
+        };
+        let dropped = self.glance.remove(at);
+        crate::diagnostic!(serde_json::json!({
+            "component": "desk_store",
+            "kind": "desk_store.glance_ended_dropped",
+            "pane": dropped.pane_id,
+        }));
         true
     }
 }
@@ -943,12 +969,17 @@ mod tests {
 
     /// The fields of Desk's store that name a machine, which the node-id
     /// migration does not map yet (with-hide/hide issue 3044): a View's
-    /// checkout's machine, a named session's machine and a queued spawn's
-    /// machine. A new field that names a machine fails here, so it reaches
-    /// that issue's list instead of a renamed device unnoticed.
+    /// checkout's machine and the machine of the agent that opened it (Desk's
+    /// own agent's is the core's node), a 한눈에 session on a connected device
+    /// (its pane id spells the device), a named session's machine and a
+    /// queued spawn's machine. A new field that names a machine fails here,
+    /// so it reaches that issue's list instead of a renamed device unnoticed.
     const DESK_MACHINE_FIELDS: &[&str] = &[
+        "/glance/*/pane_id",
         "/named/*/session/device_id",
         "/queue/*/command/machine",
+        "/views/root/area/displays/*/opener/device_id",
+        "/views/root/area/displays/*/openers/*/device_id",
         "/views/root/area/displays/*/origin/device_id",
     ];
 
@@ -965,7 +996,21 @@ mod tests {
             .views
             .new_display("/p/a.md", DisplayKind::File, None, false);
         file.origin = Some(origin.clone());
+        file.opened_by(
+            crate::view_feedback::Opener {
+                device_id: "d".into(),
+                terminal_id: crate::workspace_control::DESK_CALLER.into(),
+                session: None,
+                resume: None,
+                resume_path: None,
+                provider: "codex".into(),
+                name: "Desk".into(),
+                profile: None,
+            },
+            1,
+        );
         stored.views.append(&area, file).unwrap();
+        stored.keep_glance("remote:d:pane:p2", 1);
         let mut page = stored
             .views
             .new_browser_display("http://localhost:5173/", 1);
@@ -1028,6 +1073,10 @@ mod tests {
                     for item in items {
                         walk(item, format!("{at}/*"), found);
                     }
+                }
+                // A connected device's pane id spells its machine.
+                serde_json::Value::String(text) if text.starts_with("remote:") => {
+                    found.insert(at);
                 }
                 _ => {}
             }
@@ -1591,6 +1640,24 @@ mod restart_tests {
             read.named[0].pane_id, stored.named[1].pane_id,
             "the oldest kept goes"
         );
+    }
+
+    /// A full list makes room by its oldest ended session, not by its
+    /// oldest one; with room left, or none ended, nothing goes.
+    #[test]
+    fn a_full_glance_lets_its_oldest_ended_session_go_first() {
+        let mut stored = Stored::default();
+        for at in 1..MAX_GLANCE_SESSIONS as u64 {
+            stored.keep_glance(&format!("p{at}"), at);
+        }
+        assert!(!stored.glance_room(|_| true), "room is left");
+        stored.keep_glance("p32", 32);
+        assert!(!stored.glance_room(|_| false), "none ended");
+        assert!(stored.glance_room(|pane| pane == "p7" || pane == "p20"));
+        assert_eq!(stored.glance.len(), MAX_GLANCE_SESSIONS - 1);
+        assert!(!stored.glance.iter().any(|kept| kept.pane_id == "p7"));
+        assert!(stored.glance.iter().any(|kept| kept.pane_id == "p20"));
+        assert_eq!(stored.glance[0].pane_id, "p1", "the oldest shown stays");
     }
 
     /// A later Hide may keep a session with an agent or a field this build

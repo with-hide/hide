@@ -1648,6 +1648,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (remote) return;
       dispatch({ schema_version: 2, kind: "window_focus", payload: { focused } });
     },
+    /** Whether this window holds the keyboard with Desk's desk drawn, so the tab in front of that desk is seen (한눈에). */
+    noteDeskFocus(focused: boolean) {
+      if (remote) return;
+      dispatch({ schema_version: 2, kind: "desk_focus", payload: { focused } });
+    },
     /** Whether this page shows the request view; while one does, the core re-reads running checks (PRD overview-request-view D-32). */
     observeRequestView(observing: boolean) {
       dispatch({ schema_version: 2, kind: "request_view", payload: { observing } });
@@ -2866,7 +2871,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().setDeskRoom((now) => toggleDeskExplorer(now, tabs));
     },
 
-    /** The session beside Desk's `✕`, or Escape with no layer open; Desk's desk stays (B13). */
+    /** `‹ 한눈에` above the session beside Desk, or Escape with no layer open: 한눈에 stands there again; Desk's desk stays (B13). */
     deskCloseSession() {
       ui().setDeskRoom(closeDeskSession);
     },
@@ -2880,11 +2885,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     deskGlanceBack() {
       ui().setDeskRoom(closeDeskSession);
       if (useShellStore.getState().desk?.lane.glance_folded) dispatch({ schema_version: 2, kind: "desk_lane", payload: { glance_folded: false } });
-    },
-
-    /** A View the operator looked at outside its own View areas: in front of Desk's desk while the desk shows. */
-    deskOutputSeen(view: { device_id: string; checkout: string; id: string }) {
-      dispatch({ schema_version: 2, kind: "desk_output_seen", payload: view });
     },
 
     /** The desk's `✕`, Escape or a press on the dimmed outside (B18): the desk hides and its tabs stay. */
@@ -4078,7 +4078,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * ⌘E in Desk's room (B6; operator decision 2026-11-25, replacing PRD desk-2-ui D-13's nothing): the session
-     * panel closes as its `✕` does, and pressed again opens the session just closed, as a
+     * panel closes as `‹ 한눈에` does, and pressed again opens the session just closed, as a
      * sidebar row's press does, with the keyboard in its input box as a work tab's ⌘E gives it back to the pane. A
      * session whose pane is gone since (closed, archived, woken in another pane) is not reopened as an empty
      * panel: the memory is cleared and only the log says so.

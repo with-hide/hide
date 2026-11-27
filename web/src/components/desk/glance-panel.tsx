@@ -54,10 +54,11 @@ export function GlancePanel({ glance, cards, onSession, onFile, onFold }: {
           <section aria-label={t("desk.glance.sessions", { count: sessions.length })} data-desk-glance-sessions={sessions.length}>
             <GroupHead start={t("desk.glance.sessions", { count: sessions.length })} end={turn > 0 ? t("desk.glance.turn", { count: turn }) : null} />
             {sessions.map((job) => (
-              <RowButton key={job.pane_id} className="gap-xs text-body" data-desk-glance-session={job.pane_id} data-desk-glance-group={glanceGroup(job)} onClick={() => onSession(job.pane_id!)}>
+              <RowButton key={job.pane_id} className={cn("gap-xs text-body", job.disconnected && "opacity-(--opacity-dimmed)")} data-desk-glance-session={job.pane_id} data-desk-glance-group={glanceGroup(job)} data-desk-glance-disconnected={job.disconnected ? "true" : undefined} onClick={() => onSession(job.pane_id!)}>
                 <JobLead job={job} />
                 <span className="min-w-0 flex-1 truncate text-foreground">{job.title}</span>
-                <span className={cn("shrink-0 text-caption", glanceGroup(job) === "turn" ? "text-warning" : "text-muted-foreground")}>{jobStateWords(t, job)}</span>
+                {/* A device that is not connected says so, as its card in the conversation does. */}
+                <span className={cn("shrink-0 text-caption", glanceGroup(job) === "turn" && !job.disconnected ? "text-warning" : "text-muted-foreground")}>{job.disconnected ? t("desk.job.disconnected") : jobStateWords(t, job)}</span>
               </RowButton>
             ))}
           </section>

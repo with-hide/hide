@@ -215,6 +215,7 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("create_worktree", Screen),
     ("deliver_letters_now", Screen),
     ("desk_approval", Screen),
+    ("desk_focus", OwnWindow),
     ("desk_install", Screen),
     ("desk_job_cancel", Screen),
     ("desk_job_read", Screen),
@@ -606,6 +607,7 @@ mod tests {
             "open_external",
             "reveal_path",
             "window_focus",
+            "desk_focus",
             "product_analytics_connected",
             "desktop_activity",
         ] {
