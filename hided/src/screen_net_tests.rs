@@ -1215,76 +1215,163 @@ async fn a_relay_tunnel_moving_to_direct_is_not_counted_or_ended() {
 
 /// The direct transport's stream receive window: noq's default
 /// (`TransportConfig::stream_receive_window`, `STREAM_RWND`, 12,500,000 /
-/// 1000 x 100 bytes), which `hide-peer-iroh` keeps. A link's mux grants 16
-/// frames of at most 16 KiB (`hide_peer::mux`), less than this.
+/// 1000 x 100 bytes in noq-proto's `src/config/transport.rs`), which
+/// `hide-peer-iroh` keeps.
 const DIRECT_STREAM_WINDOW: u64 = 1_250_000;
 
-// R18 inbound: bytes the host sends cross the transport before the guest
-// reserves them, so a host streaming into sixteen tunnels on the real
-// direct transport passes the guest's reservations by at most what that
-// transport lets it send ahead, one stream receive window per tunnel, and
-// the chunk each tunnel read before its reservation failed.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_host_streaming_into_sixteen_tunnels_passes_the_budget_by_at_most_sixteen_receive_windows()
- {
-    let host = Machine::new("windows-pc");
-    let guest = Machine::new("macbook");
-    let written = Arc::new(AtomicU64::new(0));
-    let ended = Arc::new(AtomicUsize::new(0));
-    {
-        let (written, ended) = (Arc::clone(&written), Arc::clone(&ended));
-        host.host.handle(StreamKind::Page, move |incoming| {
-            let (written, ended) = (Arc::clone(&written), Arc::clone(&ended));
-            async move {
-                let _recv = incoming.stream.recv;
-                let mut send = incoming.stream.send;
-                let chunk = vec![3_u8; 16 * 1024];
-                while send.write_all(&chunk).await.is_ok() {
-                    written.fetch_add(chunk.len() as u64, Ordering::SeqCst);
-                }
-                ended.fetch_add(1, Ordering::SeqCst);
+/// A link's mux window: `WINDOW` frames of at most `MAX_CHUNK` bytes
+/// (`hide-peer/src/mux/streams.rs`, 16 x 16 KiB).
+const MUX_STREAM_WINDOW: u64 = 16 * 16 * 1024;
+
+/// A host's half of `PLACES` streams that writes without end into each:
+/// what each write took, partial writes included, and how many streams
+/// started and ended.
+#[derive(Clone, Default)]
+struct Streaming {
+    written: Arc<AtomicU64>,
+    started: Arc<AtomicUsize>,
+    ended: Arc<AtomicUsize>,
+}
+
+impl Streaming {
+    async fn into(&self, mut send: impl AsyncWrite + Unpin) {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        let chunk = vec![3_u8; 16 * 1024];
+        while let Ok(count) = send.write(&chunk).await {
+            if count == 0 {
+                break;
             }
-        });
+            self.written.fetch_add(count as u64, Ordering::SeqCst);
+        }
+        self.ended.fetch_add(1, Ordering::SeqCst);
     }
-    let link = paired(&host, &guest).await;
-    let limit = 32 * CHUNK as u64;
+
+    async fn all_started(&self) {
+        within("every stream to start", async {
+            while self.started.load(Ordering::SeqCst) < PLACES {
+                tokio::time::sleep(Duration::from_millis(10)).await; // wait-ok: the host's handlers start as the streams arrive
+            }
+        })
+        .await;
+    }
+
+    async fn all_ended(&self) {
+        within("the host's writes to end", async {
+            while self.ended.load(Ordering::SeqCst) < PLACES {
+                tokio::time::sleep(Duration::from_millis(10)).await; // wait-ok: the host's writes fail once the guest's ends are dropped
+            }
+        })
+        .await;
+    }
+}
+
+/// Copies each of `streams` into a page through `pipe` on the relay with
+/// one shared budget of `limit`, all started together, and checks each
+/// ends on the budget; the budget is returned.
+async fn on_the_relay<R, W>(streams: Vec<(R, W)>, limit: u64) -> Arc<RelayBudget>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
     let budget = Arc::new(RelayBudget::new(limit));
     let mut tunnels = Vec::new();
     let mut pages = Vec::new();
-    for _ in 0..PLACES {
-        let stream = open_page(&link).await.unwrap();
+    for (recv, send) in streams {
         let (page, local) = tokio::io::duplex(4 * CHUNK);
         pages.push(drain(page));
         let budget = Arc::clone(&budget);
         tunnels.push(tokio::spawn(async move {
             let mut local = local;
-            pipe(
-                &mut local,
-                &[],
-                stream.recv,
-                stream.send,
-                &budget,
-                &|| true,
-                &slot(),
-                &|| {},
-            )
-            .await
-            .0
+            pipe(&mut local, &[], recv, send, &budget, &|| true, &slot(), &|| {})
+                .await
+                .0
         }));
     }
     for tunnel in tunnels {
         assert_eq!(within("a tunnel", tunnel).await.unwrap(), Piped::Budget);
     }
-    within("the host's writes to end", async {
-        while ended.load(Ordering::SeqCst) < PLACES {
-            tokio::time::sleep(Duration::from_millis(10)).await; // wait-ok: the host's writes fail once the guest's ends are dropped
-        }
-    })
-    .await;
     assert!(budget.used() <= limit);
-    let past = written.load(Ordering::SeqCst).saturating_sub(budget.used());
+    budget
+}
+
+// R18 inbound: bytes the host sends cross the transport before the guest
+// reads them, and the guest reserves each read before it makes it, so a
+// host streaming into sixteen tunnels passes the guest's reservations by
+// at most what the transport lets it send ahead: one stream receive window
+// per tunnel. On the real direct transport.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_host_streaming_into_sixteen_tunnels_passes_the_budget_by_at_most_sixteen_receive_windows() {
+    let host = Machine::new("windows-pc");
+    let guest = Machine::new("macbook");
+    let streaming = Streaming::default();
+    {
+        let streaming = streaming.clone();
+        host.host.handle(StreamKind::Page, move |incoming| {
+            let streaming = streaming.clone();
+            async move {
+                let _recv = incoming.stream.recv;
+                streaming.into(incoming.stream.send).await;
+            }
+        });
+    }
+    let link = paired(&host, &guest).await;
+    let mut streams = Vec::new();
+    for _ in 0..PLACES {
+        let stream = open_page(&link).await.unwrap();
+        streams.push((stream.recv, stream.send));
+    }
+    streaming.all_started().await;
+    let budget = on_the_relay(streams, 32 * CHUNK as u64).await;
+    streaming.all_ended().await;
+    let past = streaming.written.load(Ordering::SeqCst).saturating_sub(budget.used());
     assert!(
-        past <= PLACES as u64 * (DIRECT_STREAM_WINDOW + CHUNK as u64),
+        past <= PLACES as u64 * DIRECT_STREAM_WINDOW,
         "the host wrote {past} bytes past the reservations"
+    );
+}
+
+// The same bound on a link's mux (the SSH and WSL links), at its own
+// window: sixteen streams of a pipe transport, the far end writing without
+// end into each.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_host_streaming_into_sixteen_mux_tunnels_passes_the_budget_by_at_most_sixteen_mux_windows() {
+    use hide_peer::key::MachineKey;
+    use hide_peer::mux::Carrier;
+    use hide_peer::pipe::PipeTransport;
+    use hide_peer::protocol::{Candidate, PeerAddr};
+    use hide_peer::transport::{PeerConn as _, PeerTransport as _};
+    use hide_platform::ipc::LocalStream;
+
+    let far = Arc::new(PipeTransport::accepting(MachineKey::generate().unwrap()));
+    let near = {
+        let far = Arc::clone(&far);
+        PipeTransport::dialing(MachineKey::generate().unwrap(), move |_| {
+            let (near, other) = LocalStream::pair().unwrap();
+            far.arrived(other.into());
+            async move { Ok(Carrier::from(near)) }
+        })
+    };
+    let to = PeerAddr::new(far.key(), vec![Candidate::Wsl("Ubuntu".to_owned())]);
+    let (dialed, accepted) = within("the connection", async { tokio::join!(near.dial(&to), far.accept()) }).await;
+    let (ours, theirs) = (dialed.unwrap(), accepted.unwrap());
+    let streaming = Streaming::default();
+    let mut streams = Vec::new();
+    for _ in 0..PLACES {
+        let (send, recv) = ours.open(-100).await.unwrap();
+        streams.push((recv, send));
+        let (their_send, their_recv) = within("the stream", theirs.accept()).await.unwrap();
+        let streaming = streaming.clone();
+        tokio::spawn(async move {
+            let _recv = their_recv;
+            streaming.into(their_send).await;
+        });
+    }
+    streaming.all_started().await;
+    let budget = on_the_relay(streams, 16 * CHUNK as u64).await;
+    streaming.all_ended().await;
+    let past = streaming.written.load(Ordering::SeqCst).saturating_sub(budget.used());
+    assert!(
+        past <= PLACES as u64 * MUX_STREAM_WINDOW,
+        "the far end wrote {past} bytes past the reservations"
     );
 }

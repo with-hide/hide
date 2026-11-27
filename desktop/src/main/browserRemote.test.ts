@@ -331,6 +331,28 @@ describe("a remote screen's pages", () => {
     expect(views.map((view) => view.contents.close.mock.calls.length > 0)).toEqual([false, true, false, false, false]);
   });
 
+  // A display past the creation rate waits, and no hidden page closes for
+  // it until it can be made.
+  it("close no hidden page for a display that must wait for the creation rate", async () => {
+    const { sync, display, views, settle } = screen();
+    const ids = Array.from({ length: 9 }, (_, n) => `d${n + 1}`);
+    const retained = ids.map((id) => ({ workspace, id, area_id: "a1", url: `https://${id}.example/`, load: 3 }));
+    for (const id of ids.slice(0, 8)) {
+      sync([display(id)], retained);
+      await settle();
+    }
+    expect(views).toHaveLength(8);
+    const closed = () => views.filter((view) => view.contents.close.mock.calls.length > 0).length;
+    expect(closed()).toBe(4);
+    sync([display("d9")], retained);
+    await settle();
+    expect(views).toHaveLength(8);
+    expect(closed()).toBe(4);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(views).toHaveLength(9);
+    expect(closed()).toBe(5);
+  });
+
   it("make at most eight in ten seconds, and the ninth once the window has room", async () => {
     const { sync, display, views, settle } = screen();
     sync(["a", "b", "c", "d"].map((id) => display(id)));

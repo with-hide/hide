@@ -752,17 +752,17 @@ export class BrowserViews {
       const key = pageKey(source, workspace, display.id);
       let page = this.pages.get(key);
       if (!page) {
-        this.evictOverCap(source);
-        if ([...this.pages.values()].filter((live) => live.source === source).length >= REMOTE_BOUNDS.pages && !this.evictHidden(source, placed)) {
-          this.failSlot(source, workspace, display, "remotePageLimit");
-          continue;
-        }
         if (source.created.length >= REMOTE_BOUNDS.creations) {
-          // It loads once the window has room again.
+          // It loads once the window has room again; no hidden page closes for it before then.
           source.createTimer ??= setTimeout(() => {
             source.createTimer = null;
             this.applyRemote(source);
           }, REMOTE_BOUNDS.creationWindowMs - (now - source.created[0]!));
+          continue;
+        }
+        this.evictOverCap(source);
+        if ([...this.pages.values()].filter((live) => live.source === source).length >= REMOTE_BOUNDS.pages && !this.evictHidden(source, placed)) {
+          this.failSlot(source, workspace, display, "remotePageLimit");
           continue;
         }
         source.created.push(now);

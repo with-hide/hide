@@ -298,8 +298,8 @@ impl Places {
 }
 
 /// A pair's page bytes on the relay in one UTC day: every chunk a
-/// tunnel writes while its connection takes the relay is reserved here
-/// first, so what the guest sends never passes the budget. Once a
+/// tunnel reads while its connection takes the relay is reserved here
+/// first, so what the guest reads and sends never passes the budget. Once a
 /// reservation fails, every relay tunnel of the pair ends at its next one
 /// until the day turns.
 pub struct RelayBudget {
@@ -343,12 +343,63 @@ impl RelayBudget {
         true
     }
 
+    /// Holds up to `most` bytes for a read, as many as the day has left;
+    /// none, and the day spent, when it has none. What the read does not
+    /// use goes back when the hold goes ([`Held::keep`]).
+    fn hold(&self, most: u64) -> Option<Held<'_>> {
+        let mut day = self.turned();
+        let left = self.limit.saturating_sub(day.1).min(most);
+        if day.2 || left == 0 {
+            day.2 = true;
+            return None;
+        }
+        day.1 += left;
+        Some(Held {
+            budget: self,
+            day: day.0,
+            bytes: left,
+            kept: 0,
+        })
+    }
+
     pub fn spent(&self) -> bool {
         self.turned().2
     }
 
     pub fn used(&self) -> u64 {
         self.turned().1
+    }
+}
+
+/// Bytes of the day's budget held for one read on the relay. The part the
+/// read did not use goes back when it goes, so a read that is cancelled
+/// (its tunnel ended, its place reclaimed) keeps nothing; a hold of a day
+/// that has turned gives nothing back to the new one.
+struct Held<'a> {
+    budget: &'a RelayBudget,
+    day: u64,
+    bytes: u64,
+    kept: u64,
+}
+
+impl Held<'_> {
+    /// How many bytes the read may take.
+    fn room(&self) -> usize {
+        usize::try_from(self.bytes).unwrap_or(usize::MAX)
+    }
+
+    /// The read took `bytes`; they stay counted.
+    fn keep(&mut self, bytes: u64) {
+        self.kept = bytes.min(self.bytes);
+    }
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        let mut day = lock(&self.budget.day);
+        if day.0 == self.day {
+            day.1 = day.1.saturating_sub(self.bytes - self.kept);
+        }
     }
 }
 
@@ -1102,17 +1153,32 @@ where
     }
     let mut buffer = vec![0_u8; CHUNK];
     loop {
-        let read = match from.read(&mut buffer).await {
+        // On the relay a read is reserved before it is made, at most what
+        // the day has left: what the other side sends past the budget stays
+        // in the transport's receive window, never read here, and the part
+        // of the hold the read did not take goes back.
+        let mut held = if relay() {
+            match budget.hold(CHUNK as u64) {
+                Some(held) => Some(held),
+                None => return Copied::Budget,
+            }
+        } else {
+            None
+        };
+        let room = held.as_ref().map_or(CHUNK, Held::room);
+        let read = match from.read(&mut buffer[..room]).await {
             Ok(0) => {
+                drop(held);
                 let _ = to.shutdown().await;
                 return Copied::Closed;
             }
             Ok(read) => read,
             Err(_) => return Copied::ReadFailed,
         };
-        if relay() && !budget.reserve(read as u64) {
-            return Copied::Budget;
+        if let Some(held) = held.as_mut() {
+            held.keep(read as u64);
         }
+        drop(held);
         if to.write_all(&buffer[..read]).await.is_err() || to.flush().await.is_err() {
             return Copied::WriteFailed;
         }
