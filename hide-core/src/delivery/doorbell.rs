@@ -465,7 +465,7 @@ pub(crate) struct Doorbell {
     /// one bell names every letter waiting there, so each letter of that
     /// recipient that waits behind the tried one is held for the same, also
     /// while the tried one sits out its backoff. Pruned to the pending
-    /// letters' panes, as `rung` is.
+    /// letters of that same recipient.
     unreadable: HashMap<String, Actor>,
     /// Why each letter waits, logged once per change.
     held: HashMap<String, Hold>,
@@ -735,10 +735,12 @@ impl Doorbell {
                 .iter()
                 .any(|letter| &letter.recipient.pane_id == pane)
         });
-        self.unreadable.retain(|pane, _| {
-            pending
-                .iter()
-                .any(|letter| &letter.recipient.pane_id == pane)
+        // Kept only while a pending letter waits for that same recipient: a
+        // pane whose agent changed starts over.
+        self.unreadable.retain(|pane, actor| {
+            pending.iter().any(|letter| {
+                &letter.recipient.pane_id == pane && letter.recipient.same_identity(actor)
+            })
         });
         let answers = owner
             .lock()
