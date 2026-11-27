@@ -197,6 +197,8 @@ model = "/model {model}"
 effort = "/model {model} {effort}"
 efforts = ["low", "medium", "high", "xhigh"]
 
-# Esc cancels the turn under way, as its working line says (`esc:cancel`).
+# Ctrl+C cancels the turn under way, as its working line says
+# (`Ctrl+c:cancel`), and leaves Grok open; Esc does not stop it (Grok 1.0.92,
+# 2026-11-27).
 [interrupt]
-keys = ["esc"]
+keys = ["ctrl-c"]

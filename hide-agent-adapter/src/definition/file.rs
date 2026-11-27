@@ -82,12 +82,15 @@ struct File {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Interrupt {
-    /// The keys in order, each a name in [`KEY_NAMES`].
+    /// The keys in order, each a name in [`INTERRUPT_KEY_NAMES`].
     pub keys: Vec<String>,
 }
 
 /// The most keys an `[interrupt]` table presses.
 pub const MAX_INTERRUPT_KEYS: usize = 4;
+/// The keys a turn is stopped with: Esc, or Ctrl+C for an agent whose Esc
+/// does not stop a turn (Grok's).
+pub const INTERRUPT_KEY_NAMES: [&str; 2] = ["esc", "ctrl-c"];
 
 fn check_interrupt(name: &str, interrupt: &Interrupt) -> Result<(), String> {
     if interrupt.keys.is_empty()
@@ -95,11 +98,11 @@ fn check_interrupt(name: &str, interrupt: &Interrupt) -> Result<(), String> {
         || !interrupt
             .keys
             .iter()
-            .all(|key| KEY_NAMES.contains(&key.as_str()))
+            .all(|key| INTERRUPT_KEY_NAMES.contains(&key.as_str()))
     {
         return Err(format!(
             "{name}: interrupt.keys holds 1 to {MAX_INTERRUPT_KEYS} of {}",
-            KEY_NAMES.join(", ")
+            INTERRUPT_KEY_NAMES.join(", ")
         ));
     }
     Ok(())
@@ -1651,9 +1654,11 @@ mod tests {
             .interrupt
             .unwrap();
         assert_eq!(interrupt.keys, ["esc", "esc"]);
+        assert!(read("x.toml", &file("keys = [\"ctrl-c\"]\n"), Origin::Builtin).is_ok());
         for refused in [
             "keys = []\n",
             "keys = [\"escape\"]\n",
+            "keys = [\"enter\"]\n",
             "keys = [\"x\"]\n",
             "keys = [\"esc\", \"esc\", \"esc\", \"esc\", \"esc\"]\n",
             "keys = [\"esc\"]\nnow = true\n",
