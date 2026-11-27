@@ -51,6 +51,24 @@ it("draws the pane header pill with the count from two letters and sends one del
   }
 });
 
+it("draws letters held on an input no read finds as the same pill with the reason and no press", async () => {
+  await clientI18n.changeLanguage("ko");
+  const events: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { events.push(event); return true; });
+  const { container, unmount } = await render(<PaneLetterButton paneId="w1:p2" letters={2} unreadable onDeliver={actions.deliverLettersNow} />);
+  try {
+    const pill = container.querySelector<HTMLElement>("[data-pane-letters]")!;
+    expect(pill.tagName).toBe("SPAN");
+    expect(container.querySelector("button")).toBeNull();
+    expect(pill.textContent).toBe("2칸이 좁음");
+    expect(pill.getAttribute("aria-label")).toBe("편지 2통 대기 중: 칸이 좁거나 가려져 입력창을 읽을 수 없어요. 칸을 넓히면 전달돼요");
+    await act(async () => pill.click());
+    expect(events).toEqual([]);
+  } finally {
+    await unmount();
+  }
+});
+
 it("marks a sidebar row with a quiet envelope and no number only while letters wait", async () => {
   await clientI18n.changeLanguage("en");
   const menu: AgentRowMenu = { items: () => [], onSelect: () => {} };

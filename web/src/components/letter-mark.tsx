@@ -14,9 +14,34 @@ import { Hint } from "./ui/tooltip";
  * fill and an unfocused header's card fill in every theme. It sits right
  * above the composer, so the operator sees whether it is empty before
  * pressing; one press is one event, and the core rings as its doorbell would.
+ * When they wait because the pane is too narrow, or covered, for its
+ * composer to be read (`letters_reason: "unreadable"`), no press can let them
+ * through: the same pill, with no action, says so on hover, and widening the
+ * pane delivers them.
  */
-export function PaneLetterButton({ paneId, letters, onDeliver }: { paneId: string; letters: number; onDeliver: (paneId: string) => void }) {
+export function PaneLetterButton({ paneId, letters, unreadable = false, onDeliver }: { paneId: string; letters: number; unreadable?: boolean; onDeliver: (paneId: string) => void }) {
   const { t } = useInterfaceTranslation();
+  if (unreadable) {
+    const label = t("panes.letters.unreadableLabel", { count: letters });
+    return (
+      <Hint label={label}>
+        <span
+          role="img"
+          tabIndex={0}
+          aria-label={label}
+          className="flex h-(--size-sidebar-line) shrink-0 items-center gap-xs rounded-xs border border-hairline bg-secondary px-xs text-caption outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          data-pane-letters={letters}
+          data-pane-letters-unreadable="true"
+        >
+          <MailIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-subtle-foreground" />
+          {letters > 1 ? <span aria-hidden="true" className="font-mono text-subtle-foreground">{letters}</span> : null}
+          <span aria-hidden="true" className="hidden whitespace-nowrap text-subtle-foreground pane-wide:inline">
+            {t("panes.letters.unreadable")}
+          </span>
+        </span>
+      </Hint>
+    );
+  }
   return (
     <Hint label={t("panes.letters.deliverLabel", { count: letters })}>
       <button
