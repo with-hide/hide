@@ -16,7 +16,7 @@ export const conversationThread = (model: ConversationModel): SessionThreadSecti
   ], parts: {}, sessions: {} },
 });
 function initial(): ConversationModel {
-  return { ...oneTabDesk({ id: CONVERSATION_PANE, title: "Check the sign-in flow", agent: agent({ pane_id: CONVERSATION_PANE, identity_label: "Check the sign-in flow", agent_kind: "claude", group: "done", mark: "done", status_code: "done", thread_capability: "ready", thread_identity: "practice-conversation", session_id: "practice-conversation" }) }), opened: false, generation: 0, sent: null, request: null };
+  return { ...oneTabDesk({ id: CONVERSATION_PANE, title: "Check the sign-in flow", agent: agent({ pane_id: CONVERSATION_PANE, identity_label: "Check the sign-in flow", agent_kind: "claude", group: "done", mark: "done", status_code: "done", elapsed: "1m", thread_capability: "ready", thread_identity: "practice-conversation", session_id: "practice-conversation" }) }), opened: false, generation: 0, sent: null, request: null };
 }
 function snapshot(model: ConversationModel, now: number): WorldSnapshot {
   const drawn = deskSnapshot([{ place: PLACE, model }], PLACE.project, now);
