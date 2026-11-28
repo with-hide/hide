@@ -4419,7 +4419,7 @@ mod tests {
             ),
             (
                 &["hide", "mission", "create", "--help"][..],
-                usage(crate::mission_cli::USAGE),
+                command_usage("mission", None).unwrap(),
             ),
             (
                 &["hide", "links", "--help"][..],
