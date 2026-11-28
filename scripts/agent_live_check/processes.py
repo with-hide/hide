@@ -21,10 +21,10 @@ import threading
 import time
 
 if __package__:
-    from .process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, live_members, marked_descendants, require_complete, retain_owned, snapshot
+    from .process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, live_members, marked_descendants, owned_group_member_state, require_complete, retain_owned, snapshot
     from .system import WINDOWS
 else:
-    from process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, live_members, marked_descendants, require_complete, retain_owned, snapshot
+    from process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, live_members, marked_descendants, owned_group_member_state, require_complete, retain_owned, snapshot
     from system import WINDOWS
 
 if WINDOWS:
@@ -909,12 +909,10 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
                     {"descendants": len(table), "rss_bytes": rss, "largest": largest(table)}, separators=(",", ":")))
             if sys.platform.startswith("linux"):
                 reap_adopted(child.pid)
-            root = table.get(child.pid)
-            if root is None:
+            root_state = owned_group_member_state(table, child.pid, group)
+            if root_state is ProcessState.VANISHED:
                 raise ProcessError("unreaped_owned_root_missing")
-            if root.group != group:
-                raise ProcessError("owned_group_unconfirmed")
-            if root.zombie:
+            if root_state is ProcessState.ZOMBIE:
                 root_exited = True
                 break
             if time.monotonic() >= deadline:

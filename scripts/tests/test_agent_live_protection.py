@@ -26,7 +26,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check.process_table import (BsdInfo, Process, ProcessState, ProcessTable, ShortBsdInfo, descendants, group_state,
-                                           marked_descendants, procargs_owned, require_complete, retain_owned, snapshot,
+                                           marked_descendants, owned_group_member_state, procargs_owned, require_complete, retain_owned, snapshot,
                                            validate_linux_procfs)
 from agent_live_check.processes import (Limits, OwnedProcesses, ProcessError, ProcessSafetyError, RssSamples, guard,
                                        control_plane, largest, linux_children_remain, reap_adopted,
@@ -831,13 +831,13 @@ class ProcessProtection(unittest.TestCase):
                     signal_reserved_group(group, signal.SIGKILL)
                 self.assertEqual(sent, [(group, signal.SIGKILL)] if signalled else [])
 
-    def test_an_observed_child_that_changes_uid_stays_owned_by_its_group(self):
+    def test_an_observed_member_or_leader_that_changes_uid_stays_owned_by_its_group(self):
         # Script libproc's owner transition between samples, with no sleep or
         # privilege change on the host. A retained birth must not turn this
         # normal exec into an identity failure or an individual PID signal.
-        own, group, member = os.getpid(), 24680, 24681
-        for status in (1, 5):
-            with self.subTest(status=status):
+        own, group = os.getpid(), 24680
+        for member, status in ((24681, 1), (24681, 5), (group, 1), (group, 5)):
+            with self.subTest(member=member, status=status):
                 library = Mock()
                 changed = False
 
@@ -885,8 +885,64 @@ class ProcessProtection(unittest.TestCase):
                     self.assertNotIn(member, retained)
                     self.assertNotIn(member, current)
                     self.assertEqual(current.unmeasured, {member} if status == 1 else set())
-                    # Later samples keep the live member until group cleanup.
-                    self.assertEqual(group_state(snapshot(group)), ProcessState.LIVE)
+                    # The leader and any child use the same membership rule,
+                    # including the transition to an unreaped zombie.
+                    expected = ProcessState.LIVE if status == 1 else ProcessState.ZOMBIE
+                    self.assertEqual(owned_group_member_state(current, member, group), expected)
+                    self.assertEqual(owned_group_member_state(snapshot(group), member, group), expected)
+
+    @unittest.skipUnless(sys.platform == "darwin", "Darwin effective-UID read boundary")
+    def test_an_unmeasured_leader_finishes_without_a_guardian_failure(self):
+        with tempfile.TemporaryDirectory() as name:
+            ready, receipt = Path(name) / "ready", Path(name) / "receipt.json"
+            child_program = ("import signal,sys,time; from pathlib import Path; "
+                             "signal.signal(signal.SIGTERM,lambda *args: sys.exit(0)); "
+                             f"Path({str(ready)!r}).touch(); time.sleep(30)")
+            program = f"""
+import os, subprocess, sys, time
+from pathlib import Path
+from agent_live_check import processes as p, process_table as pt
+original_spawn, original_snapshot, original_wait = subprocess.Popen, p.snapshot, p.ExitWatch.wait
+child, changed = None, False
+def started(*args, **kwargs):
+    global child
+    child = original_spawn(*args, **kwargs)
+    end = time.monotonic() + 10
+    while not Path({str(ready)!r}).exists():
+        if time.monotonic() >= end: raise RuntimeError('fixture_never_ready')
+        time.sleep(.01)
+    return child
+def sampled(group=None):
+    global changed
+    table = original_snapshot(group)
+    if child and child.pid in table:
+        if changed:
+            process = table.pop(child.pid)
+            table.foreign_uid_pids.add(child.pid)
+            if group is not None and not process.zombie:
+                table.unmeasured.add(child.pid)
+        elif group is not None:
+            changed = True
+    return table
+def finish_after_observation(self, seconds, cancelled):
+    child.terminate()
+    return original_wait(self, seconds, cancelled)
+subprocess.Popen = started
+p.snapshot = pt.snapshot = sampled
+p.ExitWatch.wait = finish_after_observation
+reader, writer = os.pipe()
+try:
+    code = p.guard(reader, [sys.executable, '-c', {child_program!r}], {str(receipt)!r},
+                   os.environ['HIDE_LIVE_CHECK_OWNER'].split(':')[0], time.monotonic() + 20)
+finally:
+    os.close(writer)
+raise SystemExit(code)
+"""
+            with OwnedProcesses() as owner:
+                code, _, error = owner.run([sys.executable, "-c", program],
+                    env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}, check=False)
+            self.assertEqual(code, 0, error)
+            self.assertTrue(json.loads(receipt.read_text())["confirmed"])
 
     def test_unavailable_controller_ancestry_refuses_prelaunch_exclusion(self):
         table = ProcessTable()

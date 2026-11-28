@@ -311,6 +311,22 @@ def identity_state(pid, birth, *, uid=None, pointer_width=None, table=None):
     return ProcessState.ZOMBIE if zombie else ProcessState.LIVE
 
 
+def owned_group_member_state(table, pid, group):
+    """Read one member, including the leader, from a reserved group's sample.
+
+    A foreign effective UID was admitted here only by the short BSD read's
+    group and real UID. Its missing full identity does not mean it vanished.
+    """
+    require_complete(table)
+    if process := table.get(pid):
+        if process.group != group:
+            raise RuntimeError("owned_group_unconfirmed")
+        return ProcessState.ZOMBIE if process.zombie else ProcessState.LIVE
+    if pid in table.foreign_uid_pids:
+        return ProcessState.LIVE if pid in table.unmeasured else ProcessState.ZOMBIE
+    return ProcessState.VANISHED
+
+
 def retain_owned(group_table, host_table, known, group):
     """Keep readable identities and group-owned set-user-ID members separate.
 
@@ -327,8 +343,11 @@ def retain_owned(group_table, host_table, known, group):
             require_complete(current)
             if pid in current.foreign_uid_pids:
                 group_table.pop(pid, None)
-                if pid in current.unmeasured:
+                group_table.foreign_uid_pids.add(pid)
+                if owned_group_member_state(current, pid, group) is ProcessState.LIVE:
                     group_table.unmeasured.add(pid)
+                else:
+                    group_table.unmeasured.discard(pid)
                 continue
             # It may have exited or execed back between samples. Use the
             # fresh readable identity when present; absence from a group
