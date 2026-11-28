@@ -1,4 +1,4 @@
-//! `hide workspace remove <path> [--delete-branch] [--force]`: removes a
+//! `hide checkout remove <path> [--delete-branch] [--force]`: removes a
 //! worktree of the caller's machine through the delete dialog's own path, so
 //! its workspace and panes close with it. The daemon runs it
 //! (`hide_core::worktree_command`).
@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::env::Env;
 
-pub const USAGE: &str = "hide workspace remove <path> [--delete-branch] [--force]";
+pub const USAGE: &str = "hide checkout remove <path> [--delete-branch] [--force]";
 
 /// One parsed command: the path as the caller typed it, resolved against
 /// the working directory only when it runs.
@@ -19,7 +19,7 @@ pub struct RemoveCli {
     pub force: bool,
 }
 
-/// `hide workspace remove …`, the words after `remove`: the path, then the
+/// `hide checkout remove …`, the words after `remove`: the path, then the
 /// switches in any order.
 pub fn parse(args: &[String]) -> Result<RemoveCli, String> {
     let mut path = None;

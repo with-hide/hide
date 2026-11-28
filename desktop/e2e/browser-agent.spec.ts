@@ -396,7 +396,7 @@ test("hide browser: a page unloaded past the live-page cap reports unloaded, and
     return contents && !contents.isDestroyed() && contents.getURL() === address ? [(view as Electron.View).getVisible()] : [];
   }), address);
   const state = async (display: string) => {
-    const { out } = await hideCli(["view", "status", display]);
+    const { out } = await hideCli(["view", "show", display]);
     return (JSON.parse(out.trim().split("\n").at(-1)!) as { view: { page: { state: string } } }).view.page.state;
   };
   // Twelve pages live at once: the thirteenth shown closes the one shown least recently.

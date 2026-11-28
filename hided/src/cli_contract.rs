@@ -1,6 +1,6 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
 //! `request`, `inbox`, `watch`, `mission`, `task`, `automation`, `device`, `phone`, `pane`,
-//! `access`, `skill`, `mcp`, `workspace purpose`, `workspace remove`, `session fold-ask`): each command's words, arguments and options, where its
+//! `access`, `skill`, `mcp`, `checkout purpose`, `checkout remove`, `session fold-ask`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -454,9 +454,9 @@ const CONFIRM_REFUSALS: &[&str] = &[
 /// The options every store command takes.
 const STORE_OPTIONS: &[Opt] = &[optional("--machine", Text), switch("--json")];
 
-/// A switch of one item, for every agent or one (`--agent`).
+/// A switch of one item, for every agent or one kind (`--kind`).
 const STORE_SWITCH: &[Opt] = &[
-    optional("--agent", Text),
+    optional("--kind", Text),
     optional("--machine", Text),
     switch("--json"),
 ];
@@ -614,7 +614,7 @@ pub const COMMANDS: &[Spec] = &[
         STORE_REFUSALS,
     ),
     mcp_reach_spec(&["mcp", "add"]),
-    mcp_reach_spec(&["mcp", "update"]),
+    mcp_reach_spec(&["mcp", "edit"]),
     store_spec(
         &["mcp", "on"],
         ITEM,
@@ -1176,7 +1176,9 @@ pub const COMMANDS: &[Spec] = &[
     // A link pairs with the Hide that shared it: the command shows the four
     // words and takes the operator's yes or no at the terminal. An SSH alias
     // whose machine already runs its own Hide is paired over SSH and nothing
-    // is installed there; any other alias registers the core's SSH device.
+    // is installed there; one whose machine runs none and can take one is
+    // added and switched with a Hide started there (`device_switched`); any
+    // other alias, and any with --ssh, registers the core's SSH device.
     Spec {
         words: &["device", "add"],
         arguments: &[Arg {
@@ -1187,9 +1189,14 @@ pub const COMMANDS: &[Spec] = &[
         }],
         repeats: None,
         needs_one_of: &[],
-        options: &[optional("--name", Text), switch("--json")],
+        options: &[optional("--name", Text), switch("--ssh"), switch("--json")],
         rest: None,
-        answers: &["device_added", "device_joined", "device_paired"],
+        answers: &[
+            "device_added",
+            "device_joined",
+            "device_paired",
+            "device_switched",
+        ],
         refusals: &[
             "machine_not_permitted",
             "device_invalid",
@@ -1216,6 +1223,16 @@ pub const COMMANDS: &[Spec] = &[
             "device_own",
             "device_limit",
             "peer_unavailable",
+            "device_not_added",
+            "added_not_connected",
+            "device_unknown",
+            "switch_running",
+            "switch_not_connected",
+            "switch_not_moved",
+            "switch_cut",
+            "ssh_core_not_started",
+            "ssh_mac_from_mac_only",
+            "ssh_mac_signed_out",
         ],
     },
     // Answers, at this terminal, the machines that wait for this machine's
@@ -1799,7 +1816,7 @@ pub const COMMANDS: &[Spec] = &[
         ],
     },
     Spec {
-        words: &["workspace", "purpose"],
+        words: &["checkout", "purpose"],
         arguments: &[Arg {
             name: "text",
             value: Text,
@@ -1822,7 +1839,7 @@ pub const COMMANDS: &[Spec] = &[
     // The delete dialog's removal: --force accepts every loss the deletion
     // gate names, --delete-branch takes the local branch with the folder.
     Spec {
-        words: &["workspace", "remove"],
+        words: &["checkout", "remove"],
         arguments: &[Arg {
             name: "path",
             value: Text,
@@ -1933,7 +1950,7 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["confirmed"],
         refusals: &[],
     },
-    spec(&["inbox", "--ack"], ID, &[], &["acknowledged"]),
+    spec(&["inbox", "ack"], ID, &[], &["acknowledged"]),
     spec(
         &["watch", "start"],
         TARGET,
@@ -1999,11 +2016,11 @@ pub const COMMANDS: &[Spec] = &[
                 value: Some(Text),
                 required: false,
                 requires: &[],
-                conflicts: &["--json"],
+                conflicts: &["--inline"],
                 repeats: None,
             },
             Opt {
-                name: "--json",
+                name: "--inline",
                 value: Some(Json),
                 required: false,
                 requires: &[],
@@ -2395,7 +2412,7 @@ pub const COMMANDS: &[Spec] = &[
         needs_one_of: &[],
         options: &[
             required("--name", Text),
-            required("--task", Body),
+            required("--brief", Body),
             required("--schedule", Text),
             required("--kind", Text),
             Opt {
@@ -2422,12 +2439,12 @@ pub const COMMANDS: &[Spec] = &[
                 conflicts: &[],
                 repeats: None,
             },
-            optional("--folder", Text),
+            optional("--repo", Text),
             Opt {
                 name: "--worktree",
                 value: None,
                 required: false,
-                requires: &["--folder"],
+                requires: &["--repo"],
                 conflicts: &[],
                 repeats: None,
             },
@@ -2465,17 +2482,17 @@ pub const COMMANDS: &[Spec] = &[
         repeats: None,
         needs_one_of: &[
             "--name",
-            "--task",
+            "--brief",
             "--schedule",
             "--kind",
-            "--folder",
-            "--own-folder",
+            "--repo",
+            "--no-repo",
             "--worktree",
             "--no-worktree",
         ],
         options: &[
             optional("--name", Text),
-            optional("--task", Body),
+            optional("--brief", Body),
             optional("--schedule", Text),
             optional("--kind", Text),
             Opt {
@@ -2502,8 +2519,8 @@ pub const COMMANDS: &[Spec] = &[
                 conflicts: &[],
                 repeats: None,
             },
-            cleared("--folder", Text, &["--own-folder"]),
-            clearing("--own-folder", &["--folder"]),
+            cleared("--repo", Text, &["--no-repo"]),
+            clearing("--no-repo", &["--repo"]),
             clearing("--worktree", &["--no-worktree"]),
             clearing("--no-worktree", &["--worktree"]),
         ],
@@ -2603,11 +2620,11 @@ pub const COMMANDS: &[Spec] = &[
                 value: Some(Text),
                 required: false,
                 requires: &[],
-                conflicts: &["--json"],
+                conflicts: &["--inline"],
                 repeats: None,
             },
             Opt {
-                name: "--json",
+                name: "--inline",
                 value: Some(Json),
                 required: false,
                 requires: &[],
@@ -2939,27 +2956,48 @@ fn listed(spec: &Spec, table: &retired::Table) -> Value {
         .iter()
         .filter(|flags| flags.command == spec.words)
     {
-        for flag in flags.renamed {
-            let value = spec
-                .options
+        let renamed: Vec<&retired::Flag> = flags.renamed.iter().collect();
+        // A list that names other options by "any of" names the old
+        // spelling too, right before the option it is now.
+        with_retired(command.get_mut("needs_one_of"), &renamed);
+        for option in command["options"].as_array_mut().into_iter().flatten() {
+            with_retired(option.get_mut("conflicts"), &renamed);
+        }
+        // A retired option is listed as the option it is now, under its old
+        // name: what a caller that types the old spelling reads stays as it
+        // was.
+        let options = command["options"]
+            .as_array_mut()
+            .expect("options are a list");
+        for flag in renamed {
+            let mut entry = options
                 .iter()
-                .find(|option| option.name == flag.now)
-                .and_then(|option| option.value)
-                .filter(|_| flag.arity > 0)
-                .map(value_json);
-            command["options"]
-                .as_array_mut()
-                .expect("options are a list")
-                .push(json!({
-                    "name": flag.old,
-                    "value": value,
-                    "required": false,
-                    "requires": [],
-                    "retired_for": flag.now,
-                }));
+                .find(|option| option["name"] == flag.now)
+                .cloned()
+                .unwrap_or_else(|| json!({"value": null, "required": false, "requires": []}));
+            entry["name"] = json!(flag.old);
+            entry["retired_for"] = json!(flag.now);
+            options.push(entry);
         }
     }
     command
+}
+
+/// `names`, a list of option names, with the old spelling of each of
+/// `renamed` right before the option it is now.
+fn with_retired(names: Option<&mut Value>, renamed: &[&retired::Flag]) {
+    if let Some(list) = names.and_then(Value::as_array_mut) {
+        *list = std::mem::take(list)
+            .into_iter()
+            .flat_map(|name| {
+                let old = renamed
+                    .iter()
+                    .find(|flag| name == flag.now)
+                    .map(|flag| json!(flag.old));
+                old.into_iter().chain([name])
+            })
+            .collect();
+    }
 }
 
 /// The contract's commands: each command of the table, followed by each
@@ -3024,6 +3062,7 @@ fn envelopes(table: &retired::Table) -> Value {
         "device": {"ok": "ok", "answer": "value", "code": "error.code"},
         "pane": {"ok": "ok", "answer": "value", "code": "error.code"},
         "workspace": {"ok": "ok", "answer": "value", "code": "error.code"},
+        "checkout": {"ok": "ok", "answer": "value", "code": "error.code"},
         "access": {"ok": "ok", "answer": "value", "code": "error.code"},
         "skill": {"ok": "ok", "answer": "value", "code": "error.code"},
         "mcp": {"ok": "ok", "answer": "value", "code": "error.code"},
@@ -3981,16 +4020,16 @@ mod tests {
             "text on agent end|sleep|archive (any name an agent goes by), key on watch start|assign (an agent id); one type changes the contract",
         ),
         (
+            "--brief",
+            "by design: text on agent spawn, whose brief is typed as the first prompt and cannot carry a line break; body on automation add|edit, whose brief is kept and may span lines",
+        ),
+        (
             "--for",
             "by design: span (minutes or hours) for a mission's hold and delay, deadline (1h to 30d) for a wait",
         ),
         (
             "--intent",
             "text on agent spawn, key on letter send|reply; a calling tool (sasu) matches both types",
-        ),
-        (
-            "--json",
-            "a switch that prints the answer as JSON, and the plan document on mission plan and task set until those take it as --inline",
         ),
         (
             "--key",
@@ -4123,7 +4162,7 @@ mod tests {
         assert_eq!(verb_problems(COMMANDS, VERBS), Vec::<String>::new());
         assert_eq!(verb(&["agent", "profile", "add"]), Some("add"));
         assert_eq!(verb(&["agent", "show", "here"]), Some("show"));
-        assert_eq!(verb(&["inbox", "--ack"]), None);
+        assert_eq!(verb(&["inbox", "--hook"]), None);
         assert_eq!(verb(&["ps"]), None);
     }
 
@@ -4325,7 +4364,7 @@ mod tests {
     /// The usage of each topic a command of the table is under, and of the
     /// topics inside one.
     fn topic_usages() -> Vec<(String, String)> {
-        // Every topic a command of the table is under, `workspace` and
+        // Every topic a command of the table is under, `checkout` and
         // `session` among them.
         let topics: std::collections::BTreeSet<&str> =
             COMMANDS.iter().map(|spec| spec.words[0]).collect();
@@ -4409,21 +4448,30 @@ mod tests {
                 .filter(|spec| spec.words.starts_with(row.now))
                 .map(|spec| argv(spec, &[], None, spec.repeats.unwrap_or(1)))
                 .collect();
-            // A command outside the table is read by its words alone, and
-            // must be one: the parser reads both lines through the table, so
-            // a row whose words now name nothing reads the same either way.
+            // A command outside the table is read by its words alone, or
+            // with one subject after them (`session show <id>`), and must
+            // be one: the parser reads both lines through the table, so a
+            // row whose words now name nothing reads the same either way.
             if lines.is_empty() {
-                let now = hide_line(row.now);
-                if matches!(
-                    parse_args(&now),
-                    Err(_) | Ok(CommandKind::Open | CommandKind::OpenPath { .. })
-                ) {
-                    problems.push(format!(
-                        "hide {} names no command; the row would read hide {old} as nothing",
-                        row.now.join(" ")
-                    ));
+                let bare = hide_line(row.now);
+                let mut subject = bare.clone();
+                subject.push("probe-1".to_owned());
+                let command = |line: &Vec<String>| {
+                    !matches!(
+                        parse_args(line),
+                        Err(_) | Ok(CommandKind::Open | CommandKind::OpenPath { .. })
+                    )
+                };
+                match [bare, subject].into_iter().find(command) {
+                    Some(now) => lines.push(now),
+                    None => {
+                        problems.push(format!(
+                            "hide {} names no command; the row would read hide {old} as nothing",
+                            row.now.join(" ")
+                        ));
+                        lines.push(hide_line(row.now));
+                    }
                 }
-                lines.push(now);
             }
             // A topic of the table keeps its retired word's envelope.
             if let ([old_topic], [now_topic]) = (row.old, row.now)
@@ -4507,12 +4555,124 @@ mod tests {
         assert_eq!(retired_problems(&retired::TABLE), Vec::<String>::new());
         assert_eq!(
             parse_args(&hide_line(&["plan", "set", "--json", "{\"nodes\": []}"])),
-            parse_args(&hide_line(&["task", "set", "--json", "{\"nodes\": []}"]))
+            parse_args(&hide_line(&["task", "set", "--inline", "{\"nodes\": []}"]))
         );
         assert!(matches!(
             parse_args(&hide_line(&["plan", "show"])),
             Ok(CommandKind::Plan(_))
         ));
+    }
+
+    /// A malformed line of a renamed Workspace command is refused in the
+    /// same form under both spellings: JSON a program reads, not text.
+    #[test]
+    fn a_refused_old_spelling_answers_in_the_form_of_the_command_it_is_now() {
+        for (old, now) in [
+            ("workspace purpose", "checkout purpose"),
+            ("workspace info extra", "checkout show extra"),
+            ("workspace remove", "checkout remove"),
+            ("workspace remove p --bogus", "checkout remove p --bogus"),
+            ("view status", "view show"),
+        ] {
+            let (old, now) = (hide_line(&shell_words(old)), hide_line(&shell_words(now)));
+            assert!(parse_args(&now).is_err(), "{now:?}");
+            assert_eq!(parse_args(&old), parse_args(&now), "{old:?}");
+            assert!(crate::cli::refuses_as_json(&now), "{now:?}");
+            assert!(crate::cli::refuses_as_json(&old), "{old:?}");
+        }
+        for command in retired::TABLE.commands {
+            assert_eq!(
+                crate::cli::refuses_as_json(&hide_line(command.old)),
+                crate::cli::refuses_as_json(&hide_line(command.now)),
+                "{:?}",
+                command.old
+            );
+        }
+    }
+
+    /// An old spelling of the second batch of names (`hided/AGENTS.md`, One
+    /// name per thing) parses as the command it is now, and the rewrite
+    /// leaves an option's value, the words after `--` and a hook's own
+    /// `workspace info --hook` as they are.
+    #[test]
+    fn an_old_spelling_keeps_its_values_the_words_after_dashes_and_the_hooks_command() {
+        let parse = |line: &str| parse_args(&hide_line(&shell_words(line)));
+        let same = |old: &str, now: &str| {
+            let (then, today) = (parse(old), parse(now));
+            assert!(today.is_ok(), "{now}: {today:?}");
+            assert_eq!(then, today, "{old}");
+            format!("{today:?}")
+        };
+        assert!(matches!(
+            parse("workspace info --hook"),
+            Ok(CommandKind::WorkspaceHookInfo)
+        ));
+        assert!(matches!(
+            parse("workspace info"),
+            Ok(CommandKind::WorkspaceInfo)
+        ));
+        assert!(matches!(
+            parse("checkout show"),
+            Ok(CommandKind::WorkspaceInfo)
+        ));
+        same(
+            "workspace purpose 'fix login'",
+            "checkout purpose 'fix login'",
+        );
+        same(
+            "workspace remove ../w --force",
+            "checkout remove ../w --force",
+        );
+        same(
+            "inbox --ack letter-2~0123456789ab",
+            "inbox ack letter-2~0123456789ab",
+        );
+        same("session record agent-7", "session show agent-7");
+        same("view status browser-3", "view show browser-3");
+        same(
+            "skill on archify --agent codex",
+            "skill on archify --kind codex",
+        );
+        same("mcp off github --agent pi", "mcp off github --kind pi");
+        same(
+            "mission plan --json '{\"nodes\": []}'",
+            "mission plan --inline '{\"nodes\": []}'",
+        );
+        same(
+            "plan set --json '{\"nodes\": []}'",
+            "task set --inline '{\"nodes\": []}'",
+        );
+        same(
+            "automation edit a1 --own-folder --task 'Say hi'",
+            "automation edit a1 --no-repo --brief 'Say hi'",
+        );
+        // The value of a retired option that looks like one is its value.
+        let added = same(
+            "automation add --name n --task --folder --schedule 'daily 09:00' --kind claude",
+            "automation add --name n --brief --folder --schedule 'daily 09:00' --kind claude",
+        );
+        assert!(
+            added.contains("task: \"--folder\"") && added.contains("folder: None"),
+            "{added}"
+        );
+        // The words after `--` are the server's.
+        let edited = same(
+            "mcp update fs -- server --agent codex --task t",
+            "mcp edit fs -- server --agent codex --task t",
+        );
+        assert!(
+            edited.contains("\"--agent\", \"codex\", \"--task\""),
+            "{edited}"
+        );
+    }
+
+    /// `line` split as a POSIX shell splits it.
+    fn shell_words(line: &str) -> Vec<String> {
+        hide_shell::shell_line(line, hide_shell::Syntax::Posix)
+            .commands
+            .into_iter()
+            .next()
+            .unwrap_or_default()
     }
 
     /// The retired-words guard catches a row the parser reads otherwise, a
@@ -4634,10 +4794,17 @@ mod tests {
         assert_eq!(retired, names.len() - COMMANDS.len());
         assert_eq!(
             document["retired_words"],
-            json!([
-                {"old": ["plan"], "now": ["task"]},
-                {"old": ["request"], "now": ["letter"]},
-            ])
+            json!(
+                retired::TABLE
+                    .commands
+                    .iter()
+                    .map(|row| json!({"old": row.old, "now": row.now}))
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert_eq!(
+            document["retired_words"][0],
+            json!({"old": ["plan"], "now": ["task"]})
         );
         assert_eq!(document["envelopes"]["plan"], document["envelopes"]["task"]);
         assert_eq!(document["envelopes"]["task"]["answer"], "result");

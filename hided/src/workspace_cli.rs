@@ -1105,7 +1105,7 @@ pub fn request_ps(credential: &mut Credential, all: bool) -> Result<Value, Strin
     })
 }
 
-/// `hide pane`, `hide agent read` and `hide workspace purpose`: the core
+/// `hide pane`, `hide agent read` and `hide checkout purpose`: the core
 /// admits the caller's pane and runs the command through its engine, with
 /// no shell needed.
 pub fn request_pane(
@@ -1126,7 +1126,7 @@ pub fn request_pane(
     })
 }
 
-/// `hide workspace remove`: the core removes the worktree as the delete
+/// `hide checkout remove`: the core removes the worktree as the delete
 /// dialog does and answers once the removal has ended, which can take as
 /// long as the host's recheck and removal; the daemon's own wait ends first.
 pub fn request_worktree_remove(
@@ -1801,6 +1801,7 @@ mod tests {
             runtime: "claude".to_owned(),
             session: "session".to_owned(),
             prompt: prompt.clone(),
+            prompt_digest: None,
         };
         let deadline = Instant::now() + Duration::from_secs(10);
         let answer = hook_request(&env_at(state.path()), None, command, deadline).unwrap();

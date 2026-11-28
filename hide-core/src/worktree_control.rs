@@ -2507,7 +2507,7 @@ impl GitCommands for EngineOnly {
     }
 }
 
-/// `hide workspace purpose`'s write: the one the checkout row's Set purpose
+/// `hide checkout purpose`'s write: the one the checkout row's Set purpose
 /// makes, on the caller's task, with this machine's node for its Git or none
 /// for a device checkout. Whether the engine's token was written; a branch
 /// description that failed after the token was written is logged, since the

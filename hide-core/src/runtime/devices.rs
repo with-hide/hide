@@ -1145,12 +1145,16 @@ impl Runtime {
                     false,
                 ))
             }
-            DeviceCommand::Add { ssh_alias, name } => {
+            DeviceCommand::Add {
+                ssh_alias,
+                name,
+                host_consent,
+            } => {
                 let ssh_alias = ssh_alias.trim().to_owned();
                 let payload = super::events::RegisterDevicePayload {
                     label: name.unwrap_or_else(|| ssh_alias.clone()),
                     ssh_alias,
-                    host_consent: false,
+                    host_consent,
                     wsl_distro: None,
                 };
                 let id = self.register_device(payload).map_err(refused)?;
@@ -1163,12 +1167,14 @@ impl Runtime {
                     .map(|device| self.device_answer(device))
                     .ok_or("device_unavailable")?;
                 let name = device["label"].as_str().unwrap_or(&id).to_owned();
+                // A device added with the consent installs its helper now.
+                let next_action = (!host_consent).then(|| format!(
+                    "Ask the operator to open Settings > Devices in Hide and choose Allow and install on {name}'s row. Until then Hide installs nothing there, and the device's files, Git and terminal input wait for it."
+                ));
                 Ok((
                     serde_json::json!({
                         "device": device,
-                        "next_action": format!(
-                            "Ask the operator to open Settings > Devices in Hide and choose Allow and install on {name}'s row. Until then Hide installs nothing there, and the device's files, Git and terminal input wait for it."
-                        ),
+                        "next_action": next_action,
                     }),
                     true,
                 ))

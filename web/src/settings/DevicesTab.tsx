@@ -42,8 +42,8 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   const [renaming, setRenaming] = useState<Device | null>(null);
   const [sharing, setSharing] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
-  // The device count when the Add dialog opened: a new row means the device was added, which closes it.
-  const [adding, setAdding] = useState<number | null>(null);
+  // The Add dialog, which closes itself once what it added is listed or connected.
+  const [adding, setAdding] = useState(false);
   // Which kind of machine the Add dialog adds; it opens on a Hide's link.
   const [addKind, setAddKind] = useState<AddKind>("hide");
   const [addStep, setAddStep] = useState<AddStep>("choose");
@@ -93,7 +93,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
       return;
     }
     setAddStep(request === "add_computer" ? "computer" : "choose");
-    setAdding(devices.length);
+    setAdding(true);
   }, [request, devices]);
   // hided rechecks the phone checklist while this machine's own window shows
   // the tab; showing it makes no pairing code and voids none (B58). A
@@ -104,10 +104,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
     return () => actions.observeMobile(false);
   }, [actions, live, ownScreen]);
   useEffect(() => {
-    if (adding !== null && rows.length > adding) setAdding(null);
-  }, [adding, rows.length]);
-  useEffect(() => {
-    if (adding !== null) return;
+    if (adding) return;
     setAddKind("hide");
     setAddStep("choose");
   }, [adding]);
@@ -157,7 +154,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
           </Button>
         </p>
         {canAdd ? (
-          <Button variant="secondary" size="sm" className="shrink-0" onClick={() => { setAddStep("choose"); setAdding(rows.length); }} data-device-add-open="true">
+          <Button variant="secondary" size="sm" className="shrink-0" onClick={() => { setAddStep("choose"); setAdding(true); }} data-device-add-open="true">
             <PlusIcon aria-hidden="true" />
             {t("devices.addTitle")}
           </Button>
@@ -188,8 +185,8 @@ export function DevicesTab({ actions }: { actions: Actions }) {
           onClose={() => setRenaming(null)}
         />
       ) : null}
-      {adding !== null && canAdd ? (
-        <Dialog open onOpenChange={(next) => { if (!next) setAdding(null); }}>
+      {adding && canAdd ? (
+        <Dialog open onOpenChange={setAdding}>
           <DialogContent showCloseButton data-add-device-dialog="true">
             <DialogHeader>
               <DialogTitle>{t("devices.addTitle")}</DialogTitle>
@@ -204,7 +201,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
                     title={t("devices.addKind.phone")}
                     line={t("devices.addKind.phoneLine")}
                     onPick={() => {
-                      setAdding(null);
+                      setAdding(false);
                       setPairingPhone(true);
                     }}
                     data-add-choice="phone"
@@ -217,16 +214,16 @@ export function DevicesTab({ actions }: { actions: Actions }) {
                 <ToggleGroupItem value="ssh" size="sm" className="flex-1" data-add-kind-choice="ssh">{t("pairing.add.kindSsh")}</ToggleGroupItem>
               </ToggleGroup> : null}
               {addStep !== "computer" ? null : addKind === "hide" ? (
-                <AddByLink actions={actions} onStarted={() => setAdding(null)} />
+                <AddByLink actions={actions} onStarted={() => setAdding(false)} />
               ) : (
                 <AddDevice
                   actions={actions}
                   devices={rows}
                   helperRoot={localRoot}
                   cliDir={localCliDir}
-                  onPaired={() => setAdding(null)}
+                  onClose={() => setAdding(false)}
                   onShowDevice={(id) => {
-                    setAdding(null);
+                    setAdding(false);
                     useUiStore.getState().openDevice(id);
                   }}
                 />

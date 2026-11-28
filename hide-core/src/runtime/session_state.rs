@@ -708,7 +708,7 @@ impl Runtime {
     }
 
     /// `record` with its `PR` sections laid as the screen's record lays
-    /// them, for `hide session record`, which never touches the screen's
+    /// them, for `hide session show`, which never touches the screen's
     /// record slot (PRD agent-session-read D-08, B16).
     pub(crate) fn laid_record_pulls(
         &self,

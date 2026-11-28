@@ -53,7 +53,8 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
                 runtime,
                 session,
                 prompt,
-            } => memory_ask(event, runtime, session, prompt).is_some(),
+                prompt_digest,
+            } => memory_ask(event, runtime, session, prompt, prompt_digest.as_deref()).is_some(),
             HookCommand::Status { report } => valid_status(report),
             HookCommand::AgentExec { .. } => request.command.agent_exec_valid(),
             HookCommand::LetterPull {
@@ -138,7 +139,8 @@ pub(crate) fn answer(
             runtime,
             session,
             prompt,
-        } => match memory_ask(event, runtime, session, prompt) {
+            prompt_digest,
+        } => match memory_ask(event, runtime, session, prompt, prompt_digest.as_deref()) {
             Some(ask) => memory(core, cap, &ask),
             None => Err((
                 "invalid_request".to_owned(),
@@ -250,7 +252,7 @@ fn agent_exec(
         .map_err(|reason| (reason.to_owned(), "Start the agent again"))
 }
 
-/// The answer a pane's `hide workspace info` gets, its page commands told
+/// The answer an agent hook's `hide workspace info --hook` gets, its page commands told
 /// as the command loop tells them (`Seen::scope`).
 fn workspace_info(
     core: &CoreHandle,
@@ -282,10 +284,12 @@ fn memory_ask(
     runtime: &str,
     session: &str,
     prompt: &str,
+    prompt_digest: Option<&str>,
 ) -> Option<hide_core::memory_hook::Ask> {
-    hide_core::memory_hook::Ask::from_wire(
-        &json!({"event":event,"runtime":runtime,"session":session,"prompt":prompt}),
-    )
+    hide_core::memory_hook::Ask::from_wire(&json!({
+        "event": event, "runtime": runtime, "session": session, "prompt": prompt,
+        "prompt_digest": prompt_digest,
+    }))
 }
 
 pub(crate) fn delivery(
@@ -317,6 +321,7 @@ pub(crate) fn memory(
     let mine = |session: &str| (cap.pane_id.clone(), session.to_owned());
     let (scope, give, brief) = core.hook_scope(
         &cap.context,
+        &cap.pane_id,
         ask.prompt_session().map(mine),
         ask.start_session().map(mine),
         deadline,
@@ -434,7 +439,7 @@ mod tests {
     use super::*;
 
     fn ask(event: &str) -> hide_core::memory_hook::Ask {
-        memory_ask(event, "claude", "s-1", "").unwrap()
+        memory_ask(event, "claude", "s-1", "", None).unwrap()
     }
 
     /// A hook's confirmation names at most one bundle of letters, each an id

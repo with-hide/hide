@@ -7,9 +7,15 @@
 //! taken off, its aliases, and every two-syllable piece of its Hangul words,
 //! so `테스트를 돌려줘` finds a card about `테스트` and a run of Hangul without
 //! spaces still shares pieces with a spaced one. SQLite's FTS5 ranks the
-//! candidates by BM25; each one is then scored here and kept only above
-//! [`MINIMUM_SCORE`], so a prompt that shares no word, stem, alias or piece
-//! with a card never receives it (B11, B12).
+//! candidates by BM25; each one is then scored here, so a text that shares no
+//! word, stem, alias or piece with a card never receives it (B11, B12).
+//!
+//! A search and the comparison set keep a card above [`MINIMUM_SCORE`]: one
+//! shared whole word is enough to list it. A prompt's cards must fit it
+//! ([`fit`], above [`MINIMUM_FIT`]): each word counts by how few of the
+//! Project's cards hold it ([`weight`]), and fully only when the card's title
+//! or aliases hold it, so one word most cards share, or a word that only
+//! happens to stand in a card's text, never gives a card to a prompt.
 
 use unicode_normalization::UnicodeNormalization;
 
@@ -17,8 +23,23 @@ use unicode_normalization::UnicodeNormalization;
 pub(crate) const QUERY_TERM_LIMIT: usize = 24;
 /// The most terms a comparison takes from a conversation it analyzes.
 pub(crate) const COMPARISON_TERM_LIMIT: usize = 96;
-/// A card needs one whole word, stem or alias, or two strong pieces.
+/// A card a search lists needs one whole word, stem or alias, or two strong
+/// pieces.
 pub(crate) const MINIMUM_SCORE: f64 = 0.8;
+/// The fit a card needs to be given to a prompt: one rare word in its title
+/// or aliases, or two in its text; a word a quarter of the cards hold adds
+/// nothing, and one most cards share stays below it alone.
+pub(crate) const MINIMUM_FIT: f64 = 0.8;
+/// The share of the Project's cards at or under which a word counts whole.
+const RARE_SHARE: f64 = 0.02;
+/// The share of the Project's cards from which a word counts nothing.
+const COMMON_SHARE: f64 = 0.25;
+/// The fewest cards a share is taken of, so a word one card of a new
+/// Project's few holds is not read as common for want of other cards.
+const SHARE_FLOOR_CARDS: usize = 50;
+/// What a word found only in a card's text, not in its title or aliases,
+/// adds to a prompt's fit, as a share of what it would add there.
+const TEXT_SHARE: f64 = 0.5;
 /// The lower bar a card clears to be compared with new words, so the
 /// analysis sees a same-meaning card said in other words (PRD
 /// memory-self-improve D-38).
@@ -214,6 +235,34 @@ fn grams(word: &str) -> Vec<String> {
     grams
 }
 
+/// How much one prompt word says about a card, from how many of the
+/// Project's `cards` hold it: 1 for a word at most [`RARE_SHARE`] of them
+/// hold, 0 for one [`COMMON_SHARE`] of them hold, and between them the log of
+/// the share scaled to that range (an inverse document frequency).
+pub(crate) fn weight(holding: usize, cards: usize) -> f64 {
+    let share = holding as f64 / cards.max(SHARE_FLOOR_CARDS) as f64;
+    if share <= RARE_SHARE {
+        return 1.0;
+    }
+    ((COMMON_SHARE / share).ln() / (COMMON_SHARE / RARE_SHARE).ln()).clamp(0.0, 1.0)
+}
+
+/// The most holders of a word worth counting among `cards`: from there on the
+/// word weighs nothing, so a count stops at it.
+pub(crate) fn holders_worth_counting(cards: usize) -> usize {
+    (COMMON_SHARE * cards.max(SHARE_FLOOR_CARDS) as f64).ceil() as usize
+}
+
+/// A prompt's fit with a card: each word's credit ([`Query::credits`]) times
+/// its weight ([`weight`]).
+pub(crate) fn fit(credits: &[f64], weights: &[f64]) -> f64 {
+    credits
+        .iter()
+        .zip(weights)
+        .map(|(credit, weight)| credit * weight)
+        .sum()
+}
+
 /// What a card is matched by, from its body and aliases.
 #[derive(Debug, Default)]
 pub(crate) struct CardTerms {
@@ -355,41 +404,71 @@ impl Query {
         parts.join(" OR ")
     }
 
+    /// How many words the query has.
+    pub(crate) fn len(&self) -> usize {
+        self.terms.len()
+    }
+
+    /// The FTS5 expression for the cards that hold word `index` whole: its
+    /// stem, as a prefix where it may start a longer word, or the word. Its
+    /// pieces are left out, so a word is not counted common for the pieces
+    /// it shares with other words.
+    pub(crate) fn holding_expression(&self, index: usize) -> String {
+        let term = &self.terms[index];
+        let star = if term.prefixes() { "*" } else { "" };
+        let mut expression = format!("\"{}\"{star}", term.stem.replace('"', "\"\""));
+        if term.word != term.stem {
+            expression.push_str(&format!(" OR \"{}\"", term.word.replace('"', "\"\"")));
+        }
+        expression
+    }
+
     /// How strongly `card` matches: one per whole word or stem, less for a
     /// prefix, and the share of a Hangul word's pieces the card holds when
     /// the word is not found whole.
     pub(crate) fn score(&self, card: &CardTerms) -> f64 {
+        self.terms.iter().map(|term| term.strength(card)).sum()
+    }
+
+    /// Each word's credit toward a prompt's fit with a card: its strength in
+    /// the card's title and aliases (`subject`), or [`TEXT_SHARE`] of its
+    /// strength when only the card's text (`text`) holds it.
+    pub(crate) fn credits(&self, subject: &CardTerms, text: &CardTerms) -> Vec<f64> {
         self.terms
             .iter()
-            .map(|term| {
-                if card
-                    .words
-                    .binary_search(&term.word)
-                    .or_else(|_| card.words.binary_search(&term.stem))
-                    .is_ok()
-                {
-                    1.0
-                } else if term.prefixes()
-                    && card.words.iter().any(|word| word.starts_with(&term.stem))
-                {
-                    0.85
-                } else if term
-                    .grams
-                    .first()
-                    .is_some_and(|first| card.grams.contains(first))
-                {
-                    let found = term
-                        .grams
-                        .iter()
-                        .filter(|gram| card.grams.contains(*gram))
-                        .count();
-                    let share = found as f64 / term.grams.len() as f64;
-                    if share >= GRAM_SHARE { share } else { 0.0 }
-                } else {
-                    0.0
-                }
-            })
-            .sum()
+            .map(|term| term.strength(subject).max(TEXT_SHARE * term.strength(text)))
+            .collect()
+    }
+}
+
+impl QueryTerm {
+    /// One per whole word or stem, less for a prefix, and the share of a
+    /// Hangul word's pieces `card` holds when the word is not found whole.
+    fn strength(&self, card: &CardTerms) -> f64 {
+        if card
+            .words
+            .binary_search(&self.word)
+            .or_else(|_| card.words.binary_search(&self.stem))
+            .is_ok()
+        {
+            1.0
+        } else if self.prefixes() && card.words.iter().any(|word| word.starts_with(&self.stem)) {
+            0.85
+        } else if self
+            .grams
+            .first()
+            .is_some_and(|first| card.grams.contains(first))
+        {
+            let found = self
+                .grams
+                .iter()
+                .filter(|gram| card.grams.contains(*gram))
+                .count();
+            let share = found as f64 / self.grams.len() as f64;
+            if share >= GRAM_SHARE { share } else { 0.0 }
+        } else {
+            0.0
+        }
     }
 }
 
@@ -496,5 +575,42 @@ mod tests {
         assert!(expression.contains("\"띄워\"*"));
         assert!(!expression.contains("하나"));
         assert!(Query::new("하나 좀").is_empty());
+    }
+
+    #[test]
+    fn a_word_weighs_by_how_few_of_the_projects_cards_hold_it() {
+        // One card in fifty or fewer counts whole; a quarter of the cards
+        // counts nothing; the geometric middle of the two shares counts half.
+        assert_eq!(weight(0, 906), 1.0);
+        assert_eq!(weight(18, 906), 1.0);
+        assert_eq!(weight(227, 906), 0.0);
+        assert_eq!(weight(540, 906), 0.0);
+        assert!((weight(71, 1000) - 0.5).abs() < 0.01);
+        // A new Project's few cards are no evidence a word is common.
+        assert_eq!(weight(1, 3), 1.0);
+        assert!(weight(3, 3) < 1.0);
+        assert_eq!(holders_worth_counting(906), 227);
+        assert_eq!(holders_worth_counting(3), 13);
+    }
+
+    #[test]
+    fn a_word_counts_whole_in_a_cards_title_or_aliases_and_half_in_its_text() {
+        let query = Query::new("ssh 서버");
+        let subject = CardTerms::new("SSH 기기는 서버 연결을 먼저", &["ssh host".to_owned()]);
+        let text = CardTerms::new("SSH로 기기를 더할 때 서버 연결을 권한다", &[]);
+        let none = CardTerms::default();
+        assert_eq!(query.credits(&subject, &text), vec![1.0, 1.0]);
+        assert_eq!(query.credits(&none, &text), vec![0.5, 0.5]);
+        let rare = [1.0, 1.0];
+        assert_eq!(fit(&query.credits(&none, &text), &rare), 1.0);
+        assert!(fit(&Query::new("ssh").credits(&none, &text), &rare) < MINIMUM_FIT);
+        assert!(fit(&Query::new("ssh").credits(&subject, &none), &rare) >= MINIMUM_FIT);
+        // A word most cards share never fits alone, wherever it stands.
+        assert!(
+            fit(
+                &Query::new("ssh").credits(&subject, &text),
+                &[weight(300, 906)]
+            ) < MINIMUM_FIT
+        );
     }
 }

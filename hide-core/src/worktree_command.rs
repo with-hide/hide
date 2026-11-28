@@ -1,4 +1,4 @@
-//! `hide workspace remove <path> [--delete-branch] [--force]`: an agent's
+//! `hide checkout remove <path> [--delete-branch] [--force]`: an agent's
 //! removal of a worktree Hide shows, through the delete dialog's own path.
 //!
 //! The runtime admits it under its lock (`Runtime::worktree_remove_command`)
@@ -47,7 +47,7 @@ impl WorktreeRemove {
     }
 }
 
-/// `hide workspace remove`: the worktree removed, with its workspace and
+/// `hide checkout remove`: the worktree removed, with its workspace and
 /// panes closed first.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct WorktreeRemoved {
@@ -148,7 +148,7 @@ pub fn answer(removal: &WorktreeRemovalSnapshot) -> Option<Result<Value, String>
     }
 }
 
-/// The next action a refusal of `hide workspace remove` names.
+/// The next action a refusal of `hide checkout remove` names.
 pub fn next_action(code: &str) -> Option<&'static str> {
     Some(match code {
         "worktree_remove_unknown" => {

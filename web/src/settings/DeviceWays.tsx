@@ -57,7 +57,7 @@ export type WaysState = {
   onSwitch: () => void;
 };
 
-/** The opened place of a device's row. */
+/** The opened place of a device's row: the server card first, the way Add device recommends (operator decision 2026-11-28). */
 export function DeviceWays({ state, actions }: { state: WaysState; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const { deviceId, name, way } = state;
@@ -79,28 +79,6 @@ export function DeviceWays({ state, actions }: { state: WaysState; actions: Acti
       <SwitchedNotice deviceId={deviceId} name={name} />
       <div ref={ref} className="dw-ways @container/ways" data-playing={playing ? "true" : "false"}>
         <div className="grid gap-sm @lg/ways:grid-cols-2">
-          <WayCard
-            title={t(state.direct === "wsl" ? "devices.ways.wsl" : "devices.ways.ssh")}
-            now={!server}
-            lit={!server && !switching}
-            data-device-way-row="direct"
-            foot={
-              server ? (
-                <Note data-device-ways-back={deviceId}>{t("devices.ways.back")}</Note>
-              ) : (
-                <Note>{t(switching ? "devices.ways.switchingEnds" : "devices.ways.directTool")}</Note>
-              )
-            }
-          >
-            {sleeps ? <Headline lead={t("devices.ways.directHead")} turn={t("devices.ways.directHeadStop")} tone="warn" /> : <Note>{t("devices.ways.sshLine")}</Note>}
-            {sleeps && !switching ? (
-              <>
-                <Picture way="direct" name={name} />
-                <Keeps way="direct" name={name} />
-                <p className="break-keep text-caption text-muted-foreground">{t("devices.ways.directFit")}</p>
-              </>
-            ) : null}
-          </WayCard>
           <WayCard
             title={t("devices.ways.server")}
             now={server}
@@ -130,6 +108,28 @@ export function DeviceWays({ state, actions }: { state: WaysState; actions: Acti
               </>
             )}
           </WayCard>
+          <WayCard
+            title={t(state.direct === "wsl" ? "devices.ways.wsl" : "devices.ways.ssh")}
+            now={!server}
+            lit={!server && !switching}
+            data-device-way-row="direct"
+            foot={
+              server ? (
+                <Note data-device-ways-back={deviceId}>{t("devices.ways.back")}</Note>
+              ) : (
+                <Note>{t(switching ? "devices.ways.switchingEnds" : "devices.ways.directTool")}</Note>
+              )
+            }
+          >
+            {sleeps ? <Headline lead={t("devices.ways.directHead")} turn={t("devices.ways.directHeadStop")} tone="warn" /> : <Note>{t("devices.ways.sshLine")}</Note>}
+            {sleeps && !switching ? (
+              <>
+                <Picture way="direct" name={name} />
+                <Keeps way="direct" name={name} />
+                <p className="break-keep text-caption text-muted-foreground">{t("devices.ways.directFit")}</p>
+              </>
+            ) : null}
+          </WayCard>
         </div>
       </div>
     </div>
@@ -137,17 +137,19 @@ export function DeviceWays({ state, actions }: { state: WaysState; actions: Acti
 }
 
 /**
- * One way of the two as a card: its name with `지금` on the one in use, what
- * it is, and at its foot what to do about it. `lit` outlines the card the
- * device is on, or is moving to while a switch runs.
+ * One way of the two as a card: its name with `지금` on the one in use (or
+ * `mark`, Add device's `추천`), what it is, and at its foot what to do about
+ * it. `lit` outlines the card the device is on, or is moving to while a
+ * switch runs, and the way Add device recommends.
  */
-function WayCard({ title, now, lit, foot, children, ...data }: { title: string; now: boolean; lit: boolean; foot: ReactNode; children: ReactNode } & Record<`data-${string}`, string>) {
+export function WayCard({ title, now, mark, lit, foot, children, ...data }: { title: string; now: boolean; mark?: string; lit: boolean; foot: ReactNode; children: ReactNode } & Record<`data-${string}`, string>) {
   const { t } = useInterfaceTranslation();
+  const badge = mark ?? (now ? t("devices.ways.now") : null);
   return (
     <section className={cn("flex min-w-0 flex-col gap-sm rounded-md border px-md py-sm", lit ? "border-muted-foreground bg-accent" : "border-border")} data-device-way-now={String(now)} {...data}>
       <div className="flex items-baseline gap-xs">
         <span className="text-body font-semibold text-foreground">{title}</span>
-        {now ? <Badge>{t("devices.ways.now")}</Badge> : null}
+        {badge ? <Badge>{badge}</Badge> : null}
       </div>
       {children}
       {foot ? <div className="mt-auto flex min-h-(--size-control) items-center border-t border-border pt-sm text-body">{foot}</div> : null}
@@ -156,7 +158,7 @@ function WayCard({ title, now, lit, foot, children, ...data }: { title: string; 
 }
 
 /** The card's first words, the reason to choose it: what this computer's sleep does, and its outcome in the way's tone. */
-function Headline({ lead, turn, tone }: { lead: string; turn: string; tone: "warn" | "ok" }) {
+export function Headline({ lead, turn, tone }: { lead: string; turn: string; tone: "warn" | "ok" }) {
   return (
     <p className="break-keep text-subhead font-semibold text-foreground" data-device-way-headline={tone}>
       <span className="block">{lead}</span>
@@ -190,7 +192,7 @@ const LABEL = 10;
  * `deviceWays.css`. For a reader it is one image
  * with one sentence of what it shows.
  */
-function Picture({ way, name }: { way: "direct" | "server"; name: string }) {
+export function Picture({ way, name }: { way: "direct" | "server"; name: string }) {
   const { t } = useInterfaceTranslation();
   const server = way === "server";
   return (
@@ -484,7 +486,7 @@ function AutoLoginSteps({ name, user }: { name: string; user: string | null }) {
 }
 
 /** A running switch: each step hided runs, the ones behind checked, the one under way turning, the rest dim. */
-function SwitchSteps({ name, current }: { name: string; current: DeviceSwitchStep }) {
+export function SwitchSteps({ name, current }: { name: string; current: DeviceSwitchStep }) {
   const { t } = useInterfaceTranslation();
   return (
     <ol aria-label={t("devices.ways.stepsAria")} className="flex flex-col gap-xs" data-device-switch-step={current}>

@@ -442,7 +442,7 @@ fn hide_step(line: &str) -> Step {
             | ["watch", "list", ..]
             | ["task", "show", ..]
             | ["mission", "show" | "list", ..]
-            | ["view", "list" | "status", ..] => Step::Sessions,
+            | ["view", "list" | "show", ..] => Step::Sessions,
             _ => Step::Other,
         };
         // A line of several commands counts as its most telling one.

@@ -1027,7 +1027,7 @@ impl Core {
         Ok(answer)
     }
 
-    /// Starts `hide workspace remove`: the delete dialog's removal of a
+    /// Starts `hide checkout remove`: the delete dialog's removal of a
     /// worktree on the caller's machine, admitted under the lock. The id is
     /// the removal record [`Self::worktree_removal_answer`] reads.
     pub fn worktree_remove(
@@ -1340,7 +1340,7 @@ impl Core {
         serde_json::to_value(rows.answer(all)).map_err(|_| "ps_unavailable".into())
     }
 
-    /// Checks a `hide pane`, `hide agent read` or `hide workspace purpose`
+    /// Checks a `hide pane`, `hide agent read` or `hide checkout purpose`
     /// caller and resolves what its command acts on; the command's engine
     /// calls then run on the daemon's blocking task, off this lock.
     pub fn prepare_pane_command(
@@ -1767,17 +1767,18 @@ impl Core {
         lock_recover(&self.runtime).laid_record_pulls(record)
     }
 
-    /// What a hook's Memory read for a pane in `context` is answered from,
-    /// which the daemon then answers off this thread
-    /// (`crate::memory_hook::answer`), or why there is none.
+    /// What a hook's Memory read for `pane`, a pane in `context` as the hook
+    /// names it, is answered from, which the daemon then answers off this
+    /// thread (`crate::memory_hook::answer`), or why there is none.
     pub fn memory_scope(
         &self,
         context: &crate::workspace_control::Context,
+        pane: &str,
     ) -> Result<crate::memory_hook::Scope, &'static str> {
         if !check_owner_thread(self, "memory_scope") {
             return Err("core_unavailable");
         }
-        lock_recover(&self.runtime).memory_scope(context)
+        lock_recover(&self.runtime).memory_scope(context, pane)
     }
 
     /// What a prompt hook in `caller`'s pane on `device` reads the open

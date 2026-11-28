@@ -1607,11 +1607,13 @@ impl Runtime {
         (nodes, unreached)
     }
 
-    /// What a hook's Memory read for a pane in `context` is answered from
-    /// (`crate::memory_hook`), on the node of the pane's checkout.
+    /// What a hook's Memory read for `pane`, a pane in `context` as the hook
+    /// names it, is answered from (`crate::memory_hook`), on the node of the
+    /// pane's checkout.
     pub(crate) fn memory_scope(
         &self,
         context: &crate::workspace_control::Context,
+        pane: &str,
     ) -> Result<crate::memory_hook::Scope, &'static str> {
         let (node, _) = self.memory_node(&context.device_id)?;
         // These facts already belong to the catalog's background owner. A
@@ -1667,10 +1669,18 @@ impl Runtime {
                 )
             })
             .map(|purpose| hide_memory::hook::prefix(&purpose.text, 1024).to_owned());
+        // The engine numbers panes per machine, so the hook's bare id is a
+        // pane of its own device, as a delivery caller's is.
+        let briefs = self.briefs_in(&crate::address::named_pane_id(
+            self.node.as_str(),
+            &context.device_id,
+            pane,
+        ));
         Ok(crate::memory_hook::Scope {
             store: self.memory_database_path(),
             project,
             task_context,
+            briefs,
         })
     }
 

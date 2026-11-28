@@ -1,4 +1,4 @@
-//! What `hide pane`, `hide agent read` and `hide workspace purpose` take
+//! What `hide pane`, `hide agent read` and `hide checkout purpose` take
 //! from the runtime under its lock: the caller's checkout, the pane or agent
 //! named, and the engine of the machine it is on (`crate::pane_command`).
 

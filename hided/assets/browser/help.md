@@ -113,7 +113,7 @@ Follow `next_action`; the reasons you will meet:
 | `eval_error` | Fix the expression. |
 | `cdp_error`, `page_script_failed` | The page changed under the command; take a fresh snapshot and retry. |
 | `screenshot_unwritable` | Choose a path in a writable folder. |
-| `screenshot_failed` | Retry; if it keeps failing, check the display with `hide view status`. |
+| `screenshot_failed` | Retry; if it keeps failing, check the display with `hide view show`. |
 | `dialog_open` | A JavaScript dialog, or a script that never yields, holds the page; the operator must answer it in hide. Dialogs are never accepted for you. |
 | `display_hidden` | Ask the operator to show the display. |
 | `display_busy` | Another debugger (agent-browser, Playwright) or another `hide browser` command holds the display; let it finish. |

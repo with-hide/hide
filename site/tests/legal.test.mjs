@@ -114,7 +114,7 @@ test("the usage-statistics table has one row per event hide-core sends, in each 
 });
 
 test("the docs that own the events and the relay logs name the page that states them", () => {
-  assert.match(repoFile("docs/ARCHITECTURE.md"), /site\/public\/privacy\.html/);
+  assert.match(repoFile("docs/adr/0062-product-usage-statistics.md"), /site\/public\/privacy\.html/);
   assert.match(repoFile("docs/RELAY_PROTOCOL.md"), /site\/public\/privacy\.html/);
 });
 

@@ -496,7 +496,7 @@ fn next_action(reason: &str, display: &str) -> String {
             "The machine whose window shows this display is not reachable; retry once it is back".to_owned()
         }
         "drag_not_started" => "The source did not start a native drag; retry with --mode pointer".to_owned(),
-        "screenshot_failed" => "Retry the screenshot; if it keeps failing, check the display with hide view status".to_owned(),
+        "screenshot_failed" => "Retry the screenshot; if it keeps failing, check the display with hide view show".to_owned(),
         "cdp_error" | "page_script_failed" => {
             format!("The page changed under the command; run {snapshot} and retry against what it shows")
         }

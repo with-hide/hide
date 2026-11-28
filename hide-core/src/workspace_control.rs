@@ -166,7 +166,7 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_browser_area: Option<String>,
     },
-    /// The caller read a View through the CLI (`hide view status`, `hide
+    /// The caller read a View through the CLI (`hide view show`, `hide
     /// browser snapshot|screenshot|eval|console|network`). It changes no
     /// View; a read by an ancestor of the agent that opened it turns that
     /// View's signal off on every ancestor (PRD unseen-agent-views D-22).

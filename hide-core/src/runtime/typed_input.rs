@@ -198,6 +198,27 @@ impl Runtime {
         self.post_brief_confirmed(&spawn.id, "hook");
     }
 
+    /// The briefs Hide submitted into `pane_id` as a spawned agent's first
+    /// prompt: typed, being typed or carried by the start, while the spawn
+    /// record keeps the text, which it lets go once the child ended
+    /// (`room::shed_finished_briefs`). A prompt hook's Memory gives no card
+    /// for one (`memory_hook::Scope::briefs`). Bounded by the spawn records,
+    /// each brief by `delivery::BODY_LIMIT`; it copies the texts and hashes
+    /// nothing, since it runs under the runtime lock.
+    pub(crate) fn briefs_in(&self, pane_id: &str) -> Vec<String> {
+        use crate::coordination::BriefPhase;
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return Vec::new();
+        };
+        ledger
+            .spawns
+            .iter()
+            .filter(|spawn| !matches!(spawn.brief_phase(), BriefPhase::None | BriefPhase::NotTyped))
+            .filter(|spawn| self.spawn_pane_id(spawn).as_deref() == Some(pane_id))
+            .filter_map(|spawn| spawn.brief.clone())
+            .collect()
+    }
+
     /// Queues the store's record that the brief of spawn `id` was taken.
     pub(crate) fn post_brief_confirmed(&self, id: &str, by: &'static str) {
         let posted =
@@ -1134,6 +1155,21 @@ pub(crate) mod tests {
         }
         runtime.publish_delivery(Arc::new(ledger), false);
         (root, runtime, spawn)
+    }
+
+    /// The briefs a prompt hook's Memory gives no card for are the ones Hide
+    /// typed or launched into the asking pane, and none in the parent's.
+    #[test]
+    fn a_panes_briefs_are_the_ones_hide_submitted_into_it() {
+        for launched in [false, true] {
+            let (_root, runtime, _) = spawned_with("codex", BRIEF, false, 100_000, launched);
+            assert_eq!(
+                runtime.briefs_in("child"),
+                vec![BRIEF.to_owned()],
+                "{launched}"
+            );
+            assert!(runtime.briefs_in("sender").is_empty(), "{launched}");
+        }
     }
 
     /// A brief that rode the start's prompt argument is never typed: while

@@ -1294,7 +1294,7 @@ pub struct Answering {
     pub core: Arc<CoreHandle>,
     pub engine: Option<EngineHandle>,
     pub port: u16,
-    /// What shows this machine's pages, which a pane's `hide workspace info`
+    /// What shows this machine's pages, which a hook's `hide workspace info --hook`
     /// is told of (`crate::server::Screens`).
     pub screens: crate::server::Screens,
     /// What `hide device` asks about pairing (`crate::pairing`).

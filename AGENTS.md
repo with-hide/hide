@@ -104,7 +104,7 @@ They once did: an evidence tree reached 123 MB and carried a browser profile wit
 - `[profile.dev] incremental = false` is deliberate: an agent worktree is built a few times and discarded, which never repays an incremental cache.
 - A debug build stays small (`docs/BUILD.md`, A debug build is kept small): the dev profile carries no debug info, a dependency or feature change is followed by `cargo hakari generate` and `cargo hakari manage-deps --yes`, no member feature exists only for tests, and a crate's integration tests are modules of its one `tests/it` binary.
 - Removing the worktree takes the cache with the work; a worktree kept alive after its branch lands keeps its cache alive too.
-  Remove a checkout Hide shows with `hide workspace remove <path>`, which closes its workspace and panes first; a raw `git worktree remove` leaves them open on a folder that is gone (`docs/delivery.md`, Removing a worktree).
+  Remove a checkout Hide shows with `hide checkout remove <path>`, which closes its workspace and panes first; a raw `git worktree remove` leaves them open on a folder that is gone (`docs/delivery.md`, Removing a worktree).
 - The root checkout stays on `main`; every branch is worked on in its own sibling worktree directory.
   `scripts/hooks/root-worktree-main-only.sh` is a `PreToolUse` hook (registered for Claude Code in `.claude/settings.json`, for Codex in `~/.codex/hooks.json`) that refuses a `git checkout`/`git switch` off `main` in the root worktree and answers with the `git worktree add` form to use instead.
 
@@ -121,7 +121,8 @@ On 2026-09-27 one session replaced it with a build that predated a merged fix, d
 
 ## Runtime Architecture
 
-Read `docs/ARCHITECTURE.md` in full before changing anything under `hide-core/`, `hided/` or `desktop/`; it owns the reasons behind these boundaries.
+Before changing anything under `hide-core/`, `hided/` or `desktop/`, read the table in `docs/ARCHITECTURE.md` and then the records under `docs/adr/` whose Code paths cover the files you change; together they own the reasons behind these boundaries, and `docs/adr/0001-record-architecture-decisions.md` says how a record is written and replaced.
+A change to behavior a record covers edits that record in place in the same pull request; a change that reverses its decision adds a new record and marks the old one `Superseded by NNNN`, as 0001 says.
 
 - The core owns all state behind one `Mutex<Runtime>`; the shell dispatches typed events in and pulls one snapshot out when the notifier announces, and holds no authority of its own.
 - The engine (the core's own, `hide-core/src/engine/own/`, over each pane's holder) owns pane existence, split geometry, zoom, cwd, agent lifecycle and the PTY; the core owns each checkout's visible tab, the keyboard focus pane, panel visibility and text scale, and changes those on the event that asked for it, telling the engine afterwards.

@@ -4,7 +4,7 @@
 //! (`hide_core::store_command`); this file only reads the words and prints
 //! the answer.
 //!
-//! `add` and `update` wait until the operator answers the confirm Hide shows
+//! `add`, `update` and `edit` wait until the operator answers the confirm Hide shows
 //! in their Needs You, and print what they chose; there is no option to skip
 //! it. A key's value is never an argument: `--env` and `--header` take a
 //! name, and the operator types its value on the confirm.
@@ -20,9 +20,9 @@ use serde_json::json;
 
 use crate::env::Env;
 
-pub const SKILL_USAGE: &str = "hide skill list [--machine <device id>]\nhide skill show <name> [--machine <device id>]\nhide skill add <github address|folder> [--name <skill>]... [--machine <device id>]\nhide skill update <name> [--machine <device id>]\nhide skill on|off <name> [--agent <agent>] [--machine <device id>]\nhide skill remove <name> [--machine <device id>]\nadd and update wait until the operator answers the confirm in their Needs You.";
+pub const SKILL_USAGE: &str = "hide skill list [--machine <device id>]\nhide skill show <name> [--machine <device id>]\nhide skill add <github address|path> [--name <skill>]... [--machine <device id>]\nhide skill update <name> [--machine <device id>]\nhide skill on|off <name> [--kind <kind>] [--machine <device id>]\nhide skill remove <name> [--machine <device id>]\nadd and update wait until the operator answers the confirm in their Needs You.";
 
-pub const MCP_USAGE: &str = "hide mcp list [--machine <device id>]\nhide mcp show <name> [--machine <device id>]\nhide mcp add|update <name> [--env <NAME>]... [--machine <device id>] -- <command> [<argument>...]\nhide mcp add|update <name> --url <https address> [--sse] [--header <NAME>]... [--machine <device id>]\nhide mcp on|off <name> [--agent <agent>] [--machine <device id>]\nhide mcp remove <name> [--machine <device id>]\nHide's own options come before --, and every word after it is the server's.\n--env and --header take a key's name only; the operator types its value on the confirm in their Needs You.";
+pub const MCP_USAGE: &str = "hide mcp list [--machine <device id>]\nhide mcp show <name> [--machine <device id>]\nhide mcp add|edit <name> [--env <NAME>]... [--machine <device id>] -- <command> [<argument>...]\nhide mcp add|edit <name> --url <https address> [--sse] [--header <NAME>]... [--machine <device id>]\nhide mcp on|off <name> [--kind <kind>] [--machine <device id>]\nhide mcp remove <name> [--machine <device id>]\nHide's own options come before --, and every word after it is the server's.\n--env and --header take a key's name only; the operator types its value on the confirm in their Needs You.";
 
 /// The answer comes a little after the core's own wait ends, which then
 /// answers `store_unanswered` itself.
@@ -61,7 +61,7 @@ pub fn parse(kind: ItemKind, args: &[String]) -> Result<StoreCommand, String> {
         match arg.as_str() {
             "--json" => {}
             "--machine" => once(&mut machine, value()?)?,
-            "--agent" => once(&mut agent, value()?)?,
+            "--kind" => once(&mut agent, value()?)?,
             "--name" if kind == ItemKind::Skill => names.push(value()?),
             "--url" if kind == ItemKind::Mcp => once(&mut url, value()?)?,
             "--sse" if kind == ItemKind::Mcp => sse = true,
@@ -140,7 +140,7 @@ pub fn parse(kind: ItemKind, args: &[String]) -> Result<StoreCommand, String> {
                 machine,
             }
         }
-        ("update", [name]) => {
+        ("edit", [name]) if kind == ItemKind::Mcp => {
             only(agent.is_none())?;
             StoreCommand::UpdateMcp {
                 name: name.clone(),
@@ -289,7 +289,7 @@ mod tests {
         // The help's own line, its placeholders filled in as an agent would.
         let filled = line
             .trim_start_matches("hide mcp ")
-            .replace("add|update", "add")
+            .replace("add|edit", "add")
             .replace("<name>", "demo")
             .replace("[--env <NAME>]...", "--env TOKEN")
             .replace("[--machine <device id>]", "--machine mini")
@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn a_switch_names_its_agent_and_a_skill_source_reads_as_an_address_or_a_folder() {
         assert_eq!(
-            parse(ItemKind::Skill, &words("off archify --agent antigravity")),
+            parse(ItemKind::Skill, &words("off archify --kind antigravity")),
             Ok(StoreCommand::Set {
                 kind: ItemKind::Skill,
                 name: "archify".to_owned(),

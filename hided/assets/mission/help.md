@@ -9,7 +9,7 @@ The examples in this guide are in Korean, as Hide's Korean screens word them; wh
 
 ```
 hide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]
-hide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)
+hide mission plan [--mission <id>] (--file <plan.json> | --inline <plan>)
 hide mission node <key> [--status <status>] [--agent-id <id>] [--pr <n>] [--base-pr <n>] [--branch <name>]
                         [--attempts <n>] [--line <text>] [--change <text>] [--review <text>]
                         [--commit <sha>] [--verdict pass|fail] [--checks <passed>/<total>]

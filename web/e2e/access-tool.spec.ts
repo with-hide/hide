@@ -121,10 +121,10 @@ test("a tool outside Hide's panes is approved at Act, starts an agent, writes to
       inbox = ok(tool(["inbox"]), "inbox");
       return JSON.stringify(inbox);
     }, { message: "the reply in the tool's inbox", timeout: 20_000 }).toContain("looked at the fixture"); // wait-ok: the reply the store wrote, read by the tool's next inbox
-    // The one command that acknowledges what this answer listed: `hide inbox --ack <bundle>`.
+    // The one command that acknowledges what this answer listed: `hide inbox ack <bundle>`.
     const bundle = `${inbox.ack_command ?? ""}`.split(" ").at(-1) ?? "";
-    expect(inbox.ack_command, JSON.stringify(inbox)).toBe(`hide inbox --ack ${bundle}`);
-    ok(tool(["inbox", "--ack", bundle]), "inbox --ack");
+    expect(inbox.ack_command, JSON.stringify(inbox)).toBe(`hide inbox ack ${bundle}`);
+    ok(tool(["inbox", "ack", bundle]), "inbox ack");
     expect(JSON.stringify(ok(tool(["inbox"]), "inbox after ack"))).not.toContain("looked at the fixture");
 
     // It types into the agent's pane, and ends the agent.

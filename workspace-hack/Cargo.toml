@@ -43,7 +43,6 @@ percent-encoding = { version = "2" }
 portable-atomic = { version = "1", features = ["serde"] }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "dfa-search", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
-rusqlite = { version = "0.32", default-features = false, features = ["bundled", "hooks", "limits"] }
 rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std", "tls12"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", features = ["alloc", "rc"] }

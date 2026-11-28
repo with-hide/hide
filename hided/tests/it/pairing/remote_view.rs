@@ -1223,7 +1223,7 @@ async fn a_machine_a_paired_computer_opens_takes_views_while_that_computer_is_co
     let _stop = StopOnDrop(&guest);
 
     // Nobody can see this machine yet: no window, no paired computer.
-    let alone = in_checkout(&host, &project, &["workspace", "info"]);
+    let alone = in_checkout(&host, &project, &["checkout", "show"]);
     assert_eq!(
         refusal(&alone).as_deref(),
         Some("renderer_unavailable"),
@@ -1239,7 +1239,7 @@ async fn a_machine_a_paired_computer_opens_takes_views_while_that_computer_is_co
 
     // The guest is connected and shows nothing of the host now: its agent's
     // Views are taken all the same.
-    let info = in_checkout(&host, &project, &["workspace", "info"]);
+    let info = in_checkout(&host, &project, &["checkout", "show"]);
     assert!(info.ok, "{}", info.text());
     let capabilities = info.json()["result"]["capabilities"].clone();
     assert!(
@@ -1297,7 +1297,7 @@ async fn a_machine_a_paired_computer_opens_takes_views_while_that_computer_is_co
         peer["opened_by"] == "paused" && peer["connected"] == true
     })
     .await;
-    let not_opened = in_checkout(&host, &project, &["workspace", "info"]);
+    let not_opened = in_checkout(&host, &project, &["checkout", "show"]);
     assert_eq!(
         refusal(&not_opened).as_deref(),
         Some("renderer_unavailable"),
