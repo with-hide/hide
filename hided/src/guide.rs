@@ -201,7 +201,7 @@ mod tests {
                     "a pane that is no registered agent takes `hide pane send` and no letter",
                     "so hand an agent work with `hide request send`",
                     "40 characters at most",
-                    "`cd <worktree> && hide workspace purpose \"…\"`",
+                    "`cd <worktree> && hide checkout purpose \"…\"`",
                 ],
             ),
             (
@@ -235,7 +235,7 @@ mod tests {
                     "Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`)",
                     "for a file outside the checkout too",
                     "such as `aside`, not `browser open`",
-                    "read it with `view status <view-id>`",
+                    "read it with `view show <view-id>`",
                 ],
             ),
             (
@@ -282,7 +282,7 @@ mod tests {
         assert!(guide.contains("## Automations"));
         assert!(guide.contains("Run `hide automation help` first"));
         assert!(guide.contains(
-            "hide automation add --name <name> --task <text> --schedule <when> --kind <kind>"
+            "hide automation add --name <name> --brief <text> --schedule <when> --kind <kind>"
         ));
     }
 
@@ -335,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn the_guide_spells_hide_workspace_remove_as_the_command_parses_it() {
+    fn the_guide_spells_hide_checkout_remove_as_the_command_parses_it() {
         assert!(TEXT.contains(crate::worktree_cli::USAGE));
     }
 
@@ -411,7 +411,7 @@ mod tests {
         "diff",
         "view",
         "pane",
-        "workspace",
+        "checkout",
         "status",
         "stop",
         "always-on",
@@ -521,11 +521,11 @@ mod tests {
                 }
                 for words in commands {
                     let Some(topic) = words.first() else { continue };
-                    if !crate::cli_contract::topic(topic) && *topic != "workspace" {
+                    if !crate::cli_contract::topic(topic) && *topic != "checkout" {
                         continue;
                     }
                     if words.get(1) == Some(&"help")
-                        || (*topic == "workspace"
+                        || (*topic == "checkout"
                             && !matches!(words.get(1), Some(&"purpose" | &"remove")))
                     {
                         continue;

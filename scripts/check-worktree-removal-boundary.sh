@@ -52,7 +52,7 @@ if git grep -nE -- 'remove_worktree\(' "$cleanup" | grep -vqF -- ', false)'; the
 fi
 
 # An agent-facing procedure removes a checkout Hide shows through `hide
-# workspace remove`, which closes its panes before Git removes the
+# checkout remove`, which closes its panes before Git removes the
 # folder; a raw `git worktree remove` leaves them open on a folder that is
 # gone. A procedure that shows the raw command to run (a line of a fenced
 # block, or the `git worktree remove <path>` form) fails here. Prose may still
@@ -66,8 +66,8 @@ for file in $procedures; do
     ' "$file")
     if [ -n "$found" ]; then
         echo "$found" >&2
-        fail "an agent procedure must remove a Hide checkout with hide workspace remove, not git worktree remove"
+        fail "an agent procedure must remove a Hide checkout with hide checkout remove, not git worktree remove"
     fi
 done
 
-echo "Worktree removal forces only an accepted discard; the Overview cleanup never forces; procedures remove through hide workspace remove"
+echo "Worktree removal forces only an accepted discard; the Overview cleanup never forces; procedures remove through hide checkout remove"

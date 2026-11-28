@@ -49,7 +49,7 @@ pub enum CommandKind {
         id: String,
         actor: Option<String>,
     },
-    /// `hide workspace remove <path> [--delete-branch] [--force]`.
+    /// `hide checkout remove <path> [--delete-branch] [--force]`.
     WorkspaceRemove(crate::worktree_cli::RemoveCli),
     /// `hide agent archive <id> [--actor <id>]`.
     AgentArchive {
@@ -70,7 +70,7 @@ pub enum CommandKind {
     /// `hide access request|status|leave|list`: an external tool's own
     /// connection.
     Access(crate::access_cli::AccessCli),
-    /// `hide pane …`, `hide agent read` and `hide workspace purpose`.
+    /// `hide pane …`, `hide agent read` and `hide checkout purpose`.
     Pane(crate::pane_cli::PaneCli),
     Help,
     AgentSpawnHelp,
@@ -172,22 +172,26 @@ const LINKS_USAGE: &str = "usage: hide links pr <number | #number | !number | ad
 
 const MEMORY_USAGE: &str = "usage: hide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card> | recheck <card>";
 
-const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--repo <folder>] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
+const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--repo <path>] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
 
 /// What an open with the `--beside` it no longer takes answers (PRD
 /// unseen-agent-views D-24, B27): an agent's open is always a tab of the
 /// active View area, and only the operator splits the areas.
 const BESIDE_REMOVED: &str = "open no longer takes --beside: run the same command again without --beside; the View opens as a tab of the active View area of your tab's Views";
 
-const FILE_USAGE: &str = "usage: hide file open <path> [--repo <folder>] [--request-id <id>]";
+/// `hide checkout …`: the checkout the caller's pane works in. A hook's
+/// own `hide workspace …` commands are not listed.
+const CHECKOUT_USAGE: &str = "hide checkout show\nhide checkout purpose <text>\nhide checkout remove <path> [--delete-branch] [--force]";
 
-const DIFF_USAGE: &str = "usage: hide diff open <path> [--repo <folder>] [--request-id <id>]";
+const FILE_USAGE: &str = "usage: hide file open <path> [--repo <path>] [--request-id <id>]";
+
+const DIFF_USAGE: &str = "usage: hide diff open <path> [--repo <path>] [--request-id <id>]";
 
 const OPEN_USAGE: &str = "usage: hide [open] [<path>]";
 
 const IMPORT_USAGE: &str = "usage: hide import herdr [--yes]";
 
-const VIEW_USAGE: &str = "usage: hide view list [--session <id|here>] | status <view-id> | select <view-id> [--request-id <id>] | close <view-id> [--request-id <id>] | split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>] | move <view-id> --area <area-id> --index <n> [--request-id <id>]";
+const VIEW_USAGE: &str = "usage: hide view list [--session <id|here>] | show <view-id> | select <view-id> [--request-id <id>] | close <view-id> [--request-id <id>] | split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>] | move <view-id> --area <area-id> --index <n> [--request-id <id>]";
 
 /// A topic's command lines as a wrong command or `--help` prints them: one
 /// `usage:` line, then each form indented under it.
@@ -262,9 +266,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "diff" => DIFF_USAGE.to_owned(),
         "view" => VIEW_USAGE.to_owned(),
         "pane" => usage(crate::pane_cli::USAGE),
-        "workspace" => usage(
-            "hide workspace info\nhide workspace purpose <text>\nhide workspace remove <path> [--delete-branch] [--force]",
-        ),
+        "checkout" => usage(CHECKOUT_USAGE),
         "status" => "usage: hide status [--json]".to_owned(),
         "import" => IMPORT_USAGE.to_owned(),
         "stop" => "usage: hide stop".to_owned(),
@@ -301,11 +303,11 @@ pub(crate) fn help_text() -> String {
         crate::wait_cli::USAGE,
         crate::automation_cli::USAGE,
         crate::pane_cli::USAGE,
-        "hide workspace info",
+        CHECKOUT_USAGE,
         FILE_USAGE.trim_start_matches("usage: "),
         DIFF_USAGE.trim_start_matches("usage: "),
         "hide browser open <url-or-path> [--wait] [--request-id <id>]\nhide browser connect [--display <id>]\nhide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...\nhide browser help",
-        "hide view list [--session <id|here>]\nhide view status <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]",
+        "hide view list [--session <id|here>]\nhide view show <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]",
         LINKS_USAGE.trim_start_matches("usage: "),
         crate::session_cli::USAGE,
         MEMORY_USAGE.trim_start_matches("usage: "),
@@ -316,7 +318,7 @@ pub(crate) fn help_text() -> String {
     text.push_str(&indent(crate::access_cli::USAGE));
     text.push_str("  Once the operator approves it as a bot, it runs the commands above as its connection: in its own space, only on the agents and missions it started, or Full, as the operator. hide guide, section Bots, says what each mode may do.\n");
     text.push_str(
-        "\nA command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there or in a plain ssh shell as the account Hide connects with, and brings Hide's window to that device's folder.\n\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide session needs the same and reads the sessions of the project it is in and of the connected devices' checkouts of its repository, as each checkout's origin names it (Desk, and a bot outside every checkout, read every project): list to scan one line per session, record to read one as its session record shows it, read for a few raw events around one request.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
+        "\nA command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there or in a plain ssh shell as the account Hide connects with, and brings Hide's window to that device's folder.\n\nCommands that act on the operator's screen (checkout, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide session needs the same and reads the sessions of the project it is in and of the connected devices' checkouts of its repository, as each checkout's origin names it (Desk, and a bot outside every checkout, read every project): list to scan one line per session, show to read one as its session record shows it, read for a few raw events around one request.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
     );
     text
 }
@@ -604,40 +606,44 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 .map_err(|reason| wrong(reason, crate::delivery_cli::USAGE))
         }
         Some("browser") => parse_browser(iter),
+        // A hook's own commands; `workspace info`, `purpose` and `remove`
+        // are read as `checkout` by the retired-words table.
         Some("workspace") => match iter.next().map(String::as_str) {
             Some("memory") => {
                 let words: Vec<&str> = iter.map(String::as_str).collect();
                 parse_workspace_memory(&words)
             }
             Some("bootstrap") if iter.next().is_none() => Ok(CommandKind::WorkspaceBootstrap),
-            Some("purpose") => {
-                crate::cli_contract::admit(&args[1..])
-                    .map_err(|refusal| format!("{refusal}\n{}", usage(crate::pane_cli::USAGE)))?;
-                crate::pane_cli::parse_purpose(&args[3..])
-                    .map(CommandKind::Pane)
-                    .map_err(|reason| wrong(reason, crate::pane_cli::USAGE))
-            }
-            Some("remove") => {
-                crate::cli_contract::admit(&args[1..]).map_err(|refusal| {
-                    format!("{refusal}\n{}", usage(crate::worktree_cli::USAGE))
-                })?;
-                crate::worktree_cli::parse(&args[3..])
-                    .map(CommandKind::WorkspaceRemove)
-                    .map_err(|reason| wrong(reason, crate::worktree_cli::USAGE))
-            }
             Some("status") => match (iter.next().map(String::as_str), iter.next()) {
                 (Some("--hook"), None) => Ok(CommandKind::StatusHook),
                 _ => Err("usage: hide workspace status --hook < report".to_owned()),
             },
             Some("info") => match (iter.next().map(String::as_str), iter.next()) {
-                (None, None) => Ok(CommandKind::WorkspaceInfo),
                 (Some("--hook"), None) => Ok(CommandKind::WorkspaceHookInfo),
-                _ => Err("usage: hide workspace info [--hook]".to_owned()),
+                _ => Err(usage(CHECKOUT_USAGE)),
             },
-            _ => Err(
-                "usage: hide workspace info | purpose <text> | remove <path> [--delete-branch] [--force]"
-                    .to_owned(),
-            ),
+            _ => Err(usage(CHECKOUT_USAGE)),
+        },
+        Some("checkout") => match iter.next().map(String::as_str) {
+            Some("show") => match iter.next() {
+                None => Ok(CommandKind::WorkspaceInfo),
+                Some(_) => Err(usage(CHECKOUT_USAGE)),
+            },
+            Some("purpose") => {
+                crate::cli_contract::admit(&args[1..])
+                    .map_err(|refusal| format!("{refusal}\n{}", usage(CHECKOUT_USAGE)))?;
+                crate::pane_cli::parse_purpose(&args[3..])
+                    .map(CommandKind::Pane)
+                    .map_err(|reason| wrong(reason, crate::pane_cli::PURPOSE_USAGE))
+            }
+            Some("remove") => {
+                crate::cli_contract::admit(&args[1..])
+                    .map_err(|refusal| format!("{refusal}\n{}", usage(CHECKOUT_USAGE)))?;
+                crate::worktree_cli::parse(&args[3..])
+                    .map(CommandKind::WorkspaceRemove)
+                    .map_err(|reason| wrong(reason, crate::worktree_cli::USAGE))
+            }
+            _ => Err(usage(CHECKOUT_USAGE)),
         },
         Some("file") => parse_open(iter, true),
         Some("diff") => parse_open(iter, false),
@@ -849,7 +855,7 @@ fn parse_view<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<CommandK
             _ => Err(usage.to_owned()),
         };
     }
-    if verb == "status" {
+    if verb == "show" {
         return match (iter.next(), iter.next()) {
             (Some(view_id), None) if !view_id.is_empty() && !view_id.starts_with('-') => {
                 Ok(CommandKind::ViewStatus {
@@ -2051,7 +2057,7 @@ fn browser_open(
             Err(reason) => {
                 println!(
                     "{}",
-                    serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_status_unavailable","detail":reason,"view_id":view_id,"result":answer["result"],"next_action":format!("Run hide view status {view_id} or retry the same request ID")})
+                    serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_status_unavailable","detail":reason,"view_id":view_id,"result":answer["result"],"next_action":format!("Run hide view show {view_id} or retry the same request ID")})
                 );
                 return Err("page_status_unavailable".to_owned());
             }
@@ -2060,7 +2066,7 @@ fn browser_open(
         if page["load"].as_u64() != Some(requested_load) {
             println!(
                 "{}",
-                serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_superseded","view_id":view_id,"page":page,"next_action":"Run hide view status or open the page again with a new request ID"})
+                serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_superseded","view_id":view_id,"page":page,"next_action":"Run hide view show or open the page again with a new request ID"})
             );
             return Err("page_superseded".to_owned());
         }
@@ -2082,7 +2088,7 @@ fn browser_open(
             Some("disconnected" | "unsupported") => {
                 println!(
                     "{}",
-                    serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_unavailable","view_id":view_id,"page":page,"next_action":"Reconnect the Hide desktop window and run hide view status again"})
+                    serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_unavailable","view_id":view_id,"page":page,"next_action":"Reconnect the Hide desktop window and run hide view show again"})
                 );
                 return Err("page_unavailable".to_owned());
             }
@@ -2097,7 +2103,7 @@ fn browser_open(
             _ => {
                 println!(
                     "{}",
-                    serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_status_unavailable","view_id":view_id,"result":answer["result"],"page":page,"next_action":format!("Run hide view status {view_id} or retry the same request ID")})
+                    serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_status_unavailable","view_id":view_id,"result":answer["result"],"page":page,"next_action":format!("Run hide view show {view_id} or retry the same request ID")})
                 );
                 return Err("page_status_unavailable".to_owned());
             }
@@ -2105,7 +2111,7 @@ fn browser_open(
         if std::time::Instant::now() >= deadline {
             println!(
                 "{}",
-                serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_wait_timeout","view_id":view_id,"page":page,"next_action":format!("Run hide view status {view_id} or retry the same request ID")})
+                serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_wait_timeout","view_id":view_id,"page":page,"next_action":format!("Run hide view show {view_id} or retry the same request ID")})
             );
             return Err("page_wait_timeout".to_owned());
         }

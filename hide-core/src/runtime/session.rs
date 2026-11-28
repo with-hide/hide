@@ -4551,7 +4551,7 @@ impl Runtime {
         true
     }
 
-    /// A purpose `hide workspace purpose` saved on the checkout `checkout_id`
+    /// A purpose `hide checkout purpose` saved on the checkout `checkout_id`
     /// (of the device `remote_target_id`, or this machine's), shown at once
     /// and announced; the worktree rows reread its branch description.
     pub(crate) fn show_checkout_purpose(

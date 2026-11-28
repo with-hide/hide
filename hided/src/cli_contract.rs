@@ -1,6 +1,6 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
 //! `request`, `inbox`, `watch`, `mission`, `task`, `automation`, `device`, `phone`, `pane`,
-//! `access`, `skill`, `mcp`, `workspace purpose`, `workspace remove`, `session fold-ask`): each command's words, arguments and options, where its
+//! `access`, `skill`, `mcp`, `checkout purpose`, `checkout remove`, `session fold-ask`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -454,9 +454,9 @@ const CONFIRM_REFUSALS: &[&str] = &[
 /// The options every store command takes.
 const STORE_OPTIONS: &[Opt] = &[optional("--machine", Text), switch("--json")];
 
-/// A switch of one item, for every agent or one (`--agent`).
+/// A switch of one item, for every agent or one kind (`--kind`).
 const STORE_SWITCH: &[Opt] = &[
-    optional("--agent", Text),
+    optional("--kind", Text),
     optional("--machine", Text),
     switch("--json"),
 ];
@@ -614,7 +614,7 @@ pub const COMMANDS: &[Spec] = &[
         STORE_REFUSALS,
     ),
     mcp_reach_spec(&["mcp", "add"]),
-    mcp_reach_spec(&["mcp", "update"]),
+    mcp_reach_spec(&["mcp", "edit"]),
     store_spec(
         &["mcp", "on"],
         ITEM,
@@ -1798,7 +1798,7 @@ pub const COMMANDS: &[Spec] = &[
         ],
     },
     Spec {
-        words: &["workspace", "purpose"],
+        words: &["checkout", "purpose"],
         arguments: &[Arg {
             name: "text",
             value: Text,
@@ -1821,7 +1821,7 @@ pub const COMMANDS: &[Spec] = &[
     // The delete dialog's removal: --force accepts every loss the deletion
     // gate names, --delete-branch takes the local branch with the folder.
     Spec {
-        words: &["workspace", "remove"],
+        words: &["checkout", "remove"],
         arguments: &[Arg {
             name: "path",
             value: Text,
@@ -1932,7 +1932,7 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["confirmed"],
         refusals: &[],
     },
-    spec(&["inbox", "--ack"], ID, &[], &["acknowledged"]),
+    spec(&["inbox", "ack"], ID, &[], &["acknowledged"]),
     spec(
         &["watch", "start"],
         TARGET,
@@ -1998,11 +1998,11 @@ pub const COMMANDS: &[Spec] = &[
                 value: Some(Text),
                 required: false,
                 requires: &[],
-                conflicts: &["--json"],
+                conflicts: &["--inline"],
                 repeats: None,
             },
             Opt {
-                name: "--json",
+                name: "--inline",
                 value: Some(Json),
                 required: false,
                 requires: &[],
@@ -2389,7 +2389,7 @@ pub const COMMANDS: &[Spec] = &[
         needs_one_of: &[],
         options: &[
             required("--name", Text),
-            required("--task", Body),
+            required("--brief", Body),
             required("--schedule", Text),
             required("--kind", Text),
             Opt {
@@ -2416,12 +2416,12 @@ pub const COMMANDS: &[Spec] = &[
                 conflicts: &[],
                 repeats: None,
             },
-            optional("--folder", Text),
+            optional("--repo", Text),
             Opt {
                 name: "--worktree",
                 value: None,
                 required: false,
-                requires: &["--folder"],
+                requires: &["--repo"],
                 conflicts: &[],
                 repeats: None,
             },
@@ -2459,17 +2459,17 @@ pub const COMMANDS: &[Spec] = &[
         repeats: None,
         needs_one_of: &[
             "--name",
-            "--task",
+            "--brief",
             "--schedule",
             "--kind",
-            "--folder",
-            "--own-folder",
+            "--repo",
+            "--no-repo",
             "--worktree",
             "--no-worktree",
         ],
         options: &[
             optional("--name", Text),
-            optional("--task", Body),
+            optional("--brief", Body),
             optional("--schedule", Text),
             optional("--kind", Text),
             Opt {
@@ -2496,8 +2496,8 @@ pub const COMMANDS: &[Spec] = &[
                 conflicts: &[],
                 repeats: None,
             },
-            cleared("--folder", Text, &["--own-folder"]),
-            clearing("--own-folder", &["--folder"]),
+            cleared("--repo", Text, &["--no-repo"]),
+            clearing("--no-repo", &["--repo"]),
             clearing("--worktree", &["--no-worktree"]),
             clearing("--no-worktree", &["--worktree"]),
         ],
@@ -2597,11 +2597,11 @@ pub const COMMANDS: &[Spec] = &[
                 value: Some(Text),
                 required: false,
                 requires: &[],
-                conflicts: &["--json"],
+                conflicts: &["--inline"],
                 repeats: None,
             },
             Opt {
-                name: "--json",
+                name: "--inline",
                 value: Some(Json),
                 required: false,
                 requires: &[],
@@ -2933,12 +2933,20 @@ fn listed(spec: &Spec, table: &retired::Table) -> Value {
         .iter()
         .filter(|flags| flags.command == spec.words)
     {
-        for flag in flags.renamed {
-            // An old spelling the command still takes as another option
-            // (`only_with_value`) is listed once, as that option.
-            if spec.options.iter().any(|option| option.name == flag.old) {
-                continue;
-            }
+        // An old spelling the command still takes as another option
+        // (`only_with_value`) is listed once, as that option.
+        let renamed: Vec<&retired::Flag> = flags
+            .renamed
+            .iter()
+            .filter(|flag| !spec.options.iter().any(|option| option.name == flag.old))
+            .collect();
+        // A list that names other options by "any of" names the old
+        // spelling too, right before the option it is now.
+        with_retired(command.get_mut("needs_one_of"), &renamed);
+        for option in command["options"].as_array_mut().into_iter().flatten() {
+            with_retired(option.get_mut("conflicts"), &renamed);
+        }
+        for flag in renamed {
             let value = spec
                 .options
                 .iter()
@@ -2959,6 +2967,23 @@ fn listed(spec: &Spec, table: &retired::Table) -> Value {
         }
     }
     command
+}
+
+/// `names`, a list of option names, with the old spelling of each of
+/// `renamed` right before the option it is now.
+fn with_retired(names: Option<&mut Value>, renamed: &[&retired::Flag]) {
+    if let Some(list) = names.and_then(Value::as_array_mut) {
+        *list = std::mem::take(list)
+            .into_iter()
+            .flat_map(|name| {
+                let old = renamed
+                    .iter()
+                    .find(|flag| name == flag.now)
+                    .map(|flag| json!(flag.old));
+                old.into_iter().chain([name])
+            })
+            .collect();
+    }
 }
 
 /// The contract's commands: each command of the table, then each retired
@@ -3009,6 +3034,7 @@ fn envelopes(table: &retired::Table) -> Value {
         "device": {"ok": "ok", "answer": "value", "code": "error.code"},
         "pane": {"ok": "ok", "answer": "value", "code": "error.code"},
         "workspace": {"ok": "ok", "answer": "value", "code": "error.code"},
+        "checkout": {"ok": "ok", "answer": "value", "code": "error.code"},
         "access": {"ok": "ok", "answer": "value", "code": "error.code"},
         "skill": {"ok": "ok", "answer": "value", "code": "error.code"},
         "mcp": {"ok": "ok", "answer": "value", "code": "error.code"},
@@ -3958,16 +3984,16 @@ mod tests {
             "text on agent end|sleep|archive (any name an agent goes by), key on watch start|assign (an agent id); one type changes the contract",
         ),
         (
+            "--brief",
+            "by design: text on agent spawn, whose brief is typed as the first prompt and cannot carry a line break; body on automation add|edit, whose brief is kept and may span lines",
+        ),
+        (
             "--for",
             "by design: span (minutes or hours) for a mission's hold and delay, deadline (1h to 30d) for a wait",
         ),
         (
             "--intent",
             "text on agent spawn, key on request send|reply; a calling tool (sasu) matches both types",
-        ),
-        (
-            "--json",
-            "a switch that prints the answer as JSON, and the plan document on mission plan and task set until those take it as --inline",
         ),
         (
             "--key",
@@ -4072,7 +4098,7 @@ mod tests {
         assert_eq!(verb_problems(COMMANDS, VERBS), Vec::<String>::new());
         assert_eq!(verb(&["agent", "profile", "add"]), Some("add"));
         assert_eq!(verb(&["agent", "show", "here"]), Some("show"));
-        assert_eq!(verb(&["inbox", "--ack"]), None);
+        assert_eq!(verb(&["inbox", "--hook"]), None);
         assert_eq!(verb(&["ps"]), None);
     }
 
@@ -4427,7 +4453,7 @@ mod tests {
         assert_eq!(retired_problems(&retired::TABLE), Vec::<String>::new());
         assert_eq!(
             parse_args(&hide_line(&["plan", "set", "--json", "{\"nodes\": []}"])),
-            parse_args(&hide_line(&["task", "set", "--json", "{\"nodes\": []}"]))
+            parse_args(&hide_line(&["task", "set", "--inline", "{\"nodes\": []}"]))
         );
         assert!(matches!(
             parse_args(&hide_line(&["plan", "show"])),

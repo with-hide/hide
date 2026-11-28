@@ -48,7 +48,7 @@ pub const HOOK_ENTRY_VERSION: u32 = 13;
 #[macro_export]
 macro_rules! intent_table {
     () => {
-        "Inside Hide, turn what the operator asks for into its command:\n| The operator asks | Run |\n| --- | --- |\n| show the operator a file, a diff or a web page | `hide file open <path>`, `hide diff open <path>`, `hide browser open <url-or-path>`: it opens beside your terminal when the operator watches your pane, else waits in your pane's Views list, and stays in the operator's Needs You as To look at until they look at it |\n| you made something for the operator to look at (an HTML page, an image, a PDF, a diagram, a long report), asked for or not | open it the same way as soon as it is ready, without asking whether to, and say in one line what you opened: from a pane the operator is not watching it only waits in your Views list, so it interrupts nothing |\n| check a page for yourself (your own browser QA) | your own browser tool, such as `aside`, not `hide browser open`: a page you open in Hide waits for the operator |\n| collect what a delegated child opened | `hide view list` shows what the operator has not seen and who opened it; read it with `hide view status <view-id>` or `hide browser snapshot <display>`, and to show it, open it again from your own pane |\n| start an agent beside you | `hide agent spawn --beside …` (your own checkout only; it is the operator's to watch, so it takes no `--parent`) |\n| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n| complex work: planning or review first, multiple PRs or parallel work, another agent reviewing, or work likely to fill the conversation | first ask in one line: Shall I run this as a mission, or do it directly? Follow the operator's answer; if they already requested a mission or invoked `/hide-mission`, run `hide mission help` and follow it without asking again. With none of these signals, work directly without asking |\n| Hide itself misbehaves: a crash, a command that fails or answers wrongly for no reason of yours, a pane or screen that breaks | `hide issue help`, which the `hide-issue` skill points at: collect the exact error, versions and steps into the bug template, show the operator, and file it in with-hide/hide after their yes |\n| start independent work the operator will handle | `hide agent spawn …` without --parent |\n| repeat a task at set times with no one present (every weekday morning, every few hours), or do one at a later time (check it in N days, check this again next Tuesday) | `hide automation add --name <name> --task <text> --schedule <when> --kind <kind>`, with `--schedule \"once in 7d 09:00\"` for one later time; run `hide automation help` first for the schedule forms, then tell the operator what it reads as and when it runs next. Not a cron job, an OS scheduler or a script of your own. A wait or a check shorter than five minutes, or one that ends within this conversation, you keep doing yourself as now |\nBefore any `hide agent spawn`, read `candidates` in `hide agent catalog`, the operator's list of agents and models to hand work to, and take the row whose purpose fits the work unless the operator named one; it is a reference, not a limit. Without --beside, `hide agent spawn` opens the agent in a tab of its own. Never start an agent with `hide pane open` or by typing its program into a pane: that agent has no parent, letters or watch. Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`): it lands in an app outside Hide with no trace of who opened it, and Hide refuses the call. Use `hide browser open` for a page or a URL and `hide file open` for anything else, for a file outside the checkout too."
+        "Inside Hide, turn what the operator asks for into its command:\n| The operator asks | Run |\n| --- | --- |\n| show the operator a file, a diff or a web page | `hide file open <path>`, `hide diff open <path>`, `hide browser open <url-or-path>`: it opens beside your terminal when the operator watches your pane, else waits in your pane's Views list, and stays in the operator's Needs You as To look at until they look at it |\n| you made something for the operator to look at (an HTML page, an image, a PDF, a diagram, a long report), asked for or not | open it the same way as soon as it is ready, without asking whether to, and say in one line what you opened: from a pane the operator is not watching it only waits in your Views list, so it interrupts nothing |\n| check a page for yourself (your own browser QA) | your own browser tool, such as `aside`, not `hide browser open`: a page you open in Hide waits for the operator |\n| collect what a delegated child opened | `hide view list` shows what the operator has not seen and who opened it; read it with `hide view show <view-id>` or `hide browser snapshot <display>`, and to show it, open it again from your own pane |\n| start an agent beside you | `hide agent spawn --beside …` (your own checkout only; it is the operator's to watch, so it takes no `--parent`) |\n| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n| complex work: planning or review first, multiple PRs or parallel work, another agent reviewing, or work likely to fill the conversation | first ask in one line: Shall I run this as a mission, or do it directly? Follow the operator's answer; if they already requested a mission or invoked `/hide-mission`, run `hide mission help` and follow it without asking again. With none of these signals, work directly without asking |\n| Hide itself misbehaves: a crash, a command that fails or answers wrongly for no reason of yours, a pane or screen that breaks | `hide issue help`, which the `hide-issue` skill points at: collect the exact error, versions and steps into the bug template, show the operator, and file it in with-hide/hide after their yes |\n| start independent work the operator will handle | `hide agent spawn …` without --parent |\n| repeat a task at set times with no one present (every weekday morning, every few hours), or do one at a later time (check it in N days, check this again next Tuesday) | `hide automation add --name <name> --brief <text> --schedule <when> --kind <kind>`, with `--schedule \"once in 7d 09:00\"` for one later time; run `hide automation help` first for the schedule forms, then tell the operator what it reads as and when it runs next. Not a cron job, an OS scheduler or a script of your own. A wait or a check shorter than five minutes, or one that ends within this conversation, you keep doing yourself as now |\nBefore any `hide agent spawn`, read `candidates` in `hide agent catalog`, the operator's list of agents and models to hand work to, and take the row whose purpose fits the work unless the operator named one; it is a reference, not a limit. Without --beside, `hide agent spawn` opens the agent in a tab of its own. Never start an agent with `hide pane open` or by typing its program into a pane: that agent has no parent, letters or watch. Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`): it lands in an app outside Hide with no trace of who opened it, and Hide refuses the call. Use `hide browser open` for a page or a URL and `hide file open` for anything else, for a file outside the checkout too."
     };
 }
 
@@ -62,8 +62,8 @@ macro_rules! intent_table {
 /// this ([`session_start_context`]).
 pub const START_CONTEXT: &str = "Inside Hide, read more when you need it:\n\
 - `hide guide <topic>` prints one part of the guide to working in Hide, such as `agents`, `letters`, `panes`, `operators-screen`, `automations` or `devices`; `hide guide` lists every topic.\n\
-- `hide workspace info` shows this checkout and the commands this pane may run.\n\
-- `hide session list` lists this Project's sessions, and `hide session record <id>` reads one.\n\
+- `hide checkout show` shows this checkout and the commands this pane may run.\n\
+- `hide session list` lists this Project's sessions, and `hide session show <id>` reads one.\n\
 - `hide memory show <id>` reads a Project Memory card in full, and `hide memory search <words>` finds others.\n\
 | The operator asks | Run |\n\
 | --- | --- |\n\
@@ -87,7 +87,7 @@ pub const SESSIONS_LEFT_OUT: &str =
 
 /// What stands in for the Workspace note when the start has no room for it,
 /// a long checkout path being the usual cause.
-pub const WORKSPACE_LEFT_OUT: &str = "Hide Workspace: `hide workspace info` names this session's checkout and the commands this pane may run.";
+pub const WORKSPACE_LEFT_OUT: &str = "Hide Workspace: `hide checkout show` names this session's checkout and the commands this pane may run.";
 
 /// What stands in for [`START_CONTEXT`] when the operator's global
 /// instruction and the Memory index leave no room for it either.
@@ -98,10 +98,10 @@ pub const START_LEFT_OUT: &str = "Inside Hide, `hide guide` prints how to work h
 /// where the commands this pane may run are listed. A bare `hide` reaches
 /// that checkout from the pane (it bootstraps its own one-shot credential),
 /// so the note gives no command prefix, and the command list and the rules
-/// for letters and Views live in `hide workspace info` and `hide guide`.
+/// for letters and Views live in `hide checkout show` and `hide guide`.
 pub fn workspace_note(checkout_path: &str) -> String {
     format!(
-        "Hide Workspace: this session's checkout is `{checkout_path}`, and Workspace commands act only on it. `hide workspace info` lists the commands this pane may run."
+        "Hide Workspace: this session's checkout is `{checkout_path}`, and Workspace commands act only on it. `hide checkout show` lists the commands this pane may run."
     )
 }
 
@@ -708,9 +708,9 @@ mod tests {
         assert!(!START_CONTEXT.to_lowercase().contains("herdr"));
         for command in [
             "`hide guide <topic>`",
-            "`hide workspace info`",
+            "`hide checkout show`",
             "`hide session list`",
-            "`hide session record <id>`",
+            "`hide session show <id>`",
             "`hide memory show <id>`",
             "`hide file open <path>`",
             "`hide diff open <path>`",

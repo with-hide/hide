@@ -14,8 +14,11 @@ Do not copy those contracts here.
 | Thing | Word | Not, for a new command or option |
 | --- | --- | --- |
 | A machine that runs panes | topic `device`, option `--machine <device id>` | `--device`, which `device accept-ssh` uses between two Hides for the asking machine's id |
-| An agent family | `--kind <kind>` | `--agent` (`skill` and `mcp` `on`/`off` still take it) |
-| The text an agent starts with | `--brief <text>` | `--task` (`automation add` and `edit` still take it) |
+| An agent family | `--kind <kind>` | `--agent`, retired on `skill` and `mcp` `on`/`off` |
+| The text an agent starts with | `--brief <text>` | `--task`, retired on `automation add` and `edit` |
+| The checkout a pane works in | topic `checkout` (`show`, `purpose`, `remove`) | `workspace`, the engine's word, which only a hook's own commands keep (`workspace info --hook`, `status --hook`, `bootstrap`, `memory`) |
+| The project a command works in | `--repo <path>`, cleared by `--no-repo` | `--folder` and `--own-folder`, retired on `automation add` and `edit` |
+| A plan document given on the command line | `--inline <plan>` | `--json <plan>`, retired on `mission plan` and `task set` |
 | A session's own plan and its steps | topic `task`, `node`, option `--plan-node` | a second topic for it; the glossary's `task` is the sidebar's unit of work, and this topic keeps the word it has |
 
 ## Shape
@@ -26,7 +29,7 @@ Do not copy those contracts here.
 - A verb comes from the verb registry `VERBS` in `cli_contract.rs`, one line of meaning each.
   Reach first for `list`, `show`, `add`, `edit`, `remove` and the pairs `start`/`stop`, `pause`/`resume`, `on`/`off`, `join`/`leave`; a new command that changes a thing's fields is `edit`, and `update` fetches a newer version of it.
   A new verb adds its line to the registry, with what none of the existing ones says.
-- An option is never a verb for a new command: `inbox --ack` and `ask-human --clear` predate the rule.
+- An option is never a verb for a new command: `ask-human --clear` predates the rule, and `inbox --ack` is retired for `inbox ack`.
   `--clear` unsets what the command sets, and `--no-<option>` unsets one field.
 - A command lives under the topic of the thing it changes, and its code in that topic's module; `hide agent read` in the pane module is the shape to avoid.
 
@@ -34,7 +37,7 @@ Do not copy those contracts here.
 
 - An option name takes one value type across the contract table.
   The exceptions are a list in the test (`VALUE_TYPE_EXCEPTIONS`), each with its reason; a new exception needs a reason a reviewer accepts, and an exception that no longer differs is taken out.
-- `--json` prints the answer as JSON; the plan document of `mission plan` and `task set` is its one other meaning, on that list.
+- `--json` prints the answer as JSON and means nothing else; the plan document of `mission plan` and `task set` is `--inline`.
 - `--intent <key>` is the retry key: the same key converges on the first result.
 - A command that answers data takes `--json`; one that always prints JSON takes it too and changes nothing.
 

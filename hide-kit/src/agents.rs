@@ -249,33 +249,36 @@ pub const GUIDE_SKILL: Skill = Skill {
     // agent list in the catalog.
     // Version 15 opens a result made for the operator without asking.
     // Version 16 writes the table's examples in English.
+    // Version 17 checks for a Hide pane with `hide checkout show`.
     body: concat!(
-        "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory and how to move a shell alias for another account, or connect a new account, as an agent profile, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
+        "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide checkout show` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory and how to move a shell alias for another account, or connect a new account, as an agent profile, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
         hide_agent_hooks::intent_table!()
     ),
-    version: 16,
+    version: 17,
 };
 
 /// Routes work that needs a Conductor to `hide mission help`, leaving
 /// small work with the current agent. Version 2 folds in the retired `hide-task`
 /// stub; earlier builds also wrote `hide-conductor` (versions 1 to 3),
 /// which [`RETIRED_SKILLS`] takes out. Version 3 asks before using a mission
-/// for complex work unless the operator already requested one.
+/// for complex work unless the operator already requested one. Version 4
+/// checks for a Hide pane with `hide checkout show`.
 pub const MISSION_SKILL: Skill = Skill {
     name: "hide-mission",
     description: "Conduct a mission of agents in Hide. Use when a task in a Hide pane takes more than a few steps, the operator asks you to plan first or have the work reviewed, or asks for a mission or several PRs carried as a group.",
-    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, a mission is work where a Conductor directs other agents, even one worker. If the operator explicitly asks for a mission or invokes `/hide-mission`, do not ask which way to work again. Run `hide mission help` and follow its contract for planning, approval, starting workers, replanning and reporting. Otherwise, look for these signals:\n\n- The operator asks for planning first or review.\n- The work needs two or more PRs or work in parallel.\n- Another agent needs to review or check the work.\n- The work is long enough to fill the conversation context, or the operator wants to keep talking with this session while it is carried out.\n\nIf any signal applies, first ask the operator in one line: Shall I run this as a mission, or do it directly? Wait for their answer and follow it: if they choose a mission, run `hide mission help` and follow it; if they choose direct work, do it directly. If none applies, do the work directly without asking.",
-    version: 3,
+    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide checkout show` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, a mission is work where a Conductor directs other agents, even one worker. If the operator explicitly asks for a mission or invokes `/hide-mission`, do not ask which way to work again. Run `hide mission help` and follow its contract for planning, approval, starting workers, replanning and reporting. Otherwise, look for these signals:\n\n- The operator asks for planning first or review.\n- The work needs two or more PRs or work in parallel.\n- Another agent needs to review or check the work.\n- The work is long enough to fill the conversation context, or the operator wants to keep talking with this session while it is carried out.\n\nIf any signal applies, first ask the operator in one line: Shall I run this as a mission, or do it directly? Wait for their answer and follow it: if they choose a mission, run `hide mission help` and follow it; if they choose direct work, do it directly. If none applies, do the work directly without asking.",
+    version: 4,
 };
 
 /// Routes a bug in Hide itself to `hide issue help`, which owns the procedure
 /// and the bug form's template, so a change to either reaches every install
-/// with the binary and not with the next kit pass.
+/// with the binary and not with the next kit pass. Version 2 checks for a
+/// Hide pane with `hide checkout show`.
 pub const ISSUE_SKILL: Skill = Skill {
     name: "hide-issue",
     description: "Report a bug in Hide itself to Hide's GitHub issues, with the exact error, versions, steps and log lines. Use when a hide command, pane, tab or screen fails in a way you or the operator saw and the cause is Hide, not the project's own code.",
-    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide issue help` and follow what it prints: when a bug is worth reporting, what to collect, the bug form's template, what to remove before it leaves the machine, and the operator's yes before it is filed.",
-    version: 1,
+    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide checkout show` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide issue help` and follow what it prints: when a bug is worth reporting, what to collect, the bug form's template, what to remove before it leaves the machine, and the operator's yes before it is filed.",
+    version: 2,
 };
 
 /// Every stub Hide writes; each skill folder holds all of them. A new stub

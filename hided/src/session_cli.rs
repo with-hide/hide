@@ -1,4 +1,4 @@
-//! `hide session list|record|read` (PRD agent-session-read): the core
+//! `hide session list|show|read` (PRD agent-session-read): the core
 //! answers one JSON value (`hide_core::links::session_command`); this draws
 //! it as text for an agent to read, or prints it with `--json`. Both forms
 //! carry the same sessions, request numbers, source marks and omission
@@ -12,7 +12,7 @@ use hide_core::links::session_command::SessionCommand;
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 
-pub const USAGE: &str = "hide session list [--since <n>m|h|d] [--limit <n>] [--json]\nhide session record <id> [--json]\nhide session read <id> --request <n> | --from <n> [--events <n>] [--json]\nhide session fold-ask <id> --reason <text> [--json]";
+pub const USAGE: &str = "hide session list [--since <n>m|h|d] [--limit <n>] [--json]\nhide session show <id> [--json]\nhide session read <id> --request <n> | --from <n> [--events <n>] [--json]\nhide session fold-ask <id> --reason <text> [--json]";
 
 /// The most a record's text takes; past it the oldest flows fold (D-12).
 pub const RECORD_TEXT_BYTES: usize = 64 * 1024;
@@ -59,7 +59,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Cli, Stri
             since_ms: option("--since").map(period).transpose()?,
             limit: number("--limit")?,
         },
-        ("record", [id]) if allowed(&[]) => SessionCommand::Record {
+        ("show", [id]) if allowed(&[]) => SessionCommand::Record {
             id: (*id).to_owned(),
         },
         ("read", [id]) if allowed(&["--request", "--from", "--events"]) => {
@@ -652,7 +652,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parsed(&["record", "agent-12"]).unwrap().command,
+            parsed(&["show", "agent-12"]).unwrap().command,
             SessionCommand::Record {
                 id: "agent-12".into()
             }
@@ -675,7 +675,7 @@ mod tests {
         for words in [
             &["read", "abc"][..],
             &["read", "abc", "--request", "1", "--from", "2"],
-            &["record", "abc", "--limit", "3"],
+            &["show", "abc", "--limit", "3"],
             &["list", "--since", "7w"],
             &["list", "--since", "7일"],
             &["list", "--since", "７d"],

@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 /// The guide `hide task help` prints, which the `hide-task` skill points at.
 pub const HELP: &str = include_str!("../assets/task/help.md");
 
-pub const USAGE: &str = "hide task help\nhide task set (--file <plan.json> | --json <plan>) [--ask [why]] [--reason <text>]\nhide task node <key> [--status planned|working|done|dropped] [--line <text>] [--pr <number> | --file <path>]\nhide task approve [<agent>]\nhide task drop [<agent>]\nhide task show [<agent>]";
+pub const USAGE: &str = "hide task help\nhide task set (--file <plan.json> | --inline <plan>) [--ask [why]] [--reason <text>]\nhide task node <key> [--status planned|working|done|dropped] [--line <text>] [--pr <number> | --file <path>]\nhide task approve [<agent>]\nhide task drop [<agent>]\nhide task show [<agent>]";
 
 /// The largest plan file read from disk.
 const FILE_LIMIT: u64 = 96 * 1024;
@@ -136,22 +136,22 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a String>) -> Result<PlanCli, Stri
                 positional,
                 values,
                 ask,
-            } = flags(rest, &["--file", "--json", "--ask", "--reason"])?;
+            } = flags(rest, &["--file", "--inline", "--ask", "--reason"])?;
             if !positional.is_empty() {
                 return Err(USAGE.to_owned());
             }
             let why = ask.clone().flatten();
             let reason = values.get("--reason").cloned();
-            let source = match (values.get("--file"), values.get("--json")) {
+            let source = match (values.get("--file"), values.get("--inline")) {
                 (Some(path), None) => PlanSource::File(path.clone()),
                 // Text that is not JSON is a usage error, as every JSON
                 // option's is; JSON that is not a plan says where at run time.
                 (None, Some(text)) => {
                     serde_json::from_str::<Value>(text)
-                        .map_err(|error| format!("--json is not JSON: {error}"))?;
+                        .map_err(|error| format!("--inline is not JSON: {error}"))?;
                     PlanSource::Json(text.clone())
                 }
-                _ => return Err("give the plan once, with --file or --json".into()),
+                _ => return Err("give the plan once, with --file or --inline".into()),
             };
             return Ok(PlanCli::Set {
                 source,
@@ -375,7 +375,7 @@ mod tests {
         );
         let plain = words(&[
             "set",
-            "--json",
+            "--inline",
             r#"{"nodes":[{"key":"a","title":"A","depends_on":[],"status":"planned"}]}"#,
         ]);
         assert!(matches!(

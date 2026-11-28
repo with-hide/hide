@@ -2,7 +2,7 @@
 Put up the steps of the task you carry yourself so the operator sees where you are: Hide draws them as a map beside your pane and reminds you of your step on every prompt. You do the work in this session; to conduct several agents carrying pull requests as a group, run `hide mission help` instead. A step is something you deliver or a point to check (a spec, a change, a PR, a verification); research, failures and retries are not steps.
 
 ```
-hide task set (--file <plan.json> | --json <plan>) [--ask [why]] [--reason <text>]
+hide task set (--file <plan.json> | --inline <plan>) [--ask [why]] [--reason <text>]
 hide task node <key> [--status planned|working|done|dropped] [--line <text>] [--pr <number> | --file <path>]
 hide task approve        hide task drop        hide task show [<agent>]        hide task help
 hide agent spawn --parent here --plan-node <key> --name <name> --kind <kind> --repo <path> --branch <branch> --brief <text>
@@ -21,7 +21,7 @@ hide agent spawn --parent here --plan-node <key> --name <name> --kind <kind> --r
 - A step ends by its output: `pr` with `--status done --pr <number>` (`12`, `#12`, gitlab.com's `!12`, or its address; one of another host or repository than your project's is refused, `change_request_other_host` or `change_request_other_repository`), a pull request made from a branch of your checkout or of a child you handed a step to; `file` with `--file <path>`, a file inside your checkout (relative to its root); `none` with nothing. In `set` a done step carries the same as `"pr": <number>` or `"file": "<path>"`. Hide checks the pull request with GitHub and the file on your machine; `plan_pr_unconfirmed` means GitHub could not be asked now, so run the same command again later, and tell the operator if it lasts.
 - When you plan, tell the operator once how you will verify the work (which steps check what, and how) and let them confirm; if they say to just go on, go on as you judge. No verification step is required: size it to the work.
 - `--ask` puts the plan up for the operator's review: until you run `hide task approve`, writes, `git commit` and `git push` are refused. Use it when a skill or the operator says to have the plan reviewed, or when you change the goal or scope (`--ask "<why>"`).
-- Approval is spoken: when the operator agrees in the conversation, run `hide task approve`; asked to change it, send the fixed plan with `set --json '<plan>' --ask` (file writes are refused while it waits); told not to do it, `hide task drop`.
+- Approval is spoken: when the operator agrees in the conversation, run `hide task approve`; asked to change it, send the fixed plan with `set --inline '<plan>' --ask` (file writes are refused while it waits); told not to do it, `hide task drop`.
 - Replanning on your own is fine: `set` again with `--reason`; changed steps are marked, the approval stays, and a done step keeps its evidence and the agent that did it.
 
 ## As a mission node's worker

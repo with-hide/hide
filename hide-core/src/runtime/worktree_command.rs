@@ -1,4 +1,4 @@
-//! What `hide workspace remove` takes from the runtime under its lock: the
+//! What `hide checkout remove` takes from the runtime under its lock: the
 //! caller's machine and checkout, the worktree's row, the command's own
 //! consent in place of the dialog's checkboxes, and then the removal the
 //! dialog starts (`crate::worktree_command`).
@@ -146,7 +146,7 @@ fn discard_words(discard: &crate::model::WorktreeDiscard) -> String {
 }
 
 impl Runtime {
-    /// Admits `hide workspace remove` for `caller` on `device` whose checkout
+    /// Admits `hide checkout remove` for `caller` on `device` whose checkout
     /// is `expected`, and starts the removal of the worktree it names on the
     /// caller's machine: the id of the removal record to wait for.
     pub(crate) fn worktree_remove_command(

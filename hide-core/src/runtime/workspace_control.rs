@@ -1107,7 +1107,7 @@ impl Runtime {
                             if found.is_some() {
                                 return Err(Refusal {
                                     reason: "ambiguous_pane",
-                                    next_action: "Reconnect the pane and run hide workspace info again",
+                                    next_action: "Reconnect the pane and run hide checkout show again",
                                 });
                             }
                             found = Some(context());
@@ -1146,7 +1146,7 @@ impl Runtime {
             Caller::Desk => DESK_REFUSAL,
             Caller::Pane(_) => Refusal {
                 reason: "pane_not_connected",
-                next_action: "Reconnect the pane in Hide and run hide workspace info again",
+                next_action: "Reconnect the pane in Hide and run hide checkout show again",
             },
             Caller::Checkout { .. } => Refusal {
                 reason: "checkout_not_registered",
@@ -1330,7 +1330,7 @@ fn caller_changed(caller_id: &str) -> Refusal {
         Caller::Desk => DESK_REFUSAL,
         Caller::Pane(_) => Refusal {
             reason: "pane_changed",
-            next_action: "Reconnect the pane and run hide workspace info again",
+            next_action: "Reconnect the pane and run hide checkout show again",
         },
         Caller::Checkout { .. } => Refusal {
             reason: "checkout_not_registered",

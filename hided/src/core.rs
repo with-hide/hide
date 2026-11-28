@@ -608,7 +608,7 @@ impl CoreHandle {
         result.recv().map_err(|_| "memory_unavailable".to_owned())?
     }
 
-    /// Admits a `hide pane`, `hide agent read` or `hide workspace purpose`
+    /// Admits a `hide pane`, `hide agent read` or `hide checkout purpose`
     /// caller on the owner thread; the command's engine calls run on the
     /// caller's blocking task.
     pub fn prepare_pane(
@@ -631,7 +631,7 @@ impl CoreHandle {
         result.recv().map_err(|_| "pane_unavailable".to_owned())?
     }
 
-    /// `hide workspace remove`: starts the removal on the owner thread,
+    /// `hide checkout remove`: starts the removal on the owner thread,
     /// then reads its record there again on each change the core announces,
     /// until it ends. The wait runs on the caller's blocking task, which is
     /// inside the daemon's runtime, and holds no lock between reads; a

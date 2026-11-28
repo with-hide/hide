@@ -4732,7 +4732,7 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "agent_pane_required" => "Run the command from an agent's pane",
         "native_identity_required" => "Retry after the agent's session is observed",
-        "caller_context_changed" => "Run hide workspace info and retry",
+        "caller_context_changed" => "Run hide checkout show and retry",
         _ => "Retry; the reason is in Hide's diagnostic log",
     }
 }

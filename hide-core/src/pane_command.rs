@@ -1,6 +1,6 @@
 //! The commands an agent uses instead of the engine's own (PRD engine-bundle-1
 //! D-5, D-13): `hide pane read`, `hide agent read`, `hide pane send`,
-//! `hide pane open --beside` and `hide workspace purpose`.
+//! `hide pane open --beside` and `hide checkout purpose`.
 //!
 //! The daemon admits the caller through its pane proof, the runtime resolves
 //! the pane and the engine under its lock (`Runtime::prepare_pane_command`),
@@ -78,7 +78,7 @@ pub enum PaneCommand {
     /// `hide pane open --beside [--focus] -- <command>`: the words after
     /// `--`, joined by spaces into the line the new pane's shell runs.
     Open { command: String, focus: bool },
-    /// `hide workspace purpose <text>`: an empty text clears the purpose.
+    /// `hide checkout purpose <text>`: an empty text clears the purpose.
     Purpose {
         text: String,
         /// The root of the Git checkout the command ran in, spelled as its
@@ -246,7 +246,7 @@ pub fn next_action(code: &str) -> Option<&'static str> {
         }
         "pane_required" => "Run the command in a pane of Hide",
         "caller_context_changed" => {
-            "Run hide workspace info and retry from the checkout you are in"
+            "Run hide checkout show and retry from the checkout you are in"
         }
         "purpose_no_workspace" => "Open the checkout in Hide and retry",
         "purpose_checkout_unlisted" => {
@@ -307,7 +307,7 @@ pub struct PaneOpened {
     pub focused: bool,
 }
 
-/// `hide workspace purpose`: the purpose the checkout now shows.
+/// `hide checkout purpose`: the purpose the checkout now shows.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PurposeSet {
     /// The folder of the checkout that shows it.

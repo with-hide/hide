@@ -104,7 +104,7 @@ They once did: an evidence tree reached 123 MB and carried a browser profile wit
 - `[profile.dev] incremental = false` is deliberate: an agent worktree is built a few times and discarded, which never repays an incremental cache.
 - A debug build stays small (`docs/BUILD.md`, A debug build is kept small): the dev profile carries no debug info, a dependency or feature change is followed by `cargo hakari generate` and `cargo hakari manage-deps --yes`, no member feature exists only for tests, and a crate's integration tests are modules of its one `tests/it` binary.
 - Removing the worktree takes the cache with the work; a worktree kept alive after its branch lands keeps its cache alive too.
-  Remove a checkout Hide shows with `hide workspace remove <path>`, which closes its workspace and panes first; a raw `git worktree remove` leaves them open on a folder that is gone (`docs/delivery.md`, Removing a worktree).
+  Remove a checkout Hide shows with `hide checkout remove <path>`, which closes its workspace and panes first; a raw `git worktree remove` leaves them open on a folder that is gone (`docs/delivery.md`, Removing a worktree).
 - The root checkout stays on `main`; every branch is worked on in its own sibling worktree directory.
   `scripts/hooks/root-worktree-main-only.sh` is a `PreToolUse` hook (registered for Claude Code in `.claude/settings.json`, for Codex in `~/.codex/hooks.json`) that refuses a `git checkout`/`git switch` off `main` in the root worktree and answers with the `git worktree add` form to use instead.
 

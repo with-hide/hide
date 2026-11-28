@@ -47,6 +47,10 @@
     "line": "Lists the letters waiting for you and the ones that came back undelivered, with the command that marks them taken.",
     "example": "hide inbox"
   },
+  "inbox ack": {
+    "line": "Marks a bundle of letters taken, by the token hide inbox prints with it, for an agent whose runtime has no prompt hook to take them.",
+    "example": "hide inbox ack letter-2~0123456789ab"
+  },
   "watch start": {
     "line": "Starts a watch on an agent, so you get a letter when that agent has been quiet for too long or has stopped at a question or a prompt; the watch ends when the agent exits, reports that it is finished, or you stop it.",
     "example": "hide watch start child-name"
@@ -135,12 +139,12 @@
     "example": "hide skill update archify"
   },
   "skill on": {
-    "line": "Switches a skill on for every agent, or for the one --agent names.",
-    "example": "hide skill on archify --agent codex"
+    "line": "Switches a skill on for every agent, or for the agent kind --kind names.",
+    "example": "hide skill on archify --kind codex"
   },
   "skill off": {
-    "line": "Switches a skill off for every agent, or for the one --agent names.",
-    "example": "hide skill off archify --agent antigravity"
+    "line": "Switches a skill off for every agent, or for the agent kind --kind names.",
+    "example": "hide skill off archify --kind antigravity"
   },
   "skill remove": {
     "line": "Takes a skill out of every agent's folder; Settings can bring it back from the undo list.",
@@ -158,17 +162,17 @@
     "line": "Adds an MCP server once the operator confirms it in Needs You and types its keys there; --env and --header take a key's name only, and Hide's options, --machine among them, come before --.",
     "example": "hide mcp add github --env GITHUB_TOKEN -- npx -y @modelcontextprotocol/server-github"
   },
-  "mcp update": {
+  "mcp edit": {
     "line": "Changes how an MCP server is reached once the operator confirms it in Needs You and types its keys there.",
-    "example": "hide mcp update linear --url https://mcp.linear.app/mcp --header Authorization"
+    "example": "hide mcp edit linear --url https://mcp.linear.app/mcp --header Authorization"
   },
   "mcp on": {
-    "line": "Switches an MCP server on for every agent, or for the one --agent names.",
-    "example": "hide mcp on github --agent codex"
+    "line": "Switches an MCP server on for every agent, or for the agent kind --kind names.",
+    "example": "hide mcp on github --kind codex"
   },
   "mcp off": {
-    "line": "Switches an MCP server off for every agent, or for the one --agent names.",
-    "example": "hide mcp off github --agent pi"
+    "line": "Switches an MCP server off for every agent, or for the agent kind --kind names.",
+    "example": "hide mcp off github --kind pi"
   },
   "mcp remove": {
     "line": "Takes an MCP server out of every agent's file; Settings can bring it back from the undo list.",
@@ -339,8 +343,8 @@
     "example": "hide automation help"
   },
   "automation add": {
-    "line": "Makes an automation: at each time of its schedule Hide starts one agent on the task, in the automation's own folder under ~/hide/automations unless --folder names a project. An automation runs at most every five minutes.",
-    "example": "hide automation add --name 'Morning issues' --task 'Sort the new issues' --schedule 'weekdays 09:00' --kind claude"
+    "line": "Makes an automation: at each time of its schedule Hide starts one agent on the task, in the automation's own folder under ~/hide/automations unless --repo names a project. An automation runs at most every five minutes.",
+    "example": "hide automation add --name 'Morning issues' --brief 'Sort the new issues' --schedule 'weekdays 09:00' --kind claude"
   },
   "automation list": {
     "line": "Lists the automations with what each schedule reads as, the next run on this machine's clock and the newest run.",
@@ -390,24 +394,28 @@
     "line": "Prints the last lines of an agent's pane, so you can see what the agent last showed.",
     "example": "hide agent read agent-7 --lines 40"
   },
-  "workspace purpose": {
+  "checkout purpose": {
     "line": "Sets the one-line purpose of the checkout you run it in, which the sidebar shows; it can be 40 characters at most, and an empty text clears it.",
-    "example": "hide workspace purpose 'Fix the lens filter'"
+    "example": "hide checkout purpose 'Fix the lens filter'"
   },
-  "workspace info": {
-    "line": "Shows the workspace and checkout Hide has for this folder, and the device they run on.",
-    "example": "hide workspace info"
+  "checkout show": {
+    "line": "Shows the checkout Hide has for this folder, the device it runs on and the commands this pane may run.",
+    "example": "hide checkout show"
+  },
+  "checkout remove": {
+    "line": "Removes a worktree Hide shows, closing its panes first as the operator's Delete does; --force accepts losing uncommitted work and --delete-branch takes the local branch with it.",
+    "example": "hide checkout remove ../hide-fix-login --delete-branch"
   },
   "file open": {
-    "line": "Shows a file to the operator in Hide's View as a tab, where it waits until they look at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, the file waits in your session's Files list instead of taking the screen. A program outside Hide's panes and outside every project names the project with --repo <folder>.",
+    "line": "Shows a file to the operator in Hide's View as a tab, where it waits until they look at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, the file waits in your session's Files list instead of taking the screen. A program outside Hide's panes and outside every project names the project with --repo <path>.",
     "example": "hide file open docs/spec.md"
   },
   "diff open": {
-    "line": "Shows the changes to a file to the operator in Hide's View as a tab, where it waits until they look at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, it waits in your session's Files list instead of taking the screen. A program outside Hide's panes and outside every project names the project with --repo <folder>.",
+    "line": "Shows the changes to a file to the operator in Hide's View as a tab, where it waits until they look at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, it waits in your session's Files list instead of taking the screen. A program outside Hide's panes and outside every project names the project with --repo <path>.",
     "example": "hide diff open src/lens.rs"
   },
   "browser open": {
-    "line": "Opens a web page, or a local file, as a browser tab in Hide's View, where it waits until the operator looks at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, the tab waits behind what they see. Only an http(s) or blank page can be driven by the other browser commands. A program outside Hide's panes and outside every project names the project with --repo <folder>.",
+    "line": "Opens a web page, or a local file, as a browser tab in Hide's View, where it waits until the operator looks at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, the tab waits behind what they see. Only an http(s) or blank page can be driven by the other browser commands. A program outside Hide's panes and outside every project names the project with --repo <path>.",
     "example": "hide browser open http://localhost:3000"
   },
   "browser connect": {
@@ -474,9 +482,9 @@
     "line": "Lists the Views open in your checkout, with the ids that the other view and browser commands take.",
     "example": "hide view list"
   },
-  "view status": {
+  "view show": {
     "line": "Shows one View by its id, so you can read what a delegated agent opened in it.",
-    "example": "hide view status browser-3"
+    "example": "hide view show browser-3"
   },
   "view select": {
     "line": "Brings a View to the front of its area when the operator is looking at your pane. If they are looking at another pane of the same checkout, the command succeeds but their selection stays as it was.",
@@ -513,9 +521,9 @@
     "line": "Lists the recent sessions of this project, one line each with a summary, and, when Hide knows this project's repository, those of the projects of the same repository on connected devices.",
     "example": "hide session list --since 1d --limit 10"
   },
-  "session record": {
+  "session show": {
     "line": "Shows one session as its record: its summary, its state and the requests it received.",
-    "example": "hide session record agent-7"
+    "example": "hide session show agent-7"
   },
   "session read": {
     "line": "Reads the raw events of a session around one request, for when the exact words or tool output matter.",

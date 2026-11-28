@@ -18,7 +18,7 @@ If this session does not run in a pane Hide manages, this guide does not apply.
    The more exact the error, the better:
    - the exact command you ran and its whole output, a `{"ok":false,...}` line with its `reason` and `next_action` included;
    - `hide --version`, the operating system and its version, and for an agent involved its name and `--version`;
-   - `hide workspace info` and `hide ps --here`;
+   - `hide checkout show` and `hide ps --here`;
    - the lines around the failure, with their timestamps, from `Logs/core.jsonl` in Hide's state folder (`$HIDE_STATE_DIR`, else the `state` folder under `~/.hide`) and, for the desktop app, from its `desktop.log` (`Copy diagnostics` names it);
    - the shortest steps that show it, and whether it happens every time, sometimes or once.
 3. Write the report in the template below.
