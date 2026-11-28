@@ -18,6 +18,7 @@ use std::future::Future;
 
 use hide_peer_protocol::{Candidate, CloseCode, PathKind, PeerAddr, PeerKey};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::time::Instant;
 
 #[derive(Debug)]
 pub enum TransportError {
@@ -93,6 +94,20 @@ pub trait PeerTransport: Send + Sync + 'static {
         to: &PeerAddr,
     ) -> impl Future<Output = Result<Self::Conn, TransportError>> + Send;
 
+    /// [`Self::dial`], which the caller gives up at `over`, the dial's bound:
+    /// what the transport starts for the dial runs to that same instant
+    /// wherever it goes, so whatever gives it up at or past `over` gives it
+    /// up for the bound. A transport that starts nothing beyond the dial's
+    /// own future dials as [`Self::dial`] does.
+    fn dial_by(
+        &self,
+        to: &PeerAddr,
+        over: Instant,
+    ) -> impl Future<Output = Result<Self::Conn, TransportError>> + Send {
+        let _ = over;
+        self.dial(to)
+    }
+
     /// The next connection a peer dialed, its key proved.
     /// [`TransportError::Closed`] once the transport is closed. It never
     /// waits on one peer's proof: a peer that starts one and does not
@@ -104,13 +119,15 @@ pub trait PeerTransport: Send + Sync + 'static {
     /// on a timer.
     fn relay(&self) -> impl Future<Output = RelayState> + Send;
 
-    /// Dials `to` over the other carrier alone, its route's: the keeper's
-    /// climb from the relay. The transport's own dial by default.
+    /// Dials `to` over the other carrier alone, its route's, given up at
+    /// `over` as [`Self::dial_by`] is: the keeper's climb from the relay.
+    /// The transport's own dial by default.
     fn dial_route(
         &self,
         to: &PeerAddr,
+        over: Instant,
     ) -> impl Future<Output = Result<Self::Conn, TransportError>> + Send {
-        self.dial(to)
+        self.dial_by(to, over)
     }
 
     /// Where another carrier to `to` stands: what the keeper's climb reads

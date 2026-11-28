@@ -885,7 +885,7 @@ async fn a_pc_reaches_its_distributions_hide_through_hide_device_carry() {
     // carrier, and its core proves the key it answered the pairing with.
     let carriers = Carriers::new(access, reach);
     let made = std::sync::Arc::clone(&carriers);
-    let transport = PipeTransport::dialing(mine, move |to| {
+    let transport = PipeTransport::dialing(mine, move |to, _| {
         let distro = hide_peer::pipe::distribution(to).map(str::to_owned);
         let carriers = std::sync::Arc::clone(&made);
         async move {

@@ -184,8 +184,8 @@ impl Settings {
             (None, None) => PipeTransport::accepting(pipe_key),
             (wsl, ssh) => {
                 let (wsl, carriers) = (wsl.clone(), ssh.clone());
-                let pipe = PipeTransport::dialing(pipe_key, move |to| {
-                    carrier_to(wsl.as_ref(), carriers.as_ref(), to)
+                let pipe = PipeTransport::dialing(pipe_key, move |to, over| {
+                    carrier_to(wsl.as_ref(), carriers.as_ref(), to, over)
                 });
                 match ssh {
                     Some(routes) => pipe.with_routes(Arc::clone(routes) as _),
@@ -244,14 +244,15 @@ impl Settings {
     }
 }
 
-/// The carrier to the machine `to` names: a distribution's through
-/// `wsl.exe`, an alias's through the system `ssh`. Either is started off
-/// the runtime; a dial given up meanwhile drops what it gets, which ends its
-/// child.
+/// The carrier to the machine `to` names, for a dial given up at `over`: a
+/// distribution's through `wsl.exe`, an alias's through the system `ssh`.
+/// Either is started off the runtime; a dial given up meanwhile drops what
+/// it gets, which ends its child.
 fn carrier_to(
     wsl: Option<&Arc<crate::pairing_wsl::Carriers>>,
     ssh: Option<&Arc<crate::peer_ssh::SshCarriers>>,
     to: &PeerAddr,
+    over: tokio::time::Instant,
 ) -> Pin<Box<dyn Future<Output = io::Result<hide_peer::mux::Carrier>> + Send>> {
     let no = |what: &str| io::Error::new(io::ErrorKind::InvalidInput, what.to_owned());
     if let Some(distro) = hide_peer::pipe::distribution(to).map(str::to_owned) {
@@ -265,7 +266,7 @@ fn carrier_to(
         });
     }
     match (hide_peer::protocol::addr::ssh_alias(to), ssh) {
-        (Some(alias), Some(carriers)) => Box::pin(carriers.carrier(to.key, alias.to_owned())),
+        (Some(alias), Some(carriers)) => Box::pin(carriers.carrier(to.key, alias.to_owned(), over)),
         _ => Box::pin(std::future::ready(Err(no(
             "the address names no carrier this machine makes",
         )))),

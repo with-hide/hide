@@ -117,7 +117,11 @@ pub const REDIAL_MOST: Duration = Duration::from_secs(60);
 /// over. One that was admitted and closed sooner counts as a failed dial.
 pub const STAYED_AFTER: Duration = REDIAL_MOST;
 
-/// How long one dial may take before it counts as failed.
+/// How long one dial may take before it counts as failed. The dial hands
+/// its deadline to the transport (`PeerTransport::dial_by`), and an SSH
+/// carrier attempt it starts runs to that same deadline wherever it is (the
+/// ladder, handed on, the climb): the wait for a carrier place, the
+/// sign-in, the `carry` step and the outgoing proof.
 pub const DIAL_WITHIN: Duration = Duration::from_secs(30);
 
 /// The SSH path. The head start a direct path gets
@@ -129,11 +133,6 @@ pub const SSH_AFTER: Duration = Duration::from_secs(1);
 /// the other transport showed, else a proved SSH connection, else its relay
 /// connection. Also how long a probe has to show a direct path.
 pub const DIRECT_WITHIN: Duration = Duration::from_secs(4);
-
-/// The whole of one SSH carrier attempt from its start, wherever it is
-/// (the ladder, handed on, the climb): the wait for a carrier place, the
-/// sign-in, the `carry` step and the outgoing proof.
-pub const CARRIER_WITHIN: Duration = DIAL_WITHIN;
 
 /// The key check an alias's add runs before it records the alias, from the
 /// `carry` step to the proof's answer, after the operator's sign-in.
@@ -249,7 +248,7 @@ const _: () = {
     assert!(SSH_AFTER.as_millis() < DIRECT_WITHIN.as_millis());
     assert!(DIRECT_WITHIN.as_secs() < DIAL_WITHIN.as_secs());
     assert!(DIRECT_WITHIN.as_secs() < HELLO_WITHIN.as_secs());
-    assert!(TAKE_WITHIN.as_secs() < CARRIER_WITHIN.as_secs());
+    assert!(TAKE_WITHIN.as_secs() < DIAL_WITHIN.as_secs());
     assert!(CLIMB_FIRST.as_secs() < CLIMB_MOST.as_secs());
     assert!(BEAT_EVERY.as_secs() * 3 == BEAT_DEAD.as_secs());
 };

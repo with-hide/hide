@@ -67,7 +67,7 @@ fn pc_and_distribution() -> (Machine, Machine) {
     let pc_dir = tempfile::tempdir().unwrap();
     let (key, twin) = keys(&pc_dir, "windows-pc");
     let arrives_at = distro.peers.clone();
-    let pipe = PipeTransport::dialing(twin, move |_| {
+    let pipe = PipeTransport::dialing(twin, move |_, _| {
         let (near, far) = LocalStream::pair().unwrap();
         arrives_at
             .transport()

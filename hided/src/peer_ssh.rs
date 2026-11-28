@@ -128,19 +128,21 @@ impl Stop {
     }
 }
 
-/// Ends an attempt whose future was dropped before it had a carrier.
-struct StopOnDrop(Option<Arc<Stop>>);
+/// Holds an attempt while its dial can give it up: before it has a
+/// carrier, and while its carrier's proof runs. Dropped still holding it,
+/// the dial gave it up ([`Attempt::given_up`]).
+struct GiveUp(Option<Arc<Attempt>>);
 
-impl StopOnDrop {
-    fn disarm(mut self) {
-        self.0 = None;
+impl GiveUp {
+    fn disarm(mut self) -> Arc<Attempt> {
+        self.0.take().expect("held until disarmed")
     }
 }
 
-impl Drop for StopOnDrop {
+impl Drop for GiveUp {
     fn drop(&mut self) {
-        if let Some(stop) = self.0.take() {
-            stop.stop();
+        if let Some(attempt) = self.0.take() {
+            attempt.given_up();
         }
     }
 }
@@ -509,15 +511,17 @@ impl SshCarriers {
         }
     }
 
-    /// Makes the carrier to `key`'s machine through `alias`: refused at once,
-    /// with no `ssh`, while the route waits or is parked; otherwise one
-    /// sign-in in a place of the carriers', which ends at the caller's
-    /// bound (`limits::CARRIER_WITHIN`, the attempt's own) when the future
-    /// is dropped.
+    /// Makes the carrier to `key`'s machine through `alias`, for a dial
+    /// given up at `over`: refused at once, with no `ssh`, while the route
+    /// waits or is parked; otherwise one sign-in in a place of the
+    /// carriers', which ends when the future is dropped. Given up at or
+    /// past `over`, before anything else settled it, the attempt makes its
+    /// route wait.
     pub fn carrier(
         self: &Arc<Self>,
         key: PeerKey,
         alias: String,
+        over: Instant,
     ) -> impl Future<Output = io::Result<Carrier>> + Send + 'static + use<> {
         let carriers = Arc::clone(self);
         async move {
@@ -549,15 +553,16 @@ impl SshCarriers {
                 key,
                 alias: alias.clone(),
                 epoch,
-                started: Instant::now(),
+                over,
                 settled: AtomicBool::new(false),
                 said: AtomicBool::new(false),
                 unproved: AtomicBool::new(false),
                 read: AtomicBool::new(false),
                 stop: Arc::clone(&stop),
             });
-            // Ends the sign-in when this future is dropped, wherever it is.
-            let guard = StopOnDrop(Some(Arc::clone(&stop)));
+            // The dial gives the attempt up when it drops this future,
+            // wherever it is.
+            let guard = GiveUp(Some(Arc::clone(&attempt)));
             let place = Arc::clone(&carriers.places)
                 .acquire_owned()
                 .await
@@ -570,11 +575,10 @@ impl SshCarriers {
             .await
             .map_err(io::Error::other)?;
             match signed {
-                Ok(channel) => {
-                    guard.disarm();
-                    Ok(carrier_of(channel, attempt))
-                }
+                Ok(channel) => Ok(carrier_of(channel, guard.disarm())),
                 Err(error) => {
+                    // Its `ssh` ended on its own, and said why.
+                    let attempt = guard.disarm();
                     attempt.settle(Outcome::of_session(&error));
                     Err(io::Error::other(error.to_string()))
                 }
@@ -719,13 +723,16 @@ impl Routes for SshCarriers {
 
 /// One attempt, held by its sign-in and then by its carrier. It settles its
 /// route once: by the proof, by why the sign-in or the far command refused,
-/// or, dropped at or past its own bound with nothing else said, as a wait.
+/// or, given up by its dial at or past the dial's bound, as a wait.
 struct Attempt {
     carriers: Weak<SshCarriers>,
     key: PeerKey,
     alias: String,
     epoch: u64,
-    started: Instant,
+    /// The deadline of the dial it was made for: every bound that can give
+    /// the attempt up (the dial's, or its own once handed on) runs to this
+    /// one instant (`PeerTransport::dial_by`).
+    over: Instant,
     settled: AtomicBool,
     /// The far command's last line was read once.
     said: AtomicBool,
@@ -737,6 +744,17 @@ struct Attempt {
 }
 
 impl Attempt {
+    /// Its dial gave it up before anything settled it, and its `ssh` ends.
+    /// At or past `over` the dial's bound did, so the route waits and the
+    /// climb does not sign in again at the next grace; sooner, another path
+    /// was chosen or the daemon stops, and the route stays as it was.
+    fn given_up(&self) {
+        if Instant::now() >= self.over {
+            self.settle(Outcome::TimedOut);
+        }
+        self.stop.stop();
+    }
+
     fn settle(&self, outcome: Outcome) {
         if self.settled.swap(true, Ordering::AcqRel) {
             return;
@@ -811,19 +829,6 @@ pub(crate) fn far_line(said: &Mutex<Vec<u8>>, done: impl Fn() -> bool) -> Option
     }
 }
 
-impl Drop for Attempt {
-    fn drop(&mut self) {
-        // Its own bound ended it with nothing said: the route waits, so the
-        // climb does not sign in again at the next grace. One dropped
-        // sooner (another path was chosen, the daemon stops) changes
-        // nothing.
-        if !self.settled.load(Ordering::Acquire) && self.started.elapsed() >= limits::CARRIER_WITHIN
-        {
-            self.settle(Outcome::TimedOut);
-        }
-    }
-}
-
 /// The last line with words in `said`.
 fn last_line(said: &[u8]) -> Option<String> {
     String::from_utf8_lossy(said)
@@ -834,20 +839,24 @@ fn last_line(said: &[u8]) -> Option<String> {
 }
 
 /// The carrier an attach channel is: its end ends `ssh` and reads what the
-/// far command said; the proof's outcome settles the attempt.
+/// far command said; the proof's outcome settles the attempt, and a dial
+/// given up before the proof told anything gives the attempt up.
 fn carrier_of(channel: AttachChannel, attempt: Arc<Attempt>) -> Carrier {
     let AttachChannel { stream, stderr } = channel;
     let read = stream.duplicate();
     let end = stream.shutdown_handle();
-    let (told, heard) = (Arc::clone(&attempt), Arc::clone(&stderr));
+    let (proving, heard) = (GiveUp(Some(Arc::clone(&attempt))), Arc::clone(&stderr));
     Carrier::new(read, stream, move || {
         end.shutdown();
         attempt.stop.stop();
         attempt.carrier_ended(&stderr);
     })
-    .told(move |proof| match proof {
-        Some(proof) => told.settle(Outcome::of_proof(proof)),
-        None => told.unproved(&heard),
+    .told(move |proof| {
+        let told = proving.disarm();
+        match proof {
+            Some(proof) => told.settle(Outcome::of_proof(proof)),
+            None => told.unproved(&heard),
+        }
     })
 }
 

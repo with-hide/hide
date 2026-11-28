@@ -1289,10 +1289,12 @@ impl<T: PeerTransport> Inner<T> {
         self.drained(&to.key).await;
         // Only the transport's dial is given up for the peer's connection.
         // Once ours is established both sides see two, and `decide` leaves
-        // the same one on both.
+        // the same one on both. The transport is handed the bound it is
+        // given up at.
+        let over = Instant::now() + limits::DIAL_WITHIN;
         let conn = tokio::select! {
             link = self.arrived(&to.key, &mut admitted) => return Ok(link),
-            conn = tokio::time::timeout(limits::DIAL_WITHIN, self.transport.dial(to)) => {
+            conn = tokio::time::timeout_at(over, self.transport.dial_by(to, over)) => {
                 conn.map_err(|_| DialError::TimedOut)??
             }
         };
@@ -1924,13 +1926,14 @@ impl<T: PeerTransport> Inner<T> {
     ) -> Result<Link<T::Conn>, NotMoved> {
         self.drained(&to.key).await;
         let start = Instant::now();
+        let over = start + limits::DIAL_WITHIN;
         let dialing = async {
             match over_route {
-                true => self.transport.dial_route(to).await,
-                false => self.transport.dial(to).await,
+                true => self.transport.dial_route(to, over).await,
+                false => self.transport.dial_by(to, over).await,
             }
         };
-        let conn = match tokio::time::timeout(limits::DIAL_WITHIN, dialing).await {
+        let conn = match tokio::time::timeout_at(over, dialing).await {
             Ok(Ok(conn)) => conn,
             Ok(Err(_)) | Err(_) => return Err(NotMoved::NotDialed),
         };
