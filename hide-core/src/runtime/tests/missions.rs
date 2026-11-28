@@ -10279,6 +10279,28 @@ fn the_review_round_at_the_limit_failing_tells_the_conductor_once_how_to_settle_
         .unwrap();
     let body = super::super::missions::wake_body(mission, wake);
     assert!(body.len() <= 700, "one cell shows it whole: {body}");
+    // The longest node key, a long title and an earlier worker's rounds
+    // still fit the cell (mission-112 review O3).
+    let mut long = mission.clone();
+    long.title = "t".repeat(160);
+    let key = "k".repeat(40);
+    long.nodes[0].key.clone_from(&key);
+    for line in long.nodes[0]
+        .criteria
+        .iter_mut()
+        .filter(|line| line.key == "review")
+    {
+        line.rounds = 103;
+        line.budget_from = 100;
+    }
+    let mut far = wake.clone();
+    far.node.clone_from(&key);
+    let longest = super::super::missions::wake_body(&long, &far);
+    assert!(
+        longest.len() <= 700 && longest.contains("(2) a serious one back in the same area"),
+        "{} bytes: {longest}",
+        longest.len()
+    );
     for words in [
         "hit its review round limit",
         "review failed round 3 of 3",
@@ -19879,7 +19901,7 @@ fn the_review_round_at_the_limit_failing_holds_the_node_until_the_conductor_choo
     let letters = limit_letters(&mut runtime);
     assert!(
         letters.len() == 1
-            && letters[0].contains("Node fix hit its review round limit")
+            && letters[0].contains("Node fix of mission mission-1 hit its review round limit")
             && letters[0].contains("(1) only ordinary or minor findings left")
             && letters[0].contains("(2) a serious one back in the same area")
             && !letters[0].contains("earlier worker")
@@ -19930,19 +19952,119 @@ fn the_review_round_at_the_limit_failing_holds_the_node_until_the_conductor_choo
     let again = limit_letters(&mut runtime);
     assert!(
         again.len() == 1
-            && again[0].contains("if its earlier worker (3 rounds) was handed over at this limit, ask the operator with `hide mission decide`")
+            && again[0].contains("if its earlier worker (3 rounds) was handed over here, ask the operator with `hide mission decide`")
             && again[0].contains("(2) a serious one back in the same area")
             && !again[0].ends_with('…'),
         "{again:?}"
     );
 }
 
+/// mission-112 (Conductor's decision on review-cap): a fresh checker bound
+/// in an ended checker's place at the limit carries that slot's rounds, so
+/// the node stays stopped: the worker's check wakes neither checker, the
+/// rounds stay at the limit and the warning stands. The re-look the
+/// Conductor asks of that checker by letter is its record on the fixed
+/// commit: a pass passes the line, which ends the stop and the warning.
+#[test]
+fn a_fresh_checker_bound_at_the_round_limit_keeps_the_node_stopped_until_a_re_look_passes() {
+    use crate::missions::WarningKind;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    for head in [HEAD, HEAD_2, HEADS_LATER[0]] {
+        failed_round(&mut runtime, "recipient", head);
+        read_cells(&mut runtime, "agent-2");
+    }
+    runtime.drive_mission_health(now);
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::ReviewFails]);
+    // The reviewer ends; the Conductor binds a fresh one in its place.
+    with_second_reviewer(&mut runtime);
+    let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
+    for record in ledger
+        .agents
+        .iter_mut()
+        .filter(|record| record.id == "agent-3")
+    {
+        record.ended = true;
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"reviewer": "agent-4"}}),
+    )
+    .unwrap();
+    let line = runtime.missions.book.get("mission-1").unwrap().nodes[0]
+        .criteria
+        .iter()
+        .find(|line| line.key == "review")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (
+            line.checkers[0].agent_id.as_deref(),
+            line.checkers[0].rounds
+        ),
+        (Some("agent-4"), 3),
+        "the fresh checker carries the slot's rounds"
+    );
+    checkout_at(&mut runtime, HEADS_LATER[1]);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEADS_LATER[1]})),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now);
+    assert!(
+        read_cells(&mut runtime, "agent-4").is_empty(),
+        "still stopped"
+    );
+    assert_eq!(fix_rounds(&runtime), Some((3, 3)));
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::ReviewFails]);
+    limit_letters(&mut runtime);
+    // A re-look that fails leaves the node stopped, with no second letter.
+    let fail =
+        json!({"commit": HEADS_LATER[1], "pass": false, "evidence": "serious: still drops v1"});
+    command(&mut runtime, "reviewer2", record_of("fix", "review", fail)).unwrap();
+    runtime.drive_mission_health(now);
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::ReviewFails]);
+    assert!(limit_letters(&mut runtime).is_empty(), "one letter");
+    assert!(
+        read_cells(&mut runtime, "agent-4").is_empty(),
+        "no round asked"
+    );
+    // The re-look the Conductor asked for by letter passes the line.
+    command(
+        &mut runtime,
+        "reviewer2",
+        record_of("fix", "review", json!({"commit": HEADS_LATER[1]})),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now);
+    assert_eq!(warnings_of(&runtime).0, Vec::<WarningKind>::new());
+    let shown = runtime.mission_view_of("mission-1").unwrap();
+    let review = shown.nodes[0]
+        .criteria
+        .iter()
+        .find(|line| line.key == "review")
+        .unwrap();
+    assert_eq!(review.state, crate::mission_criteria::CriterionState::Pass);
+    assert!(
+        read_cells(&mut runtime, "agent-4").is_empty(),
+        "the re-look answered the held check itself"
+    );
+}
+
 /// mission-112 c2: a review or verification that spent its round budget is
 /// skipped only naming a follow-up node of the same mission that is not
 /// done or dropped; an issue number alone is refused with what to do, the
-/// node itself or one not in the mission is refused too, and the skip that
-/// names one keeps it and lets the check the hold kept reach the node's
-/// other checker, the verifier, which had not answered it.
+/// node itself, one not in the mission and a dropped one are refused too,
+/// and the skip that names one keeps it, is the same skip when sent again,
+/// and lets the check the hold kept reach the node's other checker, the
+/// verifier, which had not answered it (by its answer, not the clock).
 #[test]
 fn a_skip_at_the_round_limit_names_a_follow_up_node_of_the_mission() {
     let fixture = conducting();
@@ -20015,7 +20137,13 @@ fn a_skip_at_the_round_limit_names_a_follow_up_node_of_the_mission() {
             && next.contains("an issue number alone is not accepted"),
         "{next}"
     );
-    for wrong in ["fix", "nowhere"] {
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    for wrong in ["fix", "nowhere", "docs"] {
         let refused = skip(&mut runtime, "review", Some(wrong)).unwrap_err();
         assert!(
             refused.starts_with("mission_follow_up_invalid"),
@@ -20043,6 +20171,8 @@ fn a_skip_at_the_round_limit_names_a_follow_up_node_of_the_mission() {
         read_cells(&mut runtime, "agent-3").is_empty(),
         "the skipped review asks no one"
     );
+    // The same skip again is the skip it was.
+    assert!(!skip(&mut runtime, "review", Some("fix-rest")).unwrap().1);
 }
 
 /// A checker's `hide mission record` of its line is its report: Hide ends
@@ -20654,22 +20784,83 @@ fn a_node_workers_brief_ends_with_what_starts_its_checkers_and_its_self_check() 
         "{first}"
     );
     let end = first.rsplit("\n\n").next().unwrap();
+    // Each item and its document, which `hide mission help` section 9
+    // lists the same (mission-112 review m4).
+    let help = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../hided/assets/mission/help.md"
+    ))
+    .unwrap();
+    let nine = help.split("## 9. ").nth(1).unwrap();
+    assert!(end.contains("Before your first `check`"), "{end}");
     for words in [
-        "Before your first `check`",
-        "(1) tests:",
-        "fails without your change (`docs/TESTING.md`)",
-        "(2) docs:",
-        "(`docs/README.md`",
-        "(3) every OS and every agent:",
-        "(`AGENTS.md`, Every Agent And Feature On Every System)",
-        "(4) the pull request body:",
-        "(`.github/pull_request_template.md`)",
+        "where it has one",
+        "tests: every behaviour you add or change has a test at the right layer that fails without your change (its testing guide, such as `docs/TESTING.md`)",
+        "docs: the guide that owns the behaviour and its references change with it (its docs index, such as `docs/README.md`)",
+        "every OS and every agent: nothing assumes one operating system or one agent runtime (its agent instructions, such as `AGENTS.md`)",
+        "the pull request body: its pull or merge request template filled from the diff, not from intent (such as `.github/pull_request_template.md`)",
     ] {
         assert!(end.contains(words), "{words:?} in {end}");
+        assert!(nine.contains(words), "{words:?} in help.md section 9");
     }
     assert_eq!(brief(&mut runtime, "mission-1:fix"), first);
     assert_eq!(brief(&mut runtime, "mission-1:docs"), "Fix it.");
     assert_eq!(brief(&mut runtime, "mission-1:review-fix"), "Fix it.");
+}
+
+/// mission-112 verify F2: every accepted brief of a node with checkers ends
+/// with the whole line and its self-check, right up to the letter limit: a
+/// brief with no room for it is refused `mission_brief_too_long`, naming
+/// the bytes over, and one exactly that much shorter is accepted at the
+/// limit with the line whole.
+#[test]
+fn a_brief_with_no_room_for_the_self_check_is_refused_and_one_that_fits_keeps_it() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let conductor = fixture.conductor.clone();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug", "cap": 3}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let brief = |runtime: &mut Runtime, text: &str| {
+        runtime
+            .prepare_delivery(
+                crate::node::TEST_NODE,
+                &conductor.pane_id,
+                &authority(&conductor).context,
+                None,
+                spawn(None, "mission-1:fix", Some(text)),
+            )
+            .map(|prepared| prepared.spawn_brief().map(str::to_owned).unwrap())
+    };
+    let near = "x".repeat(crate::delivery::BODY_LIMIT - 200);
+    let refused = brief(&mut runtime, &near).unwrap_err();
+    let (code, detail) = crate::coordination::split_refusal(&refused);
+    assert_eq!(code, "mission_brief_too_long", "{refused}");
+    let over: usize = detail
+        .and_then(|detail| detail.strip_suffix(" bytes over"))
+        .and_then(|bytes| bytes.parse().ok())
+        .unwrap();
+    assert!(
+        brief(&mut runtime, &"x".repeat(near.len() - over + 1))
+            .unwrap_err()
+            .starts_with("mission_brief_too_long")
+    );
+    let fits = "x".repeat(near.len() - over);
+    let sent = brief(&mut runtime, &fits).unwrap();
+    assert_eq!(sent.len(), crate::delivery::BODY_LIMIT);
+    let end = sent.rsplit("\n\n").next().unwrap();
+    assert!(
+        sent.starts_with(&fits)
+            && end.starts_with("Before you record your `check` line")
+            && end.contains("Before your first `check`")
+            && end.contains("(such as `.github/pull_request_template.md`)."),
+        "{end}"
+    );
 }
 
 /// PRD mission-speed-2 D-03: an agent that takes letters at its tools takes

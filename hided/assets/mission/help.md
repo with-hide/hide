@@ -260,7 +260,9 @@ The rounds count from the node's current worker: binding a fresh worker (`hide m
      To have the serious fixes looked at once more before the skip, ask the checker that raised them by letter to re-look only those on the fixed commit: its record opens that one round, a pass passes the line and the node goes on, and a failure leaves the node stopped for your next choice.
   2. A serious finding came back in the same area: hand the node to a fresh worker on a different model, with a handover note and a list of what not to try again (Handing a node to a fresh worker, section 4); binding it gives its checkers a fresh round count.
   3. The fresh worker reaches the limit too: ask the operator with `hide mission decide --node <key>`; Hide's letter says so when the node's checkers counted rounds for an earlier worker.
-  Ending the stop any of these ways (a pass, a skip, a fresh worker) lets a `check` the worker recorded while it stood reach the checkers that have not answered it.
+  Only these end the stop: the line passing, its skip, or a fresh worker; a fresh checker bound in an ended checker's place carries that place's rounds and keeps the node stopped.
+  A pass or a skip lets a `check` the worker recorded while it stood reach the checkers that have not answered it; a fresh worker's own next `check` opens round 1 of its count.
+  While the node stands stopped, its worker waits on you and is never warned as stopped, and the stop counts in the operator's safety net like a raise of yours: settle it before you rest (section 4, What Hide does by itself).
 - A minor finding that blocks nothing gets no push of its own: the worker gathers them and sends them with the next push the node needs.
 - Choose every checker by the operator's agent list as you choose workers.
   Prefer a different kind of agent than the node's worker (a codex checker for a claude worker, a claude one for a codex worker); when the list has none, one installed here.
@@ -298,7 +300,7 @@ Every worker's brief, code or general, says in its first line what the node is, 
 - the destination, and that its pull request is opened with `gh pr create --base <destination>` on GitHub or `glab mr create --target-branch <destination>` on gitlab.com (a stacked one with the lower pull request's branch as its base), never a push to the destination itself; `hide mission show <node>` prints it as `destination <branch>`;
 - the checks the diff touches, by the repository's own commands, run before every push, since a push that fails a check the worker could run is a whole CI round lost;
 - the push rhythm: each push starts the CI again and cancels the run before it, so the worker fixes every finding of a review round, runs those checks, and pushes once for the round, never once per finding;
-- that recording its `check` line (on a node without a check command, every line of its own passed) is what starts its node's review and verification, so it runs the local checks its change touches first and records `check` right after it pushes the commit, never after the CI, which its checkers run beside (section 9); on a node with a reviewer or a verifier, Hide adds a line saying so at the end of the worker's brief, with the self-check the worker does before its first `check` (section 9);
+- that recording its `check` line (on a node without a check command, every line of its own passed) is what starts its node's review and verification, so it runs the local checks its change touches first and records `check` right after it pushes the commit, never after the CI, which its checkers run beside (section 9); on a node with a reviewer or a verifier, Hide adds a line saying so at the end of the worker's brief, with the self-check the worker does before its first `check` (section 9), and refuses a brief with no room left for it under 16 KiB (`mission_brief_too_long`, naming the bytes over);
 - that a commit that only merges the destination into its branch gets no `check`: the worker pushes it and its CI proves it, and records `check` on such a commit only when resolving a conflict changed its own code (section 9);
 - the pull request rules: the repository's template, its title form, no agent attribution anywhere;
 - the limits: start no agents of its own, merge nothing, never touch the operator's app, terminals or panes, never force push or rebase, stop and write a letter when the goal or scope would change, and declare a step only a person can take with `hide agent ask-human` rather than in a letter (section 9);
@@ -315,7 +317,7 @@ Every worker's brief, code or general, says in its first line what the node is, 
   In a plain-folder project leave out `--repo` and `--branch`: the worker starts in the folder itself, where you are.
   The brief is the worker's first prompt: Hide submits it once the agent takes input and keeps it as a delivered letter under the node's intent, so the worker starts on it without anyone typing and a wake later finds it.
   Hide keeps the brief with the node when you bind the worker, and the node's panel shows it folded under Instructions for as long as the node is on the map, so write it as the one place the worker's instructions live.
-  A node's worker without a brief is refused (`mission_brief_missing`); a brief holds at most 16 KiB, so a longer one goes in a file the brief names.
+  A node's worker without a brief is refused (`mission_brief_missing`); a brief holds at most 16 KiB, so a longer one goes in a file the brief names, and on a node with a reviewer or a verifier Hide's end line counts in the 16 KiB too (`mission_brief_too_long` names the bytes over).
   Retrying a node uses the same intent, so it never makes a second agent or submits the brief twice; a new attempt with another worker uses a new intent, the node's with the attempt's number (`<mission-id>:<node-key>:2`), as Handing a node to a fresh worker below says.
 - When a spawn answers anything but an agent (`request_timeout`, `native_identity_unavailable`, `spawn_busy`), run the same command again until it answers the agent's id, and only then record or bind it.
   An agent whose pane is up but whose spawn never answered its id is not registered: the mission cannot bind it, and its `hide mission record` is refused (`participant_unavailable`).
@@ -452,7 +454,8 @@ A letter settles nothing: Hide reads only these commands, so a wait you told a w
 Several nodes raised by one cause (a login that expired, a CI that is down on main) are one problem: settle it once for all of them.
 Nothing reaches the operator per node.
 When a raise, or the warning that a worker stopped (below), stands unsettled while you rest (your turn ended, you ask the operator nothing and wait on no task of your own; your workers at work do not count) and 20 minutes passed since the latest of it, your arrival and your rest, or any such stands while no Conductor holds the mission, the mission shows the operator one card for all of them, the safety net, which leads them to your terminal (or, with no Conductor, to Resume command); a delay, a node's hold, an open decision and a gate waiting on the operator hold it off, as they hold off a stall; a gate that asks while its node still owes other lines (its own, CI, a review) holds off nothing, and its question holds the mission only while the gate is all its node owes.
-A failed CI, a review asking for changes and a review failing at its round limit are the working worker's to answer and never reach the operator by themselves: only once the worker stops on one (its stopped warning) or ends (a raise), counted from then.
+A failed CI and a review asking for changes are the working worker's to answer and never reach the operator by themselves: only once the worker stops on one (its stopped warning) or ends (a raise), counted from then.
+A node stopped at its review round limit is yours to move (Verification strength), so its warning counts in the safety net from when it was raised.
 The operator can still settle a raised node from its panel on the map; you then get a letter saying what they did.
 The same cause is raised once.
 CI, review and merge waits call no one, and a worker waiting on them, or on the operator's answer to a raise on its node or to your `hide mission decide --node` question about it, gets no no-activity letter from its watch, nor does one whose node waits on a delay or a hold.
@@ -469,7 +472,7 @@ The map draws the node `Stopped` with its cause and how long ago from the moment
 Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review, the stopped worker at work or waiting again, or its node waiting on someone or on a delay or hold, takes it off with its letter if not sent yet, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
 You get one letter per stop, and while its warning stands its watch sends you no no-activity letter; the raise the stopped warning becomes after 30 minutes does not take that warning off.
 Read the node with `hide mission show <node>` and judge whether its worker needs another approach or the node a fresh worker.
-The round limit's warning stays yours alone: it stands while the node is stopped at its limit and goes when that line passes, you skip it naming a follow-up node, or a fresh worker is bound, so it is never raised as stalled and never reaches the operator.
+The round limit's warning stays yours: it stands while the node is stopped at its limit, whether its worker is awake or asleep, and goes when that line passes, you skip it naming a follow-up node, or a fresh worker is bound; it is never raised as stalled, and reaches the operator only through the safety net, as your own unsettled raise does.
 The thresholds are fixed: the strength's round limit and 5 minutes stopped.
 
 ### A move that did not come
@@ -592,11 +595,11 @@ A worker or checker of a mission records its own lines from its own pane; the Co
   A worker's or checker's record that Hide cannot judge because it could not read its agent ledger is refused `ledger_unavailable`: stop and tell the operator; the Conductor's record on a node that never had a worker needs no ledger.
   Each of these refusals (`mission_criterion_not_yours`, `participant_session_changed`, `participant_registering`, `participant_unavailable`, `ledger_unavailable`) leaves one `mission.record_refused` line in Hide's diagnostic log with your session's digest, the registrations it found for your pane and the agents bound to the line.
 - Recording the same result on the same commit again changes nothing, and wakes no checker again.
-- Before your first `check` on a node with a reviewer or a verifier, check these four yourself and fix what you find; the line Hide adds at the end of your brief lists them too:
-  1. tests: every behaviour you add or change has a test at the right layer that fails without your change (`docs/TESTING.md`);
-  2. docs: the owning guide and its references change with the behaviour (`docs/README.md` names them);
-  3. every OS and every agent: nothing assumes one operating system or one agent runtime (`AGENTS.md`, Every Agent And Feature On Every System);
-  4. the pull request body: the repository's template filled from the diff, not from intent (`.github/pull_request_template.md`).
+- Before your first `check` on a node with a reviewer or a verifier, check these four yourself and fix what you find, each against the project's own guide where it has one; the line Hide adds at the end of your brief lists them too:
+  1. tests: every behaviour you add or change has a test at the right layer that fails without your change (its testing guide, such as `docs/TESTING.md`);
+  2. docs: the guide that owns the behaviour and its references change with it (its docs index, such as `docs/README.md`);
+  3. every OS and every agent: nothing assumes one operating system or one agent runtime (its agent instructions, such as `AGENTS.md`);
+  4. the pull request body: its pull or merge request template filled from the diff, not from intent (such as `.github/pull_request_template.md`).
 - A round of review goes like this, and Hide's cells say each step's line at its moment:
   - Before you record your `check` (on a node without a check command, your own lines), run the local checks your change touches: the record is what starts the node's review and verification, and a push alone starts nothing.
     Record it as soon as those checks passed and the commit is pushed, never after the CI: Hide reads the CI into your `ci` line by itself, and your checkers read while it runs.

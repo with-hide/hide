@@ -593,8 +593,12 @@ pub(super) fn closing_report_in(
             alone.len()
         ));
         for skip in alone {
+            let follow = skip
+                .follow_up
+                .map(|node| format!(" · follow-up node {node}"))
+                .unwrap_or_default();
             lines.push(format!(
-                "- {} ({}) · {}: {} · {} · at {} Unix ms",
+                "- {} ({}) · {}: {}{follow} · {} · at {} Unix ms",
                 skip.title, skip.node, skip.line, skip.reason, skip.by, skip.at_unix_ms
             ));
         }

@@ -2087,7 +2087,7 @@ impl Runtime {
                 .is_some_and(|admission| admission.node_worker)
                 && let Some(text) = brief.as_mut()
             {
-                self.brief_round_line(&actor, intent, text, earlier);
+                self.brief_round_line(&actor, intent, text, earlier)?;
             }
             *pick = picked.map(|request| crate::coordination::Picked(Box::new(request)));
         }

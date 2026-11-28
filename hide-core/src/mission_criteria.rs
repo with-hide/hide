@@ -774,18 +774,21 @@ impl Criterion {
     }
 
     /// Whether this checker line spent the `limit` rounds of the mission's
-    /// strength and stands failed: the one fact that the node's round limit
-    /// is reached and its Conductor owes the choice of how it goes on
-    /// (operator decision 2026-11-28). While it holds, the worker's check
-    /// wakes no checker (`Runtime::ask_checkers`), the Conductor is warned
-    /// once (`WarningKind::ReviewFails`), and a skip of the line names a
-    /// follow-up node (`Runtime::skip_criterion`). It ends when the line
-    /// passes (a re-look the Conductor asked the checker for), is skipped,
-    /// or the node's fresh worker starts a fresh budget (`fresh_budget`).
+    /// strength and has not passed or been skipped since: the one fact that
+    /// the node's round limit is reached and no round opens until its
+    /// Conductor chooses how it goes on (operator decision 2026-11-28).
+    /// While it holds, the worker's check wakes no checker
+    /// (`Runtime::ask_checkers`), the Conductor is warned once the line
+    /// stands failed (`WarningKind::ReviewFails`), and a skip of the line
+    /// names a follow-up node (`Runtime::skip_criterion`). It ends only
+    /// when the line passes (a re-look the Conductor asked the checker
+    /// for), is skipped, or the node's fresh worker starts a fresh budget
+    /// (`fresh_budget`): a fresh checker bound in an ended one's place
+    /// carries that slot's rounds (`bind`), so it keeps the stop.
     pub fn budget_spent(&self, limit: u32) -> bool {
         self.kind.checker_judges()
             && self.budget_rounds() >= limit
-            && self.state == CriterionState::Fail
+            && !matches!(self.state, CriterionState::Pass | CriterionState::Skipped)
     }
 
     /// The node's worker changed: the rounds from now are the fresh

@@ -1785,26 +1785,19 @@ impl MissionNode {
     }
 
     /// The review or verification line whose round budget is spent
-    /// (`Criterion::budget_spent`), the one with more rounds first: while
+    /// (`Criterion::budget_spent`), a failed one first and then the one
+    /// with more rounds: while
     /// one stands, the node's Conductor owes the choice of how it goes on
     /// and no round opens (operator decision 2026-11-28).
     pub fn round_hold(&self, limit: u32) -> Option<&crate::mission_criteria::Criterion> {
         self.checker_lines()
             .filter(|line| line.budget_spent(limit))
-            .max_by_key(|line| line.budget_rounds())
-    }
-
-    /// When the round that spent the budget was last answered, while a
-    /// round hold stands (`round_hold`): a check signalled after it was
-    /// held, and goes to the checkers once the hold ends.
-    pub(crate) fn round_held_at(&self, limit: u32) -> Option<u64> {
-        self.round_hold(limit).map(|line| {
-            line.checkers
-                .iter()
-                .filter_map(|checker| checker.at_unix_ms)
-                .max()
-                .unwrap_or(0)
-        })
+            .max_by_key(|line| {
+                (
+                    line.state == crate::mission_criteria::CriterionState::Fail,
+                    line.budget_rounds(),
+                )
+            })
     }
 
     /// The worker's signal that its work is ready for its checkers (PRD
@@ -1865,13 +1858,14 @@ pub(crate) struct CheckSignal {
 }
 
 impl CheckSignal {
-    /// Whether `checker` answered this signal's round: after it, on its
-    /// commit when both name one.
+    /// Whether `checker` answered this signal's round: on its commit when
+    /// both name one (an answer on that commit before the signal, a re-look
+    /// the Conductor asked for, included), else after it.
     pub(crate) fn answered_by(&self, checker: &crate::mission_criteria::Checker) -> bool {
-        checker.at_unix_ms.is_some_and(|at| at >= self.at_unix_ms)
+        checker.at_unix_ms.is_some()
             && match (&self.commit, &checker.commit) {
                 (Some(round), Some(read)) => crate::mission_criteria::same_commit(round, read),
-                _ => true,
+                _ => checker.at_unix_ms.is_some_and(|at| at >= self.at_unix_ms),
             }
     }
 }
@@ -4254,7 +4248,17 @@ pub(crate) fn apply_patch(
     take!(agent_id);
     // A fresh worker gets a fresh round budget: the strength's limit counts
     // its checkers' rounds from now (operator decision 2026-11-28).
-    if next.agent_id.is_some() && next.agent_id != node.agent_id {
+    // The worker before is the one bound, else the last that recorded a
+    // line, so unbinding and binding the same worker again starts nothing.
+    let before = node.agent_id.clone().or_else(|| {
+        node.criteria
+            .iter()
+            .filter_map(|line| line.by.as_ref())
+            .filter(|by| by.role == crate::mission_criteria::Role::Worker)
+            .max_by_key(|by| by.at_unix_ms)
+            .and_then(|by| by.agent_id.clone())
+    });
+    if next.agent_id.is_some() && next.agent_id != before {
         for line in next
             .criteria
             .iter_mut()

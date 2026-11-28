@@ -715,6 +715,10 @@ pub struct SkippedAloneView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     pub reason: String,
+    /// The node of the mission that carries what a review or verification
+    /// left at its round limit (`Skip::follow_up`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub follow_up: Option<String>,
     pub by: String,
     pub at_unix_ms: u64,
 }
@@ -739,6 +743,7 @@ pub(crate) fn skipped_alone(mission: &Mission) -> Vec<SkippedAloneView> {
                     kind: line.kind,
                     text: line.text.clone(),
                     reason: skip.reason.clone(),
+                    follow_up: skip.follow_up.clone(),
                     by: by.name.clone(),
                     at_unix_ms: by.at_unix_ms,
                 })
@@ -1414,6 +1419,9 @@ pub(super) fn wake_words(
                 mission.id, mission.title, wake.node
             )
         }
+        WakeEvent::Warning if wake.warning == Some(WarningKind::ReviewFails) && node.is_some() => {
+            limit_letter(mission, node.expect("checked above"))
+        }
         WakeEvent::Warning => {
             let warning = node.and_then(|node| {
                 node.warnings
@@ -1428,35 +1436,6 @@ pub(super) fn wake_words(
                 wake.node, mission.id
             );
             let (what, ask) = match (wake.warning, node, warning) {
-                (Some(WarningKind::ReviewFails), Some(node), _) => {
-                    // A cell shows 700 bytes (`status_cells::CELL_BYTES`):
-                    // the node and its choices come first, and the steps
-                    // in full are `hide mission help`, Verification strength.
-                    let limit = crate::mission_health::review_limit(mission);
-                    let held = node.review_line(limit);
-                    let line = held.map_or("review", |line| line.key.as_str());
-                    let rounds = held.map_or(limit, Criterion::budget_rounds);
-                    let key = wake.node.as_str();
-                    let choices = format!(
-                        "(1) only ordinary or minor findings left: its worker fixes just the serious ones here and the rest become a follow-up node, then `hide mission skip {key} {line} --follow-up <node>`; (2) a serious one back in the same area: a fresh worker on another model with a handover and a do-not-retry list"
-                    );
-                    // Rounds counted before the current worker's budget: the
-                    // node already had a fresh worker, maybe for this limit.
-                    let ask = match held.map_or(0, |line| line.budget_from) {
-                        0 => format!(
-                            "choose, without the operator: {choices}; (3) a fresh worker failing here too: `hide mission decide`"
-                        ),
-                        before => format!(
-                            "if its earlier worker ({before} rounds) was handed over at this limit, ask the operator with `hide mission decide`; else choose: {choices}"
-                        ),
-                    };
-                    (
-                        format!(
-                            "hit its review round limit: {line} failed round {rounds} of {limit}; no checker wakes until you choose"
-                        ),
-                        ask,
-                    )
-                }
                 (Some(WarningKind::Stopped), _, Some(warning)) => {
                     use crate::missions::StopCause;
                     let why = match &warning.cause {
@@ -1511,6 +1490,35 @@ pub(super) fn wake_words(
         (Some(_), Some((line, true, _))) => format!("{body}\nIts review round: {line}."),
         _ => body,
     }
+}
+
+/// The Conductor's one letter about `node` stopped at its review round
+/// limit (`MissionNode::round_hold`, operator decision 2026-11-28): the
+/// node and its choices, worded to fit one cell (`status_cells::CELL_BYTES`,
+/// 700 bytes) with the longest node key, so it names the mission by its id
+/// alone; the steps in full are `hide mission help`, Verification strength.
+fn limit_letter(mission: &Mission, node: &MissionNode) -> String {
+    let limit = crate::mission_health::review_limit(mission);
+    let held = node.review_line(limit);
+    let line = held.map_or("review", |line| line.key.as_str());
+    let rounds = held.map_or(limit, Criterion::budget_rounds);
+    let (key, id) = (node.key.as_str(), mission.id.as_str());
+    let choices = format!(
+        "(1) only ordinary or minor findings left: its worker fixes just the serious ones here, the rest become a follow-up node, then `hide mission skip {key} {line} --follow-up <node>`; (2) a serious one back in the same area: a fresh worker on another model with a handover and a do-not-retry list"
+    );
+    // Rounds counted before the current worker's budget: the node already
+    // had a fresh worker, maybe for this limit.
+    let ask = match held.map_or(0, |line| line.budget_from) {
+        0 => format!(
+            "choose, without the operator: {choices}; (3) a fresh worker failing here too: `hide mission decide`"
+        ),
+        before => format!(
+            "if its earlier worker ({before} rounds) was handed over here, ask the operator with `hide mission decide`; else choose: {choices}"
+        ),
+    };
+    format!(
+        "Node {key} of mission {id} hit its review round limit: {line} failed round {rounds} of {limit}; no checker wakes until you choose.\nRead `hide mission show {key} --mission {id}` and {ask}."
+    )
 }
 
 /// What a not-started stall tells the Conductor when its node waits on the

@@ -101,7 +101,7 @@ A reviewer asks these four questions of every cap the change adds or changes; a 
 - In a mission, review rounds stop at the limit its verification strength allows (`hide mission help`, Verification strength): when that round fails, Hide opens no further round, and the Conductor, not the operator, owns the decision in three steps.
   1. Only ordinary or minor findings remain: the worker fixes the serious ones in the same pull request, which then merges, and the rest become a follow-up node of the same mission, never an issue alone; the line is skipped naming that node.
      The Conductor may ask the checker for one re-look of the serious fixes first, and its pass passes the line.
-  2. A serious finding comes back in the same area: the node goes to a fresh worker of a different model, with a handover note and a list of what not to try again, and its checkers count a fresh set of rounds.
+  2. A serious finding comes back in the same area: the node goes to a fresh worker of a different model, with a handover note and a list of what not to try again, and its checkers count a fresh set of rounds; a fresh checker alone does not.
   3. The fresh worker reaches the limit too: the Conductor asks the operator.
   Serious findings still block until fixed in the node.
 - A review round after a fix reads only what changed since the round before and says whether each earlier finding is closed; it raises a new finding only when it is serious.

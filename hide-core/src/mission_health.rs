@@ -834,10 +834,11 @@ pub(crate) enum WarnAct {
 /// How the warnings of `mission`'s nodes change at `now` (with-hide/hide-private#552):
 /// a node at work in a running mission warns once the round of its review
 /// or verification at the strength's limit (`review_limit`) failed
-/// (`MissionNode::round_hold`), and the warning stands while that holds, so
-/// the Conductor is told once; it goes when the line passes, is skipped or
-/// a fresh worker starts a fresh budget, or when the node is no longer at
-/// work. A node whose worker stood stopped
+/// (`MissionNode::round_hold`, its line failed), and the warning stands
+/// while the hold does, a fresh checker bound in the line's place included,
+/// so the Conductor is told once; it goes when the line passes, is skipped
+/// or a fresh worker starts a fresh budget, or when the node is no longer
+/// at work. A node whose worker stood stopped
 /// `STOPPED_THAT_WARNS_MS` (`stopped_worker`) warns once with its cause, and
 /// the warning goes once that rule no longer holds: the worker works, waits
 /// or ends, or the node waits on someone. A node that waits on purpose
@@ -882,7 +883,9 @@ pub(crate) fn warn_acts(
             }
             _ => {}
         }
-        let held = works
+        // The stop is the Conductor's to move, whatever its worker does: a
+        // worker asleep while it waits for the choice leaves it standing.
+        let held = (node_works(mission, node) && mission.wait_of(node).is_none())
             .then(|| node.round_hold(review_limit(mission)))
             .flatten();
         match standing(WarningKind::ReviewFails) {
@@ -890,12 +893,17 @@ pub(crate) fn warn_acts(
                 node: at,
                 kind: WarningKind::ReviewFails,
             }),
-            None if held.is_some() => acts.push(WarnAct::Raise {
-                node: at,
-                kind: WarningKind::ReviewFails,
-                from: last_review_at(node).unwrap_or(now),
-                cause: None,
-            }),
+            None if held.is_some_and(|line| {
+                line.state == crate::mission_criteria::CriterionState::Fail
+            }) =>
+            {
+                acts.push(WarnAct::Raise {
+                    node: at,
+                    kind: WarningKind::ReviewFails,
+                    from: last_review_at(node).unwrap_or(now),
+                    cause: None,
+                })
+            }
             _ => {}
         }
     }
@@ -1055,19 +1063,25 @@ pub enum HeldReason {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CellReason {
+    /// The node stopped at its review round limit and waits on its
+    /// Conductor's choice (`MissionNode::round_hold`).
+    WarningReviewFails,
     WarningStopped,
 }
 
 /// What holds `node` of `mission` in the safety net, with since when it
 /// stood unresolved and the pull request it is about: a raise its Conductor
 /// settles (not `operator_first`, which is the operator's own item), else a
-/// standing cell no one but its Conductor moves: the node's worker stopped
+/// standing cell no one but its Conductor moves: the node stopped at its
+/// review round limit, waiting on the Conductor's choice (its
+/// `WarningKind::ReviewFails` while `MissionNode::round_hold` stands,
+/// operator decision 2026-11-28), or the node's worker stopped
 /// (`WarningKind::Stopped`). A waiting node's failed wait is a raise (PRD
 /// core-wait D-17), read above.
-/// A failed or cancelled CI, changes asked for and a review failing at its
-/// round limit are the working worker's to answer and hold nothing: a worker
-/// that stops on one is warned as stopped and one that ends is raised, and
-/// the clock counts from then. None when nothing stands.
+/// A failed or cancelled CI and changes asked for are the working worker's
+/// to answer and hold nothing: a worker that stops on one is warned as
+/// stopped and one that ends is raised, and the clock counts from then.
+/// None when nothing stands.
 pub(crate) fn held_of(
     mission: &Mission,
     node: &MissionNode,
@@ -1090,6 +1104,18 @@ pub(crate) fn held_of(
             HeldReason::Raise(attention.reason),
             since,
             attention.pr,
+        ));
+    }
+    if let Some(warning) = node
+        .warnings
+        .iter()
+        .find(|warning| warning.kind == WarningKind::ReviewFails)
+        .filter(|_| node.round_hold(review_limit(mission)).is_some())
+    {
+        return Some((
+            HeldReason::Cell(CellReason::WarningReviewFails),
+            warning.since_unix_ms,
+            node.current_pr(),
         ));
     }
     let wake = mission
@@ -1309,16 +1335,20 @@ pub(crate) fn quiet_waits(
 }
 
 /// Whether the next move on `node` is someone else's besides a raise on
-/// it: a question about it that holds the mission (`decision_holds`), or a
-/// pull request that waits on CI, a review or the merge (`worker_waits`);
-/// unknown while GitHub's answer does not hold the pull request.
+/// it: a question about it that holds the mission (`decision_holds`), its
+/// Conductor's choice at the review round limit (`MissionNode::round_hold`),
+/// or a pull request that waits on CI, a review or the merge
+/// (`worker_waits`); unknown while GitHub's answer does not hold the pull
+/// request.
 fn owed_elsewhere(
     mission: &Mission,
     node: &MissionNode,
     pulls: Option<&GithubProjectSnapshot>,
     operator_waits: &[bool],
 ) -> Option<bool> {
-    if mission.deciding_on(&node.key) && decision_holds(mission, operator_waits) {
+    if mission.deciding_on(&node.key) && decision_holds(mission, operator_waits)
+        || node.round_hold(review_limit(mission)).is_some()
+    {
         return Some(true);
     }
     worker_waits(node, pulls)
@@ -1976,11 +2006,11 @@ mod tests {
 
     /// mission-82, mission-112: the round at the strength's limit failing
     /// warns, once: a round before it failing does not, nor the limit's
-    /// round still open; standing, a failed re-look raises nothing more,
-    /// and the line passing, skipped or opened again (a fresh checker bound
-    /// in its place) takes it away, and so does a fresh worker's budget,
-    /// which counts from its bind and warns again at its own limit. A
-    /// mission from before strength counts as normal.
+    /// round still open; standing, a failed re-look or a fresh checker
+    /// bound in the line's place raises nothing more and takes nothing
+    /// away, the line passing or skipped takes it away, and so does a fresh
+    /// worker's budget, which counts from its bind and warns again at its
+    /// own limit. A mission from before strength counts as normal.
     #[test]
     fn the_review_round_at_the_strengths_limit_failing_warns_once_until_the_line_passes() {
         use crate::mission_criteria::CriterionState::{Fail, Open, Pass, Skipped};
@@ -2030,7 +2060,11 @@ mod tests {
             );
             m.nodes[0].criteria[1].budget_from = 0;
             m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
-            for state in [Open, Pass, Skipped] {
+            // A fresh checker bound in the line's place opens it again with
+            // the slot's rounds: the node stays stopped, the warning stands.
+            review(&mut m, limit + 1, Open);
+            assert!(warn_acts(&m, None, &[], &[], 10).is_empty(), "{strength:?}");
+            for state in [Pass, Skipped] {
                 review(&mut m, limit + 1, state);
                 assert_eq!(
                     warn_acts(&m, None, &[], &[], 10),
@@ -2104,10 +2138,12 @@ mod tests {
         };
         let pulls = listed(Vec::new());
         let now = 100 * MINUTE;
+        // Stopped at its round limit, the worker waits on its Conductor, so
+        // only the review warns (mission-112 review O1).
         assert_eq!(
             warn_acts(&m, Some(&pulls), &[stopped(0)], &[false], now).len(),
-            2,
-            "unheld, it warns of both"
+            1,
+            "unheld, the review warns"
         );
         m.delay = Some("disk".into());
         m.delay_until_unix_ms = Some(now + 30 * MINUTE);
@@ -2157,15 +2193,17 @@ mod tests {
                 ended + STOPPED_THAT_WARNS_MS
             )
             .len(),
-            2
+            1
         );
     }
 
-    /// B23: a sleeping worker is no wait and gets no warning of any kind:
-    /// its review failed at the limit raises none while it sleeps, one
-    /// standing goes, and it rises again once the worker wakes.
+    /// B23: a sleeping worker is no wait and gets no stopped warning; a
+    /// node stopped at its review round limit waits on its Conductor
+    /// whatever the worker does (mission-112 review O2), so that warning
+    /// rises and stands while the worker sleeps, and is not cleared and
+    /// raised again, a second letter, when it wakes.
     #[test]
-    fn a_sleeping_worker_gets_no_warning_and_is_no_wait() {
+    fn a_sleeping_worker_gets_no_stopped_warning_but_the_round_limit_stands() {
         let mut m = reviewed();
         m.nodes[0].criteria[1].rounds = 3;
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
@@ -2181,25 +2219,24 @@ mod tests {
         let now = 600 * MINUTE;
         let acts =
             |m: &Mission, life_now| warn_acts(m, Some(&pulls), &[life(life_now)], &[false], now);
-        assert!(acts(&m, WorkerLife::Asleep).is_empty());
+        let raise = WarnAct::Raise {
+            node: 0,
+            kind: WarningKind::ReviewFails,
+            from: 5,
+            cause: None,
+        };
+        assert_eq!(acts(&m, WorkerLife::Asleep), std::slice::from_ref(&raise));
         assert_eq!(m.wait_of(&m.nodes[0]), None);
         m.nodes[0].warnings = vec![warn(WarningKind::ReviewFails, 5)];
-        assert_eq!(
-            acts(&m, WorkerLife::Asleep),
-            [WarnAct::Clear {
-                node: 0,
-                kind: WarningKind::ReviewFails,
-            }]
-        );
+        assert!(acts(&m, WorkerLife::Asleep).is_empty(), "it stands");
+        // Awake and stopped for hours, it waits on its Conductor: no second
+        // letter and no stopped warning.
+        assert!(acts(&m, WorkerLife::Running).is_empty(), "awake, still one");
         m.nodes[0].warnings.clear();
+        m.nodes[0].criteria[1].rounds = 2;
         assert!(
-            acts(&m, WorkerLife::Running).contains(&WarnAct::Raise {
-                node: 0,
-                kind: WarningKind::ReviewFails,
-                from: 5,
-                cause: None,
-            }),
-            "awake, it warns again"
+            acts(&m, WorkerLife::Asleep).is_empty(),
+            "no stop, no warning"
         );
     }
 
@@ -2400,11 +2437,12 @@ mod tests {
         assert!(stalls(&m, None, false, &[true], &[]).is_empty());
     }
 
-    /// A failed review warns the Conductor and stops there: while the worker
-    /// fixes the findings it stands a whole review round, so it is never a
-    /// stall and never reaches the operator's safety net, and a stall an
-    /// earlier build raised on it goes. A warning the worker's own move takes
-    /// off still stalls beside it, and keeps its stall.
+    /// A review failed at its round limit warns the Conductor and is never
+    /// raised as a stall, and a stall an earlier build raised on it goes; it
+    /// waits on the Conductor's choice, so the safety net counts it as the
+    /// Conductor's (`held_of`, mission-112 review O1). A warning the
+    /// worker's own move takes off still stalls beside it, and keeps its
+    /// stall.
     #[test]
     fn a_failed_review_is_never_raised_as_a_stall() {
         let failed = || {
@@ -2420,6 +2458,10 @@ mod tests {
                 .contains(&Act::Clear { node: 0 })
         };
         assert!(stalls(&failed(), None, false, &[false], &[]).is_empty());
+        assert_eq!(
+            held_of(&failed(), &failed().nodes[0]).map(|held| held.0),
+            Some(HeldReason::Cell(CellReason::WarningReviewFails))
+        );
         let mut raised = failed();
         raised.nodes[0].attention = Some(attention(AttentionReason::WarningStood, None));
         assert!(cleared(&raised));

@@ -1000,6 +1000,7 @@ pub const COMMANDS: &[Spec] = &[
             "sender_not_registered",
             "codex_capability_unknown",
             "invalid_brief",
+            "mission_brief_too_long",
             "invalid_agent_name",
             "brief_not_submitted",
             "mission_brief_missing",
