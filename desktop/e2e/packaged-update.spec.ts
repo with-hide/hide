@@ -105,8 +105,24 @@ function appProcesses(app: string): AppProcess[] {
   });
 }
 
-/** Electron's relauncher on Linux, which waits for the old app to exit and then starts the new one, is not the app. */
-const isRelauncher = (listed: AppProcess): boolean => listed.args?.includes(" --type=relauncher") ?? false;
+/**
+ * The events the new version's host logged since `since`, from its own
+ * `host.start`: empty until a host of `version` starts. The new version
+ * writes to the profile its environment names. On Linux Electron's
+ * relauncher starts it with the old app's environment, the test's; on
+ * Windows the installer has Explorer start it, with the account's own
+ * environment, so its profile is the account's. An old process, or the
+ * relauncher waiting for one, cannot log a host of the new version.
+ */
+function reopenedEvents(env: Record<string, string>, since: string, version: string): string[] {
+  const account = process.platform === "win32" ? [{ HIDE_DESKTOP_USER_DATA_DIR: path.join(process.env.APPDATA!, "hide-desktop") }] : [];
+  for (const profile of [env, ...account]) {
+    const logged = hostLog(profile).filter((line) => String(line.ts) >= since);
+    const start = logged.findIndex((line) => line.event === "host.start" && line.version === version);
+    if (start >= 0) return logged.slice(start).map((line) => line.event);
+  }
+  return [];
+}
 
 /**
  * Ends every process of the installed app, which after the update is the new
@@ -211,21 +227,23 @@ test("the installed app updates to the next version and the panes and daemon kee
     expect(hostLog(run.env).map((line) => line.event)).toEqual(expect.arrayContaining(["update.check", "update.found", "update.ready"]));
 
     const closed = app.waitForEvent("close", { timeout: 120_000 });
+    const restarted = new Date().toISOString();
     await restart.click();
     await closed;
     app = null;
 
     // The installer of N+1 replaced N (B16) and nothing the core runs ended (D-19).
     await expect.poll(installedVersion, { timeout: 180_000, intervals: [1_000] }).toBe(next);
-    // Restart opens the new version once it is installed (B16). It is not
-    // the app this test launched: on Windows the installer has Explorer start
-    // it (electron-builder's NSIS `StartApp`), and Explorer does so on its own
-    // time, sometimes after the installer has exited; on Linux Electron's
-    // relauncher starts it once the old app has exited. It is ended below
-    // only once it is there, or it would start after the end and stay.
-    await expect.poll(() => appProcesses(file).filter((listed) => !isRelauncher(listed)).length, {
-      message: `hide ${next} opened after the update`, timeout: 60_000, intervals: [1_000], // wait-ok: the update starts the new version
-    }).toBeGreaterThan(0);
+    // Restart opens the new version once it is installed (B16): its host
+    // starts and makes its window. It is not the app this test launched: on
+    // Windows the installer has Explorer start it (electron-builder's NSIS
+    // `StartApp`), and Explorer does so on its own time, sometimes after the
+    // installer has exited; on Linux Electron's relauncher starts it once the
+    // old app has exited. It is ended below only once it is there, or it
+    // would start after the end and stay.
+    await expect.poll(() => reopenedEvents(run.env, restarted, next), {
+      message: `hide ${next} opened its window after the update`, timeout: 60_000, intervals: [1_000], // wait-ok: the update starts the new version
+    }).toEqual(expect.arrayContaining(["host.start", "window.bounds"]));
     expect(run.daemonPid()).toBe(daemon);
     expect(await panesNow()).toBe(panes);
     expect(hostLog(run.env).map((line) => line.event)).toContain("update.install");
