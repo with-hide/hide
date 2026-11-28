@@ -4326,7 +4326,7 @@ mod tests {
     /// The usage of each topic a command of the table is under, and of the
     /// topics inside one.
     fn topic_usages() -> Vec<(String, String)> {
-        // Every topic a command of the table is under, `workspace` and
+        // Every topic a command of the table is under, `checkout` and
         // `session` among them.
         let topics: std::collections::BTreeSet<&str> =
             COMMANDS.iter().map(|spec| spec.words[0]).collect();
