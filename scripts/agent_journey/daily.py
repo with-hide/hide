@@ -252,8 +252,10 @@ def install_clis(owner, stream, env):
     links.mkdir(exist_ok=True)
     for kind, program in programs.items():
         link = links / kind
-        link.unlink(missing_ok=True)
-        link.symlink_to(program)
+        require_removable(link, link=True)
+        replacement = link.with_name(f".{kind}-{secrets.token_hex(8)}.next")
+        replacement.symlink_to(program)
+        replace(replacement, link, links=True)
     for other in (root / "clis").iterdir():
         if other != folder:
             remove(other)
@@ -264,14 +266,30 @@ def controller_provider():
     return journey_root() / "controller/claude"
 
 
+def require_removable(path, *, link=False):
+    """One account/path gate for removals and atomic replacements.
+
+    Only a CLI link replacement may address a final symlink; its parent
+    still must be reached without crossing a link from the account home.
+    """
+    path = Path(path)
+    if not account.removable(account_home(), path.parent if link else path):
+        raise RuntimeError("a change outside the journey account's owned paths")
+
+
+def replace(source, target, *, links=False):
+    for path in (source, target):
+        require_removable(path, link=links)
+    os.replace(source, target)
+
+
 def remove(path):
     """Removes a file or a folder, only inside the journey account's own home
     (account.removable): every removal of the runner goes through here."""
     path = Path(path)
     if not path.exists() and not path.is_symlink():
         return
-    if not account.removable(account_home(), path):
-        raise RuntimeError("a removal outside the journey account's home")
+    require_removable(path)
     if path.is_dir():
         shutil.rmtree(path)
     else:
@@ -402,8 +420,10 @@ def publish(record, stream):
     """Replaces the record file whole, so a reader never sees half of one."""
     target = journey_root() / RECORD
     replacement = target.with_name(target.name + ".next")
+    require_removable(replacement)
+    require_removable(target)
     replacement.write_text(json.dumps(record, indent=1) + "\n")
-    os.replace(replacement, target)
+    replace(replacement, target)
     log(stream, f"record: run {record['run']}")
 
 
@@ -467,8 +487,14 @@ def run(settings):
         # and says so in the record.
         signal.signal(signal.SIGTERM, stop)
         request = root / "request.json"
-        asked = json.loads(request.read_text()) if request.is_file() else {}
-        request.unlink(missing_ok=True)
+        run_dir = runs_folder() / f"daily-{stamp}"
+        asked = {}
+        if request.exists() or request.is_symlink():
+            require_removable(request)
+            asked = json.loads(request.read_text())
+            require_removable(run_dir)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            replace(request, run_dir / "request.json")
         target = asked.get("commit")
         record = {"format": 1, "started": started.isoformat(timespec="seconds"), "if_stale": STALE,
                   "source": f"request {target}" if target else "main", "request": asked.get("id"),
@@ -492,7 +518,6 @@ def run(settings):
                 answering = [key for key, state in before.items() if state == "answers"]
                 measured = {}
                 if answering:
-                    run_dir = runs_folder() / f"daily-{stamp}"
                     # The journey's output is its screens' words: its report folder
                     # keeps what it found, the log only its exit.
                     record["exit"], _ = step(owner, "journey", [

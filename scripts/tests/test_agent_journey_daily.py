@@ -167,7 +167,8 @@ class Summary(unittest.TestCase):
         record = {"format": 1, "started": "2026-11-29T05:00:07+09:00", "if_stale": daily.STALE, "source": "main",
                   "request": None, "run": "ok", "exit": 1, "commit": "a" * 40, "minutes": 84,
                   "agents": daily.summarize(REPORT)}
-        with tempfile.TemporaryDirectory() as root, mock.patch.object(daily, "journey_root", return_value=Path(root)):
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(daily, "journey_root", return_value=Path(root)), \
+                mock.patch.object(account, "removable", side_effect=lambda home, path: Path(root) in Path(path).parents):
             daily.publish(record, io.StringIO())
             text = (Path(root) / daily.RECORD).read_text()
             self.assertEqual(sorted(path.name for path in Path(root).iterdir()), [daily.RECORD])
@@ -209,6 +210,54 @@ class Runner(unittest.TestCase):
             code = daily.run(self.SETTINGS)
         return code, json.loads((self.root / daily.RECORD).read_text())
 
+    def test_cli_links_replace_atomically_and_refuse_a_linked_parent(self):
+        root = self.home / "journey"
+        root.mkdir()
+        table = (daily.CHECKOUT / "contracts/agent-clis.json").read_bytes()
+        folder = root / "clis" / __import__("hashlib").sha256(table).hexdigest()[:16]
+        folder.mkdir(parents=True)
+        installed = folder / "installed.json"
+        installed.write_text(json.dumps({"claude": str(folder / "first")}))
+        with mock.patch.object(daily, "journey_root", return_value=root), \
+                mock.patch.object(account, "removable", REMOVABLE), \
+                mock.patch.object(Path, "unlink", side_effect=AssertionError("link update must not unlink")):
+            daily.install_clis(None, io.StringIO(), {})
+            installed.write_text(json.dumps({"claude": str(folder / "second")}))
+            daily.install_clis(None, io.StringIO(), {})
+            self.assertEqual(os.readlink(root / "bin/claude"), str(folder / "second"))
+            (root / "bin").rename(root / "old-bin")
+            vault = self.home / "vault"
+            vault.mkdir()
+            protected = vault / "claude"
+            protected.write_bytes(b"keep this file")
+            (root / "bin").symlink_to(vault, target_is_directory=True)
+            with self.assertRaises(RuntimeError):
+                daily.install_clis(None, io.StringIO(), {})
+            self.assertEqual(protected.read_bytes(), b"keep this file")
+            self.assertEqual(list(vault.iterdir()), [protected])
+
+    def test_request_is_archived_and_a_linked_request_is_refused(self):
+        root, runs = self.home / "journey", self.home / "runs"
+        root.mkdir()
+        request = root / "request.json"
+        asked = {"commit": "b" * 40, "id": "0123abcd"}
+        request.write_text(json.dumps(asked))
+        with mock.patch.object(daily, "journey_root", return_value=root), \
+                mock.patch.object(daily, "runs_folder", return_value=runs), \
+                mock.patch.object(account, "removable", REMOVABLE), \
+                mock.patch.object(daily, "checkout", side_effect=daily.Stage("checkout failed")), \
+                mock.patch.object(Path, "unlink", side_effect=AssertionError("request must not unlink")):
+            self.assertEqual(daily.run(self.SETTINGS), 1)
+            archived = list(runs.glob("daily-*/request.json"))
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(json.loads(archived[0].read_text()), asked)
+            self.assertFalse(request.exists())
+            request.symlink_to(archived[0])
+            with self.assertRaises(RuntimeError):
+                daily.run(self.SETTINGS)
+            self.assertTrue(request.is_symlink())
+            self.assertEqual(json.loads(archived[0].read_text()), asked)
+
     def test_a_run_that_did_not_finish_never_reads_as_ok(self):
         for failure, run in ((daily.Stage("install timed out"), "install timed out"),
                              (subprocess.TimeoutExpired("installer", 1), "runner failed: TimeoutExpired"),
@@ -232,7 +281,7 @@ class Runner(unittest.TestCase):
         def journey(owner, name, argv, stream, env, seconds, cwd=daily.CHECKOUT):
             journeys.append(argv)
             run_dir = Path(argv[argv.index("--run-dir") + 1])
-            run_dir.mkdir(parents=True)
+            run_dir.mkdir(parents=True, exist_ok=True)
             agents = argv[argv.index("--agents") + 1].split(",")
             (run_dir / "report.json").write_text(json.dumps({
                 "agents": [{"id": key, "version": "1.0.0"} for key in agents],
@@ -335,7 +384,7 @@ class Runner(unittest.TestCase):
         def journey(owner, name, argv, stream, env, seconds, **kwargs):
             self.write(".codex/sessions/2026/11/28/rollout-new.jsonl", 101, 0)
             run_dir = Path(argv[argv.index("--run-dir") + 1])
-            run_dir.mkdir(parents=True)
+            run_dir.mkdir(parents=True, exist_ok=True)
             agents = argv[argv.index("--agents") + 1].split(",")
             (run_dir / "report.json").write_text(json.dumps({
                 "agents": [{"id": key, "version": "1.0.0"} for key in agents],
