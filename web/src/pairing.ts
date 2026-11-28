@@ -68,6 +68,8 @@ export type PairingResult = {
   device_id?: string;
   condition?: SwitchCondition;
   user?: string | null;
+  /** A refused `add_server` whose device was added (over SSH) before the step that failed: its row says why. */
+  added?: boolean;
   /** With `switch` and `add_server`: how the press ended; `held` names the computer that switched the device first and how many terminals this one runs there. */
   switch?: "done" | "left" | "held" | "install_needed";
   by?: string;

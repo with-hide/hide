@@ -94,7 +94,10 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onClose, onSho
   // connects it as a server: a pairing with the Hide it runs, or a Hide
   // started there (`add_server`).
   const [look, setLook] = useState<{ alias: string; request: string; answer: HostAnswer } | null>(null);
-  const [pairing, setPairing] = useState<{ request: string; alias: string; verb: "pair" | "add_server"; refused: string | null } | null>(null);
+  // `ended` is an `add_server` answer for a device it added and did not
+  // switch, held until the snapshot lists that device, which hided may
+  // send after the answer.
+  const [pairing, setPairing] = useState<{ request: string; alias: string; verb: "pair" | "add_server"; refused: string | null; ended: PairingResult | null } | null>(null);
   useEffect(() => {
     if (!answered?.request_id) return;
     if ((answered.verb === "look_ssh" || answered.verb === "look_wsl") && answered.request_id === look?.request && !look.answer.answered) {
@@ -103,26 +106,31 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onClose, onSho
         : { answered: true, looked: null, system: null, leaves: null, condition: null };
       setLook({ ...look, answer });
     }
-    if (answered.request_id !== pairing?.request || pairing.refused !== null) return;
+    if (answered.request_id !== pairing?.request || pairing.refused !== null || pairing.ended !== null) return;
     const refused = () => setPairing({ ...pairing, refused: answered.reason ?? "" });
     if (answered.verb === "pair_ssh" || answered.verb === "pair_wsl") {
       if (answered.ok) onClose();
       else refused();
     } else if (answered.verb === "add_server") {
-      // The device was added over SSH and not switched: its row, where the
-      // switch can be pressed again, says why; a machine never added says
-      // it here.
-      const device = devices.find((row) => row.id === answered.device_id) ?? devices.find((row) => row.ssh_alias === pairing.alias);
+      // A machine never added says why here; one added over SSH and not
+      // switched opens its row, where the switch can be pressed again.
       if (answered.ok && answered.switch === "done") onClose();
-      else if (!device || !onShowDevice) refused();
-      else {
-        const outcome = serverAddOutcome(answered);
-        if (outcome) useUiStore.getState().setSwitchOutcome(device.id, outcome);
-        setPairing(null);
-        onShowDevice(device.id);
-      }
+      else if ((!answered.ok && answered.added !== true) || !onShowDevice) refused();
+      else setPairing({ ...pairing, ended: answered });
     }
-  }, [answered, look, pairing, devices, onClose, onShowDevice]);
+  }, [answered, look, pairing, onClose, onShowDevice]);
+  // The added device's row opens once the snapshot lists it, before or
+  // after the answer, with how the press ended.
+  useEffect(() => {
+    const ended = pairing?.ended;
+    if (!ended || !onShowDevice) return;
+    const device = devices.find((row) => row.id === ended.device_id) ?? devices.find((row) => row.ssh_alias === pairing.alias);
+    if (!device) return;
+    const outcome = serverAddOutcome(ended);
+    if (outcome) useUiStore.getState().setSwitchOutcome(device.id, outcome);
+    setPairing(null);
+    onShowDevice(device.id);
+  }, [pairing, devices, onShowDevice]);
   const [alias, setAlias] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [nameEdited, setNameEdited] = useState(false);
@@ -194,14 +202,14 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onClose, onSho
     if (blocked || chosen === null) return;
     const request = `pair-${Date.now()}`;
     if (connects) {
-      setPairing({ request, alias: chosen, verb: "pair", refused: null });
+      setPairing({ request, alias: chosen, verb: "pair", refused: null, ended: null });
       if (distro !== null) actions.pairing("pair_wsl", { distro, request_id: request });
       else actions.pairing("pair_ssh", { alias: chosen, request_id: request });
       return;
     }
     // The press is the consent to Hide's helper and to a Hide started there, as the button says.
     if (way?.kind === "install") {
-      setPairing({ request, alias: chosen, verb: "add_server", refused: null });
+      setPairing({ request, alias: chosen, verb: "add_server", refused: null, ended: null });
       actions.pairing("add_server", { alias: chosen, name: name.trim(), request_id: request });
       return;
     }

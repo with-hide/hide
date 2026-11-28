@@ -168,13 +168,29 @@ it("opens the added device's row with why when its Hide did not start, and says 
   expect(q('[data-ssh-pair-refused="device_not_added"]')).not.toBeNull();
   expect(q('[data-add-device="server"]')?.hasAttribute("disabled")).toBe(false);
   expect(shown).not.toHaveBeenCalled();
-  // Pressed again, the device was added and its Hide did not start: the row says why, with its retry.
+  // Pressed again, the device was added and its Hide did not start: the row says why, with its retry,
+  // though hided's answer came before the snapshot that lists the device.
   await act(async () => { q('[data-add-device="server"]')?.click(); });
+  await answer("add_server", { ok: false, reason: "ssh_core_not_started", added: true });
+  expect(q("[data-ssh-pair-refused]")).toBeNull();
+  expect(shown).not.toHaveBeenCalled();
   await rerender([{ id: "gpu-machine", ssh_alias: "gpu-box", label: "gpu-box", kind: "remote" } as Device]);
-  await answer("add_server", { ok: false, reason: "ssh_core_not_started" });
   expect(shown).toHaveBeenCalledWith("gpu-machine");
   expect(useUiStore.getState().switchOutcomes["gpu-machine"]).toEqual({ kind: "failed", reason: "ssh_core_not_started" });
   useUiStore.getState().setSwitchOutcome("gpu-machine", null);
+  await unmount();
+});
+it("opens the added device's row whether the snapshot listing it comes before or after hided's answer", async () => {
+  const { q, answer, rerender, shown, unmount } = await mount(hosts([host("gpu-box")]));
+  await act(async () => { q('[data-ssh-host="gpu-box"] [role="radio"]')?.click(); });
+  await answer("look_ssh", { ok: true, alias: "gpu-box", looked: { state: "absent" }, system: "linux", leaves: null });
+  await act(async () => { q('[data-add-device="server"]')?.click(); });
+  // Listed first, by its alias, then the answer: it never connected, which its row says by itself.
+  await rerender([{ id: "gpu-box", ssh_alias: "gpu-box", label: "gpu-box", kind: "remote" } as Device]);
+  expect(shown).not.toHaveBeenCalled();
+  await answer("add_server", { ok: false, reason: "added_not_connected", added: true });
+  expect(shown).toHaveBeenCalledWith("gpu-box");
+  expect(useUiStore.getState().switchOutcomes["gpu-box"]).toBeUndefined();
   await unmount();
 });
 it("waits for the Host's own answer before it adds, so a machine that runs Hide is never added as a helper device meanwhile (B7)", async () => {

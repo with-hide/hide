@@ -1232,9 +1232,14 @@ impl Pairing {
             }
         }
         // Adding an alias a paired machine is reached by answers its outcome
-        // beside a refusal.
+        // beside a refusal, and a server added and not switched says it was
+        // added.
         let answered = match ask {
-            Ask::PairSsh { alias } => self.pair_ssh(&alias).await,
+            Ask::PairSsh { alias } => self
+                .pair_ssh(&alias)
+                .await
+                .map_err(|(code, ssh)| (code, ssh.map(|ssh| ("ssh", json!(ssh))))),
+            Ask::AddServer { alias, name } => self.add_server(alias, name, caller).await,
             ask => self.run(ask, caller).await.map_err(|code| (code, None)),
         };
         match answered {
@@ -1242,10 +1247,10 @@ impl Pairing {
                 answer["ok"] = json!(true);
                 answer
             }
-            Err((code, ssh)) => {
+            Err((code, beside)) => {
                 let mut answer = refused(code);
-                if let Some(ssh) = ssh {
-                    answer["ssh"] = json!(ssh);
+                if let Some((key, value)) = beside {
+                    answer[key] = value;
                 }
                 answer
             }
@@ -1353,7 +1358,6 @@ impl Pairing {
             | Ask::Join { .. }
             | Ask::PairWsl { .. }
             | Ask::Switch { .. }
-            | Ask::AddServer { .. }
             | Ask::AcceptSsh { .. } => self.service().await?,
             Ask::EndShare | Ask::DismissJoin => match self.service.get() {
                 Some(service) => service.clone(),
@@ -1425,12 +1429,9 @@ impl Pairing {
                 Ok(answer)
             }
             Ask::PairSsh { .. } => unreachable!("answered by `pair_ssh`"),
+            Ask::AddServer { .. } => unreachable!("answered by `add_server`"),
             Ask::Switch { device, install } => {
                 self.switch_device(&service, &peers, device, install).await
-            }
-            Ask::AddServer { alias, name } => {
-                self.add_helper(&alias, name).await?;
-                self.switch_device(&service, &peers, alias, true).await
             }
             Ask::Share { language, held } => {
                 self.relay_named(&peers).await;
@@ -1737,11 +1738,38 @@ impl Pairing {
         answer
     }
 
-    /// The first half of [`Ask::AddServer`]: adds the machine `alias` names
+    /// [`Ask::AddServer`]: adds the machine `alias` names as a helper device,
+    /// waits for its first connection and switches it with `install`, as the
+    /// row's own [`Ask::Switch`] does. A refusal after the device was added
+    /// says so (`added`): the device stays added over SSH and its row says
+    /// why, and the window waits for that row, which the snapshot may bring
+    /// after this answer.
+    async fn add_server(
+        self: &Arc<Self>,
+        alias: String,
+        name: Option<String>,
+        caller: Caller,
+    ) -> Result<Value, (&'static str, Option<(&'static str, Value)>)> {
+        self.add_helper(&alias, name)
+            .await
+            .map_err(|code| (code, None))?;
+        // A refusal from here on says the device was added, unless it is
+        // gone, which leaves no row to open.
+        let added = |code: &'static str| match code {
+            "device_unknown" => (code, None),
+            code => (code, Some(("added", json!(true)))),
+        };
+        self.connected(&alias).await.map_err(added)?;
+        let switch = Ask::Switch {
+            device: alias,
+            install: true,
+        };
+        self.run(switch, caller).await.map_err(added)
+    }
+
+    /// The first step of [`Ask::AddServer`]: adds the machine `alias` names
     /// as a helper device with the operator's consent, through the core's
-    /// own add, and waits for its first connection, which puts the `hide`
-    /// a switch starts that machine's Hide from. A device that waits on
-    /// the operator or failed stops it, added over SSH: its row says why.
+    /// own add. A refusal here added nothing.
     async fn add_helper(&self, alias: &str, name: Option<String>) -> Result<(), &'static str> {
         use hide_core::device_command::DeviceCommand;
         if !pairing_ssh::valid_alias(alias) {
@@ -1768,33 +1796,42 @@ impl Pairing {
             }));
             return Err("device_not_added");
         }
+        Ok(())
+    }
+
+    /// The second step of [`Ask::AddServer`]: waits for the added device's
+    /// first connection, which puts the `hide` a switch starts that
+    /// machine's Hide from. A device that waits on the operator or failed
+    /// stops it, added over SSH: its row says why.
+    async fn connected(&self, alias: &str) -> Result<(), &'static str> {
+        use hide_core::device_command::DeviceCommand;
         // The device's id becomes its machine's own on its first
         // connection, so it is read back by its alias.
         let over = Instant::now() + ADDED_CONNECTS_WITHIN;
-        loop {
+        connects(&self.shutdown, over, || {
             let core = Arc::clone(&self.core);
-            let listed = tokio::task::spawn_blocking(move || {
-                let own = core.node().as_str().to_owned();
-                core.device_command(&own, DeviceCommand::List)
-            })
-            .await
-            .map_err(|_| "hide_unavailable")?
-            .map_err(|_| "hide_unavailable")?;
-            let state = listed["devices"]
-                .as_array()
-                .and_then(|devices| devices.iter().find(|device| device["ssh_alias"] == alias))
-                // Removed while it was connecting.
-                .ok_or("device_unknown")?["state"]
-                .as_str()
-                .unwrap_or_default()
-                .to_owned();
-            match state.as_str() {
-                "connected" => return Ok(()),
-                "connecting" if Instant::now() < over && !self.shutdown.has_ended() => {}
-                _ => return Err("added_not_connected"),
+            let alias = alias.to_owned();
+            async move {
+                let listed = tokio::task::spawn_blocking(move || {
+                    let own = core.node().as_str().to_owned();
+                    core.device_command(&own, DeviceCommand::List)
+                })
+                .await
+                .map_err(|_| "hide_unavailable")?
+                .map_err(|_| "hide_unavailable")?;
+                listed["devices"]
+                    .as_array()
+                    .and_then(|devices| {
+                        devices
+                            .iter()
+                            .find(|device| device["ssh_alias"] == alias.as_str())
+                    })
+                    // Removed while it was connecting.
+                    .ok_or("device_unknown")
+                    .map(|device| device["state"].as_str().unwrap_or_default().to_owned())
             }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
+        })
+        .await
     }
 
     /// One switch the operator asked for (operator decision 2026-11-24:
@@ -2539,6 +2576,42 @@ impl Pairing {
     }
 }
 
+/// Waits for the device [`Ask::AddServer`] added to connect, by its state
+/// as `read` answers it, every half second until `over`. The daemon's stop
+/// and the deadline outrank every answer: a read or a pause still running
+/// when either comes is not waited for, and a read that answers
+/// `connected` with either already come is not taken, so nothing is
+/// started on the machine after them. A device that is neither connected
+/// nor connecting stops the wait.
+async fn connects<R>(
+    shutdown: &Ending,
+    over: Instant,
+    mut read: impl FnMut() -> R,
+) -> Result<(), &'static str>
+where
+    R: std::future::Future<Output = Result<String, &'static str>>,
+{
+    loop {
+        let state = tokio::select! {
+            biased;
+            () = shutdown.ended() => return Err("added_not_connected"),
+            () = tokio::time::sleep_until(over) => return Err("added_not_connected"),
+            state = read() => state?,
+        };
+        match state.as_str() {
+            "connected" => return Ok(()),
+            "connecting" => {}
+            _ => return Err("added_not_connected"),
+        }
+        tokio::select! {
+            biased;
+            () = shutdown.ended() => return Err("added_not_connected"),
+            () = tokio::time::sleep_until(over) => return Err("added_not_connected"),
+            () = tokio::time::sleep(Duration::from_millis(500)) => {}
+        }
+    }
+}
+
 /// Ends a share whose terminal stopped asking for its status. `held` is when
 /// the terminal last asked, `waiting` whether the share still has a link or
 /// a question, and `end` ends it. A terminal that keeps asking, as it does
@@ -2931,6 +3004,68 @@ mod tests {
         assert!(ended.load(std::sync::atomic::Ordering::SeqCst));
         assert!(last.elapsed() <= HELD_FOR + HELD_FOR / 4);
         assert_eq!(*lock(&held), None);
+    }
+
+    /// The wait for a device `add_server` added to connect, before its
+    /// switch installs anything: the deadline and the daemon's stop outrank
+    /// an answer that comes with or after them, and neither waits on a read
+    /// that does not answer.
+    #[tokio::test(start_paused = true)]
+    async fn an_added_device_that_connects_after_the_deadline_or_a_stop_starts_nothing() {
+        let within = Duration::from_secs(2);
+        // It connects as the deadline passes.
+        let over = Instant::now() + within;
+        let late = connects(&Ending::new(), over, || async move {
+            let state = if Instant::now() >= over {
+                "connected"
+            } else {
+                "connecting"
+            };
+            Ok(state.to_owned())
+        });
+        assert_eq!(late.await, Err("added_not_connected"));
+        // The stop comes between two reads, and the next one would say it
+        // connected.
+        let shutdown = Ending::new();
+        let waiting = tokio::spawn({
+            let shutdown = shutdown.clone();
+            async move {
+                let told = shutdown.clone();
+                connects(&shutdown, Instant::now() + within, move || {
+                    let state = if told.has_ended() {
+                        "connected"
+                    } else {
+                        "connecting"
+                    };
+                    async move { Ok(state.to_owned()) }
+                })
+                .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        shutdown.end();
+        assert_eq!(waiting.await.unwrap(), Err("added_not_connected"));
+        // A read that never answers ends at the deadline, and at a stop.
+        let never = std::future::pending::<Result<String, &'static str>>;
+        let hung = connects(&Ending::new(), Instant::now() + within, never);
+        assert_eq!(hung.await, Err("added_not_connected"));
+        let shutdown = Ending::new();
+        shutdown.end();
+        let hung = connects(&shutdown, Instant::now() + within, never);
+        assert_eq!(hung.await, Err("added_not_connected"));
+        // Connecting, then connected in time: the switch goes on.
+        let mut reads = 0;
+        let connected = connects(&Ending::new(), Instant::now() + within, || {
+            reads += 1;
+            let state = if reads == 1 {
+                "connecting"
+            } else {
+                "connected"
+            };
+            async move { Ok(state.to_owned()) }
+        });
+        assert_eq!(connected.await, Ok(()));
+        assert_eq!(reads, 2);
     }
 
     #[test]

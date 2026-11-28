@@ -1676,7 +1676,7 @@
       }
     },
     "pairingResult": {
-      "description": "Payload of a pairing_result frame (`hided/src/pairing.rs`): the verb of the `pairing_*` event it answers, whether it was done and, when not, the reason the window words; a share carries its link, an SSH look what the other machine said with its system and, for one with no Hide, why none can be started there or, for one that runs Hide, where it stands on the switch rule, and a switch or an `add_server` how the press ended.",
+      "description": "Payload of a pairing_result frame (`hided/src/pairing.rs`): the verb of the `pairing_*` event it answers, whether it was done and, when not, the reason the window words; a share carries its link, an SSH look what the other machine said with its system and, for one with no Hide, why none can be started there or, for one that runs Hide, where it stands on the switch rule, and a switch or an `add_server` how the press ended; an `add_server` refused after its device was added says `added`.",
       "type": "object",
       "required": ["verb", "ok"],
       "properties": {
