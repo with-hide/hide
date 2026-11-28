@@ -1610,3 +1610,4 @@ async fn a_split_that_stops_before_its_commit_leaves_the_node_its_core_takes() {
     assert!(kept.join("core-placement.json").is_file());
     assert_eq!(core.peers().len(), 1);
 }
+// Probe for with-hide/hide#3169: selects `pairing` through its parent file; reverted before merge.
