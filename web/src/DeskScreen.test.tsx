@@ -17,6 +17,7 @@ import { useUiStore } from "./ui";
 import { DESK_ROOM_CLOSED } from "./deskRoom";
 import { emptyScope } from "../test/legacyAgentScope";
 import type { DispatchFn } from "./ws";
+import { layOutConversation } from "./components/desk/thread-test-layout";
 
 const NO_GLANCE = { sessions: [], files: [], files_more: 0 };
 
@@ -68,6 +69,8 @@ describe("Desk's room", () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     // The `@` menu's list measures itself, which jsdom cannot.
     vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    // The session beside Desk draws only the rows its viewport reaches, which a test window does not lay out.
+    layOutConversation();
     events = [];
     container = document.createElement("div");
     document.body.append(container);
@@ -80,6 +83,7 @@ describe("Desk's room", () => {
     useShellStore.setState(saved, true);
     useUiStore.setState(savedUi, true);
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     clearPreviews();
   });
 
@@ -1262,6 +1266,57 @@ describe("Desk's room", () => {
     const asks = sent("pane_ask").length;
     await act(async () => useShellStore.setState({ paneChoice: { request_id: String(second.request_id), ok: false, reason: "stale" } }));
     expect(sent("pane_ask")).toHaveLength(asks + 1);
+  });
+
+  // Review round 1 F1: a session whose sleep closes its pane (Pi, OpenCode, omp) also gets the record the core
+  // keeps of a gone pane; asleep, it stays a sleeping session to wake beside Desk, not an ended one to resume.
+  it.each(["pi", "opencode", "omp"])("keeps a %s session whose sleep closed its pane asleep beside Desk when its record arrives", async (kind) => {
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([]));
+    const liveRest = structuredClone(rest);
+    liveRest.navigator!.workspaces![0]!.checkouts[0]!.tabs = [{ id: "t1", panes: [{ id: "w1:p2" }] }] as never;
+    const row = { pane_id: "w1:p2", device_id: "local", identity_label: "fixer", agent_kind: kind, session_id: "session-2", mark: "going", state: { working: false, asking: false } } as never;
+    await act(async () => {
+      useShellStore.setState({ rest: liveRest, agents: [row] });
+      useUiStore.getState().setDeskRoom((now) => ({ ...now, session: "w1:p2" }));
+    });
+    const asleepRest = structuredClone(rest);
+    asleepRest.navigator!.sleeping_sessions = [{ sleep_id: "sleep-2", node_id: "local", session_id: "session-2", checkout_path: "/work/repo-fix", kind, identity_label: "fixer", group: "seen", phase: "sleeping", since_unix_ms: 1, wake_available: true, reason: null, checking: false }];
+    await act(async () => useShellStore.setState({ agents: [], rest: asleepRest }));
+    expect(document.body.querySelector("[data-thread-sleep-card]")).not.toBeNull();
+    const record: DeskRecord = { pane_id: "w1:p2", session: { device_id: "local", agent: kind, session_id: "session-2" }, agent_kind: kind, title: "fixer", started_at_unix_ms: 1, ended_at_unix_ms: 2, line: "last progress", pull_requests: [], cwd: "/work/repo-fix", path: "/sessions/session-2.jsonl", project: "/work/repo-fix", thread: true };
+    await act(async () => useShellStore.setState({ deskJobs: { ...useShellStore.getState().deskJobs!, records: [record] } }));
+    expect({
+      card: document.body.querySelector("[data-thread-sleep-card] [data-pane-sleep]")?.getAttribute("data-pane-sleep"),
+      head: document.body.querySelector("[data-desk-session-head]")?.getAttribute("data-desk-session-head"),
+      recordFoot: document.body.querySelector("[data-desk-session-record-foot]") !== null,
+    }).toEqual({ card: "sleeping", head: "sleeping", recordFoot: false });
+    await press("[data-agent-wake]");
+    expect(sent("wake_sleeping_session")).toEqual([{ sleep_id: "sleep-2" }]);
+    // Woken, its sleeping session goes: the record of the gone pane is what stands, as for any ended session.
+    await act(async () => useShellStore.setState({ rest: structuredClone(rest) }));
+    expect(document.body.querySelector("[data-desk-session-record-foot]")).not.toBeNull();
+  });
+
+  // Review round 2 F4: a work name is no identity. An ended session's record beside Desk stays ended though another
+  // session of the same name sleeps in the same checkout, whether that one is another agent's or the same agent's.
+  it.each(["codex", "pi"])("keeps an ended %s record ended beside a different sleeping Pi session of the same name", async (kind) => {
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([]));
+    const ended: DeskRecord = { pane_id: "old-pane", session: { device_id: "local", agent: kind, session_id: "ended-session-A" }, agent_kind: kind, title: "fixer", started_at_unix_ms: 1, ended_at_unix_ms: 2, line: null, pull_requests: [], cwd: "/work/repo-fix", path: "/sessions/ended-A.jsonl", project: "/work/repo-fix", thread: true };
+    const asleepRest = structuredClone(rest);
+    asleepRest.navigator!.sleeping_sessions = [{ sleep_id: "unrelated-sleep-B", node_id: "local", session_id: "sleeping-session-B", checkout_path: "/work/repo-fix", kind: "pi", identity_label: "fixer", group: "seen", phase: "sleeping", since_unix_ms: 3, wake_available: true, reason: null, checking: false }];
+    await act(async () => {
+      useShellStore.setState({ agents: [], rest: asleepRest, deskJobs: { jobs: [], workers: [], named: [], records: [ended], moved: [], glance: NO_GLANCE } });
+      useUiStore.getState().setDeskRoom((now) => ({ ...now, session: "old-pane" }));
+    });
+    expect({
+      card: document.body.querySelector("[data-thread-sleep-card]") !== null,
+      head: document.body.querySelector("[data-desk-session-head]")?.getAttribute("data-desk-session-head"),
+      wake: document.body.querySelector("[data-agent-wake]") !== null,
+      recordFoot: document.body.querySelector("[data-desk-session-record-foot]") !== null,
+    }).toEqual({ card: false, head: "ended", wake: false, recordFoot: true });
+    expect(sent("wake_sleeping_session")).toEqual([]);
   });
 });
 

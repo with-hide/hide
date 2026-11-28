@@ -12,6 +12,14 @@
 //! row limit of the 1.x reader. A row over [`SCAN_LIMIT_BYTES`] is not
 //! scanned, and one read scans at most that many bytes of rows.
 //!
+//! OpenCode 2.4 writes each item of an assistant message as a row of its own
+//! in `session_part`, in `ordinal` order, and leaves the message's `content`
+//! empty; a message 2.4 never split keeps its items inline. Every read takes
+//! an assistant's items the way OpenCode itself reads them back
+//! (`SessionHistory.withParts`): its `session_part` rows, then its own
+//! `content`, which an older build may still write after the split
+//! ([`items`]), and counts its parts' bytes as the message's ([`bytes`]).
+//!
 //! A message is written in order of its `seq`, which a message's index
 //! counts. An assistant message OpenCode is still writing has no
 //! `time.completed`, as in 1.x; the read stops before it and takes it whole on
@@ -36,6 +44,37 @@ const SCAN_LIMIT_BYTES: u64 = 8 * 1024 * 1024;
 /// The `content` item kinds that carry words or tool output; reasoning is
 /// neither read nor counted.
 const CONTENT_KINDS: &str = "json_extract(value, '$.type') IN ('text', 'tool')";
+
+/// The content items of the message whose rowid is `?1`, as `(key, value)`
+/// rows in OpenCode's order (`SessionHistory.withParts`): its `session_part`
+/// rows by ordinal when the database has them, then the items of its own
+/// `content`, which an older build may still write after the split, keyed
+/// past the last part so the keys keep that order. A message with no part
+/// rows reads its `content` alone, under its own keys. A part row's `data` is
+/// the item whole, its `type` included, as an inline one is.
+pub(crate) fn items(parts: bool) -> String {
+    let inline = "json_each((SELECT data FROM session_message WHERE rowid = ?1), '$.content')";
+    if !parts {
+        return inline.to_owned();
+    }
+    let own = "session_part.message_id = (SELECT id FROM session_message WHERE rowid = ?1)";
+    format!(
+        "(SELECT ordinal AS key, data AS value FROM session_part WHERE {own} \
+         UNION ALL SELECT key + (SELECT coalesce(max(ordinal) + 1, 0) FROM session_part WHERE {own}), \
+         value FROM {inline})"
+    )
+}
+
+/// The bytes of the `session_message` row named `message` in the query, its
+/// `session_part` rows counted with it: what a read of it scans.
+pub(crate) fn bytes(parts: bool) -> &'static str {
+    if parts {
+        "(octet_length(message.data) + (SELECT coalesce(sum(octet_length(part.data)), 0) \
+         FROM session_part AS part WHERE part.message_id = message.id))"
+    } else {
+        "octet_length(message.data)"
+    }
+}
 
 /// The first request of a person's, as the catalog shows it: the text of the
 /// first `user` message that has any, read within the row limit.
@@ -63,6 +102,7 @@ pub(super) fn first_request(
 /// 1.x session.
 pub(super) fn walk(
     connection: &Connection,
+    parts: bool,
     session_id: &str,
     start: u64,
     created: u64,
@@ -80,16 +120,17 @@ pub(super) fn walk(
         mut visited,
         mut part_work,
     } = walk;
+    let bytes = bytes(parts);
     let mut statement = connection
-        .prepare(
+        .prepare(&format!(
             "SELECT rowid, CASE WHEN typeof(type) = 'text' THEN type END, \
-             typeof(data) = 'text', octet_length(data), octet_length(id), \
+             typeof(data) = 'text', {bytes}, octet_length(id), \
              CASE WHEN octet_length(id) <= ?4 THEN id END, \
              EXISTS(SELECT 1 FROM session_message AS later \
              WHERE later.session_id = message.session_id AND later.seq > message.seq) \
              FROM session_message AS message WHERE session_id = ?1 \
-             ORDER BY seq LIMIT ?2 OFFSET ?3",
-        )
+             ORDER BY seq LIMIT ?2 OFFSET ?3"
+        ))
         .map_err(|error| refusal(&error))?;
     let mut rows = statement
         .query(params![
@@ -116,15 +157,15 @@ pub(super) fn walk(
     let mut text = connection
         .prepare("SELECT json_extract(data, '$.text') FROM session_message WHERE rowid = ?1")
         .map_err(|error| refusal(&error))?;
+    let items = items(parts);
     let mut headers = connection
         .prepare(&format!(
-            "SELECT key, octet_length(value) FROM json_each(\
-             (SELECT data FROM session_message WHERE rowid = ?1), '$.content') \
-             WHERE {CONTENT_KINDS} LIMIT ?2"
+            "SELECT key, octet_length(value) FROM {items} \
+             WHERE {CONTENT_KINDS} ORDER BY key LIMIT ?2"
         ))
         .map_err(|error| refusal(&error))?;
     let mut item = connection
-        .prepare("SELECT json_extract(data, ?2) FROM session_message WHERE rowid = ?1")
+        .prepare(&format!("SELECT value FROM {items} WHERE key = ?2"))
         .map_err(|error| refusal(&error))?;
     let mut scanned = 0_u64;
     while let Some(row) = rows.next().map_err(|error| refusal(&error))? {
@@ -257,9 +298,7 @@ pub(super) fn walk(
                 }
                 spent += bytes;
                 let data = item
-                    .query_row(params![rowid, format!("$.content[{key}]")], |row| {
-                        row.get::<_, String>(0)
-                    })
+                    .query_row(params![rowid, key], |row| row.get::<_, String>(0))
                     .map_err(|error| refusal(&error))?;
                 parts.push(data);
             }
@@ -323,13 +362,17 @@ pub(super) fn walk(
 /// without being parsed, and a message too large to scan shows none.
 pub(super) fn unfinished_questions(
     connection: &Connection,
+    parts: bool,
     message_id: &str,
     budget: u64,
     transcript: &mut super::Read,
 ) -> Result<Option<Vec<ToolTurnMark>>, String> {
     let (rowid, scannable): (i64, bool) = connection
         .query_row(
-            "SELECT rowid, octet_length(data) <= ?2 FROM session_message WHERE id = ?1",
+            &format!(
+                "SELECT rowid, {} <= ?2 FROM session_message AS message WHERE id = ?1",
+                bytes(parts)
+            ),
             params![message_id, SCAN_LIMIT_BYTES as i64],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -339,11 +382,11 @@ pub(super) fn unfinished_questions(
     if !scannable {
         return Ok(Some(Vec::new()));
     }
-    let content = "(SELECT data FROM session_message WHERE rowid = ?1)";
+    let items = items(parts);
     let oversized: i64 = connection
         .query_row(
             &format!(
-                "SELECT count(*) FROM json_each({content}, '$.content') \
+                "SELECT count(*) FROM {items} \
                  WHERE octet_length(value) > ?2 AND {CONTENT_KINDS}"
             ),
             params![rowid, ROW_LIMIT_BYTES],
@@ -356,10 +399,10 @@ pub(super) fn unfinished_questions(
     // CASE, unlike AND, fixes the order: no item over the limit is parsed.
     let mut headers = connection
         .prepare(&format!(
-            "SELECT key, octet_length(value) FROM json_each({content}, '$.content') \
+            "SELECT key, octet_length(value) FROM {items} \
              WHERE CASE WHEN octet_length(value) <= ?3 \
              THEN json_extract(value, '$.type') = 'tool' \
-             AND json_extract(value, '$.name') = 'question' ELSE 0 END LIMIT ?2"
+             AND json_extract(value, '$.name') = 'question' ELSE 0 END ORDER BY key LIMIT ?2"
         ))
         .map_err(|error| refusal(&error))?;
     let headers = headers
@@ -385,21 +428,19 @@ pub(super) fn unfinished_questions(
         return Ok(None);
     }
     let mut data = connection
-        .prepare("SELECT json_extract(data, ?2) FROM session_message WHERE rowid = ?1")
+        .prepare(&format!("SELECT value FROM {items} WHERE key = ?2"))
         .map_err(|error| refusal(&error))?;
-    let mut parts = Vec::with_capacity(headers.len());
+    let mut questions = Vec::with_capacity(headers.len());
     for (key, _) in headers {
         let part: String = data
-            .query_row(params![rowid, format!("$.content[{key}]")], |row| {
-                row.get(0)
-            })
+            .query_row(params![rowid, key], |row| row.get(0))
             .map_err(|error| refusal(&error))?;
-        parts.push(
+        questions.push(
             serde_json::from_str::<Value>(&part)
                 .map_err(|_| SkipReason::UserTurnInvalid.as_str().to_owned())?,
         );
     }
-    crate::turns::native::opencode_2_marks(&parts)
+    crate::turns::native::opencode_2_marks(&questions)
         .map(Some)
         .map_err(|reason| reason.as_str().to_owned())
 }

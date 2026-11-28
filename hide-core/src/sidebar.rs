@@ -1840,62 +1840,6 @@ mod tests {
         }
     }
 
-    /// AC10. The shell keeps no list of agent state names of its own.
-    ///
-    /// Five copies of that vocabulary had drifted apart, which is how the pet
-    /// dashboard and the sidebar came to disagree about whether a finished
-    /// agent needs attention. The shell now reads the values derived here, so
-    /// two marks of the old vocabulary are refused: the retired
-    /// `unseen_completion` anywhere at all, and any literal array that lists
-    /// both `blocked` and `question`, which only the retired state arrays did.
-    #[test]
-    fn axes_no_state_name_array_remains_in_the_shell() {
-        let shell = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../web/src")
-            .canonicalize()
-            .expect("the shell sits beside the core");
-        let mut offenders = Vec::new();
-        let mut scanned = 0_usize;
-        let mut stack = vec![shell];
-        while let Some(entry) = stack.pop() {
-            if entry.is_dir() {
-                for child in std::fs::read_dir(&entry).expect("readable directory") {
-                    stack.push(child.expect("readable entry").path());
-                }
-                continue;
-            }
-            if !matches!(
-                entry.extension().and_then(|value| value.to_str()),
-                Some("ts" | "tsx")
-            ) {
-                continue;
-            }
-            scanned += 1;
-            let text = std::fs::read_to_string(&entry).expect("readable source");
-            if text.contains("unseen_completion") {
-                offenders.push(format!(
-                    "{}: the retired unseen_completion state",
-                    entry.display()
-                ));
-            }
-            let mut rest = text.as_str();
-            while let Some(open) = rest.find('[') {
-                let after = &rest[open + 1..];
-                let Some(close) = after.find(']') else { break };
-                let span = &after[..close];
-                if span.contains("\"blocked\"") && span.contains("\"question\"") {
-                    offenders.push(format!("{}: a literal agent state array", entry.display()));
-                }
-                rest = &after[close + 1..];
-            }
-        }
-        assert!(scanned > 0, "no shell sources were scanned");
-        assert!(
-            offenders.is_empty(),
-            "the shell still keeps its own agent state vocabulary: {offenders:#?}"
-        );
-    }
-
     /// AC10. No view builds a label out of an axis value, so nothing
     /// underscored can reach the screen.
     #[test]

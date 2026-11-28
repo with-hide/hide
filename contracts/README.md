@@ -66,6 +66,8 @@ Regenerate it after a change to those commands, and review the diff as the chang
 target/debug/hide contract --json | python3 -m json.tool > contracts/hide-cli.json
 ```
 
+A merge of main into a branch merges this file command by command through a git merge driver a clone registers once; [docs/BUILD.md](../docs/BUILD.md#merging-contractshide-clijson) says how, and when it leaves a conflict.
+
 # Device kits
 
 `device-kits.json` names every platform a device kit is made for, and is the only place those platforms are named ([docs/BUILD.md](../docs/BUILD.md#device-helper-release-bundles)).

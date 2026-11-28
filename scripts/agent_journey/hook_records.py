@@ -18,9 +18,11 @@ instead of a start refused on an identity nobody can explain (engineering
 rules 4 and 10).
 """
 
+import errno
 import hashlib
 import json
 from pathlib import Path
+import re
 
 # `hide_agent_hooks::route::APP_INSTALL`: the desktop package's installation,
 # whose panes keep their records in the folder itself, with no mark.
@@ -154,3 +156,109 @@ def identity_cause(runtime, pane, install=None):
     if pane and failure.get("pane_id") not in ("", pane):
         return f"no_hook_outcome: the hook's last record names pane {failure.get('pane_id')}, not {pane}"
     return named
+
+
+# `hide_agent_hooks::hook_log`: the hooks' bounded log beside the records,
+# one JSON line per refusal, failed report or event kept from the pane.
+LOG_NAME = "spawn-guard.log"
+# The fields a kept log line may carry: ids, kinds and times. A free-form
+# field (a cause's sentence) can name a path, and stays behind.
+LOG_FIELDS = ("component", "kind", "failure", "pane", "agent", "runtime", "event", "conversation", "at_unix_ms")
+# How much of the log's end is read: it rotates at 256 KiB, and a failed
+# cell keeps the pane's newest lines of it.
+LOG_TAIL_BYTES = 32 * 1024
+# How much of the pane's record is read: `hide_agent_hooks::route` keeps a
+# record of a few sessions, well under this; a longer one is named
+# `too_large`, not read in part.
+RECORD_BYTES = 64 * 1024
+
+
+def pane_file(records, pane):
+    """`hide_agent_hooks::route::pane_file`: the pane's record under `panes/`."""
+    return records / "panes" / (re.sub(r"[^A-Za-z0-9_-]", "_", pane) + ".json")
+
+
+def unread(error):
+    """An error reading the records as a code, never its message, which
+    names the file's path."""
+    return errno.errorcode.get(error.errno, type(error).__name__) if isinstance(error, OSError) else type(error).__name__
+
+
+def pane_record(runtime, pane, cap, install=None):
+    """What the hooks kept of `pane`, for a failed cell to keep beside it, as
+    JSON text of at most `cap` bytes, its own `cut` mark and formatting
+    included, or None when they kept nothing; a log whose start was left
+    unread always answers, if only with `cut`.
+
+    The sessions the pane's record holds, oldest first, by the agent and the
+    session its hook named and the turn it last reported, and the pane's
+    lines of the end of the hooks' log ([`LOG_TAIL_BYTES`]); when the log is
+    longer, or what was read does not all fit, the oldest log lines go
+    first, then the oldest sessions, and `cut` says so. A start that names another agent's session then shows
+    whether the pane's hook named it (with-hide/hide#3124). Only ids, kinds,
+    turns and times are copied, and a file that cannot be read is named by
+    its error code: no prompt, task, command, sentence or path.
+    """
+    if not pane:
+        return None
+    records = folder(runtime, install)
+    kept = {}
+    try:
+        with pane_file(records, pane).open("rb") as file:
+            text = file.read(RECORD_BYTES + 1)
+        if len(text) > RECORD_BYTES:
+            kept["record_unread"] = "too_large"
+            written = None
+        else:
+            written = json.loads(text)
+    except FileNotFoundError:
+        written = None
+    except (OSError, ValueError) as error:
+        kept["record_unread"] = unread(error)
+        written = None
+    if isinstance(written, dict):
+        sessions = written.get("sessions") if isinstance(written.get("sessions"), list) else [written]
+        kept["sessions"] = [{key: session.get(key) for key in ("agent", "session", "turn")
+                             if isinstance(session.get(key), (str, int, type(None)))}
+                            for session in sessions if isinstance(session, dict)]
+    # Set when the log's start was left unread, so a reader never takes a
+    # missing earlier line for one the hooks never wrote.
+    cut = False
+    try:
+        with (records / LOG_NAME).open("rb") as file:
+            start = max(0, file.seek(0, 2) - LOG_TAIL_BYTES)
+            cut = start > 0
+            file.seek(start)
+            tail = file.read(LOG_TAIL_BYTES).decode("utf-8", errors="replace").splitlines()
+    except FileNotFoundError:
+        tail = []
+    except OSError as error:
+        kept["log_unread"] = unread(error)
+        tail = []
+    logged = []
+    for line in tail:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("pane") == pane:
+            logged.append({key: entry[key] for key in LOG_FIELDS
+                           if isinstance(entry.get(key), (str, int)) and not isinstance(entry.get(key), bool)})
+    if not kept and not logged and not cut:
+        return None
+    kept = {"pane": pane, **kept}
+    sessions = kept.pop("sessions", None)
+    while True:
+        shown = {**kept, **({"sessions": sessions} if sessions is not None else {}),
+                 **({"log": logged} if logged else {}), **({"cut": True} if cut else {})}
+        text = json.dumps(shown, indent=2) + "\n"
+        if len(text.encode()) <= cap:
+            return text
+        # The oldest log lines go first, then the oldest sessions.
+        if logged:
+            logged = logged[max(1, len(logged) // 4):]
+        elif sessions:
+            sessions = sessions[max(1, len(sessions) // 4):]
+        else:
+            return None
+        cut = True

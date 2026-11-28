@@ -1525,7 +1525,7 @@ export type MissionBlocked = "upstream_dropped";
 /** Why a node waits on someone to look (`mission_attention_reason`, PRD mission-node-simple D-04). */
 export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate", "not_started", "warning_stood", "wait_stood", "ci_failed", "mission_cancelled", "node_dropped", "wait_expired"] as const;
 export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
-/** A standing cell that is not a raise, as the safety net's row names it (`mission_health::CellReason`, PRD letters-missions-simplify D-23). The core sends only `warning_stopped` since 2026-11-23, a waiting node's failed wait being a raise (PRD core-wait D-17); the other five stay because a phone reads a Mac of the same `PHONE_PROTOCOL` built before then. */
+/** A standing cell that is not a raise, as the safety net's row names it (`mission_health::CellReason`, PRD letters-missions-simplify D-23). The core sends `warning_stopped`, and since 2026-11-28 `warning_review_fails` again for a node stopped at its review round limit, which waits on its Conductor; a waiting node's failed wait is a raise (PRD core-wait D-17), and the other four stay because a phone reads a Mac of the same `PHONE_PROTOCOL` built before then. */
 export const MISSION_HELD_CELL_REASONS = ["ci_failed", "ci_cancelled", "changes_requested", "outside_failed", "warning_review_fails", "warning_stopped"] as const;
 export type MissionHeldCellReason = typeof MISSION_HELD_CELL_REASONS[number];
 /** Who a raised node waits on (`mission_attention_to`, D-05). */
@@ -3962,7 +3962,18 @@ export type ThreadSession = { pane_id: string; machine: string };
  * call id, and where each session a letter, a spawn or a letter's sender
  * names runs, by the name as written; a name no live session answers to is absent.
  */
-export type ThreadPage = { updates: ThreadUpdate[]; parts: Record<string, ThreadPart>; sessions: Record<string, ThreadSession> };
+export type ThreadPage = {
+  /**
+   * The record file the page was read from and where the page begins in it, a byte offset: together its name, which a
+   * page read in above or the live page joining the kept ones never changes, and a record replaced at the same path
+   * never shares.
+   */
+  record: string;
+  start: number;
+  updates: ThreadUpdate[];
+  parts: Record<string, ThreadPart>;
+  sessions: Record<string, ThreadSession>;
+};
 /** `contracts/snapshot-wire-enums.json`: `session_thread_state`. */
 export type SessionThreadState = "closed" | "loading" | "ready" | "failed";
 /** Why the record could not be read (B27; `session_thread_failure`). */
@@ -4021,6 +4032,8 @@ export type SessionWorkSearch = { query: string; options?: SessionSearchOptions;
 export type SleepingSession = {
   sleep_id: string;
   node_id: string;
+  /** The agent's own conversation id the sleep keeps; absent from a core before it was sent. */
+  session_id?: string;
   checkout_path: string;
   kind: string;
   identity_label: string;

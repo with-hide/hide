@@ -1768,6 +1768,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "A mission node's worker starts on its brief: spawn again with --brief-file <path> (or --brief <text>) holding what the node is to do"
         }
         "invalid_brief" => "The brief must be text of at most 16 KiB that is not blank",
+        "mission_brief_too_long" => {
+            "On a node with a reviewer or a verifier Hide ends the brief with what starts the checkers and the worker's self-check, and the whole must fit 16 KiB: shorten the brief by the bytes the refusal names, or move its detail into a file the brief names"
+        }
         "invalid_agent_name" => INVALID_AGENT_NAME.as_str(),
         "brief_not_submitted" => {
             "The agent started but did not take its brief within 30 seconds, and nothing was typed; error.spawn.cause says why: question (its screen asks a question; answer it in its pane), not_ready, unread, or agent_ended. Then run the same command again with the same intent, which submits the brief, starting the agent once more only if it ended"

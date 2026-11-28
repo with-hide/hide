@@ -29,6 +29,10 @@ on:
         type: choice
         options: [mini, hosted]
         default: mini
+      allow_red_nightly:
+        description: Why this candidate cannot wait for a red nightly or an open nightly-failure or agent-canary issue (empty stops it).
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -39,7 +43,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A candidate starts only while the safety nets are green: the newest
+  # scheduled nightly on main did not fail and no nightly-failure or
+  # agent-canary issue but the support record is open (CONTRIBUTING.md,
+  # Releases). `allow_red_nightly` names why an urgent one cannot wait, and
+  # the job prints it with what was red. Every other job waits for this one.
+  nightly:
+    name: nightly is green
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/check-nightly-green.py
+          sparse-checkout-cone-mode: false
+      - name: Require a green nightly, or a reason to go on without one
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALLOW_RED_NIGHTLY: ${{ inputs.allow_red_nightly }}
+        run: python3 scripts/check-nightly-green.py --allow-red-nightly "$ALLOW_RED_NIGHTLY"
+
   validate:
+    needs: nightly
     runs-on: ubuntu-latest
     # Up to 45 minutes waiting for a pending verify run to start, and the checks.
     timeout-minutes: 50

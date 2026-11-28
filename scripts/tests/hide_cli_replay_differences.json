@@ -1,0 +1,109 @@
+{
+ "4f2adc6331e1": [
+  "/commands/device accept-ssh/hidden",
+  "/commands/device address/hidden",
+  "/commands/device allow/hidden",
+  "/commands/device look-ssh/hidden",
+  "/commands/device pause/hidden",
+  "/commands/device request/hidden",
+  "/commands/device resume/hidden",
+  "/commands/device share/hidden"
+ ],
+ "7ee433bbdfa3": [
+  "/commands/device carry/hidden",
+  "/commands/device update/hidden"
+ ],
+ "91ef0448736b": [
+  "/commands/device accept-ssh/hidden",
+  "/commands/device address/hidden",
+  "/commands/device allow/hidden",
+  "/commands/device look-ssh/hidden",
+  "/commands/device pause/hidden",
+  "/commands/device projects-ssh/hidden",
+  "/commands/device request/hidden",
+  "/commands/device resume/hidden",
+  "/commands/device share/hidden",
+  "/commands/device switch/hidden"
+ ],
+ "9aa28801be59": [
+  "/commands/device accept-ssh/hidden",
+  "/commands/device address/hidden",
+  "/commands/device allow/hidden",
+  "/commands/device look-ssh/hidden",
+  "/commands/device pause/hidden",
+  "/commands/device request/hidden",
+  "/commands/device resume/hidden",
+  "/commands/device share/hidden"
+ ],
+ "a82552bdfee0": [
+  "/commands/mission record/refusals"
+ ],
+ "c67fe6f0d257": [
+  "/answers/wait",
+  "/answers/wait_cancelled",
+  "/answers/wait_list",
+  "/commands/mission defect/refusals",
+  "/commands/mission node/refusals",
+  "/commands/mission plan/refusals",
+  "/commands/wait branch",
+  "/commands/wait cancel",
+  "/commands/wait list",
+  "/commands/wait mission",
+  "/commands/wait pr",
+  "/value_types/deadline"
+ ],
+ "d3e83d815b96": [
+  "/commands/mission plan/refusals"
+ ],
+ "e5b9dc485f0e": [
+  "/answers/agent_show/definitions/HumanKind/oneOf",
+  "/answers/ask_human/definitions/HumanKind/oneOf",
+  "/answers/spawn_show/definitions/HumanKind/oneOf",
+  "/answers/store_changed",
+  "/answers/store_item",
+  "/answers/store_list",
+  "/commands/mcp add",
+  "/commands/mcp list",
+  "/commands/mcp off",
+  "/commands/mcp on",
+  "/commands/mcp remove",
+  "/commands/mcp show",
+  "/commands/mcp update",
+  "/commands/skill add",
+  "/commands/skill list",
+  "/commands/skill off",
+  "/commands/skill on",
+  "/commands/skill remove",
+  "/commands/skill show",
+  "/commands/skill update",
+  "/envelopes/mcp",
+  "/envelopes/skill"
+ ],
+ "e9582eb42d83": [
+  "/answers/inbox/definitions/Letter/properties/core_id",
+  "/answers/inbox/definitions/Letter/required",
+  "/answers/letter/properties/core_id",
+  "/answers/letter/required",
+  "/commands/agent list/options",
+  "/commands/agent list/refusals",
+  "/commands/agent read/refusals",
+  "/commands/agent show/refusals",
+  "/commands/pane read/refusals",
+  "/commands/pane send/refusals",
+  "/commands/request send/refusals"
+ ],
+ "f9b0f806c020": [
+  "/answers/wait",
+  "/answers/wait_cancelled",
+  "/answers/wait_list",
+  "/commands/mission defect/refusals",
+  "/commands/mission node/refusals",
+  "/commands/mission plan/refusals",
+  "/commands/wait branch",
+  "/commands/wait cancel",
+  "/commands/wait list",
+  "/commands/wait mission",
+  "/commands/wait pr",
+  "/value_types/deadline"
+ ]
+}

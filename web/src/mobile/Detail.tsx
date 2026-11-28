@@ -285,7 +285,7 @@ const STRIP_TONE: Partial<Record<PhoneAgent["mark"], string>> = {
 
 /**
  * What the detail shows in place of the terminal while the agent sleeps, in the
- * desktop pane's words (`SleepBody`): Sleeping with Wake agent, Waking…, or the
+ * desktop's words (`SleepCard`): Sleeping with Wake agent, Waking…, or the
  * resume failure with its reason, Retry and Start new session.
  */
 function SleepState({ sleep, agentKey }: { sleep: AgentSleep; agentKey: AgentKey }) {

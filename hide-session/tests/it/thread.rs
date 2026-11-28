@@ -451,6 +451,71 @@ fn every_agents_sample_reads_to_the_task_it_recorded() {
     }
 }
 
+/// OpenCode 2.4.2 writes an assistant's items as `session_part` rows and an
+/// older build may still write some inline after the split; OpenCode reads
+/// the part rows followed by the inline ones (`SessionHistory.withParts`),
+/// so the sample moved wholly to part rows, and with each message's last
+/// item left inline, reads as the same thread.
+#[test]
+fn an_opencode_session_whose_items_are_part_rows_reads_as_the_same_thread() {
+    let sample = SAMPLES
+        .iter()
+        .find(|sample| sample.format == SessionFormat::OpenCode)
+        .unwrap();
+    // How many of each assistant message's items stay inline.
+    for kept in [0, 1] {
+        let placed = Placed::new(sample);
+        let inline = placed.read_all();
+        let connection = rusqlite::Connection::open(&placed.path).unwrap();
+        connection
+            .execute_batch(&format!(
+                // As `sqlite3 opencode.db .schema session_part` prints 2.4.2's.
+                "CREATE TABLE `session_part` (
+                  `message_id` text NOT NULL,
+                  `session_id` text NOT NULL,
+                  `ordinal` integer NOT NULL,
+                  `type` text NOT NULL,
+                  `call_id` text,
+                  `time_created` integer NOT NULL,
+                  `time_updated` integer NOT NULL,
+                  `data` text NOT NULL,
+                  CONSTRAINT `session_part_pk` PRIMARY KEY(`message_id`, `ordinal`)
+                );
+                INSERT INTO session_part SELECT message.id, message.session_id, item.key,
+                  json_extract(item.value, '$.type'),
+                  CASE WHEN json_extract(item.value, '$.type') = 'tool'
+                    THEN json_extract(item.value, '$.id') END,
+                  message.time_created, message.time_updated, item.value
+                  FROM session_message AS message, json_each(message.data, '$.content') AS item
+                  WHERE message.type = 'assistant'
+                    AND item.key < json_array_length(message.data, '$.content') - {kept};
+                UPDATE session_message SET data = json_set(data, '$.content',
+                  (SELECT json_group_array(json(item.value)) FROM json_each(data, '$.content') AS item
+                   WHERE item.key >= json_array_length(data, '$.content') - {kept}))
+                  WHERE type = 'assistant';"
+            ))
+            .unwrap();
+        if kept > 0 {
+            let mixed: i64 = connection
+                .query_row(
+                    "SELECT count(*) FROM session_message WHERE type = 'assistant' \
+                     AND json_array_length(data, '$.content') > 0 \
+                     AND EXISTS (SELECT 1 FROM session_part WHERE message_id = id)",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                mixed > 0,
+                "no message holds both part rows and inline items"
+            );
+        }
+        let split = placed.read_all();
+        assert!(!split.is_empty());
+        assert_eq!(split, inline, "{kept} kept inline");
+    }
+}
+
 /// A screen shows how long a command has run and how long it took, so
 /// every call says when it started and every finished result when it ended,
 /// and it finds the answer a question Hide found was asked in, so every

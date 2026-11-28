@@ -82,6 +82,17 @@ impl ThreadCursor {
     pub fn at_start(&self) -> bool {
         self.position == 0
     }
+
+    /// The record boundary's byte offset in its file.
+    pub fn position(&self) -> u64 {
+        self.position
+    }
+
+    /// Which file the position belongs to: a file replaced at the same path
+    /// has another.
+    pub fn incarnation(&self) -> &str {
+        &self.incarnation
+    }
 }
 
 /// One page of a session's thread.

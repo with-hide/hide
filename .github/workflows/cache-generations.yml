@@ -1,0 +1,70 @@
+# Deletes the generations of main's dependency caches that a newer one
+# replaced, after each run on main that can save one: `verify`'s push run, the
+# nightly and `package cache`. A changed lockfile, manifest, toolchain or pin
+# saves every Rust set and hide-vt entry again under a new key, about 4 GB
+# across the sets and systems, and the repository has 10 GB of Actions cache;
+# left to GitHub, the old generations stay until eviction, which then also
+# takes current entries that are read only once a day (docs/BUILD.md, "CI's
+# Rust caches"). `scripts/cache-generations.py` owns which entries go.
+name: cache generations
+
+on:
+  workflow_run:
+    workflows: [verify, nightly, package cache]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-generations
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: delete replaced generations
+    # `branches` matches the triggering run's head branch by name only, and a
+    # fork's pull request from its own `main` runs `verify` with that name; so
+    # the job starts only for this repository's own runs on main, never for a
+    # pull request or a merge queue group.
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+      github.event.workflow_run.event != 'pull_request' &&
+      github.event.workflow_run.event != 'merge_group' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Deleting a cache entry and reporting a failed prune are its only
+    # writes; no other job here holds them.
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Keep the newest entry of each set and system
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          python3 scripts/cache-generations.py --repo "$GITHUB_REPOSITORY" | tee -a "$GITHUB_STEP_SUMMARY"
+      # A run of this workflow is not one anyone watches, and while it fails
+      # the replaced generations pile up past the limit again: the failure
+      # goes to one open development issue, with a comment for each later failure.
+      - name: Report a failed prune as a development issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="cache generations: replaced dependency caches are not being deleted"
+          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label development --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body "Failed again: $RUN"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --label development --title "$title" \
+              --body "\`cache-generations.yml\` failed, so main's replaced Rust and hide-vt cache generations stay until GitHub evicts them, and the cache can pass its 10 GB limit (docs/BUILD.md, \"CI's Rust caches\"). Run: $RUN"
+          fi

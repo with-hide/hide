@@ -615,9 +615,9 @@ pub struct Woken {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WarningKind {
-    /// The review or verification line failed
-    /// `mission_health::REVIEW_FAILS_THAT_WARN` times in a row
-    /// (`MissionNode::review_fails`).
+    /// The review or verification round at the strength's limit failed
+    /// (`MissionNode::round_hold`): no round opens until the Conductor
+    /// chooses how the node goes on.
     ReviewFails,
     /// Its worker's program runs, its turn ended and it waits on nothing
     /// (`mission_health::stopped_worker`), for
@@ -1769,27 +1769,35 @@ impl MissionNode {
         }
     }
 
-    /// The node's review rounds line (`Criterion::rounds`): the review or
-    /// verification line past `limit` (`Criterion::past_limit`), a failed
-    /// one first and then the one with more rounds, else the one with the
-    /// most rounds; none
-    /// before any checker answered. The one rule the limit's warning, its
-    /// letter and the screens that count rounds read.
+    /// The node's review rounds line (`Criterion::budget_rounds`): the
+    /// review or verification line whose round budget is spent
+    /// (`round_hold`), else the one with the most rounds in the current
+    /// worker's budget; none before any checker answered for it. The one
+    /// rule the limit's warning, its letter and the screens that count
+    /// rounds read.
     pub fn review_line(&self, limit: u32) -> Option<&crate::mission_criteria::Criterion> {
-        let lines = || {
+        self.round_hold(limit).or_else(|| {
             self.criteria
                 .iter()
-                .filter(|line| line.kind.checker_judges() && line.rounds > 0)
-        };
-        lines()
-            .filter(|line| line.past_limit(limit))
+                .filter(|line| line.kind.checker_judges() && line.budget_rounds() > 0)
+                .max_by_key(|line| line.budget_rounds())
+        })
+    }
+
+    /// The review or verification line whose round budget is spent
+    /// (`Criterion::budget_spent`), a failed one first and then the one
+    /// with more rounds: while
+    /// one stands, the node's Conductor owes the choice of how it goes on
+    /// and no round opens (operator decision 2026-11-28).
+    pub fn round_hold(&self, limit: u32) -> Option<&crate::mission_criteria::Criterion> {
+        self.checker_lines()
+            .filter(|line| line.budget_spent(limit))
             .max_by_key(|line| {
                 (
                     line.state == crate::mission_criteria::CriterionState::Fail,
-                    line.rounds,
+                    line.budget_rounds(),
                 )
             })
-            .or_else(|| lines().max_by_key(|line| line.rounds))
     }
 
     /// The worker's signal that its work is ready for its checkers (PRD
@@ -1847,6 +1855,19 @@ impl MissionNode {
 pub(crate) struct CheckSignal {
     pub(crate) at_unix_ms: u64,
     pub(crate) commit: Option<String>,
+}
+
+impl CheckSignal {
+    /// Whether `checker` answered this signal's round: on its commit when
+    /// both name one (an answer on that commit before the signal, a re-look
+    /// the Conductor asked for, included), else after it.
+    pub(crate) fn answered_by(&self, checker: &crate::mission_criteria::Checker) -> bool {
+        checker.at_unix_ms.is_some()
+            && match (&self.commit, &checker.commit) {
+                (Some(round), Some(read)) => crate::mission_criteria::same_commit(round, read),
+                _ => checker.at_unix_ms.is_some_and(|at| at >= self.at_unix_ms),
+            }
+    }
 }
 
 /// The session that conducts a mission (D-23). `actor` is the delivery
@@ -2917,7 +2938,9 @@ pub enum MissionCommand {
         rerun: bool,
     },
     /// The Conductor goes past a line with its reason (B11, B12); a check
-    /// command or CI line also names the operator's answered decision.
+    /// command or CI line also names the operator's answered decision, and
+    /// a review or verification whose round budget is spent the follow-up
+    /// node of the same mission that carries what it left open.
     Skip {
         #[serde(default)]
         mission: Option<String>,
@@ -2926,6 +2949,8 @@ pub enum MissionCommand {
         reason: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         decision: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        follow_up: Option<String>,
     },
     /// The Conductor relays the operator's answer to `node`'s human gate,
     /// given in its pane, with their words quoted (PRD mission-human-gate
@@ -3033,8 +3058,15 @@ impl MissionCommand {
                 node,
                 line,
                 reason,
+                follow_up,
                 ..
-            } => id_ok(mission) && valid_key(node) && valid_key(line) && reason.len() <= LINE_LIMIT,
+            } => {
+                id_ok(mission)
+                    && valid_key(node)
+                    && valid_key(line)
+                    && reason.len() <= LINE_LIMIT
+                    && follow_up.as_deref().is_none_or(valid_key)
+            }
             Self::Defect {
                 mission,
                 node,
@@ -3862,6 +3894,7 @@ pub(crate) fn apply_plan(
             node.in_main = None;
         }
     }
+    check_paths_ordered(&next)?;
     next.updated_at_unix_ms = now;
     Ok(next)
 }
@@ -4214,6 +4247,27 @@ pub(crate) fn apply_patch(
         };
     }
     take!(agent_id);
+    // A fresh worker gets a fresh round budget: the strength's limit counts
+    // its checkers' rounds from now (operator decision 2026-11-28).
+    // The worker before is the one bound, else the last that recorded a
+    // line, so unbinding and binding the same worker again starts nothing.
+    let before = node.agent_id.clone().or_else(|| {
+        node.criteria
+            .iter()
+            .filter_map(|line| line.by.as_ref())
+            .filter(|by| by.role == crate::mission_criteria::Role::Worker)
+            .max_by_key(|by| by.at_unix_ms)
+            .and_then(|by| by.agent_id.clone())
+    });
+    if next.agent_id.is_some() && next.agent_id != before {
+        for line in next
+            .criteria
+            .iter_mut()
+            .filter(|line| line.kind.checker_judges())
+        {
+            line.fresh_budget();
+        }
+    }
     // `--pr <n>` makes `n` the node's current pull request beside those it
     // holds; `--no-pr` lets go of every one.
     match patch.pr {
@@ -4394,31 +4448,36 @@ pub(crate) fn check_question(
     Ok(())
 }
 
-/// Where another open mission touches the same issue or path as one of this
-/// mission's nodes (D-18, B6): `(other mission, its title, what overlaps)`.
+/// The other open missions of `mission`'s project on its machine: a path
+/// names a project on one machine only.
+fn neighbours<'a>(
+    book: &'a MissionBook,
+    mission: &'a Mission,
+) -> impl Iterator<Item = &'a Mission> {
+    book.missions.iter().filter(move |other| {
+        other.id != mission.id
+            && other.status.open()
+            && other.project == mission.project
+            && other.device_id == mission.device_id
+    })
+}
+
+/// Where another open mission touches the same issue or code path as one of
+/// this mission's nodes (D-18, B6): `(other mission, its title, what
+/// overlaps)`. A document path is never an overlap ([`shared_code_paths`]).
 pub(crate) fn overlaps(book: &MissionBook, mission: &Mission) -> Vec<Overlap> {
     let mut out = Vec::new();
-    for other in &book.missions {
-        // A path names a project on one machine only.
-        if other.id == mission.id
-            || !other.status.open()
-            || other.project != mission.project
-            || other.device_id != mission.device_id
-        {
-            continue;
-        }
-        let issues: BTreeSet<u32> = other
-            .nodes
-            .iter()
-            .filter(|node| node.status != NodeStatus::Dropped)
+    for other in neighbours(book, mission) {
+        let live = || {
+            other
+                .nodes
+                .iter()
+                .filter(|node| node.status != NodeStatus::Dropped)
+        };
+        let issues: BTreeSet<u32> = live()
             .flat_map(|node| node.issues.iter().copied())
             .collect();
-        let paths: Vec<&str> = other
-            .nodes
-            .iter()
-            .filter(|node| node.status != NodeStatus::Dropped)
-            .flat_map(|node| node.paths.iter().map(String::as_str))
-            .collect();
+        let paths: Vec<String> = live().flat_map(|node| node.paths.iter().cloned()).collect();
         let mut shared_issues = BTreeSet::new();
         let mut shared_paths = BTreeSet::new();
         for node in &mission.nodes {
@@ -4428,11 +4487,7 @@ pub(crate) fn overlaps(book: &MissionBook, mission: &Mission) -> Vec<Overlap> {
                     .copied()
                     .filter(|issue| issues.contains(issue)),
             );
-            for path in &node.paths {
-                if paths.iter().any(|theirs| overlapping(path, theirs)) {
-                    shared_paths.insert(path.clone());
-                }
-            }
+            shared_paths.extend(shared_code_paths(&mission.project, &node.paths, &paths).cloned());
         }
         if !shared_issues.is_empty() || !shared_paths.is_empty() {
             out.push(Overlap {
@@ -4446,13 +4501,255 @@ pub(crate) fn overlaps(book: &MissionBook, mission: &Mission) -> Vec<Overlap> {
     out
 }
 
-/// Whether two declared paths name the same file or one holds the other.
+/// Whether a declared path names documents only: a `*.md` or `*.pen` file
+/// or the site under `site/`. Documents merge once with main right before
+/// the merge (AGENTS.md, Working Beside Open Pull Requests), so they order
+/// no nodes and are no overlap. It reads a [`path_key`], in lower case.
+fn document_path(key: &str) -> bool {
+    key.ends_with(".md") || key.ends_with(".pen") || key == "site" || key.starts_with("site/")
+}
+
+/// A path a node of the mission in `project` declares, in the one spelling
+/// both path rules compare: below the project, names joined by `/` (a Windows
+/// `\` too), no empty or `.` names, and a `..` taking the name before it, so
+/// `./web/src/`, `web\src` and `docs/../web/src` are all `web/src`. An
+/// absolute path keeps the root it starts from (`/`, a share's `//server/share`
+/// or a drive's `C:`), which no `..` climbs above, and is read below the
+/// project when it is inside it (`hide_platform::path::wire_relative`); one
+/// outside it keeps a leading `/`, so it never meets a path of the project.
+/// Letters compare in lower case: whether the project's volume tells
+/// `Web/src` from `web/src` is known only on its machine, and taking them as
+/// one path can only order two nodes that did not need it, never let two
+/// meet at the merge. The plan keeps the path as it was written; only the
+/// comparison reads this.
+fn path_key(project: &str, path: &str) -> String {
+    let path = path.replace('\\', "/").to_lowercase();
+    let absolute = hide_platform::path::is_wire_absolute(&path);
+    let (root, rest) = if let Some(rest) = path.strip_prefix("//") {
+        ("//", rest)
+    } else if let Some(rest) = path.strip_prefix('/') {
+        ("/", rest)
+    } else {
+        ("", path.as_str())
+    };
+    // The names an absolute path's root holds: a share's server and share,
+    // a drive's letter.
+    let floor = match root {
+        "//" => 2,
+        "" if absolute => 1,
+        _ => 0,
+    };
+    let mut names: Vec<&str> = Vec::new();
+    for name in rest.split('/') {
+        match name {
+            "" | "." => {}
+            ".." if names.len() > floor && names.last().is_some_and(|last| *last != "..") => {
+                names.pop();
+            }
+            ".." if absolute => {}
+            name => names.push(name),
+        }
+    }
+    let key = names.join("/");
+    if !absolute {
+        return key;
+    }
+    let spelled = format!("{root}{key}");
+    match hide_platform::path::wire_relative(&project.replace('\\', "/").to_lowercase(), &spelled) {
+        Ok(below) => below.into_string(),
+        Err(_) if spelled.starts_with('/') => spelled,
+        Err(_) => format!("/{spelled}"),
+    }
+}
+
+/// The code paths of `mine` that name a code path of `theirs`, hold it or
+/// sit inside it, both declared in `project`; a document path is neither side
+/// of one.
+fn shared_code_paths<'a>(
+    project: &'a str,
+    mine: &'a [String],
+    theirs: &'a [String],
+) -> impl Iterator<Item = &'a String> {
+    let theirs: Vec<String> = theirs
+        .iter()
+        .map(|path| path_key(project, path))
+        .filter(|key| !document_path(key))
+        .collect();
+    mine.iter().filter(move |path| {
+        let key = path_key(project, path);
+        !document_path(&key) && theirs.iter().any(|other| overlapping(&key, other))
+    })
+}
+
+/// Whether two path keys ([`path_key`]) name the same file or one holds the
+/// other; the project's folder itself (`.`) holds every path in it.
 fn overlapping(a: &str, b: &str) -> bool {
-    let a = a.trim_end_matches('/');
-    let b = b.trim_end_matches('/');
+    // The project's folder holds a path below it, never one above it or
+    // outside it (`../x`, `/elsewhere/x`).
+    let inside = |key: &str| !key.starts_with('/') && key != ".." && !key.starts_with("../");
+    if a.is_empty() || b.is_empty() {
+        return inside(a) && inside(b);
+    }
     a == b
         || a.strip_prefix(b).is_some_and(|rest| rest.starts_with('/'))
         || b.strip_prefix(a).is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Whether node `from` of `mission` waits on node `to` through whole-node
+/// dependencies, directly or through other nodes. A finish-line dependency
+/// (`a:c1`) orders no files: the node starts on a line of the other's
+/// branch, and their two pull requests still meet at the merge.
+fn waits_whole_on(mission: &Mission, from: &str, to: &str) -> bool {
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![from];
+    while let Some(key) = stack.pop() {
+        let Some(node) = mission.node(key) else {
+            continue;
+        };
+        for dependency in node
+            .depends_on
+            .iter()
+            .filter(|dependency| dependency.line.is_none())
+        {
+            if dependency.node == to {
+                return true;
+            }
+            if seen.insert(dependency.node.as_str()) {
+                stack.push(dependency.node.as_str());
+            }
+        }
+    }
+    false
+}
+
+/// The change nodes of `mission` not started yet: the only ones the path
+/// order holds, so a node at work, done or dropped is never refused again
+/// and a replan of a running mission keeps working.
+fn unstarted_changes(mission: &Mission) -> impl Iterator<Item = &MissionNode> {
+    mission
+        .nodes
+        .iter()
+        .filter(|node| node.kind == NodeKind::Change && !node.started())
+}
+
+/// Two change nodes not started yet that change the same code run one after
+/// the other: one waits on the other through `depends_on`, or the plan is
+/// refused naming both and the paths they share.
+fn check_paths_ordered(mission: &Mission) -> Result<(), String> {
+    let fresh: Vec<&MissionNode> = unstarted_changes(mission).collect();
+    for (index, a) in fresh.iter().enumerate() {
+        for b in &fresh[index + 1..] {
+            let shared: Vec<&str> = shared_code_paths(&mission.project, &a.paths, &b.paths)
+                .map(String::as_str)
+                .collect();
+            if shared.is_empty()
+                || waits_whole_on(mission, &a.key, &b.key)
+                || waits_whole_on(mission, &b.key, &a.key)
+            {
+                continue;
+            }
+            return Err(crate::coordination::refusal(
+                "mission_paths_unordered",
+                &format!(
+                    "{} and {} both change {}; add one's key to the other's depends_on",
+                    a.key,
+                    b.key,
+                    shared.join(", ")
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A change node of `mission` not started yet that changes the code of a
+/// change node at work in another open mission of its project waits for that
+/// node's work to merge: it depends on a waiting node of this plan on each of
+/// that node's pull requests still open (or not read yet), or, while it has
+/// none, on the node itself. A node or mission wait is not taken once a pull
+/// request is open, since a node of a `pr`-scope mission is done when its pull
+/// request is ready, before the merge; and a wait on one pull request leaves
+/// another open one free to meet this node at the merge. Otherwise the plan is
+/// refused naming the other mission, its node, the paths and the waiting
+/// nodes to write.
+pub(crate) fn check_paths_across(book: &MissionBook, mission: &Mission) -> Result<(), String> {
+    use crate::waits::WaitTarget;
+    for other in neighbours(book, mission) {
+        let working = other
+            .nodes
+            .iter()
+            .filter(|node| node.kind == NodeKind::Change && node.status == NodeStatus::Working);
+        for theirs in working {
+            let ended = |number: u32| {
+                theirs
+                    .pr_seen
+                    .iter()
+                    .any(|seen| seen.number == number && (seen.merged || seen.closed))
+            };
+            let mut targets: Vec<WaitTarget> = theirs
+                .prs
+                .iter()
+                .copied()
+                .filter(|number| !ended(*number))
+                .map(WaitTarget::Pr)
+                .collect();
+            if targets.is_empty() {
+                targets.push(WaitTarget::Node {
+                    mission: other.id.clone(),
+                    node: theirs.key.clone(),
+                });
+            }
+            for mine in unstarted_changes(mission) {
+                let shared: Vec<&str> =
+                    shared_code_paths(&mission.project, &mine.paths, &theirs.paths)
+                        .map(String::as_str)
+                        .collect();
+                if shared.is_empty() {
+                    continue;
+                }
+                let missing: Vec<String> = targets
+                    .iter()
+                    .filter(|target| {
+                        !mission.nodes.iter().any(|wait| {
+                            wait.kind == NodeKind::Wait
+                                && wait.wait_target.as_ref() == Some(*target)
+                                && waits_whole_on(mission, &mine.key, &wait.key)
+                        })
+                    })
+                    .map(|target| match target {
+                        WaitTarget::Pr(number) => {
+                            format!("{{\"kind\": \"wait\", \"wait\": {{\"pr\": {number}}}}}")
+                        }
+                        _ => format!(
+                            "{{\"kind\": \"wait\", \"wait\": {{\"mission\": \"{}\", \"node\": \"{}\"}}}}",
+                            other.id, theirs.key
+                        ),
+                    })
+                    .collect();
+                if missing.is_empty() {
+                    continue;
+                }
+                let (nodes, keys) = if missing.len() == 1 {
+                    ("a node", "its key")
+                } else {
+                    ("nodes", "their keys")
+                };
+                return Err(crate::coordination::refusal(
+                    "mission_paths_in_other_mission",
+                    &format!(
+                        "{} changes {} that {} node {} is changing now; add {} as {nodes} and put {keys} in {}'s depends_on",
+                        mine.key,
+                        shared.join(", "),
+                        other.id,
+                        theirs.key,
+                        missing.join(" and "),
+                        mine.key
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -4508,6 +4805,12 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_dependency_stack_split" => {
             "A node stacks on one node only: name finish lines of one node in depends_on, and wait on any other by its key alone"
+        }
+        "mission_paths_unordered" => {
+            "Two change nodes not started yet change the same code: add one's key to the other's depends_on so they run one after the other (a finish line such as <node>:c1 does not order them), or take the shared path off one; documents (*.md, *.pen, site/) never order nodes"
+        }
+        "mission_paths_in_other_mission" => {
+            "A change node not started yet changes code a node of another open mission of this project is changing now: add a waiting node on each of that node's open pull requests, {\"kind\": \"wait\", \"wait\": {\"pr\": <n>}} ({\"mission\": \"<id>\", \"node\": \"<key>\"} only while it has none open), and put their keys in your node's depends_on"
         }
         "mission_merge_order_stack" => {
             "Name the node a stacked node waits on by a line before it in merge_order, or leave both out: a stacked pull request merges after the one under it, and a node merge_order leaves out merges after every node it names"
@@ -4672,6 +4975,12 @@ pub fn next_action(code: &str) -> &'static str {
             "On another machine than the project's, a mission runs only a pull-request change node's worker and its checkers: start this node's worker or checker on the project's machine, or bind one that runs there"
         }
         "mission_skip_reason_missing" => "Give the reason with --reason <text>",
+        "mission_skip_follow_up_required" => {
+            "This line spent the review rounds the mission's strength allows: plan the findings it left as a follow-up node of this mission (not an issue) with hide mission plan, then skip with --follow-up <node> --reason <text>; an issue number alone is not accepted"
+        }
+        "mission_follow_up_invalid" => {
+            "Name with --follow-up a node of this mission other than this one that is not done or dropped: add the follow-up node to the plan with hide mission plan first"
+        }
         "mission_criteria_protected" => {
             "A failed CI line is skipped only on the operator's answer: run the CI again, or ask with hide mission decide --line <question> --node <key> and once answered skip with --decision <its key>"
         }
@@ -5721,6 +6030,362 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert!(overlaps(&book, &m).is_empty());
+    }
+
+    #[test]
+    fn a_document_path_shared_with_another_mission_is_no_overlap() {
+        let mut book = MissionBook::default();
+        let mut other = mission();
+        other.id = "mission-2".into();
+        other.status = MissionStatus::Running;
+        let mut theirs = node("x", NodeKind::Change, &[]);
+        theirs.paths = vec!["docs".into(), "site".into(), "design/ui.pen".into()];
+        other = apply_plan(&other, &plan(vec![theirs]), 2, InterfaceLanguage::Korean).unwrap();
+        book.missions.push(other);
+        let mut mine = node("y", NodeKind::Change, &[]);
+        mine.paths = vec![
+            "docs/ARCHITECTURE.md".into(),
+            "site/index.html".into(),
+            "design/ui.pen".into(),
+        ];
+        let m = apply_plan(&mission(), &plan(vec![mine]), 2, InterfaceLanguage::Korean).unwrap();
+        assert!(overlaps(&book, &m).is_empty());
+    }
+
+    /// Two change nodes `a` and `b` declaring `a_paths` and `b_paths`, `b`
+    /// depending on `b_depends`, with `extra` nodes beside them.
+    fn two_on_paths(
+        a_paths: &[&str],
+        b_paths: &[&str],
+        b_depends: &[&str],
+        extra: Vec<NodeInput>,
+    ) -> PlanInput {
+        let mut a = node("a", NodeKind::Change, &[]);
+        a.paths = a_paths.iter().map(|path| (*path).to_owned()).collect();
+        let mut b = node("b", NodeKind::Change, b_depends);
+        b.paths = b_paths.iter().map(|path| (*path).to_owned()).collect();
+        let mut nodes = vec![a, b];
+        nodes.extend(extra);
+        plan(nodes)
+    }
+
+    #[test]
+    fn two_unstarted_change_nodes_on_the_same_code_without_depends_on_are_refused() {
+        let planned =
+            |input: &PlanInput| apply_plan(&mission(), input, 2, InterfaceLanguage::Korean);
+        // A folder holds what is under it; the refusal names both nodes and
+        // the shared path and says to add depends_on.
+        let refused = planned(&two_on_paths(
+            &["hide-core/src", "web/src/App.tsx"],
+            &["hide-core/src/missions.rs"],
+            &[],
+            Vec::new(),
+        ))
+        .unwrap_err();
+        let (code, detail) = crate::coordination::split_refusal(&refused);
+        assert_eq!(code, "mission_paths_unordered");
+        assert_eq!(
+            detail,
+            Some("a and b both change hide-core/src; add one's key to the other's depends_on")
+        );
+        // A finish-line dependency starts b on a's branch, but their pull
+        // requests still meet at the merge.
+        let refused = planned(&two_on_paths(
+            &["web/src"],
+            &["web/src"],
+            &["a:c1"],
+            Vec::new(),
+        ))
+        .unwrap_err();
+        assert_eq!(
+            crate::coordination::split_refusal(&refused).0,
+            "mission_paths_unordered"
+        );
+        // depends_on orders them, directly or through another node.
+        assert!(
+            planned(&two_on_paths(
+                &["web/src"],
+                &["web/src"],
+                &["a"],
+                Vec::new()
+            ))
+            .is_ok()
+        );
+        assert!(
+            planned(&two_on_paths(
+                &["web/src"],
+                &["web/src"],
+                &["mid"],
+                vec![node("mid", NodeKind::General, &["a"])],
+            ))
+            .is_ok()
+        );
+        // Documents, a name that only starts the same, and a node of
+        // another kind order nothing.
+        assert!(
+            planned(&two_on_paths(
+                &["docs/ARCHITECTURE.md", "site", "design/a.pen"],
+                &["docs/ARCHITECTURE.md", "site/index.html", "design/a.pen"],
+                &[],
+                Vec::new(),
+            ))
+            .is_ok()
+        );
+        assert!(planned(&two_on_paths(&["web/src"], &["web/srcs"], &[], Vec::new())).is_ok());
+        // One file in another spelling is the same file: a leading `./`, a
+        // Windows separator, a doubled or trailing `/`, a `..` back down, an
+        // absolute path inside the project (`/repo`); the project's folder
+        // holds every path in it.
+        for (a, b) in [
+            ("./web/src", "web/src/App.tsx"),
+            ("web\\src", "web/src/App.tsx"),
+            ("web//src/", "web/src"),
+            ("docs/../web/src", "web/src/App.tsx"),
+            ("/repo/web/src/", "web/src/App.tsx"),
+            (".", "hided/src/main.rs"),
+            // Whether the volume tells case apart is known only on the
+            // project's machine, so another case is taken as the same path.
+            ("Web/src", "web/src/App.tsx"),
+            ("src/A.rs", "src/a.rs"),
+            ("/REPO/web", "web/src"),
+        ] {
+            let refused = planned(&two_on_paths(&[a], &[b], &[], Vec::new())).unwrap_err();
+            assert_eq!(
+                crate::coordination::split_refusal(&refused).0,
+                "mission_paths_unordered",
+                "{a} and {b}"
+            );
+        }
+        // A path above the project or another folder's absolute path is not
+        // one of the project's.
+        for (a, b) in [
+            ("../web/src", "web/src"),
+            ("/elsewhere/web/src", "web/src"),
+            ("/repo-other/web", "web"),
+            (".", "/elsewhere/x"),
+            ("/elsewhere", "."),
+            (".", "../web"),
+        ] {
+            assert!(
+                planned(&two_on_paths(&[a], &[b], &[], Vec::new())).is_ok(),
+                "{a} and {b}"
+            );
+        }
+        // A document in another spelling is still a document.
+        assert!(
+            planned(&two_on_paths(
+                &["./site", "README.MD", "docs\\a.md"],
+                &["site/index.html", "README.md", "docs/a.md"],
+                &[],
+                Vec::new(),
+            ))
+            .is_ok()
+        );
+        let mut general = two_on_paths(&["web/src"], &["web/src"], &[], Vec::new());
+        general.nodes[1].kind = NodeKind::General.into();
+        general.nodes[1].delivery = None;
+        assert!(planned(&general).is_ok());
+    }
+
+    #[test]
+    fn an_absolute_path_on_a_windows_share_or_drive_is_read_below_its_project() {
+        let refused = |project: &str, a: &str, b: &str| {
+            let mut on = mission();
+            on.project = project.into();
+            apply_plan(
+                &on,
+                &two_on_paths(&[a], &[b], &[], Vec::new()),
+                2,
+                InterfaceLanguage::Korean,
+            )
+            .err()
+            .map(|refused| crate::coordination::split_refusal(&refused).0.to_owned())
+        };
+        let unordered = Some("mission_paths_unordered".to_owned());
+        for (project, a) in [
+            ("//server/share/repo", "\\\\server\\share\\repo\\web\\src"),
+            ("//server/share/repo", "//server/share/repo/web/src"),
+            ("//server/share/repo", "//server/share/repo/../repo/web/src"),
+            ("C:/work/repo", "c:\\work\\repo\\web\\src"),
+            ("C:/work/repo", "C:/work/repo/web/src/"),
+        ] {
+            assert_eq!(
+                refused(project, a, "web/src/App.tsx"),
+                unordered,
+                "{project}: {a}"
+            );
+        }
+        // A `..` does not climb above the share or the drive, and another
+        // share or drive is outside the project.
+        for (project, a) in [
+            (
+                "//server/share/repo",
+                "//server/share/../other/repo/web/src",
+            ),
+            ("//server/share/repo", "//server/other/repo/web/src"),
+            ("C:/work/repo", "D:/work/repo/web/src"),
+        ] {
+            assert_eq!(
+                refused(project, a, "web/src/App.tsx"),
+                None,
+                "{project}: {a}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_replan_keeps_a_node_at_work_done_or_dropped_on_the_same_code() {
+        let mut running = apply_plan(
+            &mission(),
+            &plan(vec![node("a", NodeKind::Change, &[])]),
+            2,
+            InterfaceLanguage::Korean,
+        )
+        .unwrap();
+        for status in [NodeStatus::Working, NodeStatus::Done, NodeStatus::Dropped] {
+            running.nodes[0].status = status;
+            assert!(
+                apply_plan(
+                    &running,
+                    &two_on_paths(&["web/src"], &["web/src/App.tsx"], &[], Vec::new()),
+                    3,
+                    InterfaceLanguage::Korean,
+                )
+                .is_ok(),
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_node_on_code_another_mission_is_changing_waits_on_its_pull_request() {
+        // mission-2 is changing web/src in node x, pull request #41.
+        let mut other = mission();
+        other.id = "mission-2".into();
+        other.status = MissionStatus::Running;
+        let mut theirs = node("x", NodeKind::Change, &[]);
+        theirs.paths = vec!["web/src".into()];
+        other = apply_plan(&other, &plan(vec![theirs]), 2, InterfaceLanguage::Korean).unwrap();
+        other.nodes[0].status = NodeStatus::Working;
+        other.nodes[0].prs = vec![41];
+        let mut book = MissionBook::default();
+        book.missions.push(other);
+        let waiting_as = |key: &str, wait: crate::waits::WaitInput| {
+            let mut node = node(key, NodeKind::Wait, &[]);
+            node.delivery = None;
+            node.criteria.clear();
+            node.wait = Some(wait);
+            node
+        };
+        let waiting = |wait: crate::waits::WaitInput| waiting_as("w", wait);
+        let on = |key: &str, number: u32| {
+            waiting_as(
+                key,
+                crate::waits::WaitInput {
+                    pr: Some(number),
+                    ..Default::default()
+                },
+            )
+        };
+        let on_pr = || on("w", 41);
+        let mine = |depends: &[&str], extra: Vec<NodeInput>| {
+            let mut y = node("y", NodeKind::Change, depends);
+            y.paths = vec!["web/src/App.tsx".into(), "docs/UI_BEHAVIOR.md".into()];
+            let mut nodes = vec![y];
+            nodes.extend(extra);
+            apply_plan(&mission(), &plan(nodes), 2, InterfaceLanguage::Korean).unwrap()
+        };
+        let refused = check_paths_across(&book, &mine(&[], Vec::new())).unwrap_err();
+        let (code, detail) = crate::coordination::split_refusal(&refused);
+        assert_eq!(code, "mission_paths_in_other_mission");
+        assert_eq!(
+            detail,
+            Some(
+                "y changes web/src/App.tsx that mission-2 node x is changing now; add {\"kind\": \"wait\", \"wait\": {\"pr\": 41}} as a node and put its key in y's depends_on"
+            )
+        );
+        // A waiting node the node does not depend on orders nothing.
+        assert!(check_paths_across(&book, &mine(&[], vec![on_pr()])).is_err());
+        assert!(check_paths_across(&book, &mine(&["w"], vec![on_pr()])).is_ok());
+        let on_node = || {
+            waiting(crate::waits::WaitInput {
+                mission: Some("mission-2".into()),
+                node: Some("x".into()),
+                ..Default::default()
+            })
+        };
+        let on_mission = waiting(crate::waits::WaitInput {
+            mission: Some("mission-2".into()),
+            ..Default::default()
+        });
+        let on_ci = waiting(crate::waits::WaitInput {
+            pr: Some(41),
+            ci: true,
+            ..Default::default()
+        });
+        // Once a pull request is open only its merge orders them: a node of
+        // a pr-scope mission is done, and its mission closes, when the pull
+        // request is ready, and its CI ends before the merge.
+        for wait in [on_node(), on_mission, on_ci] {
+            let refused = check_paths_across(&book, &mine(&["w"], vec![wait])).unwrap_err();
+            assert!(refused.contains("{\"pr\": 41}"), "{refused}");
+        }
+        // Two open pull requests: each one's merge is waited on, since the
+        // one left could still meet this node at the merge.
+        book.missions[0].nodes[0].prs = vec![41, 42];
+        let refused = check_paths_across(&book, &mine(&["w"], vec![on_pr()])).unwrap_err();
+        assert!(
+            refused.ends_with(
+                "add {\"kind\": \"wait\", \"wait\": {\"pr\": 42}} as a node and put its key in y's depends_on"
+            ),
+            "{refused}"
+        );
+        let refused = check_paths_across(&book, &mine(&["w"], vec![on("w", 42)])).unwrap_err();
+        assert!(refused.contains("{\"pr\": 41}"), "{refused}");
+        let refused = check_paths_across(&book, &mine(&[], Vec::new())).unwrap_err();
+        assert!(
+            refused.ends_with(
+                "add {\"kind\": \"wait\", \"wait\": {\"pr\": 41}} and {\"kind\": \"wait\", \"wait\": {\"pr\": 42}} as nodes and put their keys in y's depends_on"
+            ),
+            "{refused}"
+        );
+        assert!(
+            check_paths_across(&book, &mine(&["w", "v"], vec![on("w", 41), on("v", 42)])).is_ok()
+        );
+        // One that merged or closed is no longer waited on: an earlier pull
+        // request of the node merged, the newer one is open.
+        book.missions[0].nodes[0].pr_seen = vec![PrSeen {
+            number: 41,
+            merged: true,
+            ..Default::default()
+        }];
+        assert!(check_paths_across(&book, &mine(&["w"], vec![on("w", 42)])).is_ok());
+        assert!(check_paths_across(&book, &mine(&["w"], vec![on_pr()])).is_err());
+        // With none open, or none yet, the node itself is waited on.
+        book.missions[0].nodes[0].pr_seen.push(PrSeen {
+            number: 42,
+            closed: true,
+            ..Default::default()
+        });
+        assert!(check_paths_across(&book, &mine(&["w"], vec![on_node()])).is_ok());
+        book.missions[0].nodes[0].prs.clear();
+        book.missions[0].nodes[0].pr_seen.clear();
+        let refused = check_paths_across(&book, &mine(&[], Vec::new())).unwrap_err();
+        assert!(
+            refused.contains("{\"mission\": \"mission-2\", \"node\": \"x\"}"),
+            "{refused}"
+        );
+        assert!(check_paths_across(&book, &mine(&["w"], vec![on_node()])).is_ok());
+        // A node of mine at work keeps working.
+        let mut started = mine(&[], Vec::new());
+        started.nodes[0].status = NodeStatus::Working;
+        assert!(check_paths_across(&book, &started).is_ok());
+        // Their node not at work yet, or on another machine, orders nothing.
+        book.missions[0].nodes[0].status = NodeStatus::Planned;
+        assert!(check_paths_across(&book, &mine(&[], Vec::new())).is_ok());
+        book.missions[0].nodes[0].status = NodeStatus::Working;
+        book.missions[0].device_id = "node-b".into();
+        assert!(check_paths_across(&book, &mine(&[], Vec::new())).is_ok());
     }
 
     #[test]

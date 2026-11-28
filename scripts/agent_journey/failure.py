@@ -92,7 +92,7 @@ class FailureLogs:
         # A line still being written may stop inside a home or a character.
         data = data[:data.rfind(b"\n") + 1]
         lines = scrub(data.decode("utf-8", errors="replace")).encode().splitlines(keepends=True)
-        cap = min(self.cell_bytes, max(self.floor, self.left))
+        cap = self.allowance()
         head = (f"journey: hided's output from step {step['step']} (began {moment(step['started_ms'])}) "
                 f"to the failure of cell {cell} ({moment(now_ms())}), {len(data)} bytes of whole lines")
         text, limit = (head + "\n").encode() + b"".join(lines), None
@@ -109,10 +109,20 @@ class FailureLogs:
                 kept.append(line)
                 room -= len(line)
             text += b"".join(reversed(kept))
-        self.left = max(0, self.left - len(text))
+        self.spend(len(text))
         path.unlink(missing_ok=True)
         write_private(path, text)
         return path.name, limit
+
+    def allowance(self):
+        """The most one more failed cell's file may hold: the cell's cap, or
+        what the run's budget has left when that is less, but never less
+        than the cell's tail."""
+        return min(self.cell_bytes, max(self.floor, self.left))
+
+    def spend(self, size):
+        """Counts a failed cell's file of `size` bytes against the run's budget."""
+        self.left = max(0, self.left - size)
 
 
 def drop_on_pass(run, code, interrupted):
