@@ -618,8 +618,10 @@ function useWords(mentions: readonly DeskMention[], onSession: ThreadPartActions
  * line. A session asleep has no box (`composer` null): its caller dims the
  * record and wakes it from the sleep card over it.
  */
-export function ThreadView({ job, lines, reading = false, failure = null, mentions = NO_MENTIONS, startedByDesk = false, composer, ask = null, asks = NO_ASKS, onAsk, foot = null, workingSince = null, onTerminal, onReachTop, olderLeft = false, scrollKey = null, ...actions }: {
+export function ThreadView({ job, running = false, lines, reading = false, failure = null, mentions = NO_MENTIONS, startedByDesk = false, composer, ask = null, asks = NO_ASKS, onAsk, foot = null, workingSince = null, onTerminal, onReachTop, olderLeft = false, scrollKey = null, ...actions }: {
   job: DeskJob | null;
+  /** The session's agent works now, as its sidebar row says (`ThreadPanel` decides it): the working line and the live fold follow it. */
+  running?: boolean;
   /** When the session's running turn started (its row's last prompt), for the working line's time. */
   workingSince?: number | null;
   lines: readonly ThreadLine[];
@@ -659,7 +661,6 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   const selected = useSelectedRows(box);
   useBrowserSelection(box);
   const turns = useMemo(() => threadTurns(lines), [lines]);
-  const running = job?.state === "working" || job?.state === "starting";
   const words = useWords(mentions, actions.onSession, actions.onCopy, actions.place ?? null, actions.onFile);
   // Which turns' work the operator unfolded, by key: the conversation's, so a fold outlives its rows leaving the viewport.
   const [open, setOpen] = useState<ReadonlySet<string>>(NO_OPEN);

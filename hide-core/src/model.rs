@@ -12111,18 +12111,26 @@ mod wire_enum_tests {
             &[
                 DeskJobState::Queued,
                 DeskJobState::Starting,
-                DeskJobState::Working,
-                DeskJobState::Asking,
-                DeskJobState::Done,
+                DeskJobState::Open,
                 DeskJobState::Failed,
                 DeskJobState::Cancelled,
                 DeskJobState::Closed,
                 DeskJobState::MovedOut,
-                DeskJobState::Sleeping,
                 DeskJobState::Archived,
             ],
         );
         checked.insert("desk_job_state");
+        assert_wire(
+            &contract,
+            "desk_job_activity",
+            &[
+                DeskJobActivity::Working,
+                DeskJobActivity::Asking,
+                DeskJobActivity::Done,
+                DeskJobActivity::Sleeping,
+            ],
+        );
+        checked.insert("desk_job_activity");
         assert_wire(
             &contract,
             "desk_ask_kind",

@@ -45,7 +45,7 @@ impl Runtime {
     /// (`JobMark::glanced`), so one pushed out is not put back. Whether the
     /// store changed.
     pub(in crate::runtime) fn keep_desk_glance(&mut self, pane: &str, at_ms: u64) -> bool {
-        use crate::model::DeskJobState;
+        use crate::model::{DeskJobActivity, DeskJobState};
         let stored = &mut self.desk.stored;
         let new = !stored.glance.iter().any(|kept| kept.pane_id == pane);
         let taken = stored.glance.len() < crate::desk::MAX_GLANCE_SESSIONS
@@ -63,13 +63,11 @@ impl Runtime {
                             .flatten()
                             .find(|card| card.pane_id.as_deref() == Some(kept))
                             .is_some_and(|card| {
-                                matches!(
-                                    card.state,
-                                    DeskJobState::Queued
-                                        | DeskJobState::Starting
-                                        | DeskJobState::Working
-                                        | DeskJobState::Asking
-                                )
+                                matches!(card.state, DeskJobState::Queued | DeskJobState::Starting)
+                                    || matches!(
+                                        card.activity,
+                                        Some(DeskJobActivity::Working | DeskJobActivity::Asking)
+                                    )
                             })
                 })
             };

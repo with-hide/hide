@@ -297,7 +297,13 @@ pub struct DeskJobSnapshot {
     pub agent_kind: String,
     pub project: DeskJobProject,
     pub location: DeskJobLocation,
+    /// Where the job stands for Desk; what its agent does is `activity`.
     pub state: DeskJobState,
+    /// What its agent does now, read only from its session's sidebar row
+    /// (the value the row's mark and the terminal's status show); absent
+    /// while it has no row (queued, starting, closed, archived, or a row not
+    /// read yet).
+    pub activity: Option<DeskJobActivity>,
     /// Its place in the queue, from 1, while `queued`.
     pub queue_position: Option<usize>,
     /// What the session does now: its pane's second line.
@@ -427,23 +433,53 @@ pub enum DeskMissionTurn {
     Attention,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// Where a job stands for Desk: in its queue, starting, open, or ended for
+/// Desk by a failure, a cancel, the operator's close or move, or the archive.
+/// What its agent does is [`DeskJobActivity`], a separate fact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeskJobState {
     Queued,
+    /// Desk started it and its session's row is not read yet.
     Starting,
-    Working,
-    Asking,
-    Done,
+    /// Its session is open where Desk follows it.
+    Open,
     Failed,
     Cancelled,
     /// The operator closed its tab (B38).
     Closed,
-    /// The operator moved its tab out of the reserved Desk group (B37).
+    /// The operator moved its tab out of the reserved Desk group (B37); its
+    /// session goes on, and `activity` still says what it does.
     MovedOut,
+    Archived,
+}
+
+/// What a job's agent does, as its session's sidebar row reads it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeskJobActivity {
+    Working,
+    /// Its turn is the operator's: a question, an approval or an error.
+    Asking,
+    Done,
     /// Hide put it to sleep (`hide agent sleep`); a letter wakes it.
     Sleeping,
-    Archived,
+}
+
+impl DeskJobActivity {
+    /// What the agent of `row` does, from the row's own state: the fields its
+    /// mark and the session's conversation read (`RowState`).
+    pub fn of(row: &super::SidebarAgentSnapshot) -> Self {
+        if row.sleep.is_some() {
+            Self::Sleeping
+        } else if row.state.asking {
+            Self::Asking
+        } else if row.state.working {
+            Self::Working
+        } else {
+            Self::Done
+        }
+    }
 }
 
 /// What an asking job waits on the operator for (D-75).
@@ -459,10 +495,21 @@ pub enum DeskAskKind {
     Blocked,
 }
 
-impl DeskJobState {
-    /// Whether the job holds one of Desk's places (B21, B22, B37, B38).
-    pub fn holds_place(self) -> bool {
-        matches!(self, Self::Starting | Self::Working | Self::Asking)
+impl DeskJobSnapshot {
+    /// Whether the job holds one of Desk's places (B21, B22, B37, B38): it
+    /// starts, or it is open and its agent has not come to rest (done or
+    /// asleep), a device's session whose row is not there while the device
+    /// is not connected included. The place is the job's, not a reading of
+    /// what its agent does.
+    pub fn holds_place(&self) -> bool {
+        match self.state {
+            DeskJobState::Starting => true,
+            DeskJobState::Open => !matches!(
+                self.activity,
+                Some(DeskJobActivity::Done | DeskJobActivity::Sleeping)
+            ),
+            _ => false,
+        }
     }
 }
 

@@ -14,10 +14,14 @@ import { GLANCE_FILE_ROWS, GlanceCrumb, GlancePanel } from "./glance-panel";
 // line with the session's state and the time since it moved, files 볼 것
 // first with their session named at the end, and `▯|` folding the panel.
 
-const card = (pane: string, title: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
+/** A card by its place, or by what its agent does while it is open. */
+type Shown = DeskJob["state"] | NonNullable<DeskJob["activity"]>;
+const ACTIVITIES: readonly string[] = ["working", "asking", "done", "sleeping"];
+const card = (pane: string, title: string, shown: Shown, extra: Partial<DeskJob> = {}): DeskJob => ({
   id: `pane:${pane}`, agent_id: null, pane_id: pane, title, agent_kind: "claude", project: { workspace_id: "w", label: "w" }, location: { kind: "checkout", label: "main" },
-  state, queue_position: null, now: null, plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false,
-  reason: null, failure: null, ask: state === "asking" ? "question" : null, mark: null, mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [],
+  ...(ACTIVITIES.includes(shown) ? { state: "open" as const, activity: shown as DeskJob["activity"] } : { state: shown as DeskJob["state"], activity: null }),
+  queue_position: null, now: null, plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false,
+  reason: null, failure: null, ask: shown === "asking" ? "question" : null, mark: null, mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [],
   ...extra,
 });
 const file = (id: string, pane: string | null, seen: boolean): DeskGlanceFile => ({ id, kind: "doc", label: `${id}.md`, thumb: null, seen, pr_state: null, device_id: "mac", checkout: "/repo", path: `/repo/${id}.md`, url: null, pane_id: pane });

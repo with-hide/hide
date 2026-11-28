@@ -37,7 +37,7 @@ import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
 import { Separator } from "../components/ui/separator";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { askingCount, outputKindOf, recordCard, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskPermission, type DeskSelection, type DeskSessionRef, type ThreadReadFailure, type WorkingPhase } from "../desk";
+import { askingCount, jobWorking, outputKindOf, recordCard, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskPermission, type DeskSelection, type DeskSessionRef, type ThreadReadFailure, type WorkingPhase } from "../desk";
 import { commandRows, keepSent, mentionTree, type ComposerTray, type TrayFile } from "../deskComposer";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -216,18 +216,18 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, fo
   const actions = useMemo(() => createActions(() => true), []);
   const lines = useMemo(() => threadLines(updates, parts, sceneSession), [updates, parts]);
   // A question is one Hide found in the conversation (the line above the box); an approval is the agent's own screen asking (its choice card).
-  const asks = useMemo(() => (job.state === "asking" && job.ask === "question" && job.question ? [
+  const asks = useMemo(() => (job.activity === "asking" && job.ask === "question" && job.question ? [
     { id: `${job.id}:earlier`, text: "라이트 캡처는 6장 모두 찍을까요?", at_unix_ms: Date.now() - 12 * 60_000 },
     { id: `${job.id}:ask`, text: job.question, at_unix_ms: Date.now() - 3 * 60_000 },
   ] : []), [job]);
-  const choice = job.state === "asking" && job.ask === "approval" && job.question
+  const choice = job.activity === "asking" && job.ask === "approval" && job.question
     ? <SessionAskCard ask={{ kind: "permission", turn: `${job.id}:turn`, since_ms: 2 * 60_000, command: job.question, choices: [{ id: "1", label: "Yes" }, { id: "2", label: "Yes, and don't ask again for this command" }, { id: "3", label: "No, and tell Codex what to do differently" }], answerable: true }} disabled={false} waited="2분" picked={null} answer={null} error={null} onPick={noop} onAnswer={noop} onTerminal={noop} onWrite={noop} />
     : null;
   return <>
-    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} />
+    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.activity === "sleeping"} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} />
     <OutputShelf outputs={job.outputs} pulls={scenePulls(job)} onOpen={noop} onPull={noop} />
     <ThreadView
-      job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk
+      job={job} running={job.activity === "working"} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk
       composer={{ value: text, tray: sceneTray(files), focused, onChange: setText, onSend: noop, bar: (
         // The session's bar (mission-106): the agent fixed, its model a menu, and an effort Hide cannot change for OpenCode-like agents yet.
         <SessionAgentBar
@@ -334,7 +334,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       // A new conversation while threads from before still run: the sidebar, the rail and the empty Desk count the same ones.
       const running = pick("mention", "gallery", "release");
       sidebar = <SceneSidebar jobs={running} selected={null} />;
-      body = <Room chat={<DeskChatColumn head={<ChatHead />} composer={<ChatComposer selection={CLAUDE} />}><DeskEmpty working={running.filter((job) => job.state === "working").length} asking={askingCount(running)} onExample={noop} /></DeskChatColumn>} />;
+      body = <Room chat={<DeskChatColumn head={<ChatHead />} composer={<ChatComposer selection={CLAUDE} />}><DeskEmpty working={running.filter(jobWorking).length} asking={askingCount(running)} onExample={noop} /></DeskChatColumn>} />;
       break;
     }
     case "s2":
@@ -348,7 +348,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       body = <CardStates />;
       break;
     case "s4": {
-      const gallery = deskJob(jobs.gallery!, { state: "working", ask: null, question: null, now: "다크 모드 찍는 중", plan: { done: 3, total: 5 } });
+      const gallery = deskJob(jobs.gallery!, { activity: "working", ask: null, question: null, now: "다크 모드 찍는 중", plan: { done: 3, total: 5 } });
       const thread = galleryThread();
       const items: DeskItem[] = [
         { kind: "user", id: 1, text: "갤러리 캡처 라이트·다크로 비교해줘", at_ms: now, mentions: [] },
@@ -385,7 +385,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       break;
     }
     case "s7": {
-      const done = deskJob(jobs.gallery!, { state: "done", ask: null, question: null, summary: "차이 3곳", plan: { done: 5, total: 5 }, outputs: [OUTPUTS.compareLight, OUTPUTS.compareDark, OUTPUTS.notes] });
+      const done = deskJob(jobs.gallery!, { activity: "done", ask: null, question: null, summary: "차이 3곳", plan: { done: 5, total: 5 }, outputs: [OUTPUTS.compareLight, OUTPUTS.compareDark, OUTPUTS.notes] });
       const items: DeskItem[] = [{ kind: "job", id: 1, job_id: "gallery" }];
       // The session's page opened on Desk's desk as a page of Desk's own (B34), drawn from its still.
       body = <Room chat={chat(items, <ChatComposer selection={CLAUDE} />, { jobs: { gallery: done }, selectedJob: "gallery" })}

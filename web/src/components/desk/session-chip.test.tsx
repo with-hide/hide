@@ -13,7 +13,7 @@ vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 
 const card: DeskJob = {
   id: "pane:w1:p7", agent_id: null, pane_id: "w1:p7", title: "agent-journey", agent_kind: "codex", project: { workspace_id: "w", label: "herdr-ide" }, location: { kind: "worktree", label: "journey-agy" },
-  state: "working", queue_position: null, now: "Linux e2e 결과 기다리는 중", plan: { done: 3, total: 5 }, question: null, summary: null, pull_requests: [{ number: 1921, state: "pending" }],
+  state: "open", activity: "working", queue_position: null, now: "Linux e2e 결과 기다리는 중", plan: { done: 3, total: 5 }, question: null, summary: null, pull_requests: [{ number: 1921, state: "pending" }],
   outputs: [{ id: "o1", kind: "image", label: "a.png", thumb: null, seen: true, pr_state: null, device_id: null, checkout: null, path: null, url: null }, { id: "o2", kind: "doc", label: "b.md", thumb: null, seen: true, pr_state: null, device_id: null, checkout: null, path: null, url: null }],
   joined: false, reason: null, failure: null, ask: null, mark: "going", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [],
 };

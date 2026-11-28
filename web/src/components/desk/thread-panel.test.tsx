@@ -28,7 +28,7 @@ vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 
 const job: DeskJob = {
   id: "gallery", agent_id: "agent-7", pane_id: "w1:p2", title: "갤러리 캡처 비교", agent_kind: "claude", project: { workspace_id: "w", label: "herdr-ide" }, location: { kind: "worktree", label: "desk-threads" },
-  state: "working", queue_position: null, now: "캡처 중", plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false,
+  state: "open", activity: "working", queue_position: null, now: "캡처 중", plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false,
   reason: null, failure: null, ask: null, mark: "going", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [],
 };
 
@@ -86,8 +86,8 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined, pane = "w1:p2", answer = false, asleep = null, onSessionWake }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void; pane?: string; answer?: boolean; asleep?: SleepingSession | null; onSessionWake?: () => void } = {}) {
-  const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn(), switchThread: vi.fn(() => "switch-1"), observeCatalog: vi.fn(() => noop), requestFileIndex: vi.fn(), deskCommandsCheck: vi.fn(), inputQueue: vi.fn(), interruptThread: vi.fn(() => "stop-1"), wakeAgent: vi.fn(), wakeSleepingSession: vi.fn() };
+async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], onCopy = () => Promise.resolve(true), onAsk = () => undefined, pane = "w1:p2", answer = false, asleep = null, onSessionWake }: { asks?: AskLine[]; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void; pane?: string; answer?: boolean; asleep?: SleepingSession | null; onSessionWake?: () => void } = {}) {
+  const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn(), switchThread: vi.fn(() => "switch-1"), observeCatalog: vi.fn(() => noop), requestFileIndex: vi.fn(), deskCommandsCheck: vi.fn(), inputQueue: vi.fn(), interruptThread: vi.fn(() => "stop-1"), wakeAgent: vi.fn(), wakeSleepingSession: vi.fn(), askPane: vi.fn(), answerPane: vi.fn(() => "answer-1"), deskTerminal: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -96,7 +96,7 @@ async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks 
   const answered = vi.fn();
   const draw = (asked: boolean, shownCard: DeskJob | null = card) => root.render(
     <TooltipProvider>
-      <ThreadPanel job={shownCard} paneId={pane} answer={asked} onAnswered={answered} actions={actions} foot={foot} asleep={asleep} onSessionWake={onSessionWake} ask={ask} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
+      <ThreadPanel job={shownCard} paneId={pane} answer={asked} onAnswered={answered} actions={actions} foot={foot} asleep={asleep} onSessionWake={onSessionWake} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
     </TooltipProvider>,
   );
   await act(async () => draw(answer));
@@ -465,6 +465,7 @@ it("draws an image the session showed as its tile's picture, made from the file'
   const reads: Record<string, unknown>[] = [];
   configureFileBytes((event) => { reads.push(event.payload as Record<string, unknown>); });
   const { container } = await mount();
+  useShellStore.setState({ agents: [workingRow()] });
   const shown = { sessionUpdate: "tool_call", toolCallId: "f", kind: "execute", title: "hide file open /repo/shots/dark.png", status: "completed" };
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: { record: "r1", start: 0, updates: [shown], parts: { f: { kind: "view", view: "file", target: "/repo/shots/dark.png" } }, sessions: {} } }) }));
   const answer = async (read: Record<string, unknown>, bytes: number[], total: number) => {
@@ -505,7 +506,7 @@ const heldMission = { id: "mission-3", title: "Desk 1차", status: "running", de
 const shown = async (tail: ThreadPage) => act(async () => useShellStore.setState({ rest: { missions: { items: [heldMission] } } as unknown as SnapshotRest, sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
 
 it("draws what one turn leads to once per target, with its newest state, and a mission chip without its title beside it", async () => {
-  const { container } = await mount({ ...job, state: "done" });
+  const { container } = await mount({ ...job, activity: "done" });
   await shown({
     record: "r1", start: 0, updates: [
       operator("미션 돌려줘"),
@@ -546,6 +547,7 @@ it("draws what one turn leads to once per target, with its newest state, and a m
 
 it("folds a running turn's calls into one line with its newest call under it, never what came out, and unfolds every call", async () => {
   const { container } = await mount();
+  useShellStore.setState({ agents: [workingRow()] });
   const tail = (newest: object[]) => ({
     record: "r1", start: 0, updates: [
       operator("칩을 고쳐줘"),
@@ -586,7 +588,7 @@ it("folds a running turn's calls into one line with its newest call under it, ne
 });
 
 it("tells parts apart by what they lead to, not by how they are drawn or typed", async () => {
-  const { container } = await mount({ ...job, state: "done" });
+  const { container } = await mount({ ...job, activity: "done" });
   await shown({
     record: "r1", start: 0, updates: [
       operator("둘 다 리뷰 맡기고 노트 열어줘"),
@@ -611,6 +613,7 @@ it("tells parts apart by what they lead to, not by how they are drawn or typed",
 
 it("names a running turn's newest call whatever it was: a Hide call by its command, a search by its term", async () => {
   const { container } = await mount();
+  useShellStore.setState({ agents: [workingRow()] });
   const running = (calls: object[], parts: ThreadPage["parts"] = {}) => shown({ record: "r1", start: 0, updates: [operator("찾아줘"), ...calls], parts, sessions: {} } as ThreadPage);
   // A call drawn as a Hide part is still the newest step, as the command it was.
   await running([shell("r", "rg old-step"), shell("m", "hide mission show --mission mission-3")], { m: { kind: "mission", mission: "mission-3" } });
@@ -633,7 +636,7 @@ it("names a running turn's newest call whatever it was: a Hide call by its comma
 });
 
 it("folds a finished turn under 작업 · 파일 n · 명령 m with no newest call", async () => {
-  const { container } = await mount({ ...job, state: "done" });
+  const { container } = await mount({ ...job, activity: "done" });
   await shown({ record: "r1", start: 0, updates: [operator("고쳐줘"), shell("r0", "rg -n mission"), edit("e1", "web/src/desk.ts", "a", "b"), said("고쳤어요")], parts: {}, sessions: {} });
   expect(container.querySelector("[data-desk-turn-toggle]")?.textContent).toBe("Work · 1 file · 1 command");
   expect(container.querySelector("[data-desk-thread-newest]")).toBeNull();
@@ -683,6 +686,7 @@ const asked = (...updates: ThreadPage["updates"]) => ({ record: "r1", start: 0, 
 it("draws only the rows near the viewport, one long turn's messages each a row of its own, and draws a row again on return", async () => {
   layOut({ viewport: 400, row: 100 });
   const { container, type } = await mount();
+  useShellStore.setState({ agents: [workingRow()] });
   // One running turn whose work holds forty messages: it must not stay drawn whole.
   const updates = Array.from({ length: 40 }, (_, index) => [
     answer(`Past **answer ${index}**`, index + 1),
@@ -713,7 +717,7 @@ it("draws only the rows near the viewport, one long turn's messages each a row o
 
 it("keeps a turn's unfolded work while its rows leave the viewport and come back", async () => {
   layOut({ viewport: 400, row: 100 });
-  const { container } = await mount({ ...job, state: "done" });
+  const { container } = await mount({ ...job, activity: "done" });
   const later = Array.from({ length: 20 }, (_, index) => [operator(`later ${index}`), said(`later answer ${index}`)]).flat();
   await shown({ record: "r1", start: 0, updates: [operator("고쳐줘"), shell("r0", "rg -n first-turn"), said("고쳤어요"), ...later], parts: {}, sessions: {} });
   await scrollConversation(container, 0);
@@ -728,7 +732,7 @@ it("keeps a turn's unfolded work while its rows leave the viewport and come back
 });
 
 it("forgets the fold of a turn whose page was let go, so the same turn read again starts folded", async () => {
-  const { container } = await mount({ ...job, state: "done" });
+  const { container } = await mount({ ...job, activity: "done" });
   const older = { record: "r1", start: 0, updates: [operator("고쳐줘"), shell("r0", "rg -n first-turn"), said("고쳤어요")], parts: {}, sessions: {} };
   const tail = { record: "r1", start: 500, updates: [operator("다음"), said("했어요")], parts: {}, sessions: {} };
   const read = (pages: ThreadPage[]) => act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages } }));
@@ -742,7 +746,7 @@ it("forgets the fold of a turn whose page was let go, so the same turn read agai
 });
 
 it("starts a record replaced at the same path with fresh rows, none of the old record's folds on them", async () => {
-  const { container } = await mount({ ...job, state: "done" });
+  const { container } = await mount({ ...job, activity: "done" });
   const page = (record: string, task: string, command: string) => ({ record, start: 0, updates: [operator(task), shell("c1", command), said(`${task} 했어요`)], parts: {}, sessions: {} });
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: page("r1", "고쳐줘", "rg -n old-record") }), sessionThreadHistory: { generation: 4, pages: [] } }));
   await act(async () => container.querySelector<HTMLElement>("[data-desk-turn-toggle]")!.click());
@@ -755,7 +759,7 @@ it("starts a record replaced at the same path with fresh rows, none of the old r
 
 it("reads a page in above without moving the row the operator reads", async () => {
   layOut({ viewport: 400, row: 40 });
-  const { container } = await mount({ ...job, state: "done" });
+  const { container } = await mount({ ...job, activity: "done" });
   const pageOf = (from: number) => ({ record: "r1", start: from * 100, updates: Array.from({ length: 20 }, (_, index) => [operator(`question ${from + index}`), said(`answer ${from + index}`)]).flat(), parts: {}, sessions: {} });
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: pageOf(20), has_older: true }), sessionThreadHistory: { generation: 4, pages: [] } }));
   await scrollConversation(container, 600);
@@ -774,7 +778,7 @@ it("reads a page in above without moving the row the operator reads", async () =
 it("keeps the row being read in place when a row above it grows, while the reader scrolls up", async () => {
   const heights = new Map<string, number>();
   layOut({ viewport: 400, row: (row) => heights.get(row.dataset.threadRow!) ?? 40 });
-  const { container } = await mount({ ...job, state: "done" });
+  const { container } = await mount({ ...job, activity: "done" });
   await shown({ record: "r1", start: 0, updates: Array.from({ length: 30 }, (_, index) => [operator(`question ${index}`), said(`answer ${index}`)]).flat(), parts: {}, sessions: {} });
   await laidOut();
   const box = container.querySelector<HTMLElement>("[data-desk-thread-conversation]")!;
@@ -803,7 +807,7 @@ it("draws the message a question goes to wherever it stands, keeps it drawn whil
   const scrolled: string[] = [];
   vi.stubGlobal("CSS", { escape: (value: string) => value });
   Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this.textContent ?? ""); };
-  const { container } = await mount({ ...job, state: "done" }, null, { asks: [{ id: "far-0", text: "어느 화면을 찍을지", at_unix_ms: 1_500, quote: "어느 화면을 찍을까요?" }] });
+  const { container } = await mount({ ...job, activity: "done" }, null, { asks: [{ id: "far-0", text: "어느 화면을 찍을지", at_unix_ms: 1_500, quote: "어느 화면을 찍을까요?" }] });
   const later = Array.from({ length: 30 }, (_, index) => [operator(`later ${index}`), answer(`later answer ${index}`, 2_000 + index)]).flat();
   await shown({ record: "r1", start: 0, updates: [operator("찍어줘"), answer("어느 화면을 찍을까요? 라이트와 다크가 있어요.", 1_000), ...later], parts: {}, sessions: {} });
   const asking = () => drawnWords(container).some((words) => words.includes("어느 화면을 찍을까요?"));
@@ -823,7 +827,7 @@ it("draws the message a question goes to wherever it stands, keeps it drawn whil
 
 it("keeps every row between a selection's ends drawn while it stands, so a copy holds all of it", async () => {
   layOut({ viewport: 400, row: 100 });
-  const { container } = await mount({ ...job, state: "done" });
+  const { container } = await mount({ ...job, activity: "done" });
   await shown({ record: "r1", start: 0, updates: Array.from({ length: 30 }, (_, index) => [operator(`question ${index}`), said(`answer ${index}`)]).flat(), parts: {}, sessions: {} });
   await scrollConversation(container, 0);
   const start = drawnRows(container).find((row) => row.textContent?.includes("answer 1"))!;
@@ -846,7 +850,7 @@ it("keeps every row between a selection's ends drawn while it stands, so a copy 
 });
 
 it("leaves a press on a message's words to the browser, so a drag can select across messages, and a code block's 복사 still takes its press", async () => {
-  const { container } = await mount({ ...job, state: "done" });
+  const { container } = await mount({ ...job, activity: "done" });
   await shown({ record: "r1", start: 0, updates: [operator("보여줘"), said("첫 답이에요"), operator("코드도"), said("이 코드예요\n\n```\nconst a = 1;\n```")], parts: {}, sessions: {} });
   await codeCopyDrawn(container);
   const reached: EventTarget[] = [];
@@ -1175,8 +1179,8 @@ it("says the reason a change typed nothing and keeps the session's choice", asyn
 });
 
 it("holds the bar while the agent's question card is on screen: a change's Enter would answer it", async () => {
-  const { actions, container } = await mount(job, null, { ask: <div data-ask-card="true" /> });
-  await act(async () => useShellStore.setState({ sessionThread: section({ choice: { model: "opus" } }), agents: [claudeRow] }));
+  const { actions, container } = await mount(job);
+  await act(async () => useShellStore.setState({ sessionThread: section({ choice: { model: "opus" } }), agents: [{ ...claudeRow, device_id: "local", state: { working: false, asking: true } } as AgentRow] }));
   const effort = container.querySelector<HTMLButtonElement>('[data-session-bar="effort"]')!;
   expect(effort.disabled).toBe(true);
   await act(async () => {
@@ -1412,4 +1416,41 @@ it("words a refusal of a full line and of its files under the box (B8, B9)", asy
   await act(async () => completeInput(section({ input: { request_id: request, state: "refused", reason: "queue_full" } })));
   expect(container.querySelector("[data-desk-composer-notice]")?.textContent).toBe("The waiting line is full");
   expect(container.querySelector("textarea")!.value).toBe("아홉 번째");
+});
+
+// Mission-115 (activity): what the agent does is its sidebar row's, the value its mark and its terminal's status show.
+// The conversation beside Desk and over the pane draws the working line and the agent's question card from that row
+// alone, whatever the card says of its place (a session moved out of Desk's group) and with no card at all (a session
+// Desk did not start), as the session "파리크라상 교육 자료 구성안 초안" did not.
+describe("what the agent does, from its sidebar row", () => {
+  const row = (state: { working: boolean; asking: boolean }) => ({ pane_id: "w1:p2", device_id: "local", agent_kind: "claude", state }) as AgentRow;
+  const ask = { kind: "question" as const, turn: "7", since_ms: null, text: "구성안을 이대로 확정할까요?", choices: [{ id: "1", label: "네" }, { id: "2", label: "아니요" }], answerable: true };
+  const movedOut: DeskJob = { ...job, state: "moved_out", activity: "done" };
+
+  it.each([["a session moved out of Desk's group", movedOut], ["a session Desk did not start", null]] as const)("draws the working line while the row works, for %s", async (_, card) => {
+    const { container } = await mount(card);
+    await act(async () => useShellStore.setState({ sessionThread: section(), sessionThreadHistory: { generation: 4, pages: [] }, agents: [row({ working: true, asking: false })] }));
+    expect(container.querySelector("[data-working-line]")).not.toBeNull();
+    await act(async () => useShellStore.setState({ agents: [row({ working: false, asking: false })] }));
+    expect(container.querySelector("[data-working-line]")).toBeNull();
+  });
+
+  it.each([["a session moved out of Desk's group", movedOut], ["a session Desk did not start", null]] as const)("reads and shows the agent's question while the row asks, for %s", async (_, card) => {
+    const { actions, container } = await mount(card);
+    await act(async () => useShellStore.setState({ sessionThread: section(), sessionThreadHistory: { generation: 4, pages: [] }, agents: [row({ working: false, asking: true })] }));
+    expect(actions.askPane).toHaveBeenCalledWith("local", "w1:p2");
+    await act(async () => useShellStore.setState({ paneAsk: { device_id: "local", pane_id: "w1:p2", ask, reason: null } }));
+    expect(container.querySelectorAll("[data-phone-ask-choice]")).toHaveLength(2);
+    expect(container.querySelector("[data-working-line]")).toBeNull();
+    // The row stops asking: the card goes, whatever the card still says.
+    await act(async () => useShellStore.setState({ agents: [row({ working: true, asking: false })] }));
+    expect(container.querySelector("[data-phone-ask-choice]")).toBeNull();
+  });
+
+  it("shows no question card for a card that says it asks while its row does not", async () => {
+    const { actions, container } = await mount({ ...job, activity: "asking", ask: "question", question: "남은 질문" });
+    await act(async () => useShellStore.setState({ sessionThread: section(), sessionThreadHistory: { generation: 4, pages: [] }, agents: [row({ working: false, asking: false })], paneAsk: { device_id: "local", pane_id: "w1:p2", ask, reason: null } }));
+    expect(actions.askPane).not.toHaveBeenCalled();
+    expect(container.querySelector("[data-phone-ask-choice]")).toBeNull();
+  });
 });

@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import { glanceSessions, agentPickable, approvalButtons, askPlace, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, outputKindOf, threadPhase, type ThreadHidePart, type ThreadTurn, sessionFacts, livePane, ENDED_JOB_STATES, jobDimmed, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
 import type { AgentRow, DeskRecord } from "./snapshot";
 
-const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
+/** A card by its place, or by what its agent does while it is open. */
+type Shown = DeskJob["state"] | NonNullable<DeskJob["activity"]>;
+const ACTIVITIES: readonly string[] = ["working", "asking", "done", "sleeping"];
+const placed = (shown: Shown): Pick<DeskJob, "state" | "activity"> => (ACTIVITIES.includes(shown) ? { state: "open", activity: shown as DeskJob["activity"] } : { state: shown as DeskJob["state"], activity: null });
+const job = (id: string, shown: Shown, extra: Partial<DeskJob> = {}): DeskJob => ({
   id, agent_id: null, pane_id: `pane-${id}`, title: id, agent_kind: "claude", project: { workspace_id: "w", label: "w" }, location: { kind: "checkout", label: "w" },
-  state, queue_position: null, now: null, plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false,
+  ...placed(shown), queue_position: null, now: null, plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false,
   reason: null, failure: null, ask: null, mark: null, mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [],
   ...extra,
 });
@@ -270,7 +274,7 @@ describe("a chip's session (D-86, B50)", () => {
     };
     const facts = sessionFacts(rows, cards, { name: "m349", mark: "done", agent_kind: "claude", pane_id: "w1:gone" }, { records: [record], moved: [] });
     expect([facts?.listed, facts?.name, facts?.mark, facts?.agent_kind, facts?.since, facts?.record]).toEqual([false, "1.3.0 후보 빌드 만들기", null, "claude", 900, record]);
-    expect(facts?.card).toMatchObject({ title: "1.3.0 후보 빌드 만들기", state: "done", now: "서명까지 확인했어요", pull_requests: [{ number: 2930, state: "merged" }], project: { label: "herdr-ide" }, location: { label: "release-1.3.0-rc9" } });
+    expect(facts?.card).toMatchObject({ title: "1.3.0 후보 빌드 만들기", state: "closed", activity: "done", now: "서명까지 확인했어요", pull_requests: [{ number: 2930, state: "merged" }], project: { label: "herdr-ide" }, location: { label: "release-1.3.0-rc9" } });
     // Another pane's record is not this one's.
     expect(sessionFacts(rows, cards, { name: "m350", mark: null, agent_kind: null, pane_id: "w1:other" }, { records: [record], moved: [] })?.record).toBeNull();
   });
@@ -313,10 +317,13 @@ describe("holdsFoot", () => {
 
 // The audit's 사소 3: one set of ended job states for Desk's room and its job card.
 describe("an ended job", () => {
-  it("is every state no pane comes for, and its card is dimmed unless it failed", () => {
+  it("is every state no pane comes for, and its card is dimmed unless it failed or its agent still works or asks", () => {
     expect([...ENDED_JOB_STATES].sort()).toEqual(["archived", "cancelled", "closed", "failed", "moved_out"]);
     const states = ["queued", "starting", "working", "asking", "done", "sleeping", "failed", "cancelled", "closed", "moved_out", "archived"] as const;
-    expect(states.filter(jobDimmed)).toEqual(["cancelled", "closed", "moved_out", "archived"]);
+    expect(states.filter((state) => jobDimmed(job(state, state)))).toEqual(["cancelled", "closed", "moved_out", "archived"]);
+    // Moved out of Desk's group, a session goes on: dimmed only once its agent rests.
+    const moved = (activity: DeskJob["activity"]) => jobDimmed(job("m", "moved_out", { activity }));
+    expect([moved("working"), moved("asking"), moved("done"), moved(null)]).toEqual([false, false, true, true]);
   });
 });
 

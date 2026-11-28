@@ -592,8 +592,16 @@ pub(crate) enum QueuedState {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct JobMark {
     pub intent: String,
-    /// Its tab was put in the reserved Desk group once; leaving it after that
-    /// is the operator's move (B37).
+    /// The pane `grouped`, `moved_out` and `glanced` are about. A start that
+    /// failed and was started again runs in a new pane, in a tab Desk has not
+    /// placed and a session 한눈에 does not list, so a new pane starts the
+    /// three over. Absent in a mark an older Hide saved, which is taken as
+    /// about the pane the job holds now. A device's pane id spells the device
+    /// (`DESK_MACHINE_FIELDS`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<String>,
+    /// Its pane's tab was put in the reserved Desk group once; leaving it
+    /// after that is the operator's move (B37).
     pub grouped: bool,
     pub moved_out: bool,
     pub closed: bool,
@@ -870,11 +878,12 @@ mod tests {
     /// migration does not map yet (with-hide/hide issue 3044): a View's
     /// checkout's machine and the machine of the agent that opened it (Desk's
     /// own agent's is the core's node), a 한눈에 session on a connected device
-    /// (its pane id spells the device), a named session's machine and a
-    /// queued spawn's machine. A new field that names a machine fails here,
+    /// and the pane a job's mark is about (each pane id spells the device), a
+    /// named session's machine and a queued spawn's machine. A new field that names a machine fails here,
     /// so it reaches that issue's list instead of a renamed device unnoticed.
     const DESK_MACHINE_FIELDS: &[&str] = &[
         "/glance/*/pane_id",
+        "/marks/*/pane",
         "/named/*/session/device_id",
         "/queue/*/command/machine",
         "/views/root/area/displays/*/opener/device_id",
@@ -910,6 +919,11 @@ mod tests {
         );
         stored.views.append(&area, file).unwrap();
         stored.keep_glance("remote:d:pane:p2", 1);
+        stored.marks.push(JobMark {
+            intent: "desk:2".into(),
+            pane: Some("remote:d:pane:p3".into()),
+            ..JobMark::default()
+        });
         let mut page = stored
             .views
             .new_browser_display("http://localhost:5173/", 1);
@@ -988,6 +1002,49 @@ mod tests {
             DESK_MACHINE_FIELDS,
             "a field of desk.json that names a machine is listed in DESK_MACHINE_FIELDS and issue 3044"
         );
+    }
+
+    /// A job's mark naming its device's pane, as this build saves it, over
+    /// every folder a release wrote: the start's migrations leave it as it
+    /// was, a second start writes nothing, and Desk reads the same pane back.
+    /// No release writes `marks[].pane` yet, so this build's own code writes
+    /// it (docs/TESTING.md, Upgrading a released state folder).
+    #[test]
+    fn a_marks_device_pane_over_a_released_state_folder_is_the_same_at_the_next_start() {
+        use crate::node_migration::upgrade_tests::{fixtures, second_start, started};
+        let folders = fixtures();
+        assert!(!folders.is_empty(), "no released state folder was found");
+        let pane = "remote:de510000000000000000000000000002:pane:p1";
+        for folder in folders {
+            let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+            let state = started(&folder);
+            let path = hide_kit::layout::desk_store(state.path());
+            let mut stored = DeskStore::new(path.clone()).restore();
+            stored.marks.push(JobMark {
+                intent: "release-state-desk-job".into(),
+                pane: Some(pane.into()),
+                grouped: true,
+                glanced: true,
+                ..JobMark::default()
+            });
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, encode(&stored).unwrap()).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            }
+
+            assert_eq!(second_start(state.path()), Vec::<String>::new(), "{tag}");
+            let read = DeskStore::new(path).restore();
+            let mark = read
+                .marks
+                .iter()
+                .find(|mark| mark.intent == "release-state-desk-job")
+                .unwrap_or_else(|| panic!("{tag}: the mark is read"));
+            assert_eq!(mark.pane.as_deref(), Some(pane), "{tag}");
+            assert!(mark.grouped && mark.glanced, "{tag}");
+        }
     }
 
     fn user(id: u64, text: &str) -> DeskItem {

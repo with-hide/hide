@@ -3480,8 +3480,10 @@ export type DeskItem =
   /** Desk started or queued a job; its card is `jobs`' entry `job_id`. */
   | { kind: "job"; id: number; job_id: string };
 
-/** `contracts/snapshot-wire-enums.json` `desk_job_state`. */
-export type DeskJobState = "queued" | "starting" | "working" | "asking" | "done" | "failed" | "cancelled" | "closed" | "moved_out" | "sleeping" | "archived";
+/** `contracts/snapshot-wire-enums.json` `desk_job_state`: where a job stands for Desk; what its agent does is `DeskJobActivity`. */
+export type DeskJobState = "queued" | "starting" | "open" | "failed" | "cancelled" | "closed" | "moved_out" | "archived";
+/** `desk_job_activity`: what a job's agent does, read from its session's sidebar row (`row.state`), whatever its place. */
+export type DeskJobActivity = "working" | "asking" | "done" | "sleeping";
 /** `desk_ask_kind`: the verb an asking job's line starts with. */
 export type DeskAskKind = "question" | "approval" | "decision" | "plan_review" | "blocked";
 /** What Desk's agent did in a turn, counted from its tool calls. */
@@ -3530,6 +3532,8 @@ export type DeskJob = {
   project: { workspace_id: string | null; label: string };
   location: { kind: "checkout" | "worktree"; label: string };
   state: DeskJobState;
+  /** What its agent does, from its session's sidebar row; null while it has none. */
+  activity: DeskJobActivity | null;
   queue_position: number | null;
   now: string | null;
   plan: { done: number; total: number } | null;
