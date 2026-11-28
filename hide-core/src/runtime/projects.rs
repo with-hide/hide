@@ -2232,7 +2232,7 @@ impl Runtime {
     }
 
     /// Starts the removal `payload` asks for through the one gate, receipt
-    /// and close-then-remove worker the delete dialog and `hide workspace
+    /// and close-then-remove worker the delete dialog and `hide checkout
     /// remove` share. `consent` is the command's own: it judges the listed
     /// row before anything is recorded, and the dialog passes none because
     /// its payload already carries the operator's choices.

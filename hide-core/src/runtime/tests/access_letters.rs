@@ -303,7 +303,7 @@ fn a_tool_at_act_writes_to_an_agent_and_reads_its_reply_once_in_its_inbox() {
     assert_eq!(letters.len(), 1, "{inbox}");
     assert_eq!(letters[0]["body"], "done");
     let ack = inbox["ack_command"].as_str().unwrap();
-    let bundle = ack.strip_prefix("hide inbox --ack ").unwrap();
+    let bundle = ack.strip_prefix("hide inbox ack ").unwrap();
     fixture
         .tool(
             &connection,

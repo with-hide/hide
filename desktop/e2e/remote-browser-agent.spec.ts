@@ -113,8 +113,8 @@ test("hide browser from a device pane reads and clicks its page, and fails like 
     const opened = await deviceCli(remote, run, bridge, ["browser", "open", `http://localhost:${port}/device.html`, "--wait"], "device-open");
     expect(opened.status, opened.out).toBe(0);
     const display = (lastJson(opened.out).result as { view_id: string }).view_id;
-    // The device's agent learns from `workspace info` that it can drive the page.
-    const info = lastJson((await deviceCli(remote, run, bridge, ["workspace", "info"], "device-info")).out);
+    // The device's agent learns from `checkout show` that it can drive the page.
+    const info = lastJson((await deviceCli(remote, run, bridge, ["checkout", "show"], "device-info")).out);
     expect((info.result as { capabilities: string[] }).capabilities).toEqual(expect.arrayContaining(["browser.open", "browser.snapshot", "browser.click", "browser.fill"]));
     const snapshot = await deviceCli(remote, run, bridge, ["browser", "snapshot", display], "device-snapshot");
     expect(snapshot.status, snapshot.out).toBe(0);

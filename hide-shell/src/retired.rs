@@ -68,6 +68,45 @@ pub const TABLE: Table = Table {
             old: &["plan"],
             now: &["task"],
         },
+        // `checkout` is what the glossary calls the folder a pane works in;
+        // `workspace` is the engine's word for it.
+        Command {
+            old: &["workspace", "info"],
+            now: &["checkout", "show"],
+        },
+        // A hook's own command keeps its spelling.
+        Command {
+            old: &["workspace", "info", "--hook"],
+            now: &["workspace", "info", "--hook"],
+        },
+        Command {
+            old: &["workspace", "purpose"],
+            now: &["checkout", "purpose"],
+        },
+        Command {
+            old: &["workspace", "remove"],
+            now: &["checkout", "remove"],
+        },
+        // An option is never a verb (`hided/AGENTS.md`, Shape).
+        Command {
+            old: &["inbox", "--ack"],
+            now: &["inbox", "ack"],
+        },
+        // Reading one thing is `show`.
+        Command {
+            old: &["session", "record"],
+            now: &["session", "show"],
+        },
+        Command {
+            old: &["view", "status"],
+            now: &["view", "show"],
+        },
+        // Changing a thing's fields is `edit`; `update` fetches a newer
+        // version (`skill update` keeps it).
+        Command {
+            old: &["mcp", "update"],
+            now: &["mcp", "edit"],
+        },
         // `hide letter` was `hide request`: the command agents type most,
         // in every session file, edited skill and calling tool (sasu) since
         // letters began. `request` stays a letter's kind (`--kind request`)
@@ -78,7 +117,103 @@ pub const TABLE: Table = Table {
             now: &["letter"],
         },
     ],
-    options: &[],
+    options: &[
+        // A project is `--repo`, as `agent spawn` names it, and the text an
+        // agent starts with is `--brief`.
+        Flags {
+            command: &["automation", "add"],
+            valued: AUTOMATION_VALUED,
+            renamed: &[TASK_TO_BRIEF, FOLDER_TO_REPO],
+        },
+        Flags {
+            command: &["automation", "edit"],
+            valued: AUTOMATION_VALUED,
+            renamed: &[
+                TASK_TO_BRIEF,
+                FOLDER_TO_REPO,
+                Flag {
+                    old: "--own-folder",
+                    now: "--no-repo",
+                    arity: 0,
+                    only_with_value: false,
+                },
+            ],
+        },
+        // `--json` prints the answer as JSON; the plan document is
+        // `--inline`.
+        Flags {
+            command: &["mission", "plan"],
+            valued: &["--mission", "--file", "--inline"],
+            renamed: &[JSON_TO_INLINE],
+        },
+        Flags {
+            command: &["task", "set"],
+            valued: &["--file", "--inline", "--reason"],
+            renamed: &[JSON_TO_INLINE],
+        },
+        // An agent family is `--kind`.
+        Flags {
+            command: &["skill", "on"],
+            valued: STORE_SWITCH_VALUED,
+            renamed: &[AGENT_TO_KIND],
+        },
+        Flags {
+            command: &["skill", "off"],
+            valued: STORE_SWITCH_VALUED,
+            renamed: &[AGENT_TO_KIND],
+        },
+        Flags {
+            command: &["mcp", "on"],
+            valued: STORE_SWITCH_VALUED,
+            renamed: &[AGENT_TO_KIND],
+        },
+        Flags {
+            command: &["mcp", "off"],
+            valued: STORE_SWITCH_VALUED,
+            renamed: &[AGENT_TO_KIND],
+        },
+    ],
+};
+
+const AUTOMATION_VALUED: &[&str] = &[
+    "--name",
+    "--brief",
+    "--schedule",
+    "--kind",
+    "--profile",
+    "--model",
+    "--effort",
+    "--repo",
+];
+
+const STORE_SWITCH_VALUED: &[&str] = &["--kind", "--machine"];
+
+const TASK_TO_BRIEF: Flag = Flag {
+    old: "--task",
+    now: "--brief",
+    arity: 1,
+    only_with_value: false,
+};
+
+const FOLDER_TO_REPO: Flag = Flag {
+    old: "--folder",
+    now: "--repo",
+    arity: 1,
+    only_with_value: false,
+};
+
+const JSON_TO_INLINE: Flag = Flag {
+    old: "--json",
+    now: "--inline",
+    arity: 1,
+    only_with_value: true,
+};
+
+const AGENT_TO_KIND: Flag = Flag {
+    old: "--agent",
+    now: "--kind",
+    arity: 1,
+    only_with_value: false,
 };
 
 /// `words`, the words after `hide`, as the command they name today: the
@@ -213,13 +348,76 @@ mod tests {
     fn the_table_reads_hide_plan_as_hide_task() {
         assert_eq!(
             current(&["plan", "set", "--json", "{}"]),
-            ["task", "set", "--json", "{}"]
+            ["task", "set", "--inline", "{}"]
         );
         assert_eq!(current(&["plan"]), ["task"]);
         assert_eq!(current(&["task", "show"]), ["task", "show"]);
         // A retired word is read only where it was the command's.
         assert_eq!(current(&["agent", "plan"]), ["agent", "plan"]);
         assert!(current::<&str>(&[]).is_empty());
+    }
+
+    /// The second batch of names: each old spelling of the table reads as
+    /// the command it is now, and an option's value, the words after `--`
+    /// and the hook's `workspace info --hook` stay as they are.
+    #[test]
+    fn the_table_reads_the_second_batch_of_names() {
+        for (old, now) in [
+            ("workspace info", "checkout show"),
+            ("workspace purpose fix login", "checkout purpose fix login"),
+            (
+                "workspace remove ../w --force",
+                "checkout remove ../w --force",
+            ),
+            ("workspace info --hook", "workspace info --hook"),
+            ("workspace status --hook", "workspace status --hook"),
+            ("inbox --ack b-1", "inbox ack b-1"),
+            ("inbox --hook --tool", "inbox --hook --tool"),
+            ("session record s1 --json", "session show s1 --json"),
+            ("view status v1", "view show v1"),
+            (
+                "mcp update fs --url https://x",
+                "mcp edit fs --url https://x",
+            ),
+            ("skill update s1", "skill update s1"),
+            (
+                "automation add --name n --task t --folder /p --worktree",
+                "automation add --name n --brief t --repo /p --worktree",
+            ),
+            (
+                "automation edit a1 --own-folder --task t",
+                "automation edit a1 --no-repo --brief t",
+            ),
+            (
+                "automation edit a1 --folder=/p",
+                "automation edit a1 --repo=/p",
+            ),
+            // A value that looks like a retired option is a value.
+            (
+                "automation add --name --task --task --folder",
+                "automation add --name --task --brief --folder",
+            ),
+            ("mission plan --json {}", "mission plan --inline {}"),
+            ("mission show --json", "mission show --json"),
+            (
+                "plan set --file p.json --json",
+                "task set --file p.json --json",
+            ),
+            ("skill on s1 --agent codex", "skill on s1 --kind codex"),
+            ("mcp off m1 --agent claude", "mcp off m1 --kind claude"),
+            ("skill add ./s --agent", "skill add ./s --agent"),
+            // After `--`, every word is the program's.
+            (
+                "mcp update fs -- srv --agent x",
+                "mcp edit fs -- srv --agent x",
+            ),
+            (
+                "agent spawn --name a --brief b -- --task x",
+                "agent spawn --name a --brief b -- --task x",
+            ),
+        ] {
+            assert_eq!(read(&TABLE, old), now, "{old}");
+        }
     }
 
     #[test]

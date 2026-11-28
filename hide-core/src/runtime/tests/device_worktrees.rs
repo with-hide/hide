@@ -900,7 +900,7 @@ fn a_missing_worktree_row_git_has_not_answered_for_is_not_removed() {
 }
 
 /// The device's runtime with an agent's pane in the main checkout, the
-/// caller of `hide workspace remove`, and a finished agent's pane left in the
+/// caller of `hide checkout remove`, and a finished agent's pane left in the
 /// linked worktree, whose engine is `fake`.
 fn command_runtime(repo: &Repo, fake: &Fake) -> SharedRuntime {
     let shared = device_runtime(repo);
@@ -945,7 +945,7 @@ fn closing_engine() -> Fake {
     })
 }
 
-/// `hide workspace remove` as the daemon runs it: started under the lock,
+/// `hide checkout remove` as the daemon runs it: started under the lock,
 /// then waited for on the removal's record until it ends.
 fn remove_command(
     shared: &Arc<Mutex<Runtime>>,

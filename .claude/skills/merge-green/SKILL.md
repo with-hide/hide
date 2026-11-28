@@ -53,7 +53,7 @@ After `gh pr view <number> --json state` says `MERGED`, find the worktree whose 
 
 ```sh
 git worktree list --porcelain
-hide workspace remove <path> --delete-branch
+hide checkout remove <path> --delete-branch
 ```
 
 Never use a raw `git worktree remove` for it: Git deletes the folder and leaves the checkout's workspace open, which comes back after a restart pointing at a directory that is gone.

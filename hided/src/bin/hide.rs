@@ -21,10 +21,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let parsed = hided::cli::parse_args(&args);
     if let Err(error) = &parsed
-        && matches!(
-            args.get(1).map(String::as_str),
-            Some("workspace" | "file" | "diff" | "view" | "browser")
-        )
+        && hided::cli::refuses_as_json(&args)
     {
         println!(
             "{}",

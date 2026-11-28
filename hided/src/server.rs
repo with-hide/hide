@@ -1648,7 +1648,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Run the command inside a pane where the agent is running; an agent on Codex's shared daemon needs a session started with --no-daemon"
         }
         "machine_unknown" => {
-            "Use the device id from hide workspace info or hide agent list with --machine, then retry"
+            "Use the device id from hide checkout show or hide agent list with --machine, then retry"
         }
         // `hide agent ask-human` (PRD ask-human B2, B3).
         "human_kind_unknown" => {
@@ -2028,13 +2028,13 @@ enum ScopedRequest {
     },
     /// `hide device`: the core's own device registrations.
     Device(hide_core::device_command::DeviceCommand),
-    /// `hide pane`, `hide agent read` and `hide workspace purpose`: run
+    /// `hide pane`, `hide agent read` and `hide checkout purpose`: run
     /// through the core's engine, which needs no shell.
     Pane(hide_core::pane_command::PaneCommand),
     /// `hide <path>`: a folder of the caller's machine opened as a project
     /// (`project_open`).
     ProjectOpen(String),
-    /// `hide workspace remove`: the delete dialog's removal of a worktree,
+    /// `hide checkout remove`: the delete dialog's removal of a worktree,
     /// run by the core, which needs no shell.
     WorktreeRemove(hide_core::worktree_command::WorktreeRemove),
     /// `hide access list`: an external tool reads the tools connected and

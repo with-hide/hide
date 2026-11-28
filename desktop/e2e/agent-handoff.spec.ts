@@ -29,7 +29,7 @@ test("handoff roots have provenance without delegation or a focus change in eith
       await showTabOf(control, parent);
     });
     const caller = await agentPane(fixture, daemon.stateDir, parent);
-    const purpose = await caller(["workspace", "purpose", "Spawn handoff fixture"]);
+    const purpose = await caller(["checkout", "purpose", "Spawn handoff fixture"]);
     expect(purpose.status, purpose.out).toBe(0);
     const command = (args: string[]) => hideAnswer(caller, args);
     await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true");

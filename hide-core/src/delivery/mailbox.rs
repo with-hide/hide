@@ -48,7 +48,7 @@ pub enum Command {
     Ack {
         id: String,
     },
-    /// `hide inbox --ack <bundle>`: acknowledges, as one receipt, exactly
+    /// `hide inbox ack <bundle>`: acknowledges, as one receipt, exactly
     /// the pending letters `hide inbox` listed, folded ones included, which
     /// `bundle` names ([`bundle_token`]); a set that changed since is refused
     /// `bundle_changed`, and a letter that came after it is not taken.
@@ -1319,7 +1319,7 @@ fn legacy_inbox(ledger: &Ledger, actor: &Actor) -> Value {
 /// What separates a bundle token's newest letter from its digest.
 const BUNDLE_MARK: char = '~';
 
-/// The token `hide inbox --ack` takes for the pending letters `ids`, in the
+/// The token `hide inbox ack` takes for the pending letters `ids`, in the
 /// ledger's order: the newest's id, then the first 12 hex digits of the
 /// SHA-256 of all of them, one per line, so the acknowledgement takes
 /// exactly the letters the inbox listed and never one it did not.
@@ -1369,7 +1369,7 @@ fn inbox(ledger: &Ledger, actor: &Actor) -> Inbox {
         .collect();
     let ack_command = bundle_token(&ids)
         .filter(|_| !prompt_hook(&actor.kind))
-        .map(|bundle| format!("hide inbox --ack {bundle}"));
+        .map(|bundle| format!("hide inbox ack {bundle}"));
     let folded = shares
         .iter()
         .filter(|share| !share.folded.is_empty())
@@ -2850,7 +2850,7 @@ mod tests {
         assert_eq!(
             inbox["ack_command"],
             format!(
-                "hide inbox --ack {}",
+                "hide inbox ack {}",
                 bundle_token(&[ids[0].as_str()]).unwrap()
             )
         );
@@ -4268,7 +4268,7 @@ mod tests {
         let all: Vec<&str> = ids.iter().map(String::as_str).collect();
         let bundle = bundle_token(&all).unwrap();
         assert!(bundle.starts_with(&format!("{}~", ids[5])));
-        assert_eq!(inbox["ack_command"], format!("hide inbox --ack {bundle}"));
+        assert_eq!(inbox["ack_command"], format!("hide inbox ack {bundle}"));
         let later = letters_from(&mut ledger, &worker, &reader, &["progress"], 30);
         let acked = apply(
             &mut ledger,
@@ -4303,7 +4303,7 @@ mod tests {
         .unwrap();
         assert_eq!(left["letters"][0]["id"], later[0]);
         let next = bundle_token(&[later[0].as_str()]).unwrap();
-        assert_eq!(left["ack_command"], format!("hide inbox --ack {next}"));
+        assert_eq!(left["ack_command"], format!("hide inbox ack {next}"));
         // Another agent's letter cannot stand for the caller's bundle.
         assert_eq!(
             apply(
@@ -4337,7 +4337,7 @@ mod tests {
         )
         .unwrap();
         let ack: String = serde_json::from_value(inbox["ack_command"].clone()).unwrap();
-        let bundle = ack.strip_prefix("hide inbox --ack ").unwrap().to_owned();
+        let bundle = ack.strip_prefix("hide inbox ack ").unwrap().to_owned();
         // A token naming only some of the letters below its newest, as an
         // inbox that left one out would print, takes nothing.
         let partial = bundle_token(&[a_ids[0].as_str(), a_ids[1].as_str()]).unwrap();

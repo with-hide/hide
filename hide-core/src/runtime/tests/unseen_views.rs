@@ -130,7 +130,7 @@ fn unseen(runtime: &Runtime, view: &str) -> bool {
         .is_some_and(|display| display.unseen.is_some())
 }
 
-/// `hide view status <view>` or a `hide browser` read from `caller`'s pane,
+/// `hide view show <view>` or a `hide browser` read from `caller`'s pane,
 /// as the CLI reports it after the read (`Action::Read`).
 fn read(runtime: &mut Runtime, caller: &str, view: &str) {
     let expected = runtime

@@ -394,7 +394,7 @@ test("browser: a page opens from an agent's pane, follows its area, moves withou
   // Workspace and answers with the core's receipt.
   const opened = await openFromCli(`${origin}/a.html`, ["--wait"]);
   expect(opened).toMatchObject({ status: 0, ok: true, result: { context: { device_id: nodeOf(run!.env), checkout_path: checkout } }, page: { state: "loaded" } });
-  expect(await cliFromPane(["view", "status", (opened.result as { view_id: string }).view_id])).toMatchObject({ status: 0, ok: true, view: { page: { state: "loaded" } } });
+  expect(await cliFromPane(["view", "show", (opened.result as { view_id: string }).view_id])).toMatchObject({ status: 0, ok: true, view: { page: { state: "loaded" } } });
   const a = await displayIdOf(page, "Page A");
   let pageA = await viewOf(`${origin}/a.html`);
   await expect.poll(async () => (await viewOf(`${origin}/a.html`)).visible).toBe(true);
@@ -524,7 +524,7 @@ test("browser: a page opens from an agent's pane, follows its area, moves withou
   // A page that cannot load says so in its area, with Reload.
   const failed = await openFromCli("http://127.0.0.1:1/", ["--wait"]);
   expect(failed).toMatchObject({ status: 2, ok: false, applied: "applied", reason: "page_failed", page: { state: "failed" } });
-  expect(await cliFromPane(["view", "status", failed.view_id as string])).toMatchObject({ status: 0, ok: true, view: { page: { state: "failed" } } });
+  expect(await cliFromPane(["view", "show", failed.view_id as string])).toMatchObject({ status: 0, ok: true, view: { page: { state: "failed" } } });
   await expect(page.locator('[data-area-empty="browser-failed"]')).toBeVisible({ timeout: 20_000 });
   await expect(page.locator("[data-browser-retry]")).toBeVisible();
   await windowShot("browser-load-failed");
@@ -722,7 +722,7 @@ test("browser: a hidden page that loads for its agent does not take the operator
   await expect(page.locator(`[data-agent-tab-bar] [data-tab="${created.tab}"]`)).toHaveCount(1);
   const hidden = await cliFromPane(["browser", "open", `${origin}/b.html`, "--wait"], agent);
   expect(hidden).toMatchObject({ status: 0, ok: true, page: { state: "loaded" } });
-  expect(await cliFromPane(["view", "status", (hidden.result as { view_id: string }).view_id], agent)).toMatchObject({ status: 0, ok: true, view: { page: { state: "loaded" } } });
+  expect(await cliFromPane(["view", "show", (hidden.result as { view_id: string }).view_id], agent)).toMatchObject({ status: 0, ok: true, view: { page: { state: "loaded" } } });
   expect((await viewOf(`${origin}/b.html`)).visible).toBe(false);
   await expect(page.locator('[data-pane-view][data-focused="true"]')).toHaveAttribute("data-pane-view", focused!);
 });
