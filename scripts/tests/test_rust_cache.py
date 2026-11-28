@@ -16,6 +16,8 @@ WORKFLOWS = ROOT / '.github' / 'workflows'
 ACTION = './.github/actions/rust-cache'
 
 ON_MAIN = "${{ github.ref == 'refs/heads/main' }}"
+# `package.yml`'s choice between a pull request's quick set and the release set.
+BY_BUILD = "${{ inputs.quick-build && 'quick' || 'release' }}"
 # The root manifest, which rust-cache's own hash leaves out.
 MANIFEST = "hashFiles('Cargo.toml')"
 # Each set's savers, one per system: (workflow, job id) and the exact `save`.
@@ -39,6 +41,11 @@ SAVERS = {
     # Linux's.
     'release': {('package.yml', 'package'): ON_MAIN, ('package.yml', 'macos-compile'): ON_MAIN,
                 ('package.yml', 'windows-compile'): ON_MAIN},
+    # A pull request's package build reads it; `package cache` builds it at
+    # the same settings.
+    'quick': {('package-cache.yml', 'quick'): ON_MAIN},
+    # The device helpers' release build, one entry per processor.
+    'helper': {('device-helpers.yml', 'build'): ON_MAIN},
 }
 
 
@@ -75,10 +82,16 @@ class RustCacheAction(unittest.TestCase):
             'save-if': '${{ inputs.save }}',
         })
 
-    def test_a_release_removes_every_workspace_crate_it_restored(self):
+    def test_a_job_whose_binaries_ship_removes_every_workspace_crate_it_restored(self):
         clean = self.steps[2]
-        self.assertEqual(clean['if'], "inputs.set == 'release'")
-        self.assertIn('cargo clean --release --workspace', clean['run'])
+        self.assertEqual(clean['if'], "inputs.set == 'release' || inputs.set == 'helper'")
+        self.assertIn('cargo clean --release --workspace ${TARGET:+--target "$TARGET"}', clean['run'])
+        self.assertEqual(clean['env'], {'TARGET': '${{ inputs.target }}'})
+
+    def test_the_device_helpers_clean_the_folder_their_target_builds_in(self):
+        steps = load(WORKFLOWS / 'device-helpers.yml')['jobs']['build']['steps']
+        cache = next(step for step in steps if step.get('uses') == ACTION)
+        self.assertEqual(cache['with']['target'], '${{ matrix.target }}')
 
 
 class RustCacheSteps(unittest.TestCase):
@@ -92,11 +105,38 @@ class RustCacheSteps(unittest.TestCase):
         for name, job, step in cache_steps():
             if step.get('uses') != ACTION:
                 continue
-            settings = step.get('with') or {}
+            settings = dict(step.get('with') or {})
+            if settings.get('set') == BY_BUILD:
+                # A package build reads the quick set in a pull request and the
+                # release set otherwise; only the release set is ever saved.
+                self.assertEqual(settings['save'], f"${{{{ !inputs.quick-build && {ON_MAIN[4:-3]} }}}}")
+                settings = {'set': 'release', 'save': ON_MAIN}
             self.assertIn(settings.get('set'), SAVERS, f'{name} job {job}: unknown set')
             if settings.get('save') is not False:
                 savers[settings['set']][(name, job)] = settings.get('save')
         self.assertEqual(savers, SAVERS)
+
+    def test_no_workflow_that_saves_the_quick_set_runs_for_a_pull_request(self):
+        triggers = load(WORKFLOWS / 'package-cache.yml')[True]
+        self.assertEqual(set(triggers), {'push', 'schedule', 'workflow_dispatch'})
+        self.assertEqual(triggers['push']['branches'], ['main'])
+
+    def test_only_this_repositorys_runs_on_main_start_the_prune(self):
+        # `branches` matches a head branch by name, which a fork's pull request
+        # can share, so the job that may delete entries checks the run itself.
+        workflow = load(WORKFLOWS / 'cache-generations.yml')
+        self.assertEqual(workflow[True], {
+            'workflow_run': {'workflows': ['verify', 'nightly', 'package cache'], 'types': ['completed'],
+                             'branches': ['main']},
+            'workflow_dispatch': None})
+        self.assertEqual(workflow['permissions'], {'contents': 'read'})
+        job = workflow['jobs']['prune']
+        self.assertEqual(job['if'], "github.event_name == 'workflow_dispatch' || ( "
+                         "github.event.workflow_run.event != 'pull_request' && "
+                         "github.event.workflow_run.event != 'merge_group' && "
+                         "github.event.workflow_run.head_repository.full_name == github.repository && "
+                         "github.event.workflow_run.head_branch == 'main')")
+        self.assertEqual(job['permissions'], {'actions': 'write', 'contents': 'read', 'issues': 'write'})
 
 
 if __name__ == '__main__':
