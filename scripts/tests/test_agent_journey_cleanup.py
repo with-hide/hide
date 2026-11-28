@@ -60,6 +60,21 @@ class ProviderKeys(unittest.TestCase):
             self.assertEqual(clean_env(), {"PATH": "/usr/bin"})
 
 
+class ShellChildren(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "Windows lists them through PowerShell")
+    def test_a_refused_spawns_shell_children_are_read_without_a_command(self):
+        # ps is set-user-ID on macOS, so no guardian can own it: the record
+        # of what held a pane comes from the process table, with no command.
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        runtime = SimpleNamespace(shell_pid=lambda pane: os.getpid(),
+                                  owner=SimpleNamespace(run=mock.Mock(side_effect=AssertionError("ran a command"))))
+        found = Journey.shell_children(SimpleNamespace(runtime=runtime), "w1:p1")
+        self.assertEqual(found["shell_pid"], os.getpid())
+        self.assertIn((child.pid, os.getpid()), [(entry["pid"], entry["parent"]) for entry in found["children"]])
+
+
 class LocalStarts(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()

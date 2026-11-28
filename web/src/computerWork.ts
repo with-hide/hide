@@ -9,7 +9,11 @@
 
 import type { Actions } from "./actions";
 import type { AgentKind } from "./agentPicker";
-import { HAND_WITHIN_MS, TAKE_WITHIN_MS, type RemoteBridge, type RemotePlace, type RemoteWork, type RemoteWorkResult } from "./remoteView";
+import { guestPaneAddress } from "./guestWork";
+import { pairedMachines } from "./pairing";
+import { remotePaneAddress, remotePaneOf } from "./remote";
+import type { RemoteScreensBridge } from "./host";
+import { HAND_WITHIN_MS, SHOW_ANSWER_MS, TAKE_WITHIN_MS, type RemoteBridge, type RemotePlace, type RemoteShowResult, type RemoteWork, type RemoteWorkResult, type ShownGuestPane } from "./remoteView";
 import type { SnapshotRest, Workspace } from "./snapshot";
 import { agentFailure, startFailure, startRefusal, type StartFailure } from "./startDraft";
 import { localDeviceId } from "./snapshot";
@@ -36,7 +40,7 @@ export function startWork(target: StartTarget, start: { request: string; provide
  * went. That computer's core's own answer reads as one of this computer's
  * would; what kept it from reaching that core names the computer.
  */
-export function handedFailure(result: Exclude<RemoteWorkResult, { outcome: "starting" }>, device: string): StartFailure | null {
+export function handedFailure(result: Exclude<RemoteWorkResult, { outcome: "starting" } | RemoteShowResult>, device: string): StartFailure | null {
   switch (result.outcome) {
     case "started":
       return null;
@@ -59,6 +63,82 @@ export function handedFailure(result: Exclude<RemoteWorkResult, { outcome: "star
     case "agent_failed":
       return agentFailure(result.reason, result.line);
   }
+}
+
+/**
+ * This computer's own work that runs on a paired machine (D-55): `paneId`,
+ * a pane this core lists on a device that is a paired machine (`peer_key`),
+ * as that machine names it, `pane`, on the device `deviceId`. Null for a pane
+ * of this machine, of an SSH or WSL device, or one this core does not list.
+ */
+export function ownWorkThere(rest: SnapshotRest | null, paneId: string): { deviceId: string; pane: string } | null {
+  const own = localDeviceId(rest);
+  const address = remotePaneAddress(rest, paneId);
+  if (!own || !address) return null;
+  const paired = rest?.navigator?.devices?.some((device) => device.id === address.device && device.peer_key != null) ?? false;
+  return paired ? { deviceId: address.device, pane: guestPaneAddress(own, address.devicePane) } : null;
+}
+
+/**
+ * The pane of this computer's own work that the paired machine whose screen
+ * shows as `screenDevice` shows on that screen now (D-55), by this core's
+ * pane id: `shown` is what that screen's page told it shows, which is this
+ * computer's when it names this computer's device. Null for another
+ * machine's work, a screen that shows none, or a pane this core does not
+ * list on that machine's device.
+ */
+export function ownPaneShownThere(rest: SnapshotRest | null, screenDevice: string, shown: ShownGuestPane | null): string | null {
+  if (!shown || !rest || shown.device !== localDeviceId(rest)) return null;
+  const keys = new Set(pairedMachines(rest).filter((peer) => peer.device_id === screenDevice).map((peer) => peer.key));
+  for (const device of rest.navigator?.devices ?? []) {
+    if (device.peer_key == null || !keys.has(device.peer_key)) continue;
+    const pane = remotePaneOf(rest, device.id, shown.pane);
+    if (pane) return pane;
+  }
+  return null;
+}
+
+/**
+ * The pane of another machine's work this page shows now, as the window
+ * that shows this screen is told (`RemoteBridge.showing`, D-55): the guest
+ * pane page's pane, by its machine and its node's id for it; null on any
+ * other page.
+ */
+export function shownGuestPane(rest: SnapshotRest | null, screen: { kind: string; paneId?: string } | null): ShownGuestPane | null {
+  if (screen?.kind !== "guest" || !screen.paneId) return null;
+  for (const guest of rest?.navigator?.guest_panes ?? []) {
+    const pane = guest.panes.find((row) => row.id === screen.paneId);
+    if (pane) return { device: guest.device_id, pane: pane.pane };
+  }
+  return null;
+}
+
+/**
+ * Follows a show handed with `request` (D-55): once that computer's page
+ * answers `shown`, nothing more; any other answer, or none within
+ * `SHOW_ANSWER_MS` (a page of an older build answers none), calls
+ * `notShown` once with why. Returns the stop, which a later ask calls.
+ */
+export function followShow(remote: Required<Pick<RemoteScreensBridge, "onWorkResult">>, request: string, notShown: (why: string) => void): () => void {
+  let done = false;
+  const stop = () => {
+    if (done) return;
+    done = true;
+    unsubscribe();
+    clearTimeout(timer);
+  };
+  const end = (why: string) => {
+    if (done) return;
+    stop();
+    notShown(why);
+  };
+  const unsubscribe = remote.onWorkResult((result) => {
+    if (result.request !== request) return;
+    if (result.outcome === "shown") stop();
+    else end(result.outcome);
+  });
+  const timer = setTimeout(() => end("no_answer"), SHOW_ANSWER_MS);
+  return stop;
 }
 
 function folderName(path: string): string {
@@ -89,7 +169,7 @@ function makeStart(actions: Pick<Actions, "startAgent" | "createWorktree">, rest
 const kindOf = (work: Start) => ("checkout" in work.place ? "agent_start" : "worktree_create");
 
 export type ComputerWorkDeps = {
-  actions: Pick<Actions, "openListedAgent" | "startAgent" | "createWorktree" | "createWorkspace">;
+  actions: Pick<Actions, "openListedAgent" | "openGuestPane" | "startAgent" | "createWorktree" | "createWorkspace">;
   rest: () => SnapshotRest | null;
   /** Calls back on each snapshot; returns the unsubscribe. */
   subscribe: (listener: () => void) => () => void;
@@ -178,13 +258,21 @@ export function takeComputerWork(bridge: Pick<RemoteBridge, "onWork" | "workResu
     if (Date.now() >= current.until) {
       pending = null;
       if (work.op === "start") report(work, { request: work.request, outcome: "late" });
-      else deps.note(`show from another computer: ${work.pane} came too late; nothing opened`);
+      else {
+        deps.note(`show from another computer: ${work.pane} came too late; nothing opened`);
+        if (work.request !== undefined) bridge.workResult?.({ request: work.request, outcome: "late" });
+      }
       return;
     }
     if (!rest || !deps.connected() || !deps.open()) return;
     if (work.op === "show") {
       pending = null;
-      deps.actions.openListedAgent(work.pane);
+      if (work.request === undefined) return deps.actions.openListedAgent(work.pane);
+      // The asking computer's own work that runs here (D-55): its pane opens in the screen that reads and types into it, and the asking window hears whether it did.
+      const listed = rest.navigator?.guest_panes?.some((guest) => guest.panes.some((pane) => pane.id === work.pane)) ?? false;
+      if (listed) deps.actions.openGuestPane(work.pane);
+      else deps.note(`show from another computer: ${work.pane} is no pane of its work here; nothing opened`);
+      bridge.workResult?.({ request: work.request, outcome: listed ? "shown" : "not_listed" });
       return;
     }
     if (placeListed(rest.navigator?.workspaces ?? [], work.place)) {
@@ -234,6 +322,7 @@ export function takeComputerWork(bridge: Pick<RemoteBridge, "onWork" | "workResu
     // The same start asked again is the one already taken.
     if (work.op === "start" && (sent.has(work.request) || (pending?.work.op === "start" && pending.work.request === work.request))) return;
     if (pending?.work.op === "start") report(pending.work, { request: pending.work.request, outcome: "late" });
+    else if (pending?.work.request !== undefined) bridge.workResult?.({ request: pending.work.request, outcome: "late" });
     pending = { work, until: Date.now() + TAKE_WITHIN_MS, add: null };
     step();
   });

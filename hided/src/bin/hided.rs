@@ -66,6 +66,12 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // A test fixture's daemon ends with the test that owns the fixture,
+    // however it was started and however the test ends.
+    if let Err(error) = hided::fixture_owner::watch() {
+        eprintln!("{error}");
+        std::process::exit(2);
+    }
     // `hide-peer` does not link the core, so the core's diagnostic log is
     // handed to it here, once, for every role this process may run.
     hide_peer::log::set_sink(hide_core::diagnostics::emit);

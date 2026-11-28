@@ -15,9 +15,68 @@
 
 use std::fmt;
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use hide_peer_protocol::{Candidate, CloseCode, PathKind, PeerAddr, PeerKey};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::time::Instant;
+
+use crate::limits;
+
+/// The bound one dial is given up at, shared by what the dial starts: an
+/// SSH attempt handed on from the dial keeps this one, its first dial's.
+/// Whoever gives the dial up for the bound runs it through [`Self::limit`],
+/// which records that the bound ran out before it drops what it limited, so
+/// what reads the bound once the dial is given up knows which way it ended,
+/// however late that reader runs; a dial given up any other way records
+/// nothing.
+#[derive(Clone, Debug)]
+pub struct DialBound(Arc<Bound>);
+
+#[derive(Debug)]
+struct Bound {
+    over: Instant,
+    ran_out: AtomicBool,
+}
+
+impl DialBound {
+    /// The bound of a dial that starts now: [`limits::DIAL_WITHIN`].
+    pub fn start() -> Self {
+        Self::at(Instant::now() + limits::DIAL_WITHIN)
+    }
+
+    /// A bound that runs out at `over`.
+    pub fn at(over: Instant) -> Self {
+        Self(Arc::new(Bound {
+            over,
+            ran_out: AtomicBool::new(false),
+        }))
+    }
+
+    pub fn over(&self) -> Instant {
+        self.0.over
+    }
+
+    /// Whether the bound ran out on a dial it limited.
+    pub fn ran_out(&self) -> bool {
+        self.0.ran_out.load(Ordering::Acquire)
+    }
+
+    /// Runs `dialing` until it ends or the bound runs out: `None` once it
+    /// ran out, recorded before `dialing` is dropped.
+    pub async fn limit<F: Future>(&self, dialing: F) -> Option<F::Output> {
+        tokio::pin!(dialing);
+        tokio::select! {
+            biased;
+            done = &mut dialing => Some(done),
+            () = tokio::time::sleep_until(self.0.over) => {
+                self.0.ran_out.store(true, Ordering::Release);
+                None
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum TransportError {
@@ -87,10 +146,14 @@ pub trait PeerTransport: Send + Sync + 'static {
     fn candidates(&self) -> Vec<Candidate>;
 
     /// Connects to `to.key` and returns once the peer proved that key.
-    /// Dropping the future gives the dial up.
+    /// Dropping the future gives the dial up; the caller gives it up for
+    /// `bound` through [`DialBound::limit`]. What the transport starts for
+    /// the dial that may outlive its future runs to the same `bound`; a
+    /// transport that starts nothing of the kind leaves it unread.
     fn dial(
         &self,
         to: &PeerAddr,
+        bound: DialBound,
     ) -> impl Future<Output = Result<Self::Conn, TransportError>> + Send;
 
     /// The next connection a peer dialed, its key proved.
@@ -104,13 +167,15 @@ pub trait PeerTransport: Send + Sync + 'static {
     /// on a timer.
     fn relay(&self) -> impl Future<Output = RelayState> + Send;
 
-    /// Dials `to` over the other carrier alone, its route's: the keeper's
-    /// climb from the relay. The transport's own dial by default.
+    /// Dials `to` over the other carrier alone, its route's, under `bound`
+    /// as [`Self::dial`] is: the keeper's climb from the relay. The
+    /// transport's own dial by default.
     fn dial_route(
         &self,
         to: &PeerAddr,
+        bound: DialBound,
     ) -> impl Future<Output = Result<Self::Conn, TransportError>> + Send {
-        self.dial(to)
+        self.dial(to, bound)
     }
 
     /// Where another carrier to `to` stands: what the keeper's climb reads

@@ -67,7 +67,7 @@ fn pc_and_distribution() -> (Machine, Machine) {
     let pc_dir = tempfile::tempdir().unwrap();
     let (key, twin) = keys(&pc_dir, "windows-pc");
     let arrives_at = distro.peers.clone();
-    let pipe = PipeTransport::dialing(twin, move |_| {
+    let pipe = PipeTransport::dialing(twin, move |_, _| {
         let (near, far) = LocalStream::pair().unwrap();
         arrives_at
             .transport()
@@ -204,7 +204,12 @@ async fn a_pipe_that_ends_is_dialed_again() {
     .await;
     // The distribution never dials: only its PC makes a pipe (D-62).
     assert!(matches!(
-        distro.peers.transport().pipe().dial(&in_wsl(&pc)).await,
+        distro
+            .peers
+            .transport()
+            .pipe()
+            .dial(&in_wsl(&pc), hide_peer::DialBound::start())
+            .await,
         Err(hide_peer::TransportError::Unreachable(_))
     ));
 }

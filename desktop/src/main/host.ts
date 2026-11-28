@@ -1282,8 +1282,8 @@ export class DesktopHost {
     const gateway = new BrowserCdpGateway({
       pages: () => browsers.cdpPages(), changed: (listener) => browsers.observeCdp(listener),
       incarnation: (scope) => browsers.cdpIncarnation(scope),
-      attached: (page, attached) => browsers.cdpAttached(page, attached),
-      revive: (scope) => browsers.cdpRevive(scope),
+      attached: (page, attached, purpose) => browsers.cdpAttached(page, attached, purpose),
+      revive: (scope, file, grant) => browsers.cdpRevive(scope, file, grant),
       action: (scope, action, signal) => this.browserControlAction(scope, action, signal),
       externalOpen: (reported, page) => this.agentExternalOpen(reported, page),
       externalRead: (grant, file, limit) => this.externals.readPart(grant, file, limit),

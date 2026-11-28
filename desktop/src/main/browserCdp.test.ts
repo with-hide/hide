@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { request } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpPage, type CdpRetirement, type CdpScope } from "./browserCdp";
+import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpPage, type CdpPurpose, type CdpRetirement, type CdpScope } from "./browserCdp";
 
 type Json = Record<string, unknown>;
 // Electron is the platform boundary. HTTP, WS, scope policy and lifecycle
@@ -70,7 +70,7 @@ class CdpClient {
 
 const shutdown: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of shutdown.splice(0).reverse()) await close(); });
-async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseResponse?: boolean; refuseOpen?: boolean; deferCloseRetirement?: boolean; revive?: (scope: CdpScope, pages: CdpPage[]) => Promise<"none" | "loaded" | "failed"> } = {}) {
+async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseResponse?: boolean; refuseOpen?: boolean; deferCloseRetirement?: boolean; revive?: (scope: CdpScope, pages: CdpPage[], grant?: string, file?: boolean) => Promise<"none" | "loaded" | "failed"> } = {}) {
   const first = electronPage(11, "d1");
   const second = electronPage(12, "d2");
   const foreign = electronPage(13, "d3", "a2");
@@ -78,6 +78,8 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
   const pages: CdpPage[] = [first, second, foreign, otherCheckout];
   const listeners = new Set<(retirement?: CdpRetirement) => void>();
   const attached = new Map<string, boolean>();
+  // The purpose each lease named to the host, which holds a file capability's page to its checkout.
+  const leasedFor = new Map<string, CdpPurpose | undefined>();
   const intents = new Map<string, CdpActionResult>();
   const opened: { scope: CdpScope; url: string | undefined }[] = [];
   const actions: CdpAction[] = [];
@@ -92,8 +94,8 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
     pages: () => pages,
     incarnation: () => incarnation,
     changed: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    attached: (page, value) => { attached.set(page.id, value); },
-    ...(options.revive ? { revive: (scope: CdpScope) => options.revive!(scope, pages) } : {}),
+    attached: (page, value, purpose) => { attached.set(page.id, value); if (value) leasedFor.set(page.id, purpose); },
+    ...(options.revive ? { revive: (scope: CdpScope, file: boolean, grant?: string) => options.revive!(scope, pages, grant, file) } : {}),
     externalOpen: async (path, page) => { externalOpens.push({ path, page }); return { grant: { id: "a1".repeat(16), name: "r.html", kind: page ? "html" : "text" } }; },
     externalRead: async (grant, file, limit) => {
       externalReads.push({ grant, file, limit });
@@ -147,7 +149,7 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
     shutdown.push(async () => { client.socket.terminate(); });
     return client;
   }
-  return { gateway, address, capability, client, first, second, foreign, pages, changed, attached, opened, actions, externalOpens, externalReads, stills,
+  return { gateway, address, capability, client, first, second, foreign, pages, changed, attached, leasedFor, opened, actions, externalOpens, externalReads, stills,
     authority: (value: boolean) => { incarnation = value ? 1 : null; changed(); },
     incarnate: (value: number) => { incarnation = value; changed(); }, advance: (milliseconds: number) => { time += milliseconds; } };
 }
@@ -949,7 +951,7 @@ describe("comment capability on a local file page", () => {
   /** The fixture's page area plus one page of the file partition, as `Browser.cdpPages` lists it. */
   async function withLocalPage() {
     const set = await fixture();
-    const local: CdpPage & { contents: { debugger: ElectronDebugger } } = { ...electronPage(21, "d9"), local: true };
+    const local: CdpPage & { contents: { debugger: ElectronDebugger } } = { ...electronPage(21, "d9"), local: "checkout" };
     local.contents.getURL = () => "file:///checkout/index.html";
     set.pages.push(local);
     const connect = async (body: Json) => {
@@ -1074,5 +1076,145 @@ describe("comment capability on a local file page", () => {
     expect(attached.get("d9")).toBe(false);
     authority(false);
     expect((await connect({ ...scope, purpose: "comment" })).status).toBe(409);
+  });
+});
+
+describe("file capability on a local file page", () => {
+  /** The fixture's pages plus a checkout's file page and an outside page, as `Browser.cdpPages` lists them. */
+  async function withFilePages(options: Parameters<typeof fixture>[0] = {}) {
+    const set = await fixture(options);
+    const checkout: CdpPage & { contents: { debugger: ElectronDebugger } } = { ...electronPage(21, "d9"), local: "checkout" };
+    checkout.contents.getURL = () => "file:///checkout/report.html";
+    const outside: CdpPage & { contents: { debugger: ElectronDebugger } } = { ...electronPage(22, "d8"), local: "outside" };
+    outside.contents.getURL = () => "file:///outside/report.html";
+    set.pages.push(checkout, outside);
+    const connect = async (body: Json) => {
+      const response = await fetch(`${set.address.endpoint}/connect`, { method: "POST", headers: { authorization: `Bearer ${set.address.token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+      return { status: response.status, body: await response.json() as { browser_ws_url?: string; cdp_http_url?: string } };
+    };
+    const scope = (display_id: string) => ({ workspace: checkout.workspace, area_id: "a1", display_id });
+    return { ...set, checkout, outside, connect, scope };
+  }
+  const reached = (debug: ElectronDebugger) => vi.spyOn(debug, "sendCommand");
+
+  it("drives a checkout's file page and an outside page with an agent's commands", async () => {
+    const { checkout, outside, connect, scope, client, leasedFor } = await withFilePages();
+    for (const [page, target] of [[checkout, "page-21"], [outside, "page-22"]] as const) {
+      const answer = await connect({ ...scope(page.id), purpose: "file" });
+      expect(answer.status, page.id).toBe(200);
+      const sent = reached(page.contents.debugger);
+      const driver = await client(answer.body.browser_ws_url!);
+      const targets = await driver.call("Target.getTargets");
+      expect((targets.result as { targetInfos: Json[] }).targetInfos.map((info) => info.targetId)).toEqual([target, target.replace("page", "tab")]);
+      const session = await attach(driver, target);
+      expect(leasedFor.get(page.id), page.id).toBe("file");
+      const allowed: [string, Json][] = [
+        ["Page.enable", {}], ["Runtime.enable", {}], ["Runtime.evaluate", { expression: "document.title" }],
+        ["Page.createIsolatedWorld", { frameId: target, worldName: "hide-page" }],
+        ["Input.dispatchMouseEvent", { type: "mousePressed", x: 1, y: 1 }], ["Input.insertText", { text: "x" }],
+        ["DOM.getBoxModel", { nodeId: 1 }], ["Page.captureScreenshot", { format: "png" }], ["Page.reload", {}],
+        ["Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }],
+      ];
+      for (const [method, params] of allowed) expect((await driver.call(method, params, session)).error, `${page.id} ${method}`).toBeUndefined();
+      expect(sent.mock.calls.map(([method]) => method)).toEqual(expect.arrayContaining(["Runtime.evaluate", "Input.dispatchMouseEvent", "Page.captureScreenshot"]));
+      driver.socket.terminate();
+      await vi.waitFor(() => expect(page.contents.debugger.isAttached()).toBe(false));
+    }
+  });
+
+  it("keeps the agent's boundary and moves the page only as the page itself may move", async () => {
+    const { checkout, connect, scope, client, actions } = await withFilePages();
+    const driver = await client((await connect({ ...scope("d9"), purpose: "file" })).body.browser_ws_url!);
+    const session = await attach(driver, "page-21");
+    const sent = reached(checkout.contents.debugger);
+    const refused: [string, Json][] = [
+      // The agent's boundary, as for a web page.
+      ["DOM.setFileInputFiles", { files: ["/etc/hosts"], nodeId: 1 }], ["DOM.getFileInfo", { objectId: "1" }],
+      ["Network.loadNetworkResource", { url: "file:///outside/private.txt", options: {} }], ["Page.setDownloadBehavior", { behavior: "allow" }],
+      ["Network.getAllCookies", {}], ["Page.getResourceContent", { frameId: "page-21", url: "file:///outside/private.txt" }],
+      ["Input.dispatchDragEvent", { type: "drop", x: 1, y: 1, data: { items: [], files: ["/etc/hosts"], dragOperationsMask: 1 } }],
+      ["Emulation.setScriptExecutionDisabled", { value: true }], ["Storage.getCookies", {}], ["IO.read", { handle: "1" }],
+      ["Target.createTarget", { url: "file:///outside/private.txt" }], ["Browser.close", {}],
+      // No navigation of its own: its web links open beside it and its file links follow its own rules.
+      ["Page.navigate", { url: "file:///outside/private.txt" }], ["Page.navigate", { url: "file:///checkout/other.html" }], ["Page.navigate", { url: "https://example.test/" }],
+      // No interception that could answer or redirect one of its loads.
+      ["Fetch.enable", {}], ["Fetch.continueRequest", { requestId: "1", url: "file:///outside/private.txt" }], ["Fetch.fulfillRequest", { requestId: "1", responseCode: 302, responseHeaders: [{ name: "Location", value: "file:///outside/private.txt" }] }],
+      ["Network.setRequestInterception", { patterns: [{ urlPattern: "*" }] }], ["Network.continueInterceptedRequest", { interceptionId: "1" }],
+      // No world with universal access.
+      ["Page.createIsolatedWorld", { frameId: "page-21", worldName: "x", grantUniveralAccess: true }],
+      // No close or select: `hide view close` and `hide view select` do that.
+      ["Page.close", {}], ["Page.bringToFront", {}], ["Target.closeTarget", { targetId: "page-21" }], ["Target.activateTarget", { targetId: "page-21" }],
+      ["Target.sendMessageToTarget", { sessionId: session, message: JSON.stringify({ id: 1, method: "Page.navigate", params: { url: "https://example.test/" } }) }],
+    ];
+    for (const [method, params] of refused) {
+      const reply = await driver.call(method, params, method.startsWith("Target.") || method.startsWith("Browser.") ? undefined : session);
+      const nested = method === "Target.sendMessageToTarget" ? driver.events.find((event) => event.method === "Target.receivedMessageFromTarget") : undefined;
+      const answer = nested ? JSON.parse(((nested.params as Json).message) as string) as Json : reply;
+      expect(answer.error, `${method} ${JSON.stringify(params)}`).toBeDefined();
+    }
+    expect(sent).not.toHaveBeenCalled();
+    expect(actions).toEqual([]);
+    expect(checkout.contents.debugger.file).toBe("unchanged");
+  });
+
+  it("lists an outside page to a file capability alone, and a file page to no agent's web capability", async () => {
+    const { outside, checkout, connect, scope, capability } = await withFilePages();
+    // Comment never reaches an outside page; an agent's web capability reaches no file page.
+    expect((await connect({ ...scope("d8"), purpose: "comment" })).status).toBe(409);
+    expect((await connect(scope("d8"))).status).toBe(409);
+    expect((await connect(scope("d9"))).status).toBe(409);
+    const cap = await capability();
+    const inventory = JSON.stringify(await (await fetch(`${cap.cdp_http_url}/json/list`)).json());
+    expect(inventory).not.toContain("page-21");
+    expect(inventory).not.toContain("page-22");
+    // A file capability reaches no web page, and names one display only.
+    expect((await connect({ ...scope("d1"), purpose: "file" })).status).toBe(409);
+    expect((await connect({ workspace: checkout.workspace, area_id: "a1", purpose: "file" })).status).toBe(400);
+    // It is its own capability, apart from Comment's on the same page.
+    const file = await connect({ ...scope("d9"), purpose: "file" });
+    const comment = await connect({ ...scope("d9"), purpose: "comment" });
+    expect(file.body.browser_ws_url).not.toBe(comment.body.browser_ws_url);
+    expect(outside.contents.debugger.isAttached()).toBe(false);
+  });
+
+  it("admits a file page's own frames, which end an agent's web capability", async () => {
+    const { checkout, connect, scope, client } = await withFilePages();
+    const driver = await client((await connect({ ...scope("d9"), purpose: "file" })).body.browser_ws_url!);
+    const root = await attach(driver, "page-21");
+    await driver.call("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, root);
+    checkout.contents.debugger.emit("message", {}, "Target.attachedToTarget", { sessionId: "native-frame", targetInfo: { targetId: "own-frame", type: "iframe", url: "file:///checkout/frame.html" } }, "");
+    await vi.waitFor(() => expect(driver.events.some((event) => event.method === "Target.attachedToTarget" && ((event.params as Json).targetInfo as Json).targetId === "own-frame")).toBe(true));
+    expect(checkout.contents.debugger.isAttached()).toBe(true);
+  });
+
+  it("ends a file lease when the page stops being a file page, and when its authority goes", async () => {
+    const { checkout, connect, scope, client, changed, attached, authority } = await withFilePages();
+    const driver = await client((await connect({ ...scope("d9"), purpose: "file" })).body.browser_ws_url!);
+    await attach(driver, "page-21");
+    expect(attached.get("d9")).toBe(true);
+    const closed = new Promise<void>((resolve) => driver.socket.once("close", () => resolve()));
+    checkout.contents.getURL = () => "https://elsewhere.example/";
+    changed();
+    await closed;
+    expect(attached.get("d9")).toBe(false);
+    authority(false);
+    expect((await connect({ ...scope("d9"), purpose: "file" })).status).toBe(409);
+  });
+
+  it("loads an unloaded file page again for a file capability, an outside page by its grant, never for Comment", async () => {
+    const revived: [CdpScope, string | undefined, boolean | undefined][] = [];
+    const { connect, scope } = await withFilePages({ revive: async (asked, _pages, grant, file) => { revived.push([asked, grant, file]); return "none"; } });
+    const grant = "ab".repeat(16);
+    expect((await connect({ ...scope("d9"), purpose: "file" })).status).toBe(200);
+    expect((await connect({ ...scope("d8"), purpose: "file", grant })).status).toBe(200);
+    expect((await connect({ ...scope("d9"), purpose: "comment" })).status).toBe(200);
+    // A web capability's connection names no file purpose, so the host never loads a file page for it.
+    expect((await connect(scope("d9"))).status).toBe(409);
+    expect(revived).toEqual([[scope("d9"), undefined, true], [scope("d8"), grant, true], [scope("d9"), undefined, false]]);
+    // A grant is a file capability's alone, in the host's own shape.
+    for (const body of [{ ...scope("d8"), purpose: "comment", grant }, { ...scope("d8"), grant }, { ...scope("d8"), purpose: "file", grant: "../../etc" }, { ...scope("d8"), purpose: "file", grant: 7 }]) {
+      expect((await connect(body)).status, JSON.stringify(body)).toBe(400);
+    }
+    expect(revived).toHaveLength(3);
   });
 });

@@ -2,7 +2,8 @@
 //! core-host-node-move B9, Q14). In production the account's login item
 //! starts it, so it outlives the SSH session that placed it and comes back
 //! after a login; a test fixture's HOME starts it as a detached process, so
-//! no test reaches launchd.
+//! no test reaches launchd, which ends with the test that owns the fixture
+//! (`crate::fixture_owner`).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

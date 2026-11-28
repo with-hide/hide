@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-28
-- Code: `docs/adr/`, `scripts/check-adr.py`
+- Code: `docs/adr/`, `scripts/check-docs.py`
 
 ## Context
 
@@ -31,13 +31,13 @@ The standard form never edits a record; this repository keeps the current contra
 A comment or document that cites `docs/ARCHITECTURE.md, <section>` keeps landing on that heading; a new reference may name the record directly.
 A new record adds its row to the table in the same pull request.
 
-A record stays at or under 60 KB, so it can be read whole.
+A record stays at or under 60 KB, so it can be read whole, as every Markdown file of the repository does ([docs/README.md, Splitting a document](../README.md#splitting-a-document)).
 
-`scripts/check-adr.py` checks every record's name and number, its title line and fields, that its Code paths exist and that it has a `## Decision`, the size limit, and that the table of contents links every record and every anchor it links exists.
+`scripts/check-docs.py` checks every record's name and number, its title line and fields, that its Code paths exist and that it has a `## Decision`, the size cap, and that the table of contents links every record and every anchor it links exists.
 
 ## Consequences
 
 Before a change, read the table in `docs/ARCHITECTURE.md` and the records whose Code paths cover the files you change, not every record.
 Five records were over 60 KB when they moved: 0004, 0005, 0013, 0050 and 0059.
-The check lists them as known until a follow-up splits each, refuses any other record over the limit, and refuses a listed one that has come under it, so the list only shrinks.
+The check's exception list names them until a follow-up splits each, refuses any other record over the cap, and refuses a listed one that has come under it, so the list only shrinks.
 Pull requests that change different decisions no longer meet in one file.

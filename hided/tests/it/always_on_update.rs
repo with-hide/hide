@@ -9,7 +9,9 @@
 //! in a fixture HOME), which runs the core with the item's own command,
 //! `hided core-login`, and never reaches the account's real login items.
 //! Every process runs on a private home and state folder with none of the
-//! Hide variables of the run that started the test.
+//! Hide variables of the run that started the test, and ends with the test
+//! however the test ends, the cores a core update started included
+//! (`fixtures::own_fixture_home`; with-hide/hide#3119).
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -33,6 +35,9 @@ fn exe(name: &str) -> String {
 /// One journey's machine: a fixture HOME, its state folder, the install
 /// root a login item runs its builds from, and the newer app.
 struct Machine {
+    /// Held while the test runs: every core under this HOME ends once it is
+    /// let go, by [`Drop`] or with the test's process.
+    owner: Option<crate::fixtures::FixtureOwner>,
     _dir: tempfile::TempDir,
     home: PathBuf,
     state: PathBuf,
@@ -52,7 +57,7 @@ impl Machine {
         let root = hide_platform::fs::identity::canonical(dir.path()).unwrap();
         let home = root.join("home");
         let state = root.join("state");
-        crate::fixtures::fixture_home(&home);
+        let owner = crate::fixtures::own_fixture_home(&home);
         let core_root = hide_kit::layout::core_root(&home);
         let resources = package(&root.join("app"));
         let built = Path::new(env!("CARGO_BIN_EXE_hided"));
@@ -75,6 +80,7 @@ impl Machine {
         let old_daemon = core_root.join(OLD_VERSION_FOLDER).join(exe("hided"));
         other_build(built, &old_daemon);
         Self {
+            owner: Some(owner),
             _dir: dir,
             home,
             state,
@@ -235,24 +241,22 @@ impl Machine {
     }
 
     /// The running core's `/health` once `until` holds of it.
-    #[allow(clippy::disallowed_methods)] // a polling helper: it reads another process's answers until a deadline
     fn health_until(&self, until: impl Fn(&Value) -> bool) -> Value {
-        let deadline = Instant::now() + Duration::from_secs(60);
         let mut last = Value::Null;
-        loop {
-            if let Some(health) = health(&self.state) {
-                if until(&health) {
-                    return health;
-                }
-                last = health;
+        let found = looked_until(|| {
+            let health = health(&self.state)?;
+            if until(&health) {
+                return Some(health);
             }
-            assert!(
-                Instant::now() < deadline,
+            last = health;
+            None
+        });
+        found.unwrap_or_else(|| {
+            panic!(
                 "the core did not answer as expected: {last}; its log: {}",
                 std::fs::read_to_string(self.home.join("old-core.log")).unwrap_or_default()
-            );
-            std::thread::sleep(Duration::from_millis(100)); // wait-ok: another process's /health naming the build expected
-        }
+            )
+        })
     }
 
     /// The version folders under the install root.
@@ -278,6 +282,24 @@ impl Drop for Machine {
             let _ = core.kill();
             let _ = core.wait();
         }
+        // Whatever the stop did not reach ends on its own.
+        self.owner = None;
+    }
+}
+
+/// What `look` answers once it answers, looked at until a minute has
+/// passed; none when it never did.
+#[allow(clippy::disallowed_methods)] // a polling helper: it reads another process's answers until a deadline
+fn looked_until<T>(mut look: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some(found) = look() {
+            return Some(found);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(100)); // wait-ok: another process's answer, or its end, that the caller names
     }
 }
 
@@ -550,6 +572,33 @@ fn a_paired_machine_s_newer_build_raises_the_core_and_an_older_one_leaves_it() {
     assert_eq!(lower["kind"], "kept", "{lower}");
     let after = machine.health_until(|health| health["build"] == new_build.as_str());
     assert_eq!(after["pid"], updated["pid"], "neither restarted the core");
+}
+
+/// A core a core update started, which no process of the test holds, ends
+/// once the test that owns the fixture lets go of it, as it ends when a
+/// runner kills the test: the system lets the owner's lock go with the
+/// test's process however it ends (with-hide/hide#3119).
+#[test]
+fn a_core_a_core_update_started_ends_with_the_test_that_owns_its_fixture() {
+    let mut machine = Machine::new();
+    machine.log_in();
+    let raised = machine.raise(&machine.app_daemon, NEW);
+    assert_eq!(raised["kind"], "updated", "{raised}");
+    let core = raised["pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .unwrap_or_else(|| panic!("the raise names no core: {raised}"));
+    let started = hide_platform::process::start_time(core).unwrap();
+
+    machine.owner = None;
+
+    let ended = looked_until(|| {
+        (hide_platform::process::start_time(core).ok() != Some(started)).then_some(())
+    });
+    assert!(
+        ended.is_some(),
+        "the core {core} still runs after its fixture's owner let go"
+    );
 }
 
 /// B23: once the app has been opened on a machine whose Hide another

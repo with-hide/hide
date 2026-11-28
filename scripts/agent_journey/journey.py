@@ -14,6 +14,7 @@ import secrets
 import sqlite3
 import time
 
+from agent_live_check.process_table import snapshot
 from agent_live_check.processes import Cancelled, ProcessError
 from agent_live_check.protection import write_private
 from agent_live_check.system import git, same_path
@@ -1180,20 +1181,26 @@ class Journey:
             shell = self.runtime.shell_pid(pane)
         except (ProcessError, KeyError, TypeError, ValueError) as error:
             return {"error": str(error)[:200]}
+        parents = {}
         if os.name == "nt":
             argv = ["powershell.exe", "-NoProfile", "-Command",
                     "Get-CimInstance Win32_Process | ForEach-Object { '{0} {1} {2}' -f "
                     "$_.ProcessId, $_.ParentProcessId, $_.Name }"]
+            code, out, err = self.runtime.owner.run(argv, env={**self.runtime.env}, check=False, seconds=15)
+            if code:
+                return {"shell_pid": shell, "error": (err.strip() or f"exit {code}")[:200]}
+            for line in out.splitlines():
+                fields = line.split(None, 2)
+                if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit():
+                    parents[int(fields[0])] = (int(fields[1]), os.path.basename(fields[2].strip()))
         else:
-            argv = ["ps", "-A", "-o", "pid=,ppid=,comm="]
-        code, out, err = self.runtime.owner.run(argv, env={**self.runtime.env}, check=False, seconds=15)
-        if code:
-            return {"shell_pid": shell, "error": (err.strip() or f"exit {code}")[:200]}
-        parents = {}
-        for line in out.splitlines():
-            fields = line.split(None, 2)
-            if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit():
-                parents[int(fields[0])] = (int(fields[1]), os.path.basename(fields[2].strip()))
+            # The process table the guardians read, not ps: ps is set-user-ID
+            # on macOS, so no guardian can own it as its command.
+            try:
+                table = snapshot()
+            except RuntimeError as error:
+                return {"shell_pid": shell, "error": str(error)[:200]}
+            parents = {pid: (process.parent, process.name) for pid, process in table.items()}
         below, queue = [], [shell]
         while queue and len(below) < 64:
             parent = queue.pop(0)

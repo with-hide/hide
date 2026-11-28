@@ -49,4 +49,4 @@ pub mod words;
 pub use hide_peer_protocol as protocol;
 pub use key::MachineKey;
 pub use peers::{Clock, Link, PeerEvent, PeerIdentity, PeerStream, Peers};
-pub use transport::{PeerConn, PeerTransport, RelayState, Route, TransportError};
+pub use transport::{DialBound, PeerConn, PeerTransport, RelayState, Route, TransportError};

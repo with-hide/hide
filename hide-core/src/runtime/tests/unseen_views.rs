@@ -272,14 +272,14 @@ fn a_view_stays_unseen_while_the_window_shows_another_computer() {
     let (_root, runtime) = fixture(false);
     let mut guard = runtime.lock().unwrap();
     keyboard(&mut guard, Some("recipient"));
-    guard.set_window_screen(WindowScreen::Computer);
+    guard.set_window_screen(WindowScreen::Computer, Vec::new());
     let view = open(&mut guard, "recipient", "src/login.ts");
     assert!(unseen(&guard, &view), "opened while another computer shows");
     guard.set_window_focus(None);
     guard.set_window_focus(Some(FocusScreen::Workspace));
     guard.sync_workspace_view();
     assert!(unseen(&guard, &view), "a window naming the Workspace first");
-    assert!(guard.set_window_screen(WindowScreen::Own));
+    assert!(guard.set_window_screen(WindowScreen::Own, Vec::new()));
     assert!(
         !unseen(&guard, &view),
         "seen once this machine's screen shows"
@@ -1134,6 +1134,10 @@ fn an_agents_open_of_an_outside_file_is_tracked_as_its_open_by_grant_alone() {
         .find(|row| row.view_id == view)
         .unwrap();
     assert_eq!((listed.kind, listed.target.as_str()), ("external", ""));
+    // hided reads the grant the window loads the page by; `hide view list`
+    // never prints it.
+    assert_eq!(listed.grant.as_deref(), Some(grant.as_str()));
+    assert!(!serde_json::to_string(&listed).unwrap().contains(&grant));
     assert!(listed.unseen && !listed.operator);
     assert_eq!(listed.openers.len(), 1);
     assert_eq!(

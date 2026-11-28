@@ -3,6 +3,7 @@
 // Workspace credential, and drives the display through the desktop's scoped
 // gateway. The operator's app, engine and browser are never used.
 import { expect, type Dialog, type ElectronApplication, type Page } from "@playwright/test";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -12,7 +13,7 @@ import { WebSocket } from "ws";
 import { focusTab, openProject, sendKeys, withControl } from "../../web/e2e/daemon-actions";
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { enterWorkspaceWithLane, showProjectRow } from "../../web/e2e/wire";
-import { fitWindow, HIDE_CLI, launchShell, startStack, test, type Isolated, type Stack } from "./fixture";
+import { fitWindow, HIDE_CLI, hostLog, launchShell, startStack, test, type Isolated, type Stack } from "./fixture";
 
 test.describe.configure({ timeout: 180_000 });
 let stack: Stack;
@@ -382,10 +383,32 @@ test("hide browser: a busy, hidden, file or missing display and a stale ref are 
   }, `${origin}/agent`);
   expect(still).toMatchObject({ visible: false, empty: false });
   expect(still!.width).toBeGreaterThan(0);
-  const file = path.join(fixture.root, "fixture", "agent-file.html");
-  fs.writeFileSync(file, "<title>Local file</title><h1>Local file</h1>");
+  // A checkout's HTML file is driven by the pane as a web page is (operator decision 2026-11-28).
+  const checkout = path.join(fixture.root, "fixture");
+  const file = path.join(checkout, "agent-file.html");
+  fs.writeFileSync(file, `<!doctype html><meta charset="utf-8"><title>Local file</title><h1>Local file</h1>
+<button onclick="document.querySelector('output').textContent='pressed'">Press</button><output></output>`);
   const fileDisplay = await openDisplay(pathToFileURL(file).href);
-  expect(await json(["snapshot", fileDisplay])).toMatchObject({ ok: false, reason: "display_unsupported" });
+  const fileRead = await snapshot(fileDisplay);
+  expect(fileRead).toContain("# Local file");
+  expect((await json(["click", fileDisplay, ref(fileRead, /button "Press"/)])).changed).toContain("pressed");
+  // While the pane drives it, a script it runs cannot move the page to a file outside the checkout and read it.
+  const canary = path.join(fixture.root, "private-canary.html");
+  fs.writeFileSync(canary, "<title>Private</title><p>PRIVATE-FILE-CANARY</p>");
+  await json(["eval", fileDisplay, `location.href = ${JSON.stringify(pathToFileURL(canary).href)}`]);
+  await expect.poll(() => hostLog(run.env).some((line) => line.event === "browser.navigation_refused" && line.reason === "checkout_boundary")).toBe(true);
+  const held = await snapshot(fileDisplay);
+  expect(held).toContain("# Local file");
+  expect(held).not.toContain("PRIVATE-FILE-CANARY");
+  // A shell bound only to the checkout, not to a pane, is told who drives a file page.
+  const shellEnv: NodeJS.ProcessEnv = { ...run.env };
+  for (const key of ["HIDE_PANE_ID", "HIDE_CAP_REF"]) delete shellEnv[key];
+  // Asynchronous, so the test's own bound ends a CLI that never answers.
+  const outsidePane = await new Promise<{ failed: boolean; stdout: string }>((resolve) => {
+    execFile(HIDE_CLI, ["browser", "snapshot", fileDisplay], { cwd: checkout, env: shellEnv, encoding: "utf8" }, (error, stdout) => resolve({ failed: error !== null, stdout }));
+  });
+  expect(outsidePane.failed, outsidePane.stdout).toBe(true);
+  expect(JSON.parse(outsidePane.stdout.trim().split("\n").at(-1)!)).toMatchObject({ ok: false, reason: "file_page_pane_only" });
   expect(await json(["snapshot", "browser-missing"])).toMatchObject({ ok: false, reason: "display_missing" });
 });
 

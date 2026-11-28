@@ -18,7 +18,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use hide_agent_hooks::hook_request::install::{self, PaneRequest};
@@ -118,6 +118,17 @@ impl Capability {
             Binding::Desk { .. } => Some(hide_core::access::Mode::All),
             _ => self.access_mode,
         }
+    }
+
+    /// Whether this caller drives the `file:` pages of its Workspace and the
+    /// outside pages it opened (`docs/BROWSER_DISPLAYS.md`, Agent page
+    /// commands): an agent or shell in one of the operator's panes, which
+    /// reads those files through its own shell already. A bot in any mode,
+    /// Desk and a shell bound only to a checkout never do; a bot is bound to
+    /// its own connection (`Binding::Access`), never to a pane, so a pane
+    /// binding is the whole answer.
+    pub(crate) fn drives_file_pages(&self) -> bool {
+        matches!(self.binding, Binding::Pane { .. })
     }
 
     /// The shell a pane-bound credential was proved against; none for any
@@ -1294,7 +1305,9 @@ pub struct Answering {
     pub core: Arc<CoreHandle>,
     pub engine: Option<EngineHandle>,
     pub port: u16,
-    pub desktop_renderers: Arc<AtomicUsize>,
+    /// What shows this machine's pages, which a hook's `hide workspace info --hook`
+    /// is told of (`crate::server::Screens`).
+    pub screens: crate::server::Screens,
     /// What `hide device` asks about pairing (`crate::pairing`).
     pub pairing: Arc<crate::pairing::Pairing>,
     /// What `hide phone` asks (`crate::mobile::command`).
@@ -1318,7 +1331,7 @@ pub async fn serve(
         core,
         engine,
         port,
-        desktop_renderers,
+        screens,
         pairing,
         mobile,
         health,
@@ -1374,7 +1387,7 @@ pub async fn serve(
         let registry = Arc::clone(&registry);
         let core = Arc::clone(&core);
         let engine = engine.clone();
-        let desktop_renderers = Arc::clone(&desktop_renderers);
+        let screens = screens.clone();
         let pairing = Arc::clone(&pairing);
         let mobile = Arc::clone(&mobile);
         let runtime = tokio::runtime::Handle::current();
@@ -1386,7 +1399,7 @@ pub async fn serve(
                 &core,
                 engine.as_ref(),
                 port,
-                desktop_renderers.load(Ordering::SeqCst) > 0,
+                &screens,
                 Some(Operators {
                     pairing: &pairing,
                     mobile: &mobile,
@@ -1424,7 +1437,7 @@ fn answer_bootstrap(
     core: &CoreHandle,
     engine: Option<&EngineHandle>,
     port: u16,
-    desktop: bool,
+    screens: &crate::server::Screens,
     operators: Option<Operators<'_>>,
 ) {
     use std::io::{BufRead, BufReader};
@@ -1618,7 +1631,7 @@ fn answer_bootstrap(
                 _ => None,
             };
             let mut answer =
-                crate::hook_request::answer(core, &cap, hook, executor, lineage, desktop);
+                crate::hook_request::answer(core, &cap, hook, executor, lineage, screens);
             install::stamp(&mut answer, answering_as(request.install.as_deref()));
             if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
                 return Err("response_too_large");
@@ -2350,6 +2363,47 @@ mod tests {
             },
         ] {
             assert_eq!(terminal(binding), None);
+        }
+    }
+
+    /// Only an operator's pane drives file pages: a bot of either mode, Desk
+    /// and a checkout-bound shell keep web pages only.
+    #[test]
+    fn only_an_operators_pane_drives_file_pages() {
+        let pid = std::process::id() as i32;
+        let capability = |binding: Binding, access_mode| Capability {
+            pane_id: "w1:p1".into(),
+            caller_alias: "w1:p1".into(),
+            context: hide_core::desk::desk_context("local"),
+            binding,
+            one_shot: true,
+            holder: None,
+            created: Instant::now(),
+            claimed: false,
+            path: PathBuf::new(),
+            remote: None,
+            access_mode,
+        };
+        let pane = || Binding::Pane {
+            terminal_id: "terminal-1".into(),
+            shell_pid: pid,
+            shell_started: 1,
+        };
+        assert!(capability(pane(), None).drives_file_pages());
+        // A bot, in either mode, is bound to its connection.
+        for mode in [hide_core::access::Mode::All, hide_core::access::Mode::Own] {
+            assert!(
+                !capability(
+                    Binding::Access {
+                        connection: "0123456789abcdef".into(),
+                    },
+                    Some(mode),
+                )
+                .drives_file_pages()
+            );
+        }
+        for binding in [Binding::Checkout, Binding::Desk { pid, started: 1 }] {
+            assert!(!capability(binding, None).drives_file_pages());
         }
     }
 

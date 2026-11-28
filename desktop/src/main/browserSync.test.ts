@@ -274,6 +274,12 @@ describe("what a local HTML page may load", () => {
     for (const type of ["image", "stylesheet", "script", "font", "media", "subFrame"]) expect(decide(fileUrl(root, "a", "b.png"), type), type).toEqual({ cancel: false });
   });
 
+  it("keeps a page an agent's file capability held to documents of its checkout", () => {
+    expect(localPageRequest(fileUrl("/elsewhere/page.html"), "mainFrame", inside, true)).toEqual({ cancel: true, boundary: "file" });
+    expect(localPageRequest(fileUrl(root, "other.html"), "mainFrame", inside, true)).toEqual({ cancel: false });
+    expect(localPageRequest("https://example.com/", "mainFrame", inside, true)).toEqual({ resolve: "example.com" });
+  });
+
   it("refuses a file outside its checkout, and any read of a file by a script", () => {
     for (const type of ["image", "script", "subFrame", "stylesheet"]) expect(decide(fileUrl("/etc/hosts"), type), type).toEqual({ cancel: true, boundary: "file" });
     expect(decide(`${pathToFileURL(root).href}/../etc/hosts`)).toEqual({ cancel: true, boundary: "file" });

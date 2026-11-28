@@ -270,7 +270,10 @@ async fn a_rebuilt_endpoint_keeps_its_key_and_accepts_again() {
 
     let to = PeerAddr::new(host.key(), after);
     let (dialed, accepted) = within("a connection to the rebuilt endpoint", async {
-        tokio::join!(guest.dial(&to), host.accept())
+        tokio::join!(
+            guest.dial(&to, hide_peer::DialBound::start()),
+            host.accept()
+        )
     })
     .await;
     use hide_peer::PeerConn;
@@ -329,7 +332,12 @@ async fn a_handshake_that_never_finishes_holds_up_no_other_connection() {
     let through_the_wire = PeerAddr::new(host.key(), vec![Candidate::Ip(wire_at)]);
     let stalled = tokio::spawn({
         let stuck = Arc::clone(&stuck);
-        async move { stuck.dial(&through_the_wire).await.is_ok() }
+        async move {
+            stuck
+                .dial(&through_the_wire, hide_peer::DialBound::start())
+                .await
+                .is_ok()
+        }
     });
 
     // The host began that handshake: its answer went out, and was dropped.
@@ -347,7 +355,10 @@ async fn a_handshake_that_never_finishes_holds_up_no_other_connection() {
     // that waited for it first would take that whole time to get here.
     let to = PeerAddr::new(host.key(), host.candidates());
     let (dialed, accepted) = tokio::time::timeout(hide_peer::limits::HELLO_WITHIN / 2, async {
-        tokio::join!(guest.dial(&to), &mut accepted)
+        tokio::join!(
+            guest.dial(&to, hide_peer::DialBound::start()),
+            &mut accepted
+        )
     })
     .await
     .expect("the other machine connected while the host still waited for that handshake");

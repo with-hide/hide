@@ -9,6 +9,7 @@ import { overviewDeviceOf } from "./overviewTasks";
 import { frontTool } from "./toolCells";
 import { workspaceKey } from "./viewLayout";
 import type { DispatchFn } from "./ws";
+import { SHOW_ANSWER_MS } from "./remoteView";
 import { FindBar } from "./Overlays";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { Checkout, SnapshotRest } from "./snapshot";
@@ -786,5 +787,178 @@ describe("which machine's screen this window shows", () => {
     actions.showScreen(mini);
     actions.noteWindowScreen();
     expect(told(sent)).toEqual(["screen:computer", "screen:computer"]);
+  });
+});
+
+// PRD device-connect-iroh D-55: this computer's work that runs on a paired machine opens in that
+// machine's tile, on the guest pane its screen reads and types into; where that screen cannot be
+// drawn or does not answer, it opens in this computer's tile as before.
+describe("this computer's work that runs on a paired machine", () => {
+  const mini = "mini-machine";
+  const KEY = "k".repeat(64);
+  const PANE = `remote:${mini}:pane:w1:p3`;
+  const live = (peer: Record<string, unknown> = {}) => {
+    useShellStore.setState({
+      connection: "live",
+      rest: {
+        navigator: {
+          focused_device_id: "core",
+          devices: [{ id: "core", kind: "local" }, { id: mini, kind: "remote", peer_key: KEY }],
+          workspaces: [],
+          tools: [],
+          peers: [{ key: KEY, device_id: mini, name: "mini", opens: "active", connected: true, ...peer }],
+        },
+        status: { remote: [{ target_id: mini, state: "connected", session: { agents: [{ pane_id: PANE, device_id: mini, device_pane_id: "w1:p3" }], workspaces: [], pane_layouts: [] } }] },
+      } as never,
+    });
+    useUiStore.setState({ screen: { kind: "main" }, remoteScreen: null } as never);
+  };
+  const desktop = (over: Record<string, unknown> = {}) => {
+    const go = vi.fn();
+    let answer: ((result: { request: string; outcome: string; device: string }) => void) | null = null;
+    window.hideHost = { kind: "electron", platform: "darwin", remoteScreens: { show: vi.fn(), go, onState: () => () => {}, onWorkResult: (listener: typeof answer) => ((answer = listener), () => (answer = null)), showAnswers: true, ...over } } as never;
+    return { go, answer: (outcome: string) => answer?.({ request: (go.mock.lastCall![0] as { work: { request: string } }).work.request, outcome, device: mini }) };
+  };
+  const opens = (sent: Parameters<DispatchFn>[0][]) => sent.filter((event) => event.kind !== "window_screen").map((event) => event.kind);
+  afterEach(() => {
+    window.hideHost = undefined;
+    useUiStore.setState({ remoteScreen: null });
+    vi.useRealTimers();
+  });
+
+  it("opens in that machine's tile on its guest pane, and nothing opens here", () => {
+    live();
+    const { go } = desktop();
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.openAgent(PANE);
+    expect(go).toHaveBeenCalledWith({ device: mini, key: KEY, work: { op: "show", pane: "guest:core:pane:w1:p3", request: expect.any(String) } });
+    expect(useUiStore.getState().remoteScreen).toBe(mini);
+    expect(opens(sent)).toEqual([]);
+  });
+
+  it("opens here once that machine's screen says it lists no such pane", () => {
+    live();
+    const { answer } = desktop();
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.openAgent(PANE);
+    answer("shown");
+    expect(useUiStore.getState().remoteScreen).toBe(mini);
+    expect(opens(sent)).toEqual([]);
+
+    actions.openAgent(PANE);
+    answer("not_listed");
+    expect(useUiStore.getState().remoteScreen).toBeNull();
+    expect(opens(sent)).not.toEqual([]);
+  });
+
+  it("opens here when a screen of an older build there answers nothing in time", () => {
+    vi.useFakeTimers();
+    live();
+    desktop();
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.openAgent(PANE);
+    vi.advanceTimersByTime(SHOW_ANSWER_MS);
+    expect(useUiStore.getState().remoteScreen).toBeNull();
+    expect(opens(sent)).not.toEqual([]);
+  });
+
+  it("leaves the operator where they went when the answer comes after they left that tile", () => {
+    live();
+    const { answer } = desktop();
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.openAgent(PANE);
+    actions.showScreen("other-machine");
+    answer("not_listed");
+    expect(useUiStore.getState().remoteScreen).toBe("other-machine");
+    expect(opens(sent)).toEqual([]);
+  });
+
+  it("follows no earlier show once that machine's tile is asked for something else", () => {
+    vi.useFakeTimers();
+    live();
+    const { go } = desktop();
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.openAgent(PANE);
+    actions.openComputerAgent(mini, "w2:p1");
+    vi.advanceTimersByTime(SHOW_ANSWER_MS);
+    expect(go).toHaveBeenCalledTimes(2);
+    expect(useUiStore.getState().remoteScreen).toBe(mini);
+    expect(opens(sent)).toEqual([]);
+  });
+
+  it.each(["paused", "confirming"])("opens here at once while that machine's screen cannot show (%s)", (opens_) => {
+    live({ opens: opens_ });
+    const { go } = desktop();
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.openAgent(PANE);
+    expect(go).not.toHaveBeenCalled();
+    expect(useUiStore.getState().remoteScreen).toBeNull();
+    expect(opens(sent)).not.toEqual([]);
+  });
+
+  it("opens here at once while that machine is not connected", () => {
+    live({ connected: false });
+    const { go } = desktop();
+    const actions = createActions(() => true);
+    actions.openAgent(PANE);
+    expect(go).not.toHaveBeenCalled();
+    expect(useUiStore.getState().remoteScreen).toBeNull();
+  });
+
+  // The page there says which pane it shows; this window tells its core its own pane shown there, so the core reads it as looked at.
+  it("tells the core this computer's pane that machine's screen shows, and no pane once it shows another", () => {
+    live();
+    desktop();
+    useShellStore.setState({ rest: { ...useShellStore.getState().rest, navigator: { ...useShellStore.getState().rest!.navigator, devices: [{ id: "core", kind: "local" }, { id: mini, kind: "remote", peer_key: KEY }] } } as never });
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.noteWindowScreen();
+    actions.openAgent(PANE);
+    actions.noteRemoteShowing(mini, { device: "core", pane: "w1:p3" });
+    actions.noteRemoteShowing(mini, { device: "core", pane: "w1:p3" });
+    actions.noteRemoteShowing(mini, null);
+    const screens = sent.filter((event) => event.kind === "window_screen").map((event) => event.payload);
+    expect(screens).toEqual([{ screen: "own" }, { screen: "computer" }, { screen: "computer", shown_there: PANE }, { screen: "computer" }]);
+  });
+
+  it("opens it in that machine's tile from a child chip or a Return, as every open of it does", () => {
+    live();
+    const { go } = desktop();
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.followRelation("w1:p1", PANE, "worker");
+    expect(go).toHaveBeenCalledWith(expect.objectContaining({ device: mini, work: expect.objectContaining({ pane: "guest:core:pane:w1:p3" }) }));
+    expect(useUiStore.getState().remoteScreen).toBe(mini);
+    expect(opens(sent)).toEqual([]);
+  });
+
+  it.each([
+    ["a browser tab", null],
+    ["an older desktop app", { showAnswers: undefined }],
+  ])("opens in this computer's tile from %s", (_where, over) => {
+    live();
+    const handed = over === null ? null : desktop(over);
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.openAgent(PANE);
+    expect(handed?.go ?? null).toSatisfy((go: ReturnType<typeof vi.fn> | null) => go === null || go.mock.calls.length === 0);
+    expect(useUiStore.getState().remoteScreen).toBeNull();
+    expect(opens(sent)).not.toEqual([]);
+  });
+
+  it("opens its Views in this computer's tile, from the pane head's eye", () => {
+    live();
+    const { go } = desktop();
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.openAgent(PANE, { view_id: "v1" } as never);
+    expect(go).not.toHaveBeenCalled();
+    expect(opens(sent)).not.toEqual([]);
   });
 });

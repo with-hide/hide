@@ -17,14 +17,14 @@ import { sameDisplayPreferences, type DisplayPreferences } from "../../../web/sr
 import type { InterfaceLanguage } from "../../../web/src/i18n/locale";
 import { HAND_WITHIN_MS, type RemoteWorkResult } from "../../../web/src/remoteView";
 import { matchHost, type Command } from "../../../web/src/shortcuts";
-import { COMMAND_CHANNEL, REMOTE_BROWSER_CAPTURE_CHANNEL, REMOTE_BROWSER_COMMAND_CHANNEL, REMOTE_BROWSER_CYCLE_END_CHANNEL, REMOTE_BROWSER_SYNC_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_STATE_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
+import { COMMAND_CHANNEL, REMOTE_BROWSER_CAPTURE_CHANNEL, REMOTE_BROWSER_COMMAND_CHANNEL, REMOTE_BROWSER_CYCLE_END_CHANNEL, REMOTE_BROWSER_SYNC_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_STATE_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_PAGE_SHOWING_CHANNEL, REMOTE_SHOWING_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
 import { PRESS_WITHIN_MS, toBounds } from "./browserSync";
 import type { BrowserRect } from "../../../web/src/host";
 import { isLocalNetworkHost } from "../../../web/src/loopbackHost";
 import type { BrowserViews, RemoteRoute, RemoteSource } from "./browser";
 import type { HostLog } from "./log";
 import { pairName, type RemoteEgress, type RemoteStorage } from "./remoteEgress";
-import { fetchPath, HIDDEN_CLOSE, MAX_SEND_BYTES, ofPage, pageAddress, pagePath, parseWorkResult, queueAllows, REMOTE_SCHEME, requestAllowed, socketAddress, type GoRequest, type ShowRequest } from "./remotePage";
+import { fetchPath, HIDDEN_CLOSE, MAX_SEND_BYTES, ofPage, pageAddress, pagePath, parseShowing, parseWorkResult, queueAllows, REMOTE_SCHEME, requestAllowed, socketAddress, type GoRequest, type ShowRequest } from "./remotePage";
 
 /** Registered before the app is ready, as Electron requires of a privileged scheme. */
 export function registerRemoteScheme(): void {
@@ -96,6 +96,12 @@ export class RemoteScreens {
   private readonly waiting = new Map<string, { key: string; work: GoRequest["work"]; at: number }>();
   /** Each start handed to a page, by its request id, with the device it went to: only that device's page may say how it ended. */
   private readonly owed = new Map<string, string>();
+  /**
+   * Per machine, the show asked with a request (D-55) whose page has not
+   * answered yet: one each, since a later show replaces it on the shell's
+   * side too, so a page of an older build that answers none keeps no more.
+   */
+  private readonly shows = new Map<string, string>();
   private readonly sessions = new Set<string>();
   private front: string | null = null;
   private clock = 0;
@@ -130,11 +136,21 @@ export class RemoteScreens {
     ipcMain.on(REMOTE_WORK_DONE_CHANNEL, (event: IpcMainEvent, reported: unknown) => {
       const screen = this.screenOf(event);
       const result = parseWorkResult(reported);
-      if (!screen || !result || this.owed.get(result.request) !== screen.device) return;
+      if (!screen || !result) return;
+      if (this.shows.get(screen.device) === result.request) this.shows.delete(screen.device);
+      else if (this.owed.get(result.request) !== screen.device) return;
       // An agent still coming up is not the end: its end follows from the same page.
-      if (result.outcome !== "starting") this.owed.delete(result.request);
+      else if (result.outcome !== "starting") this.owed.delete(result.request);
       this.deps.log.event("remote.work_result", { device: screen.device, outcome: result.outcome });
       this.toShell(screen.device, result);
+    });
+    // Which pane of another machine's work the screen's page shows now (D-55), from that page only, to the window.
+    ipcMain.on(REMOTE_PAGE_SHOWING_CHANNEL, (event: IpcMainEvent, value: unknown) => {
+      const screen = this.screenOf(event);
+      const shown = parseShowing(value);
+      if (!screen || shown === undefined) return;
+      const window = this.deps.window();
+      if (window && !window.isDestroyed()) window.webContents.send(REMOTE_SHOWING_CHANNEL, { device: screen.device, shown });
     });
     // The browser displays the screen's page places, as this window's shell places its own.
     ipcMain.on(REMOTE_BROWSER_SYNC_CHANNEL, (event: IpcMainEvent, value: unknown) => {
@@ -231,7 +247,9 @@ export class RemoteScreens {
   private hand(screen: Screen, work: GoRequest["work"]): void {
     if (screen.view.webContents.isDestroyed()) return this.answer(screen.device, work, "not_shown");
     this.deps.log.event("remote.work_handed", { device: screen.device, op: work.op });
-    if (work.op === "start") {
+    if (work.op === "show") {
+      if (work.request !== undefined) this.shows.set(screen.device, work.request);
+    } else {
       this.owed.set(work.request, screen.device);
       for (const [request, device] of this.owed) {
         if (this.owed.size <= OWED) break;
@@ -261,14 +279,19 @@ export class RemoteScreens {
     this.answer(device, waiting.work, "not_shown");
   }
 
-  /** Tells the shell a start of its did not reach `device`'s page; nothing for a work to show. */
+  /** Tells the shell a start of its, or a show it asked an answer of, did not reach `device`'s page; nothing for a show without one. */
   private answer(device: string, work: GoRequest["work"], outcome: "not_shown"): void {
-    if (work.op === "start") this.toShell(device, { request: work.request, outcome });
+    if (work.request !== undefined) this.toShell(device, { request: work.request, outcome });
   }
 
   /** The starts `device`'s page was following go with the page: each is answered `unconfirmed` (see `OWED`). */
   private forget(device: string, reason: string): void {
     for (const [request, owner] of this.owed) if (owner === device) this.unconfirmed(request, device, reason);
+    const show = this.shows.get(device);
+    if (show === undefined) return;
+    this.shows.delete(device);
+    this.deps.log.event("remote.work_unknown", { device, reason });
+    this.toShell(device, { request: show, outcome: "unconfirmed" });
   }
 
   private unconfirmed(request: string, device: string, reason: string): void {

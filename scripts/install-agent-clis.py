@@ -3,7 +3,8 @@
 
 Usage: install-agent-clis.py <kind>... | --all [--prefix DIR]
 
-CI (CI=true), or the guarded local fake journey's private cache installer.
+CI (CI=true), the journey account's daily run (agent_journey/daily.py), or
+the guarded local fake journey's private cache installer.
 The latter requires --private-fake and a HOME inside the pin entry; its caller
 owns the sandbox, lease and byte cap. Each CLI goes under DIR (default
 $RUNNER_TEMP/agent-clis), and the script prints one `<kind>=<program>` line
@@ -46,6 +47,7 @@ import time
 
 CHECKOUT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CHECKOUT / "scripts"))
+from agent_journey import account  # noqa: E402
 from agent_journey.clis import AGY_SYSTEMS, TABLE, matches, table as pins  # noqa: E402
 
 WINDOWS = os.name == "nt"
@@ -340,8 +342,8 @@ def main(argv=None):
     if args.private_fake:
         if not args.prefix or Path.home().resolve() != (args.prefix / "home").resolve():
             parser.error("private fake installation needs a pin-local HOME")
-    elif os.environ.get("CI") != "true":
-        print("install-agent-clis.py installs CLIs on a CI runner only", file=sys.stderr)
+    elif os.environ.get("CI") != "true" and not account.dedicated():
+        print("install-agent-clis.py installs CLIs on a CI runner or the journey account only", file=sys.stderr)
         return 2
     rows = table()
     unknown = [kind for kind in args.kinds if kind not in rows]
