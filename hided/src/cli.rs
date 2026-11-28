@@ -172,7 +172,7 @@ const LINKS_USAGE: &str = "usage: hide links pr <number | #number | !number | ad
 
 const MEMORY_USAGE: &str = "usage: hide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card> | recheck <card>";
 
-const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--repo <path>] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
+const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--repo <path>] [--request-id <id>] | connect [--display <id>] | help | snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ... (see hide browser help)";
 
 /// What an open with the `--beside` it no longer takes answers (PRD
 /// unseen-agent-views D-24, B27): an agent's open is always a tab of the
@@ -192,6 +192,22 @@ const OPEN_USAGE: &str = "usage: hide [open] [<path>]";
 const IMPORT_USAGE: &str = "usage: hide import herdr [--yes]";
 
 const VIEW_USAGE: &str = "usage: hide view list [--session <id|here>] | show <view-id> | select <view-id> [--request-id <id>] | close <view-id> [--request-id <id>] | split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>] | move <view-id> --area <area-id> --index <n> [--request-id <id>]";
+
+/// What `hide open --help` says past its line.
+const OPEN_NOTE: &str = "A command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there or in a plain ssh shell as the account Hide connects with, and brings Hide's window to that device's folder.";
+
+/// What the help of `file`, `diff`, `view` and `browser` says past their
+/// lines.
+const SCREEN_NOTE: &str = "These commands act on the operator's screen: they need Hide's window open and a pane or shell inside a registered checkout, and never start Hide.";
+
+/// What `hide links --help` says past its line.
+const LINKS_NOTE: &str = "These commands need only a pane or shell inside a registered checkout and a running Hide, and read the project it is in unless --all-projects is given.";
+
+/// What `hide session --help` says past its lines.
+const SESSION_NOTE: &str = "These commands need a pane or shell inside a registered checkout and a running Hide, and read the sessions of the project it is in and of the connected devices' checkouts of its repository, as each checkout's origin names it (Desk, and a bot outside every checkout, read every project): list to scan one line per session, show to read one as its session record shows it, read for a few raw events around one request.";
+
+/// What `hide memory --help` says past its line.
+const MEMORY_NOTE: &str = "These commands read, add to and forget from the Project Memory of the project the pane or shell is in, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nrelease ends a hold that an agent's stale report put on a card.\nrecheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given. Run in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.";
 
 /// A topic's command lines as a wrong command or `--help` prints them: one
 /// `usage:` line, then each form indented under it.
@@ -224,103 +240,320 @@ fn wrong(reason: String, lines: &str) -> String {
     }
 }
 
+/// What `hide access --help` says of a bot before it points at the guide.
+const ACCESS_NOTE: &str = "A tool outside Hide's panes runs these on the machine where Hide's core runs; once the operator approves it as a bot, it runs Hide's commands as its connection: in its own space, only on the agents and missions it started, or Full, as the operator.";
+
 /// Where `hide access --help` sends a bot for what each mode may do; the
 /// guide holds `access_cli::USAGE` itself, so the pointer is added here.
 const ACCESS_GUIDE_POINTER: &str = "What a bot may do in each mode: hide guide, section Bots.";
 
 /// The usage `hide <topic> <verb> … --help` prints: the one of the parser
-/// that reads the command, which for `agent profile` and `agent read` is
-/// not the `agent` topic's own.
+/// that reads the command, which for `agent profile` is not the `agent`
+/// topic's own.
 pub(crate) fn command_usage(topic: &str, verb: Option<&str>) -> Option<String> {
     match (topic, verb) {
         ("agent", Some("profile")) => Some(usage(crate::profile_cli::USAGE)),
-        ("agent", Some("read")) => Some(usage(crate::pane_cli::USAGE)),
+        // `workspace` stays the word of a hook's own commands only
+        // (`hided/AGENTS.md`, One name per thing); a person who asks for its
+        // help is shown the topic it became.
+        ("workspace", Some("--help" | "-h")) => topic_usage("checkout"),
         _ => topic_usage(topic),
     }
 }
 
-/// The usage `hide <topic> … --help` prints, for every command a person or
-/// an agent types.
-fn topic_usage(topic: &str) -> Option<String> {
-    Some(match topic {
-        "letter" | "inbox" | "watch" => usage(crate::delivery_cli::USAGE),
-        "agent" => usage(crate::agent_cli::USAGE),
-        "ps" => usage(crate::ps_cli::USAGE),
-        "skill" => usage(crate::store_cli::SKILL_USAGE),
-        "mcp" => usage(crate::store_cli::MCP_USAGE),
-        "device" => usage(crate::device_cli::USAGE),
-        "phone" => usage(crate::phone_cli::USAGE),
-        "access" => usage(&format!(
-            "{}\n{ACCESS_GUIDE_POINTER}",
-            crate::access_cli::USAGE
-        )),
-        "mission" => usage(crate::mission_cli::USAGE),
-        "task" => usage(crate::plan_cli::USAGE),
-        "wait" => usage(crate::wait_cli::USAGE),
-        "automation" => usage(crate::automation_cli::USAGE),
-        "links" => LINKS_USAGE.to_owned(),
-        "session" => usage(crate::session_cli::USAGE),
-        "memory" => MEMORY_USAGE.to_owned(),
-        "browser" => BROWSER_USAGE.to_owned(),
-        "file" => FILE_USAGE.to_owned(),
-        "diff" => DIFF_USAGE.to_owned(),
-        "view" => VIEW_USAGE.to_owned(),
-        "pane" => usage(crate::pane_cli::USAGE),
-        "checkout" => usage(CHECKOUT_USAGE),
-        "status" => "usage: hide status [--json]".to_owned(),
-        "import" => IMPORT_USAGE.to_owned(),
-        "stop" => "usage: hide stop".to_owned(),
-        "always-on" => crate::always_on::cli::USAGE.to_owned(),
-        "open" => OPEN_USAGE.to_owned(),
-        "version" => "usage: hide version [--json]".to_owned(),
-        "guide" => crate::guide::USAGE.to_owned(),
-        "issue" => usage(crate::issue_cli::USAGE),
-        "contract" => "usage: hide contract --json".to_owned(),
-        _ => return None,
-    })
+/// The usage `hide <topic> … --help` prints, for every topic of [`TOPICS`].
+fn topic_usage(word: &str) -> Option<String> {
+    TOPICS
+        .iter()
+        .find(|topic| topic.word == word)
+        .map(|topic| (topic.usage)())
 }
 
-/// `hide --help`: the commands a person types, then the ones an agent in a
-/// Hide pane uses. The host's and the hooks' own commands (`connect`,
-/// `serve`, `dev`, `runtime prepare`, `workspace bootstrap`,
-/// `workspace memory`) are not listed.
+/// Where `hide --help` shows a topic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Shown {
+    /// A row of the screen: the topic's group, then what it is for.
+    Row(&'static str, &'static str),
+    /// Named by the screen's first or last lines (`hide [open] [<path>]`,
+    /// `hide guide`).
+    Around,
+    /// Left off the screen, for the reason given: no person or agent types
+    /// it in their work.
+    Off(&'static str),
+}
+
+/// A word that starts a command a person or an agent types, and what
+/// `hide --help`, `hide <topic> --help` and `hide help <topic>` print for
+/// it. A hook's and the host's own commands (`workspace`, `connect`,
+/// `serve`, `dev`, `runtime`, `restart`) are not topics.
+pub(crate) struct Topic {
+    pub(crate) word: &'static str,
+    pub(crate) shown: Shown,
+    usage: fn() -> String,
+}
+
+/// Every topic, in the order `hide --help` lists them: the one list the
+/// first screen, `hide <topic> --help`, `hide help <topic>` and the guide's
+/// test of what an agent is taught read. A change of the first screen's
+/// wording or grouping is an edit of this list (`hided/AGENTS.md`, Help).
+pub(crate) const TOPICS: &[Topic] = &[
+    Topic {
+        word: "agent",
+        shown: Shown::Row(
+            "Agents",
+            "spawn, list, show, read and end agents; their profiles",
+        ),
+        usage: || usage(crate::agent_cli::USAGE),
+    },
+    Topic {
+        word: "ps",
+        shown: Shown::Row("Agents", "the panes and agents running now, as a tree"),
+        usage: || usage(crate::ps_cli::USAGE),
+    },
+    Topic {
+        word: "pane",
+        shown: Shown::Row(
+            "Agents",
+            "read a pane's screen, type into it, open one beside",
+        ),
+        usage: || usage(crate::pane_cli::USAGE),
+    },
+    Topic {
+        word: "letter",
+        shown: Shown::Row(
+            "Letters",
+            "send another agent a letter, answer one, show one",
+        ),
+        usage: || usage(crate::delivery_cli::LETTER_USAGE),
+    },
+    Topic {
+        word: "inbox",
+        shown: Shown::Row("Letters", "the letters that came to you"),
+        usage: || usage(crate::delivery_cli::INBOX_USAGE),
+    },
+    Topic {
+        word: "watch",
+        shown: Shown::Row("Waiting", "watch an agent and be told when it goes quiet"),
+        usage: || usage(crate::delivery_cli::WATCH_USAGE),
+    },
+    Topic {
+        word: "wait",
+        shown: Shown::Row(
+            "Waiting",
+            "wake when a pull request, a branch or a mission moves",
+        ),
+        usage: || usage(crate::wait_cli::USAGE),
+    },
+    Topic {
+        word: "mission",
+        shown: Shown::Row(
+            "Missions",
+            "plan and run agents that carry pull requests together",
+        ),
+        usage: || {
+            format!(
+                "{}\nHow a Conductor runs a mission: hide mission help.",
+                usage(crate::mission_cli::USAGE)
+            )
+        },
+    },
+    Topic {
+        word: "task",
+        shown: Shown::Row("Missions", "your own plan's steps, drawn beside your pane"),
+        usage: || {
+            format!(
+                "{}\nHow to keep your own plan: hide task help.",
+                usage(crate::plan_cli::USAGE)
+            )
+        },
+    },
+    Topic {
+        word: "automation",
+        shown: Shown::Row("Missions", "agents that start on a schedule"),
+        usage: || {
+            format!(
+                "{}\nHow to schedule an agent: hide automation help.",
+                usage(crate::automation_cli::USAGE)
+            )
+        },
+    },
+    Topic {
+        word: "checkout",
+        shown: Shown::Row(
+            "Project",
+            "this pane's checkout: show, name its purpose, remove",
+        ),
+        usage: || usage(CHECKOUT_USAGE),
+    },
+    Topic {
+        word: "session",
+        shown: Shown::Row("Project", "this project's past sessions: list, show, read"),
+        usage: || format!("{}\n{SESSION_NOTE}", usage(crate::session_cli::USAGE)),
+    },
+    Topic {
+        word: "memory",
+        shown: Shown::Row(
+            "Project",
+            "Project Memory: what agents learned in this project",
+        ),
+        usage: || format!("{MEMORY_USAGE}\n{MEMORY_NOTE}"),
+    },
+    Topic {
+        word: "links",
+        shown: Shown::Row(
+            "Project",
+            "what links to a pull request, issue, branch or session",
+        ),
+        usage: || format!("{LINKS_USAGE}\n{LINKS_NOTE}"),
+    },
+    Topic {
+        word: "file",
+        shown: Shown::Row("Views", "open a file beside the pane, in Hide's window"),
+        usage: || format!("{FILE_USAGE}\n{SCREEN_NOTE}"),
+    },
+    Topic {
+        word: "diff",
+        shown: Shown::Row("Views", "open a change beside the pane"),
+        usage: || format!("{DIFF_USAGE}\n{SCREEN_NOTE}"),
+    },
+    Topic {
+        word: "view",
+        shown: Shown::Row(
+            "Views",
+            "list, select, split, move and close the open Views",
+        ),
+        usage: || format!("{VIEW_USAGE}\n{SCREEN_NOTE}"),
+    },
+    Topic {
+        word: "browser",
+        shown: Shown::Row(
+            "Views",
+            "open a page beside the pane, then read or drive it",
+        ),
+        usage: || format!("{BROWSER_USAGE}\n{SCREEN_NOTE}"),
+    },
+    Topic {
+        word: "device",
+        shown: Shown::Row("Devices", "connect the machines this Hide works on"),
+        usage: || usage(crate::device_cli::USAGE),
+    },
+    Topic {
+        word: "phone",
+        shown: Shown::Row(
+            "Devices",
+            "pair a phone with this computer, list and remove them",
+        ),
+        usage: || usage(crate::phone_cli::USAGE),
+    },
+    Topic {
+        word: "access",
+        shown: Shown::Row("Bots", "connect a tool outside Hide's panes as a bot"),
+        usage: || {
+            usage(&format!(
+                "{}\n{ACCESS_NOTE}\n{ACCESS_GUIDE_POINTER}",
+                crate::access_cli::USAGE
+            ))
+        },
+    },
+    Topic {
+        word: "skill",
+        shown: Shown::Row("Tools", "the skills Hide gives every agent"),
+        usage: || usage(crate::store_cli::SKILL_USAGE),
+    },
+    Topic {
+        word: "mcp",
+        shown: Shown::Row("Tools", "the MCP servers Hide gives every agent"),
+        usage: || usage(crate::store_cli::MCP_USAGE),
+    },
+    Topic {
+        word: "status",
+        shown: Shown::Row("Hide", "whether Hide is running"),
+        usage: || "usage: hide status [--json]".to_owned(),
+    },
+    Topic {
+        word: "stop",
+        shown: Shown::Row("Hide", "stop Hide's background service"),
+        usage: || "usage: hide stop".to_owned(),
+    },
+    Topic {
+        word: "version",
+        shown: Shown::Row("Hide", "this build's version"),
+        usage: || "usage: hide version [--json]".to_owned(),
+    },
+    Topic {
+        word: "guide",
+        shown: Shown::Around,
+        usage: || crate::guide::USAGE.to_owned(),
+    },
+    Topic {
+        word: "issue",
+        shown: Shown::Row("Hide", "how to report a bug in Hide itself"),
+        usage: || usage(crate::issue_cli::USAGE),
+    },
+    Topic {
+        word: "contract",
+        shown: Shown::Row("Hide", "the commands tools call, as JSON"),
+        usage: || "usage: hide contract --json".to_owned(),
+    },
+    Topic {
+        word: "open",
+        shown: Shown::Around,
+        usage: || format!("{OPEN_USAGE}\n{OPEN_NOTE}"),
+    },
+    Topic {
+        word: "import",
+        shown: Shown::Off("a person's one-time move from the engine Hide ran before"),
+        usage: || IMPORT_USAGE.to_owned(),
+    },
+    Topic {
+        word: "always-on",
+        shown: Shown::Off(
+            "the desktop host and a pairing call it; docs/INSTALL.md gives the one line a person types, at uninstall",
+        ),
+        usage: || crate::always_on::cli::USAGE.to_owned(),
+    },
+];
+
+/// The first screen's lines above its topics.
+const SCREEN_TOP: &str = "usage: hide [open] [<path>]       open Hide, or a folder in it as a project\n       hide <topic> [<verb>] ...  run one of a topic's commands\n\n";
+
+/// The first screen's lines below its topics.
+const SCREEN_END: &str = "\nA topic's commands: hide <topic> --help, or hide help <topic>.\nThe guide to working in Hide: hide guide, or one part: hide guide <part>.\nA folder named like a topic: hide ./<name>, or hide open <name>.\n";
+
+/// `hide --help`, `hide help` and `hide -h`: one screen of the topics by
+/// group, each with what it is for; a topic's commands are its own
+/// `--help`.
 pub(crate) fn help_text() -> String {
-    let indent =
-        |lines: &str| -> String { lines.lines().map(|line| format!("  {line}\n")).collect() };
-    let mut text = String::from(
-        "usage: hide [command]\n\nFor you\n  hide                      open Hide\n  hide <path>, hide .       open a folder as a project in Hide, adding it if it is not one yet\n  hide status [--json]      show whether Hide is running\n  hide stop                 stop Hide's background service\n  hide version [--json]     show this build's version\n\nFor agents in a Hide pane\n  hide guide [<topic>]      the agent guide to everything below, or one topic of it\n  hide issue help           how to report a bug in Hide itself\n  hide contract --json      the commands tools call, as JSON\n",
-    );
-    for lines in [
-        crate::delivery_cli::USAGE,
-        crate::agent_cli::USAGE,
-        crate::ps_cli::USAGE,
-        crate::store_cli::SKILL_USAGE,
-        crate::store_cli::MCP_USAGE,
-        crate::device_cli::USAGE,
-        crate::phone_cli::USAGE,
-        crate::mission_cli::USAGE,
-        crate::plan_cli::USAGE,
-        crate::wait_cli::USAGE,
-        crate::automation_cli::USAGE,
-        crate::pane_cli::USAGE,
-        CHECKOUT_USAGE,
-        FILE_USAGE.trim_start_matches("usage: "),
-        DIFF_USAGE.trim_start_matches("usage: "),
-        "hide browser open <url-or-path> [--wait] [--request-id <id>]\nhide browser connect [--display <id>]\nhide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...\nhide browser help",
-        "hide view list [--session <id|here>]\nhide view show <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]",
-        LINKS_USAGE.trim_start_matches("usage: "),
-        crate::session_cli::USAGE,
-        MEMORY_USAGE.trim_start_matches("usage: "),
-    ] {
-        text.push_str(&indent(lines));
+    let mut text = String::from(SCREEN_TOP);
+    let mut last = "";
+    for topic in TOPICS {
+        let Shown::Row(group, line) = topic.shown else {
+            continue;
+        };
+        let label = if group == last { "" } else { group };
+        last = group;
+        text.push_str(&format!("{label:<11}{:<12}{line}\n", topic.word));
     }
-    text.push_str("\nFor a tool outside Hide's panes, on the machine where Hide's core runs\n");
-    text.push_str(&indent(crate::access_cli::USAGE));
-    text.push_str("  Once the operator approves it as a bot, it runs the commands above as its connection: in its own space, only on the agents and missions it started, or Full, as the operator. hide guide, section Bots, says what each mode may do.\n");
-    text.push_str(
-        "\nA command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there or in a plain ssh shell as the account Hide connects with, and brings Hide's window to that device's folder.\n\nCommands that act on the operator's screen (checkout, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide session needs the same and reads the sessions of the project it is in and of the connected devices' checkouts of its repository, as each checkout's origin names it (Desk, and a bot outside every checkout, read every project): list to scan one line per session, show to read one as its session record shows it, read for a few raw events around one request.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
-    );
+    text.push_str(SCREEN_END);
     text
+}
+
+/// `hide help <topic> …`: what `hide <topic> … --help` prints, read by the
+/// same parser, so the two never differ; a line that names no topic is
+/// refused with where the topics are.
+fn help_of(words: &[String]) -> Result<CommandKind, String> {
+    let line: Vec<String> = std::iter::once("hide")
+        .chain(words.iter().map(String::as_str))
+        .chain(std::iter::once("--help"))
+        .map(str::to_owned)
+        .collect();
+    match parse_args(&line) {
+        Ok(kind @ (CommandKind::Usage(_) | CommandKind::AgentSpawnHelp)) => Ok(kind),
+        _ => Err(format!(
+            "unknown topic: hide help {} (run hide --help for the topics)",
+            words.join(" ")
+        )),
+    }
 }
 
 /// The version this build reports: `HIDE_VERSION` when it was built (a
@@ -384,13 +617,13 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         ))
         .collect();
     let args = renamed.as_slice();
-    // `--help` or `-h` ending any command asks for that command's usage; the
-    // guides of `agent spawn`, `mission` and `task` answer it themselves.
+    // `--help` or `-h` ending any command asks for that command's usage;
+    // the guide of `agent spawn` answers it itself, and a topic's guide is
+    // its `help` verb (`hide mission help`).
     if let (Some(topic), Some("--help" | "-h")) = (
         args.get(1).map(String::as_str),
         args.last().filter(|_| args.len() > 2).map(String::as_str),
-    ) && !(args[2..] == ["spawn", "--help"]
-        || (matches!(topic, "mission" | "task" | "automation") && args.len() == 3))
+    ) && args[2..] != ["spawn", "--help"]
         && let Some(text) = command_usage(topic, args.get(2).map(String::as_str))
     {
         return Ok(CommandKind::Usage(text));
@@ -398,7 +631,8 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
     let mut iter = args.iter().skip(1);
     match iter.next().map(String::as_str) {
         Some("help" | "--help" | "-h") if iter.next().is_none() => Ok(CommandKind::Help),
-        Some("help") => Err("usage: hide --help".to_owned()),
+        // `hide help <topic> …` is `hide <topic> … --help`, read once.
+        Some("help") => help_of(&args[2..]),
         Some("--version") if iter.next().is_none() => Ok(CommandKind::Version { json: false }),
         Some("version") => match (iter.next().map(String::as_str), iter.next()) {
             (None, _) => Ok(CommandKind::Version { json: false }),
@@ -487,10 +721,18 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         }
         Some("agent") if args.get(2).map(String::as_str) == Some("read") => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::pane_cli::USAGE)))?;
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
+            // The pane module reads it and names its own lines as the
+            // reason; the command is the agent topic's.
             crate::pane_cli::parse_agent_read(&args[3..])
                 .map(CommandKind::Pane)
-                .map_err(|reason| wrong(reason, crate::pane_cli::USAGE))
+                .map_err(|reason| {
+                    wrong_agent(if reason == crate::pane_cli::USAGE {
+                        crate::agent_cli::USAGE.to_owned()
+                    } else {
+                        reason
+                    })
+                })
         }
         Some("pane") => {
             crate::cli_contract::admit(&args[1..])
@@ -617,11 +859,12 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 .map_err(|reason| wrong(reason, crate::access_cli::USAGE))
         }
         Some(topic @ ("letter" | "inbox" | "watch")) => {
+            let lines = crate::delivery_cli::usage(topic);
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::delivery_cli::USAGE)))?;
+                .map_err(|refusal| format!("{refusal}\n{}", usage(lines)))?;
             crate::delivery_cli::parse(topic, iter)
                 .map(CommandKind::Delivery)
-                .map_err(|reason| wrong(reason, crate::delivery_cli::USAGE))
+                .map_err(|reason| wrong(reason, lines))
         }
         Some("browser") => parse_browser(iter),
         // A hook's own commands; `workspace info`, `purpose` and `remove`
@@ -691,7 +934,7 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             })
         }
         Some(other) => Err(format!(
-            "unknown command: hide {other} (run hide --help for the commands)"
+            "unknown command: hide {other} (run hide --help for the topics)"
         )),
     }
 }
@@ -4207,9 +4450,15 @@ mod tests {
                 CommandKind::Usage(usage(crate::profile_cli::USAGE))
             );
         }
+        // `agent read` is the agent topic's, though the pane module reads it.
         assert_eq!(
             parse(&["hide", "agent", "read", "--help"]).unwrap(),
-            CommandKind::Usage(usage(crate::pane_cli::USAGE))
+            CommandKind::Usage(usage(crate::agent_cli::USAGE))
+        );
+        assert!(
+            parse(&["hide", "agent", "read"])
+                .unwrap_err()
+                .ends_with(&usage(crate::agent_cli::USAGE))
         );
         let error = parse(&["hide", "agent", "spawn", "--no-watch"]).unwrap_err();
         assert!(error.starts_with(
@@ -4289,17 +4538,20 @@ mod tests {
             ),
             (
                 &["hide", "letter", "send", "--help"][..],
-                usage(crate::delivery_cli::USAGE),
+                usage(crate::delivery_cli::LETTER_USAGE),
             ),
             (
                 &["hide", "request", "send", "--help"][..],
-                usage(crate::delivery_cli::USAGE),
+                usage(crate::delivery_cli::LETTER_USAGE),
             ),
             (
                 &["hide", "mission", "create", "--help"][..],
-                usage(crate::mission_cli::USAGE),
+                command_usage("mission", None).unwrap(),
             ),
-            (&["hide", "links", "--help"][..], LINKS_USAGE.to_owned()),
+            (
+                &["hide", "links", "--help"][..],
+                format!("{LINKS_USAGE}\n{LINKS_NOTE}"),
+            ),
             (
                 &["hide", "status", "--help"][..],
                 "usage: hide status [--json]".to_owned(),
@@ -4307,8 +4559,15 @@ mod tests {
         ] {
             assert_eq!(parse(args).unwrap(), CommandKind::Usage(lines), "{args:?}");
         }
+        // A topic's `--help` is its commands, and its `help` verb its guide.
+        for topic in ["mission", "task", "automation"] {
+            let CommandKind::Usage(text) = parse(&["hide", topic, "--help"]).unwrap() else {
+                panic!("hide {topic} --help prints its usage");
+            };
+            assert!(text.ends_with(&format!("hide {topic} help.")), "{text}");
+        }
         assert_eq!(
-            parse(&["hide", "mission", "--help"]).unwrap(),
+            parse(&["hide", "mission", "help"]).unwrap(),
             CommandKind::Mission(crate::mission_cli::MissionCli::Help)
         );
         assert_eq!(
@@ -4325,30 +4584,216 @@ mod tests {
         );
         assert_eq!(
             parse(&["hide", "--foo"]).unwrap_err(),
-            "unknown command: hide --foo (run hide --help for the commands)"
+            "unknown command: hide --foo (run hide --help for the topics)"
         );
         assert_eq!(
             parse(&["hide", "foo", "bar"]).unwrap_err(),
-            "unknown command: hide foo (run hide --help for the commands)"
+            "unknown command: hide foo (run hide --help for the topics)"
         );
         assert_eq!(
             parse(&["hide", "help", "extra"]).unwrap_err(),
-            "usage: hide --help"
+            "unknown topic: hide help extra (run hide --help for the topics)"
         );
         assert!(
             parse(&["hide", "ps", "--every"])
                 .unwrap_err()
                 .starts_with("unknown flag for hide ps: --every\nusage:\n  hide ps")
         );
-        let help = help_text();
-        assert!(help.starts_with("usage: hide [command]\n\nFor you\n"));
-        assert_eq!(help.matches("hide agent catalog").count(), 1);
+    }
+
+    fn hide_args(words: &[&str]) -> Vec<String> {
+        std::iter::once("hide")
+            .chain(words.iter().copied())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// `hide --help` is one screen of 80 columns and 40 lines: the topics
+    /// by group, each once, and no command's syntax (`hided/AGENTS.md`,
+    /// Help).
+    #[test]
+    fn the_first_screen_is_the_topics_by_group_on_one_screen() {
+        let screen = help_text();
+        assert!(screen.lines().count() <= 40, "{screen}");
         assert!(
-            !help.contains("hide serve")
-                && !help.contains("hide connect")
-                && !help.contains("renderer")
+            screen.lines().all(|line| line.chars().count() <= 80),
+            "{screen}"
         );
-        assert!(help.lines().all(|line| line.len() <= 400), "{help}");
+        for words in [&["--help"][..], &["help"], &["-h"]] {
+            assert_eq!(parse_args(&hide_args(words)).unwrap(), CommandKind::Help);
+        }
+        // A row is its group's name on the group's first row, the topic's
+        // word, then what it is for.
+        let rows: Vec<&str> = screen
+            .strip_prefix(SCREEN_TOP)
+            .and_then(|rest| rest.strip_suffix(SCREEN_END))
+            .expect("the topics stand between the screen's first and last lines")
+            .lines()
+            .map(|line| line[11..].split_whitespace().next().unwrap_or_default())
+            .collect();
+        let mut groups: Vec<&str> = Vec::new();
+        for topic in TOPICS {
+            match topic.shown {
+                Shown::Row(group, line) => {
+                    assert_eq!(
+                        rows.iter().filter(|word| **word == topic.word).count(),
+                        1,
+                        "hide {} is not on the first screen once:\n{screen}",
+                        topic.word
+                    );
+                    assert!(screen.contains(line));
+                    if groups.last() != Some(&group) {
+                        assert!(!groups.contains(&group), "group {group} is split");
+                        groups.push(group);
+                    }
+                }
+                Shown::Around => assert!(
+                    screen.contains(&format!("hide {}", topic.word))
+                        || screen.contains(&format!("hide [{}]", topic.word)),
+                    "hide {} is not named on the first screen",
+                    topic.word
+                ),
+                Shown::Off(why) => {
+                    assert!(!why.is_empty());
+                    assert!(
+                        !rows.contains(&topic.word),
+                        "{} is off the screen",
+                        topic.word
+                    );
+                }
+            }
+        }
+        // No command syntax past `hide [open] [<path>]`: the one option on
+        // it is `--help`, and every row is a topic's.
+        assert_eq!(
+            screen.matches("--").count(),
+            screen.matches("--help").count()
+        );
+        assert_eq!(
+            rows.len(),
+            TOPICS
+                .iter()
+                .filter(|topic| matches!(topic.shown, Shown::Row(..)))
+                .count()
+        );
+        assert!(!screen.contains("hide serve") && !screen.contains("hide connect"));
+    }
+
+    /// No two topics share a word (the contract table's topics are held to
+    /// [`TOPICS`] by `every_topic_of_the_table_is_a_help_topic`).
+    #[test]
+    fn no_two_topics_share_a_word() {
+        let mut words: Vec<&str> = TOPICS.iter().map(|topic| topic.word).collect();
+        words.sort_unstable();
+        words.dedup();
+        assert_eq!(words.len(), TOPICS.len());
+    }
+
+    /// `hide <topic> --help` prints that topic's commands and no other
+    /// topic's: every `hide` line of a topic's usage starts with its word.
+    #[test]
+    fn a_topics_help_names_only_its_own_commands() {
+        for topic in TOPICS {
+            let text = command_usage(topic.word, None).unwrap();
+            for line in text.lines() {
+                let line = line.trim().trim_start_matches("usage: ");
+                let Some(rest) = line.strip_prefix("hide ") else {
+                    continue;
+                };
+                let word = rest.split_whitespace().next().unwrap_or_default();
+                assert_eq!(
+                    word.trim_matches(['[', ']']),
+                    topic.word,
+                    "hide {} --help shows another topic's line: {line}",
+                    topic.word
+                );
+            }
+        }
+        // The three letter topics were one text.
+        for (topic, other) in [
+            ("letter", "hide inbox"),
+            ("inbox", "hide watch"),
+            ("watch", "hide letter"),
+        ] {
+            assert!(
+                !command_usage(topic, None).unwrap().contains(other),
+                "{topic}"
+            );
+        }
+        assert!(!command_usage("pane", None).unwrap().contains("hide agent"));
+        assert!(
+            command_usage("agent", None)
+                .unwrap()
+                .contains("hide agent read <agent>")
+        );
+        // The browser's page commands are named, not folded into `<command>`.
+        let browser = command_usage("browser", None).unwrap();
+        for verb in crate::browser_page::VERBS {
+            assert!(
+                browser
+                    .split(|c: char| c == '|' || c.is_whitespace())
+                    .any(|word| word == *verb),
+                "hide browser --help does not name {verb}"
+            );
+        }
+    }
+
+    /// `hide help <topic>` prints exactly what `hide <topic> --help` does,
+    /// for every topic and for `agent spawn`, whose `--help` is its guide;
+    /// a retired topic word prints the help of the topic it is now, and a
+    /// word that names no topic is refused with where the topics are.
+    #[test]
+    fn hide_help_topic_is_the_topics_help() {
+        let parse = |words: &[&str]| parse_args(&hide_args(words));
+        for topic in TOPICS {
+            let help = parse(&["help", topic.word]).unwrap();
+            assert_eq!(
+                help,
+                parse(&[topic.word, "--help"]).unwrap(),
+                "{}",
+                topic.word
+            );
+            assert!(
+                matches!(help, CommandKind::Usage(_)),
+                "hide help {}: {help:?}",
+                topic.word
+            );
+        }
+        assert_eq!(
+            parse(&["help", "mission", "node"]).unwrap(),
+            parse(&["mission", "node", "--help"]).unwrap()
+        );
+        assert_eq!(
+            parse(&["help", "agent", "spawn"]).unwrap(),
+            CommandKind::AgentSpawnHelp
+        );
+        assert_eq!(
+            parse(&["help", "agent", "profile"]).unwrap(),
+            parse(&["agent", "profile", "--help"]).unwrap()
+        );
+        for (old, now) in [
+            ("request", "letter"),
+            ("workspace", "checkout"),
+            ("plan", "task"),
+        ] {
+            let help = parse(&[now, "--help"]).unwrap();
+            assert_eq!(parse(&[old, "--help"]).unwrap(), help, "hide {old} --help");
+            assert_eq!(parse(&["help", old]).unwrap(), help, "hide help {old}");
+        }
+        for unknown in [
+            &["nothing-like-it"][..],
+            &["connect"],
+            &["serve"],
+            &["./status"],
+        ] {
+            assert_eq!(
+                parse(&[&["help"][..], unknown].concat()).unwrap_err(),
+                format!(
+                    "unknown topic: hide help {} (run hide --help for the topics)",
+                    unknown.join(" ")
+                )
+            );
+        }
     }
 
     #[test]
@@ -5129,7 +5574,11 @@ mod tests {
             parse(&["hide", "open", "--json"]).unwrap_err(),
             "usage: hide [open] [<path>]"
         );
-        assert!(help_text().contains("hide ./status opens the folder status"));
+        assert!(
+            command_usage("open", None)
+                .unwrap()
+                .contains("hide ./status opens the folder status")
+        );
     }
 
     /// A plain shell on a device asks its core over the device's link even

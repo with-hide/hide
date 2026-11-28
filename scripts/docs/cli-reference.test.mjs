@@ -7,7 +7,7 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { commandsOf, expand, noteProblems } from "./cli-reference.mjs";
+import { commandsOf, expand, noteProblems, topicsOf } from "./cli-reference.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const source = (path) => readFileSync(`${root}/${path}`, "utf8");
@@ -18,19 +18,17 @@ function constant(path, name) {
   assert.ok(match, `${name} not found in ${path}`);
   return JSON.parse(`"${match[1]}"`);
 }
-/** One usage string as `hide --help` prints it: `usage: ` dropped, each line indented by two spaces. */
-const asHelp = (usage) => usage.replace(/^usage: /, "").split("\n").map((line) => `  ${line}`).join("\n");
 
 const links = constant("hided/src/cli.rs", "LINKS_USAGE");
 const memory = constant("hided/src/cli.rs", "MEMORY_USAGE");
 const notes = JSON.parse(source("site/src/data/cli-notes.json"));
 
 test("a `|` between whole commands is one command each, with its own arguments", () => {
-  const found = [...commandsOf(asHelp(memory)).keys()];
+  const found = [...commandsOf(memory, "memory").keys()];
   for (const name of ["show", "search", "add", "forget", "undo", "placed", "building", "unbuilt", "outdated", "skipped", "stale", "release", "recheck"]) {
     assert.ok(found.includes(`memory ${name}`), `memory ${name} not found in: ${memory}`);
   }
-  const found2 = [...commandsOf(asHelp(links)).keys()];
+  const found2 = [...commandsOf(links, "links").keys()];
   for (const name of ["pr", "issue", "branch", "session"]) assert.ok(found2.includes(`links ${name}`), `links ${name} not found in: ${links}`);
 });
 
@@ -41,11 +39,34 @@ test("alternatives inside one word are one command each, and a `|` inside bracke
   assert.deepEqual(expand("hide <path>, hide ."), []);
 });
 
+test("the first screen's rows are its topics, under the group named on a group's first row, and a topic its last lines name", () => {
+  const screen = [
+    "usage: hide [open] [<path>]       open Hide, or a folder in it as a project",
+    "       hide <topic> <verb> ...    run one of a topic's commands",
+    "",
+    "Agents     agent       start, show, read and end agents; their profiles",
+    "           ps          the panes and agents running now, as a tree",
+    "Work done  mission     plan and run agents that carry pull requests together",
+    "",
+    "A topic's commands: hide <topic> --help, or hide help <topic>.",
+    "The guide to working in Hide: hide guide, or one part: hide guide <part>.",
+    "A folder named like a topic: hide ./<name>, or hide open <name>.",
+  ].join("\n");
+  // A topic the last lines name after a colon joins the last group; `open` and `<topic>` are not rows.
+  assert.deepEqual([...topicsOf(screen)], [["agent", "Agents"], ["ps", "Agents"], ["mission", "Work done"], ["guide", "Work done"]]);
+});
+
+test("a topic's help gives its own commands only", () => {
+  const usage = "usage:\n  hide agent list [--live]\n  hide agent read <agent> [--lines <n>]  hide agent show <id>\n  hide pane read <pane>\nThese commands need a running Hide.";
+  assert.deepEqual([...commandsOf(usage, "agent").keys()], ["agent list", "agent read", "agent show"]);
+  assert.equal(commandsOf(usage, "agent").get("agent show").syntax, "hide agent show <id>");
+});
+
 // The two usages are a part of the whole help, so the notes of every other command look "gone" here.
 const noNote = (commands, given) => noteProblems({ "hide": commands }, given).filter((problem) => problem.startsWith("commands with no note"));
 
 test("every command of those usages has a note, and a deleted note fails the check", () => {
-  const commands = new Map([...commandsOf(asHelp(memory)), ...commandsOf(asHelp(links))]);
+  const commands = new Map([...commandsOf(memory, "memory"), ...commandsOf(links, "links")]);
   assert.deepEqual(noNote(commands, notes), []);
   for (const name of ["memory search", "memory stale", "links issue", "links session"]) {
     const { [name]: _removed, ...without } = notes;
@@ -56,12 +77,21 @@ test("every command of those usages has a note, and a deleted note fails the che
   assert.match(noteProblems({ "hide": commands }, { ...notes, "memory teleport": { line: "x" } }).join("\n"), /gone.*memory teleport/);
 });
 
-// A stand-in `hide` whose `--help` prints the given lines.
+// A stand-in `hide` whose first screen lists the topics of the given lines, and whose `<topic> --help` prints that
+// topic's lines as a usage.
 function fakeHide(lines) {
   const dir = mkdtempSync(`${tmpdir()}/cli-reference-`);
-  writeFileSync(`${dir}/help.txt`, `usage: hide [command]\n\nFor you\n${lines.map((line) => `  ${line}`).join("\n")}\n`);
+  const byTopic = new Map();
+  for (const line of lines) {
+    const topic = line.split(" ")[1];
+    byTopic.set(topic, [...(byTopic.get(topic) ?? []), line]);
+  }
+  // Two groups, so the reference's sections follow the screen's: the first topic alone, then the rest.
+  const rows = [...byTopic.keys()].map((topic, index) => `${index === 0 ? "First" : index === 1 ? "Second" : ""}`.padEnd(11) + topic.padEnd(12) + "what it is for");
+  writeFileSync(`${dir}/help.txt`, `usage: hide [open] [<path>]       open Hide\n\n${rows.join("\n")}\n\nA topic's commands: hide <topic> --help.\n`);
+  for (const [topic, topicLines] of byTopic) writeFileSync(`${dir}/${topic}.txt`, `usage:\n${topicLines.map((line) => `  ${line}`).join("\n")}\n`);
   const path = `${dir}/hide`;
-  writeFileSync(path, `#!/bin/sh\ncat ${dir}/help.txt\n`);
+  writeFileSync(path, `#!/bin/sh\nif [ "$1" = --help ]; then cat ${dir}/help.txt; else cat "${dir}/$1.txt"; fi\n`);
   chmodSync(path, 0o755);
   return path;
 }
@@ -83,24 +113,9 @@ test("a binary whose help lists a note's command no more fails as a gone note, a
   const matching = generate(fakeHide(names.map((name) => `hide ${name}`)));
   assert.equal(matching.status, 0, matching.stderr);
   assert.match(matching.stdout, /^<!-- Generated by scripts\/docs\/cli-reference.mjs/);
-  // All thirteen sections in reading order; every command of these names has a named section, none falls to "Other commands".
+  // The sections are the first screen's groups, in its order.
   const headings = [...matching.stdout.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
-  assert.deepEqual(headings, [
-    "Start and stop Hide",
-    "For agents and tools",
-    "Letters and watches",
-    "Agents",
-    "Skills and MCP servers",
-    "Missions",
-    "Tasks",
-    "Automations",
-    "Panes and checkouts",
-    "The operator's screen",
-    "Devices",
-    "Bots",
-    "Past sessions and links",
-    "Project Memory",
-  ]);
+  assert.deepEqual(headings, ["First", "Second"]);
   // One command's own entry: its heading, its syntax line from that help and its note.
   assert.ok(matching.stdout.includes("### `hide mission gate`"), "no heading for hide mission gate");
   assert.ok(matching.stdout.includes("```sh\nhide mission gate\n```"), "no syntax block for hide mission gate");

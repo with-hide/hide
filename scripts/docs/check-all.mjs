@@ -18,7 +18,7 @@
 //      check-map-fits.mjs frames the mission map in a stand-in page running the real head script and fails when
 //      content is hidden or blank space is left under it, or the height does not settle, at 1440 and 390.
 // Usage: check-all.mjs (--hide <binary> | HIDE_BIN=<binary>) [--ci] [--checks-only]
-//   --hide / HIDE_BIN  the `hide` whose `--help` is the one authority for which commands exist (missing notes, notes for
+//   --hide / HIDE_BIN  the `hide` whose topics' help is the one authority for which commands exist (missing notes, notes for
 //                      gone commands, the generated cli.md). It must be built from THIS commit: CI builds it in the job
 //                      and passes its path here.
 //   --ci               (or CI=true) a missing binary is a hard failure before anything is generated; there is no default
@@ -65,7 +65,7 @@ run("guides and features hold each other", "node", ["scripts/docs/check-features
 
 run("the site's own tests: the download policy and the legal pages", "bash", ["scripts/verify-web.sh", "site", "test"]);
 
-const cli = run("CLI reference from hide --help", "node", ["scripts/docs/cli-reference.mjs", hide, join(root, "contracts/hide-cli.json"), join(root, "site/src/data/cli-notes.json")], { capture: true });
+const cli = run("CLI reference from the topics' help", "node", ["scripts/docs/cli-reference.mjs", hide, join(root, "contracts/hide-cli.json"), join(root, "site/src/data/cli-notes.json")], { capture: true });
 const front = ["---", "title: CLI", "description: Every hide command, with one line and an example each.", "sidebar:", "  order: 1", "---", "", ""].join("\n");
 writeFileSync(join(content, "reference/cli.md"), front + cli);
 

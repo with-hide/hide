@@ -801,7 +801,7 @@ class NamedPaths(unittest.TestCase):
                 self.assertNotIn("docs", self.lanes(path))
 
     def test_a_change_to_each_file_that_owns_help_text_plans_the_docs_lane(self):
-        # `hide --help` is what the CLI reference reads, so a command added in any of its owners
+        # The topics' help is what the CLI reference reads, so a command added in any of its owners
         # needs its note in the same pull request, not first on main.
         for path in ci.HELP_SOURCES:
             with self.subTest(path=path):
@@ -813,11 +813,14 @@ class NamedPaths(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertNotIn("docs", self.lanes(path))
 
-    def test_help_text_owners_are_the_modules_cli_rs_joins(self):
+    def test_help_text_owners_are_the_files_the_topics_name(self):
         source = (ROOT / "hided/src/cli.rs").read_text()
-        body = source[source.index("fn help_text()"):]
-        body = body[:body.index("\n}\n")]
-        joined = {f"hided/src/{name}.rs" for name in re.findall(r"crate::(\w+)::(?:USAGE\b|usage_here\(\))", body)}
+        table = source[source.index("pub(crate) const TOPICS"):]
+        table = table[:table.index("\n];\n")]
+        # The topics the first screen names (a row, or its first or last lines), each with the modules whose text
+        # its `--help` prints.
+        listed = [block for block in table.split("    Topic {")[1:] if "Shown::Off" not in block]
+        joined = {f"hided/src/{name}.rs" for block in listed for name in re.findall(r"crate::(\w+)::\w*USAGE\b", block)}
         self.assertEqual(joined | {"hided/src/cli.rs"}, set(ci.HELP_SOURCES))
 
     def test_web_e2e_helpers_reach_the_desktop_and_windows_lanes_but_not_rust(self):

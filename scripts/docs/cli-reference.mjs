@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The CLI reference's source of truth is the help of ONE `hide` binary, which the caller names (CI: the one built from
-// this checkout in the same job): every command
-// `hide --help` lists, with the syntax and options of the ones `contracts/hide-cli.json` also describes.
+// this checkout in the same job): the topics its first screen (`hide --help`) lists, then every command each topic's own
+// help (`hide <topic> --help`) lists, with the syntax and options of the ones `contracts/hide-cli.json` also describes.
 // A person writes one line and an example per command in the notes file; this fails on a command with no
 // note and on a note whose command is gone, then prints the reference as Markdown.
 // Usage: cli-reference.mjs <hide-binary> <contracts/hide-cli.json> <notes.json> > cli.md
@@ -65,15 +65,44 @@ export function expand(syntax) {
   return commands;
 }
 
-/** Every command `hide --help` lists: `Map<name, { group, syntax }>`. */
-export function commandsOf(help) {
-  const commands = new Map();
+/**
+ * The topics the first screen (`hide --help`) lists: `Map<topic, group>`. A row is an optional group name, the topic's
+ * word, two or more spaces, then what the topic is for. A line below the rows that names a topic after its colon
+ * (`The guide to working in Hide: hide guide, …`) adds that topic to the last group; the screen's other lines name
+ * no topic word there (`hide <topic>`, `hide ./<name>`).
+ */
+export function topicsOf(screen) {
+  const topics = new Map();
   let group = "";
+  for (const line of screen.split("\n")) {
+    const row = line.match(/^([A-Z]\S*(?: \S+)*)?\s+([a-z][a-z-]*)\s{2,}\S/);
+    if (row) {
+      if (row[1]) group = row[1];
+      topics.set(row[2], group);
+      continue;
+    }
+    const named = topics.size ? line.match(/^[A-Z][^:]*: hide ([a-z][a-z-]*)[,.\s]/) : null;
+    if (named && !topics.has(named[1])) topics.set(named[1], group);
+  }
+  return topics;
+}
+
+/**
+ * The commands one topic's help lists: `Map<name, { group, syntax }>`. A command line starts with `hide ` (or
+ * `usage: hide `) and may hold several commands apart by two or more spaces; a command of another topic is left to that
+ * topic.
+ */
+export function commandsOf(help, topic, group = "") {
+  const commands = new Map();
+  const add = (name, syntax) => {
+    if (name && name.split(" ")[0] === topic && !commands.has(name)) commands.set(name, { group, syntax });
+  };
   for (const line of help.split("\n")) {
-    if (/^[A-Z]/.test(line) && !line.startsWith("A command") && !line.startsWith("Commands") && !line.startsWith("On a ")) { group = line.trim(); continue; }
-    if (!line.startsWith("  hide ")) continue;
-    const syntax = line.trim().split(/\s{2,}/)[0];
-    for (const name of expand(syntax)) if (name && !commands.has(name)) commands.set(name, { group, syntax });
+    const text = line.trim().replace(/^usage: /, "");
+    if (!text.startsWith("hide ")) continue;
+    for (const syntax of text.split(/\s{2,}/).filter((part) => part.startsWith("hide "))) {
+      for (const name of expand(syntax)) add(name, syntax);
+    }
   }
   return commands;
 }
@@ -102,40 +131,26 @@ if (import.meta.url !== pathToFileURL(process.argv[1] ?? "").href) {
 } else {
 const [hide, contractPath, notesPath] = process.argv.slice(2);
 if (!notesPath) throw new Error("usage: cli-reference.mjs <hide-binary> <hide-cli.json> <notes.json>");
-const help = execFileSync(hide, ["--help"], { encoding: "utf8" });
 const contract = new Map(JSON.parse(readFileSync(contractPath, "utf8")).commands.map((command) => [command.command, command]));
 const notes = JSON.parse(readFileSync(notesPath, "utf8"));
-const commands = commandsOf(help);
-if (commands.size === 0) throw new Error(`${hide} --help listed no command; the reference cannot hold the commands to their notes`);
+const topics = topicsOf(execFileSync(hide, ["--help"], { encoding: "utf8" }));
+if (topics.size === 0) throw new Error(`${hide} --help listed no topic; the reference cannot hold the commands to their notes`);
+const commands = new Map();
+for (const [topic, group] of topics) {
+  const listed = commandsOf(execFileSync(hide, [topic, "--help"], { encoding: "utf8" }), topic, group);
+  if (listed.size === 0) throw new Error(`${hide} ${topic} --help listed no command of hide ${topic}`);
+  for (const [name, info] of listed) commands.set(name, info);
+}
 const problems = noteProblems({ [hide]: commands }, notes);
 if (problems.length) {
   console.error(problems.join("\n"));
   process.exit(1);
 }
 
-// The reading order of the reference: each section names the first words of the commands it holds. A command whose
-// first word is in no section lands in the last one, so a new command is still listed (its note is still required).
-const SECTIONS = [
-  ["Start and stop Hide", ["status", "stop", "version"]],
-  ["For agents and tools", ["guide", "issue", "contract"]],
-  ["Letters and watches", ["letter", "inbox", "watch", "wait"]],
-  ["Agents", ["agent", "ps"]],
-  ["Skills and MCP servers", ["skill", "mcp"]],
-  ["Missions", ["mission"]],
-  ["Tasks", ["task"]],
-  ["Automations", ["automation"]],
-  ["Panes and checkouts", ["pane", "checkout"]],
-  ["The operator's screen", ["file", "diff", "browser", "view"]],
-  ["Devices", ["device", "phone"]],
-  ["Bots", ["access"]],
-  ["Past sessions and links", ["session", "links"]],
-  ["Project Memory", ["memory"]],
-];
-const OTHER = "Other commands";
-const sectionOf = (first) => SECTIONS.find(([, words]) => words.includes(first))?.[0] ?? OTHER;
-const bySection = new Map([...SECTIONS.map(([title]) => [title, []]), [OTHER, []]]);
-for (const [name, info] of commands) bySection.get(sectionOf(name.split(" ")[0])).push([name, info]);
-const out = ["<!-- Generated by scripts/docs/cli-reference.mjs from `hide --help` and contracts/hide-cli.json. Edit the notes, not this file. -->", ""];
+// The reading order of the reference is the first screen's: its groups, each with its topics' commands.
+const bySection = new Map();
+for (const [name, info] of commands) bySection.set(info.group, [...(bySection.get(info.group) ?? []), [name, info]]);
+const out = ["<!-- Generated by scripts/docs/cli-reference.mjs from `hide --help`, each `hide <topic> --help` and contracts/hide-cli.json. Edit the notes, not this file. -->", ""];
 for (const [title, list] of bySection) {
   if (list.length === 0) continue;
   out.push(`## ${title}`, "");
@@ -150,9 +165,9 @@ for (const [title, list] of bySection) {
       out.push("");
     }
     if (spec?.refusals?.length) out.push(`Can be refused as: ${spec.refusals.map((r) => `\`${r}\``).join(", ")}.`, "");
-    out.push(spec ? `_Syntax from the command contract._` : `_Syntax from \`hide --help\`; not in the command contract._`, "");
+    out.push(spec ? `_Syntax from the command contract._` : `_Syntax from \`hide ${name.split(" ")[0]} --help\`; not in the command contract._`, "");
   }
 }
 console.log(out.join("\n"));
-console.error(`ok: ${commands.size} commands from ${hide} --help, ${[...commands.keys()].filter((n) => contract.has(n)).length} also in the contract`);
+console.error(`ok: ${commands.size} commands of ${topics.size} topics from ${hide} --help, ${[...commands.keys()].filter((n) => contract.has(n)).length} also in the contract`);
 }

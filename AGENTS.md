@@ -116,7 +116,7 @@ On 2026-09-27 one session replaced it with a build that predated a merged fix, d
 
 - Replace `/Applications/hide.app` only when the operator asked for it in the session doing the replacing; another session's approval, a PRD, or a verification plan is not that authority.
 - Keep the bundle you replace as `/Applications/hide-previous-<version>.app.bak`, and never delete a `.bak` another session left; the version is `CFBundleShortVersionString` in its `Contents/Info.plist`.
-- Before a live check, read the installed `Contents/Info.plist` version and `hide --help` from its `Contents/Resources`, and say in the run record which build answered.
+- Before a live check, read the installed `Contents/Info.plist` version and `hide version` (its version and commit) from its `Contents/Resources`, and say in the run record which build answered.
 - Launch it with the `HIDE_*` variables stripped from the launching shell (`env -u HIDE_STATE_DIR … open /Applications/hide.app`): a shell that set one, such as `HIDE_STATE_DIR` for an isolated run, points the app at that state folder rather than the one a Dock launch finds.
 - Package without `HIDE_VERSION`: the script names a local build `<newest release>-main.<commit>`, such as `0.4.0-main.f77c2a43`, and only a release sets `HIDE_VERSION` (`docs/BUILD.md`).
 

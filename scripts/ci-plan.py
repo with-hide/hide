@@ -1075,25 +1075,28 @@ SYSTEM_TESTS = (
 # The user docs lane: `scripts/docs/check-all.mjs` over `site/`, the live parts it
 # frames and the `hide` this checkout builds (docs/TESTING.md, The user docs).
 DOCS_LANES = {"docs"}
-# The files that own the text `hide --help` prints (`help_text` in hided/src/cli.rs): its own
-# inline lines and the links, memory, file, diff, browser and view usages, and the `USAGE`
-# of each command module it joins. The docs lane reads the commands from that text, so a command
-# added in any of them needs its note in the same pull request. The test
-# `help_text_owners_are_the_modules_cli_rs_joins` keeps this list equal to what `help_text` names.
+# The files that own the help the CLI reference reads (scripts/docs/cli-reference.mjs): the first
+# screen and each listed topic's `hide <topic> --help`, the topic's usage (`TOPICS` in
+# hided/src/cli.rs and the command modules it names). A command added in any of them needs its
+# note in the same pull request. The
+# test `help_text_owners_are_the_files_the_topics_name` keeps this list equal to what `TOPICS` names.
 HELP_SOURCES = (
     "hided/src/cli.rs",
-    "hided/src/delivery_cli.rs",
     "hided/src/agent_cli.rs",
     "hided/src/ps_cli.rs",
-    "hided/src/device_cli.rs",
-    "hided/src/access_cli.rs",
+    "hided/src/pane_cli.rs",
+    "hided/src/delivery_cli.rs",
+    "hided/src/wait_cli.rs",
     "hided/src/mission_cli.rs",
     "hided/src/plan_cli.rs",
     "hided/src/automation_cli.rs",
-    "hided/src/pane_cli.rs",
-    "hided/src/phone_cli.rs",
     "hided/src/session_cli.rs",
-    "hided/src/wait_cli.rs",
+    "hided/src/device_cli.rs",
+    "hided/src/phone_cli.rs",
+    "hided/src/access_cli.rs",
+    "hided/src/store_cli.rs",
+    "hided/src/guide.rs",
+    "hided/src/issue_cli.rs",
 )
 NAMED_LANES = (
     ("web/e2e/worker-owned.ts", WEB_E2E_LANES | {"relay-protocol"}),
@@ -1315,7 +1318,7 @@ def classify(path, status, crates, root):
             lanes.add("remote-mailbox-arm")
         if crate["name"] in WSL_CRATES or path.as_posix() in WSL_CRATE_FILES:
             lanes.add("windows-wsl")
-        # `hide --help` lists the commands the CLI reference holds a note for.
+        # The topics' help lists the commands the CLI reference holds a note for.
         if path.as_posix() in HELP_SOURCES:
             lanes.update(DOCS_LANES)
         if crate["name"] in OS_CRATES:

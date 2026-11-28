@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::env::Env;
 
-pub const USAGE: &str = "hide pane read <pane> [--lines <n>] [--json]\nhide pane read <pane> --source visible --format ansi [--json]\nhide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]\nhide pane open --beside [--focus] -- <command>\nhide agent read <agent> [--lines <n>] [--json]";
+pub const USAGE: &str = "hide pane read <pane> [--lines <n>] [--json]\nhide pane read <pane> --source visible --format ansi [--json]\nhide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]\nhide pane open --beside [--focus] -- <command>";
 
 /// The line `hide checkout purpose` refuses its words with.
 pub const PURPOSE_USAGE: &str = "hide checkout purpose <text>";
