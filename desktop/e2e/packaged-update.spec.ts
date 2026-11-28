@@ -110,7 +110,8 @@ function Snap([string]$label) {
   foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p }
   $now = (Get-Date).ToString('o')
   $matched = @($all | Where-Object { ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, 'OrdinalIgnoreCase')) -or $_.Name -like 'hide*' })
-  "update-diag $label at=$now matched=$($matched.Count)"
+  "update-diag $label at=$now matched=$($matched.Count) self=$PID selfSession=$((Get-Process -Id $PID).SessionId)"
+  if ($label -eq 'start') { foreach ($x in @($all | Where-Object { $_.Name -eq 'explorer.exe' })) { 'update-diag-explorer ' + ([ordered]@{ pid = $x.ProcessId; session = $x.SessionId; created = $x.CreationDate.ToString('o') } | ConvertTo-Json -Compress) } }
   foreach ($p in $matched) {
     $parent = $byId[[int]$p.ParentProcessId]
     $row = [ordered]@{ label = $label; pid = $p.ProcessId; name = $p.Name; ppid = $p.ParentProcessId; parent = $(if ($parent) { $parent.Name } else { $null }); parentCreated = $(if ($parent) { $parent.CreationDate.ToString('o') } else { $null }); created = $p.CreationDate.ToString('o'); session = $p.SessionId; path = $p.ExecutablePath; cmd = $p.CommandLine }
@@ -138,9 +139,12 @@ if ((Reopened).Count -gt 0) {
   Snap 'throw'
   foreach ($p in Reopened) { "update-diag waitprocess $($p.Id)"; $p | Wait-Process -Timeout 3 -ErrorAction SilentlyContinue -ErrorVariable waitErrors; foreach ($e in $waitErrors) { "update-diag wait-error $e" } }
   Snap 'after-throw-wait'
-  throw 'the reopened app is still running'
-}
-Snap 'ended'
+  $failedEnd = $true
+} else { Snap 'ended' }
+# Whether an app appears later, after the check a passing run ends on.
+for ($j = 1; $j -le 30; $j++) { Start-Sleep -Seconds 1; Snap "later-$j" }
+foreach ($p in Reopened) { "update-diag later-stop $($p.Id)"; $p | Stop-Process -Force -ErrorAction SilentlyContinue }
+if ($failedEnd) { throw 'the reopened app is still running' }
 `;
     execFileSync("pwsh", ["-NoProfile", "-Command", script], { stdio: "inherit", env: { ...process.env, HIDE_E2E_REOPENED_APP: app, HIDE_E2E_REOPENED_SETUP: path.parse(setup).name } });
   } else {
