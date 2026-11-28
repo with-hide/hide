@@ -28,7 +28,7 @@ import { useFilePathChips } from "./file-path-chip";
 import { ThreadAsks } from "./thread-asks";
 import { keepScroll, keptScroll, placeAt, scrollPlace, stillAt, type ScrollPlace } from "../../conversationScroll";
 import { rowEstimate, threadRows, type RowGap, type ThreadRow, type ViewLine } from "../../threadRows";
-import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
+import { defaultRangeExtractor, useVirtualizer, type Range, type VirtualItem, type Virtualizer } from "@tanstack/react-virtual";
 
 const TOOL_ICON: Partial<Record<AcpToolKind, typeof WrenchIcon>> = {
   execute: SquareTerminalIcon,
@@ -461,6 +461,12 @@ function useBrowserSelection(box: RefObject<HTMLDivElement | null>) {
   }, [box, surface]);
 }
 
+/** Whether a row's change of height moves the scroll by as much (`useThreadList`). */
+function keepsReadingPlace(item: VirtualItem, _delta: number, instance: Virtualizer<HTMLDivElement, Element>): boolean {
+  const top = (instance.scrollOffset ?? 0) + instance.scrollAdjustments;
+  return instance.itemSizeCache.has(item.key) ? item.end <= top : item.start < top;
+}
+
 /**
  * The conversation's rows near its scroll viewport, and its scrolling (B25, issue 3101). Only the rows within a few of
  * the viewport are drawn, each measured as it is drawn and kept by its key while it is not; the rows of `keep` are
@@ -508,6 +514,16 @@ function useThreadList(ref: RefObject<HTMLDivElement | null>, rows: readonly Thr
     anchorTo: "end",
     scrollEndThreshold: AT_END,
   });
+  // A row above the viewport that changes height (an image that arrives late, words that wrap again) moves the
+  // scroll by as much, whichever way the reader scrolls, so what they read stays put: a row measured for the first
+  // time when its top is above the viewport, a row measured again when the whole of it is. The library's own rule
+  // skips the second while scrolling up, which let the reading line move.
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = keepsReadingPlace;
+  // What the rows no longer hold (a page let go, a thread read anew) is forgotten, so the measured heights stay as
+  // many as the rows.
+  useEffect(() => {
+    for (const key of virtualizer.itemSizeCache.keys()) if (!indexOf.has(key as string)) virtualizer.itemSizeCache.delete(key);
+  }, [indexOf, virtualizer]);
   useLayoutEffect(() => {
     const box = ref.current;
     return () => {
@@ -667,6 +683,12 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   const litId = lit?.id ?? null;
   const keep = useMemo<RowSpan[]>(() => [...(selected ? [selected] : []), ...(litId ? [[litId, litId] as const] : [])], [selected, litId]);
   const scroller = useThreadList(box, rows, scrollKey, onReachTop, keep);
+  // A fold of a turn the conversation no longer holds (its page let go) is forgotten with it.
+  useEffect(() => {
+    if (!settled || open.size === 0) return;
+    const held = new Set(turns.map((turn) => turn.key));
+    if ([...open].some((key) => !held.has(key))) setOpen(new Set([...open].filter((key) => held.has(key))));
+  }, [turns, open, settled]);
   const goTo = (ask: AskLine) => {
     if (places.get(ask.id)?.state === "gone") return;
     setSeek((now) => ({ id: ask.id, press: Math.max(now?.press ?? 0, lit?.press ?? 0) + 1 }));

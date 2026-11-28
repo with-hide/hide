@@ -6,7 +6,7 @@
 import { threadLines, type AcpSessionUpdate, type DeskOutput, type DeskSessionRef, type ThreadHidePart, type ThreadLine, type ThreadReadFailure } from "./desk";
 import { missionCounts, missionTurn } from "./missions";
 import { heldBy } from "./components/mission-hold";
-import type { AgentRow, MissionsSnapshot, PlansSnapshot, PlanView, SessionThreadHistorySection, SessionThreadSection, ThreadPage, ThreadPart, ThreadSession, ThreadUpdate } from "./snapshot";
+import type { AgentRow, MissionsSnapshot, PlansSnapshot, PlanView, SessionThreadHistorySection, SessionThreadSection, ThreadPart, ThreadSession, ThreadUpdate } from "./snapshot";
 
 export type ThreadConversation = {
   /** Every update the thread holds, oldest first. */
@@ -17,44 +17,13 @@ export type ThreadConversation = {
   sessions: Record<string, ThreadSession>;
   /**
    * Each update's name, which neither a page read in above, the live page filling and joining the kept ones, nor the
-   * oldest kept page being let go moves: its page's own first update and its place in that page. A screen keeps a
-   * line's fold, its measured height and the place a reader stands at by it.
+   * oldest kept page being let go moves: where its page begins in the record and its place in that page, whatever
+   * stands before it. A screen keeps a line's fold, its measured height and the place a reader stands at by it.
    */
   ids: string[];
 };
 
 const EMPTY: ThreadConversation = { updates: [], parts: {}, sessions: {}, ids: [] };
-
-/** A small hash of a string, enough to tell pages apart by what they begin with. */
-function hashOf(text: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(36);
-}
-
-/** What a page begins with, without reading an image's bytes: a page is never read again from another start. */
-function pageName(page: ThreadPage): string {
-  const first = page.updates[0];
-  if (!first) return "empty";
-  const { content, ...rest } = first as { content?: { type?: string; text?: string; data?: string; mimeType?: string } } & Record<string, unknown>;
-  const said = content ? { type: content.type, text: content.text?.slice(0, 256), mime: content.mimeType, bytes: content.data?.length } : null;
-  return hashOf(JSON.stringify([rest.sessionUpdate, rest.toolCallId ?? null, rest.messageId ?? null, rest._meta ?? null, rest.title ?? null, said]));
-}
-
-/** Each update's lasting name (`ThreadConversation.ids`); two pages that begin alike are told apart by their order. */
-function updateIds(pages: readonly ThreadPage[]): string[] {
-  const seen = new Map<string, number>();
-  return pages.flatMap((page) => {
-    const name = pageName(page);
-    const count = (seen.get(name) ?? 0) + 1;
-    seen.set(name, count);
-    const prefix = count === 1 ? name : `${name}.${count}`;
-    return page.updates.map((_, index) => `${prefix}:${index}`);
-  });
-}
 
 /**
  * The thread's conversation. Kept pages of another generation belong to a
@@ -69,7 +38,7 @@ export function threadConversation(thread: SessionThreadSection | null, history:
     updates: pages.flatMap((page) => page.updates),
     parts: Object.assign({}, ...pages.map((page) => page.parts)) as Record<string, ThreadPart>,
     sessions: Object.assign({}, ...pages.map((page) => page.sessions)) as Record<string, ThreadSession>,
-    ids: updateIds(pages),
+    ids: pages.flatMap((page) => page.updates.map((_, index) => `${page.start}:${index}`)),
   };
 }
 

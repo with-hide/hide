@@ -4,8 +4,8 @@ import { threadConversation, threadInputHeld, threadScreen } from "./threadView"
 
 const said = (text: string) => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
 
-function page(texts: string[], parts: ThreadPage["parts"] = {}, sessions: ThreadPage["sessions"] = {}): ThreadPage {
-  return { updates: texts.map(said), parts, sessions };
+function page(texts: string[], parts: ThreadPage["parts"] = {}, sessions: ThreadPage["sessions"] = {}, start = 0): ThreadPage {
+  return { start, updates: texts.map(said), parts, sessions };
 }
 
 function thread(extra: Partial<SessionThreadSection> = {}): SessionThreadSection {
@@ -16,33 +16,36 @@ describe("a thread's conversation", () => {
   it("is the kept pages, oldest first, then the live page", () => {
     const history: SessionThreadHistorySection = {
       generation: 2,
-      pages: [page(["처음"], { a: { kind: "plan" } }), page(["둘째"], { b: { kind: "letter", to: "agent-7", body: "hi" } }, { "agent-7": { pane_id: "w1:p2", machine: "mac" } })],
+      pages: [page(["처음"], { a: { kind: "plan" } }), page(["둘째"], { b: { kind: "letter", to: "agent-7", body: "hi" } }, { "agent-7": { pane_id: "w1:p2", machine: "mac" } }, 100)],
     };
     const spawned = { kind: "spawn" as const, name: "review", intent: null, agent_id: "agent-42" };
-    const shown = threadConversation(thread({ tail: page(["지금"], { b: spawned }, { "agent-42": { pane_id: "w1:p3", machine: "mac" } }) }), history);
+    const shown = threadConversation(thread({ tail: page(["지금"], { b: spawned }, { "agent-42": { pane_id: "w1:p3", machine: "mac" } }, 200) }), history);
     expect(shown.updates.map((update) => (update.content as { text: string }).text)).toEqual(["처음", "둘째", "지금"]);
     expect(shown.parts).toEqual({ a: { kind: "plan" }, b: spawned });
     expect(shown.sessions).toEqual({ "agent-7": { pane_id: "w1:p2", machine: "mac" }, "agent-42": { pane_id: "w1:p3", machine: "mac" } });
   });
 
-  it("names each line so that reading a page above, the live page joining the kept ones, or the oldest one let go moves none", () => {
+  it("names each line by its page's start in the record, so reading a page above, the live page joining the kept ones, or the oldest one let go moves none", () => {
     const user = (text: string) => ({ sessionUpdate: "user_message_chunk", content: { type: "text", text } });
-    const older = { updates: [user("처음 질문"), said("처음 답")], parts: {}, sessions: {} };
-    const kept = { updates: [user("둘째 질문"), said("둘째 답")], parts: {}, sessions: {} };
-    const live = { updates: [user("지금 질문"), said("지금 답")], parts: {}, sessions: {} };
+    // Pages that begin alike, as an agent's todo list starts a page with no message id or time of its own.
+    const plan = { sessionUpdate: "plan", entries: [{ content: "단계", priority: "medium", status: "pending" }] };
+    const older = { start: 0, updates: [plan, user("처음 질문"), said("처음 답")], parts: {}, sessions: {} };
+    const kept = { start: 400, updates: [plan, user("둘째 질문"), said("둘째 답")], parts: {}, sessions: {} };
+    const live = { start: 900, updates: [plan, user("지금 질문"), said("지금 답")], parts: {}, sessions: {} };
     const ids = (history: ThreadPage[], tail: ThreadPage | null) => {
       const lines = threadScreen(thread({ tail }), { generation: 2, pages: history }, {}, []).lines;
-      return new Map(lines.map((line) => ["text" in line ? line.text : "", line.id]));
+      return new Map(lines.filter((line) => "text" in line).map((line) => [(line as { text: string }).text, line.id]));
     };
     const first = ids([kept], live);
     // The page before is read in above.
     const read = ids([older, kept], live);
     expect(read.get("둘째 답")).toBe(first.get("둘째 답"));
     expect(read.get("지금 답")).toBe(first.get("지금 답"));
+    expect(new Set(read.values()).size).toBe(read.size);
     // The live page filled and joined the kept pages, and the oldest was let go.
     const moved = ids([kept, live], null);
+    expect(moved.get("둘째 답")).toBe(first.get("둘째 답"));
     expect(moved.get("지금 답")).toBe(first.get("지금 답"));
-    expect(new Set(read.values()).size).toBe(read.size);
   });
 
   it("leaves out the kept pages of a thread that closed", () => {
@@ -70,6 +73,7 @@ describe("a thread's screen", () => {
   const plan = { pane_id: "w1:p9" } as PlanView;
   const mission = { id: "mission-3", title: "Desk 1차", status: "running", decision: null, conductor: { present: true }, nodes: [{ key: "done", depends_on: [], status: "done", attention: null }, { key: "working", depends_on: [], status: "working", attention: null }, { key: "dropped", depends_on: [], status: "dropped", attention: null }] } as unknown as Mission;
   const tail: ThreadPage = {
+    start: 0,
     updates: [
       { sessionUpdate: "user_message_chunk", content: { type: "text", text: "다음 단계\n둘째 줄" }, _meta: { hide: { origin: "letter", from: "lead" } } },
       call("a", "hide request send agent-7 --intent m:ask"),
