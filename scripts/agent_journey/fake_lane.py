@@ -32,11 +32,14 @@ LIMITS = [
 ]
 
 # Update policies come from the Rust adapters. Telemetry stays off, and
-# requests to the fake skip any proxy the runner has.
+# requests to the fake skip any proxy the runner has. Claude Code's
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is not set: 2.1.332 (not 2.1.302) also
+# turns off the session title Claude asks its model for, which the `title`
+# cell measures and an operator's Claude, without it, writes; local.QUIET
+# keeps Claude's telemetry, error reports and self-update off.
 QUIET = {"NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost",
          "PI_TELEMETRY": "0",
-         "GROK_TELEMETRY_ENABLED": "0",
-         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+         "GROK_TELEMETRY_ENABLED": "0"}
 
 
 def claude_config(root, key=KEY):
