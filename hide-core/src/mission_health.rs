@@ -833,10 +833,11 @@ pub(crate) enum WarnAct {
 
 /// How the warnings of `mission`'s nodes change at `now` (with-hide/hide-private#552):
 /// a node at work in a running mission warns once the round of its review
-/// or verification at the strength's limit (`review_limit`) failed, and
-/// the warning stands, through any round after it, until that line passes
-/// or is skipped, so the Conductor is told once; it goes then, or when the
-/// node is no longer at work. A node whose worker stood stopped
+/// or verification at the strength's limit (`review_limit`) failed
+/// (`MissionNode::round_hold`), and the warning stands while that holds, so
+/// the Conductor is told once; it goes when the line passes, is skipped or
+/// a fresh worker starts a fresh budget, or when the node is no longer at
+/// work. A node whose worker stood stopped
 /// `STOPPED_THAT_WARNS_MS` (`stopped_worker`) warns once with its cause, and
 /// the warning goes once that rule no longer holds: the worker works, waits
 /// or ends, or the node waits on someone. A node that waits on purpose
@@ -881,20 +882,15 @@ pub(crate) fn warn_acts(
             }
             _ => {}
         }
-        let limit = review_limit(mission);
-        let past = works
-            .then(|| node.review_line(limit))
-            .flatten()
-            .filter(|line| line.past_limit(limit));
+        let held = works
+            .then(|| node.round_hold(review_limit(mission)))
+            .flatten();
         match standing(WarningKind::ReviewFails) {
-            Some(_) if past.is_none() => acts.push(WarnAct::Clear {
+            Some(_) if held.is_none() => acts.push(WarnAct::Clear {
                 node: at,
                 kind: WarningKind::ReviewFails,
             }),
-            None if past.is_some_and(|line| {
-                line.state == crate::mission_criteria::CriterionState::Fail
-            }) =>
-            {
+            None if held.is_some() => {
                 acts.push(WarnAct::Raise {
                     node: at,
                     kind: WarningKind::ReviewFails,
@@ -1942,8 +1938,9 @@ mod tests {
     }
 
     /// mission-82 review O4: a node with a review and a verification names
-    /// one rounds line everywhere: the one past the limit and not passed,
-    /// else the one with the most rounds.
+    /// one rounds line everywhere: the one whose round budget is spent
+    /// (failed at the limit), else the one with the most rounds in the
+    /// current worker's budget.
     #[test]
     fn a_node_names_the_line_past_the_limit_before_the_one_with_most_rounds() {
         use crate::mission_criteria::CriterionState::{Fail, Pass};
@@ -1966,16 +1963,26 @@ mod tests {
         set(&mut m, 1, 5, Pass);
         set(&mut m, 2, 3, Fail);
         assert_eq!(named(&m).as_deref(), Some("review"));
+        // A fresh worker's budget counts from its bind: the verify's 4
+        // rounds were an earlier worker's, and the review's 2 are this one's.
+        m.nodes[0].criteria[1].budget_from = 3;
+        set(&mut m, 2, 4, Fail);
+        m.nodes[0].criteria[2].budget_from = 4;
+        assert_eq!(named(&m).as_deref(), Some("review"));
+        m.nodes[0].criteria[1].budget_from = 0;
+        m.nodes[0].criteria[2].budget_from = 0;
         set(&mut m, 1, 0, Pass);
         set(&mut m, 2, 0, Fail);
         assert_eq!(named(&m), None);
     }
 
-    /// mission-82: the round at the strength's limit failing warns, once:
-    /// a round before it failing does not, nor the limit's round still
-    /// open; standing, the rounds after it raise nothing more, and the line
-    /// passing or skipped takes it away. A mission from before strength
-    /// counts as normal.
+    /// mission-82, mission-112: the round at the strength's limit failing
+    /// warns, once: a round before it failing does not, nor the limit's
+    /// round still open; standing, a failed re-look raises nothing more,
+    /// and the line passing, skipped or opened again (a fresh checker bound
+    /// in its place) takes it away, and so does a fresh worker's budget,
+    /// which counts from its bind and warns again at its own limit. A
+    /// mission from before strength counts as normal.
     #[test]
     fn the_review_round_at_the_strengths_limit_failing_warns_once_until_the_line_passes() {
         use crate::mission_criteria::CriterionState::{Fail, Open, Pass, Skipped};
@@ -2008,11 +2015,24 @@ mod tests {
                 "{strength:?}"
             );
             m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
-            for state in [Open, Fail] {
-                review(&mut m, limit + 1, state);
-                assert!(warn_acts(&m, None, &[], &[], 10).is_empty(), "{strength:?}");
-            }
-            for state in [Pass, Skipped] {
+            review(&mut m, limit + 1, Fail);
+            assert!(warn_acts(&m, None, &[], &[], 10).is_empty(), "{strength:?}");
+            let clear = [WarnAct::Clear {
+                node: 0,
+                kind: WarningKind::ReviewFails,
+            }];
+            m.nodes[0].criteria[1].budget_from = limit;
+            assert_eq!(warn_acts(&m, None, &[], &[], 10), clear, "{strength:?}");
+            m.nodes[0].warnings.clear();
+            review(&mut m, 2 * limit, Fail);
+            assert_eq!(
+                warn_acts(&m, None, &[], &[], 10).len(),
+                1,
+                "the fresh worker's own limit {strength:?}"
+            );
+            m.nodes[0].criteria[1].budget_from = 0;
+            m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
+            for state in [Open, Pass, Skipped] {
                 review(&mut m, limit + 1, state);
                 assert_eq!(
                     warn_acts(&m, None, &[], &[], 10),

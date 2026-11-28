@@ -367,6 +367,7 @@ fn skip_lines(node: &mut MissionNode, keys: &[String], decision: &str, now: u64)
         line.skip(
             decision.to_owned(),
             None,
+            None,
             crate::mission_criteria::Recorded {
                 role: crate::mission_criteria::Role::Operator,
                 name: "operator".to_owned(),

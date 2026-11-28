@@ -2197,6 +2197,7 @@ pub const COMMANDS: &[Spec] = &[
             optional("--mission", Key),
             required("--reason", Text),
             optional("--decision", Unsigned),
+            optional("--follow-up", Key),
         ],
         rest: None,
         answers: &["mission"],
@@ -2207,6 +2208,8 @@ pub const COMMANDS: &[Spec] = &[
             "mission_ambiguous",
             "mission_skip_reason_missing",
             "mission_criteria_protected",
+            "mission_skip_follow_up_required",
+            "mission_follow_up_invalid",
         ],
     },
     Spec {

@@ -1430,17 +1430,25 @@ pub(super) fn wake_words(
             let (what, ask) = match (wake.warning, node, warning) {
                 (Some(WarningKind::ReviewFails), Some(node), _) => {
                     let limit = crate::mission_health::review_limit(mission);
-                    let past = node.review_line(limit);
-                    let line = past.map_or("review", |line| line.key.as_str());
-                    let rounds = past.map_or(limit, |line| line.rounds);
+                    let held = node.review_line(limit);
+                    let line = held.map_or("review", |line| line.key.as_str());
+                    let rounds = held.map_or(limit, Criterion::budget_rounds);
+                    let key = wake.node.as_str();
+                    // Rounds counted before the current worker's budget: the
+                    // node already had a fresh worker, maybe for this limit.
+                    let earlier = match held.map_or(0, |line| line.budget_from) {
+                        0 => String::new(),
+                        before => format!(
+                            "Its checkers counted {before} rounds for an earlier worker of this node: if that worker was handed over at this limit, the fresh one failed too, so ask the operator with `hide mission decide --node {key}` instead. "
+                        ),
+                    };
                     (
                         format!(
-                            "reached its review round limit: the {line} failed in round {rounds}, with {limit} rounds the mission's `{}` strength allows",
+                            "reached its review round limit: the {line} failed in round {rounds}, with {limit} rounds the mission's `{}` strength allows, so its worker's next check wakes no checker until you choose how it goes on",
                             mission.strength.unwrap_or_default().as_str()
                         ),
                         format!(
-                            "settle it yourself, without the operator: have its worker fix the serious findings in the node; file the ordinary and minor ones as follow-up issues, name them on the pull request, and skip the line with `hide mission skip {} {line} --reason \"<issue numbers>\"`",
-                            wake.node
+                            "choose one, without the operator. {earlier}(1) Only ordinary or minor findings remain: tell its worker to fix only the serious ones in this pull request, plan the rest as a follow-up node of this mission (not an issue), and skip the line with `hide mission skip {key} {line} --follow-up <node> --reason \"<why>\"`; to have the serious fixes looked at once more first, ask its checker by letter to re-look only those on the fixed commit, and its pass passes the line. (2) A serious finding came back in the same area: hand the node to a fresh worker on a different model, with a handover note and a list of what not to try again, and bind it with `hide mission node {key} --agent-id <agent-N> --attempts <n>`, which gives its checkers a fresh round budget; if that worker reaches the limit too, ask the operator with `hide mission decide --node {key}`"
                         ),
                     )
                 }
@@ -1734,7 +1742,14 @@ fn round_body(
         }
         (RoundWake::Checked, Some(node)) => {
             let (line, failed, running) = round_facts(mission, node);
+            let held = node
+                .round_hold(crate::mission_health::review_limit(mission))
+                .is_some();
             let act = match (failed, running) {
+                // The round budget is spent (`Criterion::budget_spent`).
+                (true, _) if held => {
+                    "That was the last round the mission's strength allows: your next check wakes no checker until your Conductor chooses how the node goes on, so wait for its letter before you fix anything."
+                }
                 (true, true) => {
                     "Start fixing now; record your next check once both results are in (after 30 minutes without the other, go on)."
                 }
@@ -1852,13 +1867,9 @@ fn round_body(
 pub(super) fn round_facts(mission: &Mission, node: &MissionNode) -> (String, bool, bool) {
     let signal = node.check_signal();
     let in_round = |checker: &crate::mission_criteria::Checker| {
-        signal.as_ref().is_none_or(|signal| {
-            checker.at_unix_ms.is_some_and(|at| at >= signal.at_unix_ms)
-                && match (&signal.commit, &checker.commit) {
-                    (Some(round), Some(read)) => crate::mission_criteria::same_commit(round, read),
-                    _ => true,
-                }
-        })
+        signal
+            .as_ref()
+            .is_none_or(|signal| signal.answered_by(checker))
     };
     let (mut failed, mut running) = (false, false);
     let mut parts = Vec::new();
@@ -1882,7 +1893,7 @@ pub(super) fn round_facts(mission: &Mission, node: &MissionNode) -> (String, boo
     }
     let limit = crate::mission_health::review_limit(mission);
     if let Some(line) = node.review_line(limit) {
-        parts.push(format!("round {} of {limit}", line.rounds));
+        parts.push(format!("round {} of {limit}", line.budget_rounds()));
     }
     if node
         .woken
@@ -3279,12 +3290,13 @@ impl Runtime {
                 line,
                 reason,
                 decision,
+                follow_up,
             } => self.skip_criterion(
                 &actor,
                 mission.as_deref(),
                 &node,
                 &line,
-                (reason, decision),
+                (reason, decision, follow_up),
                 now,
             ),
             MissionCommand::Defect {
@@ -5555,7 +5567,7 @@ impl Runtime {
                         .review_line(crate::mission_health::review_limit(mission))
                         .map(|line| ReviewRounds {
                             line: line.key.clone(),
-                            rounds: line.rounds,
+                            rounds: line.budget_rounds(),
                             limit: crate::mission_health::review_limit(mission),
                         }),
                     ready_at_unix_ms: ready_at(mission, node, &lines),
