@@ -90,10 +90,10 @@ pub(crate) fn answer(
     request: &HookRequest,
     executor: Option<ExecProcess>,
     lineage: Option<Vec<ExecProcess>>,
-    desktop: bool,
+    screens: &crate::server::Screens,
 ) -> Value {
     let result = match &request.command {
-        HookCommand::WorkspaceInfo {} => workspace_info(core, cap, desktop),
+        HookCommand::WorkspaceInfo {} => workspace_info(core, cap, screens),
         // The caller's proof admitted it to a registered checkout.
         HookCommand::Registration {} => Ok(json!({})),
         HookCommand::LetterPull {
@@ -252,7 +252,13 @@ fn agent_exec(
         .map_err(|reason| (reason.to_owned(), "Start the agent again"))
 }
 
-fn workspace_info(core: &CoreHandle, cap: &Capability, desktop: bool) -> Result<Value, Failure> {
+/// The answer an agent hook's `hide workspace info --hook` gets, its page commands told
+/// as the command loop tells them (`Seen::scope`).
+fn workspace_info(
+    core: &CoreHandle,
+    cap: &Capability,
+    screens: &crate::server::Screens,
+) -> Result<Value, Failure> {
     let mut result = core
         .workspace_query(
             &cap.context.device_id,
@@ -264,11 +270,7 @@ fn workspace_info(core: &CoreHandle, cap: &Capability, desktop: bool) -> Result<
         let (reason, next_action) = cap.changed_refusal();
         return Err((reason.to_owned(), next_action));
     }
-    if !desktop {
-        result
-            .capabilities
-            .retain(|capability| !capability.starts_with("browser."));
-    }
+    screens.now().scope(&mut result);
     serde_json::to_value(result).map_err(|_| {
         (
             "result_encoding_failed".to_owned(),

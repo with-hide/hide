@@ -142,11 +142,15 @@ pub(super) struct WindowFocusPayload {
 /// What this machine's windows show, as the daemon sums every window's
 /// report: its own screen in one window at least, or another computer's in
 /// every window that reports; sent only when that changes, and released with
-/// a window's connection (`look.rs`, `WindowScreen`).
+/// a window's connection (`look.rs`, `WindowScreen`). `shown_there` is every
+/// pane of this machine's that a paired machine's screen shows in one of
+/// them (D-55), by the core's pane id; absent reads as none.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WindowScreenPayload {
     pub(super) screen: super::look::WindowScreen,
+    #[serde(default)]
+    pub(super) shown_there: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4407,7 +4411,9 @@ impl Runtime {
             Event::WindowFocus(payload) => {
                 self.set_window_focus(payload.focused.then_some(payload.screen))
             }
-            Event::WindowScreen(payload) => self.set_window_screen(payload.screen),
+            Event::WindowScreen(payload) => {
+                self.set_window_screen(payload.screen, payload.shown_there)
+            }
             Event::OverviewRefresh(payload) => {
                 let project = self
                     .snapshot

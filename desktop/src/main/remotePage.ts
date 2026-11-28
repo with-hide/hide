@@ -5,7 +5,7 @@
 
 import type { BrowserRect } from "../../../web/src/host";
 import { readDisplayPreferences, type DisplayPreferences } from "../../../web/src/displayPreferences";
-import type { RemotePlace, RemoteWork, RemoteWorkResult } from "../../../web/src/remoteView";
+import type { RemotePlace, RemoteWork, RemoteWorkResult, ShownGuestPane } from "../../../web/src/remoteView";
 
 /** The page's own scheme: `hide-remote://<device>/`, one origin per machine. */
 export const REMOTE_SCHEME = "hide-remote";
@@ -124,7 +124,11 @@ function parsePlace(value: unknown): RemotePlace | undefined {
 function parseWork(value: unknown): RemoteWork | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const work = value as Record<string, unknown>;
-  if (work.op === "show") return named(work.pane) ? { op: "show", pane: work.pane } : undefined;
+  if (work.op === "show") {
+    // A show with a request is answered by the page (D-55); one without is shown as before.
+    if (!named(work.pane) || (work.request !== undefined && !named(work.request, 128))) return undefined;
+    return work.request === undefined ? { op: "show", pane: work.pane } : { op: "show", pane: work.pane, request: work.request };
+  }
   if (work.op !== "start") return undefined;
   const place = parsePlace(work.place);
   const model = maybe(work.model);
@@ -157,6 +161,8 @@ export function parseWorkResult(value: unknown): RemoteWorkResult | undefined {
   if (!named(result.request, 128)) return undefined;
   const request = result.request;
   switch (result.outcome) {
+    case "shown":
+    case "not_listed":
     case "started":
     case "starting":
     case "unconfirmed":
@@ -180,6 +186,14 @@ export function parseWorkResult(value: unknown): RemoteWorkResult | undefined {
     default:
       return undefined;
   }
+}
+
+/** What a page says it shows of another machine's work (D-55): that machine's device id and its node's id for the pane, or none; undefined when it is neither. */
+export function parseShowing(value: unknown): ShownGuestPane | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== "object") return undefined;
+  const { device, pane } = value as Record<string, unknown>;
+  return typeof device === "string" && DEVICE.test(device) && named(pane) ? { device, pane } : undefined;
 }
 
 /** The page's first address. */

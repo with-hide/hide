@@ -31,6 +31,7 @@ pub mod desktop_notices;
 pub mod device_cli;
 pub mod ending;
 pub mod env;
+pub mod fixture_owner;
 pub mod guide;
 mod herdr_transition;
 pub mod holder_restart;
@@ -814,7 +815,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             core: Arc::clone(&core),
             engine: Some(core.engine().clone()),
             port,
-            desktop_renderers: Arc::clone(&app.desktop_renderers),
+            screens: server::Screens::of(&app),
             pairing,
             mobile: Arc::clone(&mobile),
             health: Arc::clone(&listeners.pane_bootstrap),

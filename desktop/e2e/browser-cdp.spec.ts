@@ -1,7 +1,7 @@
 // Runs the production host and its scoped endpoint against a private daemon
 // and engine. The operator's app, browser and profile are never used.
 import { chromium, expect, type Browser, type ElectronApplication, type Page } from "@playwright/test";
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -698,16 +698,6 @@ test("browser CDP: native files cannot be read through runtime, frames, redirect
   await expect.poll(async () => (await nativeState()).length).toBeGreaterThanOrEqual(2);
   expect((await nativeState()).some((url) => url.startsWith("file:"))).toBe(false);
   expect(await page.locator("body").innerText()).not.toContain("FORBIDDEN_CDP_FILE_CONTENT");
-  // A manual file display retains ordinary native behavior but is excluded
-  // even when its source is within this checkout and its renderer is live.
-  const manual = path.join(fixture.root, "fixture", "manual-cdp-file.html");
-  fs.writeFileSync(manual, "<title>Manual local file</title><h1>Manual local file</h1>");
-  const manualOpened = await fromPane(["browser", "open", pathToFileURL(manual).href, "--wait"]);
-  const manualId = (manualOpened.result as { view_id: string }).view_id;
-  expect((await fromPane(["browser", "connect", "--display", manualId], false)).ok).toBe(false);
-  const inventory = await (await fetch(`${capability.cdp_http_url}/json/list`)).json() as { id: string; url: string }[];
-  expect(inventory).toHaveLength(1);
-  expect(inventory[0]!.url).toBe(`${origin}/protected`);
   // A script installed before disconnect must not gain file access after it.
   await cdp.send("Runtime.evaluate", { expression: `addEventListener('cdp-file-attempt', () => location.assign(${JSON.stringify(fileUrl)}));` });
   await cdp.detach();
@@ -765,6 +755,41 @@ test("browser CDP: native files cannot be read through runtime, frames, redirect
   await expect(redirectPage.getByRole("heading")).toHaveText("Scoped browser fixture");
   expect(redirectPage.url()).toBe(`${origin}/redirect-guard`);
   expect(await redirectPage.locator("body").innerText()).not.toContain("FORBIDDEN_CDP_FILE_CONTENT");
+});
+
+test("browser CDP: a manual file page is reached by a pane's file capability alone", async () => {
+  const launched = await launchShell(run.env);
+  app = launched.app;
+  await enterWorkspaceWithLane(launched.page, "fixture");
+  await fromPane(["browser", "open", `${origin}/protected`, "--wait"]);
+  const capability = (await fromPane(["browser", "connect"])).result as Capability;
+  // A manual file display retains ordinary native behavior. Only a pane's
+  // file capability reaches it (operator decision 2026-11-28); the web
+  // capability and its clients never list or attach it, even when its source
+  // is within this checkout and its renderer is live.
+  const checkout = path.join(fixture.root, "fixture");
+  const manual = path.join(checkout, "manual-cdp-file.html");
+  fs.writeFileSync(manual, "<title>Manual local file</title><h1>Manual local file</h1>");
+  const manualOpened = await fromPane(["browser", "open", pathToFileURL(manual).href, "--wait"]);
+  const manualId = (manualOpened.result as { view_id: string }).view_id;
+  const fileCapability = (await fromPane(["browser", "connect", "--display", manualId])).result as Capability;
+  const fileInventory = await targets(fileCapability);
+  expect(fileInventory).toHaveLength(1);
+  expect(fileInventory[0]!.url).toMatch(/^file:\/\/\/.*\/fixture\/manual-cdp-file\.html$/);
+  const inventory = await targets(capability);
+  expect(inventory).toHaveLength(1);
+  expect(inventory[0]!.url).toBe(`${origin}/protected`);
+  const foreignAttach = await browserCommand(capability.browser_ws_url, "Target.attachToTarget", { targetId: fileInventory[0]!.id, flatten: true });
+  expect(foreignAttach.error?.message).toBe("Target is outside this capability");
+  // A shell bound only to the checkout, not to a pane, is refused the file page with its reason.
+  const shellEnv: NodeJS.ProcessEnv = { ...run.env };
+  for (const key of ["HIDE_PANE_ID", "HIDE_CAP_REF"]) delete shellEnv[key];
+  // Asynchronous, so the test's own bound ends a CLI that never answers.
+  const outsidePane = await new Promise<{ failed: boolean; stdout: string }>((resolve) => {
+    execFile(HIDE_CLI, ["browser", "connect", "--display", manualId], { cwd: checkout, env: shellEnv, encoding: "utf8" }, (error, stdout) => resolve({ failed: error !== null, stdout }));
+  });
+  expect(outsidePane.failed).toBe(true);
+  expect(JSON.parse(outsidePane.stdout.trim().split("\n").at(-1)!)).toMatchObject({ ok: false, reason: "file_page_pane_only" });
 });
 
 test("browser CDP: the owned native iframe request is causally canceled before file content", async () => {

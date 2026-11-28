@@ -268,7 +268,7 @@ fn earlier_builds_retired_stubs_give_way_to_the_current_ones() {
             .text()
             .contains(hide_agent_hooks::intent_table!())
     );
-    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@16:"));
+    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@17:"));
     assert!(!GUIDE_SKILL.text().contains("hide task help"));
     // The mission's stub names missions and the Conductor for the agent
     // choosing it, and sends it to the help that owns the commands.
@@ -297,7 +297,7 @@ fn earlier_builds_retired_stubs_give_way_to_the_current_ones() {
         assert!(MISSION_SKILL.text().contains(rule), "{rule}");
     }
     assert!(!MISSION_SKILL.text().contains("hide task help"));
-    assert!(MISSION_SKILL.text().contains("<!-- hide-skill@3:"));
+    assert!(MISSION_SKILL.text().contains("<!-- hide-skill@4:"));
     // The issue stub names the bug and sends the agent to the help that owns
     // the procedure and the template.
     assert!(ISSUE_SKILL.text().starts_with("---\nname: hide-issue\n"));
@@ -307,7 +307,7 @@ fn earlier_builds_retired_stubs_give_way_to_the_current_ones() {
             .contains("description: \"Report a bug in Hide itself")
     );
     assert!(ISSUE_SKILL.text().contains("run `hide issue help`"));
-    assert!(ISSUE_SKILL.text().contains("<!-- hide-skill@1:"));
+    assert!(ISSUE_SKILL.text().contains("<!-- hide-skill@2:"));
     // The session-start table sends the agent to it.
     assert!(
         GUIDE_SKILL
@@ -1790,18 +1790,18 @@ fn a_stub_text_changes_only_with_its_version() {
     let pinned = [
         (
             "hide",
-            16,
-            "e2442a5b5bab4c39e982001faa46299935bdea3f9bd5fd10b40ae6337cef4c84",
+            17,
+            "a474aafb6b384436dae3022ccca50dea293841105f455e305df1cb096b9b6d8f",
         ),
         (
             "hide-mission",
-            3,
-            "a7ea89f57899a6d251afb12277cfd835c1da5bc2b5b6067759ab22b7baf1b08f",
+            4,
+            "699b9ac09302dab4892e41a10121787dba8cecc9ef31d2a0728e23a2b6383c4b",
         ),
         (
             "hide-issue",
-            1,
-            "01a4b9e83e9a1caafb4e2caafca4ee82ea7d9fb62fac79c88ec29b06a51bb798",
+            2,
+            "68575be901c70dfaa2aec050bb7e483c29d0b02e92412c2cdce2fb3433a141ad",
         ),
     ];
     for skill in SKILLS {

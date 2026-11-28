@@ -76,10 +76,10 @@ test("Comment on a local HTML page: point at an element and drag an area, and th
   await shell.mouse.move(0, 0);
   await expect(shell.getByRole("tooltip")).toHaveCount(0);
   await expect.poll(() => evaluateIn<boolean>(app!, url, "document.querySelector('hide-comment-overlay') !== null")).toBe(true);
-  // The lease is hided's alone: an agent's page command on a file page keeps its answer.
+  // The lease is hided's alone: while Comment holds the page, an agent's page command on it is busy.
   const refused = await agent(["browser", "snapshot", display]);
   expect(refused.status).not.toBe(0);
-  expect(refused.out).toContain("display_unsupported");
+  expect(refused.out).toContain("display_busy");
 
   // A click on an element: the note opens over the page's still with the element's selector, and Add keeps it.
   const save = await centreOf(url, "#save");

@@ -94,25 +94,35 @@ async fn open_view_saying(port: u16, token: &str, host: &str, key: &str, more: V
 
 /// What the host's daemon counts as drawing its browser displays now (`/health`).
 async fn page_renderers(running: &hided::RunningDaemon) -> u64 {
+    counted(running, "page_renderers").await
+}
+
+/// One of the host daemon's counts in `/health`.
+async fn counted(running: &hided::RunningDaemon, count: &str) -> u64 {
     let (_, body) = get(running.port, "/health", None).await;
-    serde_json::from_str::<Value>(&body).unwrap()["page_renderers"]
+    serde_json::from_str::<Value>(&body).unwrap()[count]
         .as_u64()
         .unwrap()
 }
 
 /// Waits until the host counts `wanted` page renderers.
 async fn page_renderers_become(running: &hided::RunningDaemon, wanted: u64) {
+    counted_becomes(running, "page_renderers", wanted).await;
+}
+
+/// Waits until the host's `count` in `/health` is `wanted`.
+async fn counted_becomes(running: &hided::RunningDaemon, count: &str, wanted: u64) {
     let deadline = Instant::now() + WITHIN;
     loop {
-        let now = page_renderers(running).await;
+        let now = counted(running, count).await;
         if now == wanted {
             return;
         }
         assert!(
             Instant::now() < deadline,
-            "page renderers stayed {now}, not {wanted}"
+            "{count} stayed {now}, not {wanted}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await; // wait-ok: the host counts a view once its handshake lands and uncounts it once its socket closes
+        tokio::time::sleep(Duration::from_millis(50)).await; // wait-ok: the host counts a screen once its handshake lands and uncounts it once its socket closes
     }
 }
 
@@ -1120,4 +1130,366 @@ async fn this_machine_s_core_hears_whether_a_window_shows_its_own_screen() {
         .await;
     let told = ends_with(&state, screens_told, &"own".to_owned()).await;
     assert_eq!(told, ["computer", "own", "computer", "own"]);
+}
+
+/// A desktop window's browser gateway that answers `/connect` as the real
+/// one does for a display whose page the window has not made yet (409, no
+/// eligible target), counting those, and with the display's capability URLs
+/// once `made` is set (`desktop/src/main/browserCdp.ts`).
+#[cfg(unix)]
+struct StandInGateway {
+    endpoint: String,
+    capability: String,
+    made: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    refused: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[cfg(unix)]
+impl StandInGateway {
+    async fn start() -> Self {
+        use axum::http::StatusCode;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let gateway = Self {
+            capability: format!("{endpoint}/cdp/{}", "c".repeat(40)),
+            endpoint,
+            made: Default::default(),
+            refused: Default::default(),
+        };
+        let (made, refused) = (gateway.made.clone(), gateway.refused.clone());
+        let capability = gateway.capability.clone();
+        let connect = move || {
+            let (made, refused, capability) = (made.clone(), refused.clone(), capability.clone());
+            async move {
+                if made.load(std::sync::atomic::Ordering::SeqCst) {
+                    let ws = capability.replacen("http", "ws", 1);
+                    (
+                        StatusCode::OK,
+                        axum::Json(json!({"cdp_http_url": capability, "browser_ws_url": ws})),
+                    )
+                } else {
+                    refused.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    (
+                        StatusCode::CONFLICT,
+                        axum::Json(json!({"error": "Display has no eligible browser target"})),
+                    )
+                }
+            }
+        };
+        let app = axum::Router::new()
+            .route("/connect", axum::routing::post(connect))
+            .fallback(|| async { axum::Json(json!({})) });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        gateway
+    }
+}
+
+/// `hide args` run from `folder`, a registered checkout of the host: the
+/// daemon binds the caller to that checkout by its working directory.
+#[cfg(unix)]
+fn in_checkout(host: &Terminal, folder: &std::path::Path, args: &[&str]) -> super::Ran {
+    super::Ran::of(host.command(args).current_dir(folder).output().unwrap())
+}
+
+/// The reason a `hide` answer gives, none when it ran.
+#[cfg(unix)]
+fn refusal(ran: &super::Ran) -> Option<String> {
+    let answer = ran.json();
+    (answer["ok"] == false).then(|| answer["reason"].as_str().unwrap_or_default().to_owned())
+}
+
+/// A machine with no window of its own, which a paired computer opens
+/// (`docs/BROWSER_DISPLAYS.md`, A machine with no window of its own): its
+/// screen can be seen while that computer is connected, though the computer
+/// keeps its screen's socket closed until its operator turns to its tile, so
+/// an agent there opens Views, which the screen shows once it opens; nobody
+/// can see it before the computer connects and after it leaves, and the
+/// Views are refused then as before. A file outside every checkout still
+/// needs this machine's own desktop window, which grants it, and the
+/// connection alone turns no screen-only read on.
+// The checkout binds its caller by the working directory, which Windows
+// does not let a process read (`docs/ARCHITECTURE.md`, `cwd_of`).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_machine_a_paired_computer_opens_takes_views_while_that_computer_is_connected() {
+    let root = crate::fixtures::fixture_root("sg");
+    let env = host_env(root.path());
+    let project = hide_platform::fs::identity::canonical(&env.home)
+        .unwrap()
+        .join("projects")
+        .join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("notes.md"), "# notes\n").unwrap();
+    std::fs::write(project.join("page.html"), "<p>page</p>\n").unwrap();
+    std::fs::write(
+        env.state_dir.join("core-state.json"),
+        json!({
+            "schema_version": 1,
+            "expanded_paths": [],
+            "selected_path": null,
+            "selected_pane_id": null,
+            "workspace_registrations": [{
+                "id": "w-project",
+                "label": "project",
+                "path": hide_platform::path::to_wire(&project).unwrap(),
+            }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    // A change to show: `notes.md` is committed, then edited.
+    for args in [
+        &["init", "-q"][..],
+        &["add", "notes.md", "page.html"],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "init",
+        ],
+    ] {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&project)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+    std::fs::write(project.join("notes.md"), "# notes\nchanged\n").unwrap();
+    let outside = root.path().join("outside.txt");
+    std::fs::write(&outside, "outside\n").unwrap();
+    let running = hided::start_daemon(env).await.unwrap();
+    let host = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
+    let _stop = StopOnDrop(&guest);
+
+    // Nobody can see this machine yet: no window, no paired computer.
+    let alone = in_checkout(&host, &project, &["checkout", "show"]);
+    assert_eq!(
+        refusal(&alone).as_deref(),
+        Some("renderer_unavailable"),
+        "{}",
+        alone.text()
+    );
+
+    let connected = guest.run(&["connect"]);
+    assert!(connected.ok, "the guest daemon: {}", connected.text());
+    let (window, host_id, _) = pair_by_link(&running, &host, &guest).await;
+    drop(window);
+    counted_becomes(&running, "renderers", 0).await;
+
+    // The guest is connected and shows nothing of the host now: its agent's
+    // Views are taken all the same.
+    let info = in_checkout(&host, &project, &["checkout", "show"]);
+    assert!(info.ok, "{}", info.text());
+    let capabilities = info.json()["result"]["capabilities"].clone();
+    assert!(
+        capabilities
+            .as_array()
+            .unwrap()
+            .contains(&json!("browser.open")),
+        "{capabilities}"
+    );
+    let file = in_checkout(&host, &project, &["file", "open", "notes.md"]);
+    assert!(file.ok, "{}", file.text());
+    let page = in_checkout(&host, &project, &["browser", "open", "page.html"]);
+    assert!(page.ok, "{}", page.text());
+    // The page is open, and no desktop window here drives it: the agent
+    // connects once one is.
+    let display = page.json()["result"]["view_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        page.json()["result"]["browser_control"],
+        json!({"state": "unavailable", "reason": "browser_unsupported",
+            "next_action": format!("Run hide browser connect --display {display} after the desktop window reconnects")}),
+        "{}",
+        page.text()
+    );
+    let diff = in_checkout(&host, &project, &["diff", "open", "notes.md"]);
+    assert!(diff.ok, "{}", diff.text());
+    // A file outside every checkout is granted by this machine's own
+    // desktop window, and a paired computer is none.
+    let external = in_checkout(
+        &host,
+        &project,
+        &["file", "open", outside.to_str().unwrap()],
+    );
+    assert_eq!(
+        refusal(&external).as_deref(),
+        Some("outside_file_no_window"),
+        "{}",
+        external.text()
+    );
+    // The connection alone attached no screen, so nothing screen-only
+    // started (`renderers_drawn`), and nothing draws pages.
+    assert_eq!(counted(&running, "renderers").await, 0);
+    assert_eq!(page_renderers(&running).await, 0);
+
+    // The guest's operator turns to the host's tile: the screen opens and
+    // shows the Views the agent opened meanwhile.
+    let (port, token) = daemon_of(&guest);
+    let key = host_key(&guest);
+    let mut view =
+        open_view_saying(port, &token, &host_id, &key, json!({"draws_pages": true})).await;
+    until(&mut view, "the opened Views", |frame| {
+        let text = frame.to_string();
+        frame["type"] == "snapshot" && text.contains("notes.md") && text.contains("page.html")
+    })
+    .await;
+    counted_becomes(&running, "renderers", 1).await;
+    drop(view);
+    counted_becomes(&running, "renderers", 0).await;
+
+    // A connected machine that may not open this one sees nothing of it:
+    // with the guest's way in paused, the Views are refused while the
+    // connection stays.
+    let paused = host.run(&["device", "pause", GUEST, "--incoming", "--json"]);
+    assert!(paused.ok, "{}", paused.text());
+    host.peer_becomes("the guest's way in is paused, still connected", |peer| {
+        peer["opened_by"] == "paused" && peer["connected"] == true
+    })
+    .await;
+    let not_opened = in_checkout(&host, &project, &["checkout", "show"]);
+    assert_eq!(
+        refusal(&not_opened).as_deref(),
+        Some("renderer_unavailable"),
+        "{}",
+        not_opened.text()
+    );
+    let resumed = host.run(&["device", "resume", GUEST, "--incoming", "--json"]);
+    assert!(resumed.ok, "{}", resumed.text());
+    host.peer_becomes("the guest's way in is back", |peer| {
+        peer["opened_by"] == "active" && peer["connected"] == true
+    })
+    .await;
+
+    // The guest leaves: nobody can see this machine again.
+    let stopped = guest.run(&["stop"]);
+    assert!(stopped.ok, "{}", stopped.text());
+    host.peer_becomes("the guest is gone", |peer| peer["connected"] == false)
+        .await;
+    let gone = in_checkout(&host, &project, &["browser", "open", "page.html"]);
+    assert_eq!(
+        refusal(&gone).as_deref(),
+        Some("renderer_unavailable"),
+        "{}",
+        gone.text()
+    );
+
+    // This machine's own desktop window opens. A shell outside every pane
+    // does not drive a file page, and is told so with hided's own next step.
+    let mut desktop = Window::open(&running, "desktop").await;
+    page_renderers_become(&running, 1).await;
+    let file_page = in_checkout(&host, &project, &["browser", "open", "page.html"]);
+    assert!(file_page.ok, "{}", file_page.text());
+    assert_eq!(
+        file_page.json()["result"]["browser_control"],
+        json!({"state": "unavailable", "reason": "file_page_pane_only",
+            "next_action": "Only an agent or a shell in a Hide pane drives a file page; serve its folder over http and open that address to drive it from here"}),
+        "{}",
+        file_page.text()
+    );
+    // A page the window never makes, with no gateway to answer for it: the
+    // open waits for the page, then tells the agent to connect once the
+    // window answers, not to drive a page nobody serves.
+    let unmade = in_checkout(
+        &host,
+        &project,
+        &["browser", "open", "http://127.0.0.1:9/unmade"],
+    );
+    assert!(unmade.ok, "{}", unmade.text());
+    let display = unmade.json()["result"]["view_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        unmade.json()["result"]["browser_control"],
+        json!({"state": "unavailable", "reason": "browser_control_unavailable",
+            "next_action": format!("Run hide browser connect --display {display} after the desktop window reconnects")}),
+        "{}",
+        unmade.text()
+    );
+
+    // The window's gateway refuses a page the window has not made yet, as
+    // right after an open: the open waits until the window reports the
+    // page, asks again, and hands the agent the page's capability URLs.
+    let gateway = StandInGateway::start().await;
+    let registered = ureq::post(format!("http://127.0.0.1:{}/browser-control", running.port))
+        .header("Authorization", format!("Bearer {}", running.token))
+        .header("Content-Type", "application/json")
+        .send(
+            json!({"owner_pid": std::process::id(), "endpoint": gateway.endpoint,
+                "token": "0123456789abcdef0123456789abcdef"})
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+    assert_eq!(registered.status().as_u16(), 204);
+    let url = "http://127.0.0.1:9/race";
+    let opening = host
+        .command(&["browser", "open", url])
+        .current_dir(&project)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + WITHIN;
+    while gateway.refused.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the open never asked the gateway"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await; // wait-ok: the open's first ask crosses the daemon to the stand-in gateway, which counts it
+    }
+    let listed = in_checkout(&host, &project, &["view", "list"]);
+    let listed = listed.json()["result"].clone();
+    let view = listed["views"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|view| view["target"] == url)
+        .unwrap_or_else(|| panic!("no view of {url}: {listed}"))
+        .clone();
+    assert_eq!(view["page"]["state"], "pending", "{view}");
+    gateway
+        .made
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    desktop
+        .send(
+            "browser_state",
+            json!({"workspace": {"device_id": listed["context"]["device_id"],
+                    "path": listed["context"]["checkout_path"]},
+                "display_id": view["view_id"], "url": url, "title": "",
+                "load": view["page"]["load"], "loading": false, "failure": null,
+                "present": true}),
+        )
+        .await;
+    let raced = super::Ran::of(opening.wait_with_output().unwrap());
+    assert!(raced.ok, "{}", raced.text());
+    assert_eq!(
+        raced.json()["result"]["cdp_http_url"],
+        gateway.capability,
+        "{}",
+        raced.text()
+    );
+    assert!(
+        raced.json()["result"].get("browser_control").is_none(),
+        "{}",
+        raced.text()
+    );
+    drop(desktop);
+    drop(running);
 }

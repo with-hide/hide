@@ -404,7 +404,7 @@ pub struct Folded {
     pub ids: Vec<String>,
 }
 
-/// `hide inbox --ack`: the bundle it took and how many letters were in it.
+/// `hide inbox ack`: the bundle it took and how many letters were in it.
 #[derive(Serialize, JsonSchema)]
 pub struct Acknowledged {
     pub bundle: String,

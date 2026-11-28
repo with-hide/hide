@@ -4,6 +4,7 @@ This file routes and keeps the rules that hold everywhere; the reasons and the p
 Read [docs/README.md](docs/README.md) before choosing supporting documents: it says which are current contracts, who owns them in code and tests, and which are historical.
 Do not apply superseded architecture decisions, old milestone reports, or old PRD implementation paths to current code.
 Update the owning guide and its active references in the same change as the behavior; keep run evidence outside `docs/`.
+Edit the sentence that is wrong in place rather than appending a paragraph, and keep every Markdown file within 60 KB: a file over it is split in the same change, as [docs/README.md, Splitting a document](docs/README.md#splitting-a-document) describes, and `scripts/hooks/docs-size-cap.sh`, a `PreToolUse` hook registered like the design-guide hook below, refuses an edit that would grow one past it.
 Before changing browser displays, read `docs/BROWSER_DISPLAYS.md` for who owns a page, the `file:` address boundary, and native display verification.
 Before calling a change verified, read `docs/VERIFICATION.md` for which check proves the claim, the traps that made a check prove nothing, and the native QA tools that can address a candidate app without reaching the operator's.
 Before reviewing a change, yours before you open its pull request or anyone else's, read `docs/CODE_REVIEW.md` for the perspectives every review covers (correctness, fragmentation, simplicity, module boundaries, ownership and limits, tests, every agent, system and host, the command line), how a finding is graded, and which grades block a merge.
@@ -104,7 +105,7 @@ They once did: an evidence tree reached 123 MB and carried a browser profile wit
 - `[profile.dev] incremental = false` is deliberate: an agent worktree is built a few times and discarded, which never repays an incremental cache.
 - A debug build stays small (`docs/BUILD.md`, A debug build is kept small): the dev profile carries no debug info, a dependency or feature change is followed by `cargo hakari generate` and `cargo hakari manage-deps --yes`, no member feature exists only for tests, and a crate's integration tests are modules of its one `tests/it` binary.
 - Removing the worktree takes the cache with the work; a worktree kept alive after its branch lands keeps its cache alive too.
-  Remove a checkout Hide shows with `hide workspace remove <path>`, which closes its workspace and panes first; a raw `git worktree remove` leaves them open on a folder that is gone (`docs/delivery.md`, Removing a worktree).
+  Remove a checkout Hide shows with `hide checkout remove <path>`, which closes its workspace and panes first; a raw `git worktree remove` leaves them open on a folder that is gone (`docs/delivery.md`, Removing a worktree).
 - The root checkout stays on `main`; every branch is worked on in its own sibling worktree directory.
   `scripts/hooks/root-worktree-main-only.sh` is a `PreToolUse` hook (registered for Claude Code in `.claude/settings.json`, for Codex in `~/.codex/hooks.json`) that refuses a `git checkout`/`git switch` off `main` in the root worktree and answers with the `git worktree add` form to use instead.
 
@@ -145,15 +146,15 @@ Read it with `gh api` or a shallow clone under your own `agents/runs/`, and dele
 
 ## Performance Guide
 
-Before diagnosing, changing, reviewing, or verifying terminal responsiveness, rendering, scrolling, selection, resize, tab switching, CPU, memory, snapshots, or attach behavior, read [docs/PERFORMANCE_TESTING.md](docs/PERFORMANCE_TESTING.md) in full.
-It owns the reproduction procedure, the isolation checklist, the measurement boundaries, the invariants a fix has to preserve, and the regression ownership table; historical run measurements are not acceptance thresholds.
+Before diagnosing, changing, reviewing, or verifying terminal responsiveness, rendering, scrolling, selection, resize, tab switching, CPU, memory, snapshots, or attach behavior, read the table in [docs/PERFORMANCE_TESTING.md](docs/PERFORMANCE_TESTING.md), then the pieces under `docs/performance/` whose Code paths cover what you change, and [docs/performance/procedure.md](docs/performance/procedure.md) in full before any measurement.
+Together they own the reproduction procedure, the isolation checklist, the measurement boundaries, the invariants a fix has to preserve, and the regression ownership table; historical run measurements are not acceptance thresholds.
 
 - Explain the added work per input, the notification fan-out, and the pending-work bound before adding anything to a high-frequency path; publish only actual state transitions, and never drop input to do so.
 - The session-sync thread that applies the engine's events never blocks: a socket read that opens its own connection, a subprocess, an HTTP request or an fsync runs on a worker or a save thread, and a publish whose catalog inputs did not move repeats no catalog build, purpose sync or path resolution.
 - No subprocesses, blocking I/O, or large serialization under `Mutex<Runtime>`: `snapshot_delta_payload` takes owned data under the lock and `serialize_snapshot_delta` serializes outside it, and `ChangeNotifier` announces once per burst.
   No per-tick or per-tab git forks: the catalog reads repository facts from what the core's own node answers about its paths (`Call::PathFacts`, read from the repository's own files there, never from a `git` process), asked off the lock.
 - Report idle and driven measurements separately, with the load and workload recorded for each.
-- Native verification targets one precisely identified candidate PID/window and an isolated state folder (`HIDE_STATE_DIR`); the operator app may remain running. Never quit, restart, focus, or manipulate the operator's app, panes, or server for QA without explicit coordination. Prefer background exact-window capture; see `docs/PERFORMANCE_TESTING.md` for isolation and foreground-interaction boundaries.
+- Native verification targets one precisely identified candidate PID/window and an isolated state folder (`HIDE_STATE_DIR`); the operator app may remain running. Never quit, restart, focus, or manipulate the operator's app, panes, or server for QA without explicit coordination. Prefer background exact-window capture; see `docs/performance/procedure.md` for isolation and foreground-interaction boundaries.
 
 <!-- harness:agents-namespace:start -->
 ## Harness Namespace (`agents/`)

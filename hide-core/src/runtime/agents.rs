@@ -1480,14 +1480,16 @@ impl Runtime {
     }
 
     /// The panes the operator is looking at on one server: `focus`, that
-    /// server's focus pane as the operator chose it, and every agent a phone
-    /// has open (`look.rs`). These are the panes the read axis
+    /// server's focus pane as the operator chose it, every agent a phone has
+    /// open, and this machine's panes a paired machine's screen shows in a
+    /// window of this one (`look.rs`). These are the panes the read axis
     /// reads as of now (`agent_state::apply_read_state`).
     fn looked_at(&self, focus: Option<&str>) -> Vec<String> {
         focus
             .into_iter()
             .map(str::to_owned)
             .chain(self.look.phones().iter().cloned())
+            .chain(self.look.shown_there().iter().cloned())
             .collect()
     }
 

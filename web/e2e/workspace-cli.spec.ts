@@ -80,7 +80,7 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
     await expect(foregroundPaneLocator).toHaveAttribute("data-pane-view", /./);
     const foregroundPane = await foregroundPaneLocator.getAttribute("data-pane-view");
 
-    const info = await fromPane(engine, daemon, ["workspace", "info"], 1);
+    const info = await fromPane(engine, daemon, ["checkout", "show"], 1);
     expect(info.ok).toBe(true);
     expect(info.result.context.checkout_path).toBe(checkout);
     expect(info.result.capabilities).toContain("file.open");

@@ -6,7 +6,7 @@ The headings after the table keep every section name and anchor this file had, s
 
 | Record | Code |
 | --- | --- |
-| [0001. Record architecture decisions](adr/0001-record-architecture-decisions.md) | `docs/adr/`, `scripts/check-adr.py` |
+| [0001. Record architecture decisions](adr/0001-record-architecture-decisions.md) | `docs/adr/`, `scripts/check-docs.py` |
 | [0002. The core, the shell and the engine](adr/0002-core-shell-and-engine.md) | `hide-core/src/runtime.rs`, `hide-core/src/handle.rs`, `hide-core/src/engine/contract.rs`, `hide-core/src/session_sync/` |
 | [0003. State placement and publication](adr/0003-state-placement-and-publication.md) | `hide-core/src/persistence.rs`, `hide-core/src/reader.rs`, `hide-core/src/input_gate.rs`, `hide-core/src/sidebar.rs`, `hide-core/src/view_feedback.rs`, `hide-core/src/runtime/view_feedback.rs`, `web/src/components/elapsed.tsx` |
 | [0004. Drawn ahead of the engine](adr/0004-drawn-ahead-of-the-engine.md) | `hide-core/src/runtime/drawn_ahead.rs`, `hide-core/src/runtime/pane_prediction.rs`, `hided/src/pane_sizes.rs`, `hide-node/src/terminal/input.rs`, `web/src/keyTarget.ts` |

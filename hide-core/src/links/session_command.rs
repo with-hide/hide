@@ -844,7 +844,7 @@ fn read(
     let agent = hide_session::Agent::from_kind(&session.agent).ok_or_else(|| {
         no(
             "session_unreadable",
-            "Hide has no reader for this agent's sessions; read it with hide session record",
+            "Hide has no reader for this agent's sessions; read it with hide session show",
         )
     })?;
     let path = file
@@ -854,7 +854,7 @@ fn read(
         .ok_or_else(|| {
             no(
                 "session_file_missing",
-                "The session's file is gone; read what the record kept with hide session record",
+                "The session's file is gone; read what the record kept with hide session show",
             )
         })?;
     // A file whose path names a credential file, a secrets folder or Git's
@@ -865,13 +865,13 @@ fn read(
     {
         return Err(no(
             "credential_path_refused",
-            "The session's file path looks like a credential file; read it with hide session record",
+            "The session's file path looks like a credential file; read it with hide session show",
         ));
     }
     if file.file_gone {
         return Err(no(
             "session_file_missing",
-            "The session's file is gone; read what the record kept with hide session record",
+            "The session's file is gone; read what the record kept with hide session show",
         ));
     }
     let count = events.unwrap_or(READ_EVENTS_DEFAULT);
@@ -908,7 +908,7 @@ fn read(
         .iter()
         .find(|(device, _)| *device == session.device_id)
         .map(|(_, node)| Arc::clone(node))
-        .ok_or_else(|| no("device_unavailable", "The device that holds this session is not connected; reconnect it and retry, or read it with hide session record"))?;
+        .ok_or_else(|| no("device_unavailable", "The device that holds this session is not connected; reconnect it and retry, or read it with hide session show"))?;
     let located = Located {
         agent,
         path,
@@ -937,7 +937,7 @@ fn read(
         }
         return Err(no(
             "session_file_missing",
-            "The session's file holds no events; read what the record kept with hide session record",
+            "The session's file holds no events; read what the record kept with hide session show",
         ));
     }
     let first = read.kept.first().map_or(0, |(index, _)| index + 1);
@@ -993,7 +993,7 @@ fn out_of_range(what: &'static str, count: usize) -> Refusal {
         ("requests", 0) => "the session has no recorded requests".to_owned(),
         ("requests", _) => format!("requests 1-{count}"),
         ("readable events", _) => format!(
-            "events 1-{count} are readable; the rest is past the read bound, so read it with hide session record"
+            "events 1-{count} are readable; the rest is past the read bound, so read it with hide session show"
         ),
         (_, _) => format!("events 1-{count}"),
     };
@@ -1008,7 +1008,7 @@ fn read_refusal(failure: ReadFailure) -> Refusal {
     match failure {
         ReadFailure::Deadline => no(
             "read_timeout",
-            "The device did not answer within 60 s; retry, or read it with hide session record",
+            "The device did not answer within 60 s; retry, or read it with hide session show",
         ),
         // The call may have reached the node, but no answer came back: a
         // link that dropped, or an answer that could not be read.
@@ -1016,7 +1016,7 @@ fn read_refusal(failure: ReadFailure) -> Refusal {
             crate::diagnostic!(json!({"component": "session_cli", "kind": "read.unanswered"}));
             no(
                 "read_timeout",
-                "The device did not answer; retry, or read it with hide session record",
+                "The device did not answer; retry, or read it with hide session show",
             )
         }
         ReadFailure::Link(LinkError::NotConnected(_)) => no(
@@ -1031,17 +1031,17 @@ fn read_refusal(failure: ReadFailure) -> Refusal {
         ReadFailure::Link(LinkError::Refused(error)) if error.message == "session_file_missing" => {
             no(
                 "session_file_missing",
-                "The session's file is gone; read what the record kept with hide session record",
+                "The session's file is gone; read what the record kept with hide session show",
             )
         }
         ReadFailure::Link(LinkError::Refused(error)) => match error.code {
             ErrorCode::NotFound => no(
                 "session_file_missing",
-                "The session's file is gone; read what the record kept with hide session record",
+                "The session's file is gone; read what the record kept with hide session show",
             ),
             ErrorCode::Unsupported => no(
                 "session_unreadable",
-                "The device has no reader for this agent's sessions; update its helper, or read it with hide session record",
+                "The device has no reader for this agent's sessions; update its helper, or read it with hide session show",
             ),
             _ => {
                 crate::diagnostic!(
@@ -1049,7 +1049,7 @@ fn read_refusal(failure: ReadFailure) -> Refusal {
                 );
                 no(
                     "session_unreadable",
-                    "The device could not read the session; read it with hide session record",
+                    "The device could not read the session; read it with hide session show",
                 )
             }
         },

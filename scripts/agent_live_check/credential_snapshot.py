@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import stat
 
+from .processes import ProcessError
 from .protection import (ConfigurationChanged, ProtectionError, beneath,
                          configuration_bytes)
 
@@ -39,8 +40,14 @@ def require_unopened(paths, owner, env):
     program = Path("/usr/sbin/lsof")
     if not program.is_file():
         raise CredentialSnapshotUnavailable("credential_opener_check_unavailable")
-    code, output, error = owner.run([str(program), "-nP", "-F", "p", "--", *map(str, paths)],
-                                    env=env, check=False)
+    try:
+        code, output, error = owner.run([str(program), "-nP", "-F", "p", "--", *map(str, paths)],
+                                        env=env, check=False)
+    except ProcessError as failure:
+        # An answer that never came is no answer: this login goes unmeasured,
+        # never the whole run (it ended a run on the mini, 2026-11-28, while
+        # an agent the person had left open held the file).
+        raise CredentialSnapshotUnavailable(f"credential_opener_check_failed: {failure}") from failure
     # lsof exits 1 with no output when it found no matching open file.
     # Every diagnostic or ambiguous answer is unavailable, never absence.
     if code != 1 or output.strip() or error.strip():

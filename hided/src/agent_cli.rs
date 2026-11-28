@@ -63,7 +63,7 @@ Use delegation for work you will collect and report, and handoff for independent
 Responsibility cannot be changed after spawn; reusing an intent with another mode is refused.
 
 Start the agent on a connected device with --machine <device id>, from the machine that runs Hide:
-  The id is the device_id `hide workspace info` shows and the machine `hide agent list` shows for agents there.
+  The id is the device_id `hide checkout show` shows and the machine `hide agent list` shows for agents there.
   --repo and --path are then paths on that device. Your own id, or no --machine, starts the agent here.
   An agent running on a device cannot use --machine: it is refused with machine_not_permitted.
   A device id that is unknown or not connected, a repository missing on the device or an agent not installed there is refused before anything is created.
@@ -741,7 +741,7 @@ mod tests {
         assert!(
             SPAWN_HELP.starts_with("hide agent spawn [--parent <here|id>] [--machine <device id>]")
         );
-        assert!(SPAWN_HELP.contains("`hide workspace info`"));
+        assert!(SPAWN_HELP.contains("`hide checkout show`"));
         assert!(SPAWN_HELP.contains("`hide agent list`"));
     }
 

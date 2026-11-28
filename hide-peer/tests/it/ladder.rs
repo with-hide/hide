@@ -224,7 +224,7 @@ fn pair_of(
     let guest_dir = tempfile::tempdir().unwrap();
     let (key, twin) = keys(&guest_dir, "macbook");
     let dialing = Arc::clone(&ssh);
-    let pipe = PipeTransport::dialing(twin, move |_| {
+    let pipe = PipeTransport::dialing(twin, move |_, _| {
         let ssh = Arc::clone(&dialing);
         async move {
             ssh.sign_ins.fetch_add(1, Ordering::AcqRel);

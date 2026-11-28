@@ -2,7 +2,7 @@
 
 The single biggest time sink so far is verifying a change against the wrong process.
 Read this before running or screenshotting the app.
-For responsiveness, rendering, CPU, or memory checks, also read [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md) in full.
+For responsiveness, rendering, CPU, or memory checks, also read the [measurement procedure](performance/procedure.md) in full and the pieces of [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md) whose Code paths cover the code you change.
 
 ## One instance, per profile
 

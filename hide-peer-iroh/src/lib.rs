@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt as _;
 use hide_peer::limits;
-use hide_peer::transport::{PeerConn, PeerTransport, RelayState, TransportError};
+use hide_peer::transport::{DialBound, PeerConn, PeerTransport, RelayState, TransportError};
 use hide_peer_protocol::addr::rank_self_discovered;
 use hide_peer_protocol::{ALPN, Candidate, CloseCode, PathKind, PeerAddr, PeerKey};
 use iroh::endpoint::{
@@ -304,7 +304,7 @@ impl PeerTransport for IrohTransport {
         found
     }
 
-    async fn dial(&self, to: &PeerAddr) -> Result<IrohConn, TransportError> {
+    async fn dial(&self, to: &PeerAddr, _bound: DialBound) -> Result<IrohConn, TransportError> {
         if self.closed.load(Ordering::Acquire) {
             return Err(TransportError::Closed);
         }

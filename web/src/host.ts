@@ -11,7 +11,7 @@ import type { RecordUpdate, ReleaseFeed, WhatsNewRecord } from "./releases";
 import { revealLabel, type RevealHost } from "./revealExternal";
 import { holdsFieldModifier, keySystemOf, type KeySystem } from "./shortcuts";
 import type { DisplayPreferences } from "./displayPreferences";
-import { remoteBridge, type RemoteWork, type RemoteWorkResult } from "./remoteView";
+import { remoteBridge, type RemoteWork, type RemoteWorkResult, type ShownGuestPane } from "./remoteView";
 
 export type HostKind = "browser" | "electron";
 
@@ -391,6 +391,14 @@ export type RemoteScreensBridge = {
   onState(listener: (state: RemoteScreenState) => void): () => void;
   /** How each start handed by `go` ended, by its request id; returns the unsubscribe. Absent with `go`. */
   onWorkResult?(listener: (result: RemoteWorkResult & { device: string }) => void): () => void;
+  /**
+   * The desktop hands a show's `request` to the page and its answer back
+   * through `onWorkResult` (D-55); absent on an older desktop app, which
+   * drops the request, so this computer's own work opens in its own tile.
+   */
+  showAnswers?: true;
+  /** Delivers, per screen, the pane of another machine's work its page shows now, or none (D-55); returns the unsubscribe. Absent on an older desktop app. */
+  onShowing?(listener: (showing: { device: string; shown: ShownGuestPane | null }) => void): () => void;
 };
 
 /** `failed` carries the reason this computer's daemon gave (`not_connected`, `paused`, `paused_there`, `no_grant`, ...). */

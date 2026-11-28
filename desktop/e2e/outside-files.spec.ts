@@ -357,7 +357,12 @@ test("an agent's outside file is its open: it waits in Needs You, view list name
   await expect(chip).toHaveCount(0);
 
   // With the operator in the agent's pane, here the left of focus mode, an HTML page opens in front.
-  expect(await hide(["browser", "open", report])).toMatchObject({ ok: true });
+  const shown = await hide(["browser", "open", report]);
+  expect(shown).toMatchObject({ ok: true });
   await expect(outsideTab(page, "report.html")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
   await screenshot(page, "agent-outside-external");
+  // The agent that opened it drives it with the page commands; another pane's shell is told it did not open it.
+  const view = (shown.result as { view_id: string }).view_id;
+  expect((await agent(["browser", "snapshot", view])).out).toContain("# Agent report");
+  expect(await shellHide(["browser", "snapshot", view], other)).toMatchObject({ ok: false, reason: "outside_page_not_opened" });
 });

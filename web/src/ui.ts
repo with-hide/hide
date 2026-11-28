@@ -2,6 +2,7 @@
 // pending close confirmation, and the notices in the window's corner. Everything the core
 // owns (focus, tabs, layout, sidebar visibility) stays in `store.ts`.
 
+import type { ShownGuestPane } from "./remoteView";
 import { create } from "zustand";
 import type { ToastLevel } from "./components/ui/toast";
 import type { ProjectSettingsTarget } from "./projectSettings";
@@ -324,6 +325,14 @@ type UiStore = {
    */
   remoteScreen: string | null;
   setRemoteScreen: (device: string | null) => void;
+  /**
+   * Per paired machine's screen, by the device it is shown under, the pane
+   * of another machine's work its page shows now, as that page last told
+   * (`RemoteBridge.showing`, D-55): the guest machine's device id and its
+   * node's id for the pane; null while it shows none.
+   */
+  remoteShowing: Record<string, ShownGuestPane | null>;
+  setRemoteShowing: (device: string, shown: ShownGuestPane | null) => void;
   /** The share window is open, and shows the allow step a pasted link asks for in place of the allow window. */
   sharing: boolean;
   setSharing: (sharing: boolean) => void;
@@ -598,6 +607,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   screen: null,
   remoteScreen: null,
   setRemoteScreen: (remoteScreen) => set({ remoteScreen }),
+  remoteShowing: {},
+  setRemoteShowing: (device, shown) => set((state) => ({ remoteShowing: { ...state.remoteShowing, [device]: shown } })),
   sharing: false,
   setSharing: (sharing) => set({ sharing }),
   deskDraft: { text: "", mentions: [] },

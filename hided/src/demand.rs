@@ -9,7 +9,7 @@
 //! connection only owns its own demand.
 
 use hide_core::links::ledger::BacklogOriginIdentity;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// Takes a hold's lock whether or not a caller's callback panicked under it.
@@ -166,26 +166,52 @@ impl WindowScreen {
     }
 }
 
+/// The most panes of this machine's that paired machines' screens are told
+/// to show at once (PRD device-connect-iroh D-55): one per window, and the
+/// core refuses more (`look.rs`). Past it the first by name are kept and the
+/// rest dropped with a diagnostic.
+pub const MAX_SHOWN_THERE: usize = 16;
+
+/// One window's report (`window_screen`): the screen it shows and, on a
+/// paired machine's screen, the pane of this machine's work that screen
+/// shows (D-55), by the core's pane id.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScreenReport {
+    pub screen: WindowScreen,
+    pub shown_there: Option<String>,
+}
+
+/// What the core hears of this machine's windows together: the screen they
+/// show and every pane of this machine's their paired screens show.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScreenSum {
+    pub screen: WindowScreen,
+    pub shown_there: BTreeSet<String>,
+}
+
 /// What this machine's windows show (`window_screen`): each connection
 /// reports its own, whether or not it holds the keyboard, and the core hears
 /// another computer's screen while every window that reports shows one, so
 /// a look chosen on this machine waits until a window shows its own screen
 /// again (`docs/status-model.md`, Hide owns the read axis). A connection
 /// that closes lets go of its report, and when the last report goes the core
-/// keeps what it was last told: a window that closed, or is reconnecting,
-/// shows nothing, so a turn it never showed is not read for it. A launch
-/// starts at this machine's own screen, as the core does, and a window that
-/// never reports (an older app) keeps it there; quitting the app on another
-/// computer's screen and opening it again opens on this machine's own, which
-/// that window then says.
+/// keeps the screen it was last told: a window that closed, or is
+/// reconnecting, shows nothing, so a turn it never showed is not read for it.
+/// A launch starts at this machine's own screen, as the core does, and a
+/// window that never reports (an older app) keeps it there; quitting the app
+/// on another computer's screen and opening it again opens on this machine's
+/// own, which that window then says. The panes of this machine's that a
+/// window's paired screen shows count only while that window reports them,
+/// so a window that goes takes its pane with it.
 pub struct ScreenDemand {
     reports: Mutex<ScreenReports>,
 }
 
 struct ScreenReports {
-    windows: HashMap<u64, WindowScreen>,
-    /// What the core was last told; a launch's is this machine's own.
-    told: WindowScreen,
+    windows: HashMap<u64, ScreenReport>,
+    /// What the core was last told; a launch's is this machine's own, with
+    /// no pane shown elsewhere.
+    told: ScreenSum,
 }
 
 impl Default for ScreenDemand {
@@ -193,22 +219,44 @@ impl Default for ScreenDemand {
         Self {
             reports: Mutex::new(ScreenReports {
                 windows: HashMap::new(),
-                told: WindowScreen::Own,
+                told: ScreenSum {
+                    screen: WindowScreen::Own,
+                    shown_there: BTreeSet::new(),
+                },
             }),
         }
     }
 }
 
 impl ScreenDemand {
-    /// What the reporting windows show together, or none while no window
-    /// reports.
-    fn summed(windows: &HashMap<u64, WindowScreen>) -> Option<WindowScreen> {
-        if windows.values().any(|screen| *screen == WindowScreen::Own) {
-            Some(WindowScreen::Own)
+    /// What the reporting windows show together; while no window reports,
+    /// the screen last told and no pane.
+    fn summed(windows: &HashMap<u64, ScreenReport>, told: WindowScreen) -> ScreenSum {
+        let screen = if windows
+            .values()
+            .any(|report| report.screen == WindowScreen::Own)
+        {
+            WindowScreen::Own
         } else if windows.is_empty() {
-            None
+            told
         } else {
-            Some(WindowScreen::Computer)
+            WindowScreen::Computer
+        };
+        let mut shown_there = windows
+            .values()
+            .filter(|report| report.screen == WindowScreen::Computer)
+            .filter_map(|report| report.shown_there.clone())
+            .collect::<BTreeSet<_>>();
+        if shown_there.len() > MAX_SHOWN_THERE {
+            hide_core::diagnostic!(serde_json::json!({
+                "component": "hided", "kind": "window_screen.shown_there_capped",
+                "panes": shown_there.len(), "limit": MAX_SHOWN_THERE,
+            }));
+            shown_there = shown_there.into_iter().take(MAX_SHOWN_THERE).collect();
+        }
+        ScreenSum {
+            screen,
+            shown_there,
         }
     }
 
@@ -219,26 +267,25 @@ impl ScreenDemand {
     pub fn set(
         &self,
         connection: u64,
-        screen: Option<WindowScreen>,
-        announce: impl FnOnce(WindowScreen),
-    ) -> Option<WindowScreen> {
+        report: Option<ScreenReport>,
+        announce: impl FnOnce(&ScreenSum),
+    ) -> Option<ScreenSum> {
         let mut reports = lock(&self.reports);
-        match screen {
-            Some(screen) => reports.windows.insert(connection, screen),
+        match report {
+            Some(report) => reports.windows.insert(connection, report),
             None => reports.windows.remove(&connection),
         };
-        let now = Self::summed(&reports.windows).filter(|now| *now != reports.told)?;
-        reports.told = now;
-        announce(now);
+        let now = Self::summed(&reports.windows, reports.told.screen);
+        if now == reports.told {
+            return None;
+        }
+        reports.told = now.clone();
+        announce(&now);
         Some(now)
     }
 
     /// Drops whatever report a closed connection held.
-    pub fn release(
-        &self,
-        connection: u64,
-        announce: impl FnOnce(WindowScreen),
-    ) -> Option<WindowScreen> {
+    pub fn release(&self, connection: u64, announce: impl FnOnce(&ScreenSum)) -> Option<ScreenSum> {
         self.set(connection, None, announce)
     }
 }
@@ -447,20 +494,26 @@ mod tests {
      {
         let demand = ScreenDemand::default();
         let heard = std::cell::RefCell::new(Vec::new());
-        let say = |now| heard.borrow_mut().push(now);
-        demand.set(1, Some(WindowScreen::Own), say);
-        demand.set(1, Some(WindowScreen::Computer), say);
-        demand.set(1, Some(WindowScreen::Computer), say);
-        demand.set(2, Some(WindowScreen::Own), say);
-        demand.set(2, Some(WindowScreen::Computer), say);
+        let say = |now: &ScreenSum| heard.borrow_mut().push(now.screen);
+        let shows = |screen| {
+            Some(ScreenReport {
+                screen,
+                shown_there: None,
+            })
+        };
+        demand.set(1, shows(WindowScreen::Own), say);
+        demand.set(1, shows(WindowScreen::Computer), say);
+        demand.set(1, shows(WindowScreen::Computer), say);
+        demand.set(2, shows(WindowScreen::Own), say);
+        demand.set(2, shows(WindowScreen::Computer), say);
         demand.release(2, say);
         // The last window goes on another computer's screen, then the same
         // page reconnects there: the core keeps what it held.
         demand.release(1, say);
-        demand.set(3, Some(WindowScreen::Computer), say);
+        demand.set(3, shows(WindowScreen::Computer), say);
         demand.release(3, say);
         // The app opened again opens on this machine's own screen.
-        demand.set(4, Some(WindowScreen::Own), say);
+        demand.set(4, shows(WindowScreen::Own), say);
         // The last window going on this machine's own screen keeps that too.
         demand.release(4, say);
         assert_eq!(
@@ -470,6 +523,61 @@ mod tests {
                 WindowScreen::Own,
                 WindowScreen::Computer,
                 WindowScreen::Own,
+            ]
+        );
+    }
+
+    /// D-55: a pane of this machine's that a window's paired screen shows is
+    /// told while that window reports it on that screen, together with every
+    /// other window's, and goes with the window or the screen it was on; a
+    /// window on this machine's own screen names none.
+    #[test]
+    fn the_core_hears_this_machine_s_panes_a_paired_screen_shows_while_its_window_reports_them() {
+        let demand = ScreenDemand::default();
+        let heard = std::cell::RefCell::new(Vec::new());
+        let say = |now: &ScreenSum| {
+            heard.borrow_mut().push((
+                now.screen,
+                now.shown_there.iter().cloned().collect::<Vec<_>>(),
+            ))
+        };
+        let there = |pane: &str| {
+            Some(ScreenReport {
+                screen: WindowScreen::Computer,
+                shown_there: Some(pane.to_owned()),
+            })
+        };
+        demand.set(1, there("remote:mini:pane:p1"), say);
+        demand.set(2, there("remote:mini:pane:p2"), say);
+        demand.set(2, there("remote:mini:pane:p2"), say);
+        demand.set(
+            2,
+            Some(ScreenReport {
+                screen: WindowScreen::Own,
+                shown_there: Some("x".into()),
+            }),
+            say,
+        );
+        demand.release(1, say);
+        demand.set(2, there("remote:mini:pane:p3"), say);
+        demand.release(2, say);
+        use WindowScreen::{Computer, Own};
+        let p = |panes: &[&str]| {
+            panes
+                .iter()
+                .map(|pane| (*pane).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            heard.into_inner(),
+            [
+                (Computer, p(&["remote:mini:pane:p1"])),
+                (Computer, p(&["remote:mini:pane:p1", "remote:mini:pane:p2"])),
+                (Own, p(&["remote:mini:pane:p1"])),
+                (Own, p(&[])),
+                (Computer, p(&["remote:mini:pane:p3"])),
+                // The last window goes: the screen stays as told, its pane goes.
+                (Computer, p(&[])),
             ]
         );
     }

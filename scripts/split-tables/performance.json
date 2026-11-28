@@ -1,0 +1,112 @@
+{
+  "source": "docs/PERFORMANCE_TESTING.md",
+  "folder": "docs/performance",
+  "pieces": [
+    {
+      "name": "procedure",
+      "title": "Measurement procedure",
+      "code": [
+        "scripts/web-shell-measure/",
+        "web/e2e/hided-fixture.ts",
+        "desktop/e2e/fixture.ts"
+      ],
+      "sections": [
+        "Verification layers and current CI coverage",
+        "1. Define the claim before running anything",
+        "2. Identify the build and protect the operator",
+        "3. Isolate runtime state before making fixtures",
+        "4. Reproduce with real interactions",
+        "5. Measure the boundary actually under discussion",
+        "6. Preserve the architecture while fixing the cause",
+        "7. Regression gates, cleanup, and verdict"
+      ]
+    },
+    {
+      "name": "audit-coverage",
+      "title": "Audit coverage and regression ownership",
+      "code": [
+        "hide-core/src/handle.rs",
+        "scripts/check-capability-readers-off-lock.sh",
+        "scripts/check-shell-structure.py",
+        "web/src/store.test.ts",
+        "web/e2e/terminal-webgl.spec.ts"
+      ],
+      "sections": [
+        "Whole-app audit coverage"
+      ]
+    },
+    {
+      "name": "resident-ticks",
+      "title": "Resident tick inventory",
+      "code": [
+        "hided/src/watch.rs",
+        "hided/src/login_item.rs",
+        "hided/src/mobile/mod.rs",
+        "hided/src/hook_request.rs",
+        "hide-core/src/fetch.rs",
+        "hide-host/src/git_watch.rs",
+        "hide-platform/src/watch.rs"
+      ],
+      "sections": [
+        "Resident ticks, timers and watchers"
+      ]
+    },
+    {
+      "name": "resident-cost-review",
+      "title": "Resident work and hook path costs",
+      "code": [
+        "hide-relay/",
+        "hide-agent-hooks/",
+        "hided/src/hook_request.rs"
+      ],
+      "sections": [
+        "Resident work cost review",
+        "The opener guard hook on a shell call",
+        "Letters at a tool event",
+        "The guardrails on a pre-tool call"
+      ]
+    },
+    {
+      "name": "web-shell",
+      "title": "Web shell and browser gateway measurement",
+      "code": [
+        "scripts/web-shell-measure/",
+        "scripts/holder-perf.py",
+        "hide-node/src/terminal/echo_timing.rs",
+        "hide-holder/"
+      ],
+      "sections": [
+        "Web shell measurement",
+        "Scoped browser gateway discovery"
+      ]
+    },
+    {
+      "name": "projects-and-overview",
+      "title": "Projects and Overview costs",
+      "code": [
+        "hide-core/src/disk.rs",
+        "hide-core/src/runtime/disk_sweep.rs",
+        "hide-host/src/disk.rs",
+        "hide-host/src/cleanup.rs",
+        "web/e2e/projects-sidebar.spec.ts"
+      ],
+      "sections": [
+        "Projects and Overview cost contract"
+      ]
+    },
+    {
+      "name": "project-memory",
+      "title": "Project Memory, Overview reads and terminal path costs",
+      "code": [
+        "hide-host/src/memory.rs",
+        "hide-session/",
+        "web/src/overviewTasks.ts",
+        "web/src/terminalLinks.ts",
+        "web/e2e/pane-move.spec.ts"
+      ],
+      "sections": [
+        "Project Memory cost contract"
+      ]
+    }
+  ]
+}

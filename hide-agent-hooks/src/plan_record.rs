@@ -203,7 +203,7 @@ pub fn hint(context: &PlanContext, now: u64) -> Option<String> {
         lines.push(line);
         if context.proposed() {
             lines.push(
-                "The task's steps wait for the operator's review: writing files, git commit and git push are blocked until the operator answers in the conversation. If they approve, run hide task approve; if they ask for changes, send the revised steps with hide task set --json '<plan>' --ask rather than a file; if they say not to, run hide task drop.".to_owned(),
+                "The task's steps wait for the operator's review: writing files, git commit and git push are blocked until the operator answers in the conversation. If they approve, run hide task approve; if they ask for changes, send the revised steps with hide task set --inline '<plan>' --ask rather than a file; if they say not to, run hide task drop.".to_owned(),
             );
         } else if now.saturating_sub(plan.updated_at_unix_ms) > STALE_AFTER_MS {
             let key = plan
@@ -308,7 +308,7 @@ impl Refused {
     pub fn reason(self) -> &'static str {
         match self {
             Self::ProposedPlan => {
-                "Not run: the task's steps are waiting for the operator's review (run hide task approve once they answer). Reading and looking around still run; write, commit and push wait for the operator's answer. Revised steps go up with hide task set --json '<plan>' --ask."
+                "Not run: the task's steps are waiting for the operator's review (run hide task approve once they answer). Reading and looking around still run; write, commit and push wait for the operator's answer. Revised steps go up with hide task set --inline '<plan>' --ask."
             }
             Self::MissionMerge(Host::GitHub) => {
                 "Not run: this mission goes up to pull requests, so its workers do not merge. Report the pull request to the Conductor; the operator merges."
