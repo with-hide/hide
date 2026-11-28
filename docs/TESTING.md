@@ -1205,7 +1205,13 @@ Nothing is handed to the nightly.
 
 ### Nightly failures
 
+The nightly runs at 02:17 in Korea (17:17 UTC): Linux and Windows every day, and macOS on Monday and Thursday (operator decision 2026-11-28).
+One full run had held 7 macOS jobs for 65 minutes, and the account shares five macOS runners across every repository, so the nightly was turned off on 2026-11-22 and two releases then lost about 13 hours to breaks first seen on their candidate.
+Each cron line names a lane, `scripts/ci-plan.py nightly-scope` turns it into the jobs and systems that run, and `nightly-aggregate` checks the run against the same answer: `all` (Monday and Thursday) is every job on every system with `verify` and the macOS package, `daily` (the other days) is the direct jobs on Linux and Windows (the agent journey and canary, holder restart, the agent contracts, the desktop and Windows web `@platform` tests) with the Linux and Windows packages.
+A hand run picks `all`, `daily`, one system or `agy` (`gh workflow run nightly.yml --ref <branch> -f lane=<lane>`).
+
 The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one writer of `nightly-failure` issues, so the run's cap, the comments and the closing never race between lanes; a lane only writes its annotations.
+The agent canary's jobs in the same run are not the report's: it neither waits for nor reads them, since a vendor's release that breaks Hide is kept in its agent's `agent-canary` issue and a cell the pins fail too is filed from `agent journey` ([VERIFICATION.md](VERIFICATION.md#the-agent-canary)).
 
 - A failure is one issue: a test a lane annotated as `Failed test`, a check the performance lane annotated as `Failed measurement`, or, for a failed job that annotated none (its report step died, wrote nothing or never ran), the lane and its failed step.
   The lane is the job's name without its shard, so a test is the same failure in whichever shard ran it; `verify`'s gate, which fails whenever a lane it waits for did, is not a lane.
@@ -1214,9 +1220,10 @@ The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one w
   It is ended by fixing the cause or reverting the candidate; a longer timeout, more retries or a skip does not end it.
 - The same failure again (a hidden `nightly-failure:<lane>:<test or step>` marker) is one comment per run attempt on the open issue, never a second issue.
   Windows web/build and Windows/macOS desktop calls that moved under `verify` resolve their former lane names to the same suite, so existing issues and green history remain connected; OS-only hand runs keep their direct names and use the same mapping.
-- A scheduled run on main, or a hand run of `all`, that passes a lane closes that lane's issues with a comment naming the commit and the run; a skipped or cancelled lane closes nothing.
+- A scheduled run on main, or a hand run of `all`, that passes a lane closes that lane's issues with a comment naming the commit and the run; a skipped or cancelled lane closes nothing, so a macOS lane's issue waits for the next Monday or Thursday run.
 - One run opens at most 10 issues; the rest, with the count of failed tests a lane had no annotation room for, go into one issue, `nightly: N more failures in run <id>`, which the next scheduled run closes as it files its own.
 - A run of any other branch writes no issue.
+- A failed scheduled nightly on main, or an open `nightly-failure` issue, stops a release candidate at its first job ([CONTRIBUTING.md](../CONTRIBUTING.md#releases)), so the issues are read before a release rather than after it.
 - The report fails its job when GitHub does, and when it cannot mint the App's token, so a failure it could not file shows as a red report job rather than a silence.
   `--dry-run` with `--runs-repo` and `--run` prints what it would write for any finished run and writes nothing; `--issues-repo` reads another issue repository than with-hide/hide.
 - The report reads a failed job's log through `gh api`, which from gh 2.97 hands over a body carrying a terminal escape only when told `--allow-escape-sequences`, and every job log carries one (the runner colors each step's command), so the report and its `--dry-run` need gh 2.97 or later.
