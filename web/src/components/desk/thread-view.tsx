@@ -14,6 +14,7 @@ import { PlanChecklist } from "../plan-checklist";
 import { PrMark } from "../pr-mark";
 import { StatusMark } from "../status-mark";
 import { Button } from "../ui/button";
+import { useOutsidePressSurface } from "../ui/layer";
 import { Hint } from "../ui/tooltip";
 import { DeskComposer, SentAttachments } from "./desk-composer";
 import type { ComposerMenus } from "./composer-menus";
@@ -417,6 +418,47 @@ function useSelectedRows(box: RefObject<HTMLDivElement | null>): RowSpan | null 
   return span;
 }
 
+/** What a press on a message's words still gives to the message: a link, a chip, a code block's `복사`. */
+const PRESSABLE = "a, button, input, textarea, select, label, [role='button'], [contenteditable='true']";
+
+/**
+ * Leaves a press on a message's words to the browser, so a drag selects across messages as on any page (issue
+ * 3101): a message is a read-only editor, which would otherwise take the press and keep the selection inside itself.
+ * The press stops above the editor, so the surface is marked for the open layers, as the terminal's is
+ * (`useOutsidePressSurface`); a press on something a message draws to be pressed still reaches it. A copy of a
+ * selection that runs past one message is the browser's too, which copies every message it covers; the browser
+ * hands a copy to the message the selection starts in, which would copy only its own part. A selection inside one
+ * message is still copied by that message, as its Markdown.
+ */
+function useBrowserSelection(box: RefObject<HTMLDivElement | null>) {
+  const surface = useOutsidePressSurface();
+  useEffect(() => {
+    const element = box.current;
+    if (!element) return undefined;
+    surface(element);
+    const press = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (event.button !== 0 || !target?.closest(".cm-content") || target.closest(PRESSABLE)) return;
+      event.stopPropagation();
+    };
+    const messageOf = (node: Node) => (node instanceof Element ? node : node.parentElement)?.closest(".cm-content") ?? null;
+    const copy = (event: ClipboardEvent) => {
+      const selection = element.ownerDocument.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+      const range = selection.getRangeAt(0);
+      const message = messageOf(range.startContainer);
+      if (!message || message !== messageOf(range.endContainer)) event.stopPropagation();
+    };
+    element.addEventListener("mousedown", press, { capture: true });
+    element.addEventListener("copy", copy, { capture: true });
+    return () => {
+      element.removeEventListener("mousedown", press, { capture: true });
+      element.removeEventListener("copy", copy, { capture: true });
+      surface(null);
+    };
+  }, [box, surface]);
+}
+
 /**
  * The conversation's rows near its scroll viewport, and its scrolling (B25, issue 3101). Only the rows within a few of
  * the viewport are drawn, each measured as it is drawn and kept by its key while it is not; the rows of `keep` are
@@ -596,6 +638,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   const { t } = useInterfaceTranslation();
   const box = useRef<HTMLDivElement>(null);
   const selected = useSelectedRows(box);
+  useBrowserSelection(box);
   const turns = useMemo(() => threadTurns(lines), [lines]);
   const running = job?.state === "working" || job?.state === "starting";
   const words = useWords(mentions, actions.onSession, actions.onCopy, actions.place ?? null, actions.onFile);

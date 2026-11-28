@@ -732,6 +732,34 @@ it("keeps every row between a selection's ends drawn while it stands, so a copy 
   expect(drawnRows(container).length).toBeLessThanOrEqual(4 + 2 * 6);
 });
 
+it("leaves a press on a message's words to the browser, so a drag can select across messages, and a code block's 복사 still takes its press", async () => {
+  const { container } = await mount({ ...job, state: "done" });
+  await shown({ updates: [operator("보여줘"), said("첫 답이에요"), operator("코드도"), said("이 코드예요\n\n```\nconst a = 1;\n```")], parts: {}, sessions: {} });
+  await codeCopyDrawn(container);
+  const reached: EventTarget[] = [];
+  const seen = (event: Event) => reached.push(event.target!);
+  document.addEventListener("mousedown", seen);
+  try {
+    const press = (target: Element) => {
+      const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 });
+      target.dispatchEvent(event);
+      return event;
+    };
+    // The words: no message takes the press, so the browser's own selection starts and can run on into the next message.
+    const words = container.querySelector('[data-desk-thread-line="agent"] .cm-line')!;
+    const event = press(words);
+    expect(event.defaultPrevented).toBe(false);
+    expect(reached).not.toContain(words);
+    // A code block's 복사 is pressed as before, and its head is no part of a copied selection.
+    const copy = container.querySelector('[data-code-block-action] [data-copy-words="code block"]')!;
+    press(copy);
+    expect(reached).toContain(copy);
+    expect(container.querySelector("[data-code-block-head]")?.className).toContain("select-none");
+  } finally {
+    document.removeEventListener("mousedown", seen);
+  }
+});
+
 it("shows a question in the agent's own sentence above the box and lights only that sentence in its message for 2 s (Doop N3 가)", async () => {
   const scrolled: string[] = [];
   vi.stubGlobal("CSS", { escape: (value: string) => value });
