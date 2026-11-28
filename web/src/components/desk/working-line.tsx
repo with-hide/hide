@@ -1,6 +1,6 @@
 import type { WorkingPhase } from "../../desk";
 import type { MessageKey } from "../../i18n/catalogs";
-import { useInterfaceTranslation } from "../../i18n/client";
+import { useInterfaceTranslation } from "../../i18n/translator";
 import { Elapsed } from "../elapsed";
 import { WorkingOwl } from "../../WorkingOwl";
 

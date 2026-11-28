@@ -553,7 +553,7 @@ export const PaneView = memo(function PaneView({
             {caption.text}
           </button>
         ) : null}
-        {conversation ? <div tabIndex={-1} className="absolute inset-0 z-10 flex min-h-0 min-w-0 bg-card" data-pane-conversation={paneId} onFocusCapture={() => actions.focusPane(paneId)} onPointerDownCapture={() => actions.focusPane(paneId)}><PaneConversation paneId={paneId} actions={actions} /></div> : null}
+        {conversation ? <div tabIndex={-1} className="absolute inset-0 z-10 flex min-h-0 min-w-0 bg-background" data-pane-conversation={paneId} onFocusCapture={() => actions.focusPane(paneId)} onPointerDownCapture={() => actions.focusPane(paneId)}><PaneConversation paneId={paneId} actions={actions} /></div> : null}
       </div>
       {input ? (
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-10 border-2 border-primary" data-pane-focus-outline="true" />

@@ -103,7 +103,8 @@ describe("a thread's screen", () => {
     const drawn = Object.fromEntries(screen.lines.map((line) => [line.id, line.kind === "hide" ? line.part : line.kind]));
     expect(screen.lines[0]).toMatchObject({ kind: "user", origin: "letter", peer: { name: "리드", mark: "turn", agent_kind: "codex", pane_id: "w1:p1" } });
     expect(drawn).toMatchObject({
-      a: { kind: "letter", direction: "sent", peer: { name: "리뷰어", mark: "going", pane_id: "w1:p2" }, body: "봐줘" },
+      // A letter keeps its whole body, which its band opens to, and the kind it was sent as.
+      a: { kind: "letter", peer: { name: "리뷰어", mark: "going", pane_id: "w1:p2" }, body: "봐줘\n자세한 건 아래", letterKind: null },
       // agent-42 has no live session: its chip is the name it was given.
       b: { kind: "spawn", session: { name: "review", mark: null, pane_id: null } },
       // Only the last plan call draws the plan as it is now.

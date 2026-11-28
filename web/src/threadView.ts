@@ -3,7 +3,7 @@
 // `session_thread_history` and the page the session is still writing in
 // `session_thread`, each on its own revision; the screen draws them as one.
 
-import { threadLines, type AcpSessionUpdate, type DeskOutput, type DeskSessionRef, type ThreadHidePart, type ThreadLine, type ThreadReadFailure } from "./desk";
+import { letterKindOf, threadLines, type AcpSessionUpdate, type DeskOutput, type DeskSessionRef, type ThreadHidePart, type ThreadLine, type ThreadReadFailure } from "./desk";
 import { missionCounts, missionTurn } from "./missions";
 import { heldBy } from "./components/mission-hold";
 import type { AgentRow, MissionsSnapshot, PlansSnapshot, PlanView, SessionThreadHistorySection, SessionThreadSection, ThreadPart, ThreadSession, ThreadUpdate } from "./snapshot";
@@ -105,7 +105,7 @@ function hidePart(part: ThreadPart, found: { session: (name: string) => DeskSess
     }
     case "letter": {
       const peer = found.session(part.to);
-      return { kind: "letter", direction: "sent", peer, body: (part.body ?? "").trim().split("\n", 1)[0] ?? "", target: `letter:${peer.pane_id ?? part.to}` };
+      return { kind: "letter", peer, body: (part.body ?? "").trim(), letterKind: letterKindOf(part.letter_kind), target: `letter:${peer.pane_id ?? part.to}` };
     }
     case "view": {
       const output = viewOutput(part.view, part.target);

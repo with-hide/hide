@@ -306,11 +306,32 @@ export type AcpContentBlock =
   | { type: "resource_link"; uri: string; name: string };
 
 /**
- * Hide's own marks under `_meta.hide`: a message's origin and a letter's
- * sender as written, a cut text or image, and when a call or its result was
- * written (Unix milliseconds).
+ * Hide's own marks under `_meta.hide`: a message's origin, a letter's sender as written, its kind (one of
+ * `LETTER_KINDS`, from its envelope or the doorbell's line) and, for a doorbell's line, the letter's first line it
+ * names; a cut text or image; when a call or its result was written (Unix milliseconds); what an agent's own question
+ * call asks (`question`) and, on its result, the operator's answer to each question in order (`answers`).
  */
-export type AcpMeta = { hide?: { origin?: "letter" | "interrupted"; from?: string; truncated?: boolean; at_ms?: number } } | null;
+export type AcpMeta = {
+  hide?: {
+    origin?: "letter" | "interrupted";
+    from?: string;
+    kind?: string;
+    summary?: string;
+    truncated?: boolean;
+    at_ms?: number;
+    question?: { text: string; choices: string[] }[];
+    answers?: (string | null)[];
+  };
+} | null;
+
+/** A letter's kind, as `hide letter send --kind` types it and its envelope or doorbell line names it. */
+export const LETTER_KINDS = ["request", "reply", "report", "progress", "block", "watch"] as const;
+export type LetterKind = (typeof LETTER_KINDS)[number];
+
+/** A kind as a record or a command wrote it, or null for one this build does not know. */
+export function letterKindOf(value: unknown): LetterKind | null {
+  return (LETTER_KINDS as readonly unknown[]).includes(value) ? (value as LetterKind) : null;
+}
 
 /** ACP `ToolCallContent`. */
 export type AcpToolCallContent =
@@ -358,8 +379,8 @@ export type ThreadHidePart = (
   | { kind: "plan"; plan: PlanView }
   /** A new session this one handed work to. */
   | { kind: "spawn"; session: DeskSessionRef }
-  /** A letter this session sent or got, with the other session and its first line. */
-  | { kind: "letter"; direction: "sent" | "received"; peer: DeskSessionRef; body: string }
+  /** A letter this session sent, to the other session, with its whole body and its kind. */
+  | { kind: "letter"; peer: DeskSessionRef; body: string; letterKind: LetterKind | null }
   | { kind: "view"; output: DeskOutput; view_id: string | null }
   | { kind: "mission"; mission: DeskMission }
   | { kind: "pr"; number: number; state: PrState }
@@ -367,16 +388,20 @@ export type ThreadHidePart = (
   /**
    * Where the part leads, by what names it in Hide rather than how it is
    * drawn: a session by its pane, else the agent id the record wrote; a View
-   * by its id, else the target typed; a mission by its id. Parts of one turn
-   * with one target are one part (`onePerTarget`).
+   * by its id, else the target typed; a mission by its id. A new session, a
+   * View or a mission one turn reaches again is one part
+   * (`conversationTurns`); every letter is its own.
    */
   target: string;
 };
 
 /** One drawn line of a thread, after chunks are joined and call updates folded into their call. */
 export type ThreadLine =
-  /** `peer` is a letter's sender, when the record names it. */
-  | { kind: "user"; id: string; message: string | null; text: string; images: AcpContentBlock[]; origin: "operator" | "letter" | "interrupted"; peer: DeskSessionRef | null }
+  /**
+   * `peer` is a letter's sender, when the record names it; `letterKind` its kind, and `summary` the first line a
+   * doorbell's line names (the line itself is `text`).
+   */
+  | { kind: "user"; id: string; message: string | null; text: string; images: AcpContentBlock[]; origin: "operator" | "letter" | "interrupted"; peer: DeskSessionRef | null; letterKind: LetterKind | null; summary: string | null }
   /** `atMs` is when its record was written, when the record says (its first piece's time). */
   | { kind: "agent"; id: string; message: string | null; text: string; atMs: number | null }
   | { kind: "thought"; id: string; message: string | null; text: string }
@@ -387,8 +412,17 @@ export type ThreadLine =
    */
   | { kind: "tool"; id: string; title: string; toolKind: AcpToolKind; status: AcpToolCallStatus; input: string | null; subject: string | null; output: string | null; diffs: Extract<AcpToolCallContent, { type: "diff" }>[]; images: AcpContentBlock[]; startedAtMs: number | null }
   | { kind: "plan"; id: string; entries: AcpPlanEntry[] }
+  /**
+   * The agent's own question call (Claude Code's `AskUserQuestion`, Codex's `request_user_input`, OpenCode's
+   * `question`, Antigravity's `ask_question`, any call its reader marked `_meta.hide.question`): each question with its
+   * choices and, once the operator answered, the answer; `status` is the call's.
+   */
+  | { kind: "question"; id: string; questions: ThreadQuestion[]; status: AcpToolCallStatus }
   /** `command` is what the session typed, when the call carries it. */
   | { kind: "hide"; id: string; part: ThreadHidePart; command: string | null };
+
+/** One question of a question call, as the question line draws it. */
+export type ThreadQuestion = { text: string; choices: string[]; answer: string | null };
 
 export type ThreadReadFailure = "no_record" | "refused";
 
@@ -451,6 +485,12 @@ const nameOnly = (name: string): DeskSessionRef => ({ name, mark: null, agent_ki
 export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonly<Record<string, ThreadHidePart>> = {}, session: (name: string) => DeskSessionRef = nameOnly, ids: readonly string[] = []): ThreadLine[] {
   const lines: ThreadLine[] = [];
   const calls = new Map<string, Extract<ThreadLine, { kind: "tool" }>>();
+  const questions = new Map<string, Extract<ThreadLine, { kind: "question" }>>();
+  const answer = (line: Extract<ThreadLine, { kind: "question" }>, fields: AcpToolCallFields) => {
+    if (fields.status !== undefined) line.status = fields.status;
+    const answers = fields._meta?.hide?.answers;
+    if (answers) line.questions = line.questions.map((question, at) => ({ ...question, answer: answers[at] ?? question.answer }));
+  };
   // A letter's sender as the record wrote it, so its chunks join by who wrote them, not by how the chip names them.
   const senders = new Map<ThreadLine, string | null>();
   const fold = (line: Extract<ThreadLine, { kind: "tool" }>, fields: AcpToolCallFields) => {
@@ -480,7 +520,8 @@ export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonl
           last.text += textOf(update.content);
           if (update.content.type === "image") last.images.push(update.content);
         } else {
-          const line: ThreadLine = { kind: "user", id, message, text: textOf(update.content), images: update.content.type === "image" ? [update.content] : [], origin, peer: from === null ? null : session(from) };
+          const hide = update._meta?.hide;
+          const line: ThreadLine = { kind: "user", id, message, text: textOf(update.content), images: update.content.type === "image" ? [update.content] : [], origin, peer: from === null ? null : session(from), letterKind: letterKindOf(hide?.kind), summary: hide?.summary ?? null };
           senders.set(line, from);
           lines.push(line);
         }
@@ -504,6 +545,14 @@ export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonl
           lines.push({ kind: "hide", id: update.toolCallId, part, command: commandOf(update.rawInput) ?? (update.title || null) });
           return;
         }
+        const asked = update._meta?.hide?.question;
+        if (asked?.length) {
+          const line: Extract<ThreadLine, { kind: "question" }> = { kind: "question", id: update.toolCallId, questions: asked.map((question) => ({ text: question.text, choices: question.choices, answer: null })), status: "pending" };
+          answer(line, update);
+          questions.set(update.toolCallId, line);
+          lines.push(line);
+          return;
+        }
         const line: Extract<ThreadLine, { kind: "tool" }> = { kind: "tool", id: update.toolCallId, title: update.title, toolKind: "other", status: "pending", input: null, subject: null, output: null, diffs: [], images: [], startedAtMs: update._meta?.hide?.at_ms ?? null };
         fold(line, update);
         calls.set(update.toolCallId, line);
@@ -511,6 +560,8 @@ export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonl
         return;
       }
       case "tool_call_update": {
+        const asked = questions.get(update.toolCallId);
+        if (asked) answer(asked, update);
         const line = calls.get(update.toolCallId);
         if (line) fold(line, update);
         return;
@@ -601,31 +652,6 @@ export function deskPhase(step: DeskStepKind | null | undefined, text: string | 
   return step ?? (text ? "answering" : "thinking");
 }
 
-/** A session's running turn as the working line says it, from its newest line: its words, else its newest call or Hide part. */
-export function threadPhase(turn: ThreadTurn | undefined): WorkingPhase {
-  if (!turn) return "thinking";
-  if (turn.answer.length > 0) return "answering";
-  const last = turn.last;
-  if (last?.kind === "tool") {
-    switch (last.toolKind) {
-      case "read":
-      case "search":
-      case "fetch":
-        return "files";
-      case "edit":
-      case "delete":
-      case "move":
-        return "editing";
-      case "execute":
-        return "other";
-      default:
-        return "thinking";
-    }
-  }
-  if (last?.kind === "hide") return last.part.kind === "letter" ? "letters" : last.part.kind === "spawn" ? "starts" : "sessions";
-  return "thinking";
-}
-
 /** A mission mention as a Desk answer's text holds it. */
 export const markedMission = (mission: DeskMissionMention) => `@mission(${mission.id} ${mission.title})`;
 
@@ -649,95 +675,13 @@ export function deskAgentWord(agent: DeskAgent): DeskAgentWord | null {
   return agent.signed_in ? "signed_in" : "signed_out";
 }
 
-/** One turn of a thread (B25): the words that started it, the work, the answer, and the parts the work made. */
-export type ThreadTurn = {
-  key: string;
-  /** The message that began the turn; the first turn may have none. */
-  user: Extract<ThreadLine, { kind: "user" }> | null;
-  /** The work before the answer: thoughts, calls, plans and every Hide part, each part's target once (`onePerTarget`). */
-  work: ThreadLine[];
-  /** The newest line of the work as the session wrote it, a repeated part included: what the working line says it does. */
-  last: ThreadLine | null;
-  /** The newest call of the work as the session wrote it, a Hide call included: the one line under a running turn's fold. */
-  call: Extract<ThreadLine, { kind: "tool" | "hide" }> | null;
-  /** The agent's words after its last piece of work. */
-  answer: Extract<ThreadLine, { kind: "agent" }>[];
-  /** The Hide parts the work made that lead somewhere, one per target: they stay in view while the work is folded (B26). */
-  parts: Extract<ThreadLine, { kind: "hide" }>[];
-  files: number;
-  commands: number;
-};
+/** A turn as a question Hide found looks in it: every piece of the agent's words, in order (`ConversationTurn`). */
+type WordsOfTurn = { texts: readonly Extract<ThreadLine, { kind: "agent" }>[] };
 
-/**
- * A turn's lines with each Hide part's target drawn once: where the turn
- * first reached it, so nothing moves as the session calls it again, with the
- * newest call's state and command (six `hide mission` calls are one chip).
- */
-function onePerTarget(lines: readonly ThreadLine[]): ThreadLine[] {
-  const newest = new Map<string, Extract<ThreadLine, { kind: "hide" }>>();
-  for (const line of lines) if (line.kind === "hide") newest.set(line.part.target, line);
-  const drawn = new Set<string>();
-  const kept: ThreadLine[] = [];
-  for (const line of lines) {
-    if (line.kind !== "hide") {
-      kept.push(line);
-      continue;
-    }
-    const target = line.part.target;
-    if (drawn.has(target)) continue;
-    drawn.add(target);
-    const last = newest.get(target)!;
-    kept.push(last === line ? line : { ...line, part: last.part, command: last.command });
-  }
-  return kept;
-}
-
-/**
- * A thread's lines as turns (B25): each message starts one, and its work
- * folds into one line, `파일 n · 명령 m`, above the answer. A new session, a
- * letter, an output, a mission or a PR it made stays in view under the
- * folded line, once per target; a plan change does not.
- */
-export function threadTurns(lines: readonly ThreadLine[]): ThreadTurn[] {
-  const turns: ThreadTurn[] = [];
-  let open: { user: ThreadTurn["user"]; body: ThreadLine[]; key: string } | null = null;
-  const close = () => {
-    if (!open) return;
-    let lastWork = open.body.length - 1;
-    while (lastWork >= 0 && open.body[lastWork]!.kind === "agent") lastWork -= 1;
-    const written = open.body.slice(0, lastWork + 1);
-    const work = onePerTarget(written);
-    const answer = open.body.slice(lastWork + 1) as Extract<ThreadLine, { kind: "agent" }>[];
-    const tools = work.filter((line): line is Extract<ThreadLine, { kind: "tool" }> => line.kind === "tool");
-    turns.push({
-      key: open.key,
-      user: open.user,
-      work,
-      last: written.at(-1) ?? null,
-      call: written.findLast((line): line is Extract<ThreadLine, { kind: "tool" | "hide" }> => line.kind === "tool" || (line.kind === "hide" && line.command !== null)) ?? null,
-      answer,
-      parts: work.filter((line): line is Extract<ThreadLine, { kind: "hide" }> => line.kind === "hide" && line.part.kind !== "plan"),
-      files: tools.filter((line) => line.toolKind === "edit" || line.toolKind === "delete" || line.toolKind === "move").length,
-      commands: tools.filter((line) => line.toolKind === "execute").length,
-    });
-  };
-  for (const line of lines) {
-    if (line.kind === "user") {
-      close();
-      open = { user: line, body: [], key: line.id };
-      continue;
-    }
-    open ??= { user: null, body: [], key: line.id };
-    open.body.push(line);
-  }
-  close();
-  return turns;
-}
-
-/** The answer lines written no later than `atUnixMs`, newest first, the later in the conversation first among lines of one time. */
-function answersBy(turns: readonly ThreadTurn[], atUnixMs: number): Extract<ThreadLine, { kind: "agent" }>[] {
+/** The agent's words written no later than `atUnixMs`, newest first, the later in the conversation first among lines of one time. */
+function answersBy(turns: readonly WordsOfTurn[], atUnixMs: number): Extract<ThreadLine, { kind: "agent" }>[] {
   return turns
-    .flatMap((turn) => turn.answer)
+    .flatMap((turn) => turn.texts)
     .filter((line) => line.atMs !== null && line.atMs <= atUnixMs)
     .reverse()
     .sort((a, b) => (b.atMs ?? 0) - (a.atMs ?? 0));
@@ -755,8 +699,9 @@ export type AskSentence = { from: number; to: number };
  * (the agent started a new record, or the record was cut short), a row a
  * press does nothing on.
  *
- * Time decides whether the message is there: the answer lines written no
- * later than the question was found (`_meta.hide.at_ms`). The agent's own
+ * Time decides whether the message is there: the agent's words written no
+ * later than the question was found (`_meta.hide.at_ms`), every piece of
+ * them, since none is folded away. The agent's own
  * sentence only decides what of it to light: the newest of them that holds
  * the sentence, lit at the sentence, since the core checked it against the
  * turn's answer messages together; when none holds it as the core read it (a
@@ -764,7 +709,7 @@ export type AskSentence = { from: number; to: number };
  * lit whole. A question kept before its sentence was goes to the newest of
  * them with nothing lit.
  */
-export function askPlace(turns: readonly ThreadTurn[], ask: { at_unix_ms: number; quote?: string }, { olderLeft, settled }: { olderLeft: boolean; settled: boolean }):
+export function askPlace(turns: readonly WordsOfTurn[], ask: { at_unix_ms: number; quote?: string }, { olderLeft, settled }: { olderLeft: boolean; settled: boolean }):
   | { state: "found"; line: Extract<ThreadLine, { kind: "agent" }>; sentence: AskSentence | null }
   | { state: "unknown" | "gone" } {
   const answers = answersBy(turns, ask.at_unix_ms);

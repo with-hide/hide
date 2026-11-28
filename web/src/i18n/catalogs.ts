@@ -20,6 +20,7 @@ import { whatsNewScenesCatalogs, whatsNewScenesEnglish } from "./resources/whats
 import { automationScreenCatalogs, automationScreenEnglish } from "./resources/automationScreen";
 import { kindsCatalogs, kindsEnglish } from "./resources/kinds";
 import { plansCatalogs, plansEnglish } from "./resources/plans";
+import { conversationCatalogs, conversationEnglish } from "./resources/conversation";
 import { deskCatalogs, deskEnglish } from "./resources/desk";
 import { archiveCatalogs, archiveEnglish } from "./resources/archive";
 import { boardCatalogs, boardEnglish } from "./resources/board";
@@ -101,6 +102,7 @@ export const english = {
   ...plansEnglish,
   ...kindsEnglish,
   ...deskEnglish,
+  ...conversationEnglish,
   ...archiveEnglish,
   ...shellEnglish,
   ...editorSearchEnglish,
@@ -187,6 +189,7 @@ export const catalogs = {
     ...plansCatalogs.ko,
     ...kindsCatalogs.ko,
     ...deskCatalogs.ko,
+    ...conversationCatalogs.ko,
     ...archiveCatalogs.ko,
     ...shellCatalogs.ko,
     ...editorSearchCatalogs.ko,
@@ -268,6 +271,7 @@ export const catalogs = {
     ...plansCatalogs["zh-CN"],
     ...kindsCatalogs["zh-CN"],
     ...deskCatalogs["zh-CN"],
+    ...conversationCatalogs["zh-CN"],
     ...archiveCatalogs["zh-CN"],
     ...shellCatalogs["zh-CN"],
     ...editorSearchCatalogs["zh-CN"],
@@ -349,6 +353,7 @@ export const catalogs = {
     ...plansCatalogs.ja,
     ...kindsCatalogs.ja,
     ...deskCatalogs.ja,
+    ...conversationCatalogs.ja,
     ...archiveCatalogs.ja,
     ...shellCatalogs.ja,
     ...editorSearchCatalogs.ja,

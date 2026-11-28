@@ -50,7 +50,7 @@ import { useShellStore } from "../store";
 import type { DeskCommand, DeskGlanceFile, DeskRecord, GlanceFolds, GlanceTab, SessionPull, SnapshotRest, ViewDisplaySnapshot, ViewLayoutSnapshot } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
-  AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_CARD, PLAN_EXIT_OPTIONS, WAITING_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, endedScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
+  AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_CARD, PLAN_EXIT_OPTIONS, WAITING_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, endedScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENU_PROJECTS, menuSessions,
   mentionItems, missionItems, missionLayoutScene, OUTPUTS, PICTURES, RECORD_THREAD, SESSION_VIEWS, SESSIONS, stateItems, statusItems, storyJobs, switchedItems, WORKER_THREAD,
 } from "./deskSceneData";
 
@@ -227,7 +227,7 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, fo
     <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.activity === "sleeping"} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} />
     <OutputShelf outputs={job.outputs} pulls={scenePulls(job)} onOpen={noop} onPull={noop} />
     <ThreadView
-      job={job} running={job.activity === "working"} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk
+      job={job} running={job.activity === "working"} lines={lines} reading={reading} failure={failure} startedByDesk
       composer={{ value: text, tray: sceneTray(files), focused, onChange: setText, onSend: noop, bar: (
         // The session's bar (mission-106): the agent fixed, its model a menu, and an effort Hide cannot change for OpenCode-like agents yet.
         <SessionAgentBar
@@ -255,7 +255,7 @@ function EndedColumn({ record }: { record: DeskRecord }) {
   const resume = <LineButton icon={<PlayIcon aria-hidden="true" />} label="이어서 하기" blocked={null} busy={false} onClick={noop} data="resume" id={record.session.session_id} />;
   return <>
     <SessionHead paneId={record.pane_id} title={record.title} job={job} row={null} pane={null} machine={null} disconnected={false} sleeping={false} ended={{ pulls: record.pull_requests }} explorerOpen={false} filesChord={null} terminalChord={null} deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} />
-    <ThreadView job={job} lines={lines} mentions={MENTIONS} startedByDesk composer={{ value: "", tray: sceneTray([]), onChange: noop, onSend: noop }} foot={<SessionRecordFoot endedAt={record.ended_at_unix_ms} resume={resume} blocked={null} />} {...PART_ACTIONS} />
+    <ThreadView job={job} lines={lines} startedByDesk composer={{ value: "", tray: sceneTray([]), onChange: noop, onSend: noop }} foot={<SessionRecordFoot endedAt={record.ended_at_unix_ms} resume={resume} blocked={null} />} {...PART_ACTIONS} />
   </>;
 }
 

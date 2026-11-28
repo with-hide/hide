@@ -5,9 +5,7 @@ import { AgentMark } from "../../AgentMark";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { Elapsed } from "../elapsed";
-import { MENTION_PRESS, MENTION_TONE } from "../mention-chip";
 import { PrMark } from "../pr-mark";
-import { StatusMark } from "../status-mark";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, useHintOpen } from "../ui/tooltip";
@@ -63,20 +61,22 @@ export function useSessionChipBridge(): (node: ReactNode) => ReactNode {
 
 /**
  * A session named inside a line (a reply's `@session`, a letter's other
- * side, a task handed on, a `@` the operator picked) in the session blue
- * (B26, B49, B50, D-75, D-85): its status, its agent and its name (its
- * sidebar row's while the sidebar lists it), the same
- * chip in the composer, the chat, a thread and its history. A session the
- * sidebar no longer lists whose record Hide keeps reads as that record, its
- * title and agent with the ended session's empty mark, one step quieter, and
- * still opens (feedback 2, frame K); one with no record is dimmed with no
- * status and opens nothing (D-86). Under the pointer or focus a listed or
- * recorded session shows its card; a press, on the chip or the card's
- * `스레드 열기 ›`, opens its thread. The chip of the session open beside
- * Desk is ringed (frame J). `card={false}` draws the chip alone, as inside
- * another card.
+ * side, a task handed on, a `@` the operator picked) as words, not a box
+ * (mockup v3 section 7; B26, B49, B50, D-75, D-85): its agent's mark and its
+ * name (its sidebar row's while the sidebar lists it) in the session blue,
+ * the same in the composer, the chat, a thread and its history. Its state is
+ * never drawn in the line: it shows only in the card. A session the sidebar
+ * no longer lists whose record Hide keeps reads as that record, its title and
+ * agent, one step quieter, and still opens (feedback 2, frame K); one with no
+ * record is dimmed and opens nothing (D-86). Under the pointer the name is
+ * underlined and nothing in the line moves; dwelling, or focus, shows a
+ * listed or recorded session's card; a press, on the name or the card's
+ * `스레드 열기 ›`, opens its thread. The name of the session open beside Desk
+ * stays underlined (frame J). `look="band"` takes a letter band's own color
+ * and leaves the agent's mark out, as the band draws its other side;
+ * `card={false}` draws the name alone, as inside another card.
  */
-export function SessionChip({ session, onPress, card: carded = true, className }: { session: DeskSessionRef; onPress?: () => void; card?: boolean; className?: string }) {
+export function SessionChip({ session, onPress, card: carded = true, look: drawn = "line", className }: { session: DeskSessionRef; onPress?: () => void; card?: boolean; look?: "line" | "band"; className?: string }) {
   const { t } = useInterfaceTranslation();
   const source = useContext(SourceContext);
   const facts = source?.facts(session) ?? null;
@@ -85,21 +85,20 @@ export function SessionChip({ session, onPress, card: carded = true, className }
   const ended = gone && facts.record !== null;
   const dimmed = gone && !ended;
   const known = facts !== null && (facts.listed || ended);
-  const mark = facts?.listed ? facts.mark : gone ? null : session.mark;
   const agent = known ? facts.agent_kind : gone ? null : session.agent_kind;
   // A listed session is called what its sidebar row calls it, an ended one what its record does, whatever name the words that named it wrote.
   const name = (known ? facts.name : null) ?? session.name;
-  const lead = agent === null ? null : <><StatusMark mark={mark} /><AgentMark kind={agent} /></>;
-  // The chip of the session open beside Desk wears the selection ring an output in front of Desk's desk wears (B16).
+  const lead = agent === null || drawn === "band" ? null : <AgentMark kind={agent} />;
+  // The name of the session open beside Desk stays underlined, as a hovered one is (B16, frame J).
   const shown = !dimmed && source?.open != null && source.open === (facts ? facts.pane_id : session.pane_id);
-  const look = cn("inline-flex max-w-full min-w-0 items-center gap-xxs rounded-xs px-xxs align-middle", MENTION_TONE.session, dimmed && "opacity-(--opacity-dimmed)", ended && "opacity-(--opacity-secondary)", shown && "ring-1 ring-ring", className);
+  const look = cn("inline-flex max-w-full min-w-0 items-center gap-xxs align-middle decoration-1 underline-offset-2", drawn === "band" ? "text-inherit" : "text-mention-session", dimmed && "opacity-(--opacity-dimmed)", ended && "opacity-(--opacity-secondary)", shown && "underline", className);
   const marks = { "data-desk-session-chip": name, "data-desk-session-gone": dimmed ? "true" : undefined, "data-desk-session-ended": ended ? "true" : undefined, "data-desk-session-open": shown ? "true" : undefined };
   // A session no longer listed and not recorded has nothing left to open.
   const press = dimmed ? undefined : onPress;
   const chip = !press ? (
     <span className={look} aria-label={dimmed ? t("desk.chip.gone", { name }) : undefined} {...marks}>{lead}<span className="truncate">{name}</span></span>
   ) : (
-    <Button variant="text" size="inline" className={cn(look, MENTION_PRESS.session)} aria-label={t("desk.mention.open", { name })} aria-current={shown ? "true" : undefined} {...marks} onClick={press}>
+    <Button variant="text" size="inline" className={cn(look, drawn === "band" ? "hover:text-inherit" : "hover:text-mention-session", "hover:underline")} aria-label={t("desk.mention.open", { name })} aria-current={shown ? "true" : undefined} {...marks} onClick={press}>
       {lead}
       <span className="truncate">{name}</span>
     </Button>

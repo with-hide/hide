@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { glanceSessions, agentPickable, approvalButtons, askPlace, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, outputKindOf, threadPhase, type ThreadHidePart, type ThreadTurn, sessionFacts, livePane, ENDED_JOB_STATES, jobDimmed, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
+import { glanceSessions, agentPickable, approvalButtons, askPlace, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, outputKindOf, sessionFacts, livePane, ENDED_JOB_STATES, jobDimmed, threadLines, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
 import type { AgentRow, DeskRecord } from "./snapshot";
+import { conversationTurns } from "./components/conversation/rows";
 
 /** A card by its place, or by what its agent does while it is open. */
 type Shown = DeskJob["state"] | NonNullable<DeskJob["activity"]>;
@@ -56,9 +57,9 @@ describe("a thread's lines (B25, B26)", () => {
     const peer = { name: "worker", mark: "going" as const, agent_kind: "codex" };
     const lines = threadLines(
       [{ sessionUpdate: "tool_call", toolCallId: "h", title: "Bash", kind: "execute", rawInput: { command: "hide request send worker --intent retry" } }, { sessionUpdate: "tool_call_update", toolCallId: "h", status: "completed" }],
-      { h: { kind: "letter", direction: "sent", peer, body: "다시 올려줘", target: "letter:worker" } },
+      { h: { kind: "letter", peer, body: "다시 올려줘", letterKind: null, target: "letter:worker" } },
     );
-    expect(lines).toEqual([{ kind: "hide", id: "h", part: { kind: "letter", direction: "sent", peer, body: "다시 올려줘", target: "letter:worker" }, command: "hide request send worker --intent retry" }]);
+    expect(lines).toEqual([{ kind: "hide", id: "h", part: { kind: "letter", peer, body: "다시 올려줘", letterKind: null, target: "letter:worker" }, command: "hide request send worker --intent retry" }]);
   });
 
   it("starts a new line where one speaker's message ends and the next begins", () => {
@@ -84,23 +85,6 @@ describe("what the working line says (feedback 1 c3)", () => {
     expect(deskPhase(null, "찾아보겠습니다.")).toBe("answering");
     expect(deskPhase(undefined, null)).toBe("thinking");
   });
-
-  it("says a session's newest line: its words, its call's kind, a Hide part, or thinking", () => {
-    const turn = (work: ThreadTurn["work"], answer: ThreadTurn["answer"] = []): ThreadTurn => ({ key: "t", user: null, work, last: work.at(-1) ?? null, call: null, answer, parts: [], files: 0, commands: 0 });
-    const tool = (toolKind: "read" | "edit" | "execute" | "think") => ({ kind: "tool" as const, id: toolKind, title: toolKind, toolKind, status: "in_progress" as const, input: null, subject: null, output: null, diffs: [], images: [], startedAtMs: null });
-    expect(threadPhase(undefined)).toBe("thinking");
-    expect(threadPhase(turn([tool("read")]))).toBe("files");
-    expect(threadPhase(turn([tool("edit")]))).toBe("editing");
-    expect(threadPhase(turn([tool("execute")]))).toBe("other");
-    expect(threadPhase(turn([tool("think")]))).toBe("thinking");
-    expect(threadPhase(turn([tool("read")], [{ kind: "agent", id: "a", message: null, text: "다 읽었어요", atMs: null }]))).toBe("answering");
-    // A part drawn once for its target still says what the newest call did.
-    const mission = { id: "mission-3", title: "Desk", status: "running", done: 0, total: 1, turn: null, delay: null } as Extract<ThreadHidePart, { kind: "mission" }>["mission"];
-    const looked = (id: string) => ({ kind: "hide" as const, id, part: { kind: "mission" as const, mission, target: "mission:mission-3" }, command: null });
-    const [read] = threadTurns([looked("m1"), tool("read"), looked("m2")]);
-    expect(read!.work.map((line) => line.id)).toEqual(["m1", "read"]);
-    expect(threadPhase(read)).toBe("sessions");
-  });
 });
 
 describe("a Desk message's mentions (B18)", () => {
@@ -109,30 +93,6 @@ describe("a Desk message's mentions (B18)", () => {
     const session = { kind: "session" as const, id: "agent-7", name: "mention 버튼 정리" };
     const parts = mentionParts("@project(~/work/my app my app) 정리하고 @session(agent-7 mention 버튼 정리)에 알려줘 @me", [project, session], markedMention);
     expect(parts).toEqual([project, " 정리하고 ", session, "에 알려줘 @me"]);
-  });
-});
-
-describe("a thread's turns (B25, B26)", () => {
-  it("starts a turn at each message, folds the work before the answer into counts, and keeps the parts that lead somewhere", () => {
-    const peer = { name: "worker", mark: "going" as const, agent_kind: "codex" };
-    const lines = threadLines(
-      [
-        text("user_message_chunk", "고쳐줘"),
-        text("agent_message_chunk", "볼게요"),
-        { sessionUpdate: "tool_call", toolCallId: "e", title: "a.ts", kind: "edit", status: "completed" },
-        { sessionUpdate: "tool_call", toolCallId: "x", title: "Bash", kind: "execute", status: "completed", rawInput: { command: "pnpm test" } },
-        { sessionUpdate: "tool_call", toolCallId: "p", title: "Bash", kind: "execute", rawInput: { command: "hide task set" } },
-        { sessionUpdate: "tool_call", toolCallId: "l", title: "Bash", kind: "execute", rawInput: { command: "hide request send worker" } },
-        text("agent_message_chunk", "고쳤어요"),
-        text("user_message_chunk", "고마워"),
-      ],
-      { p: { kind: "plan", plan: {} as never, target: "plan" }, l: { kind: "letter", direction: "sent", peer, body: "봐줘", target: "letter:peer" } },
-    );
-    const turns = threadTurns(lines);
-    expect(turns.map((turn) => turn.user?.text)).toEqual(["고쳐줘", "고마워"]);
-    expect(turns[0]).toMatchObject({ files: 1, commands: 1, answer: [{ text: "고쳤어요" }], parts: [{ id: "l" }] });
-    expect(turns[0]!.work.map((line) => line.id)).toEqual([lines[1]!.id, "e", "x", "p", "l"]);
-    expect(turns[1]).toMatchObject({ work: [], answer: [], parts: [] });
   });
 });
 
@@ -165,7 +125,7 @@ describe("where a question Hide found was asked (Doop N3 가)", () => {
     text("user_message_chunk", "응"),
     answer("끝났어요.", 3_000),
   ]);
-  const turns = threadTurns(lines);
+  const turns = conversationTurns(lines);
   const read = { olderLeft: false, settled: true };
 
   it("is the newest answer by the time it was found that holds the question's sentence, and where in it", () => {
@@ -183,7 +143,7 @@ describe("where a question Hide found was asked (Doop N3 가)", () => {
     // A reader that wrote the message a little differently: the message is there, so the question goes to it.
     const place = askPlace(turns, { at_unix_ms: 2_500, quote: "본인 확인을 직접 해 주실 수 있나요?" }, read);
     expect(place.state === "found" ? [place.line.text, place.line.text.slice(place.sentence!.from, place.sentence!.to)] : place.state).toEqual(["본인 확인은 직접 해 줄 수 있어?", "본인 확인은 직접 해 줄 수 있어?"]);
-    const padded = threadTurns(threadLines([text("user_message_chunk", "해줘"), answer("\n다크도 찍을까요\n", 1_000)]));
+    const padded = conversationTurns(threadLines([text("user_message_chunk", "해줘"), answer("\n다크도 찍을까요\n", 1_000)]));
     const whole = askPlace(padded, { at_unix_ms: 1_500, quote: "다크도 찍을까요?" }, read);
     expect(whole.state === "found" ? whole.line.text.slice(whole.sentence!.from, whole.sentence!.to) : whole.state).toBe("다크도 찍을까요");
     // No answer written by the time it was found: gone, whatever its sentence.
@@ -203,7 +163,7 @@ describe("where a question Hide found was asked (Doop N3 가)", () => {
 
   it("is not known while pages before remain or the record is being read, and gone once every page is read without it", () => {
     expect(askPlace(turns, { at_unix_ms: 500 }, read).state).toBe("gone");
-    expect(askPlace(threadTurns(threadLines([text("user_message_chunk", "해줘"), answer("할까요?", null)])), { at_unix_ms: 9_000 }, read).state).toBe("gone");
+    expect(askPlace(conversationTurns(threadLines([text("user_message_chunk", "해줘"), answer("할까요?", null)])), { at_unix_ms: 9_000 }, read).state).toBe("gone");
     expect(askPlace(turns, { at_unix_ms: 500 }, { olderLeft: true, settled: true }).state).toBe("unknown");
     expect(askPlace(turns, { at_unix_ms: 500 }, { olderLeft: false, settled: false }).state).toBe("unknown");
   });

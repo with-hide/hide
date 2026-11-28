@@ -322,7 +322,7 @@ export function galleryThread(): { updates: AcpSessionUpdate[]; parts: Record<st
     ],
     parts: {
       ...GALLERY_FIRST_PARTS,
-      "g2-letter": { kind: "letter", direction: "sent", peer: SESSIONS.recordNow, body: "다크 캡처 경로가 바뀌어요", target: "letter:record-now" },
+      "g2-letter": { kind: "letter", peer: SESSIONS.recordNow, body: "다크 캡처 경로가 바뀌어요", letterKind: "progress", target: "letter:record-now" },
       "g2-spawn": { kind: "spawn", session: SESSIONS.review, target: "spawn:review" },
     },
   };
@@ -367,7 +367,7 @@ export function conductorThread(jobs: Record<string, DeskJob>): { updates: AcpSe
     parts: {
       "h-plan": { kind: "plan", plan, target: "plan" },
       "h-spawn": { kind: "spawn", session: { name: jobs["1b"]!.title, mark: "going", agent_kind: jobs["1b"]!.agent_kind }, target: "spawn:1b" },
-      "h-letter": { kind: "letter", direction: "sent", peer: SESSIONS.room, body: "리뷰 지적 2개 반영해서 다시 올려줘", target: "letter:room" },
+      "h-letter": { kind: "letter", peer: SESSIONS.room, body: "리뷰 지적 2개 반영해서 다시 올려줘", letterKind: "request", target: "letter:room" },
       "h-view": { kind: "view", output: OUTPUTS.galleryPage, view_id: null, target: "view:gallery-page" },
       "h-mission": { kind: "mission", mission: MISSION, target: "mission:gallery" },
       "h-pr": { kind: "pr", number: 1905, state: "pending", target: "pr:1905" },

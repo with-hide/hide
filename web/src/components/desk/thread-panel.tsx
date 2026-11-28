@@ -3,7 +3,7 @@ import { agentAdapter } from "../../agentAdapters";
 import { catalogFor, type ProviderKind } from "../../agentPicker";
 import type { Actions } from "../../actions";
 import { refusalText, submitThreadInput } from "../../attachments";
-import type { DeskJob, DeskMention } from "../../desk";
+import type { DeskJob } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { allAgents } from "../../paneAgents";
@@ -26,7 +26,7 @@ import { SessionAgentBar } from "./desk-composer";
 import { FileDropZone } from "./file-drop";
 import { QueueGroup } from "./queue-group";
 import { SessionThreadAsk } from "./session-ask";
-import { NO_MENTIONS, ThreadView, type ThreadPartActions } from "./thread-view";
+import { ThreadView, type ThreadPartActions } from "./thread-view";
 
 import { Button } from "../ui/button";
 import { Hint } from "../ui/tooltip";
@@ -49,14 +49,13 @@ const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "u
  * shelf under it), the agent's choice card, the questions Hide found and
  * what stands in an ended session's box's place are the caller's.
  */
-export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = false, onAnswered, head = null, asks, onAsk, foot = null, asleep = null, onSessionWake, onTerminal, ...parts }: {
+export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_id ?? null, actions, startedByDesk = false, focused = false, answer = false, onAnswered, head = null, asks, onAsk, foot = null, asleep = null, onSessionWake, onTerminal, ...parts }: {
   /** The session's card; a session that is no job of Desk's opens before its card arrives, by its pane (D-87). */
   job: DeskJob | null;
   paneConversation?: boolean;
   /** The pane whose thread this is; its card's when not given. */
   paneId?: string | null;
   actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread" | "switchThread" | "observeCatalog" | "requestFileIndex" | "deskCommandsCheck" | "inputQueue" | "interruptThread" | "wakeAgent" | "wakeSleepingSession" | "askPane" | "answerPane" | "deskTerminal">;
-  mentions?: readonly DeskMention[];
   startedByDesk?: boolean;
   focused?: boolean;
   /** A press asks for this session's input box and no box has taken it yet (`답하기`, B29, or opening the conversation over its pane): the box takes the keyboard. */
@@ -319,7 +318,6 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
         lines={screen.lines}
         reading={thread === null || screen.reading}
         failure={screen.failure}
-        mentions={mentions}
         startedByDesk={startedByDesk}
         ask={ask}
         asks={asks}

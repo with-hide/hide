@@ -9,7 +9,7 @@ import { createActions } from "../actions";
 import { ThreadPanel } from "../components/desk/thread-panel";
 import { SessionHead } from "../components/desk/desk-session";
 import { TooltipProvider } from "../components/ui/tooltip";
-import type { DeskJob, DeskMention } from "../desk";
+import type { DeskJob } from "../desk";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import type { AgentRow, AgentSleep, SessionThreadSection, SnapshotRest, ThreadPage } from "../snapshot";
@@ -156,12 +156,11 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
     document.documentElement.style.setProperty("--interface-scale", params.get("scale") ?? "1");
   }, [job, missions, now, plan, state, theme, params]);
 
-  const mentions: DeskMention[] = [{ kind: "session", id: "w1:1a", name: "1a-desk-room", mark: "done", agent_kind: "codex" }];
   return (
     <TooltipProvider>
       <div className="flex h-screen min-w-0 justify-end bg-background text-foreground" data-desk-thread-scene={state}>
         <div className="flex min-h-0 w-full max-w-(--size-lane-ideal) min-w-0 flex-col border-l border-border">
-          <ThreadPanel job={job} paneId={job.pane_id} actions={actions} mentions={mentions} startedByDesk={state === "asking"} asks={state === "asking" ? ASKS : undefined} onAsk={noop} head={<SessionHead paneId={job.pane_id!} title={job.title} job={job} row={null} pane={null} machine={state === "live" ? "Mac mini" : null} disconnected={false} sleeping={state in SLEEPS} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} />} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={() => Promise.resolve(true)} />
+          <ThreadPanel job={job} paneId={job.pane_id} actions={actions} startedByDesk={state === "asking"} asks={state === "asking" ? ASKS : undefined} onAsk={noop} head={<SessionHead paneId={job.pane_id!} title={job.title} job={job} row={null} pane={null} machine={state === "live" ? "Mac mini" : null} disconnected={false} sleeping={state in SLEEPS} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} />} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={() => Promise.resolve(true)} />
         </div>
       </div>
     </TooltipProvider>
