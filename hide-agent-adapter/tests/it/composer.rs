@@ -178,6 +178,35 @@ fn grok_reads_its_suggestion_as_empty_on_either_console() {
     }
 }
 
+/// Claude Code 2.1.332 in a private 80-column, 40-row terminal with a Hide
+/// pane's `TERM` and `COLORTERM` on 2026-11-29, after a turn ended
+/// (with-hide/hide#3144): the next prompt it suggests, `CI 결과 알려줘`, put
+/// through the path its own guesses take (`prompt.suggest`), stands dim in
+/// the empty composer for Tab to take. Typing replaces it, erasing back to
+/// nothing brings it back, what is left of a word partly erased and a paste
+/// mark are drawn plain, and so is the suggestion once Tab took it.
+#[test]
+fn claude_reads_its_suggestion_as_empty_and_anything_typed_or_taken_as_text() {
+    use Verdict::{Empty, Holds};
+    let claude = AgentId::ClaudeCode.adapter().composer.supported().unwrap();
+    for (step, want) in [
+        ("0-suggested", Empty),
+        ("1-typed", Holds),
+        ("2-erased", Empty),
+        ("3-partly-erased", Holds),
+        ("4-pasted", Holds),
+        ("5-cleared", Empty),
+        ("6-taken", Holds),
+    ] {
+        let name = format!("claude-2.1.332-suggest-{step}");
+        assert_eq!(claude.judge(&screen(&name)), want, "{name}");
+    }
+    let pasted = screen("claude-2.1.332-suggest-4-pasted");
+    assert!(claude.holds(&pasted, "line one\nline two\nline three\nline four\n"));
+    let taken = screen("claude-2.1.332-suggest-6-taken");
+    assert!(claude.holds(&taken, "CI 결과 알려줘"));
+}
+
 /// omp 19.2.1 in the agent journey's pane at 80 columns on Linux on
 /// 2026-11-28 (hand run 46094104848), after its last turn ended: the next
 /// prompt it predicts stands in the empty composer as ghost text in its
