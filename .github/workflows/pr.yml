@@ -263,6 +263,7 @@ jobs:
           bash scripts/check-agent-folders.sh
           python3 scripts/check-herdr-names.py
           python3 scripts/check-adr.py
+          python3 scripts/check-retired-spellings.py
           python3 scripts/check-shell-structure.py
 
       # Reads the pull request's body, which no merge group carries, so a merge
