@@ -153,14 +153,21 @@ def share_with_daemon(runtime, environment):
 
 def agy_set_up(home):
     """What a set-up agy 1.4.2 keeps in its HOME: Gemini as its provider,
-    and its first-run onboarding (a color scheme, then a security notice)
-    finished, the status it saves in `cache/onboarding.json`. In a HOME
-    without it the onboarding opens over the first prompt and can hold it,
-    so the start answers nothing."""
-    folder = home / ".gemini/antigravity-cli"
-    private_directory(folder / "cache")
-    write_private(folder / "settings.json", json.dumps({"modelProvider": "gemini"}).encode())
-    write_private(folder / "cache/onboarding.json", json.dumps({
+    and its first-run onboarding finished (agy_onboarded)."""
+    agy_onboarded(home)
+    write_private(home / ".gemini/antigravity-cli/settings.json", json.dumps({"modelProvider": "gemini"}).encode())
+
+
+def agy_onboarded(home):
+    """agy's first-run onboarding (a color scheme, then a security notice)
+    finished, the status it saves in `cache/onboarding.json`, as an account's
+    own agy keeps it once it has been used. In a HOME without it the
+    onboarding opens over the first prompt and can hold it, so the start
+    answers nothing (agy 1.5.18 writes it unfinished in a new HOME, and its
+    notice then took a signed-in journey's later input, 2026-11-28)."""
+    folder = home / ".gemini/antigravity-cli/cache"
+    private_directory(folder)
+    write_private(folder / "onboarding.json", json.dumps({
         "onboardingComplete": True, "consumerOnboardingComplete": True,
         "enterpriseOnboardingComplete": False}).encode())
 

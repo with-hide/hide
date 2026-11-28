@@ -315,6 +315,8 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
             agent["fake_env"] = sorted(extra)
         elif kind == "claude":
             claude_config(runtime.home, root)
+        elif kind == "agy":
+            ci.agy_onboarded(runtime.home)
         elif kind == "opencode":
             keys, refusal = provider_keys(runtime, kind, opencode_model(operator, runtime.home / opencode_service.CONFIG))
             agent["key_env"] = sorted(keys)
