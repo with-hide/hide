@@ -20,6 +20,7 @@ import { planFixture } from "./PlanScene";
 
 export const DESK_THREAD_SCENES = [
   { state: "live", label: "Thread from the store: Hide's parts, a letter each way, a running command (B25, B26, D-75)" },
+  { state: "rows", label: "Thread from the store: the agent's words always, the tools between them as gray lines with a failure, a letter each way by kind, a reply, and a question with its answer (mockup v3 sections 2, 4, 5)" },
   { state: "asking", label: "Thread from the store: code blocks, and the questions Hide found above the box (Doop B4, N)" },
   { state: "failed", label: "Thread from the store: a record it cannot read (B27)" },
   { state: "held", label: "Thread from the store: its pane runs another session (B29)" },
@@ -105,6 +106,39 @@ function conductorPage(now: number, mission: string): ThreadPage {
   };
 }
 
+/**
+ * A finished session read from its record: words between runs of tools, one run with a failed command and an edit,
+ * a request sent and its reply received as bands, the session's own reply to a letter it was sent, and the agent's
+ * question with the operator's answer under it. A delivered letter is its body alone, as the reader sends it with the
+ * envelope's header taken off and its id kept in `_meta.hide.letter`.
+ */
+function rowsPage(): ThreadPage {
+  const letter = (text: string, from: string, kind: string, id: string) => ({ sessionUpdate: "user_message_chunk", content: { type: "text", text }, _meta: { hide: { origin: "letter", from, kind, letter: id } } });
+  return {
+    record: "r1", start: 0, updates: [
+      asked("파리크라상 교육 자료를 어떻게 구성할지 계획을 세워 줘."),
+      said("근거는 다 모았어요. 계획 문서를 쓸게요."),
+      { sessionUpdate: "tool_call", toolCallId: "rd", kind: "read", title: "Read presentation/AGENTS.md", status: "completed" },
+      shell("g1", "grep -E \"^#{1,3} \" 09-05-modakbul-intermediate/slides.md", "completed"),
+      { ...shell("a1", "aside repl --account u2 \"await page.goto(...)\"", "completed"), status: "failed" },
+      edit("e1", "parikrasang-plan.md", "", "# 파리크라상 교육 계획\n\n1. 입문반", "completed"),
+      said("구성안 초안을 썼어요. 리뷰를 맡길게요."),
+      shell("l1", "hide letter send agent-1a --kind request --intent plan:review --body '실행 부분 맨 앞에서도 전용 계정 확인을 해 주세요.'", "completed"),
+      letter("1) 이후로 지우기 코드가 든 테스트는 HOME=$(mktemp -d)로만 돌렸어요.\n2) 실행 부분 맨 앞에도 같은 확인을 넣었어요.", "1a-desk-room", "reply", "letter-41"),
+      said("작업자의 기록을 받았고, 제가 코드를 직접 확인했어요."),
+      shell("r1", "hide letter reply letter-41 --intent plan:thanks --body '확인했어요. 고마워요.'", "completed"),
+      { sessionUpdate: "tool_call", toolCallId: "q1", kind: "other", title: "AskUserQuestion", status: "completed", _meta: { hide: { question: [{ text: "계획 문서를 어디에 둘까요?", choices: ["presentation/", "프로젝트 맨 위"] }] } } },
+      { sessionUpdate: "tool_call_update", toolCallId: "q1", status: "completed", _meta: { hide: { answers: ["presentation/"] } } },
+      said("presentation/ 에 두었어요."),
+    ],
+    parts: {
+      l1: { kind: "letter", to: "agent-1a", body: "실행 부분 맨 앞에서도 전용 계정 확인을 해 주세요.", letter_kind: "request" },
+      r1: { kind: "letter", to: null, body: "확인했어요. 고마워요.", letter_kind: "reply", reply_to: "letter-41" },
+    },
+    sessions: { "agent-1a": { pane_id: "w1:1a", machine: "mac" }, "1a-desk-room": { pane_id: "w1:1a", machine: "mac" } },
+  };
+}
+
 function thread(pane: string, page: ThreadPage | null, extra: Partial<SessionThreadSection> = {}): SessionThreadSection {
   return { generation: 1, state: "ready", pane_id: pane, machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", tail: page, input: null, queue: null, choice: {}, ...extra };
 }
@@ -128,10 +162,11 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
 
   useLayoutEffect(() => {
     const sleep = SLEEPS[state] ?? null;
-    const own = sleep ? { ...row(job.pane_id!, job.title, "asleep", job.agent_kind), state: { working: false, asking: false }, sleep } as AgentRow : row(job.pane_id!, job.title, state === "paused" ? "done" : (job.mark ?? "going"), job.agent_kind);
+    const own = sleep ? { ...row(job.pane_id!, job.title, "asleep", job.agent_kind), state: { working: false, asking: false }, sleep } as AgentRow : row(job.pane_id!, job.title, state === "paused" || state === "rows" ? "done" : (job.mark ?? "going"), job.agent_kind);
     const rows = [row("w1:1a", "1a Desk 방", "done", "codex"), row("w1:1b", "1b 스레드 화면", "going", "codex"), own];
     const page: Record<SceneState, SessionThreadSection> = {
       live: thread(job.pane_id!, conductorPage(now, missions.mission.id)),
+      rows: thread(job.pane_id!, rowsPage()),
       asking: thread(job.pane_id!, { record: "r1", start: 0, updates: [asked("gallery 캡처를 라이트·다크로 찍어서 나란히 비교해줘"), shell("c1", "node scripts/capture-gallery.mjs --theme light", "completed"), { ...said(ASKED_IN), _meta: { hide: { at_ms: Date.now() - 10 * 60_000 } } }], parts: {}, sessions: {} }),
       failed: thread(job.pane_id!, null, { state: "failed", failure: "no_record" }),
       held: thread(job.pane_id!, conductorPage(now, missions.mission.id), { pane: "changed" }),
