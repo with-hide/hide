@@ -12297,6 +12297,8 @@ mod wire_enum_tests {
             hide_session::thread::HideCall::Letter {
                 to: String::new(),
                 body: None,
+                letter_kind: None,
+                reply_to: None,
             },
             hide_session::thread::HideCall::View {
                 view: hide_session::thread::ViewKind::File,

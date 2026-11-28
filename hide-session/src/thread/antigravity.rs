@@ -9,7 +9,7 @@ use agent_client_protocol_schema::v1::ToolKind;
 use hide_agent_adapter::HookDialect;
 use serde_json::Value;
 
-use super::build::{Call, FileDiff, Origin, Outcome, Part, Thread};
+use super::build::{AnswerKey, Call, FileDiff, Origin, Outcome, Part, Thread};
 use super::{Lines, Session};
 
 pub(super) const LINES: Lines = Lines {
@@ -157,8 +157,62 @@ fn outcome(record: &Value, content: &str) -> Outcome<'static> {
     Outcome {
         failed: exit.is_some_and(|exit| exit != 0) || record["status"] == "ERROR",
         running: false,
+        answers: answers(&output),
         output: Some(output),
         images,
         diffs: Vec::new(),
+    }
+}
+
+/// What the operator answered an `ask_question` call: its result writes one
+/// `A<n>: <answer>` line per question, from `A1`. Any other result holds
+/// none, and the builder keeps answers only for a call that asked.
+fn answers(output: &str) -> Vec<(AnswerKey, String)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (place, answer) = line.strip_prefix('A')?.split_once(": ")?;
+            let place = place.parse::<usize>().ok()?.checked_sub(1)?;
+            Some((AnswerKey::Index(place), answer.to_owned()))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_client_protocol_schema::v1::SessionUpdate;
+    use serde_json::json;
+
+    /// agy 1.5's `ask_question` step and the step that answers it, as
+    /// `transcript_full.jsonl` holds them.
+    #[test]
+    fn an_ask_question_step_carries_its_questions_and_its_result_the_answers() {
+        let session = Session {
+            header: &Value::Null,
+            path: std::path::Path::new("transcript_full.jsonl"),
+        };
+        let mut thread = Thread::default();
+        for record_ in [
+            json!({"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","tool_calls":[{"name":"ask_question","args":{"questions":[
+                {"is_multi_select":false,"options":["(Recommended) Red","Green"],"question":"Which color?"}],"toolAction":"Asking"}}]}),
+            json!({"step_index":4,"source":"MODEL","type":"GENERIC","status":"DONE","content":"Created At: 2026-11-23T00:11:02+09:00\nCompleted At: 2026-11-23T00:11:08+09:00\nA1: Green"}),
+        ] {
+            record(&record_, &session, &mut thread);
+        }
+        thread.end_turn();
+        let updates = thread
+            .into_parts()
+            .0
+            .iter()
+            .map(|update: &SessionUpdate| serde_json::to_value(update).unwrap())
+            .collect::<Vec<_>>();
+        let call = updates.iter().find(|update| update["sessionUpdate"] == "tool_call").unwrap();
+        assert_eq!(
+            call["_meta"]["hide"]["question"],
+            json!([{"text":"Which color?","choices":["(Recommended) Red","Green"]}])
+        );
+        let result = updates.iter().find(|update| update["sessionUpdate"] == "tool_call_update").unwrap();
+        assert_eq!(result["_meta"]["hide"]["answers"], json!(["Green"]));
     }
 }

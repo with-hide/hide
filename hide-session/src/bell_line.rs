@@ -112,6 +112,24 @@ pub fn is_bell_line(text: &str) -> bool {
 /// [`BELL_NAME_CHARS`] and [`BELL_CUT`]), or `None` when `text` is not one
 /// ([`is_bell_line`]).
 pub fn bell_sender(text: &str) -> Option<&str> {
+    bell_line(text).map(|line| line.sender)
+}
+
+/// What a doorbell's line says, read by the parts it was written from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BellLine<'a> {
+    /// The sender as the line carries it.
+    pub sender: &'a str,
+    /// The letter's kind, one of [`BELL_KINDS`]; `None` for the word a kind
+    /// this build does not know is written as.
+    pub kind: Option<&'static str>,
+    /// The letter's first line as the line carries it, when it has one.
+    pub summary: Option<&'a str>,
+}
+
+/// The doorbell's line `text` is, or `None` when it is not one
+/// ([`is_bell_line`]).
+pub fn bell_line(text: &str) -> Option<BellLine<'_>> {
     let text = text.trim();
     if text.chars().any(char::is_control) {
         return None;
@@ -129,9 +147,16 @@ pub fn bell_sender(text: &str) -> Option<&str> {
     // A summary may hold a kind word too; the sender ends at the first one.
     LANGUAGES
         .iter()
-        .flat_map(|words| words.kinds)
-        .filter_map(|word| head_sender(rest, word))
-        .min_by_key(|sender| sender.len())
+        .flat_map(|words| words.kinds.iter().enumerate())
+        .filter_map(|(index, word)| {
+            let (sender, summary) = head_sender(rest, word)?;
+            Some(BellLine {
+                sender,
+                kind: BELL_KINDS.get(index).copied(),
+                summary,
+            })
+        })
+        .min_by_key(|line| line.sender.len())
 }
 
 /// `rest` without a trailing ` · <N more>` in any language.
@@ -151,9 +176,9 @@ fn strip_more(rest: &str) -> Option<&str> {
         .then_some(head)
 }
 
-/// The sender of `head` when it is `<sender> <word>` or
+/// The sender and summary of `head` when it is `<sender> <word>` or
 /// `<sender> <word>: <summary>`.
-fn head_sender<'a>(head: &'a str, word: &str) -> Option<&'a str> {
+fn head_sender<'a>(head: &'a str, word: &str) -> Option<(&'a str, Option<&'a str>)> {
     let needle = format!(" {word}");
     head.match_indices(&needle).find_map(|(at, _)| {
         let sender = &head[..at];
@@ -164,7 +189,7 @@ fn head_sender<'a>(head: &'a str, word: &str) -> Option<&'a str> {
         };
         (fits(sender, BELL_NAME_CHARS)
             && summary.is_none_or(|summary| fits(summary, BELL_SUMMARY_CHARS)))
-        .then_some(sender)
+        .then_some((sender, summary))
     })
 }
 
@@ -195,6 +220,28 @@ mod tests {
             Some("Codex")
         );
         assert_eq!(bell_sender("ci-lead 보고: PR #881"), None);
+    }
+
+    #[test]
+    fn a_doorbells_line_names_its_letters_kind_and_first_line() {
+        assert_eq!(
+            bell_line("🦉 m110-mini-journey 답장: 1) 이후로 지웠어요 · 외 1통 · hide inbox"),
+            Some(BellLine {
+                sender: "m110-mini-journey",
+                kind: Some("reply"),
+                summary: Some("1) 이후로 지웠어요"),
+            })
+        );
+        assert_eq!(
+            bell_line("🦉 ci-lead report"),
+            Some(BellLine {
+                sender: "ci-lead",
+                kind: Some("report"),
+                summary: None,
+            })
+        );
+        // The word for a kind this build does not know names no kind.
+        assert_eq!(bell_line("🦉 a 편지: hi").and_then(|line| line.kind), None);
     }
 
     #[test]

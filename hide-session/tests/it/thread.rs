@@ -835,7 +835,9 @@ fn hide_and_harness_wrappers_stay_apart_from_the_operators_words() {
             ("고쳐줘", None, false),
             ("panic at main.rs:3", None, true),
             ("왜 그래?", None, false),
-            (letter, Some("letter"), false),
+            // The envelope's header and its pointer are the letter's marks;
+            // its words are the letter.
+            ("CI 다시 봐줘", Some("letter"), false),
             ("[Request interrupted by user]", Some("interrupted"), false),
         ]
     );

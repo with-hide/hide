@@ -62,9 +62,10 @@ pub mod turns;
 pub mod usage;
 
 pub use account::Accounts;
-pub use bell_line::{bell_sender, is_bell_line};
+pub use bell_line::{BellLine, bell_line, bell_sender, is_bell_line};
 pub use envelope::{
-    envelope_from_operator, envelope_header, envelope_names, envelope_sender, is_letter,
+    envelope_from_operator, envelope_header, envelope_names, envelope_sender, envelope_words,
+    is_letter,
 };
 pub use named_prs::NamedPr;
 pub use refusal::ReadRefusal;

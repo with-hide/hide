@@ -144,6 +144,7 @@ fn record(record: &Value, thread: &mut Thread) {
                     output: (!texts.is_empty()).then(|| texts.join("\n")),
                     images,
                     diffs: diffs(content),
+                    answers: Vec::new(),
                 },
             );
         }

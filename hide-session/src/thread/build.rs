@@ -85,6 +85,44 @@ pub(crate) struct Call {
     /// `_meta.hide.shell` so whoever reads its title reads it as that shell
     /// did (`crate::call_shell`); `None` for any other call.
     pub shell: Option<Syntax>,
+    /// What the call asks the operator, when it is the agent's own question
+    /// (`_meta.hide.question`). A converter names it for a shape the input
+    /// alone does not tell; otherwise the builder reads it from the input.
+    pub question: Vec<Question>,
+}
+
+/// One question an agent's own question call asks, as the thread carries
+/// it on the call (`_meta.hide.question`): its words and its choices'
+/// labels. `id` is what the agent named it by, kept only to match its answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Question {
+    pub text: String,
+    pub choices: Vec<String>,
+    pub id: Option<String>,
+}
+
+impl Question {
+    fn of(question: &crate::turns::native::RecordQuestion<'_>) -> Self {
+        Self {
+            text: question.text.to_owned(),
+            choices: question
+                .choices
+                .iter()
+                .map(|(label, _)| (*label).to_owned())
+                .collect(),
+            id: question.id.map(str::to_owned),
+        }
+    }
+}
+
+/// How a question call's result names the question an answer is for:
+/// by its words (Claude Code), by the id the agent gave it (Codex), or by
+/// its place among the call's questions, from 0 (OpenCode, Antigravity).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AnswerKey {
+    Text(String),
+    Id(String),
+    Index(usize),
 }
 
 impl Call {
@@ -100,7 +138,15 @@ impl Call {
             diffs: Vec::new(),
             status: ToolCallStatus::Pending,
             shell: None,
+            question: Vec::new(),
         }
+    }
+
+    /// The questions the call asks, for a shape [`Thread::call`] does not
+    /// read from the input itself.
+    pub fn question(mut self, questions: Vec<Question>) -> Self {
+        self.question = questions;
+        self
     }
 
     /// A command call `dialect`'s tool ran, in that tool's shell.
@@ -147,6 +193,9 @@ pub(crate) struct Outcome<'a> {
     pub output: Option<String>,
     pub images: Vec<Part<'a>>,
     pub diffs: Vec<FileDiff>,
+    /// What the operator answered, when the call asked (`_meta.hide.answers`);
+    /// a result of any other call carries none that is kept.
+    pub answers: Vec<(AnswerKey, String)>,
 }
 
 /// One plan step.
@@ -172,6 +221,9 @@ pub(crate) struct Thread {
     /// The file changes of this page's calls, so a result that replaces a
     /// call's content with its text keeps the change in front of it.
     changes: BTreeMap<String, Vec<ToolCallContent>>,
+    /// The questions this page's question calls asked, so their answers are
+    /// laid out one per question, in the order they were asked.
+    asked: BTreeMap<String, Vec<Question>>,
     /// Whether a record that should hold conversation could not be read.
     unreadable: bool,
     /// When the record being read was written, in Unix milliseconds: a
@@ -194,17 +246,15 @@ impl Thread {
         self.at_ms
     }
 
-    fn at_meta(&self) -> Option<Meta> {
-        self.at_ms.map(|at| hide_meta([("at_ms", json!(at))]))
-    }
-
-    /// A call's marks: when it started, and the shell a command ran in.
-    fn call_meta(&self, shell: Option<Syntax>) -> Option<Meta> {
+    /// A call's marks: when it started, the shell a command ran in, and what
+    /// a question call asks.
+    fn call_meta(&self, shell: Option<Syntax>, question: &[Question]) -> Option<Meta> {
         let marks = self
             .at_ms
             .map(|at| ("at_ms", json!(at)))
             .into_iter()
             .chain(shell.map(|shell| ("shell", json!(crate::call_shell::name(shell)))))
+            .chain((!question.is_empty()).then(|| ("question", question_mark(question))))
             .collect::<Vec<_>>();
         (!marks.is_empty()).then(|| hide_meta(marks))
     }
@@ -271,17 +321,39 @@ impl Thread {
                         self.skip("injected");
                         continue;
                     }
-                    // A letter names who wrote it, for the line that says
-                    // whom it came from.
-                    let from = (origin == Origin::Letter)
-                        .then(|| {
-                            crate::envelope_sender(text)
-                                .or_else(|| crate::bell_sender(text).map(str::to_owned))
-                        })
+                    // A letter names who wrote it and its kind, for the band
+                    // that says whom it came from (`_meta.hide.from`,
+                    // `_meta.hide.kind`): from its envelope, whose header
+                    // line those marks then carry, so its words are what
+                    // follow; or from the doorbell's line, whose first line
+                    // of the letter is `_meta.hide.summary`.
+                    let envelope = (origin == Origin::Letter)
+                        .then(|| crate::envelope_header(text))
                         .flatten();
+                    let bell = (origin == Origin::Letter && envelope.is_none())
+                        .then(|| crate::bell_line(text))
+                        .flatten();
+                    let letter = match (&envelope, bell) {
+                        (Some((from, kind)), _) => Some(vec![
+                            ("from", json!(from)),
+                            ("kind", json!(kind)),
+                        ]),
+                        (None, Some(bell)) => Some(
+                            [("from", json!(bell.sender))]
+                                .into_iter()
+                                .chain(bell.kind.map(|kind| ("kind", json!(kind))))
+                                .chain(bell.summary.map(|summary| ("summary", json!(summary))))
+                                .collect(),
+                        ),
+                        (None, None) => None,
+                    };
+                    let text = match envelope {
+                        Some(_) => crate::envelope_words(text).unwrap_or(text),
+                        None => text,
+                    };
                     for (piece, pasted) in crate::pasted::pasted_pieces(text) {
                         let block = text_block(piece, pasted.then_some(("pasted", json!(true))));
-                        self.letter_chunk(message, origin, from.as_deref(), block);
+                        self.letter_chunk(message, origin, letter.clone(), block);
                     }
                 }
                 _ if origin == Origin::Injected => self.skip("injected"),
@@ -325,7 +397,19 @@ impl Thread {
         );
     }
 
-    pub fn call(&mut self, call: Call) {
+    pub fn call(&mut self, mut call: Call) {
+        if call.question.is_empty()
+            && let Some(asked) = call
+                .input
+                .as_ref()
+                .and_then(crate::turns::native::record_questions)
+        {
+            call.question = asked.iter().map(Question::of).collect();
+        }
+        let question = std::mem::take(&mut call.question);
+        if !question.is_empty() {
+            self.asked.insert(call.id.clone(), question.clone());
+        }
         let locations = call
             .paths
             .iter()
@@ -346,10 +430,11 @@ impl Thread {
             } else {
                 fields.content(content)
             };
-            self.updates
-                .push(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-                    call.id, fields,
-                )));
+            let meta = (!question.is_empty())
+                .then(|| hide_meta([("question", question_mark(&question))]));
+            self.updates.push(SessionUpdate::ToolCallUpdate(
+                ToolCallUpdate::new(call.id, fields).meta(meta),
+            ));
             return;
         }
         self.updates.push(SessionUpdate::ToolCall(
@@ -360,7 +445,7 @@ impl Thread {
                 .locations(locations)
                 .content(content)
                 .raw_input(call.input)
-                .meta(self.call_meta(call.shell)),
+                .meta(self.call_meta(call.shell, &question)),
         ));
     }
 
@@ -435,14 +520,57 @@ impl Thread {
             fields.content(content)
         };
         // A result still running has not ended.
-        let ended = if status == ToolCallStatus::InProgress {
-            None
-        } else {
-            self.at_meta()
-        };
+        let marks = (status != ToolCallStatus::InProgress)
+            .then_some(self.at_ms)
+            .flatten()
+            .map(|at| ("at_ms", json!(at)))
+            .into_iter()
+            .chain(self.answer_mark(id, &outcome.answers))
+            .collect::<Vec<_>>();
+        let meta = (!marks.is_empty()).then(|| hide_meta(marks));
         self.updates.push(SessionUpdate::ToolCallUpdate(
-            ToolCallUpdate::new(id.to_owned(), fields).meta(ended),
+            ToolCallUpdate::new(id.to_owned(), fields).meta(meta),
         ));
+    }
+
+    /// What the operator answered a question call that came back before its
+    /// answers did (Codex's `request_user_input_async`), from the later
+    /// record that holds them; nothing for a call this page did not see ask.
+    pub fn answers(&mut self, id: &str, answers: &[(AnswerKey, String)]) {
+        if let Some(mark) = self.answer_mark(id, answers) {
+            self.updates.push(SessionUpdate::ToolCallUpdate(
+                ToolCallUpdate::new(id.to_owned(), ToolCallUpdateFields::new())
+                    .meta(hide_meta([mark])),
+            ));
+        }
+    }
+
+    /// `_meta.hide.answers` for call `id`: one answer per question it asked,
+    /// in their order, `null` where none came; `None` when the call asked
+    /// nothing or no answer names one of its questions.
+    fn answer_mark(
+        &self,
+        id: &str,
+        answers: &[(AnswerKey, String)],
+    ) -> Option<(&'static str, Value)> {
+        let questions = self.asked.get(id)?;
+        let laid = questions
+            .iter()
+            .enumerate()
+            .map(|(index, question)| {
+                answers.iter().find_map(|(key, answer)| {
+                    let names = match key {
+                        AnswerKey::Text(text) => *text == question.text,
+                        AnswerKey::Id(id) => question.id.as_ref() == Some(id),
+                        AnswerKey::Index(at) => *at == index,
+                    };
+                    names.then(|| capped(answer).0)
+                })
+            })
+            .collect::<Vec<_>>();
+        laid.iter()
+            .any(Option::is_some)
+            .then(|| ("answers", json!(laid)))
     }
 
     pub fn plan(&mut self, steps: impl IntoIterator<Item = Step>) {
@@ -461,19 +589,22 @@ impl Thread {
         self.updates.push(SessionUpdate::Plan(Plan::new(entries)));
     }
 
+    /// A piece of a person's message; a letter's carries the marks its
+    /// sender and kind were read into (`Thread::user`).
     fn letter_chunk(
         &mut self,
         message: Option<&str>,
         origin: Origin,
-        from: Option<&str>,
+        letter: Option<Vec<(&'static str, Value)>>,
         block: ContentBlock,
     ) {
-        let Some(from) = from else {
+        let Some(letter) = letter else {
             return self.chunk(SessionUpdate::UserMessageChunk, message, origin, block);
         };
+        let marks = [("origin", json!("letter"))].into_iter().chain(letter).collect();
         let chunk = ContentChunk::new(block)
             .message_id(message.map(str::to_owned).map(Into::into))
-            .meta(self.message_meta(vec![("origin", json!("letter")), ("from", json!(from))]));
+            .meta(self.message_meta(marks));
         self.updates.push(SessionUpdate::UserMessageChunk(chunk));
     }
 
@@ -573,6 +704,30 @@ fn diff_content(diff: FileDiff) -> ToolCallContent {
     })
 }
 
+/// What a question call asks, as `_meta.hide.question` carries it: each
+/// question's words and its choices' labels, within the caps a question
+/// card keeps (`turns::CHOICE_LIMIT` questions and choices each).
+fn question_mark(questions: &[Question]) -> Value {
+    let limit = crate::turns::CHOICE_LIMIT;
+    Value::Array(
+        questions
+            .iter()
+            .take(limit)
+            .map(|question| {
+                json!({
+                    "text": capped(&question.text).0,
+                    "choices": question
+                        .choices
+                        .iter()
+                        .take(limit)
+                        .map(|choice| capped(choice).0)
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect(),
+    )
+}
+
 /// `text` within [`TEXT_LIMIT_CHARS`], and whether it was cut.
 fn capped(text: &str) -> (String, bool) {
     match text.char_indices().nth(TEXT_LIMIT_CHARS) {
@@ -645,6 +800,82 @@ mod tests {
         assert!(image.data.is_empty());
         assert_eq!(image.mime_type, "image/png");
         assert_eq!(image.meta.unwrap()["hide"]["truncated"], json!(true));
+    }
+
+    fn values(thread: Thread) -> Vec<Value> {
+        thread
+            .into_parts()
+            .0
+            .iter()
+            .map(|update| serde_json::to_value(update).unwrap())
+            .collect()
+    }
+
+    /// A letter delivered in its envelope reads as its words, its header's
+    /// sender and kind as marks; a doorbell's line keeps its text and marks
+    /// the letter's kind and first line it names.
+    #[test]
+    fn a_letter_carries_its_sender_and_kind_and_an_envelope_its_words_alone() {
+        let mut thread = Thread::default();
+        thread.user(
+            None,
+            Origin::Operator,
+            [Part::Text("Hide letter letter-1 from ci-lead (claude) [request]\nCI 다시 봐줘\n둘째 줄\nFull letter: hide letter show letter-1\n")],
+        );
+        thread.user(
+            None,
+            Origin::Operator,
+            [Part::Text("🦉 m110 답장: 1) 지웠어요 · hide inbox")],
+        );
+        let updates = values(thread);
+        assert_eq!(updates[0]["content"]["text"], json!("CI 다시 봐줘\n둘째 줄"));
+        assert_eq!(updates[0]["_meta"]["hide"]["from"], json!("ci-lead"));
+        assert_eq!(updates[0]["_meta"]["hide"]["kind"], json!("request"));
+        assert_eq!(updates[1]["content"]["text"], json!("🦉 m110 답장: 1) 지웠어요 · hide inbox"));
+        assert_eq!(updates[1]["_meta"]["hide"]["origin"], json!("letter"));
+        assert_eq!(updates[1]["_meta"]["hide"]["kind"], json!("reply"));
+        assert_eq!(updates[1]["_meta"]["hide"]["summary"], json!("1) 지웠어요"));
+    }
+
+    /// An answer comes back by the question's words, its id or its place,
+    /// and is laid out one per question in the order they were asked.
+    #[test]
+    fn a_question_calls_answers_are_laid_out_by_question_whatever_names_them() {
+        let question = |text: &str, id: Option<&str>| Question {
+            text: text.to_owned(),
+            choices: vec!["a".to_owned()],
+            id: id.map(str::to_owned),
+        };
+        for (key, laid) in [
+            (AnswerKey::Text("two".to_owned()), json!([null, "x"])),
+            (AnswerKey::Id("q1".to_owned()), json!(["x", null])),
+            (AnswerKey::Index(1), json!([null, "x"])),
+        ] {
+            let mut thread = Thread::default();
+            thread.call(
+                Call::new("c", "ask", ToolKind::Other)
+                    .question(vec![question("one", Some("q1")), question("two", None)]),
+            );
+            thread.result(
+                "c",
+                Outcome {
+                    answers: vec![(key.clone(), "x".to_owned())],
+                    ..Outcome::default()
+                },
+            );
+            assert_eq!(values(thread)[1]["_meta"]["hide"]["answers"], laid, "{key:?}");
+        }
+        // A call that asked nothing keeps no answer, whatever its result says.
+        let mut thread = Thread::default();
+        thread.call(Call::new("c", "run", ToolKind::Execute));
+        thread.result(
+            "c",
+            Outcome {
+                answers: vec![(AnswerKey::Index(0), "A1".to_owned())],
+                ..Outcome::default()
+            },
+        );
+        assert!(values(thread)[1]["_meta"].is_null());
     }
 
     fn result_ids(thread: Thread) -> (Vec<String>, BTreeMap<&'static str, usize>) {

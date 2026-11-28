@@ -16,7 +16,7 @@ use hide_agent_adapter::HookDialect;
 use rusqlite::{Connection, params};
 use serde_json::Value;
 
-use super::build::{Call, FileDiff, Origin, Outcome, Part, Step, Thread};
+use super::build::{AnswerKey, Call, FileDiff, Origin, Outcome, Part, Step, Thread};
 use super::{THREAD_PAGE_BYTES, THREAD_TAIL_BYTES, ThreadCursor, ThreadPage, ThreadRead};
 use crate::opencode::{Owner, Schema, prove, sql_refusal, with_read};
 use crate::{ReadRefusal, SessionReadScope};
@@ -475,6 +475,16 @@ fn tool(piece: &Value, thread: &mut Thread) {
                 .filter_map(file)
                 .collect(),
             diffs: Vec::new(),
+            // A `question` call keeps the operator's picks by question.
+            answers: state["metadata"]["answers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .filter_map(|(at, answer)| {
+                    Some((AnswerKey::Index(at), crate::turns::native::answer_text(answer)?))
+                })
+                .collect(),
         },
     );
     thread.at(message_at);

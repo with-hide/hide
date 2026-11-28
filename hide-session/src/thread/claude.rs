@@ -7,7 +7,7 @@ use hide_agent_adapter::HookDialect;
 use serde_json::Value;
 
 use super::Lines;
-use super::build::{Call, FileDiff, Origin, Outcome, Part, Step, Thread};
+use super::build::{AnswerKey, Call, FileDiff, Origin, Outcome, Part, Step, Thread};
 
 pub(super) const LINES: Lines = Lines {
     header: None,
@@ -215,6 +215,18 @@ fn result(record: &Value, block: &Value, thread: &mut Thread) {
     let failed = block["is_error"] == true;
     let mut outcome = Outcome {
         failed,
+        // An `AskUserQuestion` answer, each by the words of its question.
+        answers: structured["answers"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(question, answer)| {
+                Some((
+                    AnswerKey::Text(question.clone()),
+                    crate::turns::native::answer_text(answer)?,
+                ))
+            })
+            .collect(),
         ..Outcome::default()
     };
     let mut texts = Vec::new();
@@ -264,4 +276,55 @@ fn shown<'a>(path: &'a str, cwd: &str) -> &'a str {
     path.strip_prefix(cwd)
         .and_then(|rest| rest.strip_prefix(['/', '\\']))
         .unwrap_or(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_client_protocol_schema::v1::SessionUpdate;
+    use serde_json::json;
+
+    fn read(records: &[Value]) -> Vec<Value> {
+        let mut thread = Thread::default();
+        for record_ in records {
+            record(record_, &mut thread);
+        }
+        let (updates, _) = thread.into_parts();
+        updates
+            .iter()
+            .map(|update: &SessionUpdate| serde_json::to_value(update).unwrap())
+            .collect()
+    }
+
+    /// Claude Code 2.1.332's `AskUserQuestion` call and the record of its
+    /// answer, as a session file holds them.
+    #[test]
+    fn an_ask_user_question_call_carries_its_questions_and_its_result_their_answers() {
+        let updates = read(&[
+            json!({"type":"assistant","uuid":"a1","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[
+                {"question":"Which folder?","header":"Folder","multiSelect":false,"options":[{"label":"New (Recommended)","description":"d"},{"label":"Old","description":"e"}]},
+                {"question":"Deploy?","header":"Deploy","multiSelect":false,"options":[{"label":"Yes","description":"y"},{"label":"No","description":"n"}]}]}}]}}),
+            json!({"type":"user","uuid":"u1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"The user answered: \"Which folder?\"=\"Old\"."}]},
+                "toolUseResult":{"questions":[],"answers":{"Which folder?":"Old"}}}),
+        ]);
+        assert_eq!(
+            updates[0]["_meta"]["hide"]["question"],
+            json!([{"text":"Which folder?","choices":["New (Recommended)","Old"]},{"text":"Deploy?","choices":["Yes","No"]}])
+        );
+        assert_eq!(updates[1]["_meta"]["hide"]["answers"], json!(["Old", null]));
+    }
+
+    #[test]
+    fn a_refused_question_carries_no_answers_and_another_call_no_question() {
+        let updates = read(&[
+            json!({"type":"assistant","uuid":"a1","message":{"id":"m1","content":[
+                {"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"Go?","options":[{"label":"Yes"}]}]}},
+                {"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls"}}]}}),
+            json!({"type":"user","uuid":"u1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"rejected"}]},
+                "toolUseResult":"User rejected tool use"}),
+        ]);
+        assert!(updates[1]["_meta"]["hide"].get("question").is_none());
+        assert_eq!(updates[2]["status"], json!("failed"));
+        assert!(updates[2]["_meta"]["hide"].get("answers").is_none());
+    }
 }

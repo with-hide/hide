@@ -39,6 +39,31 @@ pub fn envelope_from_operator(text: &str) -> bool {
         .is_some_and(|from| from == "operator (operator)")
 }
 
+/// The words of a letter delivered in its envelope: what follows the first
+/// header line, without the `Full letter: hide … show …` pointer
+/// `mailbox::pull` ends it with. A batch keeps the later letters' headers.
+/// `None` when `text` is no envelope ([`envelope_header`]).
+pub fn envelope_words(text: &str) -> Option<&str> {
+    envelope_header(text)?;
+    let words = text
+        .trim_start()
+        .split_once('\n')
+        .map_or("", |(_, words)| words)
+        .trim();
+    Some(match words.rsplit_once('\n') {
+        Some((head, last)) if pointer(last) => head.trim_end(),
+        None if pointer(words) => "",
+        _ => words,
+    })
+}
+
+/// The line `mailbox::pull` ends a letter's preview with.
+fn pointer(line: &str) -> bool {
+    line.trim()
+        .strip_prefix("Full letter: hide ")
+        .is_some_and(|rest| rest.contains(" show "))
+}
+
 /// The canonical envelope sender and kind, for work-giver attribution.
 pub fn envelope_header(text: &str) -> Option<(String, String)> {
     let first = text.trim_start().lines().next()?.trim();

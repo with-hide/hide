@@ -21,8 +21,17 @@ pub enum HideCall {
         agent_id: Option<String>,
     },
     /// `hide letter send <to>`: a letter, with its body when it was written
-    /// on the command line.
-    Letter { to: String, body: Option<String> },
+    /// on the command line, its `--kind` as typed (`request`, `report`,
+    /// `progress`, `block`; `letter_kind`, since `kind` names the part) and
+    /// the letter it answers (`--reply-to`).
+    Letter {
+        to: String,
+        body: Option<String>,
+        #[serde(default)]
+        letter_kind: Option<String>,
+        #[serde(default)]
+        reply_to: Option<String>,
+    },
     /// `hide browser|file|diff open <target>`: a View the session opened,
     /// by the target as typed, and the View id its answer named when the
     /// call printed one (`opened_view`), which is how the View is found;
@@ -122,6 +131,8 @@ fn read(args: &[String]) -> Option<HideCall> {
         ("letter", Some("send")) => Some(HideCall::Letter {
             to: positional(tail, &["--intent", "--body", "--kind", "--reply-to"])?.to_owned(),
             body: option(tail, "--body"),
+            letter_kind: option(tail, "--kind"),
+            reply_to: option(tail, "--reply-to"),
         }),
         ("browser" | "file" | "diff", Some("open")) => Some(HideCall::View {
             view: match verb.as_str() {
@@ -173,10 +184,12 @@ fn positional<'a>(args: &'a [String], valued: &[&str]) -> Option<&'a str> {
 mod tests {
     use super::*;
 
-    fn letter(to: &str, body: Option<&str>) -> HideCall {
+    fn letter(to: &str, body: Option<&str>, kind: Option<&str>) -> HideCall {
         HideCall::Letter {
             to: to.to_owned(),
             body: body.map(str::to_owned),
+            letter_kind: kind.map(str::to_owned),
+            reply_to: None,
         }
     }
 
@@ -201,15 +214,24 @@ mod tests {
             ),
             (
                 "hide letter send agent-7 --kind report --intent m:a --body \"끝났어요\"",
-                Some(letter("agent-7", Some("끝났어요"))),
+                Some(letter("agent-7", Some("끝났어요"), Some("report"))),
             ),
             // The spelling letters had before `hide letter`, which session
             // files keep for good.
             (
                 "hide request send agent-7 --kind report --intent m:a --body \"끝났어요\"",
-                Some(letter("agent-7", Some("끝났어요"))),
+                Some(letter("agent-7", Some("끝났어요"), Some("report"))),
             ),
             ("hide letter show letter-3", None),
+            (
+                "hide letter send agent-7 --kind=request --reply-to letter-5 --intent m:a --body ok",
+                Some(HideCall::Letter {
+                    to: "agent-7".to_owned(),
+                    body: Some("ok".to_owned()),
+                    letter_kind: Some("request".to_owned()),
+                    reply_to: Some("letter-5".to_owned()),
+                }),
+            ),
             (
                 "hide browser open --wait http://localhost:5173",
                 Some(HideCall::View {
@@ -281,7 +303,7 @@ mod tests {
                 "HIDE_CAP_REF='/Users/me/.hide/state/pane-capabilities/a.json' '/Applications/hide.app/Contents/Resources/hide' letter send agent-18238 --kind progress --intent m:t --body \"계획\"",
                 Syntax::Posix
             ),
-            Some(letter("agent-18238", Some("계획")))
+            Some(letter("agent-18238", Some("계획"), Some("progress")))
         );
         assert_eq!(
             hide_call(
@@ -295,7 +317,7 @@ mod tests {
                 "hide request send --body=hi --intent k agent-3",
                 Syntax::Posix
             ),
-            Some(letter("agent-3", Some("hi")))
+            Some(letter("agent-3", Some("hi"), None))
         );
         // PowerShell runs the bundled `hide` with `&`, and `\` is no escape.
         assert_eq!(

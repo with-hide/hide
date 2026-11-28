@@ -17,7 +17,7 @@ use hide_agent_adapter::HookDialect;
 use serde_json::Value;
 
 use super::Lines;
-use super::build::{Call, FileDiff, Origin, Outcome, Part, Step, Thread};
+use super::build::{AnswerKey, Call, FileDiff, Origin, Outcome, Part, Question, Step, Thread};
 
 pub(super) const LINES: Lines = Lines {
     header: Some(|record| record["type"] == "session_meta"),
@@ -48,6 +48,17 @@ fn message(payload: &Value, thread: &mut Thread) {
     };
     match payload["role"].as_str() {
         Some("user") => {
+            // The operator's answers to an async question come as a message
+            // Codex writes for the model: they belong to the call that asked.
+            if let Some(replies) = content
+                .iter()
+                .find_map(|part| part["text"].as_str())
+                .and_then(crate::turns::native::async_reply_answers)
+            {
+                for (call, at, answer) in replies {
+                    thread.answers(&call, &[(AnswerKey::Index(at), answer)]);
+                }
+            }
             let parts = content.iter().filter_map(user_part).collect::<Vec<_>>();
             thread.user(id, Origin::Operator, parts);
         }
@@ -296,6 +307,11 @@ fn legacy(kind: &str, payload: &Value, cwd: &str, thread: &mut Thread) {
                         .title(command)
                         .shell(HookDialect::Codex)
                 }
+                // Asked with a `title` and plain choices: a shape the
+                // builder does not read from the input itself.
+                "request_user_input_async" => {
+                    Call::new(id, name, ToolKind::Other).question(async_questions(&arguments))
+                }
                 "view_image" => {
                     let path = arguments["path"].as_str().unwrap_or_default();
                     Call::new(id, name, ToolKind::Read)
@@ -343,6 +359,28 @@ fn legacy(kind: &str, payload: &Value, cwd: &str, thread: &mut Thread) {
     }
 }
 
+/// The questions of a `request_user_input_async` call.
+fn async_questions(arguments: &Value) -> Vec<Question> {
+    arguments["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|question| {
+            Some(Question {
+                text: question["title"].as_str()?.to_owned(),
+                choices: question["options"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect(),
+                id: None,
+            })
+        })
+        .collect()
+}
+
 fn plan(arguments: &Value) -> Vec<Step> {
     arguments["plan"]
         .as_array()
@@ -365,6 +403,21 @@ fn output(id: &str, output: &Value, thread: &mut Thread) {
     let mut outcome = Outcome::default();
     let text = match output {
         Value::String(text) => match serde_json::from_str::<Value>(text) {
+            // A `request_user_input` answer: each question's picks by its id.
+            Ok(structured) if structured["answers"].is_object() => {
+                outcome.answers = structured["answers"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(id, picked)| {
+                        Some((
+                            AnswerKey::Id(id.clone()),
+                            crate::turns::native::answer_text(&picked["answers"])?,
+                        ))
+                    })
+                    .collect();
+                text.clone()
+            }
             Ok(structured) if structured["output"].is_string() => {
                 outcome.failed = structured["metadata"]["exit_code"]
                     .as_i64()
@@ -491,6 +544,39 @@ mod tests {
     fn item(kind: &str, mut payload: Value) -> Value {
         payload["type"] = json!(kind);
         json!({"type": "response_item", "payload": payload})
+    }
+
+    /// `request_user_input` answers by each question's id; the async form
+    /// asks with a `title` and is answered by a later reply message.
+    #[test]
+    fn a_question_call_carries_its_questions_and_its_answers_by_either_form() {
+        let reply = format!(
+            "<send_user_message_question_reply>\n{}\n</send_user_message_question_reply>",
+            json!([{"answer":"운영","question":"q","questionItemId":json!(["request_user_input_async","c2",0]).to_string()}])
+        );
+        let updates = read(&[
+            item("function_call", json!({"call_id":"c1","name":"request_user_input","arguments":json!({"questions":[
+                {"id":"color","header":"색","question":"버튼 색은?","options":[{"label":"Red","description":"r"},{"label":"Green","description":"g"}]}]}).to_string()})),
+            item("function_call_output", json!({"call_id":"c1","output":"{\"answers\":{\"color\":{\"answers\":[\"Green\"]}}}"})),
+            item("function_call", json!({"call_id":"c2","name":"request_user_input_async","arguments":json!({"questions":[
+                {"title":"배포 대상을 골라주세요","options":["미리보기","운영"]}]}).to_string()})),
+            item("function_call_output", json!({"call_id":"c2","output":"{\"accepted\":true}"})),
+            item("message", json!({"role":"user","content":[{"type":"input_text","text":reply}]})),
+        ]);
+        assert_eq!(
+            updates[0]["_meta"]["hide"]["question"],
+            json!([{"text":"버튼 색은?","choices":["Red","Green"]}])
+        );
+        assert_eq!(updates[1]["_meta"]["hide"]["answers"], json!(["Green"]));
+        assert_eq!(
+            updates[2]["_meta"]["hide"]["question"],
+            json!([{"text":"배포 대상을 골라주세요","choices":["미리보기","운영"]}])
+        );
+        assert!(updates[3]["_meta"]["hide"].get("answers").is_none());
+        assert_eq!(updates[4]["toolCallId"], json!("c2"));
+        assert_eq!(updates[4]["_meta"]["hide"]["answers"], json!(["운영"]));
+        // The reply is the model's, not a message of the operator's.
+        assert_eq!(updates.len(), 5);
     }
 
     /// A legacy rollout's command and patch, in the shapes of

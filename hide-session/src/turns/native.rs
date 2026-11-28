@@ -30,48 +30,114 @@ pub(crate) fn id(value: Option<&Value>) -> Result<Option<String>, SkipReason> {
 }
 
 pub(crate) fn question_content(input: &Value) -> Option<UserTurnContent> {
-    let questions = input.get("questions")?.as_array()?;
-    if questions.is_empty()
-        || questions
-            .iter()
-            .any(|question| question.get("question").and_then(Value::as_str).is_none())
-    {
-        return None;
-    }
-    if questions.iter().any(|question| {
-        question.get("options").is_some_and(|options| {
-            options.as_array().is_none_or(|options| {
-                options
-                    .iter()
-                    .any(|choice| choice.get("label").and_then(Value::as_str).is_none())
-            })
-        })
-    }) {
-        return None;
-    }
-    Some(UserTurnContent::questions(questions.iter().map(
-        |question| {
-            let choices = question
-                .get("options")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|choice| {
-                    let label = choice.get("label").and_then(Value::as_str)?;
-                    Some((label, choice.get("description").and_then(Value::as_str)))
-                });
-            Asked {
-                text: question["question"]
-                    .as_str()
-                    .expect("question texts checked"),
-                choices,
-                // Claude Code's `multiSelect`, OpenCode's `multiple`.
-                several: ["multiSelect", "multiple"]
-                    .iter()
-                    .any(|key| question.get(key).and_then(Value::as_bool) == Some(true)),
-            }
+    let questions = record_questions(input)?;
+    Some(UserTurnContent::questions(questions.into_iter().map(
+        |question| Asked {
+            text: question.text,
+            choices: question.choices,
+            several: question.several,
         },
     )))
+}
+
+/// One question an agent's own question call asks, as its record writes
+/// it, before any cap.
+pub(crate) struct RecordQuestion<'a> {
+    /// The id the agent gave the question (Codex's `id`), by which its
+    /// answer may come back.
+    pub id: Option<&'a str>,
+    pub text: &'a str,
+    /// Each choice's label and the note under it.
+    pub choices: Vec<(&'a str, Option<&'a str>)>,
+    pub several: bool,
+}
+
+/// The questions a question call's input asks, in each shape an agent
+/// writes: `questions`, each with its text as `question` and its choices as
+/// `options` of `{label, description}` (Claude Code, Codex, OpenCode, omp)
+/// or of plain strings (Antigravity's `ask_question`). `None` when the input
+/// asks none, or any question lacks its text or holds a choice of neither
+/// shape: such an input is not a question call.
+pub(crate) fn record_questions(input: &Value) -> Option<Vec<RecordQuestion<'_>>> {
+    let questions = input.get("questions")?.as_array()?;
+    if questions.is_empty() {
+        return None;
+    }
+    questions
+        .iter()
+        .map(|question| {
+            let text = question.get("question")?.as_str()?;
+            let choices = match question.get("options") {
+                None => Vec::new(),
+                Some(options) => options
+                    .as_array()?
+                    .iter()
+                    .map(|choice| match choice {
+                        Value::String(label) => Some((label.as_str(), None)),
+                        choice => Some((
+                            choice.get("label")?.as_str()?,
+                            choice.get("description").and_then(Value::as_str),
+                        )),
+                    })
+                    .collect::<Option<Vec<_>>>()?,
+            };
+            Some(RecordQuestion {
+                id: question.get("id").and_then(Value::as_str),
+                text,
+                choices,
+                // Claude Code's `multiSelect`, OpenCode's `multiple`,
+                // Antigravity's `is_multi_select`.
+                several: ["multiSelect", "multiple", "is_multi_select"]
+                    .iter()
+                    .any(|key| question.get(key).and_then(Value::as_bool) == Some(true)),
+            })
+        })
+        .collect()
+}
+
+/// What the operator answered each question of a Codex
+/// `request_user_input_async` call, from one reply message's text: the call,
+/// the question's place in it, and the answer. `None` when the text is not
+/// such a reply or its body cannot be read.
+pub(crate) fn async_reply_answers(text: &str) -> Option<Vec<(String, usize, String)>> {
+    let body = text.trim_start().strip_prefix(ASYNC_REPLY_OPEN)?;
+    let body = body.rsplit_once(ASYNC_REPLY_CLOSE).map_or(body, |(body, _)| body);
+    let Value::Array(replies) = serde_json::from_str::<Value>(body.trim()).ok()? else {
+        return None;
+    };
+    Some(
+        replies
+            .iter()
+            .filter_map(|reply| {
+                let item = match reply.get("questionItemId")? {
+                    Value::String(item) => serde_json::from_str::<Value>(item).ok()?,
+                    item => item.clone(),
+                };
+                let item = item.as_array()?;
+                if item.first()?.as_str()? != ASYNC_QUESTION_TOOL {
+                    return None;
+                }
+                let call = item.get(1)?.as_str()?.to_owned();
+                let question = usize::try_from(item.get(2)?.as_u64()?).ok()?;
+                Some((call, question, answer_text(reply.get("answer")?)?))
+            })
+            .collect(),
+    )
+}
+
+/// An answer as one line: a list of picked choices joined by commas.
+pub(crate) fn answer_text(answer: &Value) -> Option<String> {
+    match answer {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(picked) => Some(
+            picked
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        _ => None,
+    }
 }
 
 /// Codex 0.162.1 asks with this tool instead of `request_user_input`: it

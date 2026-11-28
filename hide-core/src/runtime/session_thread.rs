@@ -2063,6 +2063,8 @@ mod tests {
             Some(&HideCall::Letter {
                 to: "agent-7".to_owned(),
                 body: Some("hi".to_owned()),
+                letter_kind: None,
+                reply_to: None,
             })
         );
 
