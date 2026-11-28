@@ -325,10 +325,10 @@ if name == 'playwright' and '--list' in args:
         self.assertTrue(all("--grep-invert" not in call for call in calls))
 
     def stage_repeat_scripts(self):
-        # `ci-repeat.py` reads `src` test declarations through `rust_scan.py`
-        # and weighs web tests through `e2e-shard.py`, so a staged run needs
-        # all three.
-        for name in ("ci-repeat.py", "rust_scan.py", "e2e-shard.py"):
+        # `ci-repeat.py` reads `src` test declarations through `rust_scan.py`,
+        # weighs web tests through `e2e-shard.py` and matches the known flaky
+        # tests through `ci-flaky-report.py`, so a staged run needs all four.
+        for name in ("ci-repeat.py", "rust_scan.py", "e2e-shard.py", "ci-flaky-report.py"):
             shutil.copyfile(ROOT / "scripts" / name, self.root / "scripts" / name)
 
     def repeat_step(self, specs, repeat, shard, parts="1"):

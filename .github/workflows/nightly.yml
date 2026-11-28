@@ -274,10 +274,12 @@ jobs:
     # pr.yml's `plan` reads the earlier runs it may reuse; a called workflow
     # gets no permission its caller does not grant, and GitHub refuses to
     # start the whole nightly without it. Its jobs file a flaky test with the
-    # development issues App's token, not this one.
+    # development issues App's token, not this one; its `repeat` lane reads the
+    # open `quarantine` issues with this one (`issues: read`).
     permissions:
       contents: read
       actions: read
+      issues: read
 
   # The Linux and Windows packages every day, the macOS app with them on an
   # `all` run.

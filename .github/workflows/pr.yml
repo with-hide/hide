@@ -157,6 +157,11 @@ jobs:
       repeat-web: ${{ steps.plan.outputs.repeat-web }}
       repeat-units: ${{ steps.plan.outputs.repeat-units }}
       repeat-rust: ${{ steps.plan.outputs.repeat-rust }}
+      # The changed Rust files that selected those modules (a JSON list of
+      # paths): a known flaky test declared in one is repeated, and one only
+      # a parent module or helper reached is left out (docs/TESTING.md, "The
+      # repeat lane").
+      repeat-rust-files: ${{ steps.plan.outputs.repeat-rust-files }}
       # Whether this run takes a macOS runner: `true` for main's push run, the
       # nightly and a pull request that changes a macOS path
       # (`scripts/ci-plan.py`, MACOS_PATHS); otherwise the plan leaves the
@@ -550,12 +555,16 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'repeat')
     uses: ./.github/workflows/repeat.yml
+    # `issues: read`: the lane reads the open `quarantine` issues to leave out
+    # the known flaky tests the pull request did not change.
     permissions:
       contents: read
+      issues: read
     with:
       web: ${{ needs.plan.outputs.repeat-web }}
       units: ${{ needs.plan.outputs.repeat-units }}
       rust: ${{ needs.plan.outputs.repeat-rust }}
+      rust-files: ${{ needs.plan.outputs.repeat-rust-files }}
 
   # The OS contract's Linux and Windows legs (see os-contract.yml), for any
   # change to what differs by system; its Windows leg only when `plan` says

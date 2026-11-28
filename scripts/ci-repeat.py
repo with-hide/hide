@@ -54,6 +54,14 @@ Two budgets, because a web test costs seconds and a unit or Rust test does not:
   changes more than `BUDGET / MIN_REPEAT` of them runs over the budget,
   because a repeat below three shows too little.
 
+A known flaky test, one an open `quarantine` issue tracks, is left out of a
+pull request's Rust repeat when the pull request does not change the file that
+declares it: a module above it or a shared helper selected it, and the `rust`
+lane still runs it with its one retry. A change to its own file, its fix
+included, repeats it with no retry like any other test
+(`leave_out_known_flaky`). A web spec or unit test file is selected only by a
+change to itself, so each of its tests is always repeated.
+
 The count job's listing builds the changed crates' tests once; it packs each
 target it listed into a nextest archive with the same cargo arguments
 (`rust_archive`), so cargo only packs what it built, and the Rust leg runs
@@ -84,6 +92,11 @@ _RUST_SCAN.loader.exec_module(rust_scan)
 _E2E_SHARD = importlib.util.spec_from_file_location("e2e_shard", Path(__file__).resolve().parent / "e2e-shard.py")
 e2e_shard = importlib.util.module_from_spec(_E2E_SHARD)
 _E2E_SHARD.loader.exec_module(e2e_shard)
+# The `quarantine` issues and how one is matched to a test: the flaky report
+# files them, and the repeat lane reads them with the same matcher.
+_FLAKY_REPORT = importlib.util.spec_from_file_location("ci_flaky_report", Path(__file__).resolve().parent / "ci-flaky-report.py")
+flaky_report = importlib.util.module_from_spec(_FLAKY_REPORT)
+_FLAKY_REPORT.loader.exec_module(flaky_report)
 
 BUDGET = 200
 # The web specs' budget, in the recorded seconds of one test run each.
@@ -118,6 +131,13 @@ UNIT_TEST = re.compile(r"^(?P<package>web|desktop|mobile)/(?P<file>.+\.(?:test\.
 
 PACKAGE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 MODULE = re.compile(r"^(?:\*|[a-z0-9_]+(?:::[a-z0-9_]+)*)$")
+# A nextest test name: its module path and its function.
+TEST_NAME = re.compile(r"[A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*")
+# The filterset a Rust plan entry runs: the selected modules, the known flaky
+# tests left out of them, both, or neither (the whole target).
+MODULES_FILTER = r"test\(/\^\([a-z0-9_:|]+\)::/\)"
+LEFT_OUT_FILTER = r"not \(test\(=[A-Za-z0-9_:]+\)(?: \| test\(=[A-Za-z0-9_:]+\))*\)"
+PLAN_FILTER = re.compile(rf"(?:{MODULES_FILTER})?|(?:{MODULES_FILTER} and )?{LEFT_OUT_FILTER}")
 SPEC_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.spec\.ts$")
 
 RUNNERS = {"linux": "ubuntu-latest", "macos": "macos-15", "windows": "windows-latest"}
@@ -132,7 +152,7 @@ def count_value(value):
     return int(value)
 
 
-def choose(event, web, rust, named, planned, rust_count, units=None, units_count=""):
+def choose(event, web, rust, named, planned, rust_count, units=None, units_count="", rust_left_out=0):
     """One explicit run decision for every leg of the lane.
 
     The legs are the Playwright specs (`web`), the Rust tests (`rust`) and the
@@ -141,7 +161,9 @@ def choose(event, web, rust, named, planned, rust_count, units=None, units_count
     `count` first and this decides from what the runners listed: the web
     specs from `planned`, what `web_plan` made of their seconds budget, and
     the unit and Rust tests from their count (`repeat`, the run-count budget
-    they share).
+    they share). Selected Rust files that leave no test to run fail, unless
+    every test they reached is a known flaky one left out
+    (`rust_left_out`, `leave_out_known_flaky`): then the Rust leg does not run.
     """
     units = [] if units is None else units
     selected = {"web": bool(web), "rust": bool(rust), "units": bool(units)}
@@ -161,6 +183,9 @@ def choose(event, web, rust, named, planned, rust_count, units=None, units_count
         for kind, raw in (("rust", rust_count), ("units", units_count)):
             counts[kind] = count_value(raw) if selected[kind] else 0
             if selected[kind] and counts[kind] == 0:
+                if kind == "rust" and count_value(rust_left_out):
+                    selected["rust"] = False
+                    continue
                 raise ValueError(f"selected {kind} files listed no tests")
         times = repeats(sum(counts.values()))
     return {
@@ -374,21 +399,27 @@ def select(entries, crate_dirs, targets=None):
     file declares (`rust_sources`). `targets` maps each crate directory to the
     source targets `cargo metadata` reports; without it, a caller that has no
     crate graph gets the `tests/it` modules and the unit test files only.
+    `rust_files` are the changed files that selected them, before a module
+    is folded into its parent: a known flaky test declared in one of them is
+    repeated, not left out (`leave_out_known_flaky`).
     """
     web = sorted({name for status, name in entries if status in ("A", "M") and WEB_SPEC.match(name)})
     units = sorted({name for status, name in entries if status in ("A", "M") and UNIT_TEST.match(name)})
     modules = set()
     sources = set()
+    files = set()
     for status, name in entries:
         if status not in ("A", "M"):
             continue
         found = rust_module(name, crate_dirs)
         if found:
             modules.add((found["package"], found["module"]))
+            files.add(name)
         crate = name.partition("/")[0]
         if targets and crate in targets:
             for source in changed_source(name, crate_dirs[crate], targets[crate]):
                 sources.add((source["package"], source["test"], source["module"]))
+                files.add(name)
     # The whole binary runs every module, and `foo` runs `foo::bar`, so neither is run twice.
     wholes = {package for package, module in modules if module == WHOLE}
     rust = [
@@ -404,7 +435,7 @@ def select(entries, crate_dirs, targets=None):
         if not any(module.startswith(other + "::") for other_package, other_test, other in sources
                    if (other_package, other_test) == (package, test))
     ]
-    return {"web": web, "units": units, "rust": rust, "rust_sources": rust_sources}
+    return {"web": web, "units": units, "rust": rust, "rust_sources": rust_sources, "rust_files": sorted(files)}
 
 
 def nextest_listed(text):
@@ -424,16 +455,21 @@ def nextest_counted(text):
     nextest marks ignored, which a listing without `--run-ignored` includes
     and the run then skips.
     """
+    matched = nextest_matched(text)
+    return len(matched), sum(1 for _, _, case in matched if case.get("ignored"))
+
+
+def nextest_matched(text):
+    """`(binary id, name, case)` of each test a `cargo nextest list --message-format json` matched."""
     suites = json.loads(text).get("rust-suites")
     if not isinstance(suites, dict):
         raise ValueError("the nextest list has no rust-suites")
-    matched = [
-        case
-        for suite in suites.values()
-        for case in suite.get("testcases", {}).values()
+    return [
+        (binary, name, case)
+        for binary, suite in suites.items()
+        for name, case in suite.get("testcases", {}).items()
         if case.get("filter-match", {}).get("status") == "matches"
     ]
-    return len(matched), sum(1 for case in matched if case.get("ignored"))
 
 
 def listed_tests(text):
@@ -646,6 +682,138 @@ def plan_run_ignored(plan, lister=None):
     return decided
 
 
+def leave_out_known_flaky(plan, issues, changed, names, lister, declared_in):
+    """A pull request's Rust plan without the known flaky tests it reached only through another file.
+
+    A test is known flaky when one of `issues`, the open `quarantine` issues,
+    tracks it: `ci-flaky-report.py`'s own `tracking`, under the name that
+    script files a nextest test by (`nextest_name`), so the lane and the
+    report never disagree on which issue is whose. Such a test is repeated
+    with no retry when `changed`, the pull request's changed Rust files
+    (`select`'s `rust_files`), holds the file that declares it
+    (`declared_in`): any change to its own file, its fix included. Otherwise a
+    module above it or a shared helper reached it, and it is left out; the
+    `rust` lane still runs it with its one retry, so a test the change breaks
+    outright still fails the pull request there.
+
+    `names(package, test, filterset)` answers the `(binary id, name)` of each
+    test the filterset runs. `lister` is `rust_plan`'s and counts the entry
+    again under the filterset that leaves the tests out, which also proves
+    nextest reads it; an entry left with no test is dropped.
+
+    Answers `(plan, left_out, repeated)`, the last two lists of `{test, issue}`.
+    """
+    kept, left_out, repeated = [], [], []
+    for entry in plan:
+        leave = []
+        for binary, name in names(entry["package"], entry["test"], entry["filter"]):
+            test = {"file": None, "name": flaky_report.nextest_name(binary, name)}
+            issue = flaky_report.tracking(issues, test)
+            if issue is None:
+                continue
+            known = {"test": test["name"], "issue": issue["number"]}
+            if declared_in(entry["package"], entry["test"], name) in changed:
+                repeated.append(known)
+            else:
+                leave.append(name)
+                left_out.append(known)
+        if not leave:
+            kept.append(entry)
+            continue
+        expression = left_out_filter(entry["filter"], leave)
+        tests = lister(entry["package"], entry["test"], expression, "")[0]
+        if tests:
+            kept.append({**entry, "filter": expression, "tests": tests})
+    return kept, left_out, repeated
+
+
+def left_out_filter(expression, names):
+    """A target's filterset with these tests of it taken out; an empty `expression` is the whole target."""
+    for name in names:
+        if not TEST_NAME.fullmatch(name):
+            raise ValueError(f"not a nextest test name: {name!r}")
+    left = "not (" + " | ".join(f"test(={name})" for name in sorted(names)) + ")"
+    return f"{expression} and {left}" if expression else left
+
+
+def declaring_file(package, test, name):
+    """The repository path of the file that declares one test of a package's target.
+
+    A test's name is its module path and its function, and its file is the
+    deepest of those modules that has a file of its own, as
+    `scripts/rust_scan.py` reads the declarations (`#[path]` included): a
+    test in a `mod x { ... }` block belongs to the file that holds the block,
+    and one of `pairing::remote_view` to `tests/it/pairing/remote_view.rs`,
+    not to `tests/it/pairing.rs`.
+    """
+    if test == "it":
+        roots = [("it", str(ROOT / package / "tests/it/main.rs"))]
+    else:
+        roots = [(target, path) for target, path in crate_targets(package) if target == test]
+    if not roots:
+        raise ValueError(f"{package} has no {test} target to find {name} in")
+    files = {}
+    for path, entry in module_tree(roots).items():
+        files.setdefault(entry["module"], path)
+    module = name.rpartition("::")[0]
+    while module and module not in files:
+        module = module.rpartition("::")[0]
+    if module not in files:
+        raise ValueError(f"no file of {package}'s {test} target declares {name}")
+    return files[module].relative_to(ROOT).as_posix()
+
+
+def known_flaky_plan(plan, changed, read, names, lister, declared_in):
+    """A pull request's Rust plan after the known flaky tests are left out, and what the run says of them.
+
+    Answers `(plan, left_out, summary lines, unread)`. `read` answers the open
+    `quarantine` issues (`known_flaky_issues`); when it cannot, nothing is
+    left out, so the lane is as strict as it was without them, and `unread`
+    is the reason, for a warning and the summary: a known flaky test that
+    then fails the lane is not a silence.
+    """
+    issues, unread = read()
+    if issues is None:
+        reason = flaky_report.clean(unread)
+        return plan, [], ["### Known flaky tests", "",
+                          f"The open `quarantine` issues could not be read ({reason}), so no known flaky test was left out.",
+                          ""], reason
+    plan, left_out, repeated = leave_out_known_flaky(plan, issues, changed, names, lister, declared_in)
+    lines = known_flaky_summary(left_out, repeated, issues)
+    if not plan:
+        lines += ["Every selected Rust test is a known flaky test left out, so the Rust leg does not run.", ""]
+    return plan, left_out, lines, ""
+
+
+def known_flaky_issues(call=None):
+    """The open `quarantine` issues, or `(None, why)` when GitHub could not be read.
+
+    The reader is the flaky report's own (`open_issues`, every page or a
+    refusal), so an incomplete listing is a failure here too, never a shorter
+    list.
+    """
+    try:
+        return flaky_report.open_issues(flaky_report.ISSUE_REPOSITORY, call or flaky_report.gh), ""
+    except (RuntimeError, ValueError, KeyError, TypeError) as error:
+        return None, str(error) or type(error).__name__
+
+
+def known_flaky_summary(left_out, repeated, issues):
+    """The job summary's account of the known flaky tests, as Markdown lines."""
+    issue = lambda known: f"`{known['test']}` ({flaky_report.ISSUE_REPOSITORY}#{known['issue']})"
+    lines = ["### Known flaky tests", ""]
+    if not left_out and not repeated:
+        return lines + [f"None of the selected Rust tests is tracked by one of the {len(issues)} open `quarantine` issues.", ""]
+    if left_out:
+        lines += ["Left out of this repeat: an open `quarantine` issue tracks each, and this pull request does not change "
+                  "the file that declares it. The `rust` lane still runs it, with its one retry.", ""]
+        lines += [f"- {issue(known)}" for known in left_out] + [""]
+    if repeated:
+        lines += ["Repeated with no retry, because this pull request changes the file that declares it:", ""]
+        lines += [f"- {issue(known)}" for known in repeated] + [""]
+    return lines
+
+
 def bash():
     """The bash on PATH, and on Windows the Git Bash beside the checkout's own tools.
 
@@ -671,6 +839,16 @@ def nextest_lister(package, test, expression, run_ignored=""):
     `ignored-only`; only the last two are passed, so the ordinary listing
     stays the one nextest makes by itself.
     """
+    return nextest_counted(nextest_list(package, test, expression, run_ignored))
+
+
+def nextest_names(package, test, expression):
+    """The `(binary id, name)` of each test one target of the package would run."""
+    return [(binary, name) for binary, name, _ in nextest_matched(nextest_list(package, test, expression))]
+
+
+def nextest_list(package, test, expression, run_ignored=""):
+    """`cargo nextest list --message-format json` of one target of the package (`nextest_lister`)."""
     command = [bash(), "scripts/verify-cargo.sh", "nextest-list", "--profile", "ci", *nextest_target(package, test)]
     if expression:
         command += ["-E", expression]
@@ -689,7 +867,7 @@ def nextest_lister(package, test, expression, run_ignored=""):
             f"{listed.returncode} ({subprocess.list2cmdline(command)}):\n"
             f"stdout:\n{tail(listed.stdout)}\nstderr:\n{tail(listed.stderr)}"
         )
-    return nextest_counted(listed.stdout)
+    return listed.stdout
 
 
 def nextest_target(package, test):
@@ -710,7 +888,7 @@ def archive_name(entry):
 def plan_entry(entry):
     """A Rust plan entry the jobs may read, or a refusal."""
     if (not PACKAGE.match(entry["package"]) or entry.get("test") not in ("it", "lib", "bin")
-            or not re.fullmatch(r"(?:test\(/\^\([a-z0-9_:|]+\)::/\))?", entry["filter"])
+            or not PLAN_FILTER.fullmatch(entry["filter"])
             or entry.get("run_ignored", "") not in ("", "ignored-only")):
         raise ValueError(f"not a Rust plan entry: {entry!r}")
     return entry
@@ -830,6 +1008,7 @@ def main():
     sub.add_parser("count-nextest", help="count the tests of `cargo nextest list --message-format json` output on stdin")
     plan_parser = sub.add_parser("rust-plan", help="list the selected modules' tests and write the Rust job's plan")
     plan_parser.add_argument("--rust", required=True, help="the JSON list of modules")
+    plan_parser.add_argument("--files", required=True, help="the JSON list of changed Rust files that selected them")
     archive_parser = sub.add_parser("rust-archive", help="pack each target of a Rust plan into its own nextest archive")
     archive_parser.add_argument("--plan", required=True, help="the JSON plan")
     archive_parser.add_argument("--dir", required=True, type=Path, help="where the archives are written")
@@ -849,6 +1028,7 @@ def main():
     choose_parser.add_argument("--table", default=WEB_TABLE, help="the duration table the web shards are dealt by")
     choose_parser.add_argument("--units-count", default="")
     choose_parser.add_argument("--rust-count", default="")
+    choose_parser.add_argument("--rust-left-out", default="0", help="how many known flaky Rust tests the plan left out")
     sub.add_parser("verdict", help="fail unless every chosen repeat leg completed tests (NEEDS JSON)")
     share_parser = sub.add_parser("shard-share", help="print `group/groups repeat` for one shard of a web repeat")
     share_parser.add_argument("--shard", required=True, help="CURRENT/TOTAL, one-based")
@@ -869,7 +1049,7 @@ def main():
             if args.web_list:
                 plan = web_plan(Path(args.web_list).read_text(encoding="utf-8"), e2e_shard.read_table(args.table))
             decision = choose(args.event, args.web, json.loads(args.rust), args.repeat, plan, args.rust_count,
-                              json.loads(args.units), args.units_count)
+                              json.loads(args.units), args.units_count, args.rust_left_out or "0")
             write_outputs(decision)
             if os.environ.get("GITHUB_STEP_SUMMARY"):
                 with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
@@ -910,8 +1090,17 @@ def main():
                 "rust-plan": json.dumps(work["plan"], separators=(",", ":")),
             })
         elif args.command == "rust-plan":
-            plan = rust_plan(json.loads(args.rust), nextest_lister)
-            write_outputs({"rust-plan": json.dumps(plan, separators=(",", ":")), "rust-count": sum(entry["tests"] for entry in plan)})
+            # Only a pull request's plan is counted here; a hand run names its
+            # modules and leaves out nothing, which is how a fix is shown.
+            plan, left_out, lines, unread = known_flaky_plan(
+                rust_plan(json.loads(args.rust), nextest_lister), set(json.loads(args.files)),
+                known_flaky_issues, nextest_names, nextest_lister, declaring_file)
+            if unread:
+                print(f"::warning title={flaky_report.escape_property('Known flaky tests not read')}::"
+                      f"{flaky_report.escape_data(unread)}")
+            flaky_report.summary(lines)
+            write_outputs({"rust-plan": json.dumps(plan, separators=(",", ":")), "rust-count": sum(entry["tests"] for entry in plan),
+                           "rust-left-out": len(left_out)})
         elif args.command == "units-plan":
             plan = units_plan(json.loads(args.units), units_lister)
             write_outputs({"units-plan": json.dumps(plan, separators=(",", ":")), "units-count": sum(entry["tests"] for entry in plan)})

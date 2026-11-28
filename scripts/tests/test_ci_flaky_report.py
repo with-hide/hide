@@ -103,6 +103,24 @@ class Matching(unittest.TestCase):
         self.assertTrue(r.tracks(issue, {"file": None, "name": "hide-platform::ipc a_burst_more", "error": ""}))
         self.assertFalse(r.tracks(issue, {"file": None, "name": "hide-platform::ipc a_burst", "error": ""}))
 
+    def test_the_issue_filed_for_a_flaky_nextest_case_is_found_under_the_name_the_repeat_lane_lists(self):
+        # The repeat lane names a test it lists by `nextest_name` and finds its
+        # issue with `tracking` (`scripts/ci-repeat.py`, leave_out_known_flaky),
+        # so what this script files is what that lane leaves out.
+        name = "pairing::remote_view::a_screen_page_request_comes_from_a_port_the_host_dialed"
+        root = ET.fromstring(
+            f'<testsuites><testsuite name="hided::it"><testcase name="{name}" classname="hided::it">'
+            "<flakyFailure>assertion `left == right` failed</flakyFailure></testcase></testsuite></testsuites>"
+        )
+        flaky = r.nextest_flaky(root)[0]
+        self.assertEqual(flaky["name"], r.nextest_name("hided::it", name))
+        filed = {"number": 3064, "body": r.new_issue(flaky, "Linux", r.run_facts(ENV), TODAY)["body"]}
+        issues = [{"number": 3063, "body": "`web/e2e/s3.spec.ts` \"a refused save\""}, filed]
+        self.assertIs(r.tracking(issues, {"file": None, "name": r.nextest_name("hided::it", name)}), filed)
+        # The same name in the library's binary, or a sibling, is another test.
+        self.assertIsNone(r.tracking(issues, {"file": None, "name": r.nextest_name("hided", name)}))
+        self.assertIsNone(r.tracking(issues, {"file": None, "name": r.nextest_name("hided::it", name + "_twice")}))
+
     def test_a_hand_written_issue_still_tracks_a_test_by_file_and_start_of_name(self):
         body = f"- Test: `{self.FILE}:62` › {self.LEDGER[:30]}... flakes"
         self.assertTrue(r.tracks({"body": body}, {"file": self.FILE, "name": self.LEDGER, "error": ""}))

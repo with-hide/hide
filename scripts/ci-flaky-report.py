@@ -206,6 +206,17 @@ def nextest_error(node):
     return (node.text or "").strip() or node.get("message") or node.get("type") or ""
 
 
+def nextest_name(binary, test):
+    """A nextest test as an issue names it: its binary id, which nextest's
+    JUnit report writes as the classname (`hided::it`, `hided` for a library),
+    then its name (`pairing::remote_view::a_test`).
+
+    The repeat lane names each test it lists this way, so one `quarantine`
+    issue tracks a test in both (`scripts/ci-repeat.py`, "leave_out_known_flaky").
+    """
+    return f"{binary} {test}"
+
+
 def nextest_flaky(root):
     found = []
     for case in root.iter("testcase"):
@@ -213,7 +224,7 @@ def nextest_flaky(root):
         if flake is None:
             flake = case.find("flakyError")
         if flake is not None:
-            found.append({"file": None, "name": f"{case.get('classname')} {case.get('name')}", "error": nextest_error(flake)})
+            found.append({"file": None, "name": nextest_name(case.get("classname"), case.get("name")), "error": nextest_error(flake)})
     return found
 
 
@@ -233,7 +244,7 @@ def nextest_failed(root):
             # The crate's folder: nextest names a test by crate and binary, not file.
             "file": classname.split("::")[0] or None,
             "line": None,
-            "name": f"{classname} {case.get('name')}",
+            "name": nextest_name(classname, case.get("name")),
             "error": error,
         })
     return found
@@ -292,6 +303,11 @@ def tracks(issue, test):
         return False
     name = test["name"] if not test["file"] else test["name"].split(" > ")[-1][:MATCH_PREFIX]
     return name in body
+
+
+def tracking(issues, test):
+    """The first of these issues that tracks the test (`tracks`), or None."""
+    return next((issue for issue in issues if tracks(issue, test)), None)
 
 
 def run_facts(env):
@@ -398,7 +414,7 @@ def report(tests, system, env, call=gh, today=None, issues=ISSUE_REPOSITORY):
     lines = [f"### Flaky tests ({system})", ""]
     for test in tests[:MAX_PER_RUN]:
         facts = {**facts, "sha": test.get("tested_sha", env.get("GITHUB_SHA", "unknown")[:12])}
-        issue = next((item for item in tracked if tracks(item, test)), None)
+        issue = tracking(tracked, test)
         if issue is None:
             created = call([f"repos/{issues}/issues", "--input", "-"], new_issue(test, system, facts, today))
             tracked.append({**created, "body": created.get("body") or new_issue(test, system, facts, today)["body"]})

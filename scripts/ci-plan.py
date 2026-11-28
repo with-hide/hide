@@ -50,7 +50,7 @@ ROOT = Path(__file__).resolve().parent.parent
 _REPEAT = importlib.util.spec_from_file_location("ci_repeat", Path(__file__).resolve().parent / "ci-repeat.py")
 ci_repeat = importlib.util.module_from_spec(_REPEAT)
 _REPEAT.loader.exec_module(ci_repeat)
-NO_REPEAT = {"web": [], "units": [], "rust": [], "rust_sources": []}
+NO_REPEAT = {"web": [], "units": [], "rust": [], "rust_sources": [], "rust_files": []}
 
 # The order is the order the summary prints.
 LANES = (
@@ -1891,6 +1891,10 @@ def main():
                 # modules in one nextest call, so the plan carries both as the
                 # `{package, test, module}` entries nextest selects by.
                 output.write(f"repeat-rust={json.dumps(repeat['rust'] + repeat['rust_sources'], separators=(',', ':'))}\n")
+                # The changed files that selected them, so the lane repeats a
+                # known flaky test whose own file changed and leaves out one a
+                # parent module or helper reached (`leave_out_known_flaky`).
+                output.write(f"repeat-rust-files={json.dumps(repeat['rust_files'], separators=(',', ':'))}\n")
         if os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
                 server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
