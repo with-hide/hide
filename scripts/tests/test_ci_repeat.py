@@ -188,7 +188,7 @@ class Detection(unittest.TestCase):
         for status in ("A", "M"):
             with self.subTest(status=status):
                 found = repeat.select([(status, "web/e2e/s3.spec.ts")], CRATE_DIRS)
-                self.assertEqual(found, {"web": ["web/e2e/s3.spec.ts"], "units": [], "rust": [], "rust_sources": []})
+                self.assertEqual(found, {"web": ["web/e2e/s3.spec.ts"], "units": [], "rust": [], "rust_sources": [], "rust_files": []})
 
     def test_a_deleted_spec_a_helper_a_desktop_spec_and_a_nested_file_are_not(self):
         found = repeat.select([
@@ -199,7 +199,7 @@ class Detection(unittest.TestCase):
             ("M", "desktop/e2e/attach.spec.ts"),
             ("M", "web/src/App.tsx"),
         ], CRATE_DIRS)
-        self.assertEqual(found, {"web": [], "units": [], "rust": [], "rust_sources": []})
+        self.assertEqual(found, {"web": [], "units": [], "rust": [], "rust_sources": [], "rust_files": []})
 
     def test_an_added_or_modified_unit_test_file_is_a_changed_test(self):
         for status in ("A", "M"):
@@ -503,6 +503,194 @@ class RustIgnoredAndHolder(unittest.TestCase):
             [{"package": "hide-kit", "test": "lib", "filter": "test(/^(process::tests)::/)",
               "tests": 8, "run_ignored": ""}],
         )
+
+def quarantine(number, test, first_seen="45930821967"):
+    """An open `quarantine` issue as `ci-flaky-report.py` files one for a nextest test (#3064's body)."""
+    return {
+        "number": number,
+        "body": (
+            f"<!-- flaky-run:{first_seen}:1 -->\n"
+            "CI found this test flaky: it failed, then passed on the one retry in the same job, so the run passed.\n\n"
+            f"- Test: `{test}`\n- System: Linux\n"
+            f"- First seen: https://github.com/with-hide/hide/actions/runs/{first_seen} "
+            "(pull request with-hide/hide#3062, commit e88cccfd351c)\n- Expires: 2026-12-04\n\n"
+            "First attempt's failure:\n\n```\nassertion `left == right` failed\n  left: String(\"ready\")\n"
+            " right: \"paused_there\"\n```\n\n"
+            "Fix the cause or delete the test by the expiry date; a flaky test is not left running.\n"
+        ),
+    }
+
+
+REMOTE_VIEW = "pairing::remote_view::a_screen_page_request_comes_from_a_port_the_host_dialed"
+CORE_LETTERS = "pairing::core_letters::agents_of_two_paired_hides_write_read_and_report_across"
+# The open issues of 2026-11-29 that name `hided::it` tests under `pairing`,
+# one of another module, and a library test filed under the same crate.
+ISSUES = [
+    quarantine(3064, f"hided::it {REMOTE_VIEW}"),
+    quarantine(2864, f"hided::it {CORE_LETTERS}"),
+    quarantine(2853, "hided::it remote_delivery::connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pending"),
+    quarantine(3075, "hided screen_net::tests::a_head_is_reserved_before_it_is_written_and_one_past_the_budget_writes_nothing"),
+]
+# What `cargo nextest list` names for `test(/^(pairing)::/)` in `hided`'s `it` binary.
+PAIRING = [("hided::it", name) for name in (
+    "pairing::a_paired_core_reports_its_peer", REMOTE_VIEW, "pairing::remote_view::a_view_closes_with_its_link",
+    CORE_LETTERS, "pairing::moved_core::a_core_moved_keeps_its_work",
+)]
+
+
+class KnownFlaky(unittest.TestCase):
+    """A test an open `quarantine` issue tracks is left out of a pull request's
+    repeat when only a module above it or a helper reached it; a change to its
+    own file repeats it with no retry (with-hide/hide#3169)."""
+
+    def plan(self, entry, names, changed, issues=ISSUES):
+        listed = []
+
+        def lister(package, test, expression, run_ignored=""):
+            listed.append(expression)
+            return (len(names) - expression.count("test(="), 0)
+
+        found = repeat.leave_out_known_flaky(
+            [entry], issues, set(changed), lambda package, test, expression: names, lister, repeat.declaring_file)
+        return found, listed
+
+    def test_a_known_flaky_test_reached_only_through_its_parent_module_is_left_out(self):
+        # with-hide/hide#3159 changed one call in `pairing.rs`; its repeat ran
+        # `pairing::remote_view` too and failed on #3064's test.
+        entry = {"package": "hided", "test": "it", "filter": "test(/^(pairing)::/)", "tests": 5, "run_ignored": ""}
+        (plan, left_out, repeated), listed = self.plan(entry, PAIRING, ["hided/tests/it/pairing.rs"])
+        expression = f"test(/^(pairing)::/) and not (test(={CORE_LETTERS}) | test(={REMOTE_VIEW}))"
+        self.assertEqual(plan, [{**entry, "filter": expression, "tests": 3}])
+        self.assertEqual(left_out, [{"test": f"hided::it {REMOTE_VIEW}", "issue": 3064},
+                                    {"test": f"hided::it {CORE_LETTERS}", "issue": 2864}])
+        self.assertEqual(repeated, [])
+        # Counted again under the filterset that runs, which nextest must read.
+        self.assertEqual(listed, [expression])
+        self.assertIs(repeat.plan_entry(plan[0]), plan[0])
+
+    def test_a_change_to_the_known_flaky_tests_own_file_repeats_it_with_no_retry(self):
+        # The fix of #3064 changes `remote_view.rs`; a change to `pairing.rs`
+        # beside it folds the selection into `pairing`, and the test still runs.
+        entry = {"package": "hided", "test": "it", "filter": "test(/^(pairing)::/)", "tests": 5, "run_ignored": ""}
+        changed = ["hided/tests/it/pairing.rs", "hided/tests/it/pairing/remote_view.rs"]
+        (plan, left_out, repeated), _ = self.plan(entry, PAIRING, changed)
+        self.assertEqual(repeated, [{"test": f"hided::it {REMOTE_VIEW}", "issue": 3064}])
+        self.assertEqual(left_out, [{"test": f"hided::it {CORE_LETTERS}", "issue": 2864}])
+        self.assertEqual(plan[0]["filter"], f"test(/^(pairing)::/) and not (test(={CORE_LETTERS}))")
+        # The selection that reaches the lane is folded, but its files are not.
+        found = repeat.select(entries(*changed), CRATE_DIRS)
+        self.assertEqual((found["rust"], found["rust_files"]), ([{"package": "hided", "module": "pairing"}], changed))
+
+    def test_a_helper_that_runs_the_whole_binary_leaves_out_every_known_flaky_test_it_reached(self):
+        names = PAIRING + [("hided::it", "remote_delivery::connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pending"),
+                           ("hided::it", "handshake::a_change_in_a_watched_checkout_is_announced")]
+        entry = {"package": "hided", "test": "it", "filter": "", "tests": len(names), "run_ignored": ""}
+        (plan, left_out, _), _ = self.plan(entry, names, ["hided/tests/it/support/mod.rs"])
+        self.assertEqual([known["issue"] for known in left_out], [3064, 2864, 2853])
+        self.assertTrue(plan[0]["filter"].startswith("not (test(=pairing::core_letters::"))
+        self.assertEqual(plan[0]["tests"], len(names) - 3)
+
+    def test_only_the_issues_own_test_is_known_flaky(self):
+        # The flaky report's matcher: a filed issue names its test whole, so a
+        # sibling that starts the same way, or the same name in another binary,
+        # is not it; a hand-written issue that names the test whole is.
+        names = [("hided::it", REMOTE_VIEW + "_twice"), ("hided", REMOTE_VIEW), ("hided::it", "handshake::a_seat")]
+        hand = {"number": 3001, "body": "`hided::it handshake::a_seat` fails one run in five on Windows."}
+        entry = {"package": "hided", "test": "it", "filter": "", "tests": 3, "run_ignored": ""}
+        (plan, left_out, _), _ = self.plan(entry, names, [], issues=ISSUES + [hand])
+        self.assertEqual(left_out, [{"test": "hided::it handshake::a_seat", "issue": 3001}])
+
+    def test_a_target_left_with_no_test_drops_out_and_the_rust_leg_does_not_run(self):
+        entry = {"package": "hided", "test": "it", "filter": "test(/^(pairing::remote_view)::/)", "tests": 1, "run_ignored": ""}
+        (plan, left_out, _), _ = self.plan(entry, [("hided::it", REMOTE_VIEW)], ["hided/tests/it/pairing.rs"])
+        self.assertEqual((plan, len(left_out)), ([], 1))
+        selection = [{"package": "hided", "module": "pairing"}]
+        decision = repeat.choose("pull_request", [], selection, "", None, "0", [], "", "1")
+        self.assertEqual((decision["run-rust"], decision["repeat"]), ("false", 0))
+        # With nothing left out, a selection that lists no test is still refused.
+        with self.assertRaises(ValueError):
+            repeat.choose("pull_request", [], selection, "", None, "0", [], "", "0")
+
+    def test_a_test_belongs_to_the_deepest_module_of_its_name_that_has_a_file(self):
+        self.assertEqual(repeat.declaring_file("hided", "it", REMOTE_VIEW), "hided/tests/it/pairing/remote_view.rs")
+        self.assertEqual(repeat.declaring_file("hided", "it", "pairing::a_paired_core_reports_its_peer"), "hided/tests/it/pairing.rs")
+        # A `mod windows { ... }` block is part of the file that holds it.
+        self.assertEqual(repeat.declaring_file("hided", "it", "agent_exec::windows::a_break_ends_the_group"), "hided/tests/it/agent_exec.rs")
+        # A library test module behind `#[path = "screen_net_tests.rs"]`.
+        self.assertEqual(repeat.declaring_file("hided", "lib", "screen_net::tests::a_head_is_reserved"), "hided/src/screen_net_tests.rs")
+        self.assertEqual(repeat.declaring_file("hide-core", "lib", "runtime::tests::desk_views::an_open_with_nothing_to_close"),
+                         "hide-core/src/runtime/tests/desk_views.rs")
+
+    def test_when_github_cannot_be_read_nothing_is_left_out_and_the_run_says_why(self):
+        entry = {"package": "hided", "test": "it", "filter": "test(/^(pairing)::/)", "tests": 5, "run_ignored": ""}
+
+        def refused(args, body=None, raw=False):
+            raise RuntimeError("gh api repos/with-hide/hide/issues?labels=quarantine&state=open&per_page=100&page=1: HTTP 403")
+
+        def endless(args, body=None, raw=False):
+            return [{"number": n, "body": ""} for n in range(100)]
+
+        for call in (refused, endless):
+            with self.subTest(call=call.__name__):
+                plan, left_out, lines, unread = repeat.known_flaky_plan(
+                    [entry], set(), lambda: repeat.known_flaky_issues(call), None, None, None)
+                self.assertEqual((plan, left_out), ([entry], []))
+                self.assertTrue(unread)
+                self.assertIn(f"could not be read ({unread}), so no known flaky test was left out", "\n".join(lines))
+
+    def test_the_issues_read_are_every_open_quarantine_issue_and_no_pull_request(self):
+        asked = []
+
+        def call(args, body=None, raw=False):
+            asked.append(args[0])
+            return [ISSUES[0], {"number": 7, "body": "", "pull_request": {}}]
+
+        issues, unread = repeat.known_flaky_issues(call)
+        self.assertEqual((issues, unread), ([ISSUES[0]], ""))
+        self.assertEqual(asked, ["repos/with-hide/hide/issues?labels=quarantine&state=open&per_page=100&page=1"])
+
+    def test_the_summary_names_each_known_flaky_test_and_its_issue(self):
+        entry = {"package": "hided", "test": "it", "filter": "test(/^(pairing)::/)", "tests": 5, "run_ignored": ""}
+        changed = {"hided/tests/it/pairing.rs", "hided/tests/it/pairing/remote_view.rs"}
+        _, _, lines, unread = repeat.known_flaky_plan(
+            [entry], changed, lambda: (ISSUES, ""), lambda *args: PAIRING,
+            lambda package, test, expression, run_ignored="": (4, 0), repeat.declaring_file)
+        text = "\n".join(lines)
+        self.assertEqual(unread, "")
+        self.assertIn("Left out of this repeat", text)
+        self.assertIn(f"- `hided::it {CORE_LETTERS}` (with-hide/hide#2864)", text)
+        self.assertIn(f"- `hided::it {REMOTE_VIEW}` (with-hide/hide#3064)", text.split("Repeated with no retry")[1])
+        _, _, lines, _ = repeat.known_flaky_plan(
+            [entry], changed, lambda: (ISSUES, ""), lambda *args: [("hided::it", "pairing::a_seat")], None, None)
+        self.assertIn("None of the selected Rust tests is tracked by one of the 4 open `quarantine` issues.", lines)
+
+    def test_a_name_nextest_could_misread_never_reaches_the_filterset(self):
+        for name in ("pairing::a test", "pairing::a)|test(=b", ""):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                repeat.left_out_filter("", [name])
+        self.assertEqual(repeat.left_out_filter("", ["b::x", "a::y"]), "not (test(=a::y) | test(=b::x))")
+        for bad in ("not (test(=a::y)) and test(/^(a)::/)", "test(/^(a)::/) or not (test(=a::y))", "not test(=a::y)"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                repeat.plan_entry({"package": "hided", "test": "it", "filter": bad, "run_ignored": ""})
+
+    def test_a_hand_run_reads_no_issue_and_a_pull_request_reads_them_with_its_own_token(self):
+        import yaml
+        jobs = yaml.safe_load((ROOT / ".github/workflows/repeat.yml").read_text())["jobs"]
+        self.assertEqual(jobs["count"]["permissions"], {"contents": "read", "issues": "read"})
+        steps = {step.get("id") or step.get("name"): step for step in jobs["count"]["steps"]}
+        count = steps["rust-count"]
+        # Only a pull request's selection is counted: a hand run never reaches this step.
+        self.assertEqual(count["if"], "steps.resolve.outputs.rust-count-needed == 'true'")
+        self.assertEqual(count["env"]["GH_TOKEN"], "${{ github.token }}")
+        self.assertIn('--files "${FILES:-[]}"', count["run"])
+        # Nothing to pack when every selected test was left out.
+        for name in ("rust-archive", "Keep the Rust tests for the Rust job"):
+            self.assertIn("steps.rust-count.outputs.rust-count != '0'", steps[name]["if"])
+        self.assertIn('--rust-left-out "${RUST_LEFT_OUT:-0}"', steps["repeat"]["run"])
+        pr = yaml.safe_load((ROOT / ".github/workflows/pr.yml").read_text())["jobs"]
+        self.assertEqual(pr["repeat"]["with"]["rust-files"], "${{ needs.plan.outputs.repeat-rust-files }}")
+        self.assertEqual(pr["plan"]["outputs"]["repeat-rust-files"], "${{ steps.plan.outputs.repeat-rust-files }}")
+
 
 class Resolve(unittest.TestCase):
     """What a pull request's call and a hand run each hand the lane."""

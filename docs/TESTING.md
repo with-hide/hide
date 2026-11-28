@@ -1071,6 +1071,7 @@ A failure on a different SHA is not evidence of flakiness by itself, and the sam
 
 A flaky test never blocks a pull request's required gate or a merge, and it does not stay: it is isolated as an issue rather than moved out of its lane, and its cause is removed by that issue's deadline.
 CI retries a failed test once, for classification and for the report, and for nothing else.
+The repeat lane, which retries nothing, leaves out a known flaky test that a pull request reached only through another file, and repeats one whose own file it changes ([The repeat lane](#the-repeat-lane)).
 
 Every issue CI files lives in with-hide/hide beside the user bug reports, so a contributor can open each one a test or a comment names: the flaky `quarantine` issues, the `nightly-failure` issues, and the `agent-canary` record and its failures.
 The labels tell them apart from user reports, and an issue a person files about the code itself takes the Development issue form and its `development` label.
@@ -1078,6 +1079,7 @@ The labels tell them apart from user reports, and an issue a person files about 
 Each job that files or reads these issues mints a token from the development issues GitHub App (its Client ID in `vars.HIDE_ISSUES_APP_CLIENT_ID`, and `secrets.HIDE_ISSUES_APP_KEY` in both the Actions and the Dependabot secret stores) with `actions/create-github-app-token`, and that token reads the run and writes the issue; the issues it files come from `with-hide-dev-issues[bot]`, which the contribution gate does not check.
 A reusable workflow receives the key from each caller by name.
 A lane whose run has no key, such as a fork's, files nothing and still passes.
+The repeat lane only reads the open `quarantine` issues, of the repository its run belongs to, so it reads them with the run's own token and `issues: read` (`pr.yml`'s `repeat` job and the nightly's call of `pr.yml` grant it): a fork's pull request reads them too.
 
 - Playwright runs with `retries: 1` when `CI` is set (`web/playwright.config.ts`, `desktop/playwright.config.ts`), and the Rust workspace runs under `cargo nextest` with the `ci` profile's `retries = 1` (`.config/nextest.toml`, `scripts/verify-cargo.sh nextest`).
   Neither retries locally: a flaky test fails where it is written.
@@ -1163,6 +1165,18 @@ Nothing is handed to the nightly.
   A file under a crate's `src` that the crate's `lib`, `main` or `bin` target builds is selected by the test modules it declares: its own module when only a test build compiles it (`#[cfg(test)] mod clear_tests;` in `hided/src/mobile/` gives `mobile::clear_tests`), and each test-gated module block when a product file holds them (`#[cfg(test)] mod tests { ... }` in `hide-kit/src/process.rs` gives `process::tests`).
   The product module itself is never selected: its name holds the product's code, not its tests. A `src` file whose tests sit nowhere a declaration names is not selected, because the diff cannot say what they are; `scripts/rust_scan.py`, "module_tree", reads the declarations the way rustc does, `#[path]` and inline blocks included.
   `scripts/ci-repeat.py` selects them, `scripts/ci-plan.py` plans the lane from its answer, and `scripts/tests/test_ci_repeat.py` holds both.
+- **A known flaky test is repeated only when the pull request changes its own file.**
+  Selecting by file reaches more than the changed file declares: a module selects its children (`pairing.rs` runs `pairing::remote_view`), and a helper selects the whole binary.
+  So a test an open `quarantine` issue already tracks failed pull requests that only touched a file above it: with-hide/hide#3159 changed one call in `hided/tests/it/pairing.rs`, and its repeat failed once in three runs on `pairing::remote_view::a_screen_page_request_comes_from_a_port_the_host_dialed`, which #3064 tracks.
+  The count job reads the open `quarantine` issues and matches each Rust test the plan lists with the flaky report's own matcher (`tracking` in `scripts/ci-flaky-report.py`), under the name that report files a nextest test by (its binary id and name, `hided::it pairing::remote_view::...`); the issues are the list, and no other list is kept.
+  A matched test whose declaring file the pull request changes is repeated with no retry like any other, so its fix, or any other change to its file, still has to pass every run.
+  The declaring file is the deepest module of the test's name that has a file of its own, as `scripts/rust_scan.py` reads the declarations (`#[path]` included, and a `mod x { ... }` block belongs to the file that holds it), and the changed files come from the plan (`repeat-rust-files`) before a child module is folded into its parent.
+  Any other matched test is left out of the filterset (`and not (test(=...))`), the count is listed again under the filterset that runs, and a target left with no test drops out; when every selected Rust test is left out, the Rust leg does not run.
+  A left-out test is not dropped from the pull request: the `rust` lane runs it with its one retry, so a change that breaks it outright still fails `verify` there, and a flaky run there is filed on its issue as before.
+  The job summary's `Known flaky tests` section names each test left out and each one repeated because its file changed, with its issue, or says that none of the selected tests is tracked and how many issues it read.
+  When the issues cannot be read (a GitHub error, an incomplete listing), nothing is left out, so the lane is as strict as before, and a `Known flaky tests not read` warning and the summary say why: a known flaky test that then fails the lane does so in the open, never by a silent pass or a silent skip.
+  A web spec or a unit test file is selected only when it changed itself, which is every one of its tests' own file, so its known flaky tests are always repeated; a hand run leaves out nothing, because it is how a fix is shown.
+  `leave_out_known_flaky` in `scripts/ci-repeat.py` makes the decision, and `scripts/tests/test_ci_repeat.py` (`KnownFlaky`) holds it.
 - **The web specs' budget is 2400 recorded test-seconds for the pull request.**
   A web test costs seconds, from 1 to 150 of them, so a count of runs said nothing about how long the leg took: one spec of 132 runs at 38 s each held one runner for 84 minutes, and the web leg ended last in 28 % of the pull request runs that ran lanes (measured 2026-11-23 to 27).
   Playwright's own `--list` names the tests that will run (so a loop that declares tests counts as many as it runs), and each weighs its recorded seconds in the Linux table `web/e2e/shard-durations.json`, a test the table lacks weighing the table's median as `scripts/e2e-shard.py` weighs it.

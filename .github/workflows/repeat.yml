@@ -24,6 +24,13 @@
 # packed into nextest archives the Rust leg runs, so the leg compiles nothing;
 # a hand run's leg builds on the system it asked for, on the same dependency
 # caches as the `rust` lane. None retries, and none files a flaky issue.
+#
+# A pull request's Rust leg leaves out a known flaky test, one an open
+# `quarantine` issue tracks, that it reached only through a parent module or
+# a shared helper: the `rust` lane still runs it with its one retry. A test
+# whose own file the pull request changes is repeated like any other, and a
+# hand run leaves out nothing (`leave_out_known_flaky` in
+# `scripts/ci-repeat.py`, docs/TESTING.md, "The repeat lane").
 name: repeat changed tests
 
 on:
@@ -39,6 +46,10 @@ on:
         default: '[]'
       rust:
         description: The changed Rust test modules, a JSON list of {package, test, module}.
+        type: string
+        default: '[]'
+      rust-files:
+        description: The changed Rust files that selected those modules, a JSON list of paths.
         type: string
         default: '[]'
   workflow_dispatch:
@@ -78,6 +89,10 @@ jobs:
   count:
     name: choose the repeat
     runs-on: ubuntu-latest
+    # `issues: read` for the open `quarantine` issues the Rust count reads.
+    permissions:
+      contents: read
+      issues: read
     # The web install and listing (5 minutes each) or the Rust build and listing (25) and its packing (5), whichever the pull request needs, with setup.
     timeout-minutes: 50
     outputs:
@@ -190,12 +205,20 @@ jobs:
         # proved by this lane as any other test is. The decision is `rust_plan`
         # in scripts/ci-repeat.py. This builds the changed crates' tests, the
         # one build of them the lane makes. A listing that fails fails the lane.
+        #
+        # It then reads the open `quarantine` issues with this run's token and
+        # leaves out each known flaky test the plan reached only through a
+        # parent module or a helper, saying which in the summary; a test whose
+        # own file changed stays. When GitHub cannot be read it leaves out
+        # nothing and says why in a warning (`leave_out_known_flaky`).
         id: rust-count
         if: steps.resolve.outputs.rust-count-needed == 'true'
         timeout-minutes: 25
         env:
           RUST: ${{ steps.resolve.outputs.rust }}
-        run: python3 scripts/ci-repeat.py rust-plan --rust "$RUST"
+          FILES: ${{ inputs.rust-files }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci-repeat.py rust-plan --rust "$RUST" --files "${FILES:-[]}"
       - name: Pack the Rust tests
         # One nextest archive per target of the plan, made with the cargo
         # arguments the listing used, so cargo finds those tests built and
@@ -204,7 +227,7 @@ jobs:
         # checks the repository out at the same path, so the paths compiled
         # into a test hold there (docs/TESTING.md, "The Rust lane's shards").
         id: rust-archive
-        if: steps.resolve.outputs.rust-count-needed == 'true'
+        if: steps.resolve.outputs.rust-count-needed == 'true' && steps.rust-count.outputs.rust-count != '0'
         timeout-minutes: 5
         env:
           PLAN: ${{ steps.rust-count.outputs.rust-plan }}
@@ -212,7 +235,7 @@ jobs:
           python3 scripts/ci-repeat.py rust-archive --plan "$PLAN" --dir "$RUNNER_TEMP/rust-repeat"
           ls -l "$RUNNER_TEMP/rust-repeat"
       - name: Keep the Rust tests for the Rust job
-        if: steps.resolve.outputs.rust-count-needed == 'true'
+        if: steps.resolve.outputs.rust-count-needed == 'true' && steps.rust-count.outputs.rust-count != '0'
         uses: actions/upload-artifact@v7
         timeout-minutes: 5
         with:
@@ -231,13 +254,15 @@ jobs:
           WEB_LIST: ${{ steps.web-count.outputs.web-list }}
           UNITS_COUNT: ${{ steps.units-count.outputs.units-count }}
           RUST_COUNT: ${{ steps.rust-count.outputs.rust-count }}
+          RUST_LEFT_OUT: ${{ steps.rust-count.outputs.rust-left-out }}
           NAMED: ${{ steps.resolve.outputs.repeat }}
           WEB: ${{ steps.resolve.outputs.web }}
           UNITS: ${{ steps.resolve.outputs.units }}
           RUST: ${{ steps.resolve.outputs.rust }}
         run: |
           python3 scripts/ci-repeat.py choose --event "$EVENT" --web "$WEB" --units "$UNITS" --rust "$RUST" \
-            --repeat "$NAMED" --web-list "$WEB_LIST" --units-count "$UNITS_COUNT" --rust-count "$RUST_COUNT"
+            --repeat "$NAMED" --web-list "$WEB_LIST" --units-count "$UNITS_COUNT" --rust-count "$RUST_COUNT" \
+            --rust-left-out "${RUST_LEFT_OUT:-0}"
 
   web:
     name: repeat web specs
