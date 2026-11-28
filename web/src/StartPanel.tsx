@@ -118,7 +118,7 @@ function useHandedStart() {
     () =>
       hostBridge()?.remoteScreens?.onWorkResult?.((result) => {
         const panel = useStartPanel.getState();
-        if (!panel.handed || result.request !== panel.handed.request) return;
+        if (!panel.handed || result.request !== panel.handed.request || result.outcome === "shown" || result.outcome === "not_listed") return;
         // Its tab exists there and its agent is coming up: no longer silence, and its end follows.
         if (result.outcome === "starting") return panel.handedStarting();
         const failure = handedFailure(result, panel.handed.device);

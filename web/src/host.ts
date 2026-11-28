@@ -391,6 +391,12 @@ export type RemoteScreensBridge = {
   onState(listener: (state: RemoteScreenState) => void): () => void;
   /** How each start handed by `go` ended, by its request id; returns the unsubscribe. Absent with `go`. */
   onWorkResult?(listener: (result: RemoteWorkResult & { device: string }) => void): () => void;
+  /**
+   * The desktop hands a show's `request` to the page and its answer back
+   * through `onWorkResult` (D-55); absent on an older desktop app, which
+   * drops the request, so this computer's own work opens in its own tile.
+   */
+  showAnswers?: true;
 };
 
 /** `failed` carries the reason this computer's daemon gave (`not_connected`, `paused`, `paused_there`, `no_grant`, ...). */

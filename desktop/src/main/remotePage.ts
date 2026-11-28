@@ -124,7 +124,11 @@ function parsePlace(value: unknown): RemotePlace | undefined {
 function parseWork(value: unknown): RemoteWork | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const work = value as Record<string, unknown>;
-  if (work.op === "show") return named(work.pane) ? { op: "show", pane: work.pane } : undefined;
+  if (work.op === "show") {
+    // A show with a request is answered by the page (D-55); one without is shown as before.
+    if (!named(work.pane) || (work.request !== undefined && !named(work.request, 128))) return undefined;
+    return work.request === undefined ? { op: "show", pane: work.pane } : { op: "show", pane: work.pane, request: work.request };
+  }
   if (work.op !== "start") return undefined;
   const place = parsePlace(work.place);
   const model = maybe(work.model);
@@ -157,6 +161,8 @@ export function parseWorkResult(value: unknown): RemoteWorkResult | undefined {
   if (!named(result.request, 128)) return undefined;
   const request = result.request;
   switch (result.outcome) {
+    case "shown":
+    case "not_listed":
     case "started":
     case "starting":
     case "unconfirmed":

@@ -331,6 +331,26 @@ describe("an ask of a remote screen", () => {
     expect(answers()).toEqual([{ device: DEVICE, request: "r-1", outcome: "refused", kind: "start_refused" }]);
   });
 
+  // PRD device-connect-iroh D-55: a show with a request is this computer's own work on that machine,
+  // and its window opens it in its own tile unless that machine's page says it shows it.
+  it("passes on a page's answer to a show asked with a request, and answers one that never reached its page", async () => {
+    const screens = screensOn(9, { event: vi.fn() });
+    const show = { op: "show", pane: "guest:mac:pane:w1:p3", request: "s-1" } as const;
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null, display: null });
+    screens.go({ device: DEVICE, key: KEY, work: show });
+    await loaded(1);
+    const view = views.at(-1)!;
+    expect(handed(view)).toEqual([show]);
+    const done = ipc.get(REMOTE_WORK_DONE_CHANNEL)!;
+    done(fromPage(view), { request: "s-1", outcome: "shown" });
+    done(fromPage(view), { request: "s-1", outcome: "not_listed" });
+    expect(answers()).toEqual([{ device: DEVICE, request: "s-1", outcome: "shown" }]);
+
+    screens.go({ device: DEVICE, key: REPLACEMENT, work: { ...show, request: "s-2" } });
+    screens.go({ device: DEVICE, key: REPLACEMENT, work: { op: "show", pane: "w1:p2" } });
+    expect(answers().slice(1)).toEqual([{ device: DEVICE, request: "s-2", outcome: "not_shown" }]);
+  });
+
   // An agent still coming up is not the end; a page that went takes its
   // made starts with it, logged and unanswered, so none is started twice.
   it("passes on an agent still starting and then its end, and forgets the starts of a page that went", async () => {

@@ -181,6 +181,8 @@ contextBridge.exposeInMainWorld("hideHost", {
     },
   },
   remoteScreens: {
+    // `go` carries a show's request to the page and `onWorkResult` its answer (D-55).
+    showAnswers: true,
     show(view: { device: string; key: string; rect: BrowserRect; name?: string | null; display?: DisplayPreferences } | null): void {
       ipcRenderer.send(REMOTE_SHOW_CHANNEL, view);
     },

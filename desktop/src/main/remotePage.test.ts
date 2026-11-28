@@ -87,6 +87,10 @@ describe("an ask of another machine's screen", () => {
     expect(parseGo({ device: "host-a", key: KEY, work: { ...start, prompt: "x".repeat(MAX_PROMPT + 1) } })).toBeUndefined();
     expect(parseGo({ device: "host-a", key: KEY, work: { op: "close", pane: "w1:p2" } })).toBeUndefined();
     expect(parseGo({ device: "host-a", key: KEY, work: { op: "show", pane: "" } })).toBeUndefined();
+    // A show asked with a request keeps it, a well-formed one only (D-55).
+    expect(parseGo({ device: "host-a", key: KEY, work: { op: "show", pane: "guest:mac:pane:w1:p2", request: "s-1" } })?.work).toEqual({ op: "show", pane: "guest:mac:pane:w1:p2", request: "s-1" });
+    expect(parseGo({ device: "host-a", key: KEY, work: { op: "show", pane: "w1:p2", request: "" } })).toBeUndefined();
+    expect(parseGo({ device: "host-a", key: KEY, work: { op: "show", pane: "w1:p2", request: "x".repeat(129) } })).toBeUndefined();
     expect(parseGo(null)).toBeUndefined();
   });
 });
@@ -96,6 +100,8 @@ describe("an ask of another machine's screen", () => {
 describe("a page's answer for a start", () => {
   it("takes each outcome with what it carries", () => {
     expect(parseWorkResult({ request: "r-1", outcome: "started" })).toEqual({ request: "r-1", outcome: "started" });
+    expect(parseWorkResult({ request: "s-1", outcome: "shown" })).toEqual({ request: "s-1", outcome: "shown" });
+    expect(parseWorkResult({ request: "s-1", outcome: "not_listed", pane: "x" })).toEqual({ request: "s-1", outcome: "not_listed" });
     expect(parseWorkResult({ request: "r-1", outcome: "starting" })).toEqual({ request: "r-1", outcome: "starting" });
     expect(parseWorkResult({ request: "r-1", outcome: "late", kind: "x" })).toEqual({ request: "r-1", outcome: "late" });
     expect(parseWorkResult({ request: "r-1", outcome: "not_added", kind: "workspace.create_refused" })).toEqual({ request: "r-1", outcome: "not_added", kind: "workspace.create_refused" });

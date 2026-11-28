@@ -18,6 +18,7 @@ import type { InterfaceLanguage } from "./i18n/locale";
 import type { ThemeChoice } from "./theme";
 import { hostBridge, type HostKind } from "./host";
 import { computerTiles, pairedComputer } from "./computers";
+import { followShow, ownWorkThere } from "./computerWork";
 import {
   closeWithSaveOutcome,
   deleteBuffer,
@@ -680,12 +681,66 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * focus mode (`openLook`, operator decision 2026-11-23).
    */
   const openAgent = (paneId: string, look?: LookAt) => {
+    stopShow?.();
+    stopShow = null;
+    // This computer's work that runs on a paired machine opens in that
+    // machine's tile, where its screen reads and types into it (PRD
+    // device-connect-iroh D-55); its Views stay in this computer's tile, so
+    // the head's eye opens here.
+    if (!look && showOwnWorkThere(paneId)) return;
     // A pane of this machine or of its devices shows on this machine's own
     // screen: from another computer's screen (an overlay such as the palette
     // drawn over it, or a key), the window shows its own again, told after
     // the open (`showScreen`).
     if (ui().remoteScreen !== null) return showScreen(null, () => openAgentHere(paneId, look));
     openAgentHere(paneId, look);
+  };
+
+  /** The show handed to a paired machine's screen that has not answered yet; a later open stops following it. */
+  let stopShow: (() => void) | null = null;
+
+  /**
+   * Hands `paneId` to the paired machine it runs on, when it is this
+   * computer's own work there and this window draws that machine's screen
+   * with a desktop that carries the answer; false leaves the open to this
+   * computer's tile. A screen that answers anything but `shown`, or nothing
+   * in time (an older build there), leaves the pane to this computer's tile
+   * too, while the operator still looks at that machine's tile.
+   */
+  const showOwnWorkThere = (paneId: string): boolean => {
+    const there = ownWorkThere(rest(), paneId);
+    const remote = hostBridge()?.remoteScreens;
+    if (!there || !remote?.showAnswers || !remote.onWorkResult) return false;
+    const screen = pairedComputer(rest(), there.deviceId)?.screen;
+    const request = remoteRequestId();
+    if (handComputerWork(there.deviceId, { op: "show", pane: there.pane, request }) !== "handed" || !screen) return false;
+    stopShow = followShow({ onWorkResult: remote.onWorkResult }, request, (why) => {
+      stopShow = null;
+      diagnostic(`show on ${there.deviceId}: ${why}; opened in this computer's tile`);
+      if (ui().remoteScreen === screen.device_id) showScreen(null, () => openAgentHere(paneId));
+    });
+    return true;
+  };
+
+  /**
+   * A paired computer's work on that computer's own screen (PRD
+   * device-connect-iroh D-73, D-78, D-81): its tile comes forward and its
+   * page shows the work its core knows by that pane, or makes the start,
+   * which is then that computer's own work and the page moves to it.
+   * `not_paired`: `deviceId` is no paired computer, and the caller does
+   * what it did before; `no_screen`: it is one, but no screen of it can be
+   * drawn here (a browser tab, an older desktop app, a pairing this
+   * window does not open), so nothing was handed.
+   */
+  const handComputerWork = (deviceId: string, work: RemoteWork): "handed" | "no_screen" | "not_paired" => {
+    const computer = pairedComputer(rest(), deviceId);
+    if (!computer) return "not_paired";
+    const remote = hostBridge()?.remoteScreens;
+    const screen = computer.screen;
+    if (!screen || !remote?.go || !remote.onWorkResult) return "no_screen";
+    const go = remote.go;
+    showScreen(screen.device_id, () => go({ device: screen.device_id, key: screen.key, work }));
+    return "handed";
   };
   const openAgentHere = (paneId: string, look?: LookAt) => {
     beginOpening({ paneId });
@@ -2030,26 +2085,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       this.focusDevice(id);
     },
 
-    /**
-     * A paired computer's work on that computer's own screen (PRD
-     * device-connect-iroh D-73, D-78, D-81): its tile comes forward and its
-     * page shows the work its core knows by that pane, or makes the start,
-     * which is then that computer's own work and the page moves to it.
-     * `not_paired`: `deviceId` is no paired computer, and the caller does
-     * what it did before; `no_screen`: it is one, but no screen of it can be
-     * drawn here (a browser tab, an older desktop app, a pairing this
-     * window does not open), so nothing was handed.
-     */
-    openComputerWork(deviceId: string, work: RemoteWork): "handed" | "no_screen" | "not_paired" {
-      const computer = pairedComputer(rest(), deviceId);
-      if (!computer) return "not_paired";
-      const remote = hostBridge()?.remoteScreens;
-      const screen = computer.screen;
-      if (!screen || !remote?.go || !remote.onWorkResult) return "no_screen";
-      const go = remote.go;
-      showScreen(screen.device_id, () => go({ device: screen.device_id, key: screen.key, work }));
-      return "handed";
-    },
+    /** A paired computer's work on that computer's own screen (`handComputerWork`). */
+    openComputerWork: handComputerWork,
 
     /**
      * Another computer's agent chosen here, by a row of that computer's own

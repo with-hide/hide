@@ -40,11 +40,14 @@ export function frontDeviceId(rest: SnapshotRest | null): string {
 }
 
 /**
- * The tile the rail rings (PRD device-connect-iroh D-55): the device in
- * front, except that this computer's work on a paired machine is this
- * computer's, opened in its own tile with that machine's mark, and so is a
- * pane of another machine's work that runs here. A paired machine's own tile
- * is that machine's screen, never this computer's work on it.
+ * The tile the rail rings while this window shows its own screen (PRD
+ * device-connect-iroh D-55): the device in front, except that this
+ * computer's work on a paired machine that stays in this computer's tile
+ * (its Views, a split, a new tab, a resume, and the pane itself where that
+ * machine's screen does not show it, `showOwnWorkThere`) is this computer's,
+ * drawn with that machine's mark, and so is a pane of another machine's work
+ * that runs here. A paired machine's own tile is that machine's screen, which
+ * the rail rings while it shows, the pane it opened there included.
  */
 export function railFrontId(rest: SnapshotRest | null, guestPaneInFront: boolean): string {
   const front = frontDeviceId(rest);

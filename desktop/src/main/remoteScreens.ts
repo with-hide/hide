@@ -35,10 +35,11 @@ export function registerRemoteScheme(): void {
 const KEPT = 3;
 
 /**
- * The starts handed to pages whose end is still owed to the shell. Past it
- * the oldest, and every one of a page that went, is answered `unconfirmed`:
- * it may have been made, so the shell keeps its words and asks to check that
- * computer's screen rather than starting it again.
+ * The starts, and the shows with a request (D-55), handed to pages whose end
+ * is still owed to the shell. Past it the oldest, and every one of a page
+ * that went, is answered `unconfirmed`: a start may have been made, so the
+ * shell keeps its words and asks to check that computer's screen rather than
+ * starting it again; a show's window opens the work in its own tile.
  */
 const OWED = 16;
 
@@ -231,7 +232,7 @@ export class RemoteScreens {
   private hand(screen: Screen, work: GoRequest["work"]): void {
     if (screen.view.webContents.isDestroyed()) return this.answer(screen.device, work, "not_shown");
     this.deps.log.event("remote.work_handed", { device: screen.device, op: work.op });
-    if (work.op === "start") {
+    if (work.request !== undefined) {
       this.owed.set(work.request, screen.device);
       for (const [request, device] of this.owed) {
         if (this.owed.size <= OWED) break;
@@ -261,9 +262,9 @@ export class RemoteScreens {
     this.answer(device, waiting.work, "not_shown");
   }
 
-  /** Tells the shell a start of its did not reach `device`'s page; nothing for a work to show. */
+  /** Tells the shell a start of its, or a show it asked an answer of, did not reach `device`'s page; nothing for a show without one. */
   private answer(device: string, work: GoRequest["work"], outcome: "not_shown"): void {
-    if (work.op === "start") this.toShell(device, { request: work.request, outcome });
+    if (work.request !== undefined) this.toShell(device, { request: work.request, outcome });
   }
 
   /** The starts `device`'s page was following go with the page: each is answered `unconfirmed` (see `OWED`). */
