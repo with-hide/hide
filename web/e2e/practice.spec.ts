@@ -212,6 +212,21 @@ for (const id of CHAPTER_IDS) {
   });
 }
 
+// The list is used by keyboard alone too: ⏎ opens the chosen chapter's card and the card's focused start button starts it.
+// Every other journey here clicks both, so this is the one place a card that stops taking focus is caught.
+test("Enter alone opens the chosen chapter's card on the list and starts it", async ({ page }) => {
+  await withPractice(page, async (practice) => {
+    await expect.poll(() => practiceState(practice)).toBe("hub");
+    await drawn(practice);
+    await practice.keyboard.press("Enter");
+    await expect.poll(() => practiceState(practice)).toMatch(/^hub~/);
+    await drawn(practice);
+    await practice.keyboard.press("Enter");
+    await expect.poll(() => practiceState(practice)).toMatch(/^[a-z]+:/);
+    await expect(practice.locator("[data-practice-layer]")).toBeVisible();
+  });
+});
+
 // The guide is not part of the screen it teaches: a press on its button leaves the keyboard in the pane that held it,
 // so a step whose chord acts where the keyboard is (⌘W closes that pane, ⌃⇥ starts from it) plays as ⏎ plays it.
 // The agents chapter is the one that closes a tab and goes back to the one before.
