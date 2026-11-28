@@ -714,7 +714,7 @@ class NamedPaths(unittest.TestCase):
             # The design contract's generators and checks, which `design-contract.yml` runs.
             "scripts/gen-tokens.mjs",
             "scripts/check-design-contract.mjs", "scripts/check-web-tokens.mjs", "scripts/check-agent-logos.mjs",
-            "scripts/merge-order.py", "scripts/pull_requests.py",
+            "scripts/merge-order.py", "scripts/pull_requests.py", "scripts/merge-hide-cli-contract.py",
             "contracts/README.md",
         ):
             with self.subTest(path=path):

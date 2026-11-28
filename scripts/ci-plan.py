@@ -980,7 +980,7 @@ POLICY_ONLY = (
     "scripts/check-retired-spellings.py",
     "scripts/check-no-workstation-identity.*", "scripts/check-worktree-removal-boundary.sh",
     "scripts/check-release-assets.mjs", "scripts/release-draft.mjs",
-    "scripts/merge-order.py", "scripts/pull_requests.py",
+    "scripts/merge-order.py", "scripts/pull_requests.py", "scripts/merge-hide-cli-contract.py",
     "scripts/web-shell-measure/*",
     # The pane holder's measurement, run by hand on macOS (docs/PERFORMANCE_TESTING.md).
     "scripts/holder-perf.py",
