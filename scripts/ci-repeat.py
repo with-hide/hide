@@ -34,20 +34,40 @@ tests, a fixture at the top of the file):
   reads the declarations the way rustc does; a file whose tests sit nowhere
   it can name is not selected, because the diff cannot say what they are.
 
-The budget is one number for the whole pull request: `BUDGET` test runs. Each
-test runs `repeats(N)` times, N being the tests that will run, counted by the
-tools that run them (`playwright test --list`, `vitest list`,
-`cargo nextest list`), of every kind:
-`clamp(floor(BUDGET / N), MIN_REPEAT, MAX_REPEAT)`. A pull request that
-changes more than `BUDGET / MIN_REPEAT` tests runs over the budget, because a
-repeat below three shows too little.
+Two budgets, because a web test costs seconds and a unit or Rust test does not:
+
+* Web specs: `WEB_BUDGET_SECONDS` recorded test-seconds for the pull request,
+  read from the Linux suite's duration table (`WEB_TABLE`, the one
+  `scripts/e2e-shard.py` deals the web shards by; a test it does not know
+  weighs the table's median, as there). One pass is the summed seconds of the
+  tests `playwright test --list` names, and each test runs
+  `clamp(floor(WEB_BUDGET_SECONDS / one pass), MIN_REPEAT, MAX_REPEAT)` times.
+  The specs run on as many shards of `web-e2e.yml` as keep each one at
+  `WEB_SHARD_SECONDS` of planned test time or less, at most `WEB_MAX_SHARDS`,
+  dealt by `e2e-shard.py split`; when even `MIN_REPEAT` passes exceed the
+  budget they run `MIN_REPEAT` times anyway, on at most
+  `WEB_OVER_BUDGET_MAX_SHARDS` shards (`web_plan`).
+* Unit test files and Rust modules: `BUDGET` test runs. Each test runs
+  `repeats(N)` times, N being the unit and Rust tests that will run, counted by
+  the tools that run them (`vitest list`, `cargo nextest list`):
+  `clamp(floor(BUDGET / N), MIN_REPEAT, MAX_REPEAT)`. A pull request that
+  changes more than `BUDGET / MIN_REPEAT` of them runs over the budget,
+  because a repeat below three shows too little.
+
+The count job's listing builds the changed crates' tests once; it packs each
+target it listed into a nextest archive with the same cargo arguments
+(`rust_archive`), so cargo only packs what it built, and the Rust leg runs
+that archive rather than building the tests again. A hand run names its own
+repeat, counts nothing and runs on one web shard, its Rust leg building on the
+system it asked for.
 
 `select` is what `scripts/ci-plan.py` calls; the subcommands are what
-`repeat.yml` calls.
+`repeat.yml` and `web-e2e.yml` call.
 """
 import argparse
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -61,8 +81,18 @@ ROOT = Path(__file__).resolve().parent.parent
 _RUST_SCAN = importlib.util.spec_from_file_location("rust_scan", Path(__file__).resolve().parent / "rust_scan.py")
 rust_scan = importlib.util.module_from_spec(_RUST_SCAN)
 _RUST_SCAN.loader.exec_module(rust_scan)
+_E2E_SHARD = importlib.util.spec_from_file_location("e2e_shard", Path(__file__).resolve().parent / "e2e-shard.py")
+e2e_shard = importlib.util.module_from_spec(_E2E_SHARD)
+_E2E_SHARD.loader.exec_module(e2e_shard)
 
 BUDGET = 200
+# The web specs' budget, in the recorded seconds of one test run each.
+WEB_BUDGET_SECONDS = 2400
+WEB_SHARD_SECONDS = 600
+WEB_MAX_SHARDS = 4
+WEB_OVER_BUDGET_MAX_SHARDS = 6
+# The Linux suite's table, which a pull request's web repeat runs against.
+WEB_TABLE = "web/e2e/shard-durations.json"
 MIN_REPEAT = 3
 MAX_REPEAT = 10
 # A hand run names its own repeat; this is the most it may ask for, so a typo
@@ -102,23 +132,33 @@ def count_value(value):
     return int(value)
 
 
-def choose(event, web, rust, named, web_count, rust_count, units=None, units_count=""):
+def choose(event, web, rust, named, planned, rust_count, units=None, units_count=""):
     """One explicit run decision for every leg of the lane.
 
     The legs are the Playwright specs (`web`), the Rust tests (`rust`) and the
     packages' Vitest unit test files (`units`). A hand run names its own
-    repeat and counts nothing; a pull request runs `count` first and this
-    decides from what the runners listed.
+    repeat, counts nothing and runs its specs on one shard; a pull request runs
+    `count` first and this decides from what the runners listed: the web
+    specs from `planned`, what `web_plan` made of their seconds budget, and
+    the unit and Rust tests from their count (`repeat`, the run-count budget
+    they share).
     """
     units = [] if units is None else units
     selected = {"web": bool(web), "rust": bool(rust), "units": bool(units)}
+    tests = selected["rust"] or selected["units"]
     if event == "workflow_dispatch":
-        times = count_value(named)
-        if not 1 <= times <= DISPATCH_MAX_REPEAT or not any(selected.values()):
+        named = count_value(named)
+        if not 1 <= named <= DISPATCH_MAX_REPEAT or not any(selected.values()):
             raise ValueError("a hand run needs named tests and a repeat from 1 to 100")
+        web_times, web_shards, web_parts = (named, 1, 1) if selected["web"] else (0, 0, 0)
+        times = named if tests else 0
     else:
+        if selected["web"] and not planned:
+            raise ValueError("selected web files listed no tests")
+        web_times, web_shards, web_parts = ((planned["repeat"], planned["shards"], planned["parts"])
+                                            if selected["web"] else (0, 0, 0))
         counts = {}
-        for kind, raw in (("web", web_count), ("rust", rust_count), ("units", units_count)):
+        for kind, raw in (("rust", rust_count), ("units", units_count)):
             counts[kind] = count_value(raw) if selected[kind] else 0
             if selected[kind] and counts[kind] == 0:
                 raise ValueError(f"selected {kind} files listed no tests")
@@ -128,7 +168,80 @@ def choose(event, web, rust, named, web_count, rust_count, units=None, units_cou
         "run-rust": str(selected["rust"]).lower(),
         "run-units": str(selected["units"]).lower(),
         "repeat": times,
+        "web-repeat": web_times,
+        "web-shards": web_shards,
+        "web-parts": web_parts,
     }
+
+
+def web_plan(listing, table):
+    """How a pull request's changed web specs repeat, and on how many shards.
+
+    `listing` is `playwright test --list --reporter=list` of the specs and
+    `table` the Linux suite's duration table. Each test weighs what
+    `e2e-shard.py` weighs it, so a test the table lacks counts at the table's
+    median there and here.
+
+    A shard runs one group of the tests, dealt by `e2e-shard.py split` as
+    `web-e2e.yml` deals them, for one part of the repeat: `groups` x `parts`
+    shards, so one test heavier than a shard's share runs its repeats on
+    several runners. The plan is the fewest shards whose heaviest plans
+    `WEB_SHARD_SECONDS` or less, cutting the repeat only where dealing the
+    tests alone needs more shards; when no count within the cap gets there, it
+    is the one whose heaviest is lightest.
+    """
+    try:
+        tests = e2e_shard.listed_tests(listing)
+    except e2e_shard.Refused as error:
+        raise ValueError(f"the web listing: {error}")
+    total = listed_tests(listing)
+    if len(tests) != total:
+        raise ValueError(f"the Playwright list totals {total} tests but names {len(tests)}")
+    one_pass = sum(e2e_shard.weights(tests, table).values())
+    if one_pass > 0:
+        times = max(MIN_REPEAT, min(MAX_REPEAT, math.floor(WEB_BUDGET_SECONDS / one_pass)))
+    else:
+        # Tests the Linux lane only skips cost it nothing.
+        times = MAX_REPEAT
+    most = WEB_MAX_SHARDS if one_pass * times <= WEB_BUDGET_SECONDS else WEB_OVER_BUDGET_MAX_SHARDS
+    candidates = []
+    # No more groups than tests and no more parts than repeats: a shard with
+    # no test or no run would prove nothing.
+    for groups in range(1, min(most, len(tests)) + 1):
+        heaviest_pass = max(e2e_shard.split(tests, table, groups)[1])
+        for parts in range(1, min(most // groups, times) + 1):
+            heaviest = heaviest_pass * math.ceil(times / parts)
+            fits = heaviest <= WEB_SHARD_SECONDS
+            shards = groups * parts
+            candidates.append(((0, shards, parts, heaviest) if fits else (1, heaviest, shards, parts), groups, parts, heaviest))
+    _, groups, parts, heaviest = min(candidates)
+    return {"tests": len(tests), "seconds": round(one_pass, 1), "repeat": times, "shards": groups * parts,
+            "parts": parts, "heaviest": round(heaviest, 1)}
+
+
+def shard_share(shard, shards, parts, times):
+    """What one shard of a web repeat runs: `(group, groups, repeat)`.
+
+    The shards are `groups` x `parts`; shard `shard` (one-based) runs test
+    group `(shard - 1) % groups + 1` of `groups` for its part of the `times`
+    repeats, the first `times % parts` parts taking one more, so every group
+    runs `times` times across its parts.
+    """
+    if not (1 <= parts <= shards and shards % parts == 0 and 1 <= shard <= shards and parts <= times):
+        raise ValueError(f"no share of a repeat of {times} in {parts} parts for shard {shard}/{shards}")
+    groups = shards // parts
+    part = (shard - 1) // groups
+    return (shard - 1) % groups + 1, groups, times // parts + (part < times % parts)
+
+
+def total_completed(paths, shards):
+    """The completed runs of a sharded web repeat: one count per shard, each read from that shard's own report."""
+    if len(paths) != shards:
+        raise ValueError(f"{len(paths)} shard counts for a repeat on {shards} shards")
+    counts = [count_value(Path(path).read_text(encoding="utf-8").strip()) for path in paths]
+    if 0 in counts:
+        raise ValueError("a repeat shard completed zero tests")
+    return sum(counts)
 
 
 def verdict(needs):
@@ -136,7 +249,9 @@ def verdict(needs):
     if needs["count"]["result"] != "success":
         raise ValueError("choosing the repeat did not succeed")
     outputs = needs["count"]["outputs"]
-    times = count_value(outputs["repeat"])
+    # The web specs repeat by their seconds budget, the unit and Rust tests by their shared count.
+    times = {"web": count_value(outputs["web-repeat"])}
+    times["units"] = times["rust"] = count_value(outputs["repeat"])
     for kind in ("web", "rust", "units"):
         selected = outputs[f"run-{kind}"]
         if selected not in ("true", "false"):
@@ -147,9 +262,11 @@ def verdict(needs):
             raise ValueError(f"{kind}: expected {expected}, got {job['result']}")
         if selected == "true":
             completed = count_value(job["outputs"].get("completed", ""))
-            if times == 0 or completed == 0 or completed % times:
-                raise ValueError(f"{kind}: {completed} completed test runs do not prove {times} repeats")
-    if (times > 0) != any(outputs[f"run-{kind}"] == "true" for kind in ("web", "rust", "units")):
+            if times[kind] == 0 or completed == 0 or completed % times[kind]:
+                raise ValueError(f"{kind}: {completed} completed test runs do not prove {times[kind]} repeats")
+    if (times["web"] > 0) != (outputs["run-web"] == "true"):
+        raise ValueError("the web repeat and run decisions disagree")
+    if (times["units"] > 0) != any(outputs[f"run-{kind}"] == "true" for kind in ("rust", "units")):
         raise ValueError("the repeat and run decisions disagree")
 
 
@@ -554,8 +671,7 @@ def nextest_lister(package, test, expression, run_ignored=""):
     `ignored-only`; only the last two are passed, so the ordinary listing
     stays the one nextest makes by itself.
     """
-    command = [bash(), "scripts/verify-cargo.sh", "nextest-list", "--profile", "ci", "-p", package]
-    command += ["--test", "it"] if test == "it" else [f"--{test}s"] if test == "bin" else ["--lib"]
+    command = [bash(), "scripts/verify-cargo.sh", "nextest-list", "--profile", "ci", *nextest_target(package, test)]
     if expression:
         command += ["-E", expression]
     if run_ignored:
@@ -574,6 +690,54 @@ def nextest_lister(package, test, expression, run_ignored=""):
             f"stdout:\n{tail(listed.stdout)}\nstderr:\n{tail(listed.stderr)}"
         )
     return nextest_counted(listed.stdout)
+
+
+def nextest_target(package, test):
+    """The cargo arguments that pick one target of a package: `it` is the
+    crate's `tests/it` binary, and `lib` and `bin` its library and programs.
+
+    The listing and the archive both use these, so the archive asks cargo for
+    exactly the tests the listing built and cargo only packs them.
+    """
+    return ["-p", package, *(["--test", "it"] if test == "it" else ["--bins"] if test == "bin" else ["--lib"])]
+
+
+def archive_name(entry):
+    """The file one Rust plan entry's tests are packed into."""
+    return f"{entry['package']}-{entry['test']}.tar.zst"
+
+
+def plan_entry(entry):
+    """A Rust plan entry the jobs may read, or a refusal."""
+    if (not PACKAGE.match(entry["package"]) or entry.get("test") not in ("it", "lib", "bin")
+            or not re.fullmatch(r"(?:test\(/\^\([a-z0-9_:|]+\)::/\))?", entry["filter"])
+            or entry.get("run_ignored", "") not in ("", "ignored-only")):
+        raise ValueError(f"not a Rust plan entry: {entry!r}")
+    return entry
+
+
+def rust_archive(plan, directory, packer):
+    """Pack each target of a pull request's plan into its own nextest archive.
+
+    `packer(path, arguments)` runs `cargo nextest archive` with the cargo
+    arguments the listing used, so it finds the listed tests built. One archive
+    per target, because an archive run takes no `-p` or target flag: the
+    archive holds that target's tests and nothing else, and the filterset picks
+    the modules. A plan asks for no ignored test (`rust_plan`); one that did
+    would need the holder built, which the Rust leg cannot do without a
+    compiler, so it is refused here.
+    """
+    for entry in plan:
+        plan_entry(entry)
+        if entry.get("run_ignored"):
+            raise ValueError(f"a pull request's plan asks for no ignored test: {entry!r}")
+        packer(Path(directory) / archive_name(entry), nextest_target(entry["package"], entry["test"]))
+
+
+def nextest_packer(path, arguments):
+    """`cargo nextest archive` into `path`, its output in the job's log."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([bash(), "scripts/verify-cargo.sh", "nextest-archive", str(path), *arguments], cwd=ROOT, check=True)
 
 
 def resolve(event, web, rust, repeat, runner, units=""):
@@ -661,13 +825,15 @@ def main():
     resolve_parser.add_argument("--rust", default="")
     resolve_parser.add_argument("--repeat", default="")
     resolve_parser.add_argument("--runner", default="linux")
-    sub.add_parser("count-listed", help="count the tests of `playwright test --list` output on stdin")
     pattern_parser = sub.add_parser("spec-patterns", help="one Playwright file filter per line for each spec")
     pattern_parser.add_argument("specs", nargs="+")
     sub.add_parser("count-nextest", help="count the tests of `cargo nextest list --message-format json` output on stdin")
     plan_parser = sub.add_parser("rust-plan", help="list the selected modules' tests and write the Rust job's plan")
     plan_parser.add_argument("--rust", required=True, help="the JSON list of modules")
-    lines_parser = sub.add_parser("plan-lines", help="one `package test filterset run_ignored` line per target of a Rust plan, fields split by UNIT_SEPARATOR")
+    archive_parser = sub.add_parser("rust-archive", help="pack each target of a Rust plan into its own nextest archive")
+    archive_parser.add_argument("--plan", required=True, help="the JSON plan")
+    archive_parser.add_argument("--dir", required=True, type=Path, help="where the archives are written")
+    lines_parser = sub.add_parser("plan-lines", help="one `package test filterset run_ignored archive` line per target of a Rust plan, fields split by UNIT_SEPARATOR")
     lines_parser.add_argument("--plan", required=True, help="the JSON plan")
     units_parser = sub.add_parser("units-plan", help="list the selected unit test files' tests and write the units job's plan")
     units_parser.add_argument("--units", required=True, help="the JSON list of unit test paths")
@@ -679,10 +845,18 @@ def main():
     choose_parser.add_argument("--units", default="[]")
     choose_parser.add_argument("--rust", required=True)
     choose_parser.add_argument("--repeat", default="")
-    choose_parser.add_argument("--web-count", default="")
+    choose_parser.add_argument("--web-list", default="", help="a pull request's `playwright test --list` output of its specs")
+    choose_parser.add_argument("--table", default=WEB_TABLE, help="the duration table the web shards are dealt by")
     choose_parser.add_argument("--units-count", default="")
     choose_parser.add_argument("--rust-count", default="")
     sub.add_parser("verdict", help="fail unless every chosen repeat leg completed tests (NEEDS JSON)")
+    share_parser = sub.add_parser("shard-share", help="print `group/groups repeat` for one shard of a web repeat")
+    share_parser.add_argument("--shard", required=True, help="CURRENT/TOTAL, one-based")
+    share_parser.add_argument("--parts", required=True, type=int)
+    share_parser.add_argument("--repeat", required=True)
+    total_parser = sub.add_parser("total", help="sum the completed runs each shard of a web repeat kept")
+    total_parser.add_argument("--shards", required=True, type=int)
+    total_parser.add_argument("counts", nargs="*", help="one file per shard holding its completed runs")
     report_parser = sub.add_parser("report", help="report completed runs from Playwright JSON or a JUnit report")
     reports = report_parser.add_mutually_exclusive_group(required=True)
     reports.add_argument("--playwright")
@@ -691,14 +865,30 @@ def main():
 
     try:
         if args.command == "choose":
-            decision = choose(args.event, args.web, json.loads(args.rust), args.repeat, args.web_count, args.rust_count,
+            plan = None
+            if args.web_list:
+                plan = web_plan(Path(args.web_list).read_text(encoding="utf-8"), e2e_shard.read_table(args.table))
+            decision = choose(args.event, args.web, json.loads(args.rust), args.repeat, plan, args.rust_count,
                               json.loads(args.units), args.units_count)
             write_outputs(decision)
             if os.environ.get("GITHUB_STEP_SUMMARY"):
                 with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-                    summary.write(f"Tests counted: web={args.web_count or 'not counted'}, "
+                    web = (f"{plan['tests']} ({plan['seconds']} s a pass, the heaviest of {plan['shards']} shards "
+                           f"in {plan['parts']} repeat parts {plan['heaviest']} s)") if plan else "not counted"
+                    summary.write(f"Tests counted: web={web}, "
                                   f"units={args.units_count or 'not counted'}, Rust={args.rust_count or 'not counted'}.\n")
                     summary.write(f"Repeat decision: {json.dumps(decision)}\n")
+        elif args.command == "shard-share":
+            found = re.fullmatch(r"([0-9]+)/([0-9]+)", args.shard)
+            if not found:
+                raise ValueError(f"expected CURRENT/TOTAL, got {args.shard!r}")
+            group, groups, times = shard_share(int(found[1]), int(found[2]), args.parts, count_value(args.repeat))
+            print(f"{group}/{groups} {times}")
+        elif args.command == "total":
+            write_outputs({"completed": total_completed(args.counts, args.shards)})
+        elif args.command == "rust-archive":
+            rust_archive(json.loads(args.plan), args.dir, nextest_packer)
+            write_outputs({"rust-archived": "true"})
         elif args.command == "verdict":
             verdict(json.loads(os.environ["NEEDS"]))
             print("Every chosen repeat leg completed its tests.")
@@ -738,18 +928,12 @@ def main():
         elif args.command == "plan-lines":
             lines = []
             for entry in plan_run_ignored(json.loads(args.plan)):
-                if (not PACKAGE.match(entry["package"]) or entry.get("test") not in ("it", "lib", "bin")
-                        or not re.fullmatch(r"(?:test\(/\^\([a-z0-9_:|]+\)::/\))?", entry["filter"])):
-                    raise ValueError(f"not a Rust plan entry: {entry!r}")
-                run_ignored = entry.get("run_ignored", "")
-                if run_ignored not in ("", "ignored-only"):
-                    raise ValueError(f"not a Rust plan entry: {entry!r}")
-                lines.append(UNIT_SEPARATOR.join((entry["package"], entry["test"], entry["filter"], run_ignored)))
+                plan_entry(entry)
+                lines.append(UNIT_SEPARATOR.join((entry["package"], entry["test"], entry["filter"],
+                                                  entry.get("run_ignored", ""), archive_name(entry))))
             write_lines(lines)
         elif args.command == "count-nextest":
             print(nextest_listed(sys.stdin.read()))
-        elif args.command == "count-listed":
-            print(listed_tests(sys.stdin.read()))
         elif args.command == "spec-patterns":
             for path in args.specs:
                 print(spec_pattern(path))
