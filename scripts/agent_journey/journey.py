@@ -21,6 +21,7 @@ from agent_live_check.system import git, same_path
 
 from . import (cells, composer, failure, fork, hook_records, kit, memory, provider_limit, scene, stop_observer, title,
                usage)
+from .controller import ControllerUnavailable
 from .requests import model_requests
 
 # The most a failed cell keeps of what the pane's hooks recorded (hook_records.pane_record).
@@ -429,7 +430,10 @@ class Journey:
 
     def step(self, name, *args):
         """Runs one step; a transport failure or a bound it reached fails the
-        step's open cell with that reason, and cancellation stops the run."""
+        step's open cell with that reason, and cancellation stops the run. A
+        cell the controller refused, because an earlier command's processes
+        were never confirmed ended, is not measured, naming that command: the
+        cell that ran it already failed, and this one never ran."""
         self.provider_mark = self.mark_provider()
         # The step's times, in the report whatever its cells read.
         times = {"step": name, "started_ms": failure.now_ms()}
@@ -443,7 +447,10 @@ class Journey:
         except ProcessError as error:
             for cell in self.STEP_CELLS.get(name, (name,)):
                 if self.table[self.id][cell]["status"] == cells.PENDING:
-                    self.settle(cell, (cells.FAIL, str(error)))
+                    if isinstance(error, ControllerUnavailable):
+                        cells.settle(self.table, self.id, cell, cells.NOT_MEASURED, str(error))
+                    else:
+                        self.settle(cell, (cells.FAIL, str(error)))
                     break
         finally:
             times["ended_ms"] = failure.now_ms()

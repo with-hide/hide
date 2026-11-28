@@ -81,6 +81,25 @@ class Supervisor(unittest.TestCase):
         self.assertEqual(supervisor["phase"], "exited")
         self.assertEqual(answer, {"ok": False, "reason": "request_timeout"})
 
+    def test_a_descendant_holding_the_streams_fails_the_command_but_settles_it(self):
+        # Issue 3166: a descendant inherits the command's streams and outlives
+        # it. The answer stays untrusted, the driver names the open streams,
+        # and the supervisor's cleanup ends the descendant, so the next command may run.
+        ready = self.root / "held-streams" / "ready"
+        helper = f"import time; from pathlib import Path; Path({str(ready)!r}).write_text('1'); time.sleep(60)"
+        code = ("import subprocess,sys,time; from pathlib import Path; "
+                f"subprocess.Popen([sys.executable,'-I','-c',{helper!r}], stdout=sys.stdout, stderr=sys.stderr); "
+                f"ready=Path({str(ready)!r})\n"
+                "while not ready.exists(): time.sleep(.01)\n"
+                "print('{\"ok\":true}',flush=True)")
+        root, supervisor, answer = self.execute("held-streams", code, within_ms=20000)
+        self.assertEqual((root / "response.json").read_text().strip(), '{"ok":true}')
+        self.assertEqual((supervisor["phase"], supervisor["exit"]), ("exited", 1))
+        self.assertTrue(supervisor["cleanup_confirmed"])
+        self.assertEqual(answer["driver"]["phase"], "capture_incomplete")
+        self.assertEqual(answer["driver"]["streams"], {"stdout": "open", "stderr": "open"})
+        self.assertEqual(answer["reason"], "controller_command_failed")
+
     def test_native_spawn_failure_reports_its_phase(self):
         root = self.root / "native-spawn"
         root.mkdir(mode=0o700)

@@ -5,7 +5,10 @@ the command's, and its answer is in the response file.
 
 The C provider owns this process and every descendant, including on timeout.
 Drain both pipes together with a retained-byte cap; inherited pipes cannot
-keep a finished command's driver alive indefinitely.
+keep a finished command's driver alive indefinitely. A capture that misses a
+stream's end names each stream's state: `ended`, `open` (no end within
+PIPE_END_SECONDS of the command's exit, as when a descendant still holds it),
+or the reader's error type; and `child_ms` says how long the command ran.
 """
 
 import json
@@ -13,6 +16,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 
 OUTPUT_BYTES = 1024 * 1024
 PIPE_END_SECONDS = 2
@@ -32,9 +36,10 @@ def run(command):
         except OSError as error:
             result["os_error"] = getattr(error, "winerror", None) or error.errno
             return result
-        overflow, capture_errors = threading.Event(), []
+        started = time.monotonic()
+        overflow, ended = threading.Event(), {}
 
-        def drain(pipe, output):
+        def drain(name, pipe, output):
             retained = 0
             try:
                 while data := pipe.read1(8192):
@@ -46,20 +51,26 @@ def run(command):
                     if len(keep) != len(data):
                         overflow.set()
                         child.kill()
+                ended[name] = "ended"
             except (OSError, ValueError) as error:
-                capture_errors.append(type(error).__name__)
+                ended[name] = type(error).__name__
             finally:
                 pipe.close()
 
-        readers = [threading.Thread(target=drain, args=(pipe, output), daemon=True)
-                   for pipe, output in ((child.stdout, response), (child.stderr, stderr))]
+        streams = {"stdout": (child.stdout, response), "stderr": (child.stderr, stderr)}
+        readers = [threading.Thread(target=drain, args=(name, pipe, output), daemon=True)
+                   for name, (pipe, output) in streams.items()]
         for reader in readers:
             reader.start()
         result["exit"] = child.wait()
+        result["child_ms"] = round((time.monotonic() - started) * 1000)
         for reader in readers:
             reader.join(PIPE_END_SECONDS)
+        # A reader still blocked owns no entry; read once, so the phase and
+        # the states describe the same moment.
+        result["streams"] = {name: ended.get(name, "open") for name in streams}
         result["phase"] = ("output_limit" if overflow.is_set() else
-                           "capture_incomplete" if capture_errors or any(reader.is_alive() for reader in readers)
+                           "capture_incomplete" if set(result["streams"].values()) != {"ended"}
                            else "exited")
         if result["phase"] != "exited":
             result["exit"] = 1

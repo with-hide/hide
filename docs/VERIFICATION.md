@@ -257,12 +257,15 @@ Only the test lane's exclusively owned disposable HOME permits attributed restor
 
 The journey's controller must outlive the local CLI protocol it measures: its 42-second command budget covers the 10-second bootstrap, 30-second spawn exchange and two-second claim.
 The observer allows the supervisor's separate 20-second cleanup bound and five seconds to publish completion; none of those reserves authorizes another command after an unsettled result.
+A result is unsettled when no completion arrives or the supervisor's outcome for that command does not confirm that every process of it ended; no later command runs then, and each cell that would have run one reads not measured, naming the unsettled command, since only the cell that ran it failed.
 The controller requires matching command identities, ordinary child completion and confirmed cleanup before accepting a JSON answer, including one written before a later watchdog timeout.
+A settled command that falls short of that, such as a supervisor deadline or an incomplete capture, fails the cell that ran it as `controller_command_failed`, naming the command and what its processes reported, never as the product's refusal, and the next command runs, because the supervisor confirmed nothing of the failed one remains.
 It preserves each command's bounded raw stdout and stderr (one MiB each), driver result and supervisor outcome under the ignored run directory, even when a later cell runs.
 The driver reads available chunks and flushes each retained chunk to its private file, rather than waiting for EOF or normal shutdown.
+A stream that has not ended two seconds after the command exits, as when a descendant still holds it, leaves the capture incomplete; the driver records each stream's state (`ended`, `open`, or its reader's error type) and how long the command ran.
 At most 512 controller commands run; the report carries byte counts and constant phase identifiers, and the retained raw streams stay out of the uploaded journey report.
 An empty or invalid answer remains a failure; a nonzero child exit carrying the product's structured refusal remains that refusal.
-The controller boundary check distinguishes stderr-only exits, OS launch errors, supervisor deadlines and inner structured timeouts on the actual compiled provider, without a desktop or agent CLI.
+The controller boundary check distinguishes stderr-only exits, OS launch errors, supervisor deadlines, inner structured timeouts and a descendant that holds the command's streams past its exit on the actual compiled provider, without a desktop or agent CLI.
 It also retains a grandchild's process object on Windows and requires it signalled, with its open file released, when completion is published.
 The supervisor follows job membership before the root starts and waits for every announced process object, since an active-process count of zero alone precedes handle release; on Unix it keeps the group leader unreaped until the final group signal so a reused pid cannot be targeted.
 On Linux the provider becomes a child subreaper and reaps its own adopted descendants, requiring both the kernel's no-child result and the group's absence before completion; leaving that work to an outer guardian would make each wait for the other.
