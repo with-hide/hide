@@ -480,7 +480,7 @@ pub(crate) const TOPICS: &[Topic] = &[
     },
     Topic {
         word: "import",
-        shown: Shown::Off("a person's one-time move from Herdr, which Hide no longer runs"),
+        shown: Shown::Off("a person's one-time move from the engine Hide ran before"),
         usage: || IMPORT_USAGE.to_owned(),
     },
     Topic {

@@ -59,7 +59,7 @@ The daily agent canary measures each CLI's latest release in place of these pins
 
 `hide-cli.json` is what `hide contract --json` exports: the commands other tools call (`hide agent`, `request`, `inbox`, `watch`), their options, and the JSON Schema of each answer ([docs/delivery.md](../docs/delivery.md#the-contract-a-calling-tool-checks)).
 The build is the writer; `hided/src/cli_contract.rs`'s `the_committed_contract_is_the_exported_one` fails until this file matches what it exports.
-A command marked `"hidden": true` is one the CLI admits but no person types, the `hide device` verbs one Hide runs on another machine's account while they pair or connect (`look-ssh`, `accept-ssh`, `projects-ssh`, `carry`); `hide --help` does not list them and a calling tool does not offer them either.
+A command marked `"hidden": true` is one the CLI admits but no person types, the `hide device` verbs one Hide runs on another machine's account while they pair or connect (`look-ssh`, `accept-ssh`, `projects-ssh`, `carry`); `hide device --help` does not list them and a calling tool does not offer them either.
 Regenerate it after a change to those commands, and review the diff as the change callers see:
 
 ```sh

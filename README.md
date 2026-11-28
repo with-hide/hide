@@ -216,7 +216,7 @@ hide mission help                                                     # plan and
 hide device add workbox                                               # another machine, by SSH alias
 ```
 
-`hide guide` prints how an agent works inside hide, and `hide --help` lists every command.
+`hide guide` prints how an agent works inside hide, `hide --help` lists the command topics on one screen, and `hide <topic> --help` (or `hide help <topic>`) prints one topic's commands.
 
 ## Install
 

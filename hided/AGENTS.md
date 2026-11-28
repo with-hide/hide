@@ -46,13 +46,20 @@ Do not copy those contracts here.
 
 ## Help
 
+- `hide --help` (also `hide help` and `hide -h`) is one screen of 80 columns and 40 lines: the topics by group, each on one row with what it is for, and no command's syntax but `hide [open] [<path>]`.
+  Every topic a person or an agent types is on it once; a hook's and the host's own commands are not topics, and a topic left off it says why (`Shown::Off`).
+- `TOPICS` in `cli.rs` is the one list of topics: the first screen, `hide <topic> --help`, `hide help <topic>` and the guide's test of what an agent is taught all read it, so a new topic, or a change of the screen's wording or grouping, is an edit of that list.
+- A topic's help is its own: `hide <topic> --help` prints that topic's commands and no other topic's, and a wrong command prints its reason, then that topic's usage.
+  The topics whose `--help` is their guide (`mission`, `task`, `wait`, `automation`, and `agent spawn`) keep it.
+- `hide help <topic> …` is read as `hide <topic> … --help` by the same parser, so the two print the same text; a retired topic word prints the help of the topic it is now, and a word that names no topic is refused with `hide --help`.
 - Usage text and the contract table hold each other: every command and option of the table is in its topic's `--help`, and every `hide` line and `--option` in a usage is in the table.
   A test fails either way, so change both in the same commit.
-- `hide <topic> <verb> --help` prints the usage of the parser that reads the command (`command_usage` in `cli.rs`), which for `agent profile` and `agent read` is not the `agent` topic's own.
+- `hide <topic> <verb> --help` prints the usage of the parser that reads the command (`command_usage` in `cli.rs`), which for `agent profile` is not the `agent` topic's own.
+- The site's CLI reference reads the topics from the first screen and each topic's commands from its `--help` (`scripts/docs/cli-reference.mjs`), so a command added to a topic's help needs its note in `site/src/data/cli-notes.json`.
 
 ## Commands a program calls
 
-- The verbs one Hide runs on another machine's account are marked hidden in the contract (`BETWEEN_HIDES`) and not printed by `hide --help`.
+- The verbs one Hide runs on another machine's account are marked hidden in the contract (`BETWEEN_HIDES`) and not printed by `hide device --help`.
 - A command a program calls that the usage leaves out is listed, with its caller, in the usage test's `PROGRAM_ONLY`.
 - Before adding one, look for a caller of the ones that exist; a command nothing calls is deleted, not kept.
 
@@ -80,6 +87,7 @@ Do not copy those contracts here.
 | One value type per option name | `an_option_name_takes_one_value_type_across_the_table` |
 | Every verb has its line | `every_verb_of_the_table_is_in_the_registry` |
 | Usage and table agree both ways | `the_usage_and_the_table_name_the_same_commands_and_options` |
+| The first screen is the topics by group on one screen, a topic's help is its own, `hide help <topic>` is the same text, and every topic of the table is in `TOPICS` | `the_first_screen_is_the_topics_by_group_on_one_screen`, `a_topics_help_names_only_its_own_commands`, `hide_help_topic_is_the_topics_help` (`cli.rs`), `every_topic_of_the_table_is_a_help_topic` (`cli_contract.rs`) |
 | What an agent is taught names contract commands and no retired spelling | `every_contract_command_an_agent_is_taught_is_in_the_contract` (`guide.rs`) |
 | No retired spelling in any other tracked text file: the core's texts, the other crates, `docs/`, `site/`, `web/src`, the root documents, `.claude/skills`, the scripts | `python3 scripts/check-retired-spellings.py` |
 

@@ -16,7 +16,7 @@ Every pane, agent and letter command here is a `hide` command; there is no other
 
 - Your session's start note from Hide, when there is one, names your checkout and points at the commands you need most; when the note and this guide differ, the note is right for this pane.
 - `hide checkout show` answers the same for this checkout now: the Workspace, the checkout, the device id and the commands available.
-- `hide --help` lists every command's syntax, `hide agent spawn --help` explains spawning, `hide browser help`, `hide mission help` and `hide wait help` are the guides to their topics.
+- `hide --help` lists the topics by group, and `hide <topic> --help`, or `hide help <topic>`, prints one topic's commands; `hide agent spawn --help` explains spawning, and `hide mission help`, `hide task help`, `hide wait help`, `hide automation help` and `hide browser help` are the guides to their topics.
 - The agent, letter and Workspace commands print one JSON line, `{"ok":true,...}` or `{"ok":false,"reason":...,"next_action":...}`; follow `next_action`, and after a timeout read the state before you run the command again.
 
 ## Letters

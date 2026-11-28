@@ -82,7 +82,7 @@ So every review covers the perspectives below, and names the perspective of each
 - A command under a topic other than the thing it changes, a verb with no line in the registry, or an option that does a verb's job.
 - A rename that drops the old spelling, removes or renames an entry, an argument or an envelope key of the contract, or keeps a second copy of the retired words outside the one table (`hide-shell/src/retired.rs`).
 - A command word changed in the parser and left in what teaches it (the guide, a skill stub, a `next_action`, the site notes).
-- A command only a program calls that `hide --help` prints with no reason, or one kept with no caller.
+- A command only a program calls that its topic's `--help` prints with no reason, or one kept with no caller.
 
 ### Reviewing a cap
 

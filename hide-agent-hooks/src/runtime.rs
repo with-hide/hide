@@ -63,6 +63,7 @@ macro_rules! intent_table {
 pub const START_CONTEXT: &str = "Inside Hide, read more when you need it:\n\
 - `hide guide <topic>` prints one part of the guide to working in Hide, such as `agents`, `letters`, `panes`, `operators-screen`, `automations` or `devices`; `hide guide` lists every topic.\n\
 - `hide checkout show` shows this checkout and the commands this pane may run.\n\
+- `hide --help` lists the topics, and `hide <topic> --help` prints one topic's commands.\n\
 - `hide session list` lists this Project's sessions, and `hide session show <id>` reads one.\n\
 - `hide memory show <id>` reads a Project Memory card in full, and `hide memory search <words>` finds others.\n\
 | The operator asks | Run |\n\

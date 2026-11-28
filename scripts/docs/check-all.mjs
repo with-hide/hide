@@ -65,7 +65,7 @@ run("guides and features hold each other", "node", ["scripts/docs/check-features
 
 run("the site's own tests: the download policy and the legal pages", "bash", ["scripts/verify-web.sh", "site", "test"]);
 
-const cli = run("CLI reference from hide --help", "node", ["scripts/docs/cli-reference.mjs", hide, join(root, "contracts/hide-cli.json"), join(root, "site/src/data/cli-notes.json")], { capture: true });
+const cli = run("CLI reference from the topics' help", "node", ["scripts/docs/cli-reference.mjs", hide, join(root, "contracts/hide-cli.json"), join(root, "site/src/data/cli-notes.json")], { capture: true });
 const front = ["---", "title: CLI", "description: Every hide command, with one line and an example each.", "sidebar:", "  order: 1", "---", "", ""].join("\n");
 writeFileSync(join(content, "reference/cli.md"), front + cli);
 
