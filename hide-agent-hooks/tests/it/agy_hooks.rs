@@ -22,6 +22,8 @@ use crate::stand_ins;
 const PANE: &str = "w1:p3";
 const CONVERSATION: &str = "ade08778-fcdd-4e96-88ba-fd1c4e594fa2";
 const SUBAGENT: &str = "7956974a-cd2e-41c0-bd3b-4c12822badd5";
+/// The account's earlier conversation, which another agy opened elsewhere.
+const EARLIER: &str = "9aacde14-30b8-4ffe-b00e-ef4b9647aa5f";
 
 /// The stand-in `hide`: the checkout is registered, the pane has one letter
 /// and every other call (Memory, the Workspace) is
@@ -33,6 +35,7 @@ case "$1 $2" in
   "workspace bootstrap") echo '{"ok":true,"reference":"/x"}' ;;
   "inbox --hook") echo '{"ok":true,"result":{"context":"LETTER-FOR-THIS-PANE","ids":["letter-1"]}}' ;;
   "inbox --confirm") echo '{"ok":true,"result":{"confirmed":["letter-1"]}}' ;;
+  "workspace status") cat >> "${HOME%/*}/hide-reports"; echo >> "${HOME%/*}/hide-reports"; exit 1 ;;
   *) exit 1 ;;
 esac
 "#;
@@ -111,11 +114,40 @@ impl Machine {
         let (reader, mut writer) = std::io::pipe().unwrap();
         writer.write_all(payload.as_bytes()).unwrap();
         drop(writer);
-        self.run_with_input(event, pane, reader.into())
+        self.run_with_input(event, pane, reader.into(), None)
     }
 
-    fn run_with_input(&self, event: &str, pane: Option<&str>, input: Stdio) -> Run {
-        let mut command = Command::new(&self.hook);
+    /// [`Self::run`] from an agy that works in `folder`: the hook's parent
+    /// is a shell there, as agy starts the block's command.
+    fn run_in(&self, folder: &Path, event: &str, payload: &Value, pane: Option<&str>) -> Run {
+        let payload = payload.to_string();
+        assert!(payload.len() <= libc::PIPE_BUF);
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        writer.write_all(payload.as_bytes()).unwrap();
+        drop(writer);
+        self.run_with_input(event, pane, reader.into(), Some(folder))
+    }
+
+    fn run_with_input(
+        &self,
+        event: &str,
+        pane: Option<&str>,
+        input: Stdio,
+        folder: Option<&Path>,
+    ) -> Run {
+        // A shell that runs the hook and waits for it, so the hook runs
+        // under a process working in `folder`.
+        let mut command = match folder {
+            Some(folder) => {
+                let mut shell = Command::new("/bin/sh");
+                shell
+                    .args(["-c", r#""$0" "$@"; exit $?"#])
+                    .arg(&self.hook)
+                    .current_dir(folder);
+                shell
+            }
+            None => Command::new(&self.hook),
+        };
         command
             .args(["hook", "--runtime", "antigravity", "--event", event])
             .args(["--source", "hide-subagents@6"])
@@ -190,6 +222,16 @@ impl Machine {
         std::fs::write(path, format!("{injected}\n{message}\n")).unwrap();
     }
 
+    /// The sessions the hook reported to the daemon, in order.
+    fn reported_sessions(&self) -> Vec<String> {
+        std::fs::read_to_string(self.root.join("hide-reports"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter_map(|report| report["session"].as_str().map(str::to_owned))
+            .collect()
+    }
+
     /// The subagents and counts the pane's record keeps under `session`.
     fn record_of(&self, session: &str) -> Option<hide_agent_hooks::counters::SessionRecord> {
         hide_agent_hooks::counters::records_in(&self.daemon.records(), PANE)
@@ -255,7 +297,7 @@ fn an_ordinary_call_is_left_to_agy() {
 fn an_open_pipe_without_a_payload_leaves_the_call_to_agy() {
     let machine = Machine::new();
     let (reader, held_open) = std::io::pipe().unwrap();
-    let run = machine.run_with_input("PreToolUse", Some(PANE), reader.into());
+    let run = machine.run_with_input("PreToolUse", Some(PANE), reader.into(), None);
     drop(held_open);
     assert_eq!(
         answer(&run),
@@ -567,4 +609,80 @@ fn a_hide_that_never_answers_lets_the_call_run_well_inside_the_blocks_timeout() 
     }
     let asked = std::fs::read_to_string(machine.root.join("hide-calls")).unwrap();
     assert!(asked.contains("workspace bootstrap"), "{asked}");
+}
+
+/// agy can call the model with an earlier conversation of the account that
+/// it never opened (with-hide/hide#3124: a new agy did so 1.1 s after the
+/// earlier agy's pane closed, before its own first model call). Those events
+/// name that conversation and the folder it was opened in, never the one
+/// this agy works in: they get nothing of the pane's, no letter among them,
+/// and never stand as its session, which is the conversation this agy
+/// started. A conversation this agy opened from another folder is its own.
+#[test]
+fn a_conversation_this_agy_did_not_open_never_stands_as_the_panes_session() {
+    let machine = Machine::new();
+    let here = machine.checkout.clone();
+    let elsewhere = machine.root.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let earlier = |event: &str, extra: Value| {
+        let mut payload = json!({
+            "conversationId": EARLIER,
+            "lastUserInput": "Reply with exactly ONE",
+            "workspacePaths": [elsewhere],
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        machine.run_in(&here, event, &payload, Some(PANE))
+    };
+
+    for run in [
+        earlier("UserPromptSubmit", json!({ "invocationNum": 0 })),
+        earlier("Stop", json!({})),
+    ] {
+        assert!(run.status_ok, "{}", run.diagnostics);
+        assert_eq!(run.stdout, "", "{}", run.diagnostics);
+    }
+    let start = machine.run_in(
+        &here,
+        "SessionStart",
+        &json!({
+            "conversationId": CONVERSATION,
+            "lastUserInput": "Reply with exactly TWO",
+            "workspacePaths": [here],
+        }),
+        Some(PANE),
+    );
+    assert!(start.status_ok, "{}", start.diagnostics);
+
+    assert!(
+        machine.inbox_calls().is_empty(),
+        "{:?}",
+        machine.inbox_calls()
+    );
+    assert_eq!(machine.reported_sessions(), [CONVERSATION]);
+    assert!(machine.record_of(EARLIER).is_none());
+    assert!(machine.record_of(CONVERSATION).is_some());
+
+    // The earlier conversation, opened from here: agy names both folders.
+    let resumed = machine.run_in(
+        &here,
+        "UserPromptSubmit",
+        &json!({
+            "conversationId": EARLIER,
+            "invocationNum": 0,
+            "lastUserInput": "Reply with exactly THREE",
+            "workspacePaths": [elsewhere, here],
+        }),
+        Some(PANE),
+    );
+    assert!(resumed.status_ok, "{}", resumed.diagnostics);
+    assert_eq!(
+        machine.reported_sessions(),
+        [CONVERSATION, EARLIER],
+        "{}",
+        resumed.diagnostics
+    );
+    assert!(machine.record_of(EARLIER).is_some());
 }

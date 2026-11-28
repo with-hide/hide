@@ -39,6 +39,16 @@
 //! operator never prompted with an empty `lastUserInput`, which is how a
 //! subagent is known before its parent is ([`Event::prompted`], measured
 //! 2026-11-15).
+//!
+//! An agy process can also run a model call of an earlier conversation it
+//! never opened, with that conversation's id and its last prompt: in the
+//! agent canary of 2026-11-27 a new agy, started 1.1 s after the pane of the
+//! account's earlier agy closed, called the model once with the earlier
+//! conversation before its own first call, and the hook named the earlier
+//! conversation from the new pane (with-hide/hide#3124). agy adds the folder
+//! it works in to a conversation's `workspacePaths` when it starts or opens
+//! the conversation, so an event whose folders do not hold that folder is of
+//! a conversation this agy did not open ([`opened_here`]).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -91,6 +101,10 @@ pub struct Event {
     /// That prompt's text, with agy's `<USER_REQUEST>` wrapper taken off
     /// ([`request_text`]); `None` when the event carries none.
     pub prompt: Option<String>,
+    /// The folders the conversation is open in (`workspacePaths`): the one
+    /// it started in and each a later agy opened it from. `None` from an agy
+    /// that sends no such field.
+    pub workspaces: Option<Vec<String>>,
 }
 
 impl Event {
@@ -102,6 +116,7 @@ impl Event {
             conversation_id: Option<String>,
             invocation_num: Option<u64>,
             last_user_input: Option<String>,
+            workspace_paths: Option<Value>,
         }
         let Some(input) = (!truncated)
             .then(|| serde_json::from_slice::<Input>(payload).ok())
@@ -120,8 +135,98 @@ impl Event {
                 .last_user_input
                 .map(|input| request_text(&input))
                 .filter(|prompt| !prompt.is_empty()),
+            // A field of another shape says nothing of the folders, and
+            // takes nothing else of the event with it.
+            workspaces: input.workspace_paths.and_then(|paths| {
+                paths
+                    .as_array()?
+                    .iter()
+                    .map(|path| path.as_str().map(str::to_owned))
+                    .collect()
+            }),
         }
     }
+}
+
+/// Whether `event` is of a conversation the agy that runs this hook did not
+/// open ([`opened_here`]); each such event is logged with the pane, the
+/// event and the conversation's id, so a start that named another
+/// conversation shows where its events went. One that cannot be told, and
+/// one from an agy that names no folders, is taken as this agy's own, as
+/// before agy named its folders.
+pub fn opened_elsewhere(home: &Path, event: &Event, name: &str) -> bool {
+    let elsewhere = event.workspaces.as_deref().and_then(opened_here) == Some(false);
+    if elsewhere {
+        let line = json!({
+            "component": "agent_hooks",
+            "kind": "antigravity.conversation_opened_elsewhere",
+            "pane": crate::pane::from_env(),
+            "event": name,
+            "conversation": event.conversation,
+        });
+        crate::hook_log::append(home, &line.to_string());
+    }
+    elsewhere
+}
+
+/// Whether the agy that runs this hook opened the conversation open in
+/// `workspaces` ([`Event::workspaces`]). agy adds the folder it works in when
+/// it starts a conversation (a new one names only that folder) or opens one
+/// (`--conversation`, `/resume`: the folder it started in and this one),
+/// measured on agy 1.5.18 on 2026-11-28. So the conversation is this agy's
+/// when one of its folders is the folder of a process this hook runs under,
+/// up to [`AGY_DEPTH`] of them: agy itself, the hook's parent on macOS and
+/// Linux and three up on Windows, through `cmd /c` and PowerShell, which
+/// work in agy's own hook folder. Folders are compared by identity, so
+/// another spelling of one still counts. `None` when no process above this
+/// hook could be read.
+pub fn opened_here(workspaces: &[String]) -> Option<bool> {
+    let folders = ancestor_folders();
+    if folders.is_empty() {
+        return None;
+    }
+    Some(workspaces.iter().any(|workspace| {
+        folders.iter().any(|folder| {
+            hide_platform::fs::identity::same_file(Path::new(workspace), folder).unwrap_or(false)
+        })
+    }))
+}
+
+/// How many processes up from this hook are read for agy's folder.
+const AGY_DEPTH: usize = 4;
+
+/// The folders the processes above this hook work in, its parent first, at
+/// most [`AGY_DEPTH`] of them. The walk ends at a process the system will not
+/// describe, and at a parent that reads as started after its child, which is
+/// a later process under a reused pid.
+fn ancestor_folders() -> Vec<PathBuf> {
+    use hide_platform::process;
+    let mut folders = Vec::new();
+    let mut pid = std::process::id();
+    let Ok(mut started) = process::start_time(pid) else {
+        return folders;
+    };
+    for _ in 0..AGY_DEPTH {
+        let Some(parent) = process::parent_of(pid)
+            .ok()
+            .filter(|parent| *parent > 1 && *parent != pid)
+        else {
+            break;
+        };
+        let Some(parent_started) = process::start_time(parent)
+            .ok()
+            .filter(|parent_started| *parent_started <= started)
+        else {
+            break;
+        };
+        match process::observed_cwd_of(parent) {
+            Ok(folder) => folders.push(folder),
+            Err(_) => break,
+        }
+        pid = parent;
+        started = parent_started;
+    }
+    folders
 }
 
 /// agy's conversation ids are lowercase UUIDs (`984dbf44-34b2-444c-91fd-34a2581196c4`).
@@ -344,6 +449,27 @@ mod tests {
         );
         let whole = json!({"conversationId": PARENT}).to_string();
         assert_eq!(Event::read(whole.as_bytes(), true), Event::default());
+    }
+
+    #[test]
+    fn an_event_names_its_folders_and_one_of_another_shape_names_none() {
+        let read = |paths: Value| {
+            Event::read(
+                json!({"conversationId": PARENT, "workspacePaths": paths})
+                    .to_string()
+                    .as_bytes(),
+                false,
+            )
+        };
+        assert_eq!(
+            read(json!(["/a", "/b"])).workspaces,
+            Some(vec!["/a".to_owned(), "/b".to_owned()])
+        );
+        for other in [json!("['/a']"), json!(["/a", 1]), json!(null)] {
+            let event = read(other.clone());
+            assert_eq!(event.workspaces, None, "{other}");
+            assert_eq!(event.conversation.as_deref(), Some(PARENT), "{other}");
+        }
     }
 
     #[test]
