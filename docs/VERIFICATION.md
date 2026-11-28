@@ -411,7 +411,7 @@ Build `hided`, `hide` and the hooks with `bash scripts/verify-cargo.sh cli` and 
 `--agents claude-code,codex` narrows the rows and `--model ID=MODEL` passes a model through the product's own flag.
 A release's run on the Mac is two runs from the same worktree, the fake model first and the signed-in agents second: `--fake-model` measures every agent Hide supports at its pinned CLI with no request to a provider, and the plain local run measures the CLI and login installed on the Mac.
 Run them one after the other, never side by side: both start a private `hided` from this worktree's build, and a local fake run leases the CLI cache.
-agy is measured by neither on the Mac (below): the CI fake model lane measures its CLI and Hide's kit, and no run measures a signed-in agy.
+agy is measured by both on the Mac through the private daemon home (below), the fake run on the installed agy rather than the pinned one, since it keeps the fake run's local exception.
 On 2026-10-25 the local fake run failed OpenCode's `start` on this Mac (its server answered HTTP 500 under the private sandbox, which no smaller sandbox reproduced) alone as well as beside others, and stopped the run before the agents after it, so leave it out of the local fake run's `--agents` until that closes; the fake model lane on CI measures it.
 It reuses `scripts/agent_live_check`'s isolation ([Run isolation](#run-isolation)): this worktree's `hided` on private state with the kit installed into a private daemon home, the write sandbox and the process guardian.
 The daemon starts without `XDG_STATE_HOME`, like an app opened from the Dock, while the pane shell inherits private XDG folders and no blanket `HIDE_STATE_DIR`.
@@ -525,10 +525,10 @@ Top-level entry enumeration and database row reads use the existing configuratio
 
 Claude Code, Codex, Grok, OpenCode, Pi and omp declare these routes.
 Their update policies are respectively `DISABLE_AUTOUPDATER`, `check_for_update_on_startup = false`, `GROK_DISABLE_AUTOUPDATER`, `update: disable`, `PI_OFFLINE` and `startup.checkUpdate: false` (omp checks for a version but does not automatically install it).
-agy keeps the local exception and is not started: no API-key environment is proven for its private HOME; CI's disposable runner still measures it.
+agy keeps the local exception (no API-key environment is proven for its private HOME), so it runs on its existing local route, the daemon home, with the fake model's key and no keychain link.
 Cursor remains excluded by operator decision.
-A missing key or update declaration keeps an adapter on its existing local fake route with the operator HOME, and the report names the exception.
-This preserves existing coverage: a route already measured still runs, while an existing local limitation such as agy remains `not measured`.
+A missing key or update declaration keeps an adapter on its existing local fake route (`ROUTES` in `scripts/agent_journey/local.py`) with the run's fake-model key, and the report names the exception.
+This preserves existing coverage: a route already measured still runs.
 The private fake sandbox denies reads of the operator's `~/.agents`, including metadata reads.
 Pi 1.0.4 searches a project's ancestors for `.agents/skills`, excluding only the current HOME's skills; without this boundary, a changed HOME makes the operator's skills look like project resources and adds an unrelated trust question.
 Operator skills must neither enter a fake run nor alter its folder-trust measurement.
