@@ -132,6 +132,7 @@ Stamp 'begin'
 # new version was recorded, while the installer may still run.
 $t1 = (Get-Date).ToString('o')
 $installerAtStop = @(Get-Process -Name $setup -ErrorAction SilentlyContinue)
+foreach ($i in $installerAtStop) { try { $null = $i.Handle } catch {} }
 $victims = @(Reopened)
 $victims | Stop-Process -Force -ErrorAction SilentlyContinue -ErrorVariable stopErrors
 $t2 = (Get-Date).ToString('o')
@@ -152,7 +153,7 @@ Rows 'victim' $victims
 Rows 'waited' $waited
 Rows 'left' $left
 Snap 'after-check'
-foreach ($i in $installerAtStop) { $i.WaitForExit(120000) | Out-Null; "update-diag installer $($i.Id) exited=$($i.HasExited) at=$(try { $i.ExitTime.ToString('o') } catch { "$_" })" }
+foreach ($i in $installerAtStop) { try { $null = $i.WaitForExit(120000); "update-diag installer $($i.Id) exited=$($i.HasExited) at=$($i.ExitTime.ToString('o'))" } catch { "update-diag installer $($i.Id) unread: $_" } }
 # Whether an app appears later, after the check a passing run ends on.
 for ($j = 1; $j -le 20; $j++) { Start-Sleep -Seconds 1; Snap "later-$j" }
 foreach ($p in @(Reopened)) { "update-diag later-stop $($p.Id)"; $p | Stop-Process -Force -ErrorAction SilentlyContinue }
