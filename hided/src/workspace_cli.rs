@@ -1801,6 +1801,7 @@ mod tests {
             runtime: "claude".to_owned(),
             session: "session".to_owned(),
             prompt: prompt.clone(),
+            prompt_digest: None,
         };
         let deadline = Instant::now() + Duration::from_secs(10);
         let answer = hook_request(&env_at(state.path()), None, command, deadline).unwrap();

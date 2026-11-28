@@ -1176,7 +1176,9 @@ pub const COMMANDS: &[Spec] = &[
     // A link pairs with the Hide that shared it: the command shows the four
     // words and takes the operator's yes or no at the terminal. An SSH alias
     // whose machine already runs its own Hide is paired over SSH and nothing
-    // is installed there; any other alias registers the core's SSH device.
+    // is installed there; one whose machine runs none and can take one is
+    // added and switched with a Hide started there (`device_switched`); any
+    // other alias, and any with --ssh, registers the core's SSH device.
     Spec {
         words: &["device", "add"],
         arguments: &[Arg {
@@ -1187,9 +1189,14 @@ pub const COMMANDS: &[Spec] = &[
         }],
         repeats: None,
         needs_one_of: &[],
-        options: &[optional("--name", Text), switch("--json")],
+        options: &[optional("--name", Text), switch("--ssh"), switch("--json")],
         rest: None,
-        answers: &["device_added", "device_joined", "device_paired"],
+        answers: &[
+            "device_added",
+            "device_joined",
+            "device_paired",
+            "device_switched",
+        ],
         refusals: &[
             "machine_not_permitted",
             "device_invalid",
@@ -1216,6 +1223,16 @@ pub const COMMANDS: &[Spec] = &[
             "device_own",
             "device_limit",
             "peer_unavailable",
+            "device_not_added",
+            "added_not_connected",
+            "device_unknown",
+            "switch_running",
+            "switch_not_connected",
+            "switch_not_moved",
+            "switch_cut",
+            "ssh_core_not_started",
+            "ssh_mac_from_mac_only",
+            "ssh_mac_signed_out",
         ],
     },
     // Answers, at this terminal, the machines that wait for this machine's

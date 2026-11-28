@@ -830,6 +830,7 @@ fn hide_device_adds_without_the_helper_and_says_who_allows_it() {
             DeviceCommand::Add {
                 ssh_alias: "Studio.local".into(),
                 name: None,
+                host_consent: false,
             },
         )
         .expect("added");
@@ -879,6 +880,7 @@ fn hide_device_adds_without_the_helper_and_says_who_allows_it() {
         DeviceCommand::Add {
             ssh_alias: "Studio.local".into(),
             name: Some("Second".into()),
+            host_consent: false,
         },
     );
     assert_eq!(
@@ -1026,6 +1028,7 @@ fn hide_device_refuses_a_device_caller_an_option_alias_and_open_files() {
     let add = |alias: &str| DeviceCommand::Add {
         ssh_alias: alias.into(),
         name: None,
+        host_consent: false,
     };
     assert_eq!(
         runtime

@@ -51,6 +51,10 @@ pub struct Scope {
     pub(crate) store: PathBuf,
     pub(crate) project: hide_project::ProjectIdentity,
     pub(crate) task_context: Option<String>,
+    /// The briefs Hide submitted into the caller's pane as a spawned agent's
+    /// first prompt (`Runtime::briefs_in`): Hide's words, not the
+    /// operator's, so a prompt that is one of them gets no card.
+    pub(crate) briefs: Vec<String>,
 }
 
 /// What one hook asks, as the CLI sent it.
@@ -59,6 +63,9 @@ pub struct Ask {
     event: HookEvent,
     session: String,
     prompt: Option<String>,
+    /// The whole prompt's identity (`hide_agent_hooks::delivery::
+    /// prompt_digest`), which the hook sends beside the cut prompt.
+    prompt_digest: Option<String>,
 }
 
 impl Ask {
@@ -82,7 +89,7 @@ impl Ask {
 
     /// The ask a `memory_hook` request carries: an event Memory answers, the
     /// runtime as Memory names its sessions, the agent's own session id, and
-    /// the prompt when the hook has one.
+    /// the prompt and its whole digest when the hook has them.
     pub fn from_wire(value: &Value) -> Option<Self> {
         let event = match value["event"].as_str()? {
             "SessionStart" => HookEvent::SessionStart,
@@ -100,11 +107,21 @@ impl Ask {
             Some(Value::String(text)) => Some(text.clone()),
             Some(_) => return None,
         };
+        let prompt_digest = match value.get("prompt_digest") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(digest))
+                if hide_agent_hooks::delivery::valid_prompt_digest(digest) =>
+            {
+                Some(digest.clone())
+            }
+            Some(_) => return None,
+        };
         Some(Self {
             runtime: runtime.to_owned(),
             event,
             session: session.to_owned(),
             prompt,
+            prompt_digest,
         })
     }
 }
@@ -146,13 +163,16 @@ where
         asks: None,
         sessions: None,
     };
-    // A doorbell's turn is the bell's line, not the operator's words: no card
-    // answers it, and its open questions ride beside this answer.
+    // A brief Hide submitted is known by the identity that confirms it
+    // (`Runtime::confirm_brief_by_hook`), never by its text's shape, and
+    // opens no store.
     if ask.event == HookEvent::UserPromptSubmit
-        && ask
-            .prompt
-            .as_deref()
-            .is_some_and(hide_session::is_bell_line)
+        && ask.prompt_digest.as_deref().is_some_and(|digest| {
+            scope
+                .briefs
+                .iter()
+                .any(|brief| hide_agent_hooks::delivery::matches_prompt_digest(brief, digest))
+        })
     {
         return without(HookOutcome::Empty);
     }
@@ -259,6 +279,7 @@ mod tests {
             store: path,
             project,
             task_context: None,
+            briefs: Vec::new(),
         }
     }
 
@@ -350,8 +371,11 @@ mod tests {
         .unwrap()
     }
 
+    /// The line the core's own bell writer types reads as no words of the
+    /// operator's; that such a turn opens no store is `hide_memory::hook`'s
+    /// to show.
     #[test]
-    fn a_doorbells_turn_gets_no_card_and_reads_no_store() {
+    fn a_doorbells_turn_gets_no_card() {
         use crate::delivery::bell::{Ring, line};
         use crate::model::InterfaceLanguage;
         let temp = tempfile::tempdir().unwrap();
@@ -377,14 +401,6 @@ mod tests {
             HookOutcome::Provided { count: 1 },
             "the bells' own words find the card when the operator types them"
         );
-
-        // A store that is not there would answer `Unavailable`, so `Empty`
-        // proves the bell was answered before the store was looked at.
-        let missing = Scope {
-            store: temp.path().join("missing.sqlite3"),
-            project: scope.project.clone(),
-            task_context: scope.task_context.clone(),
-        };
         for (runtime, bell) in [
             ("claude", &claude),
             ("codex", &codex),
@@ -394,10 +410,55 @@ mod tests {
             let result = answer_until(&scope, &ask, never);
             assert_eq!(result.outcome, HookOutcome::Empty, "{bell}");
             assert!(result.context.is_none(), "{bell}");
-            assert_eq!(
-                answer_until(&missing, &ask, never).outcome,
-                HookOutcome::Empty,
-                "{bell}"
+        }
+    }
+
+    /// A spawned agent's first prompt is the brief Hide submitted for its
+    /// parent, so it gets no card even where its words find one; words the
+    /// operator types in the same pane still find it. Which briefs the core
+    /// hands a pane is `Runtime::briefs_in`'s to show.
+    #[test]
+    fn a_spawned_agents_first_brief_gets_no_card() {
+        const BRIEF: &str =
+            "# Granite review\n\tRun the granite review with nextest.\nReport by letter.";
+        let temp = tempfile::tempdir().unwrap();
+        let mut scope = seeded(temp.path(), &GRANITE);
+        // The hook's digest of the agent's record of the brief: Claude Code
+        // records the typed tab as four spaces.
+        let first = Ask::from_wire(&json!({
+            "event": "UserPromptSubmit", "runtime": "claude", "session": "child",
+            "prompt": BRIEF.replace('\t', "    "),
+            "prompt_digest": hide_agent_hooks::delivery::prompt_digest(&BRIEF.replace('\t', "    ")),
+        }))
+        .unwrap();
+        assert_eq!(
+            answer_until(&scope, &first, never).outcome,
+            HookOutcome::Provided { count: 1 },
+            "without Hide's record of the brief its words find the card"
+        );
+        scope.briefs = vec![BRIEF.to_owned()];
+        let result = answer_until(&scope, &first, never);
+        assert_eq!(result.outcome, HookOutcome::Empty);
+        assert!(result.context.is_none());
+        let typed = Ask::from_wire(&json!({
+            "event": "UserPromptSubmit", "runtime": "claude", "session": "child",
+            "prompt": "Run the granite review with nextest.",
+            "prompt_digest": hide_agent_hooks::delivery::prompt_digest("Run the granite review with nextest."),
+        }))
+        .unwrap();
+        assert_eq!(
+            answer_until(&scope, &typed, never).outcome,
+            HookOutcome::Provided { count: 1 },
+            "the operator's own prompt in the same pane still finds the card"
+        );
+        for refused in [json!("not-a-digest"), json!(7)] {
+            assert!(
+                Ask::from_wire(&json!({
+                    "event": "UserPromptSubmit", "runtime": "claude", "session": "child",
+                    "prompt": BRIEF, "prompt_digest": refused,
+                }))
+                .is_none(),
+                "{refused}"
             );
         }
     }
@@ -410,6 +471,7 @@ mod tests {
             store: temp.path().join("missing.sqlite3"),
             project: scope.project.clone(),
             task_context: None,
+            briefs: Vec::new(),
         };
         let start = Ask::from_wire(&json!({
             "event": "SessionStart", "runtime": "claude", "session": "starting",

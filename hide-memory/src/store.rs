@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::evidence::{EVIDENCE_ROW_LIMIT, Evidence, EvidenceKind};
-use crate::matcher::{CardTerms, MINIMUM_SCORE, Query, normalize};
+use crate::matcher::{self, CardTerms, MINIMUM_SCORE, Query, normalize};
 use crate::{
     ACTIVE_MEMORY_LIMIT, ALIAS_LIMIT, ALIAS_LIMIT_CHARS, CITED_PATH_LIMIT, CITED_PATH_LIMIT_BYTES,
     HOOK_CANDIDATE_LIMIT, INDEX_LINE_LIMIT, INJECTION_TOKEN_LIMIT, PROMOTION_HUMAN_SESSIONS,
@@ -768,8 +768,10 @@ pub struct Injection {
     pub kind: InjectionKind,
     pub items: Vec<InjectedItem>,
     pub token_count: usize,
-    /// Cards the query matched, counting those the session was already
-    /// given: zero says the text has no Memory of its own.
+    /// Cards the query's words reach at [`MINIMUM_SCORE`], the unweighted
+    /// match `hide memory search` uses, whether or not they fit it and
+    /// counting those the session was already given: zero says the text has
+    /// no Memory of its own.
     pub matched: usize,
 }
 
@@ -2437,7 +2439,6 @@ impl MemoryStore {
             project_id,
             &query,
             HOOK_CANDIDATE_LIMIT,
-            false,
             crate::matcher::COMPARISON_MINIMUM_SCORE,
         )?;
         let archived = self.archived_ids(project_id)?;
@@ -2500,7 +2501,7 @@ impl MemoryStore {
     ) -> Result<Vec<MemoryItem>, MemoryError> {
         let query = Query::new(text);
         let mut items = Vec::new();
-        for candidate in self.matching_active(project_id, &query, HOOK_CANDIDATE_LIMIT, false)? {
+        for candidate in self.matching_active(project_id, &query, HOOK_CANDIDATE_LIMIT)? {
             if let Some(item) = self.item(project_id, &candidate.id)? {
                 items.push(item);
             }
@@ -3839,16 +3840,15 @@ impl MemoryStore {
                 // A card in the repository's own files is read there (B12),
                 // and is left out before the candidate limit, so it takes no
                 // live card's place.
-                let candidates = self.matching_active(
-                    &query.project_id,
-                    &Query::new(&query.text),
-                    HOOK_CANDIDATE_LIMIT,
-                    true,
-                )?;
+                let Some((reached, candidates)) =
+                    self.fitting(&query.project_id, &Query::new(&query.text), &expired)?
+                else {
+                    return Ok(empty(InjectionOutcome::Deadline));
+                };
                 if expired() {
                     return Ok(empty(InjectionOutcome::Deadline));
                 }
-                matched = candidates.len();
+                matched = reached;
                 let ids = candidates
                     .iter()
                     .map(|candidate| candidate.id.clone())
@@ -4190,17 +4190,13 @@ impl MemoryStore {
     /// Active cards the matcher keeps for `query`, best first: FTS5 finds
     /// every card sharing a form with the query in BM25 order, and the
     /// matcher's score decides, BM25 rank only breaking its ties.
-    /// `given` is a hook's prompt match: a card in the repository's own files
-    /// is read there (B12), and one not verified since its evidence moved is
-    /// not given at all (D-06); the comparison set and `search` see both.
     fn matching_active(
         &self,
         project_id: &str,
         query: &Query,
         limit: usize,
-        given: bool,
     ) -> Result<Vec<RetrievalCandidate>, MemoryError> {
-        self.matching_above(project_id, query, limit, given, MINIMUM_SCORE)
+        self.matching_above(project_id, query, limit, MINIMUM_SCORE)
     }
 
     /// As [`Self::matching_active`], keeping cards at or above `minimum`.
@@ -4209,8 +4205,112 @@ impl MemoryStore {
         project_id: &str,
         query: &Query,
         limit: usize,
-        given: bool,
         minimum: f64,
+    ) -> Result<Vec<RetrievalCandidate>, MemoryError> {
+        let mut candidates = self.candidates(project_id, query, limit, false)?;
+        for candidate in &mut candidates {
+            let mut matched = candidate.aliases.clone();
+            matched.push(candidate.title.clone());
+            candidate.score = query.score(&CardTerms::new(&candidate.body, &matched));
+        }
+        candidates.retain(|candidate| candidate.score >= minimum);
+        best_first(&mut candidates);
+        Ok(candidates)
+    }
+
+    /// The cards that fit a prompt (`query`), best first, beside how many of
+    /// the hook's candidates its words reach at [`MINIMUM_SCORE`], fitting or
+    /// not ([`Injection::matched`]), or `None` once `expired`. Each card is
+    /// kept at or above [`matcher::MINIMUM_FIT`] by its fit
+    /// ([`matcher::fit`]), with the weights of only the words some candidate
+    /// holds.
+    fn fitting(
+        &self,
+        project_id: &str,
+        query: &Query,
+        expired: &dyn Fn() -> bool,
+    ) -> Result<Option<(usize, Vec<RetrievalCandidate>)>, MemoryError> {
+        let mut candidates = self.candidates(project_id, query, HOOK_CANDIDATE_LIMIT, true)?;
+        let reached = candidates
+            .iter()
+            .filter(|candidate| {
+                let mut named = candidate.aliases.clone();
+                named.push(candidate.title.clone());
+                query.score(&CardTerms::new(&candidate.body, &named)) >= MINIMUM_SCORE
+            })
+            .count();
+        let credits = candidates
+            .iter()
+            .map(|candidate| {
+                query.credits(
+                    &CardTerms::new(&candidate.title, &candidate.aliases),
+                    &CardTerms::new(&candidate.body, &[]),
+                )
+            })
+            .collect::<Vec<_>>();
+        let held = |index: usize| credits.iter().any(|credit| credit[index] > 0.0);
+        let Some(weights) = self.weights(project_id, query, held, expired)? else {
+            return Ok(None);
+        };
+        for (candidate, credits) in candidates.iter_mut().zip(&credits) {
+            candidate.score = matcher::fit(credits, &weights);
+        }
+        candidates.retain(|candidate| candidate.score >= matcher::MINIMUM_FIT);
+        best_first(&mut candidates);
+        Ok(Some((reached, candidates)))
+    }
+
+    /// Each query word's weight ([`matcher::weight`]) over the Project's
+    /// active cards, which the search index holds exactly, or `None` once
+    /// `expired`. Only a word `held` says a candidate holds is counted, one
+    /// FTS5 count each that stops at [`matcher::holders_worth_counting`];
+    /// every other word weighs nothing, since it adds to no candidate's fit.
+    fn weights(
+        &self,
+        project_id: &str,
+        query: &Query,
+        held: impl Fn(usize) -> bool,
+        expired: &dyn Fn() -> bool,
+    ) -> Result<Option<Vec<f64>>, MemoryError> {
+        let mut weights = vec![0.0; query.len()];
+        if !(0..query.len()).any(&held) {
+            return Ok(Some(weights));
+        }
+        let cards = count_state(&self.connection, project_id, "active")?;
+        let mut count = self.connection.prepare(
+            "SELECT COUNT(*) FROM (SELECT 1 FROM memory_fts WHERE memory_fts MATCH ?1 AND project_id=?2 LIMIT ?3)",
+        )?;
+        for (index, weight) in weights.iter_mut().enumerate() {
+            if !held(index) {
+                continue;
+            }
+            if expired() {
+                return Ok(None);
+            }
+            let holding = count.query_row(
+                params![
+                    query.holding_expression(index),
+                    project_id,
+                    matcher::holders_worth_counting(cards) as u64
+                ],
+                |row| row.get::<_, u64>(0),
+            )?;
+            *weight = matcher::weight(holding as usize, cards);
+        }
+        Ok(Some(weights))
+    }
+
+    /// The active cards that share a form with `query`, in BM25 order, at
+    /// most `limit`, unscored. `given` is a hook's prompt match: a card in
+    /// the repository's own files is read there (B12), and one not verified
+    /// since its evidence moved is not given at all (D-06); the comparison
+    /// set and `search` see both.
+    fn candidates(
+        &self,
+        project_id: &str,
+        query: &Query,
+        limit: usize,
+        given: bool,
     ) -> Result<Vec<RetrievalCandidate>, MemoryError> {
         if query.is_empty() {
             return Ok(Vec::new());
@@ -4246,22 +4346,8 @@ impl MemoryStore {
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for (rank, candidate) in candidates.iter_mut().enumerate() {
-            let mut matched = candidate.aliases.clone();
-            matched.push(candidate.title.clone());
             candidate.rank = rank;
-            candidate.score = query.score(&CardTerms::new(&candidate.body, &matched));
         }
-        candidates.retain(|candidate| candidate.score >= minimum);
-        candidates.sort_by(|left, right| {
-            right
-                .score
-                .total_cmp(&left.score)
-                .then_with(|| left.rank.cmp(&right.rank))
-                .then_with(|| right.salience.total_cmp(&left.salience))
-                .then_with(|| right.confidence.total_cmp(&left.confidence))
-                .then_with(|| right.updated_at_unix_ms.cmp(&left.updated_at_unix_ms))
-                .then_with(|| left.id.cmp(&right.id))
-        });
         Ok(candidates)
     }
 
@@ -4310,13 +4396,27 @@ fn write_promotion(
     Ok(())
 }
 
-/// The matched cards in the order a prompt is given them: the matcher's score
+/// Scored cards best first, BM25 rank only breaking the score's ties.
+fn best_first(candidates: &mut [RetrievalCandidate]) {
+    candidates.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.rank.cmp(&right.rank))
+            .then_with(|| right.salience.total_cmp(&left.salience))
+            .then_with(|| right.confidence.total_cmp(&left.confidence))
+            .then_with(|| right.updated_at_unix_ms.cmp(&left.updated_at_unix_ms))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
+/// The fitting cards in the order a prompt is given them: the prompt's fit
 /// times the square root of the operator's reinforcement
-/// ([`reinforcement::weight`]), so among cards that match about as well, one
+/// ([`reinforcement::weight`]), so among cards that fit about as well, one
 /// the operator said across sessions and lately goes before a one-off or stale
 /// one. The root keeps the weight's spread under two, so it rarely outweighs a
-/// whole shared word. Every card here already passed the matcher's minimum
-/// score.
+/// rare shared word. Every card here already fits the prompt
+/// ([`matcher::MINIMUM_FIT`]).
 fn by_reinforcement(
     mut candidates: Vec<RetrievalCandidate>,
     support: &std::collections::HashMap<String, reinforcement::Support>,
@@ -9944,7 +10044,9 @@ PRAGMA user_version=14;"#,
     #[test]
     fn prompt_bodies_obey_item_and_token_budgets_and_exclusions() {
         let (_temp, mut store, project) = store();
-        for index in 0..6 {
+        // Four cards share the prompt's two words: few enough that the two
+        // together fit each of them.
+        for index in 0..4 {
             store
                 .apply_candidates(
                     &batch(&project, &format!("b{index}"), &format!("h{index}")),
@@ -10155,7 +10257,7 @@ PRAGMA user_version=14;"#,
     }
 
     #[test]
-    fn prompt_top_three_are_ordered_by_relevance_before_confidence() {
+    fn prompt_cards_are_ordered_by_fit_before_confidence() {
         let (_temp, mut store, project) = store();
         for (index, body, confidence) in [
             ("all", "Hook retrieval stays local", 0.1),
@@ -10186,11 +10288,9 @@ PRAGMA user_version=14;"#,
                 .iter()
                 .map(|item| item.text.as_str())
                 .collect::<Vec<_>>(),
-            vec![
-                "Hook retrieval stays local",
-                "Hook retrieval stays bounded",
-                "Hook writes stay bounded",
-            ]
+            // "Hook writes stay bounded" shares only `hook`, which three of
+            // the four cards hold, and does not fit.
+            vec!["Hook retrieval stays local", "Hook retrieval stays bounded"]
         );
     }
 
@@ -12552,6 +12652,22 @@ PRAGMA user_version=14;"#,
             };
             store.set_promotion(&project, number, &promotion).unwrap();
         }
+        // Cards on other topics keep the prompt's words, which the merged
+        // cards share, rare enough for the live card to fit by them: 61 of
+        // 861 cards, while the merged cards still fill the candidate limit
+        // ahead of it, shorter and newer.
+        let others = (0..800)
+            .map(|index| {
+                candidate(
+                    &format!("Archive retention note {index}"),
+                    CandidateRelation::New,
+                )
+            })
+            .collect::<Vec<_>>();
+        let summary = store
+            .apply_candidates(&batch(&project, "others", "h-others"), &others)
+            .unwrap();
+        assert_eq!(summary.created, others.len());
         let given = store
             .retrieve(&RetrievalQuery::prompt(&project, "deploy lint", vec![]))
             .unwrap()
