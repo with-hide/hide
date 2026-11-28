@@ -3440,6 +3440,29 @@ mod tests {
         assert!(bell.letter_forced(&forced));
     }
 
+    /// with-hide/hide#3144: the next prompt Claude Code suggests after a
+    /// turn stands dim in its empty composer and nobody typed it, so a
+    /// forced letter is typed over it, as over an empty composer; the same
+    /// words once Tab took them are the operator's text, and the letter
+    /// waits as an ordinary one.
+    #[test]
+    fn a_forced_letter_is_typed_over_claude_codes_suggestion_but_not_over_a_taken_one() {
+        for (name, screen, typed) in [
+            ("suggested", CLAUDE_SUGGESTED, 1),
+            ("taken", CLAUDE_TAKEN, 0),
+        ] {
+            let bell = Bell::of_kind("claude", screen);
+            let mut doorbell = Doorbell::default();
+            let start = now();
+            bell.working_since(start - 1_000);
+            let forced = bell.send_forced("forced");
+            bell.pass(&mut doorbell, start);
+            assert_eq!(bell.typed().len(), typed, "{name}");
+            assert_eq!(bell.reads(), 1, "{name}: its composer is read right before");
+            assert_eq!(bell.letter_forced(&forced), typed == 1, "{name}");
+        }
+    }
+
     /// PRD engine-bundle-1 D-14: someone starts typing between the send
     /// and the doorbell's turn. The composer read right before typing shows
     /// their text, so nothing is typed, `delivery.forced_deferred` is
@@ -4981,6 +5004,16 @@ mod tests {
     }
 
     const CODEX_DRAFT: &str = "\x1b[0m\x1b[1m› \x1b[0mhello 안녕하세요\r\n\r\n  footer\r\n";
+
+    /// Claude Code 2.1.332's composer after a turn, showing the next prompt
+    /// it suggests, and the same words once Tab took them
+    /// (`hide-agent-adapter`'s `tests/fixtures/composer`, 2026-11-29).
+    const CLAUDE_SUGGESTED: &str = include_str!(
+        "../../../hide-agent-adapter/tests/fixtures/composer/claude-2.1.332-suggest-0-suggested.ansi"
+    );
+    const CLAUDE_TAKEN: &str = include_str!(
+        "../../../hide-agent-adapter/tests/fixtures/composer/claude-2.1.332-suggest-6-taken.ansi"
+    );
 
     /// Antigravity 1.5.11's screens as an isolated Hide read them
     /// (`hide-agent-adapter`'s `tests/fixtures/composer`, 2026-11-19).
