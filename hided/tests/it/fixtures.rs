@@ -40,3 +40,28 @@ pub fn fixture_home(home: &std::path::Path) {
         home.display()
     );
 }
+
+/// The lock a test holds on its fixture HOME's owner file
+/// (`hided::env::FIXTURE_OWNER_FILE`) while it runs. Every `hided` under
+/// that HOME ends once the lock is let go, which the system does with the
+/// test's process however it ends, so a test a runner kills leaves none of
+/// its daemons running, the ones it holds no handle to included (a core a
+/// core update started; with-hide/hide#3119). Dropping it lets go too.
+pub struct FixtureOwner {
+    _lock: hide_platform::fs::lock::Lock,
+}
+
+/// Owns the fixture HOME `home` ([`FixtureOwner`]); taken before the first
+/// daemon starts under it.
+pub fn own_fixture_home(home: &std::path::Path) -> FixtureOwner {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(home.join(hided::env::FIXTURE_OWNER_FILE))
+        .expect("the fixture HOME's owner file");
+    let lock =
+        hide_platform::fs::lock::lock_file_blocking(file, hide_platform::fs::lock::Mode::Exclusive)
+            .expect("the fixture HOME's owner lock");
+    FixtureOwner { _lock: lock }
+}
