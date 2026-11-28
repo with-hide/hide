@@ -3490,30 +3490,6 @@ fn tab_label_follows_focused_pane_unless_custom_named() {
     assert_eq!(display_tab_label("", 7, Some("  "), Some("zsh")), "zsh");
 }
 
-/// The shell used to name an unlabelled tab after its position, which
-/// renamed every tab whenever one moved. Nothing may reintroduce that.
-#[test]
-fn tab_label_has_no_position_derived_path_left_in_the_shell() {
-    let mut offenders = Vec::new();
-    for (name, source) in web_sources() {
-        if source.contains("fallbackIndex") || source.contains("displayLabel") {
-            offenders.push(name.clone());
-        }
-        // The same class of defect, read the other way: the shell taking a
-        // label the core formatted and parsing the number back out of it.
-        // That writes the "Tab N" convention down a second time across the
-        // wire, where a change to either half breaks the other in silence.
-        // The core decides the next label; the shell draws it.
-        if source.contains("startsWith(\"tab \")") || source.contains("startsWith(\"Tab \")") {
-            offenders.push(name.clone());
-        }
-    }
-    assert!(
-        offenders.is_empty(),
-        "a position-derived or reverse-parsed tab label path is back in {offenders:?}"
-    );
-}
-
 #[test]
 fn tab_label_names_the_next_tab_after_the_lowest_free_engine_number() {
     let next = |labels: &[&str]| crate::model::next_tab_label(labels.iter().copied());

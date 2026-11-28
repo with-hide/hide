@@ -648,7 +648,7 @@ A path is narrower than every lane only by being named in `MACOS_LANE_INPUTS`, `
 `UNIT_TEST_PATHS` follows the desktop Vitest include list, not a general filename heuristic.
 Desktop unit tests are outside the explicit entry graphs in `desktop/scripts/build.mjs`; both retained jobs run the unit suites, including Windows.
 Linux `checks` runs both packages' typecheck and lint once; `windows check` retains both Vitest suites and every Windows Rust contract without repeating those OS-independent checks.
-Web tests keep their existing app lanes: `hide-core/src/sidebar.rs` scans every TypeScript file under `web/src`, including tests, and Tailwind scans test files under the Vite web root as CSS inputs.
+Web tests keep their existing app lanes: Tailwind scans test files under the Vite web root as CSS inputs, and `scripts/check-shell-structure.py` (the `policy` lane) scans every TypeScript file under `web/src`, including tests.
 Unregistered test conventions keep their folder's existing lanes, and a mixed change keeps the union of every changed file's lanes.
 Registered desktop unit tests are not package inputs even when a broad input pattern such as `updater*` names them.
 `NamedPaths` compares the narrowed files with the desktop Vitest configuration and checks that both retained jobs execute both unit suites.

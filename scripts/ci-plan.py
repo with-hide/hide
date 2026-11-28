@@ -235,13 +235,9 @@ SHARED_WEB_LANES = ("windows-e2e", "windows-desktop")
 # is a folder. Keep this beside the test that reads the file. A path no other
 # rule claims plans its readers here and nothing else.
 READERS = (
-    # hide-core/src/runtime/tests/snapshot_delta.rs asserts the agent notes.
-    ("AGENTS.md", {"rust"}, {"hide-core"}),
-    ("CLAUDE.md", {"rust"}, {"hide-core"}),
-    # hide-core's structure tests scan the shell (runtime/tests.rs, sidebar.rs)
-    # and the daemon (runtime/tests/snapshot_delta.rs).
-    ("web/src/", {"rust"}, {"hide-core"}),
-    ("hided/src/", {"rust"}, {"hide-core"}),
+    # No row for `web/src/`, `hided/src/`, `AGENTS.md` or `CLAUDE.md`: the text
+    # of them a test holds is read by `scripts/check-shell-structure.py` in
+    # `policy`, which every plan has, and no Rust test reads them.
     # web/e2e/s2, s3 and s7 import the wire path conversion.
     ("desktop/src/main/wirePath.ts", {"checks", "web-e2e", "windows-e2e"}, set()),
     # web/e2e/markdown-html.spec.ts opens the repository README with its logo
@@ -960,7 +956,7 @@ def every_system(result, why):
 # repository invariants are what reads them.
 POLICY_ONLY = (
     "agents/*",
-    ".gitignore", "web/.gitignore", "desktop/.gitignore",
+    ".gitignore", "web/.gitignore", "desktop/.gitignore", "mobile/.gitignore",
     # hide's own license and copyright notice; no build or package reads them.
     "LICENSE", "NOTICE",
     ".github/pull_request_template.md", ".github/dependabot.yml",
@@ -977,6 +973,19 @@ POLICY_ONLY = (
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py", "scripts/check-device-kits-single-source.py",
     "scripts/check-agent-folders.sh",
+    # What the shell, the daemon and the agent notes must keep saying, read as text.
+    "scripts/check-shell-structure.py",
+    # The check of a retired name in product text and the list of files that keep
+    # it; `policy`'s structural step and its script suite read both, and nothing
+    # else does.
+    "scripts/check-*-names.py", "scripts/*-names-allowlist.json",
+    # The raw-control count and its baseline: `design-contract.yml` runs the check
+    # (through `check-design-contract.mjs`) and `scripts/tests/ui-parts.test.mjs` on every pull request.
+    "scripts/check-ui-parts.mjs", "scripts/ui-parts-baseline.json",
+    # The release checklist runs the generator by hand with Docker; no lane does. The
+    # upgrade tests read the state folders it writes under `hide-core/tests/fixtures/`,
+    # which plan their own crates, not the generator.
+    "scripts/release_state/*",
     "scripts/check-no-workstation-identity.*", "scripts/check-worktree-removal-boundary.sh",
     "scripts/check-release-assets.mjs", "scripts/release-draft.mjs",
     "scripts/merge-order.py", "scripts/pull_requests.py",
@@ -998,8 +1007,8 @@ WEB_E2E_LANES = {"checks", "web-e2e", "windows-e2e", "windows-desktop", "windows
 DESKTOP_E2E_LANES = {"checks", "windows-desktop", "windows-check"}
 # Desktop Vitest inputs, outside the app's explicit esbuild entry graphs:
 # `checks` and `windows-check` run them. Web tests are deliberately absent:
-# sidebar.rs scans every web/src TypeScript file, and Tailwind's web-root
-# scanner reads web tests as CSS inputs. Their existing app lanes must stay.
+# Tailwind's web-root scanner reads web tests as CSS inputs, so their existing
+# app lanes must stay (`check-shell-structure.py` scans them too, in `policy`).
 # An unregistered convention keeps its folder's existing plan.
 UNIT_TEST_PATHS = (
     "desktop/src/*.test.ts", "desktop/scripts/*.test.mjs",
@@ -1117,6 +1126,24 @@ NAMED_LANES = (
     ("contracts/agent-journey.json", JOURNEY_LANES | AGENT_CLI_LANES | HOLDER_RESTART_LANES),
     ("web/e2e/*", WEB_E2E_LANES),
     ("desktop/e2e/*", DESKTOP_E2E_LANES),
+    # The iOS app host's package (`mobile/package.json` stays out: a dependency
+    # change reaches the lock and every lane). Its unit suite (`verify-web.sh mobile
+    # test`, the `checks` lane) runs vitest over `mobile/scripts/*.test.mjs`, which read
+    # the scripts, the release inputs, the Xcode project and Swift sources
+    # (`release.test.mjs`, `check-versions.mjs`), the Capacitor config, and the real store text
+    # (`check-store-text.test.mjs`). Nothing else reads them: the Android lane builds
+    # `mobile/android` alone, and the iOS app is built on the Mac mini, not in CI.
+    ("mobile/scripts/*", {"checks"}),
+    ("mobile/ios/*", {"checks"}),
+    ("mobile/store/*", {"checks"}),
+    ("mobile/release-env.json", {"checks"}),
+    ("mobile/release-expect.json", {"checks"}),
+    ("mobile/release.env.example", {"checks"}),
+    ("mobile/android-release-env.json", {"checks"}),
+    ("mobile/android-release-expect.json", {"checks"}),
+    ("mobile/android-release.env.example", {"checks"}),
+    ("mobile/capacitor.config.json", {"checks"}),
+    ("mobile/retained-bundles.json", {"checks"}),
     # The user docs' scripts and the build of the live parts they frame; the parts
     # import the web shell's own components, which is why a `web/src` change plans `docs` too.
     ("scripts/docs/*", DOCS_LANES),
@@ -1323,7 +1350,7 @@ def classify(path, status, crates, root):
     if parts[:2] == ("mobile", "android") and len(parts) > 2:
         # The Android app host's Gradle project: its JVM tests and debug build, and
         # `checks`, whose mobile unit test reads its plugin and library lists
-        # (`mobile/scripts/check-versions.mjs`). The rest of `mobile/` plans every lane.
+        # (`mobile/scripts/check-versions.mjs`). The rest of `mobile/` is named in `NAMED_LANES`.
         return {"android", "checks"}, f"Android app host: {path}", set()
     if parts[0] == "desktop" and len(parts) > 1:
         if parts[1] == "e2e" and len(parts) == 3 and path.name.endswith(".spec.ts"):
