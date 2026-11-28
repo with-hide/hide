@@ -370,6 +370,48 @@ fn a_waiting_node_past_its_deadline_is_raised_until_planned_again() {
     assert_eq!(reason(&runtime, "wait"), None);
 }
 
+/// A plan whose change node, not started yet, changes code a node of another
+/// mission of the project is changing now is refused, naming that mission and
+/// node, until the node depends on a waiting node on that node's pull request.
+#[test]
+fn a_plan_on_code_another_mission_is_changing_waits_for_its_pull_request() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    created(&mut runtime);
+    other_mission(&mut runtime, "mission-7");
+    set_other(&mut runtime, "mission-7", |mission| {
+        let node = &mut mission.nodes[0];
+        node.kind = crate::missions::NodeKind::Change;
+        node.paths = vec!["web/src".into()];
+        node.prs = vec![1232];
+    });
+    let fix = json!({"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+                     "criteria": ["it works"], "paths": ["web/src/App.tsx"]});
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [fix.clone()]}}),
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("mission_paths_in_other_mission")
+            && refused.contains("fix changes web/src/App.tsx that mission-7 node n"),
+        "{refused}"
+    );
+    assert!(runtime.missions.book.get("mission-1").unwrap().node("fix").is_none());
+    let mut after = fix;
+    after["depends_on"] = json!(["wait"]);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "wait", "title": "Wait", "kind": "wait", "wait": {"pr": 1232}},
+            after,
+        ]}}),
+    )
+    .unwrap();
+}
+
 /// B10 (D-10, D-22): a plan may not wait on its own mission, on one that
 /// waits on it, or on a mission or node this machine does not hold.
 #[test]
