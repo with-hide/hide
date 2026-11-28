@@ -33,6 +33,11 @@ describe("a sleeping pane's words", () => {
     });
   });
 
+  it("titles the sleep card 잠든 중, the operator's word for it (2026-11-28), and Sleeping in English", () => {
+    expect(ko("panes.sleep.cardSleeping")).toBe("잠든 중");
+    expect(t("panes.sleep.cardSleeping")).toBe("Sleeping");
+  });
+
   it("names the age of the conversation a wake resumes", () => {
     expect(wakingLine({ state: "waking", since_unix_ms: now - 3 * 24 * HOUR }, now, t)).toBe("Resuming the conversation from 3d ago");
     expect(wakingLine({ state: "waking", since_unix_ms: now }, now, t)).toBe("Resuming the conversation");

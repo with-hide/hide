@@ -21,7 +21,7 @@ export function SleepCard({ paneId, view, className }: { paneId: string; view: S
       {sleep.state === "sleeping" ? (
         <>
           <MoonIcon className="size-(--size-icon-lg) text-muted-foreground" aria-hidden="true" />
-          <p className="text-subhead text-foreground">{t("panes.sleep.sleeping")}</p>
+          <p className="text-subhead text-foreground">{t("panes.sleep.cardSleeping")}</p>
           {sleep.progress ? <p className="max-w-full truncate text-caption text-muted-foreground" data-pane-sleep-progress="true">{sleep.progress}</p> : null}
           {onWake ? (
             <Button variant="secondary" size="sm" className="mt-xs" data-agent-wake={paneId} onClick={onWake}>
