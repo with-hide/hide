@@ -1,8 +1,9 @@
 // The operator reads and replies over a live pane, then returns to its unchanged
 // terminal. Only a native shell over a real holder can prove that round trip.
-import { expect, type ElectronApplication } from "@playwright/test";
+import { expect, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
+import { field } from "../../web/e2e/chords";
 import { agentIn, withControl } from "../../web/e2e/daemon-actions";
 import { continueFixtureTranscript } from "../../web/e2e/pane-fixture";
 import { countSent, enterWorkspace, sendEvent, showExplorer } from "../../web/e2e/wire";
@@ -112,9 +113,44 @@ test("another window takes the thread once and only an explicit press reclaims i
   await finishNative(failures, [["close the second app", () => second?.close()], ["close the first app", () => first?.close()], ["stop the stack", () => stack.stop()]]);
 });
 
-// The native scroll viewport owns which Markdown editors are alive. A long
-// history must stay readable while the expensive views follow the reader.
-test("long conversation history releases offscreen editors and restores Markdown at the reading position", async () => {
+/**
+ * Drags from the start of `from` down past the rows drawn, scrolling the conversation while the button is held, and
+ * lets go on the lowest answer standing in view; answers that answer's number.
+ */
+async function dragAcrossMessages(page: Page, scroll: Locator, from: Locator): Promise<number> {
+  // The first visual line of the message's first line, where its words begin.
+  const start = await from.locator(".cm-line").first().evaluate((line) => {
+    const words = document.createRange();
+    words.selectNodeContents(line);
+    const first = words.getClientRects()[0]!;
+    return { x: first.left + 1, y: first.top + first.height / 2 };
+  });
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  const box = (await scroll.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height - 4, { steps: 5 });
+  const before = await scroll.evaluate((element) => element.scrollTop);
+  await page.mouse.wheel(0, 3 * box.height);
+  await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(before + box.height);
+  const end = await scroll.evaluate((element) => {
+    const view = element.getBoundingClientRect();
+    const lines = [...element.querySelectorAll<HTMLElement>('[data-desk-thread-line="agent"] .cm-line')].filter((line) => {
+      const rect = line.getBoundingClientRect();
+      return rect.top >= view.top && rect.bottom <= view.bottom;
+    });
+    const last = lines.at(-1)!;
+    const rect = last.getBoundingClientRect();
+    return { x: rect.right - 2, y: rect.top + rect.height / 2, n: Number(/History (\d+):/.exec(last.textContent ?? "")?.[1]) };
+  });
+  await page.mouse.move(end.x, end.y, { steps: 5 });
+  await page.mouse.up();
+  return end.n;
+}
+
+// The conversation draws only the rows near its scroll viewport (issue 3101).
+// A long history stays readable, the reading position holds while answers
+// arrive, and a selection dragged past the rows drawn copies every message.
+test("long conversation history draws the rows near the reader, keeps the reading position and copies a selection across messages", async () => {
   const stack = await startStack("pane-conversation-history");
   let app: ElectronApplication | undefined;
   const failures: unknown[] = [];
@@ -129,31 +165,51 @@ test("long conversation history releases offscreen editors and restores Markdown
     await page.locator(`[data-pane-conversation-toggle="${fixture.panes[0]}"]`).click();
     const cover = page.locator("[data-pane-conversation]");
     const scroll = cover.locator("[data-desk-thread-conversation]");
-    const first = cover.locator('[data-desk-thread-line="agent"]').filter({ hasText: "History 0:" });
-    const last = cover.locator('[data-desk-thread-line="agent"]').filter({ hasText: "History 119:" });
+    const answer = (n: number) => cover.locator('[data-desk-thread-line="agent"]').filter({ hasText: `History ${n}:` });
+    const first = answer(0), last = answer(119);
     await expect(last.locator(".cm-editor")).toHaveCount(1);
-    await expect(first).toHaveCount(1);
-    await expect(first.locator(".cm-editor")).toHaveCount(0);
+    await expect(cover.locator("[data-desk-thread-lines]")).toHaveAttribute("data-desk-thread-lines", "242");
+    // Every line is read (the fixture's own first turn and these 120), and only the rows near the foot are drawn.
+    await expect(first).toHaveCount(0);
+    expect(await cover.locator("[data-thread-row]").count()).toBeLessThan(60);
     // A real scroll, rather than scrollIntoView's implicit programmatic jump,
     // establishes the reading position before the next answer arrives.
     await scroll.evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")); });
     await expect(first.locator(".cm-editor")).toHaveCount(1);
-    await expect(last.locator(".cm-editor")).toHaveCount(0);
+    await expect(last).toHaveCount(0);
     await expect(first).toBeInViewport();
     const firstEditor = await first.locator(".cm-editor").elementHandle();
-    await cover.locator("[data-desk-composer-input]").fill("읽던 곳을 유지해요");
+    const composer = cover.locator("[data-desk-composer-input]");
+    await composer.fill("읽던 곳을 유지해요");
     expect(await first.locator(".cm-editor").evaluate((element, before) => element === before, firstEditor)).toBe(true);
     continueFixtureTranscript(fixture, "fixture-one", { task: "History 120: 새 답변이 왔어요", at: Date.now() });
-    await expect(cover).toContainText("History 120:");
+    await expect(cover.locator("[data-desk-thread-lines]")).toHaveAttribute("data-desk-thread-lines", "244");
     await expect(first).toBeInViewport();
     await compositorPresents(page);
     await captureElectronWindow(app, "pane-conversation-history", { turns: 121, state: run.env.HIDE_STATE_DIR, condition: "reading oldest answer while a new answer arrives" });
+    // A drag from the oldest answer past the rows drawn selects every message between, and the copy holds them all.
+    const held = await app.evaluate(({ clipboard }) => clipboard.readText());
+    try {
+      const reached = await dragAcrossMessages(page, scroll, first);
+      expect(reached).toBeGreaterThan(5);
+      await page.keyboard.press(field("KeyC"));
+      await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toContain(`History ${reached}:`);
+      const copied = await app.evaluate(({ clipboard }) => clipboard.readText());
+      for (let n = 0; n <= reached; n++) expect(copied, `History ${n}`).toContain(`History ${n}:`);
+    } finally {
+      await app.evaluate(({ clipboard }, text) => clipboard.writeText(text), held);
+    }
+    await expect(composer).toHaveValue("읽던 곳을 유지해요");
+    // While the selection stands its rows stay drawn, even with the conversation at its foot.
     await scroll.evaluate((element) => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event("scroll")); });
-    const newest = cover.locator('[data-desk-thread-line="agent"]').filter({ hasText: "History 120:" });
-    await expect(newest.locator(".cm-editor")).toHaveCount(1);
-    await expect(first.locator(".cm-editor")).toHaveCount(0);
+    await expect(answer(120).locator(".cm-editor")).toHaveCount(1);
+    await expect(first).toHaveCount(1);
+    // A press in the box clears it, and the rows it held are let go.
+    await composer.click();
+    await expect.poll(() => page.evaluate(() => document.getSelection()?.isCollapsed ?? true)).toBe(true);
+    await expect(first).toHaveCount(0);
     continueFixtureTranscript(fixture, "fixture-one", { task: "History 121: 아래에서는 새 글을 따라가요", at: Date.now() + 1000 });
-    const following = cover.locator('[data-desk-thread-line="agent"]').filter({ hasText: "History 121:" });
+    const following = answer(121);
     await expect(following.locator(".cm-editor")).toHaveCount(1);
     await expect(following).toBeInViewport();
   } catch (error) { failures.push(error); }

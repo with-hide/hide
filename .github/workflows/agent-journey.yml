@@ -71,19 +71,13 @@ on:
       clis-table:
         description: >-
           A table of contracts/agent-clis.json's shape for the fake lane to install and measure instead
-          of the pins; the daily agent canary passes each CLI's latest release (agent-canary.yml).
-        type: string
-        default: ''
-      agents:
-        description: >-
-          Comma-separated adapter IDs the fake lane measures, every active adapter when empty; the
-          agent canary reruns only the agents whose latest release failed, at their pins.
+          of the pins; the nightly's agent canary passes each CLI's latest release (nightly.yml).
         type: string
         default: ''
       report-name:
         description: >-
-          The fake lane's artifact name before `-<system>`, so a second call in one run keeps its
-          reports apart from the first's.
+          The fake lane's artifact name before `-<system>`, so a second call in one run (the
+          nightly's agent canary) keeps its reports apart from the first's.
         type: string
         default: agent-journey-fake
 
@@ -244,7 +238,7 @@ jobs:
     # Seven agents of eleven cells each, about 4 to 7 minutes an agent on
     # macOS and up to 9 on Windows (2026-10-18), inside the journey step's 85;
     # the job's cap is its steps' caps summed.
-    timeout-minutes: 186
+    timeout-minutes: 191
     strategy:
       fail-fast: false
       matrix:
@@ -254,7 +248,7 @@ jobs:
         shell: bash
     env:
       RUN_DIR: agents/runs/agent-journey-fake-${{ matrix.system }}
-      # Every active adapter unless the caller named some (agent-canary.yml's pinned rerun).
+      # Every active adapter unless a hand run named some.
       AGENTS: ${{ inputs.agents }}
       # The journey needs Python 3.12; Windows names it python.
       PYTHON: ${{ matrix.system == 'windows' && 'python' || 'python3' }}
@@ -360,6 +354,11 @@ jobs:
           selection=()
           if [[ -n "$AGENTS" ]]; then selection=(--agents "$AGENTS"); fi
           "$PYTHON" scripts/agent-journey-lane.py "$RUN_DIR/report.json" --lane fake "${selection[@]}"
+      # The report stays at its artifact's root, where the agent canary's
+      # record reads it (scripts/agent-canary-record.py): one artifact of this
+      # folder and the controller's roots both at their parent, which left
+      # the record with no report from 2026-11-03 to 2026-11-28, so the
+      # controller's evidence is an artifact of its own.
       - name: Keep the report
         timeout-minutes: 5
         if: ${{ !cancelled() }}
@@ -373,6 +372,13 @@ jobs:
             ${{ env.RUN_DIR }}/*.jsonl
             ${{ env.RUN_DIR }}/*.txt
             ${{ env.RUN_DIR }}/*.log
-            ${{ env.RUN_DIR }}-controller/
+          if-no-files-found: warn
+      - name: Keep the controller's evidence
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.report-name || 'agent-journey-fake' }}-controller-${{ matrix.system }}
+          path: ${{ env.RUN_DIR }}-controller/
           if-no-files-found: warn
 
