@@ -1,12 +1,13 @@
 """The docs check must pass a well-formed checkout and name each break of the
-cap, the exception list, a decision record's form, a guide piece's header and
-a table of contents.
+cap, the exception list, a split table and its over-cap pieces, a decision
+record's form, a guide piece's header and a table of contents.
 
 Each test builds a small git checkout in a temporary folder (records, a table
 of contents, pieces and one code path) and runs the check on it, never on the
 real one.
 """
 import importlib.util
+import json
 import subprocess
 import tempfile
 import unittest
@@ -36,6 +37,12 @@ def piece(title='A piece', code='`src/`', index='[Guide](../GUIDE.md)', body='Te
     if index is not None:
         head.append(f'- Index: {index}')
     return '\n'.join(head + ['', '## Section', '', body])
+
+
+def table(pieces, source='docs/GUIDE.md', folder='docs/guide'):
+    """A split table's text, as scripts/split-tables/ holds it; `pieces` are names or piece dicts."""
+    return json.dumps({'source': source, 'folder': folder,
+                       'pieces': [{'name': p} if isinstance(p, str) else p for p in pieces]})
 
 
 def adr_toc(records):
@@ -163,12 +170,9 @@ class TheRecords(Base):
 class TheGuidePieces(Base):
     TOC = '# Guide\n\n| Piece | Code |\n| --- | --- |\n| [A](guide/a.md) | `src/` |\n\n## Section\n\nMoved to [A](guide/a.md#section).\n'
 
-    def setUp(self):
-        super().setUp()
-        CHECK.SPLITS = {'docs/ARCHITECTURE.md': 'docs/adr', 'docs/GUIDE.md': 'docs/guide'}
-
-    def guide(self, pieces, toc=None):
-        files = {'docs/GUIDE.md': self.TOC if toc is None else toc}
+    def guide(self, pieces, toc=None, split=None):
+        files = {'docs/GUIDE.md': self.TOC if toc is None else toc,
+                 'scripts/split-tables/guide.json': table([name[:-3] for name in pieces]) if split is None else split}
         files.update({f'docs/guide/{name}': text for name, text in pieces.items()})
         return errors(files=files)
 
@@ -213,7 +217,65 @@ class TheGuidePieces(Base):
 
     def test_a_registered_split_needs_its_folder_and_its_table_of_contents(self):
         self.assertNamed(self.guide({}), 'docs/guide/ holds no pieces')
-        self.assertNamed(errors(files={'docs/guide/a.md': piece()}), 'docs/GUIDE.md: the table of contents of docs/guide/ does not exist')
+        self.assertNamed(errors(files={'scripts/split-tables/guide.json': table(['a']), 'docs/guide/a.md': piece()}),
+                         'docs/GUIDE.md: the table of contents of docs/guide/ does not exist')
+
+
+class TheSplitTables(Base):
+    """A split is learned from its own table file, never from a list another split edits."""
+
+    TOC = TheGuidePieces.TOC
+    guide = TheGuidePieces.guide
+
+    def test_a_split_is_checked_only_once_its_table_file_names_it(self):
+        broken = {'docs/GUIDE.md': '# Guide\n', 'docs/guide/a.md': piece(code='`src/gone.rs`')}
+        self.assertEqual(errors(files=broken), [], 'without a table the folder is no split')
+        found = errors(files=dict(broken, **{'scripts/split-tables/guide.json': table(['a'])}))
+        self.assertNamed(found, 'src/gone.rs does not exist')
+        self.assertNamed(found, 'does not link docs/guide/a.md')
+
+    def test_the_table_names_exactly_the_pieces_its_folder_holds(self):
+        found = self.guide({'a.md': piece(), 'b.md': piece()}, split=table(['a', 'c']),
+                           toc='# Guide\n\n[a](guide/a.md)\n[b](guide/b.md)\n')
+        self.assertNamed(found, 'scripts/split-tables/guide.json: names the piece docs/guide/c.md, which does not exist')
+        self.assertNamed(found, 'docs/guide/b.md: no piece of scripts/split-tables/guide.json; add it to the table')
+
+    def test_a_malformed_table_or_a_second_split_of_one_document_fails(self):
+        for text in ('{', '{"source": "docs/GUIDE.md"}', table([{'name': 'a', 'over_cap': 'yes'}])):
+            with self.subTest(text=text):
+                self.assertNamed(self.guide({'a.md': piece()}, split=text), 'scripts/split-tables/guide.json: not a split table')
+        again = {'scripts/split-tables/other.json': table(['a'], folder='docs/other'), 'docs/other/a.md': piece()}
+        found = errors(files=dict(again, **{'docs/GUIDE.md': self.TOC, 'docs/guide/a.md': piece(),
+                                            'scripts/split-tables/guide.json': table(['a'])}))
+        self.assertNamed(found, 'scripts/split-tables/other.json: splits docs/GUIDE.md, which scripts/split-tables/guide.json already splits')
+        found = errors(files={'scripts/split-tables/adr.json': table(['a'], source='docs/ARCHITECTURE.md')})
+        self.assertNamed(found, 'splits docs/ARCHITECTURE.md, which SPLITS already splits')
+
+    def test_a_piece_over_the_cap_is_allowed_only_by_its_over_cap_mark(self):
+        big = piece(body='x' * CHECK.LIMIT)
+        self.assertNamed(self.guide({'a.md': big}), f'docs/guide/a.md: {len(big.encode())} bytes, over the')
+        self.assertEqual(self.guide({'a.md': big}, split=table([{'name': 'a', 'over_cap': True}])), [])
+        self.assertEqual(CHECK.excepted(Path('/nowhere')), CHECK.EXCEPTIONS, 'no tables, only the list')
+
+    def test_an_over_cap_mark_on_a_small_or_still_divisible_piece_fails(self):
+        marked = table([{'name': 'a', 'over_cap': True}])
+        self.assertNamed(self.guide({'a.md': piece()}, split=marked),
+                         'scripts/split-tables/guide.json marks docs/guide/a.md over_cap, now within the cap; remove the mark')
+        two = piece(body='x' * CHECK.LIMIT + '\n\n## Another\n\nText.\n')
+        self.assertNamed(self.guide({'a.md': two}, split=marked), 'more than one section heading; split it further')
+
+
+class TheExceptionsLayout(unittest.TestCase):
+    """Two splits each remove their own EXCEPTIONS entry; a blank line between entries keeps
+    those removals off neighbouring lines, so git merges them (test_split_doc merges two)."""
+
+    def test_every_entry_of_the_real_list_has_a_line_of_its_own_with_a_blank_line_between(self):
+        text = (ROOT / 'scripts' / 'check-docs.py').read_text(encoding='utf-8')
+        block = text[text.index('EXCEPTIONS = {\n') + len('EXCEPTIONS = {\n'):text.index('\n}\n', text.index('EXCEPTIONS = {'))]
+        entries = block.split('\n\n')
+        self.assertEqual(sorted(line.strip()[1:-2] for line in entries), sorted(CHECK.EXCEPTIONS))
+        for line in entries:
+            self.assertRegex(line, r"^    '[^']+',$")
 
 
 if __name__ == '__main__':
