@@ -146,15 +146,15 @@ Read it with `gh api` or a shallow clone under your own `agents/runs/`, and dele
 
 ## Performance Guide
 
-Before diagnosing, changing, reviewing, or verifying terminal responsiveness, rendering, scrolling, selection, resize, tab switching, CPU, memory, snapshots, or attach behavior, read [docs/PERFORMANCE_TESTING.md](docs/PERFORMANCE_TESTING.md) in full.
-It owns the reproduction procedure, the isolation checklist, the measurement boundaries, the invariants a fix has to preserve, and the regression ownership table; historical run measurements are not acceptance thresholds.
+Before diagnosing, changing, reviewing, or verifying terminal responsiveness, rendering, scrolling, selection, resize, tab switching, CPU, memory, snapshots, or attach behavior, read the table in [docs/PERFORMANCE_TESTING.md](docs/PERFORMANCE_TESTING.md), then the pieces under `docs/performance/` whose Code paths cover what you change, and [docs/performance/procedure.md](docs/performance/procedure.md) in full before any measurement.
+Together they own the reproduction procedure, the isolation checklist, the measurement boundaries, the invariants a fix has to preserve, and the regression ownership table; historical run measurements are not acceptance thresholds.
 
 - Explain the added work per input, the notification fan-out, and the pending-work bound before adding anything to a high-frequency path; publish only actual state transitions, and never drop input to do so.
 - The session-sync thread that applies the engine's events never blocks: a socket read that opens its own connection, a subprocess, an HTTP request or an fsync runs on a worker or a save thread, and a publish whose catalog inputs did not move repeats no catalog build, purpose sync or path resolution.
 - No subprocesses, blocking I/O, or large serialization under `Mutex<Runtime>`: `snapshot_delta_payload` takes owned data under the lock and `serialize_snapshot_delta` serializes outside it, and `ChangeNotifier` announces once per burst.
   No per-tick or per-tab git forks: the catalog reads repository facts from what the core's own node answers about its paths (`Call::PathFacts`, read from the repository's own files there, never from a `git` process), asked off the lock.
 - Report idle and driven measurements separately, with the load and workload recorded for each.
-- Native verification targets one precisely identified candidate PID/window and an isolated state folder (`HIDE_STATE_DIR`); the operator app may remain running. Never quit, restart, focus, or manipulate the operator's app, panes, or server for QA without explicit coordination. Prefer background exact-window capture; see `docs/PERFORMANCE_TESTING.md` for isolation and foreground-interaction boundaries.
+- Native verification targets one precisely identified candidate PID/window and an isolated state folder (`HIDE_STATE_DIR`); the operator app may remain running. Never quit, restart, focus, or manipulate the operator's app, panes, or server for QA without explicit coordination. Prefer background exact-window capture; see `docs/performance/procedure.md` for isolation and foreground-interaction boundaries.
 
 <!-- harness:agents-namespace:start -->
 ## Harness Namespace (`agents/`)
