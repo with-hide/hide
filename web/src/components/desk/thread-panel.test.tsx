@@ -16,6 +16,8 @@ import { useUiStore } from "../../ui";
 import { NO_SESSION_DRAFTS, SESSION_DRAFT_BYTES } from "../../sessionDrafts";
 import { TooltipProvider } from "../ui/tooltip";
 import { ThreadPanel } from "./thread-panel";
+import { forgetScrolls } from "../../conversationScroll";
+import { drawnRows, layOutConversation, scrollConversation, watchResizes } from "./thread-test-layout";
 import { clearPreviews } from "../../filePreview";
 import { drawPreview } from "../../previewDraw";
 
@@ -43,6 +45,18 @@ function completeInput(next: SessionThreadSection) {
   if (next.input) receiveThreadInputResult(next.input);
 }
 
+/** The rows each turn draws, oldest first: a turn is the rows it draws, not one element. */
+function turnsIn(container: HTMLElement): HTMLElement[][] {
+  const turns = new Map<string, HTMLElement[]>();
+  for (const row of container.querySelectorAll<HTMLElement>("[data-desk-thread-turn]")) turns.set(row.dataset.deskThreadTurn!, [...(turns.get(row.dataset.deskThreadTurn!) ?? []), row]);
+  return [...turns.values()];
+}
+const within = (rows: readonly HTMLElement[], selector: string) => rows.flatMap((row) => Array.from(row.querySelectorAll<HTMLElement>(selector)));
+const wordsOf = (rows: readonly HTMLElement[]) => rows.map((row) => row.textContent).join("");
+const drawnWords = (container: HTMLElement) => drawnRows(container).map((row) => row.textContent ?? "");
+const layOut = layOutConversation;
+let laidOut: () => Promise<void>;
+
 let saved: ReturnType<typeof useShellStore.getState>;
 let events: { kind: string; payload: Record<string, unknown> }[];
 let mounted: ReturnType<typeof createRoot>[] = [];
@@ -50,7 +64,8 @@ let mounted: ReturnType<typeof createRoot>[] = [];
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // The input box holds the corner's notices above it by its measured box (`noticeFloor.ts`).
-  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  ({ laidOut } = watchResizes());
+  layOut();
   saved = useShellStore.getState();
   useUiStore.setState({ threadLease: null, paneConversation: null });
   useShellStore.setState({ connection: "live", threadInputResult: null });
@@ -65,6 +80,9 @@ afterEach(async () => {
   mounted = [];
   useShellStore.setState(saved, true);
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  // A conversation left above its foot is remembered by its pane, which every test shares.
+  forgetScrolls();
   document.body.innerHTML = "";
 });
 
@@ -451,19 +469,19 @@ it("draws what one turn leads to once per target, with its newest state, and a m
     },
     sessions: {},
   });
-  const turns = Array.from(container.querySelectorAll("[data-desk-thread-turn]"));
-  const parts = (turn: Element) => Array.from(turn.querySelectorAll("[data-desk-hide-part]")).map((part) => part.getAttribute("data-desk-hide-part"));
+  const parts = (turn: number) => within(turnsIn(container)[turn]!, "[data-desk-hide-part]").map((part) => part.getAttribute("data-desk-hide-part"));
+  const first = () => turnsIn(container)[0]!;
   // Three mission calls and two letters to one session are one chip and one letter line, where the turn first reached them.
-  expect(parts(turns[0]!)).toEqual(["mission", "letter"]);
-  expect(turns[0]!.querySelector('[data-desk-hide-part="letter"]')?.textContent).toContain("둘째 편지");
-  expect(turns[0]!.textContent).not.toContain("첫 편지");
+  expect(parts(0)).toEqual(["mission", "letter"]);
+  expect(within(first(), '[data-desk-hide-part="letter"]')[0]?.textContent).toContain("둘째 편지");
+  expect(wordsOf(first())).not.toContain("첫 편지");
   // The chip names the mission once, inside it.
-  expect(turns[0]!.querySelector('[data-desk-hide-part="mission"]')?.textContent?.split("Desk 1차").length).toBe(2);
+  expect(within(first(), '[data-desk-hide-part="mission"]')[0]?.textContent?.split("Desk 1차").length).toBe(2);
   // Another turn that reaches the same mission draws it again: the rule holds within a turn.
-  expect(parts(turns[1]!)).toEqual(["mission"]);
+  expect(parts(1)).toEqual(["mission"]);
   // Unfolded, the work draws each target once too.
-  await act(async () => (turns[0]!.querySelector("[data-desk-turn-toggle]") as HTMLElement).click());
-  expect(parts(turns[0]!)).toEqual(["mission", "letter"]);
+  await act(async () => within(first(), "[data-desk-turn-toggle]")[0]!.click());
+  expect(parts(0)).toEqual(["mission", "letter"]);
 });
 
 it("folds a running turn's calls into one line with its newest call under it, never what came out, and unfolds every call", async () => {
@@ -482,18 +500,18 @@ it("folds a running turn's calls into one line with its newest call under it, ne
     sessions: {},
   }) as ThreadPage;
   await shown(tail([edit("e2", "web/src/thread-view.tsx", "a\nb", "a2\nb2", "in_progress")]));
-  const turn = container.querySelector("[data-desk-thread-turn]")!;
-  const toggle = turn.querySelector("[data-desk-turn-toggle]")!;
+  const turn = turnsIn(container)[0]!;
+  const toggle = within(turn, "[data-desk-turn-toggle]")[0]!;
   expect(toggle.getAttribute("data-desk-turn-toggle")).toBe("folded");
   // One command is a command, in the singular; two files are files.
   expect(toggle.textContent).toBe("Working · 1 command · 2 files");
   // What it said and the mission it reached stay in view; its calls and their output do not.
-  expect(turn.textContent).toContain("먼저 칩을 고칠게요.");
-  expect(turn.querySelectorAll('[data-desk-hide-part="mission"]')).toHaveLength(1);
-  expect(turn.querySelectorAll('[data-desk-thread-line="tool"]')).toHaveLength(0);
-  expect(turn.textContent).not.toContain("threadView.ts:105");
+  expect(wordsOf(turn)).toContain("먼저 칩을 고칠게요.");
+  expect(within(turn, '[data-desk-hide-part="mission"]')).toHaveLength(1);
+  expect(within(turn, '[data-desk-thread-line="tool"]')).toHaveLength(0);
+  expect(wordsOf(turn)).not.toContain("threadView.ts:105");
   // The newest call is its file and what it changed.
-  expect(turn.querySelector("[data-desk-thread-newest]")?.textContent).toMatch(/^Edit web\/src\/thread-view\.tsx\+2 −2/);
+  expect(within(turn, "[data-desk-thread-newest]")[0]?.textContent).toMatch(/^Edit web\/src\/thread-view\.tsx\+2 −2/);
   // A command that comes next takes its place, as its first line alone.
   await shown(tail([edit("e2", "web/src/thread-view.tsx", "a\nb", "a2\nb2"), shell("r1", "pnpm --dir web test\n  --run desk", "in_progress")]));
   expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toMatch(/^pnpm --dir web testRunning/);
@@ -602,86 +620,124 @@ it("keeps every message's view while the operator types and while the last messa
 const answer = (text: string, at: number) => ({ sessionUpdate: "agent_message_chunk", messageId: text, content: { type: "text", text }, _meta: { hide: { at_ms: at } } });
 const asked = (...updates: ThreadPage["updates"]) => ({ updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, ...updates], parts: {}, sessions: {} });
 
-/** JSDOM has no layout; the browser boundary reports which messages approach the viewport. */
-function conversationVisibility() {
-  const observers: { callback: IntersectionObserverCallback; targets: Set<Element>; disconnected: boolean; root: Element | Document | null }[] = [];
-  vi.stubGlobal("IntersectionObserver", class {
-    readonly state;
-    constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
-      this.state = { callback, targets: new Set<Element>(), disconnected: false, root: options?.root ?? null };
-      observers.push(this.state);
-    }
-    observe(target: Element) { this.state.targets.add(target); }
-    unobserve(target: Element) { this.state.targets.delete(target); }
-    disconnect() { this.state.disconnected = true; this.state.targets.clear(); }
-    takeRecords() { return []; }
-  });
-  const conversation = () => observers.filter((one) => one.root instanceof Element && one.root.hasAttribute("data-desk-thread-conversation"));
-  return {
-    conversation,
-    see: (target: Element, shown: boolean) => act(async () => {
-      const observer = conversation().find((one) => one.targets.has(target));
-      expect(observer, "the conversation watches this message").toBeDefined();
-      observer!.callback([{ target, isIntersecting: shown } as IntersectionObserverEntry], {} as IntersectionObserver);
-    }),
-  };
-}
-
-it("releases offscreen Markdown in one long turn, restoring it on return and retaining a selected message until copying ends", async () => {
-  const visibility = conversationVisibility();
-  const { container, type, root } = await mount();
+it("draws only the rows near the viewport, one long turn's messages each a row of its own, and draws a row again on return", async () => {
+  layOut({ viewport: 400, row: 100 });
+  const { container, type } = await mount();
+  // One running turn whose work holds forty messages: it must not stay drawn whole.
   const updates = Array.from({ length: 40 }, (_, index) => [
     answer(`Past **answer ${index}**`, index + 1),
     { sessionUpdate: "tool_call", toolCallId: `call-${index}`, kind: "execute", title: "echo work", status: "completed" },
   ]).flat();
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: asked(...updates, answer("Newest **answer**", 100)) }), sessionThreadHistory: { generation: 4, pages: [] } }));
-  expect(container.querySelectorAll(".cm-editor")).toHaveLength(0);
-  const messages = Array.from(container.querySelectorAll<HTMLElement>("[data-thread-markdown]"));
-  expect(messages).toHaveLength(41);
-  const first = messages[0]!, last = messages.at(-1)!;
-  expect(first.textContent).toContain("answer 0");
-  await visibility.see(last, true);
-  const latestEditor = last.querySelector(".cm-editor");
-  expect(latestEditor).not.toBeNull();
+  // The rows it drew are measured taller than their estimates, and the conversation follows its foot as they grow.
+  await laidOut();
+  await laidOut();
+  expect(container.querySelector("[data-desk-thread-lines]")?.getAttribute("data-desk-thread-lines")).toBe("82");
+  // It opens at its foot: the newest answer is drawn, the first is not, and no more rows than the viewport and a few past it.
+  const bounded = () => expect(drawnRows(container).length).toBeLessThanOrEqual(4 + 2 * 6 + 2);
+  bounded();
+  expect(drawnWords(container).some((words) => words.includes("Newest answer"))).toBe(true);
+  expect(drawnWords(container).some((words) => words.includes("answer 0"))).toBe(false);
   await type("keep my draft");
-  expect(last.querySelector(".cm-editor")).toBe(latestEditor);
-  await visibility.see(first, true);
-  expect(first.querySelector(".cm-editor")).not.toBeNull();
-  await visibility.see(first, false);
-  expect(first.querySelector(".cm-editor")).toBeNull();
-  expect(first.textContent).toContain("answer 0");
-  await visibility.see(first, true);
-  const selectedEditor = first.querySelector(".cm-editor");
-  await act(async () => {
-    const range = document.createRange();
-    range.selectNodeContents(first.querySelector(".cm-content")!);
-    document.getSelection()!.removeAllRanges();
-    document.getSelection()!.addRange(range);
+  await scrollConversation(container, 0);
+  bounded();
+  expect(drawnWords(container).some((words) => words.includes("answer 0"))).toBe(true);
+  expect(drawnWords(container).some((words) => words.includes("Newest answer"))).toBe(false);
+  expect(container.querySelector("textarea")!.value).toBe("keep my draft");
+  // Back at the foot, the newest answer is drawn again as Markdown.
+  await scrollConversation(container, "end");
+  const newest = drawnRows(container).find((row) => row.textContent?.includes("Newest answer"));
+  expect(newest?.querySelector(".cm-editor")).not.toBeNull();
+  expect(container.querySelector("textarea")!.value).toBe("keep my draft");
+});
+
+it("keeps a turn's unfolded work while its rows leave the viewport and come back", async () => {
+  layOut({ viewport: 400, row: 100 });
+  const { container } = await mount({ ...job, state: "done" });
+  const later = Array.from({ length: 20 }, (_, index) => [operator(`later ${index}`), said(`later answer ${index}`)]).flat();
+  await shown({ updates: [operator("고쳐줘"), shell("r0", "rg -n first-turn"), said("고쳤어요"), ...later], parts: {}, sessions: {} });
+  await scrollConversation(container, 0);
+  await act(async () => container.querySelector<HTMLElement>("[data-desk-turn-toggle]")!.click());
+  expect(container.querySelector("[data-desk-turn-toggle]")?.getAttribute("data-desk-turn-toggle")).toBe("open");
+  expect(drawnWords(container).some((words) => words.includes("rg -n first-turn"))).toBe(true);
+  await scrollConversation(container, "end");
+  expect(drawnWords(container).some((words) => words.includes("first-turn") || words.includes("고쳐줘"))).toBe(false);
+  await scrollConversation(container, 0);
+  expect(container.querySelector("[data-desk-turn-toggle]")?.getAttribute("data-desk-turn-toggle")).toBe("open");
+  expect(drawnWords(container).some((words) => words.includes("rg -n first-turn"))).toBe(true);
+});
+
+it("reads a page in above without moving the row the operator reads", async () => {
+  layOut({ viewport: 400, row: 40 });
+  const { container } = await mount({ ...job, state: "done" });
+  const pageOf = (from: number) => ({ updates: Array.from({ length: 20 }, (_, index) => [operator(`question ${from + index}`), said(`answer ${from + index}`)]).flat(), parts: {}, sessions: {} });
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: pageOf(20), has_older: true }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  await scrollConversation(container, 600);
+  const box = container.querySelector<HTMLElement>("[data-desk-thread-conversation]")!;
+  // The row at the viewport's top edge, and how far below the edge it stands.
+  const reading = () => {
+    const row = drawnRows(container).find((one) => Number.parseFloat(one.style.top) + 40 > box.scrollTop)!;
+    return { key: row.dataset.threadRow, words: row.textContent, offset: Number.parseFloat(row.style.top) - box.scrollTop };
+  };
+  const before = reading();
+  await act(async () => useShellStore.setState({ sessionThreadHistory: { generation: 4, pages: [pageOf(0)] } }));
+  expect(container.querySelector("[data-desk-thread-lines]")?.getAttribute("data-desk-thread-lines")).toBe("80");
+  expect(reading()).toEqual(before);
+});
+
+it("draws the message a question goes to wherever it stands, keeps it drawn while lit, and lets it go after", async () => {
+  layOut({ viewport: 400, row: 100 });
+  const scrolled: string[] = [];
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this.textContent ?? ""); };
+  const { container } = await mount({ ...job, state: "done" }, null, { asks: [{ id: "far-0", text: "어느 화면을 찍을지", at_unix_ms: 1_500, quote: "어느 화면을 찍을까요?" }] });
+  const later = Array.from({ length: 30 }, (_, index) => [operator(`later ${index}`), answer(`later answer ${index}`, 2_000 + index)]).flat();
+  await shown({ updates: [operator("찍어줘"), answer("어느 화면을 찍을까요? 라이트와 다크가 있어요.", 1_000), ...later], parts: {}, sessions: {} });
+  const asking = () => drawnWords(container).some((words) => words.includes("어느 화면을 찍을까요?"));
+  expect(asking()).toBe(false);
+  vi.useFakeTimers();
+  try {
+    await act(async () => container.querySelector<HTMLElement>('[data-desk-thread-ask="far-0"]')!.click());
+    expect(asking()).toBe(true);
+    expect(scrolled.some((text) => text.includes("어느 화면을 찍을까요?"))).toBe(true);
+    await act(async () => vi.advanceTimersByTime(2_000));
+    // Lit no more and still away from the viewport, the message is let go.
+    expect(asking()).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps every row between a selection's ends drawn while it stands, so a copy holds all of it", async () => {
+  layOut({ viewport: 400, row: 100 });
+  const { container } = await mount({ ...job, state: "done" });
+  await shown({ updates: Array.from({ length: 30 }, (_, index) => [operator(`question ${index}`), said(`answer ${index}`)]).flat(), parts: {}, sessions: {} });
+  await scrollConversation(container, 0);
+  const start = drawnRows(container).find((row) => row.textContent?.includes("answer 1"))!;
+  const select = (to: Node | null) => act(async () => {
+    const selection = document.getSelection()!;
+    if (to) selection.setBaseAndExtent(start, 0, to, 0);
+    else selection.removeAllRanges();
     document.dispatchEvent(new Event("selectionchange"));
   });
-  await visibility.see(first, false);
-  expect(first.querySelector(".cm-editor")).toBe(selectedEditor);
-  await act(async () => {
-    document.getSelection()!.removeAllRanges();
-    document.dispatchEvent(new Event("selectionchange"));
-  });
-  expect(first.querySelector(".cm-editor")).toBeNull();
-  expect(last.querySelector(".cm-editor")).toBe(latestEditor);
-  expect(visibility.conversation()).toHaveLength(1);
-  await act(async () => root.unmount());
-  mounted = [];
-  expect(visibility.conversation()[0]!.disconnected).toBe(true);
-  expect(visibility.conversation()[0]!.targets.size).toBe(0);
+  await select(start.nextElementSibling);
+  // The drag goes on to the foot: the browser scrolls, and the rows between both ends stay drawn.
+  await scrollConversation(container, "end");
+  const last = drawnRows(container).at(-1)!;
+  await select(last);
+  const words = drawnWords(container);
+  for (let index = 1; index < 30; index += 1) expect(words.some((one) => one.includes(`answer ${index}`)), `answer ${index}`).toBe(true);
+  expect(document.getSelection()!.toString()).toContain("answer 1");
+  await select(null);
+  expect(drawnRows(container).length).toBeLessThanOrEqual(4 + 2 * 6);
 });
 
 it("shows a question in the agent's own sentence above the box and lights only that sentence in its message for 2 s (Doop N3 가)", async () => {
-  conversationVisibility();
   const scrolled: string[] = [];
   vi.stubGlobal("CSS", { escape: (value: string) => value });
   Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this.textContent ?? ""); };
   const { container } = await mount(job, null, { asks: [{ id: "missed-1-0", text: "다크 화면을 넣을지", at_unix_ms: 1_500, quote: "다크 화면도 넣을까요?" }] });
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: asked(answer("라이트를 찍었어요. 다크 화면도 넣을까요? 넣으면 두 배예요.", 1_000)) }), sessionThreadHistory: { generation: 4, pages: [] } }));
-  expect(container.querySelector(".cm-editor")).toBeNull();
   const line = container.querySelector("[data-desk-thread-asks]")!;
   const row = line.querySelector('[data-desk-thread-ask-row="missed-1-0"]')!;
   // One row above the box: 확인할 것, the agent's sentence, when it was asked and ×; no message unfolds under it.
@@ -700,13 +756,13 @@ it("shows a question in the agent's own sentence above the box and lights only t
     await act(async () => row.querySelector<HTMLElement>('[data-desk-thread-ask="missed-1-0"]')!.click());
     const lit = () => Array.from(container.querySelectorAll("[data-desk-thread-message] [data-markdown-lit]")).map((one) => one.textContent);
     expect(lit()).toEqual(["다크 화면도 넣을까요?"]);
-    expect(scrolled.some((text) => text.includes("라이트를 찍었어요."))).toBe(true);
+    // The lit sentence is what is brought to the middle of the conversation.
+    expect(scrolled.at(-1)).toBe("다크 화면도 넣을까요?");
     expect(row.getAttribute("data-lit")).toBe("true");
     await act(async () => vi.advanceTimersByTime(1_999));
     expect(lit()).toHaveLength(1);
     await act(async () => vi.advanceTimersByTime(1));
     expect(lit()).toEqual([]);
-    expect(container.querySelector(".cm-editor")).toBeNull();
     expect(row.getAttribute("data-lit")).toBeNull();
   } finally {
     vi.useRealTimers();
