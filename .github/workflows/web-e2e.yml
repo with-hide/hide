@@ -491,7 +491,7 @@ jobs:
   repeat-total:
     name: repeat total ${{ inputs.lane }}
     needs: e2e
-    if: ${{ inputs.specs != '' }}
+    if: ${{ !cancelled() && inputs.specs != '' && needs.e2e.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
