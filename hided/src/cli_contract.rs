@@ -2943,7 +2943,9 @@ fn listed(spec: &Spec, table: &retired::Table) -> Value {
         // A retired option is listed as the option it is now, under its old
         // name: what a caller that types the old spelling reads stays as it
         // was.
-        let options = command["options"].as_array_mut().expect("options are a list");
+        let options = command["options"]
+            .as_array_mut()
+            .expect("options are a list");
         for flag in renamed {
             let mut entry = options
                 .iter()
@@ -4042,7 +4044,10 @@ mod tests {
             std::collections::BTreeMap::new();
         for spec in commands {
             for option in spec.options {
-                types.entry(option.name).or_default().insert(kind(option.value));
+                types
+                    .entry(option.name)
+                    .or_default()
+                    .insert(kind(option.value));
             }
         }
         let mut problems = Vec::new();
@@ -4079,8 +4084,18 @@ mod tests {
             spec(&["x", "add"], &[], &[optional("--depth", Text)], &[]),
             spec(&["x", "list"], &[], &[optional("--depth", Unsigned)], &[]),
             spec(&["x", "show"], &[], &[optional("--for", Span)], &[]),
-            spec(&["x", "a"], &[], &[optional("--mode", OneOf(&["a", "b"]))], &[]),
-            spec(&["x", "b"], &[], &[optional("--mode", OneOf(&["a", "c"]))], &[]),
+            spec(
+                &["x", "a"],
+                &[],
+                &[optional("--mode", OneOf(&["a", "b"]))],
+                &[],
+            ),
+            spec(
+                &["x", "b"],
+                &[],
+                &[optional("--mode", OneOf(&["a", "c"]))],
+                &[],
+            ),
         ];
         let problems = value_type_problems(WRONG, &[("--for", "two ranges")]).join("\n");
         assert!(problems.contains("--depth takes"), "{problems}");
@@ -4538,21 +4553,45 @@ mod tests {
             assert_eq!(then, today, "{old}");
             format!("{today:?}")
         };
-        assert!(matches!(parse("workspace info --hook"), Ok(CommandKind::WorkspaceHookInfo)));
-        assert!(matches!(parse("workspace info"), Ok(CommandKind::WorkspaceInfo)));
-        assert!(matches!(parse("checkout show"), Ok(CommandKind::WorkspaceInfo)));
-        same("workspace purpose 'fix login'", "checkout purpose 'fix login'");
-        same("workspace remove ../w --force", "checkout remove ../w --force");
-        same("inbox --ack letter-2~0123456789ab", "inbox ack letter-2~0123456789ab");
+        assert!(matches!(
+            parse("workspace info --hook"),
+            Ok(CommandKind::WorkspaceHookInfo)
+        ));
+        assert!(matches!(
+            parse("workspace info"),
+            Ok(CommandKind::WorkspaceInfo)
+        ));
+        assert!(matches!(
+            parse("checkout show"),
+            Ok(CommandKind::WorkspaceInfo)
+        ));
+        same(
+            "workspace purpose 'fix login'",
+            "checkout purpose 'fix login'",
+        );
+        same(
+            "workspace remove ../w --force",
+            "checkout remove ../w --force",
+        );
+        same(
+            "inbox --ack letter-2~0123456789ab",
+            "inbox ack letter-2~0123456789ab",
+        );
         same("session record agent-7", "session show agent-7");
         same("view status browser-3", "view show browser-3");
-        same("skill on archify --agent codex", "skill on archify --kind codex");
+        same(
+            "skill on archify --agent codex",
+            "skill on archify --kind codex",
+        );
         same("mcp off github --agent pi", "mcp off github --kind pi");
         same(
             "mission plan --json '{\"nodes\": []}'",
             "mission plan --inline '{\"nodes\": []}'",
         );
-        same("plan set --json '{\"nodes\": []}'", "task set --inline '{\"nodes\": []}'");
+        same(
+            "plan set --json '{\"nodes\": []}'",
+            "task set --inline '{\"nodes\": []}'",
+        );
         same(
             "automation edit a1 --own-folder --task 'Say hi'",
             "automation edit a1 --no-repo --brief 'Say hi'",
@@ -4562,13 +4601,19 @@ mod tests {
             "automation add --name n --task --folder --schedule 'daily 09:00' --kind claude",
             "automation add --name n --brief --folder --schedule 'daily 09:00' --kind claude",
         );
-        assert!(added.contains("task: \"--folder\"") && added.contains("folder: None"), "{added}");
+        assert!(
+            added.contains("task: \"--folder\"") && added.contains("folder: None"),
+            "{added}"
+        );
         // The words after `--` are the server's.
         let edited = same(
             "mcp update fs -- server --agent codex --task t",
             "mcp edit fs -- server --agent codex --task t",
         );
-        assert!(edited.contains("\"--agent\", \"codex\", \"--task\""), "{edited}");
+        assert!(
+            edited.contains("\"--agent\", \"codex\", \"--task\""),
+            "{edited}"
+        );
     }
 
     /// `line` split as a POSIX shell splits it.
@@ -4656,7 +4701,13 @@ mod tests {
             .iter()
             .map(|command| command["command"].as_str().unwrap())
             .collect();
-        for name in ["plan set", "plan node", "plan approve", "plan drop", "plan show"] {
+        for name in [
+            "plan set",
+            "plan node",
+            "plan approve",
+            "plan drop",
+            "plan show",
+        ] {
             assert!(names.contains(&name), "{name} is not listed");
         }
         // Every row's spellings, each right after the command it is now.
@@ -4692,7 +4743,10 @@ mod tests {
                     .collect::<Vec<_>>()
             )
         );
-        assert_eq!(document["retired_words"][0], json!({"old": ["plan"], "now": ["task"]}));
+        assert_eq!(
+            document["retired_words"][0],
+            json!({"old": ["plan"], "now": ["task"]})
+        );
         assert_eq!(document["envelopes"]["plan"], document["envelopes"]["task"]);
         assert_eq!(document["envelopes"]["task"]["answer"], "result");
     }

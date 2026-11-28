@@ -356,14 +356,20 @@ mod tests {
         for (old, now) in [
             ("workspace info", "checkout show"),
             ("workspace purpose fix login", "checkout purpose fix login"),
-            ("workspace remove ../w --force", "checkout remove ../w --force"),
+            (
+                "workspace remove ../w --force",
+                "checkout remove ../w --force",
+            ),
             ("workspace info --hook", "workspace info --hook"),
             ("workspace status --hook", "workspace status --hook"),
             ("inbox --ack b-1", "inbox ack b-1"),
             ("inbox --hook --tool", "inbox --hook --tool"),
             ("session record s1 --json", "session show s1 --json"),
             ("view status v1", "view show v1"),
-            ("mcp update fs --url https://x", "mcp edit fs --url https://x"),
+            (
+                "mcp update fs --url https://x",
+                "mcp edit fs --url https://x",
+            ),
             ("skill update s1", "skill update s1"),
             (
                 "automation add --name n --task t --folder /p --worktree",
@@ -373,7 +379,10 @@ mod tests {
                 "automation edit a1 --own-folder --task t",
                 "automation edit a1 --no-repo --brief t",
             ),
-            ("automation edit a1 --folder=/p", "automation edit a1 --repo=/p"),
+            (
+                "automation edit a1 --folder=/p",
+                "automation edit a1 --repo=/p",
+            ),
             // A value that looks like a retired option is a value.
             (
                 "automation add --name --task --task --folder",
@@ -381,12 +390,18 @@ mod tests {
             ),
             ("mission plan --json {}", "mission plan --inline {}"),
             ("mission show --json", "mission show --json"),
-            ("plan set --file p.json --json", "task set --file p.json --json"),
+            (
+                "plan set --file p.json --json",
+                "task set --file p.json --json",
+            ),
             ("skill on s1 --agent codex", "skill on s1 --kind codex"),
             ("mcp off m1 --agent claude", "mcp off m1 --kind claude"),
             ("skill add ./s --agent", "skill add ./s --agent"),
             // After `--`, every word is the program's.
-            ("mcp update fs -- srv --agent x", "mcp edit fs -- srv --agent x"),
+            (
+                "mcp update fs -- srv --agent x",
+                "mcp edit fs -- srv --agent x",
+            ),
             (
                 "agent spawn --name a --brief b -- --task x",
                 "agent spawn --name a --brief b -- --task x",

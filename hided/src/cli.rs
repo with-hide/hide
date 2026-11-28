@@ -495,11 +495,17 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         }
         Some(topic @ ("skill" | "mcp")) => {
             let (kind, usage_text) = if topic == "skill" {
-                (hide_kit::store::ItemKind::Skill, crate::store_cli::SKILL_USAGE)
+                (
+                    hide_kit::store::ItemKind::Skill,
+                    crate::store_cli::SKILL_USAGE,
+                )
             } else {
                 (hide_kit::store::ItemKind::Mcp, crate::store_cli::MCP_USAGE)
             };
-            if matches!(args.get(2).map(String::as_str), None | Some("help" | "--help")) {
+            if matches!(
+                args.get(2).map(String::as_str),
+                None | Some("help" | "--help")
+            ) {
                 println!("{usage_text}");
                 std::process::exit(0);
             }
@@ -550,9 +556,8 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             crate::automation_cli::parse(&args[2..]).map(CommandKind::Automation)
         }
         Some("automation") => {
-            crate::cli_contract::admit(&args[1..]).map_err(|refusal| {
-                format!("{refusal}\n{}", usage(crate::automation_cli::USAGE))
-            })?;
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::automation_cli::USAGE)))?;
             crate::automation_cli::parse(&args[2..])
                 .map(CommandKind::Automation)
                 .map_err(|reason| wrong(reason, crate::automation_cli::USAGE))

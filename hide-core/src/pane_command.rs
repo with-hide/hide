@@ -245,9 +245,7 @@ pub fn next_action(code: &str) -> Option<&'static str> {
             "Name the agent by its registration id or its pane, both shown by hide ps"
         }
         "pane_required" => "Run the command in a pane of Hide",
-        "caller_context_changed" => {
-            "Run hide checkout show and retry from the checkout you are in"
-        }
+        "caller_context_changed" => "Run hide checkout show and retry from the checkout you are in",
         "purpose_no_workspace" => "Open the checkout in Hide and retry",
         "purpose_checkout_unlisted" => {
             "Hide lists this folder in no checkout of your pane's project yet; retry once its row shows in the sidebar, or run the command from a pane opened in it"
