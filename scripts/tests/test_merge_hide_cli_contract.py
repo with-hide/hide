@@ -85,6 +85,17 @@ class TheDigestIsRustsDigest(unittest.TestCase):
         expected = hashlib.sha256('{"a":null,"b":[{"a":"\u00e9\\u001f","z":1}]}'.encode()).hexdigest()
         self.assertEqual(driver.digest_of(body), "sha256:" + expected)
 
+    def test_a_float_with_no_exponent_is_written_as_rust_writes_it(self):
+        expected = hashlib.sha256(b'{"a":0.0,"b":0.5,"c":3}').hexdigest()
+        self.assertEqual(driver.digest_of({"c": 3, "b": 0.5, "a": 0.0}), "sha256:" + expected)
+
+    def test_a_number_serde_json_may_write_differently_is_refused_not_hashed(self):
+        # serde_json writes 2.9802322387695312e-8 where Python writes ...e-08, so the
+        # two digests of one body differ (sha256:5b4047ad... and sha256:428184ca...).
+        for number in (2.9802322387695312e-8, 1e16, 1e-5, float("nan"), 2**64):
+            with self.subTest(number=number), self.assertRaises(driver.Unsupported):
+                driver.digest_of({"minimum": number})
+
     def test_the_text_written_keeps_non_ascii_escaped_as_json_tool_does(self):
         self.assertIn("\\u00e9", driver.render({"a": "é"}))
 
@@ -159,6 +170,20 @@ class TheSameEntryDifferentlyConflicts(unittest.TestCase):
         ours = add(BASE, command("agent end"), after="ps")
         theirs = add(BASE, command("mission list"), after="ps")
         self.assertEqual(self.conflicts(ours, theirs), "commands (the order of the entries)")
+
+    def test_one_command_moved_to_two_places_is_not_kept_twice(self):
+        # Each input lists every command once; `git merge-file` of the three
+        # orders answers [a, c, b, d, b].
+        def ordered(*names):
+            return driver.with_digest({**BASE, "commands": [command(name) for name in names]})
+
+        where = self.conflicts_in(ordered(*"abcd"), ordered(*"acbd"), ordered(*"acdb"))
+        self.assertEqual(where, "commands (the order of the entries)")
+
+    def conflicts_in(self, base, ours, theirs):
+        with self.assertRaises(driver.Conflict) as raised:
+            merged(base, ours, theirs)
+        return raised.exception.where
 
     def test_a_scalar_both_sides_changed(self):
         self.assertEqual(self.conflicts(driver.with_digest({**BASE, "format": 2}), driver.with_digest({**BASE, "format": 3})), "format")
@@ -258,6 +283,31 @@ class AGitMerge(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0, "the text merge of two commands added at different ends is a conflict on the digest")
         self.assertIn("<<<<<<<", (self.repo / CONTRACT).read_text(encoding="utf-8"))
 
+    def register(self):
+        subprocess.run([sys.executable, "scripts/merge-hide-cli-contract.py", "--register"], cwd=self.repo, check=True, capture_output=True)
+
+    def test_registered_one_command_moved_to_two_places_is_a_conflict_not_a_duplicate(self):
+        def ordered(*names):
+            return driver.with_digest({**BASE, "commands": [command(name) for name in names]})
+
+        self.write(ordered(*"abcd"))
+        self.git("commit", "--quiet", "-am", "four commands")
+        self.two_branches(ordered(*"acbd"), ordered(*"acdb"))
+        self.register()
+        done = self.git("merge", "--no-edit", "theirs", check=False)
+        self.assertNotEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.git("diff", "--name-only", "--diff-filter=U").stdout.split(), [CONTRACT])
+
+    def test_registered_a_number_the_digest_cannot_promise_is_a_conflict_to_regenerate(self):
+        self.two_branches(
+            {**add(BASE, command("agent end"), after="ps"), "value_types": {"text": {"minimum": 2.9802322387695312e-8}}},
+            add(BASE, command("mission list"), after="agent show"),
+        )
+        self.register()
+        done = self.git("merge", "--no-edit", "theirs", check=False)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("serde_json may write", done.stderr + done.stdout)
+
     def test_registering_twice_leaves_one_driver(self):
         for _ in range(2):
             subprocess.run([sys.executable, "scripts/merge-hide-cli-contract.py", "--register"], cwd=self.repo, check=True, capture_output=True)
@@ -276,13 +326,16 @@ class AGitMerge(unittest.TestCase):
 #
 # `SAME`: no hand edit, and the driver's file is the merge commit's file, digest
 # included. `STALE_DIGEST`: the merge commit committed a digest that is not its
-# own body's (a later commit fixed it); the driver's body is the commit's and
-# its digest is the right one. `CODE_MERGED`: the author rebuilt `hide` after
-# merging the Rust and the file holds what neither side's file did (a command's
-# `hidden` flag, a refusal the merged code now returns), which only the code can
-# say; the driver finishes with the data merge and hided's committed-contract
-# test is what asks for the regeneration. `CONFLICT`: both sides changed the
-# same entry, and the author merged it by hand.
+# own body's; the driver's body is the commit's and its digest is the right one.
+# `COMMITTED_FILE_LACKS`: the merge commit's file lacks what the Rust source at
+# that same commit exports (`WITNESS` is a line of it that names what the driver's
+# file has and the committed one does not), so the driver's file is the nearer to
+# the source. `CODE_DERIVED`: the merged code adds something neither side's file
+# holds (a `hidden` flag, a refusal), which only a build says; the driver finishes
+# with the data merge and hided's committed-contract test asks for the
+# regeneration. `CONFLICT`: both sides changed the same entry, and the author
+# merged it by hand. `hide_cli_replay_differences.json` pins, for the last two
+# kinds before it, every entry where the driver's file and the committed one differ.
 SAME = """
 012454514b0e 1597b6d793d2 1b26e7625537 1c3807a56184 1caea4df18ee 20224a9a2a19 2326258d5dd7 278f15356da3
 42c5cf492980 42cafa6f4b42 4ab007dc17a2 4e3d7c650315 53ae25e0a854 5425e508ca10 685acb41b354 69a45e438018
@@ -291,16 +344,41 @@ SAME = """
 df3a468e698d e67231cf0b9d ee4059a73285 ee716b7a8dc2 f155b2166549 f182c5465996 fd9b45a84632
 """.split()
 STALE_DIGEST = ["449db18002e9"]
-CODE_MERGED = """
-4f2adc6331e1 7ee433bbdfa3 91ef0448736b 9aa28801be59 a82552bdfee0 c67fe6f0d257 d3e83d815b96 e5b9dc485f0e
-e9582eb42d83 f9b0f806c020
-""".split()
+COMMITTED_FILE_LACKS = {
+    "4f2adc6331e1": "PAIRING_ONLY",
+    "91ef0448736b": "PAIRING_ONLY",
+    "9aa28801be59": "PAIRING_ONLY",
+    "c67fe6f0d257": "wait_target_invalid",
+    "f9b0f806c020": "wait_target_invalid",
+    "d3e83d815b96": "mission_dependency_stack_split",
+    "e9582eb42d83": "With `--machine`",
+    "e5b9dc485f0e": '&["skill", "add"]',
+}
+CODE_DERIVED = ["7ee433bbdfa3", "a82552bdfee0"]
 CONFLICT = {
     "0de8fc530f86": "commands/device switch/refusals",
     "44d7557061f4": "answers/inbox/definitions/Letter/required",
     "dadde56b9a2a": "commands/device accept-ssh/options",
     "fdd39e89209e": "commands/mission node/refusals",
 }
+DIFFERENCES = json.loads((Path(__file__).parent / "hide_cli_replay_differences.json").read_text())
+
+
+def differences(ours, theirs, path=""):
+    """Where two documents differ, `commands` by command name, as `/commands/<name>/<field>`."""
+    if isinstance(ours, dict) and isinstance(theirs, dict):
+        found = []
+        for key in sorted(set(ours) | set(theirs)):
+            if key in ours and key in theirs:
+                found += differences(ours[key], theirs[key], f"{path}/{key}")
+            else:
+                found.append(f"{path}/{key}")
+        return found
+    if path == "/commands":
+        return differences(
+            {item["command"]: item for item in ours}, {item["command"]: item for item in theirs}, path
+        )
+    return [] if ours == theirs else [path]
 
 
 def blob(spec):
@@ -342,13 +420,27 @@ class ReplayOfRealMerges(unittest.TestCase):
                 committed = json.loads(committed)
                 self.assertEqual({k: v for k, v in result.items() if k != "digest"}, {k: v for k, v in committed.items() if k != "digest"})
                 self.assertNotEqual(committed["digest"], driver.with_digest(committed)["digest"])
-                self.assertEqual(result["digest"], driver.with_digest(result)["digest"])
+                self.assertEqual(result["digest"], driver.digest_of({k: v for k, v in result.items() if k != "digest"}))
 
-    def test_merges_the_code_decided_finish_with_a_digest_of_their_own_body(self):
-        for short in CODE_MERGED:
+    def assert_differs_as_pinned(self, short):
+        base, ours, theirs, committed = self.versions(short)
+        result = merged(base, ours, theirs)
+        found = [item for item in differences(result, json.loads(committed)) if item != "/digest"]
+        self.assertEqual(found, DIFFERENCES[short])
+        self.assertEqual(result["digest"], driver.digest_of({k: v for k, v in result.items() if k != "digest"}))
+
+    def test_a_merge_commit_whose_file_lacks_what_its_own_source_exports(self):
+        for short, witness in COMMITTED_FILE_LACKS.items():
             with self.subTest(merge=short):
-                result = merged(*self.versions(short)[:3])
-                self.assertEqual(result["digest"], driver.with_digest(result)["digest"])
+                self.versions(short)
+                source = blob(f"{short}:hided/src/cli_contract.rs")
+                self.assertIn(witness, source)
+                self.assert_differs_as_pinned(short)
+
+    def test_a_merge_the_merged_code_changed_beyond_both_files_finishes_and_differs_as_pinned(self):
+        for short in CODE_DERIVED:
+            with self.subTest(merge=short):
+                self.assert_differs_as_pinned(short)
 
     def test_merges_that_changed_one_entry_on_both_sides_stay_conflicts(self):
         for short, where in CONFLICT.items():

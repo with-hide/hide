@@ -336,7 +336,9 @@ What the driver does:
 
 - Objects merge key by key, and `commands` merges entry by entry on each `command` name, so a command one side added, removed or changed, and a field of a command one side changed, are taken.
 - The order of the commands is merged by `git merge-file` over their names, so two branches that add a command at the same place in the list still conflict: only the Rust source says which comes first.
+  An order that would list one command twice (two branches moved it to different places) is a conflict too.
 - `digest` is computed again exactly as `digest_of` in `hided/src/cli_contract.rs` does: the sha256 of the body without it, keys sorted, written compactly.
+  A float whose text serde_json and Python write differently (any with an exponent) is refused, since the digest could not be promised: the file is left as a text merge to regenerate.
 - The file is written in the committed format (`python3 -m json.tool`, four spaces, non-ASCII escaped, one final newline).
 - When both sides changed the same entry differently, or one changed what the other removed, the driver picks neither: it leaves git's ordinary text merge of the three files with its conflict markers and exits non-zero.
   Merge it by hand, or take either side and regenerate with `target/debug/hide contract --json | python3 -m json.tool > contracts/hide-cli.json`.
@@ -344,7 +346,9 @@ What the driver does:
 The driver never builds `hide`.
 It merges what the three files say, so a merge whose Rust changes alter the contract in a way neither file shows (a command another branch added that the merged code now hides, a refusal the merged code now returns) comes out clean and wrong.
 `the_committed_contract_is_the_exported_one` in `hided/src/cli_contract.rs` is the check for that: it fails in CI until the file is regenerated.
-Of the 54 merges of main that conflicted on the file between 11-10 and 11-28, 39 finish with exactly the file the author committed, 1 differed only by a digest the author had left stale, 4 changed one entry on both sides and stay conflicts, and 10 were regenerated after the code merged and differ.
+Of the 54 merges of main that conflicted on the file between 11-10 and 11-28, 39 finish with exactly the file the author committed.
+One differs only by a digest the author committed wrong, and 4 changed one entry on both sides and stay conflicts.
+Of the other 10, 8 committed a file that lacks what the Rust source at the same commit exports (a `hidden` flag, a command, refusals), so the driver's file is the nearer to the source, and 2 were changed by the merged code beyond both files (a `hidden` flag, a refusal), which only a build shows.
 `scripts/tests/test_merge_hide_cli_contract.py` replays them by commit id and runs a real `git merge` of two branches in a temporary repository, registered and not; the replay skips in a shallow clone.
 
 ## Product analytics build input

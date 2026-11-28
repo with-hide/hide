@@ -14,7 +14,9 @@ three versions as data:
   order of the commands by git's own text merge over the command names, so two
   branches that add a command at the same place in the list still conflict;
 - `digest` is not merged but computed again exactly as `digest_of` does in Rust:
-  sha256 of the body without `digest`, keys sorted, no whitespace.
+  sha256 of the body without `digest`, keys sorted, no whitespace; a number
+  whose text Rust may write differently (a float with an exponent) is refused
+  and the file left as a text merge, since the digest could not be promised.
 
 When both sides changed the same entry differently, the driver changes nothing
 that decides it: it leaves git's ordinary text merge of the three files, with
@@ -60,6 +62,36 @@ class Conflict(Exception):
         self.where = where
 
 
+class Unsupported(Exception):
+    """A value whose digest this script cannot promise to equal Rust's."""
+
+    def __init__(self, value):
+        super().__init__(f"{value!r} is a number serde_json may write differently than Python")
+
+
+def check_numbers(value):
+    """Refuse the numbers whose text can differ between Rust and Python.
+
+    serde_json writes a float with the shortest digits that read back and an
+    exponent without padding (`1e-8`), where Python writes `1e-08`, and the two
+    switch to an exponent at different sizes, so a float is written the same
+    only when Python's text has no exponent. An integer past 64 bits is read by
+    serde_json as a float. The contract holds integers and `0.0` today.
+    """
+    if isinstance(value, dict):
+        for item in value.values():
+            check_numbers(item)
+    elif isinstance(value, list):
+        for item in value:
+            check_numbers(item)
+    elif isinstance(value, float):
+        if "e" in repr(value).lower() or value != value or value in (float("inf"), float("-inf")):
+            raise Unsupported(value)
+    elif isinstance(value, int) and not isinstance(value, bool):
+        if not -(2**63) <= value < 2**64:
+            raise Unsupported(value)
+
+
 def canonical(value):
     """The document with every object's keys in order, as `canonical` in Rust."""
     if isinstance(value, dict):
@@ -71,6 +103,7 @@ def canonical(value):
 
 def digest_of(body: dict) -> str:
     """`sha256:<hex>` of the body, as `digest_of` in hided/src/cli_contract.rs."""
+    check_numbers(body)
     text = json.dumps(canonical(body), separators=(",", ":"), ensure_ascii=False)
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -131,6 +164,9 @@ def keyed(items: list, key: str, path: tuple) -> dict:
 def merge_keyed_list(base: list, ours: list, theirs: list, path: tuple, key: str) -> list:
     entries = [keyed(side, key, path) for side in (base, ours, theirs)]
     names = merge_order(*[list(side) for side in entries], path)
+    if len(set(names)) != len(names):
+        # Moves of one entry to two places: `git merge-file` keeps both.
+        raise Conflict("/".join(path) + " (the order of the entries)")
     merged = []
     for name in names + sorted(set().union(*entries) - set(names)):
         value = merge_value(
@@ -192,6 +228,10 @@ def drive(base: Path, ours: Path, theirs: Path, name: str) -> int:
         merged = merge_documents(load(base), load(ours), load(theirs))
     except Conflict as conflict:
         print(f"{name}: both sides changed {conflict.where}; merge it by hand", file=sys.stderr)
+        text_merge(base, ours, theirs)
+        return 1
+    except Unsupported as unsupported:
+        print(f"{name}: {unsupported}; merged as text, regenerate the digest", file=sys.stderr)
         text_merge(base, ours, theirs)
         return 1
     except ValueError as invalid:
