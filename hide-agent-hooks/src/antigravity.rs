@@ -174,59 +174,105 @@ pub fn opened_elsewhere(home: &Path, event: &Event, name: &str) -> bool {
 /// it starts a conversation (a new one names only that folder) or opens one
 /// (`--conversation`, `/resume`: the folder it started in and this one),
 /// measured on agy 1.5.18 on 2026-11-28. So the conversation is this agy's
-/// when one of its folders is the folder of a process this hook runs under,
-/// up to [`AGY_DEPTH`] of them: agy itself, the hook's parent on macOS and
-/// Linux and three up on Windows, through `cmd /c` and PowerShell, which
-/// work in agy's own hook folder. Folders are compared by identity, so
-/// another spelling of one still counts. `None` when no process above this
-/// hook could be read.
+/// when one of its folders is the folder of a process this hook runs under:
+/// agy itself is [`AGY_LEVEL`] up, and one more is read in case a shell
+/// stands between them. Folders are compared by identity, so another
+/// spelling of one still counts.
+///
+/// `Some(false)` only when agy's own process was read and no folder is one
+/// of theirs. `None`, which the caller takes as this agy's own, when it
+/// cannot be told ([`ancestor_folders`], [`named_among`]).
 pub fn opened_here(workspaces: &[String]) -> Option<bool> {
-    let folders = ancestor_folders();
-    if folders.is_empty() {
-        return None;
-    }
-    Some(workspaces.iter().any(|workspace| {
-        folders.iter().any(|folder| {
-            hide_platform::fs::identity::same_file(Path::new(workspace), folder).unwrap_or(false)
-        })
-    }))
+    let folders = ancestor_folders(std::process::id(), &System, AGY_LEVEL)?;
+    named_among(workspaces, &folders, |workspace, folder| {
+        hide_platform::fs::identity::same_file(workspace, folder)
+    })
 }
 
-/// How many processes up from this hook are read for agy's folder.
-const AGY_DEPTH: usize = 4;
-
-/// The folders the processes above this hook work in, its parent first, at
-/// most [`AGY_DEPTH`] of them. The walk ends at a process the system will not
-/// describe, and at a parent that reads as started after its child, which is
-/// a later process under a reused pid.
-fn ancestor_folders() -> Vec<PathBuf> {
-    use hide_platform::process;
-    let mut folders = Vec::new();
-    let mut pid = std::process::id();
-    let Ok(mut started) = process::start_time(pid) else {
-        return folders;
-    };
-    for _ in 0..AGY_DEPTH {
-        let Some(parent) = process::parent_of(pid)
-            .ok()
-            .filter(|parent| *parent > 1 && *parent != pid)
-        else {
-            break;
-        };
-        let Some(parent_started) = process::start_time(parent)
-            .ok()
-            .filter(|parent_started| *parent_started <= started)
-        else {
-            break;
-        };
-        match process::observed_cwd_of(parent) {
-            Ok(folder) => folders.push(folder),
-            Err(_) => break,
+/// Whether one of `workspaces` is one of `folders`: `Some(true)` at the first
+/// that is, `Some(false)` when every one was compared and none is, and `None`
+/// when one could not be looked up (renamed or removed since agy opened it)
+/// and none matched, since it may have been agy's, or when there are none.
+fn named_among(
+    workspaces: &[String],
+    folders: &[PathBuf],
+    same: impl Fn(&Path, &Path) -> std::io::Result<bool>,
+) -> Option<bool> {
+    if workspaces.is_empty() {
+        return None;
+    }
+    let mut unread = false;
+    for workspace in workspaces {
+        for folder in folders {
+            match same(Path::new(workspace), folder) {
+                Ok(true) => return Some(true),
+                Ok(false) => {}
+                Err(_) => unread = true,
+            }
         }
+    }
+    (!unread).then_some(false)
+}
+
+/// How many processes up from this hook agy itself is: its parent on macOS
+/// and Linux, and on Windows three up, through the `cmd /c` and PowerShell
+/// its installed command runs in (`docs/agent-hooks.md`), which work in agy's
+/// hook folder.
+const AGY_LEVEL: usize = if cfg!(windows) { 3 } else { 1 };
+
+/// What [`ancestor_folders`] reads of a process, the system's answer outside
+/// tests.
+trait Processes {
+    fn parent_of(&self, pid: u32) -> std::io::Result<u32>;
+    fn start_time(&self, pid: u32) -> std::io::Result<u64>;
+    fn folder_of(&self, pid: u32) -> std::io::Result<PathBuf>;
+}
+
+struct System;
+
+impl Processes for System {
+    fn parent_of(&self, pid: u32) -> std::io::Result<u32> {
+        hide_platform::process::parent_of(pid)
+    }
+    fn start_time(&self, pid: u32) -> std::io::Result<u64> {
+        hide_platform::process::start_time(pid)
+    }
+    fn folder_of(&self, pid: u32) -> std::io::Result<PathBuf> {
+        hide_platform::process::observed_cwd_of(pid)
+    }
+}
+
+/// The folders the processes above `pid` work in, its parent first, up to
+/// one above agy (`agy_level + 1`, for a shell between agy and its hook) or
+/// the end of the tree: the root, or a parent that
+/// has exited (on Windows the system no longer vouches for its pid). `None`
+/// unless at least `agy_level` were read, so the folders always include
+/// agy's and are never only the wrappers' around it, and `None` when a
+/// process on the way cannot be read or a parent reads as started after its
+/// child (a later process under a reused pid).
+fn ancestor_folders(
+    mut pid: u32,
+    processes: &impl Processes,
+    agy_level: usize,
+) -> Option<Vec<PathBuf>> {
+    let mut folders = Vec::new();
+    let mut started = processes.start_time(pid).ok()?;
+    while folders.len() <= agy_level {
+        let parent = match processes.parent_of(pid) {
+            Ok(parent) if parent <= 1 || parent == pid => break,
+            Ok(parent) => parent,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(_) => return None,
+        };
+        let parent_started = processes
+            .start_time(parent)
+            .ok()
+            .filter(|parent_started| *parent_started <= started)?;
+        folders.push(processes.folder_of(parent).ok()?);
         pid = parent;
         started = parent_started;
     }
-    folders
+    (folders.len() >= agy_level).then_some(folders)
 }
 
 /// agy's conversation ids are lowercase UUIDs (`984dbf44-34b2-444c-91fd-34a2581196c4`).
@@ -449,6 +495,112 @@ mod tests {
         );
         let whole = json!({"conversationId": PARENT}).to_string();
         assert_eq!(Event::read(whole.as_bytes(), true), Event::default());
+    }
+
+    /// A process table: each pid's parent (or the error asking for it),
+    /// start time and folder; a pid missing is a process gone.
+    struct Table(Vec<(u32, std::io::Result<u32>, u64, &'static str)>);
+
+    impl Processes for Table {
+        fn parent_of(&self, pid: u32) -> std::io::Result<u32> {
+            match self.0.iter().find(|row| row.0 == pid) {
+                Some((_, Ok(parent), _, _)) => Ok(*parent),
+                Some((_, Err(error), _, _)) => Err(std::io::Error::from(error.kind())),
+                None => Err(std::io::ErrorKind::NotFound.into()),
+            }
+        }
+        fn start_time(&self, pid: u32) -> std::io::Result<u64> {
+            let row = self.0.iter().find(|row| row.0 == pid);
+            row.map(|row| row.2)
+                .ok_or_else(|| std::io::ErrorKind::NotFound.into())
+        }
+        fn folder_of(&self, pid: u32) -> std::io::Result<PathBuf> {
+            match self.0.iter().find(|row| row.0 == pid) {
+                Some((_, _, _, "")) => Err(std::io::ErrorKind::PermissionDenied.into()),
+                Some((_, _, _, folder)) => Ok(PathBuf::from(folder)),
+                None => Err(std::io::ErrorKind::NotFound.into()),
+            }
+        }
+    }
+
+    /// The Windows chain: the helper, PowerShell, `cmd /c`, agy, and above
+    /// agy a parent that may have exited.
+    fn windows_chain(above_agy: Option<u32>) -> Table {
+        let mut rows = vec![
+            (40, Ok(30), 40, "C:/hook"),
+            (30, Ok(20), 30, "C:/gemini/config"),
+            (20, Ok(10), 20, "C:/gemini/config"),
+            (
+                10,
+                above_agy.ok_or_else(|| std::io::ErrorKind::NotFound.into()),
+                10,
+                "C:/work",
+            ),
+        ];
+        if let Some(pid) = above_agy {
+            rows.push((pid, Ok(1), 1, "C:/"));
+        }
+        Table(rows)
+    }
+
+    #[test]
+    fn agys_folder_is_read_or_nothing_is_told() {
+        // agy's parent exited: the walk ends there, with agy's folder read.
+        let folders = ancestor_folders(40, &windows_chain(None), 3).unwrap();
+        assert_eq!(
+            folders,
+            ["C:/gemini/config", "C:/gemini/config", "C:/work"].map(PathBuf::from)
+        );
+        assert_eq!(
+            ancestor_folders(40, &windows_chain(Some(7)), 3)
+                .unwrap()
+                .len(),
+            4
+        );
+
+        // agy itself is gone: only the wrappers' folders were read.
+        let mut gone = windows_chain(None);
+        gone.0.retain(|row| row.0 != 10);
+        assert_eq!(ancestor_folders(40, &gone, 3), None);
+        // The tree ends at the root below agy's level.
+        let mut orphan = windows_chain(None);
+        orphan.0[1].1 = Ok(1);
+        assert_eq!(ancestor_folders(40, &orphan, 3), None);
+        // A parent that cannot be read, whose folder cannot be read, or that
+        // started after its child is not told.
+        let mut refused = windows_chain(None);
+        refused.0[1].1 = Err(std::io::ErrorKind::PermissionDenied.into());
+        assert_eq!(ancestor_folders(40, &refused, 3), None);
+        let mut hidden = windows_chain(None);
+        hidden.0[3].3 = "";
+        assert_eq!(ancestor_folders(40, &hidden, 3), None);
+        let mut reused = windows_chain(None);
+        reused.0[3].2 = 50;
+        assert_eq!(ancestor_folders(40, &reused, 3), None);
+
+        // On macOS and Linux agy is the hook's parent.
+        assert_eq!(
+            ancestor_folders(20, &windows_chain(None), 1).unwrap(),
+            ["C:/work"].map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_looked_up_leaves_the_answer_untold_unless_another_matches() {
+        let folders = ["/work", "/gemini/config"].map(PathBuf::from);
+        let same = |workspace: &Path, folder: &Path| match workspace.to_str().unwrap() {
+            "/gone" => Err(std::io::ErrorKind::NotFound.into()),
+            _ => Ok(workspace == folder),
+        };
+        let named = |workspaces: &[&str]| {
+            let workspaces: Vec<String> = workspaces.iter().map(|w| w.to_string()).collect();
+            named_among(&workspaces, &folders, same)
+        };
+        assert_eq!(named(&["/elsewhere"]), Some(false));
+        assert_eq!(named(&["/elsewhere", "/work"]), Some(true));
+        assert_eq!(named(&["/gone", "/work"]), Some(true));
+        assert_eq!(named(&["/gone", "/elsewhere"]), None);
+        assert_eq!(named(&[]), None);
     }
 
     #[test]

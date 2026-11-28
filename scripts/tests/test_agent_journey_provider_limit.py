@@ -15,6 +15,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent_journey import cells, provider_limit  # noqa: E402
+from agent_journey.failure import FailureLogs  # noqa: E402
 from agent_journey.journey import Journey  # noqa: E402
 
 # The columns Codex 0.165.0 creates its `logs` table with.
@@ -112,7 +113,7 @@ class RefusedCell(unittest.TestCase):
             record = {}
             journey = Journey(runtime, None, controller, table, {"id": "codex", "agent_cli": "codex", "model_flag": []},
                               Path("/repo"), record, None, branch="b", created=[], sessions=Path(folder),
-                              route={}, composer_judge=None, failure_logs=None)
+                              route={}, composer_judge=None, failure_logs=FailureLogs(None))
             journey.pane, journey.session = "w1:p1", THREAD
             journey.provider_mark = journey.mark_provider()
             log(Path(folder) / ".codex", [retry(REFUSED)])

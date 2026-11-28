@@ -610,6 +610,78 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
     );
 }
 
+/// agy runs a hook through `cmd /c` and PowerShell, so the folder agy works
+/// in is three processes above the helper, and an event of a conversation
+/// that names only another folder is not this agy's (with-hide/hide#3124).
+#[test]
+fn agys_windows_session_hook_answers_only_a_conversation_this_agy_opened() {
+    use hide_agent_hooks::guidance::{self, GuidanceAgent};
+
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let here = root.path().join("here");
+    let elsewhere = root.path().join("elsewhere");
+    for folder in [&here, &elsewhere] {
+        std::fs::create_dir_all(folder).unwrap();
+    }
+    let agent = GuidanceAgent::Antigravity;
+    std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
+    let helper = root.path().join("Hide Kit").join(HELPER_BINARY_NAME);
+    std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_hide-agent-hooks"), &helper).unwrap();
+    crate::stand_ins::ready(&helper);
+    guidance::install(
+        agent,
+        &home,
+        crate::hook_target_at(&helper, &crate::state_of(&home)),
+    )
+    .unwrap();
+    let document: Value =
+        serde_json::from_str(&std::fs::read_to_string(agent.config_path(&home)).unwrap()).unwrap();
+    let command = document["hide"]["SessionStart"][0]["command"]
+        .as_str()
+        .unwrap();
+    let answer = |workspaces: &[&Path]| {
+        let event = serde_json::json!({
+            "conversationId": "ade08778-fcdd-4e96-88ba-fd1c4e594fa2",
+            "workspacePaths": workspaces,
+        });
+        let mut shell = agy_shell(command);
+        shell
+            .current_dir(&here)
+            .env(hide_platform::host::HOME_VARIABLE, &home)
+            .env_remove("HIDE_CAP_REF")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = hide_platform::process::OwnedChild::spawn(&mut shell).unwrap();
+        child
+            .take_stdin()
+            .unwrap()
+            .write_all(event.to_string().as_bytes())
+            .unwrap();
+        let output = child
+            .capture_until(
+                std::time::Instant::now() + std::time::Duration::from_secs(15),
+                64 * 1024,
+            )
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        output
+    };
+
+    let output = answer(&[&elsewhere]);
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains(START_CONTEXT),
+        "another folder's conversation is answered nothing: {output:?}"
+    );
+    let output = answer(&[&elsewhere, &here]);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(START_CONTEXT),
+        "a conversation this agy opened is answered: {output:?}"
+    );
+}
+
 #[test]
 fn agys_windows_guard_preserves_korean_and_non_bmp_hook_answers() {
     use hide_agent_hooks::guidance::{self, GuidanceAgent};

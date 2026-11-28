@@ -665,6 +665,25 @@ fn a_conversation_this_agy_did_not_open_never_stands_as_the_panes_session() {
     assert!(machine.record_of(EARLIER).is_none());
     assert!(machine.record_of(CONVERSATION).is_some());
 
+    // The conversation this agy started takes the pane's letter.
+    let prompt = machine.run_in(
+        &here,
+        "UserPromptSubmit",
+        &json!({
+            "conversationId": CONVERSATION,
+            "invocationNum": 0,
+            "lastUserInput": "Reply with exactly TWO",
+            "workspacePaths": [here],
+        }),
+        Some(PANE),
+    );
+    assert!(
+        injected(&prompt).contains("LETTER-FOR-THIS-PANE"),
+        "{}",
+        prompt.diagnostics
+    );
+    assert_eq!(machine.reported_sessions(), [CONVERSATION, CONVERSATION]);
+
     // The earlier conversation, opened from here: agy names both folders.
     let resumed = machine.run_in(
         &here,
@@ -680,9 +699,38 @@ fn a_conversation_this_agy_did_not_open_never_stands_as_the_panes_session() {
     assert!(resumed.status_ok, "{}", resumed.diagnostics);
     assert_eq!(
         machine.reported_sessions(),
-        [CONVERSATION, EARLIER],
+        [CONVERSATION, CONVERSATION, EARLIER],
         "{}",
         resumed.diagnostics
     );
     assert!(machine.record_of(EARLIER).is_some());
+}
+
+/// A conversation whose folder cannot be looked up any more (renamed or
+/// removed since agy opened it) cannot be told from this agy's own, and is
+/// taken as the pane's, as before agy named its folders.
+#[test]
+fn a_conversation_whose_folder_cannot_be_looked_up_stays_the_panes() {
+    let machine = Machine::new();
+    let here = machine.checkout.clone();
+    let gone = machine.root.join("gone");
+
+    let start = machine.run_in(
+        &here,
+        "SessionStart",
+        &json!({
+            "conversationId": CONVERSATION,
+            "lastUserInput": "Reply with exactly ONE",
+            "workspacePaths": [gone],
+        }),
+        Some(PANE),
+    );
+
+    assert!(start.status_ok, "{}", start.diagnostics);
+    assert_eq!(
+        machine.reported_sessions(),
+        [CONVERSATION],
+        "{}",
+        start.diagnostics
+    );
 }
