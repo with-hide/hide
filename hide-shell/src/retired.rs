@@ -232,11 +232,18 @@ mod tests {
             );
         }
         assert_eq!(
-            current(&["request", "send", "parent", "--kind", "request", "--body", "request"]),
-            ["letter", "send", "parent", "--kind", "request", "--body", "request"]
+            current(&[
+                "request", "send", "parent", "--kind", "request", "--body", "request"
+            ]),
+            [
+                "letter", "send", "parent", "--kind", "request", "--body", "request"
+            ]
         );
         // `request` as another topic's verb is never the letter topic.
-        assert_eq!(current(&["device", "request", "pc"]), ["device", "request", "pc"]);
+        assert_eq!(
+            current(&["device", "request", "pc"]),
+            ["device", "request", "pc"]
+        );
         assert_eq!(
             current(&["access", "request", "--name", "bot"]),
             ["access", "request", "--name", "bot"]

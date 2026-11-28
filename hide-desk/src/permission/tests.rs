@@ -146,7 +146,10 @@ fn a_turns_tool_calls_count_as_sessions_read_letters_and_starts() {
         run("hide letter send agent-3 --intent k --body hi"),
         Step::Letter
     );
-    assert_eq!(run("hide letter reply letter-3 --intent k --body hi"), Step::Letter);
+    assert_eq!(
+        run("hide letter reply letter-3 --intent k --body hi"),
+        Step::Letter
+    );
     assert_eq!(run("hide letter show letter-3"), Step::Sessions);
     // The spelling letters had before `hide letter`, which session files
     // keep for good.
