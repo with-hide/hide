@@ -19,6 +19,12 @@ CHECK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECK)
 
 CONTRACT = {
+    'retired_words': [
+        {'old': ['plan'], 'now': ['task']},
+        {'old': ['request'], 'now': ['letter']},
+        {'old': ['workspace', 'info'], 'now': ['checkout', 'show']},
+        {'old': ['workspace', 'info', '--hook'], 'now': ['workspace', 'info', '--hook']},
+    ],
     'commands': [
         {'command': 'task set', 'options': [{'name': '--json'}]},
         {'command': 'task show', 'options': []},
@@ -61,11 +67,14 @@ def errors_of(files):
 class RetiredSpellingsFail(unittest.TestCase):
     def test_a_retired_command_in_a_core_text_fails_with_its_file_line_and_new_spelling(self):
         errors = errors_of({'hide-core/src/plans.rs': 'fn f() {}\nlet next = "run hide plan show";\n'})
-        self.assertEqual(errors, ['hide-core/src/plans.rs:2: hide plan show is retired; write hide task show'])
+        self.assertEqual(errors, ['hide-core/src/plans.rs:2: hide plan is retired; write hide task'])
 
     def test_a_retired_topic_alone_fails(self):
-        errors = errors_of({'docs/x.md': 'Use `hide plan` to keep your steps.\n'})
-        self.assertEqual(errors, ['docs/x.md:1: hide plan is retired; write hide task'])
+        errors = errors_of({'docs/x.md': 'Use `hide plan` to keep your steps, or hide workspace info.\n'})
+        self.assertEqual(errors, [
+            'docs/x.md:1: hide plan is retired; write hide task',
+            'docs/x.md:1: hide workspace info is retired; write hide checkout show',
+        ])
 
     def test_a_retired_option_fails_after_its_command(self):
         errors = errors_of({'site/src/content/a.mdx': 'hide letter send a --body hi --machine m1\n'})
@@ -73,8 +82,20 @@ class RetiredSpellingsFail(unittest.TestCase):
 
     def test_a_retired_command_of_a_topic_that_stays_fails(self):
         errors = errors_of({'web/src/i18n/a.ts': 'const s = "hide request send a";\n'})
-        self.assertEqual(len(errors), 1)
-        self.assertIn('hide request send is retired; write hide letter send', errors[0])
+        self.assertEqual(errors, ['web/src/i18n/a.ts:1: hide request is retired; write hide letter'])
+
+    def test_a_retired_option_under_its_old_command_fails_twice(self):
+        errors = errors_of({'README.md': 'Run hide request send a --machine m1 there.\n'})
+        self.assertEqual(errors, [
+            'README.md:1: hide request is retired; write hide letter',
+            'README.md:1: hide letter send --machine is retired; write hide letter send --device',
+        ])
+
+    def test_every_tracked_text_file_is_read(self):
+        files = {name: 'hide plan show\n' for name in (
+            'README.md', 'AGENTS.md', '.claude/skills/x/SKILL.md', 'desktop/src/main/a.ts',
+            'hide-session/src/a.rs', 'scripts/agent_journey/run.py', 'scripts/a.mjs')}
+        self.assertEqual(len(errors_of(files)), len(files))
 
 
 class WhatIsLeftOut(unittest.TestCase):
@@ -94,12 +115,42 @@ class WhatIsLeftOut(unittest.TestCase):
             'const NEXT: &str = "hide plan show";\n'
             '#[cfg(test)]\n#[allow(dead_code)]\npub mod tests {\n    const S: &str = "hide plan set";\n}\n'
         )})
-        self.assertEqual(errors, ['hide-core/src/mailbox.rs:3: hide plan show is retired; write hide task show'])
+        self.assertEqual(errors, ['hide-core/src/mailbox.rs:3: hide plan is retired; write hide task'])
+
+    def test_a_kept_region_leaves_out_its_lines_only(self):
+        errors = errors_of({'hide-kit/src/agents.rs': (
+            'pub const CURRENT: &str = "run hide workspace info";\n'
+            '// retired-spellings: kept from here: an earlier build\'s stub, byte for byte\n'
+            'pub const RETIRED: &str = "run hide workspace info";\n'
+            '// retired-spellings: kept to here\n'
+            'pub const AFTER: &str = "run hide plan show";\n'
+        )})
+        self.assertEqual(errors, [
+            'hide-kit/src/agents.rs:1: hide workspace info is retired; write hide checkout show',
+            'hide-kit/src/agents.rs:5: hide plan is retired; write hide task',
+        ])
+
+    def test_a_kept_region_with_no_reason_or_no_end_fails(self):
+        errors = errors_of({
+            'docs/a.md': '<!-- retired-spellings: kept from here -->\nhide plan\n<!-- retired-spellings: kept to here -->\n',
+            'docs/b.md': '<!-- retired-spellings: kept from here: history -->\nhide plan\n',
+            # Prose that names the marker opens nothing.
+            'docs/c.md': 'Wrap it in `retired-spellings: kept from here: <why>`, then hide plan.\n',
+        })
+        self.assertEqual(errors, [
+            'docs/a.md:1: a kept region says why after "retired-spellings: kept from here:"',
+            'docs/b.md:1: a kept region has no "retired-spellings: kept to here"',
+            'docs/c.md:1: hide plan is retired; write hide task',
+        ])
 
     def test_the_same_word_elsewhere_passes(self):
         files = {
             'docs/a.md': '`hide device request k1`, a letter of kind request, the hide-plan skill, hide planning.\n',
             'docs/b.md': 'hide task show, then hide letter send a --device m1 --body "--machine".\n',
+            # A kept row and a command no row names pass.
+            'docs/c.md': 'hide workspace info --hook, hide workspace bootstrap, hide workspace purpose x\n',
+            # An option of the next command on the line is that command's.
+            'docs/d.md': 'hide letter send a, then hide agent spawn --machine m1\n',
         }
         self.assertEqual(errors_of(files), [])
 

@@ -2934,11 +2934,6 @@ fn listed(spec: &Spec, table: &retired::Table) -> Value {
         .filter(|flags| flags.command == spec.words)
     {
         for flag in flags.renamed {
-            // An old spelling the command still takes as another option
-            // (`only_with_value`) is listed once, as that option.
-            if spec.options.iter().any(|option| option.name == flag.old) {
-                continue;
-            }
             let value = spec
                 .options
                 .iter()
@@ -2961,29 +2956,19 @@ fn listed(spec: &Spec, table: &retired::Table) -> Value {
     command
 }
 
-/// The contract's commands: each command of the table, then each retired
-/// spelling of one (`hide_shell::retired`) as an entry of its own under
-/// its old words, marked with the command it is now. A calling tool looks a
-/// command up by the words it types and refuses a Hide where they are gone,
-/// so a renamed command keeps its entry for good (`docs/delivery.md`, The
-/// contract a calling tool checks).
+/// The contract's commands: each command of the table, followed by each
+/// retired spelling of it (`hide_shell::retired`) as an entry of its own
+/// under its old words, marked with the command it is now. A calling tool
+/// looks a command up by the words it types and refuses a Hide where they
+/// are gone, so a renamed command keeps its entry for good
+/// (`docs/delivery.md`, The contract a calling tool checks). An entry
+/// follows its command, so two branches that each retire one add lines in
+/// two places.
 fn commands(table: &retired::Table) -> Vec<Value> {
-    let mut commands: Vec<Value> = COMMANDS.iter().map(|spec| listed(spec, table)).collect();
-    for row in table.commands.iter().filter(|row| row.old != row.now) {
-        for spec in COMMANDS
-            .iter()
-            .filter(|spec| spec.words.starts_with(row.now))
-        {
-            let old: Vec<&str> = row
-                .old
-                .iter()
-                .chain(&spec.words[row.now.len()..])
-                .copied()
-                .collect();
-            // A longer row that keeps the old spelling shadows this one.
-            if table.current(&old) != spec.words {
-                continue;
-            }
+    let mut commands = Vec::new();
+    for spec in COMMANDS {
+        commands.push(listed(spec, table));
+        for old in retired_spellings(spec, table) {
             let mut command = listed(spec, table);
             command["command"] = json!(old.join(" "));
             command["retired_for"] = json!(spec.words.join(" "));
@@ -2991,6 +2976,30 @@ fn commands(table: &retired::Table) -> Vec<Value> {
         }
     }
     commands
+}
+
+/// The old spellings `table` reads as `spec`: by the rows whose words now
+/// start the command most closely, so a topic's row gives no spelling to a
+/// command a longer row renamed (`workspace info` to `checkout show` is not
+/// also `workspace show`), and none that a longer row keeps as it is.
+fn retired_spellings(spec: &Spec, table: &retired::Table) -> Vec<Vec<&'static str>> {
+    let rows: Vec<&retired::Command> = table
+        .commands
+        .iter()
+        .filter(|row| row.old != row.now && spec.words.starts_with(row.now))
+        .collect();
+    let closest = rows.iter().map(|row| row.now.len()).max().unwrap_or(0);
+    rows.into_iter()
+        .filter(|row| row.now.len() == closest)
+        .map(|row| {
+            row.old
+                .iter()
+                .chain(&spec.words[row.now.len()..])
+                .copied()
+                .collect::<Vec<_>>()
+        })
+        .filter(|old| table.current(old.as_slice()) == spec.words)
+        .collect()
 }
 
 /// Where each topic's printed line carries the answer and, when the
@@ -3032,6 +3041,14 @@ fn body() -> Value {
     json!({
         "format": FORMAT,
         "commands": commands(&retired::TABLE),
+        // The retired-words table's command rows, kept ones included, so a
+        // reader of text (`scripts/check-retired-spellings.py`) reads an old
+        // spelling by the same longest row as the CLI.
+        "retired_words": retired::TABLE
+            .commands
+            .iter()
+            .map(|row| json!({"old": row.old, "now": row.now}))
+            .collect::<Vec<_>>(),
         "value_types": {
             "text": "non-empty, no control characters, does not start with --",
             "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
@@ -3978,6 +3995,10 @@ mod tests {
             "by design: a letter's kind (one_of) on request send, an agent's kind (text) elsewhere",
         ),
         (
+            "--status",
+            "by design: a mission node's status (working, done, dropped) and a plan step's, which can also go back to planned",
+        ),
+        (
             "--name",
             "key on access request (a bot's name), text elsewhere; one type changes the contract",
         ),
@@ -3986,14 +4007,22 @@ mod tests {
     /// The option names of `commands` that take more than one value type,
     /// less the `allowed` ones, and an allowed one that no longer does.
     fn value_type_problems(commands: &[Spec], allowed: &[(&str, &str)]) -> Vec<String> {
-        let mut types: std::collections::BTreeMap<&str, std::collections::BTreeSet<&str>> =
+        // `one_of` with other values is another type: `--status` of a
+        // mission node is not a plan step's.
+        let kind = |value: Option<Input>| match value {
+            None => "switch".to_owned(),
+            Some(OneOf(values)) => {
+                let mut values = values.to_vec();
+                values.sort_unstable();
+                format!("one_of[{}]", values.join(","))
+            }
+            Some(value) => value.name().to_owned(),
+        };
+        let mut types: std::collections::BTreeMap<&str, std::collections::BTreeSet<String>> =
             std::collections::BTreeMap::new();
         for spec in commands {
             for option in spec.options {
-                types
-                    .entry(option.name)
-                    .or_default()
-                    .insert(option.value.map_or("switch", Input::name));
+                types.entry(option.name).or_default().insert(kind(option.value));
             }
         }
         let mut problems = Vec::new();
@@ -4030,9 +4059,12 @@ mod tests {
             spec(&["x", "add"], &[], &[optional("--depth", Text)], &[]),
             spec(&["x", "list"], &[], &[optional("--depth", Unsigned)], &[]),
             spec(&["x", "show"], &[], &[optional("--for", Span)], &[]),
+            spec(&["x", "a"], &[], &[optional("--mode", OneOf(&["a", "b"]))], &[]),
+            spec(&["x", "b"], &[], &[optional("--mode", OneOf(&["a", "c"]))], &[]),
         ];
         let problems = value_type_problems(WRONG, &[("--for", "two ranges")]).join("\n");
         assert!(problems.contains("--depth takes"), "{problems}");
+        assert!(problems.contains("--mode takes"), "{problems}");
         assert!(
             problems.contains("--for takes one value type now"),
             "{problems}"
@@ -4271,11 +4303,16 @@ mod tests {
         }
     }
 
-    /// The usage of each topic of the table, and of the topics inside one.
+    /// The usage of each topic a command of the table is under, and of the
+    /// topics inside one.
     fn topic_usages() -> Vec<(String, String)> {
-        TOPICS
-            .iter()
-            .map(|topic| (*topic, None))
+        // Every topic a command of the table is under, `workspace` and
+        // `session` among them.
+        let topics: std::collections::BTreeSet<&str> =
+            COMMANDS.iter().map(|spec| spec.words[0]).collect();
+        topics
+            .into_iter()
+            .map(|topic| (topic, None))
             .chain(SUBTOPICS.iter().map(|words| (words[0], Some(words[1]))))
             .map(|(topic, verb)| {
                 let text = crate::cli::command_usage(topic, verb)
@@ -4353,9 +4390,32 @@ mod tests {
                 .filter(|spec| spec.words.starts_with(row.now))
                 .map(|spec| argv(spec, &[], None, spec.repeats.unwrap_or(1)))
                 .collect();
-            // A command outside the table is read by its words alone.
+            // A command outside the table is read by its words alone, and
+            // must be one: the parser reads both lines through the table, so
+            // a row whose words now name nothing reads the same either way.
             if lines.is_empty() {
-                lines.push(hide_line(row.now));
+                let now = hide_line(row.now);
+                if matches!(
+                    parse_args(&now),
+                    Err(_) | Ok(CommandKind::Open | CommandKind::OpenPath { .. })
+                ) {
+                    problems.push(format!(
+                        "hide {} names no command; the row would read hide {old} as nothing",
+                        row.now.join(" ")
+                    ));
+                }
+                lines.push(now);
+            }
+            // A topic of the table keeps its retired word's envelope.
+            if let ([old_topic], [now_topic]) = (row.old, row.now)
+                && TOPICS.contains(now_topic)
+            {
+                let envelopes = envelopes(table);
+                if envelopes.get(*old_topic).is_none() || envelopes.get(*now_topic).is_none() {
+                    problems.push(format!(
+                        "the contract's envelopes have no {old_topic} beside {now_topic}"
+                    ));
+                }
             }
             for now in lines {
                 let mut then = hide_line(row.old);
@@ -4398,9 +4458,10 @@ mod tests {
                         flag.old, flag.arity
                     ));
                 }
-                if let Some(old) = spec.options.iter().find(|option| option.name == flag.old)
-                    && (!flag.only_with_value || old.value.is_some())
-                {
+                // The old name stays in the contract as the retired option,
+                // with the value type it had; a current option of the same
+                // name would change that type (`--json <plan>` as `--json`).
+                if spec.options.iter().any(|option| option.name == flag.old) {
                     problems.push(format!("retired hide {command} {} is used", flag.old));
                 }
                 let now_line = argv(spec, now.conflicts, None, spec.repeats.unwrap_or(1));
@@ -4453,6 +4514,16 @@ mod tests {
                     old: &["ps"],
                     now: &["task"],
                 },
+                // A misspelt new word names nothing.
+                Command {
+                    old: &["letters"],
+                    now: &["lettr"],
+                },
+                // `wait` has no envelope to keep beside `waits`.
+                Command {
+                    old: &["waits"],
+                    now: &["wait"],
+                },
             ],
             options: &[Flags {
                 command: &["task", "node"],
@@ -4474,6 +4545,8 @@ mod tests {
             "hide task node takes a value for",
             "retired hide task node --line is used",
             "is not read as hide task node",
+            "hide lettr names no command",
+            "the contract's envelopes have no waits beside wait",
         ] {
             assert!(problems.contains(caught), "{caught} not in:\n{problems}");
         }
@@ -4495,24 +4568,40 @@ mod tests {
             assert_eq!(found.len(), 1, "{name} is listed {} times", found.len());
             found[0].clone()
         };
-        let tasks: Vec<&Spec> = COMMANDS
+        let names: Vec<&str> = commands
             .iter()
-            .filter(|spec| spec.words.first() == Some(&"task"))
+            .map(|command| command["command"].as_str().unwrap())
             .collect();
-        assert_eq!(tasks.len(), 5);
-        for spec in tasks {
-            let now = spec.words.join(" ");
-            let mut old = entry(&format!("plan {}", spec.words[1..].join(" ")));
-            assert_eq!(old["retired_for"], now.as_str());
-            let mut current = entry(&now);
-            assert!(current.get("retired_for").is_none());
-            for value in [&mut old, &mut current] {
-                let map = value.as_object_mut().unwrap();
-                map.remove("command");
-                map.remove("retired_for");
-            }
-            assert_eq!(old, current, "plan {}", spec.words[1..].join(" "));
+        for name in ["plan set", "plan node", "plan approve", "plan drop", "plan show"] {
+            assert!(names.contains(&name), "{name} is not listed");
         }
+        // Every row's spellings, each right after the command it is now.
+        let mut retired = 0;
+        for spec in COMMANDS {
+            let now = spec.words.join(" ");
+            for old in retired_spellings(spec, &retired::TABLE) {
+                let old = old.join(" ");
+                let mut then = entry(&old);
+                assert_eq!(then["retired_for"], now.as_str());
+                let mut current = entry(&now);
+                assert!(current.get("retired_for").is_none());
+                let follows = names.iter().position(|name| *name == old).unwrap()
+                    > names.iter().position(|name| *name == now).unwrap();
+                assert!(follows, "{old} comes before {now}");
+                for value in [&mut then, &mut current] {
+                    let map = value.as_object_mut().unwrap();
+                    map.remove("command");
+                    map.remove("retired_for");
+                }
+                assert_eq!(then, current, "{old}");
+                retired += 1;
+            }
+        }
+        assert_eq!(retired, names.len() - COMMANDS.len());
+        assert_eq!(
+            document["retired_words"],
+            json!([{"old": ["plan"], "now": ["task"]}])
+        );
         assert_eq!(document["envelopes"]["plan"], document["envelopes"]["task"]);
         assert_eq!(document["envelopes"]["task"]["answer"], "result");
     }
@@ -4533,6 +4622,14 @@ mod tests {
                     old: &["plan", "show"],
                     now: &["plan", "show"],
                 },
+                Command {
+                    old: &["steps"],
+                    now: &["task"],
+                },
+                Command {
+                    old: &["steps", "peek"],
+                    now: &["task", "show"],
+                },
             ],
             options: &[Flags {
                 command: &["task", "node"],
@@ -4551,6 +4648,9 @@ mod tests {
             .map(|command| command["command"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"plan set") && !names.contains(&"plan show"));
+        // The closest row alone spells `task show`: no `steps show`.
+        assert!(names.contains(&"steps set") && names.contains(&"steps peek"));
+        assert!(!names.contains(&"steps show"));
         for name in ["task node", "plan node"] {
             let node = commands
                 .iter()

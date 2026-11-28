@@ -224,8 +224,6 @@ fn wrong(reason: String, lines: &str) -> String {
 /// guide holds `access_cli::USAGE` itself, so the pointer is added here.
 const ACCESS_GUIDE_POINTER: &str = "What a bot may do in each mode: hide guide, section Bots.";
 
-/// The usage `hide <topic> … --help` prints, for every command a person or
-/// an agent types.
 /// The usage `hide <topic> <verb> … --help` prints: the one of the parser
 /// that reads the command, which for `agent profile` and `agent read` is
 /// not the `agent` topic's own.
@@ -237,6 +235,8 @@ pub(crate) fn command_usage(topic: &str, verb: Option<&str>) -> Option<String> {
     }
 }
 
+/// The usage `hide <topic> … --help` prints, for every command a person or
+/// an agent types.
 fn topic_usage(topic: &str) -> Option<String> {
     Some(match topic {
         "request" | "inbox" | "watch" => usage(crate::delivery_cli::USAGE),
