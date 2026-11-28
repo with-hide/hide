@@ -373,6 +373,7 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
                 # Another process has the login open; it is never ended for the journey.
                 agent["login"] = (f"{kind}'s login is open in another process ({error}); close that {kind} "
                                   "yourself, then rerun; the journey never ends another session's agent")
+                agent["login_in_use"] = True
                 cells.settle_agent(table, key, agent["login"])
                 continue
 

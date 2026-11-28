@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check.overlay import prepare
 from agent_live_check.credential_snapshot import CredentialSnapshotUnavailable
 from agent_live_check.protection import MAX_BACKUP_BYTES, ProtectionError
-from agent_live_check.processes import OwnedProcesses
+from agent_live_check.processes import OwnedProcesses, ProcessError
 from agent_live_check.runtime import Runtime
 
 
@@ -160,6 +160,17 @@ class PrivateConfiguration(unittest.TestCase):
                 self.assertEqual(list((probe / "config-fixture").iterdir()), [])
             finally:
                 connection.close()
+
+    @unittest.skipUnless(Path("/usr/sbin/lsof").is_file(), "native snapshot needs the macOS lsof")
+    def test_an_opener_check_that_never_answers_leaves_only_this_login_unmeasured(self):
+        # On the mini, 2026-11-28, lsof timed out while an agent left open
+        # held the file, and the timeout ended the whole run.
+        with tempfile.TemporaryDirectory() as name, OwnedProcesses() as owner:
+            operator, probe, source = self.wal_fixture(Path(name))
+            with patch.object(owner, "run", side_effect=ProcessError("command_timeout")):
+                with self.assertRaises(CredentialSnapshotUnavailable):
+                    prepare(self.recipe("auth.db"), probe, operator, owner=owner)
+            self.assertEqual(list((probe / "config-fixture").iterdir()), [])
 
     @unittest.skipUnless(Path("/usr/sbin/lsof").is_file(), "native snapshot needs the macOS lsof")
     def test_wal_metadata_change_during_read_discards_the_whole_bundle(self):

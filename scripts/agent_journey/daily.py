@@ -206,6 +206,9 @@ def summarize(report):
             entry["result"] = "pass"
         elif LOGIN_REFUSAL.match(row.get("login") or ""):
             entry["result"] = "login needed"
+        elif row.get("login_in_use"):
+            # An agent someone left open in the account holds its login.
+            entry["result"] = "login in use"
         else:
             entry["result"] = NOT_MEASURED
         agents.append(entry)

@@ -31,7 +31,9 @@ REPORT = {
          "login": "not logged in: run codex login yourself; the journey never logs in"},
         {"id": "grok", "version": "grok 1.0.52"},
         {"id": "cursor", "excluded": "excluded: operator decision 2026-10-17"},
-        {"id": "pi", "version": "1.0.4", "login": "pi's login is open in another process (busy)"},
+        {"id": "pi", "version": "1.0.4", "login": "pi's login is open in another process (busy)",
+         "login_in_use": True},
+        {"id": "omp", "version": "18.7.0", "login": "omp could not be read"},
     ],
     "table": {
         "claude-code": cells(start="pass", reply="pass", profile="not measured"),
@@ -39,6 +41,7 @@ REPORT = {
         "grok": cells(start="pass", reply="fail", title="fail"),
         "cursor": cells(start="excluded"),
         "pi": cells(start="not measured"),
+        "omp": cells(start="not measured"),
     },
 }
 
@@ -52,8 +55,9 @@ class Summary(unittest.TestCase):
         self.assertEqual(rows["grok"]["result"], "fail")
         self.assertEqual(rows["grok"]["failed"], ["reply", "title"])
         self.assertEqual(rows["cursor"]["result"], "excluded")
-        # A login held by another process is not a sign-in the person must make.
-        self.assertEqual(rows["pi"]["result"], "not measured")
+        # A login held by an agent left open is not a sign-in the person must make.
+        self.assertEqual(rows["pi"]["result"], "login in use")
+        self.assertEqual(rows["omp"]["result"], "not measured")
 
     def test_a_failed_agent_that_cannot_answer_outside_hide_carries_its_state(self):
         rows = daily.summarize(REPORT)
@@ -90,7 +94,7 @@ class Summary(unittest.TestCase):
         read = json.loads(text)
         self.assertEqual({row["id"]: row["result"] for row in read["agents"]},
                          {"claude-code": "pass", "codex": "login needed", "grok": "fail", "cursor": "excluded",
-                          "pi": "not measured"})
+                          "pi": "login in use", "omp": "not measured"})
         self.assertEqual(read["agents"][2]["failed"], ["reply", "title"])
         for private in ("/Users/", "not logged in", "another process", "private words"):
             self.assertNotIn(private, text)
