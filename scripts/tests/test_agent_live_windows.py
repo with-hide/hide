@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check import processes
-from agent_live_check.processes import OwnedProcesses, ProcessError, ProcessSafetyError
+from agent_live_check.processes import Limits, OwnedProcesses, ProcessError, ProcessSafetyError
 from agent_live_check.protection import private, private_directory, write_private
 from agent_live_check.system import WINDOWS, PaneShell, launcher, remove_pane_files, remove_tree, same_path
 
@@ -108,32 +108,30 @@ class JobOwnership(unittest.TestCase):
                          (16, 128, 2 * 1024 ** 3, 1024 ** 2, 15, 30 * 60))
 
     def test_a_process_past_the_descendant_cap_is_a_named_failure(self):
-        with patch.object(processes, "MAX_DESCENDANTS", 3):
-            self.owner = OwnedProcesses()
-            with self.assertRaisesRegex(ProcessSafetyError, r'owned_processes_over_budget:\{"descendants":3\}'):
-                # The job refuses the fourth process; only the job's end, not
-                # the child, ends the run.
-                self.owner.run(self.python("""
-                    import subprocess, sys, time
-                    for _ in range(5):
-                        try:
-                            subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
-                        except OSError:
-                            pass
-                    time.sleep(600)
-                """), env=dict(os.environ), check=False)
+        self.owner = OwnedProcesses(limits=Limits(descendants=3))
+        with self.assertRaisesRegex(ProcessSafetyError, r'owned_processes_over_budget:\{"descendants":3\}'):
+            # The job refuses the fourth process; only the job's end, not
+            # the child, ends the run.
+            self.owner.run(self.python("""
+                import subprocess, sys, time
+                for _ in range(5):
+                    try:
+                        subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+                    except OSError:
+                        pass
+                time.sleep(600)
+            """), env=dict(os.environ), check=False)
 
     def test_resident_memory_past_the_cap_is_a_named_failure(self):
         cap = 256 * 1024 * 1024
-        with patch.object(processes, "MAX_RSS_BYTES", cap):
-            self.owner = OwnedProcesses()
-            with self.assertRaises(ProcessSafetyError) as raised:
-                # Every page written, so it is resident, as the Unix guardian counts RSS.
-                self.owner.run(self.python(f"""
-                    import time
-                    held = b"x" * {2 * cap}
-                    time.sleep(600)
-                """), env=dict(os.environ), check=False)
+        self.owner = OwnedProcesses(limits=Limits(rss_bytes=cap))
+        with self.assertRaises(ProcessSafetyError) as raised:
+            # Every page written, so it is resident, as the Unix guardian counts RSS.
+            self.owner.run(self.python(f"""
+                import time
+                held = b"x" * {2 * cap}
+                time.sleep(600)
+            """), env=dict(os.environ), check=False)
         reason, _, measured = str(raised.exception).partition(":")
         self.assertEqual(reason, "owned_processes_over_budget")
         measured = json.loads(measured)
@@ -142,34 +140,32 @@ class JobOwnership(unittest.TestCase):
 
     def test_memory_committed_past_the_hard_stop_is_a_named_failure(self):
         committed = 256 * 1024 * 1024
-        with patch.object(processes, "MAX_COMMITTED_BYTES", committed):
-            self.owner = OwnedProcesses()
-            with self.assertRaisesRegex(ProcessSafetyError,
-                                        rf'owned_processes_over_budget:\{{"committed_bytes":{committed}\}}'):
-                # Refused by Windows at the allocation, before any of it is resident.
-                self.owner.run(self.python(f"""
-                    import time
-                    try:
-                        held = bytearray({2 * committed})
-                    except MemoryError:
-                        pass
-                    time.sleep(600)
-                """), env=dict(os.environ), check=False)
+        self.owner = OwnedProcesses(limits=Limits(committed_bytes=committed))
+        with self.assertRaisesRegex(ProcessSafetyError,
+                                    rf'owned_processes_over_budget:\{{"committed_bytes":{committed}\}}'):
+            # Refused by Windows at the allocation, before any of it is resident.
+            self.owner.run(self.python(f"""
+                import time
+                try:
+                    held = bytearray({2 * committed})
+                except MemoryError:
+                    pass
+                time.sleep(600)
+            """), env=dict(os.environ), check=False)
 
     def test_memory_committed_but_never_touched_is_within_the_cap(self):
         cap = 256 * 1024 * 1024
-        with patch.object(processes, "MAX_RSS_BYTES", cap):
-            self.owner = OwnedProcesses()
-            # Committed and never written: Windows charges it, RSS does not hold it.
-            code, _, stderr = self.owner.run(self.python(f"""
-                import ctypes, time
-                VirtualAlloc = ctypes.windll.kernel32.VirtualAlloc
-                VirtualAlloc.restype = ctypes.c_void_p
-                VirtualAlloc.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_ulong, ctypes.c_ulong]
-                if not VirtualAlloc(None, {2 * cap}, 0x1000, 0x04):  # MEM_COMMIT, PAGE_READWRITE
-                    raise SystemExit("VirtualAlloc failed")
-                time.sleep(1)
-            """), env=dict(os.environ), check=False)
+        self.owner = OwnedProcesses(limits=Limits(rss_bytes=cap))
+        # Committed and never written: Windows charges it, RSS does not hold it.
+        code, _, stderr = self.owner.run(self.python(f"""
+            import ctypes, time
+            VirtualAlloc = ctypes.windll.kernel32.VirtualAlloc
+            VirtualAlloc.restype = ctypes.c_void_p
+            VirtualAlloc.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_ulong, ctypes.c_ulong]
+            if not VirtualAlloc(None, {2 * cap}, 0x1000, 0x04):  # MEM_COMMIT, PAGE_READWRITE
+                raise SystemExit("VirtualAlloc failed")
+            time.sleep(1)
+        """), env=dict(os.environ), check=False)
         self.assertEqual(code, 0, stderr)
 
     def test_output_past_the_cap_ends_the_command(self):

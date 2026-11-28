@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import cells
 from agent_journey.daemon import Daemon
 from agent_live_check.processes import ProcessError
-from agent_journey.local import (codex_login_refusal, grok_login_refusal, omp_login_refusal, pi_login_refusal,
-                                 trust_codex, trust_grok)
+from agent_journey.local import (codex_login_refusal, grok_login_refusal, omp_login_refusal, opencode_login_refusal,
+                                 pi_login_refusal, trust_codex, trust_grok)
 
 CHECKOUT = Path(__file__).resolve().parents[2]
 HOUR = 3600
@@ -328,6 +328,40 @@ class LocalRoute(unittest.TestCase):
             self.assertIn("run pi once yourself", refusal)
             auth.write_text(json.dumps({"openai": {"type": "oauth", "expires": "soon"}}))
             self.assertIn("unreadable", pi_login_refusal(auth, HOUR, now))
+
+    def test_an_opencode_2_login_is_read_from_its_database_copy(self):
+        # OpenCode 2.0.29 keeps its login in `opencode.db` and ignores an
+        # `auth.json` (measured on the mini, 2026-11-28).
+        import sqlite3
+        now = datetime.datetime(2026, 11, 28, tzinfo=datetime.timezone.utc).timestamp()
+        with tempfile.TemporaryDirectory() as temporary:
+            auth, database = Path(temporary) / "auth.json", Path(temporary) / "opencode.db"
+            self.assertIn("not logged in", opencode_login_refusal(auth, HOUR, now, database=database))
+
+            def credentials(*rows):
+                database.unlink(missing_ok=True)
+                with sqlite3.connect(database) as connection:
+                    connection.execute("CREATE TABLE credential (id TEXT, integration_id TEXT, value TEXT, "
+                                       "active INTEGER)")
+                    connection.executemany("INSERT INTO credential VALUES ('c', ?, ?, ?)", rows)
+                connection.close()
+
+            credentials()
+            self.assertIn("not logged in", opencode_login_refusal(auth, HOUR, now, database=database))
+            credentials(("anthropic", json.dumps({"type": "key", "key": "k"}), 1))
+            self.assertIsNone(opencode_login_refusal(auth, HOUR, now, database=database))
+            # An inactive login is not the one OpenCode would use.
+            credentials(("anthropic", json.dumps({"type": "key", "key": "k"}), 0))
+            self.assertIn("not logged in", opencode_login_refusal(auth, HOUR, now, database=database))
+            credentials(("openai", json.dumps({"type": "oauth", "expires": (now + 3 * HOUR) * 1000}), 1))
+            self.assertIsNone(opencode_login_refusal(auth, HOUR, now, database=database))
+            self.assertIn("login near refresh", opencode_login_refusal(auth, 4 * HOUR, now, database=database))
+            # The journey account's copy goes back to it, so no window applies.
+            self.assertIsNone(opencode_login_refusal(auth, None, now, database=database))
+            # An older OpenCode's auth.json still counts.
+            database.unlink()
+            auth.write_text(json.dumps({"anthropic": {"type": "api", "key": "k"}}))
+            self.assertIsNone(opencode_login_refusal(auth, HOUR, now, database=database))
 
     def test_an_omp_login_database_copy_is_judged_by_its_oauth_expiry(self):
         import sqlite3
