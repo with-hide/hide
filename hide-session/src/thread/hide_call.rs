@@ -20,7 +20,7 @@ pub enum HideCall {
         intent: Option<String>,
         agent_id: Option<String>,
     },
-    /// `hide request send <to>`: a letter, with its body when it was written
+    /// `hide letter send <to>`: a letter, with its body when it was written
     /// on the command line.
     Letter { to: String, body: Option<String> },
     /// `hide browser|file|diff open <target>`: a View the session opened,
@@ -107,18 +107,19 @@ fn program_words(words: &[String], syntax: Syntax) -> Option<&[String]> {
 }
 
 fn read(args: &[String]) -> Option<HideCall> {
+    // A session file keeps the spelling the command had when it ran.
+    let args = hide_shell::retired::current(args);
     let (verb, rest) = args.split_first()?;
     let sub = rest.first().map(String::as_str);
     let tail = rest.get(1..).unwrap_or_default();
     match (verb.as_str(), sub) {
-        // `plan` is the name `task` had; a session file still holds it.
-        ("task" | "plan", Some("set" | "node" | "approve" | "drop")) => Some(HideCall::Plan),
+        ("task", Some("set" | "node" | "approve" | "drop")) => Some(HideCall::Plan),
         ("agent", Some("spawn")) => Some(HideCall::Spawn {
             name: option(tail, "--name"),
             intent: option(tail, "--intent"),
             agent_id: None,
         }),
-        ("request", Some("send")) => Some(HideCall::Letter {
+        ("letter", Some("send")) => Some(HideCall::Letter {
             to: positional(tail, &["--intent", "--body", "--kind", "--reply-to"])?.to_owned(),
             body: option(tail, "--body"),
         }),
@@ -199,9 +200,16 @@ mod tests {
                 }),
             ),
             (
+                "hide letter send agent-7 --kind report --intent m:a --body \"끝났어요\"",
+                Some(letter("agent-7", Some("끝났어요"))),
+            ),
+            // The spelling letters had before `hide letter`, which session
+            // files keep for good.
+            (
                 "hide request send agent-7 --kind report --intent m:a --body \"끝났어요\"",
                 Some(letter("agent-7", Some("끝났어요"))),
             ),
+            ("hide letter show letter-3", None),
             (
                 "hide browser open --wait http://localhost:5173",
                 Some(HideCall::View {
@@ -237,13 +245,40 @@ mod tests {
         }
     }
 
+    /// Every retired spelling of the one table (`hide_shell::retired`) is
+    /// read as the command it is now: a session file keeps the spelling a
+    /// call ran with for good.
+    #[test]
+    fn a_retired_spelling_is_read_as_the_command_it_is_now() {
+        let tails = [
+            "set --json '{}'",
+            "node core --status done",
+            "approve",
+            "show",
+            "send agent-7 --intent m:a --body hi",
+            "spawn --name review --intent m:review",
+            "open docs/mock.png",
+        ];
+        let mut read = 0;
+        for row in hide_shell::retired::TABLE.commands {
+            for tail in tails {
+                let now = format!("hide {} {tail}", row.now.join(" "));
+                let old = format!("hide {} {tail}", row.old.join(" "));
+                let expected = hide_call(&now, Syntax::Posix);
+                read += usize::from(expected.is_some());
+                assert_eq!(hide_call(&old, Syntax::Posix), expected, "{old}");
+            }
+        }
+        assert!(read > 0, "no retired spelling names a call a thread draws");
+    }
+
     /// Hide's guidance tells an agent to run the bundled `hide` by its path
     /// with its capability before it; a compound line's first `hide` counts.
     #[test]
     fn a_hide_command_is_found_behind_its_capability_path_and_in_a_list() {
         assert_eq!(
             hide_call(
-                "HIDE_CAP_REF='/Users/me/.hide/state/pane-capabilities/a.json' '/Applications/hide.app/Contents/Resources/hide' request send agent-18238 --kind progress --intent m:t --body \"계획\"",
+                "HIDE_CAP_REF='/Users/me/.hide/state/pane-capabilities/a.json' '/Applications/hide.app/Contents/Resources/hide' letter send agent-18238 --kind progress --intent m:t --body \"계획\"",
                 Syntax::Posix
             ),
             Some(letter("agent-18238", Some("계획")))

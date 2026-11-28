@@ -162,7 +162,7 @@ pub fn ask(node_dir: &Path, pane_id: Option<&str>, command: Option<&Value>) -> O
 pub fn next_action(reason: &str) -> Option<&'static str> {
     match reason {
         OWNER_OFFLINE => Some(
-            "The Hide this work belongs to is not connected and reconnects by itself; run the command again then. A letter (hide request send) is kept and delivered once it is back",
+            "The Hide this work belongs to is not connected and reconnects by itself; run the command again then. A letter (hide letter send) is kept and delivered once it is back",
         ),
         OUTBOX_FULL => Some(
             "Too many letters wait for the Hide this work belongs to; send again once it has reconnected",

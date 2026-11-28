@@ -5398,7 +5398,7 @@ pub(crate) mod tests {
     /// Every pane an answer hands a caller is taken back as written
     /// (with-hide/hide#3037): for this machine's agent and for a device's
     /// agent, the address each is handed for the core's `w1:p2` and for the
-    /// device's `w1:p2` reaches that pane in `hide request send` (which
+    /// device's `w1:p2` reaches that pane in `hide letter send` (which
     /// hands the same address back), `hide agent read` and `hide pane read`;
     /// `hide agent show`'s reading is `coordination`'s
     /// `show_reads_back_the_address_each_caller_is_handed`, since this

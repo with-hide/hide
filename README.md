@@ -211,7 +211,7 @@ hide installs a skill and hooks into each agent, so an agent can do from its pan
 ```sh
 hide agent spawn --parent here --name export-csv --intent export-csv --kind codex \
   --repo ~/billing-app --branch feat/export-csv --brief "Export invoices as CSV"   # a worker it watches
-hide request send <agent> --intent review --body "Check #431 before I merge"   # a letter to another agent
+hide letter send <agent> --intent review --body "Check #431 before I merge"   # a letter to another agent
 hide mission help                                                     # plan and run a set of pull requests
 hide device add workbox                                               # another machine, by SSH alias
 ```

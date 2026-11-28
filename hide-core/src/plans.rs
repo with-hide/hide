@@ -1202,7 +1202,7 @@ pub fn next_action(code: &str) -> &'static str {
             "This session has no plan; put one up with hide task set --file <plan.json>"
         }
         "plan_not_yours" => {
-            "A plan is changed only by its own session: send that agent a letter (hide request send <agent> ...) saying what the operator answered, and it runs hide task approve or drop itself"
+            "A plan is changed only by its own session: send that agent a letter (hide letter send <agent> ...) saying what the operator answered, and it runs hide task approve or drop itself"
         }
         "plan_unavailable" => {
             "Hide cannot read its plan record right now; go on with the work and run the same command again in a minute"
@@ -1247,7 +1247,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Three children of your plans are working already; wait for one to report and finish its step, or do this step yourself"
         }
         "plan_delegate_not_permitted" => {
-            "An agent a plan or a mission started does its own work and starts no agents; do the step yourself, or tell your parent with hide request send"
+            "An agent a plan or a mission started does its own work and starts no agents; do the step yourself, or tell your parent with hide letter send"
         }
         _ => "Check the hide task command (hide task help) and run it again",
     }

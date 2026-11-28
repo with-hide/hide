@@ -1,4 +1,4 @@
-//! The answers `hide agent`, `hide request`, `hide inbox` and `hide watch`
+//! The answers `hide agent`, `hide letter`, `hide inbox` and `hide watch`
 //! return, as types, so the CLI's exported contract describes each answer
 //! from the type that builds it (`answer_schemas`) and a changed field
 //! changes the contract.
@@ -387,7 +387,7 @@ pub struct Inbox {
     /// last bell failed when one did.
     pub returned: Vec<Letter>,
     /// Per sender, the older letters the bundle folded, oldest first; each
-    /// opens with `hide request show <id>`.
+    /// opens with `hide letter show <id>`.
     pub folded: Vec<Folded>,
     /// The one command that acknowledges exactly the pending letters this
     /// answer lists, folded ones included, by a token naming the bundle, for

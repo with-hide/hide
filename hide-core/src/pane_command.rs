@@ -205,7 +205,7 @@ pub fn next_action(code: &str) -> Option<&'static str> {
             "This pane's program is not known to take a paste as one; send one line at a time, with --key enter between lines only if each line should be submitted"
         }
         "pane_asleep" => {
-            "The agent in that pane is asleep or waking; send it a letter with hide request send instead"
+            "The agent in that pane is asleep or waking; send it a letter with hide letter send instead"
         }
         "composer_not_empty" => {
             "Someone typed into the agent's input box and its text may be a person's draft; nothing was sent. Read the pane with hide pane read, and send again once the box is empty or submitted"

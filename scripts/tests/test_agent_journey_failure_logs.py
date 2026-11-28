@@ -6,6 +6,7 @@ a passed cell keeps none of it (with-hide/hide-private#548).
 hided's output reaches the journey through a real pipe drained by the
 runtime's own reader (`ResidentOutput`), as the candidate's does."""
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -79,7 +80,7 @@ class FailedCell(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.run_dir)
         self.hided = Hided(self, self.run_dir)
         self.screen = MACOS + "/project $ claude\n"
-        runtime = SimpleNamespace(run=self.run_dir, home=self.run_dir, owner=SimpleNamespace(cancelled=threading.Event()))
+        runtime = SimpleNamespace(run=self.run_dir, home=self.run_dir, state=self.run_dir / "state", owner=SimpleNamespace(cancelled=threading.Event()))
         controller = SimpleNamespace(read_pane=lambda pane, lines=200: self.screen)
         self.table = {"claude": {name: cells.cell(cells.PENDING, "") for name in cells.CELLS}}
         self.record = {"id": "claude"}
@@ -104,6 +105,33 @@ class FailedCell(unittest.TestCase):
         [step] = self.record["steps"]
         self.assertEqual(step["step"], "resume")
         self.assertLessEqual(step["started_ms"], step["ended_ms"])
+
+    def hook_record(self, pane="w1:p1"):
+        """The pane's record as the candidate's hooks keep it."""
+        records = self.run_dir / "state" / "agent-hooks" / "panes"
+        records.mkdir(parents=True)
+        (records / (pane.replace(":", "_") + ".json")).write_text(
+            '{"sessions":[{"agent":"antigravity","session":"9aacde14","turn":"working"}]}')
+
+    def test_a_failed_cell_keeps_the_panes_hook_record(self):
+        journey = self.journey()
+        self.hook_record()
+        journey.step("resume", b'{"kind":"x"}\n', (cells.FAIL, "the reader read another session"))
+        kept = json.loads((self.run_dir / "claude-resume-hooks.json").read_text())
+        self.assertEqual(kept["sessions"], [{"agent": "antigravity", "session": "9aacde14", "turn": "working"}])
+        self.assertIn("claude-resume-hooks.json", self.table["claude"]["resume"]["evidence"])
+
+    def test_evidence_that_cannot_be_written_leaves_the_cells_failure_and_reason(self):
+        journey = self.journey()
+        self.hook_record()
+        (self.run_dir / "claude-resume-hooks.json").mkdir()
+        journey.step("resume", b'{"kind":"x"}\n', (cells.FAIL, "the reader read another session"))
+        cell = self.table["claude"]["resume"]
+        self.assertEqual((cell["status"], cell["reason"]), (cells.FAIL, "the reader read another session"))
+        # The code a directory in the file's place answers: EPERM on macOS, EISDIR on Linux.
+        self.assertRegex(cell["evidence"], r"claude-resume-hooks\.json not kept: E[A-Z]+(,|$)")
+        self.assertIn("claude-resume-hided.log", cell["evidence"])
+        self.assertNotIn(str(self.run_dir), cell["evidence"])
 
     def test_a_passed_cell_keeps_no_log_but_its_steps_times(self):
         journey = self.journey()

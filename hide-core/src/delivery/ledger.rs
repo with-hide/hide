@@ -147,13 +147,13 @@ pub struct Letter {
     /// older build handed.
     #[serde(default)]
     pub handed_at_unix_ms: Option<u64>,
-    /// Sent with `hide request send --now`: delivered at the recipient's
+    /// Sent with `hide letter send --now`: delivered at the recipient's
     /// next safe gap while it works, without the mid-turn wait (PRD
     /// letters-to-busy-agents D-05). An older build drops the field at its
     /// next save, and the letter then waits as any other.
     #[serde(default)]
     pub immediate: bool,
-    /// Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its
+    /// Sent with `hide letter send --force` (PRD engine-bundle-1 D-14): its
     /// composer was read empty when it was sent, and the doorbell types its
     /// bell even while the recipient works, after reading the composer empty
     /// once more; a composer that shows text then leaves it an ordinary
@@ -881,7 +881,7 @@ impl Ledger {
     /// letter ends `no_recipient`, as one whose agent ended with no agent
     /// after it does, and keeps the other core's `reason` where a failed
     /// bell's is kept (`Letter::bell_failure`), so its sender reads it with
-    /// the letter in `hide inbox` and `hide request show`. Only a letter
+    /// the letter in `hide inbox` and `hide letter show`. Only a letter
     /// still waiting to be handed over on that connection ends. Returns
     /// whether it ended.
     pub fn refuse_core(&mut self, id: &str, key: &str, reason: &str, now: u64) -> bool {

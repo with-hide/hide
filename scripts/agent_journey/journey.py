@@ -1,7 +1,7 @@
 """One agent's journey on the candidate: spawn, reply, letter, sleep and wake, resume.
 
 Each step asks the product to act the way an operator or a parent agent does
-(`hide agent spawn`, `hide request send`, the daemon's Sleep, Wake and terminal
+(`hide agent spawn`, `hide letter send`, the daemon's Sleep, Wake and terminal
 input) and judges only what Hide then reports. A step that cannot run settles
 its cell with the reason; nothing here types into a screen it read, but the
 composer cell, which reads the pane's screen only to judge it.
@@ -22,6 +22,9 @@ from agent_live_check.system import git, same_path
 from . import (cells, composer, failure, fork, hook_records, kit, memory, provider_limit, scene, stop_observer, title,
                usage)
 from .requests import model_requests
+
+# The most a failed cell keeps of what the pane's hooks recorded (hook_records.pane_record).
+HOOK_RECORD_BYTES = 32 * 1024
 
 SPAWN_SECONDS = 150
 TURN_SECONDS = 180
@@ -250,6 +253,32 @@ class Journey:
         write_private(path, failure.scrub(text).encode())
         return path.name
 
+    def hook_record(self, name, pane=None):
+        """What the candidate's hooks kept of the pane the cell measured
+        (hook_records.pane_record), kept only for a failed cell under the
+        failed cells' budget (failure.py)."""
+        text = hook_records.pane_record(self.runtime, pane or self.pane,
+                                        min(HOOK_RECORD_BYTES, self.failure_logs.allowance()))
+        if text is None:
+            return None
+        path = self.run / f"{self.name}-{name}-hooks.json"
+        path.unlink(missing_ok=True)
+        write_private(path, text.encode())
+        self.failure_logs.spend(len(text.encode()))
+        return path.name
+
+    def kept(self, name, kind, keep):
+        """A failed cell's evidence file, or a note that it could not be
+        kept, naming the file and the error's code only: a failure to keep
+        one piece of evidence never takes the next one, or the cell's own
+        verdict and reason, with it. A cancel still ends the run."""
+        try:
+            return keep()
+        except Cancelled:
+            raise
+        except Exception as error:
+            return f"{self.name}-{name}-{kind} not kept: {hook_records.unread(error)}"
+
     def daemon_log(self, name):
         """What hided wrote while the running step ran, kept only for a
         failed cell, at its failure (failure.py)."""
@@ -276,8 +305,10 @@ class Journey:
             cells.settle_agent(self.table, self.id, refused)
             return False
         if status == cells.FAIL:
-            screen = self.capture(name, pane)
-            evidence = ", ".join(value for value in (evidence, screen, self.daemon_log(name)) if value) or None
+            kept = (self.kept(name, "pane.txt", lambda: self.capture(name, pane)),
+                    self.kept(name, "hooks.json", lambda: self.hook_record(name, pane)),
+                    self.kept(name, "hided.log", lambda: self.daemon_log(name)))
+            evidence = ", ".join(value for value in (evidence, *kept) if value) or None
         cells.settle(self.table, self.id, name, status, reason, evidence)
         return status == cells.PASS
 
@@ -605,12 +636,12 @@ class Journey:
         value = token()
         since = self.daemon.mark(self.pane)
         log = self.log_mark()
-        sent = self.controller.hide(["request", "send", self.agent, "--intent", "journey-letter-" + self.name,
+        sent = self.controller.hide(["letter", "send", self.agent, "--intent", "journey-letter-" + self.name,
                                      "--kind", "report", "--body", LETTER_BODY + value])
         record = {"form": form, "token": value, "sent": sent, "shown": []}
         self.record["letter"] = record
         if sent.get("ok") is not True:
-            self.settle("letter", (cells.FAIL, "hide request send refused: " + ": ".join(filter(None, cells.refusal(sent)))),
+            self.settle("letter", (cells.FAIL, "hide letter send refused: " + ": ".join(filter(None, cells.refusal(sent)))),
                         self.evidence("letter", record))
             return
         letter = sent["result"]["id"]
@@ -688,9 +719,9 @@ class Journey:
                 raise Cancelled("run_cancelled")
 
     def send_now(self, intent, value, record):
-        """`hide request send --now` of a letter whose second line is `value`;
+        """`hide letter send --now` of a letter whose second line is `value`;
         the letter's id, or None with the cell's failure settled."""
-        sent = self.controller.hide(["request", "send", self.agent, "--intent", intent, "--kind", "report",
+        sent = self.controller.hide(["letter", "send", self.agent, "--intent", intent, "--kind", "report",
                                      "--now", "--body", LETTER_BODY + value])
         record["sent"] = sent
         if sent.get("ok") is not True:
@@ -733,7 +764,7 @@ class Journey:
         log = self.log_mark()
         letter = self.send_now("journey-letter-busy-" + self.id, value, record)
         if letter is None:
-            self.settle("letter_busy", (cells.FAIL, "hide request send refused: "
+            self.settle("letter_busy", (cells.FAIL, "hide letter send refused: "
                                         + ": ".join(filter(None, cells.refusal(record["sent"])))),
                         self.evidence("letter_busy", record))
             return
@@ -775,11 +806,11 @@ class Journey:
                     self.evidence("letter", record))
 
     def shown(self, letter, record, done, seconds):
-        """`hide request show` until `done(result)` or `seconds` pass; the last answer."""
+        """`hide letter show` until `done(result)` or `seconds` pass; the last answer."""
         end = time.monotonic() + seconds
         shown = {}
         while time.monotonic() < end:
-            answer = self.controller.hide(["request", "show", letter])
+            answer = self.controller.hide(["letter", "show", letter])
             shown = answer.get("result") or {}
             record["shown"].append({key: shown.get(key) for key in (
                 "state", "bell_line", "hook_confirmed", "bell_attempts", "bell_turn", "tool_handovers")})

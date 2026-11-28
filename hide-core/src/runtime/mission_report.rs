@@ -9,7 +9,7 @@
 //! another; one for another machine waits in this ledger and goes over
 //! the connection between the two cores once.
 //!
-//! The letter is the Conductor's own, prepared as a `hide request send`
+//! The letter is the Conductor's own, prepared as a `hide letter send`
 //! from its pane and sent by the rules every letter of that Conductor is
 //! sent under, so nothing here admits or delivers.
 //!
@@ -336,7 +336,7 @@ impl Runtime {
                 &conductor,
                 format!("mission-report:{id}"),
                 format!(
-                    "Hide could not send mission {id}'s result report to the agent that asked for it ({reason}). Send it yourself with `hide request send <agent> --kind report` if it still matters."
+                    "Hide could not send mission {id}'s result report to the agent that asked for it ({reason}). Send it yourself with `hide letter send <agent> --kind report` if it still matters."
                 ),
                 true,
                 now,
