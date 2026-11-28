@@ -8,6 +8,8 @@ import type { AgentRow, AgentSleep, SessionThreadSection } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { layOutConversation, watchResizes } from "./components/desk/thread-test-layout";
+import { forgetScrolls } from "./conversationScroll";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 
@@ -17,10 +19,13 @@ vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 
 let saved: ReturnType<typeof useShellStore.getState>;
 let mounted: ReturnType<typeof createRoot>[] = [];
+let laidOut: () => Promise<void>;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  // The conversation draws only the rows its viewport reaches: give it one that holds them all.
+  ({ laidOut } = watchResizes());
+  layOutConversation();
   saved = useShellStore.getState();
   useUiStore.setState({ threadLease: null, paneConversation: { paneId: "w1:p2" } as never });
 });
@@ -30,6 +35,8 @@ afterEach(async () => {
   mounted = [];
   useShellStore.setState(saved, true);
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  forgetScrolls();
   document.body.innerHTML = "";
 });
 
@@ -51,6 +58,7 @@ it("draws a sleeping agent's conversation dimmed with Wake agent in its middle a
   const root = createRoot(container);
   mounted.push(root);
   await act(async () => root.render(<TooltipProvider><PaneConversation paneId="w1:p2" actions={actions} /></TooltipProvider>));
+  await laidOut();
 
   expect(container.textContent).toContain("상태를 기다리게 바꾸는 중이에요");
   expect(container.querySelector("[data-thread-asleep]")?.className).toContain("opacity-(--opacity-dimmed)");

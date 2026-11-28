@@ -1,12 +1,12 @@
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, CircleAlertIcon, FilePenIcon, FileSearchIcon, GlobeIcon, MailIcon, PlusIcon, SquareTerminalIcon, WrenchIcon } from "lucide-react";
 import { pullLabel } from "../../codeHost";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithRef, type ReactNode, type Ref } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithRef, type ReactNode, type Ref, type RefObject } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
 import { askPlace, callName, namedMention, threadPhase, threadTurns } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
-import type { MarkdownChip, MarkdownMark } from "../../MarkdownText";
+import { MarkdownText, type MarkdownChip, type MarkdownMark } from "../../MarkdownText";
 import type { CopyText } from "../human-turn-copy";
 import type { AskLine } from "../open-asks";
 import { useRunningClock } from "../elapsed";
@@ -14,6 +14,7 @@ import { PlanChecklist } from "../plan-checklist";
 import { PrMark } from "../pr-mark";
 import { StatusMark } from "../status-mark";
 import { Button } from "../ui/button";
+import { useOutsidePressSurface } from "../ui/layer";
 import { Hint } from "../ui/tooltip";
 import { DeskComposer, SentAttachments } from "./desk-composer";
 import type { ComposerMenus } from "./composer-menus";
@@ -25,8 +26,9 @@ import { DeskOutputs } from "./desk-outputs";
 import type { AnswerPlace, FoundAnswerPath } from "../../answerPaths";
 import { useFilePathChips } from "./file-path-chip";
 import { ThreadAsks } from "./thread-asks";
-import { ThreadMarkdown, ThreadMarkdownWindow } from "./thread-markdown";
 import { keepScroll, keptScroll, placeAt, scrollPlace, stillAt, type ScrollPlace } from "../../conversationScroll";
+import { rowEstimate, threadRows, type RowGap, type ThreadRow, type ViewLine } from "../../threadRows";
+import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 
 const TOOL_ICON: Partial<Record<AcpToolKind, typeof WrenchIcon>> = {
   execute: SquareTerminalIcon,
@@ -262,7 +264,7 @@ function AgentWords({ line, words, lit, live }: { line: Extract<ThreadLine, { ki
   const chips = useMemo(() => (files.length ? [...words.chips, ...files] : words.chips), [words.chips, files]);
   return (
     <div className="-mx-xs min-w-0 rounded-md px-xs" data-desk-thread-line="agent" data-desk-thread-message={line.id} data-desk-thread-lit={lit ? "true" : undefined}>
-      <ThreadMarkdown text={line.text} size="chat" chips={chips} copyCode={words.copy} mark={lit} />
+      <MarkdownText text={line.text} size="chat" chips={chips} copyCode={words.copy} mark={lit} />
     </div>
   );
 }
@@ -309,188 +311,261 @@ function UserLine({ line, handed, actions }: { line: Extract<ThreadLine, { kind:
   );
 }
 
-/** A turn as the place a conversation was left names it: its first line's place and words, since a page read in above moves the place. */
-function turnAnchor(turn: ThreadTurn): string {
-  return `${turn.key}:${turn.user?.text.slice(0, 80) ?? ""}`;
-}
-
 /**
- * One turn (B25, D-75): the operator's words, the work folded into one line
- * `작업 · 파일 n · 명령 m ›`, the answer. A part that leads somewhere (a new
- * session, a letter, an output, a mission, a PR) stays in view while the work
- * is folded, once per target. The turn still running folds too: what it said
- * and the parts it made stay in view, and its calls are one line at its foot,
- * `작업 중 · 명령 n · 파일 n ⌄`, with its newest call's head under it,
- * never what came out; unfolded, every line stands above that line.
+ * A turn's fold line (B25): `작업 · 파일 n · 명령 m ›` above a finished turn's answer, `작업 중 · 명령 n · 파일 n ⌄` at
+ * the running turn's foot, whose lines open above it, so its chevron points up while they stand. Whether it is open is
+ * the conversation's, by the turn's key, so it outlives the line leaving the viewport.
  */
-function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; live: boolean; handed: boolean; words: Words; lit: Lit | null; actions: ThreadPartActions }) {
+function TurnToggle({ turn, live, open, onToggle }: { turn: ThreadTurn; live: boolean; open: boolean; onToggle: (key: string) => void }) {
   const { t } = useInterfaceTranslation();
-  const [open, setOpen] = useState(false);
   const files = turn.files ? t("desk.turn.files", { count: turn.files }) : null;
   const commands = turn.commands ? t("desk.turn.commands", { count: turn.commands }) : null;
   // While it runs the line leads with what it does and counts the commands first; a finished turn's reads `작업 · 파일 n · 명령 m`.
   const counts = (live ? [commands, files] : [files, commands]).filter(Boolean).map((count) => ` · ${count}`).join("");
-  // A running turn's lines open above its line at the foot, so its chevron points up while they stand.
   const Chevron = live ? (open ? ChevronUpIcon : ChevronDownIcon) : open ? ChevronDownIcon : ChevronRightIcon;
-  const toggle = turn.work.length ? (
-    <Button variant="text" size="inline" className="self-start gap-xxs text-caption text-muted-foreground" aria-expanded={open} data-desk-turn-toggle={open ? "open" : "folded"} data-desk-turn-live={live || undefined} onClick={() => setOpen(!open)}>
+  return (
+    <Button variant="text" size="inline" className="self-start gap-xxs text-caption text-muted-foreground" aria-expanded={open} data-desk-turn-toggle={open ? "open" : "folded"} data-desk-turn-live={live || undefined} onClick={() => onToggle(turn.key)}>
       <span>{live ? <span className="text-foreground">{t("desk.turn.working")}</span> : t("desk.turn.work")}{counts}</span>
       <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
     </Button>
-  ) : null;
-  const work = open && turn.work.length ? <WorkList work={turn.work} words={words} actions={actions} /> : null;
-  const answer = turn.answer.map((line) => <AgentWords key={line.id} line={line} words={words} lit={lit?.id === line.id ? lit.sentence : null} live={live} />);
-  const newest = live && !open ? turn.call : null;
-  return (
-    <li className="flex min-w-0 flex-col gap-sm" data-desk-thread-turn={open ? "open" : "folded"} data-scroll-anchor={turnAnchor(turn)}>
-      {turn.user ? <UserLine line={turn.user} handed={handed} actions={actions} /> : null}
-      {live ? (
-        <>
-          {work ?? <ShownWork work={turn.work} words={words} actions={actions} />}
-          {answer}
-          {toggle}
-          {newest ? <div className="ml-xxs min-w-0 border-l border-border pl-sm" data-desk-thread-newest={newest.id}>{newest.kind === "tool" ? <ToolHead line={newest} firstLine /> : <HideCallHead command={newest.command ?? ""} />}</div> : null}
-        </>
-      ) : (
-        <>
-          {toggle}
-          {work}
-          {answer}
-          {!open && turn.parts.length ? <FoldedParts parts={turn.parts} actions={actions} /> : null}
-        </>
-      )}
-    </li>
   );
 }
 
-/** A turn's work unfolded, along a rail: views opened one after another share one row of tiles. */
-function WorkList({ work, words, actions }: { work: readonly ThreadLine[]; words: Words; actions: ThreadPartActions }) {
-  return (
-    <ol className="ml-xxs flex min-w-0 flex-col gap-xs border-l border-border pl-sm" data-desk-thread-work={work.length}>
-      {workRows(work).map((row) => <WorkRow key={Array.isArray(row) ? row[0]!.id : row.id} row={row} words={words} actions={actions} />)}
-    </ol>
-  );
-}
-
-/** What a running turn keeps in view while its calls are folded: what the agent said and the parts that lead somewhere, in the order it made them. */
-function ShownWork({ work, words, actions }: { work: readonly ThreadLine[]; words: Words; actions: ThreadPartActions }) {
-  const shown = work.filter((line) => line.kind === "agent" || (line.kind === "hide" && line.part.kind !== "plan"));
-  if (!shown.length) return null;
-  return (
-    <ol className="flex min-w-0 flex-col gap-xs" data-desk-thread-shown={shown.length}>
-      {workRows(shown).map((row) => <WorkRow key={Array.isArray(row) ? row[0]!.id : row.id} row={row} words={words} actions={actions} />)}
-    </ol>
-  );
-}
-
+/** A line of a turn's work, or the views it opened one after another as one row of tiles (feedback 2, frame M 나). */
 function WorkRow({ row, words, actions }: { row: ThreadLine | ViewLine[]; words: Words; actions: ThreadPartActions }) {
   return Array.isArray(row) ? (
-    <li className="min-w-0">
-      <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={row.map((line) => actions.outputOf(line.part.output, line.part.view_id))} onOpen={actions.onOutput} /></div>
-    </li>
+    <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={row.map((line) => actions.outputOf(line.part.output, line.part.view_id))} onOpen={actions.onOutput} /></div>
   ) : (
-    <li className="min-w-0"><WorkLine line={row} words={words} actions={actions} /></li>
+    <WorkLine line={row} words={words} actions={actions} />
   );
 }
 
-type ViewLine = Extract<ThreadLine, { kind: "hide" }> & { part: Extract<ThreadHidePart, { kind: "view" }> };
+/** The room above a row, the space the conversation keeps between turns, a turn's parts and a group's lines. */
+const GAP: Record<RowGap, string> = { none: "", turn: "pt-lg", part: "pt-sm", member: "pt-xs", foot: "pt-md" };
 
-/** A turn's work as its open fold draws it: views opened one after another share one row of tiles, as the folded turn's do (feedback 2, frame M 나). */
-function workRows(work: readonly ThreadLine[]): (ThreadLine | ViewLine[])[] {
-  const rows: (ThreadLine | ViewLine[])[] = [];
-  for (const line of work) {
-    const last = rows.at(-1);
-    if (!isViewLine(line)) rows.push(line);
-    else if (Array.isArray(last)) last.push(line);
-    else rows.push([line]);
+/**
+ * What one row draws (B25, B26, D-75): the operator's words, the fold line, a line of the work (along the unfolded
+ * work's rail), an answer message, a folded turn's part or its outputs, the running turn's newest call under its fold
+ * line (its head's first line, never what came out), or the foot.
+ */
+function RowBody({ row, words, lit, actions, onToggle, foot }: { row: ThreadRow; words: Words; lit: Lit | null; actions: ThreadPartActions; onToggle: (key: string) => void; foot: ReactNode }) {
+  switch (row.kind) {
+    case "user":
+      return <UserLine line={row.line} handed={row.handed} actions={actions} />;
+    case "toggle":
+      return <TurnToggle turn={row.of} live={row.live} open={row.open} onToggle={onToggle} />;
+    case "work":
+      return row.rail ? (
+        <div className={cn("ml-xxs min-w-0 border-l border-border pl-sm", row.gap === "member" && GAP.member)} data-desk-thread-work="true">
+          <WorkRow row={row.row} words={words} actions={actions} />
+        </div>
+      ) : <WorkRow row={row.row} words={words} actions={actions} />;
+    case "answer":
+      return <AgentWords line={row.line} words={words} lit={lit?.id === row.line.id ? lit.sentence : null} live={row.live} />;
+    case "part":
+      return <HidePartLine part={row.line.part} command={row.line.command} actions={actions} />;
+    case "outputs":
+      return <DeskOutputs outputs={row.lines.flatMap((line) => (line.part.kind === "view" ? [actions.outputOf(line.part.output, line.part.view_id)] : []))} onOpen={actions.onOutput} />;
+    case "newest":
+      return (
+        <div className="ml-xxs min-w-0 border-l border-border pl-sm" data-desk-thread-newest={row.call.id}>
+          {row.call.kind === "tool" ? <ToolHead line={row.call} firstLine /> : <HideCallHead command={row.call.command ?? ""} />}
+        </div>
+      );
+    case "foot":
+      return foot;
   }
-  return rows;
-}
-
-function isViewLine(line: ThreadLine): line is ViewLine {
-  return line.kind === "hide" && line.part.kind === "view";
-}
-
-/** What a folded turn keeps in view (B26): its lines that lead somewhere, then the outputs it opened as one row of pictures. */
-function FoldedParts({ parts, actions }: { parts: ThreadTurn["parts"]; actions: ThreadPartActions }) {
-  const outputs = parts.flatMap((line) => (line.part.kind === "view" ? [actions.outputOf(line.part.output, line.part.view_id)] : []));
-  const rest = parts.filter((line) => line.part.kind !== "view");
-  return (
-    <div className="flex min-w-0 flex-col gap-xs" data-desk-thread-parts={parts.length}>
-      {rest.map((line) => <HidePartLine key={line.id} part={line.part} command={line.command} actions={actions} />)}
-      {outputs.length ? <DeskOutputs outputs={outputs} onOpen={actions.onOutput} /> : null}
-    </div>
-  );
 }
 
 /** How near an end of the conversation still counts as at it, in pixels. */
 const AT_END = 24;
+/** The rows drawn past each edge of the viewport, so a scroll shows drawn rows before the next are measured. */
+const OVERSCAN = 6;
+/** The room above the first row and below the last, `--spacing-md`. */
+const LIST_PAD = 12;
+
+/** A run of rows by their keys, both ends included; `null` reaches the conversation's first or last row. */
+type RowSpan = readonly [string | null, string | null];
 
 /**
- * The conversation's scrolling (B25): while the operator is at its end, what
- * the session writes next is brought into view; a page read in above keeps
- * the lines they are reading where they were; reaching the top asks for the
- * page before. Left above its end for another screen or another session,
- * `scrollKey`'s conversation comes back to the turn the operator was reading
- * (`keptScroll`), held there while its lines are drawn again until the
- * operator scrolls; a turn the lines read again no longer hold leaves it at
- * its end.
+ * The rows a selection in the conversation covers, by key, while one stands: a drag across messages, or one that
+ * scrolled past the viewport, keeps every row between its ends drawn, so the browser copies all of it. An end outside
+ * the conversation reaches its first or last row.
  */
-function useThreadScroll(lines: readonly ThreadLine[], scrollKey: string | null, onReachTop?: () => void) {
-  const ref = useRef<HTMLDivElement>(null);
-  const atEnd = useRef(true);
-  const anchor = useRef<ScrollPlace | null>(null);
-  const resized = useRef<ResizeObserver | null>(null);
-  const before = useRef<{ first: string | null; height: number }>({ first: null, height: 0 });
+function useSelectedRows(box: RefObject<HTMLDivElement | null>): RowSpan | null {
+  const [span, setSpan] = useState<RowSpan | null>(null);
+  useEffect(() => {
+    const element = box.current;
+    if (!element) return undefined;
+    const document = element.ownerDocument;
+    const rowAt = (node: Node, edge: null): string | null => {
+      const at = node instanceof Element ? node : node.parentElement;
+      const row = at?.closest<HTMLElement>("[data-thread-row]");
+      return row && element.contains(row) ? row.dataset.threadRow! : edge;
+    };
+    const changed = () => {
+      const selection = document.getSelection();
+      let next: RowSpan | null = null;
+      if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        if (range.intersectsNode(element)) next = [rowAt(range.startContainer, null), rowAt(range.endContainer, null)];
+      }
+      setSpan((now) => (now?.[0] === next?.[0] && now?.[1] === next?.[1] && (now === null) === (next === null) ? now : next));
+    };
+    document.addEventListener("selectionchange", changed);
+    return () => document.removeEventListener("selectionchange", changed);
+  }, [box]);
+  return span;
+}
+
+/** What a press on a message's words still gives to the message: a chip, a box, a code block's `복사`. */
+const PRESSABLE = "a, button, input, textarea, select, label, [role='button'], [contenteditable='true']";
+
+/**
+ * Leaves a press on a message's words to the browser, so a drag selects across messages as on any page (issue
+ * 3101): a message is a read-only editor, which would otherwise take the press and keep the selection inside itself.
+ * The press stops above the editor, so the surface is marked for the open layers, as the terminal's is
+ * (`useOutsidePressSurface`); a press on something a message draws to be pressed, and a ⌘- or Ctrl-press that opens a
+ * link, still reaches it. A copy of a
+ * selection that runs past one message is the browser's too, which copies every message it covers; the browser
+ * hands a copy to the message the selection starts in, which would copy only its own part. A selection inside one
+ * message is still copied by that message, as its Markdown.
+ */
+function useBrowserSelection(box: RefObject<HTMLDivElement | null>) {
+  const surface = useOutsidePressSurface();
+  useEffect(() => {
+    const element = box.current;
+    if (!element) return undefined;
+    surface(element);
+    const press = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      // A ⌘- or Ctrl-press is a message's own: it opens the link under it.
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || !target?.closest(".cm-content") || target.closest(PRESSABLE)) return;
+      event.stopPropagation();
+    };
+    const messageOf = (node: Node) => (node instanceof Element ? node : node.parentElement)?.closest(".cm-content") ?? null;
+    const copy = (event: ClipboardEvent) => {
+      const selection = element.ownerDocument.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+      const range = selection.getRangeAt(0);
+      const message = messageOf(range.startContainer);
+      if (!message || message !== messageOf(range.endContainer)) event.stopPropagation();
+    };
+    element.addEventListener("mousedown", press, { capture: true });
+    element.addEventListener("copy", copy, { capture: true });
+    return () => {
+      element.removeEventListener("mousedown", press, { capture: true });
+      element.removeEventListener("copy", copy, { capture: true });
+      surface(null);
+    };
+  }, [box, surface]);
+}
+
+/**
+ * The conversation's rows near its scroll viewport, and its scrolling (B25, issue 3101). Only the rows within a few of
+ * the viewport are drawn, each measured as it is drawn and kept by its key while it is not; the rows of `keep` are
+ * drawn wherever they stand (a selection, the lit question, the place being restored) and so is the foot.
+ *
+ * While the operator is at its end, what the session writes next is brought into view; a page read in above, or a row
+ * above the viewport changing height, leaves the rows they are reading where they were (`anchorTo: "end"`); reaching
+ * the top asks for the page before. Left above its end for another screen or another session, `scrollKey`'s
+ * conversation comes back to the row the operator was reading (`keptScroll`), held there while the rows around it are
+ * measured until the operator scrolls; a row the lines no longer hold leaves it at its end.
+ */
+function useThreadList(ref: RefObject<HTMLDivElement | null>, rows: readonly ThreadRow[], scrollKey: string | null, onReachTop: (() => void) | undefined, keep: readonly RowSpan[]) {
+  const list = useRef<HTMLOListElement>(null);
+  const [kept] = useState(() => (scrollKey === null ? null : keptScroll(scrollKey)));
+  const anchor = useRef<ScrollPlace | null>(kept);
+  const atEnd = useRef(kept === null);
+  const indexOf = useMemo(() => new Map(rows.map((row, index) => [row.key, index])), [rows]);
+  const held = anchor.current?.anchor ?? null;
+  const foot = rows.at(-1)?.kind === "foot" ? rows.length - 1 : null;
+  // Every row a span covers, as indexes; recomputed when the rows or the spans move, not on every scroll.
+  const drawn = useMemo(() => {
+    const spans = held === null ? keep : [...keep, [held, held] as const];
+    const indexes: number[] = foot === null ? [] : [foot];
+    for (const [from, to] of spans) {
+      const first = from === null ? 0 : indexOf.get(from);
+      const last = to === null ? rows.length - 1 : indexOf.get(to);
+      if (first === undefined || last === undefined) continue;
+      for (let index = Math.min(first, last); index <= Math.max(first, last); index += 1) indexes.push(index);
+    }
+    return indexes;
+  }, [keep, held, foot, indexOf, rows.length]);
+  const rangeExtractor = useCallback((range: Range) => {
+    if (drawn.length === 0) return defaultRangeExtractor(range);
+    return [...new Set([...defaultRangeExtractor(range), ...drawn])].sort((a, b) => a - b);
+  }, [drawn]);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => ref.current,
+    estimateSize: useCallback((index: number) => rowEstimate(rows[index]), [rows]),
+    getItemKey: useCallback((index: number) => rows[index]?.key ?? index, [rows]),
+    rangeExtractor,
+    overscan: OVERSCAN,
+    paddingStart: LIST_PAD,
+    paddingEnd: LIST_PAD,
+    anchorTo: "end",
+    scrollEndThreshold: AT_END,
+  });
   useLayoutEffect(() => {
     const box = ref.current;
-    if (!box) return;
-    anchor.current = scrollKey === null ? null : keptScroll(scrollKey);
-    atEnd.current = anchor.current === null;
-    // The lines' words fill their editors after the pass that draws them, so the held turn is placed again as they grow.
-    const observer = new ResizeObserver(() => {
-      if (anchor.current) placeAt(box, anchor.current);
-      else if (atEnd.current) box.scrollTop = box.scrollHeight;
-      before.current.height = box.scrollHeight;
-    });
-    resized.current = observer;
-    const content = box.querySelector("[data-thread-content]");
-    if (content) observer.observe(content);
     return () => {
-      if (scrollKey !== null) keepScroll(scrollKey, atEnd.current ? null : (anchor.current ?? scrollPlace(box)));
-      observer.disconnect();
-      resized.current = null;
+      if (box && scrollKey !== null) keepScroll(scrollKey, atEnd.current ? null : (anchor.current ?? scrollPlace(box)));
     };
   }, [scrollKey]);
+  // To the foot by its offset, never by a row: a row's place moves as rows are measured, and a scroll aimed at a row
+  // is aimed again for seconds, which would take back a reader who scrolled up meanwhile.
+  const follow = useCallback(() => {
+    const box = ref.current;
+    if (box) virtualizer.scrollToOffset(box.scrollHeight);
+  }, [ref, virtualizer]);
+  const listed = rows.length > 0;
   useLayoutEffect(() => {
     const box = ref.current;
-    if (!box) return;
-    // A message line's id is its place, which a page read in above moves, so the first line is known by its words too.
-    const head = lines[0];
-    const first = head ? `${head.kind}:${head.id}:${"text" in head ? head.text.slice(0, 80) : ""}` : null;
-    if (anchor.current && lines.length > 0 && !placeAt(box, anchor.current)) {
+    const element = list.current;
+    if (!box || !element) return undefined;
+    // The held row is drawn at its estimated place, then placed again as the rows around it are measured; at the foot,
+    // the rows growing as they are measured or as words stream in are followed.
+    const observer = new ResizeObserver(() => {
+      if (anchor.current) placeAt(box, anchor.current);
+      else if (atEnd.current) follow();
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [listed, ref, follow]);
+  useLayoutEffect(() => {
+    const box = ref.current;
+    if (!box || rows.length === 0) return;
+    const place = anchor.current;
+    if (place && !indexOf.has(place.anchor)) {
       anchor.current = null;
       atEnd.current = true;
+    } else if (place) {
+      placeAt(box, place);
     }
-    if (anchor.current) for (const child of box.querySelectorAll("[data-scroll-anchor]")) resized.current?.observe(child);
-    else if (atEnd.current) box.scrollTop = box.scrollHeight;
-    else if (before.current.first !== null && first !== before.current.first) box.scrollTop += box.scrollHeight - before.current.height;
-    before.current = { first, height: box.scrollHeight };
-  }, [lines]);
+    if (!anchor.current && atEnd.current) follow();
+  }, [rows]);
   const onScroll = () => {
     const box = ref.current;
     if (!box) return;
     if (anchor.current && stillAt(box, anchor.current)) return;
     anchor.current = null;
     atEnd.current = box.scrollHeight - box.scrollTop - box.clientHeight < AT_END;
-    before.current.height = box.scrollHeight;
     if (box.scrollTop < AT_END) onReachTop?.();
   };
-  return { ref, onScroll };
+  return { list, onScroll, virtualizer };
 }
 
 /** How long the sentence a question asks stays lit after the question line brought it into view (Doop N3 가). */
 const LIT_MS = 2_000;
+/** A lit message stands where it was brought once it has not moved for this many frames. */
+const LIT_STILL_FRAMES = 3;
+/** The most frames a lit message is brought to the middle again while the rows on its way are measured, about a second. */
+const LIT_SEEK_FRAMES = 60;
+
+const NO_OPEN: ReadonlySet<string> = new Set();
+const NO_ROWS: readonly ThreadRow[] = [];
 
 /** The message a pressed question went to, the sentence of it lit (none for a question kept without its sentence), and the question. */
 type Lit = { id: string; sentence: MarkdownMark | null; ask: string };
@@ -564,10 +639,19 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   scrollKey?: string | null;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
-  const scroller = useThreadScroll(lines, scrollKey, onReachTop);
+  const box = useRef<HTMLDivElement>(null);
+  const selected = useSelectedRows(box);
+  useBrowserSelection(box);
   const turns = useMemo(() => threadTurns(lines), [lines]);
   const running = job?.state === "working" || job?.state === "starting";
   const words = useWords(mentions, actions.onSession, actions.onCopy, actions.place ?? null, actions.onFile);
+  // Which turns' work the operator unfolded, by key: the conversation's, so a fold outlives its rows leaving the viewport.
+  const [open, setOpen] = useState<ReadonlySet<string>>(NO_OPEN);
+  const toggle = useCallback((key: string) => setOpen((now) => {
+    const next = new Set(now);
+    if (!next.delete(key)) next.add(key);
+    return next;
+  }), []);
   // Where each question was asked, decided once for the line (`askPlace`): found, not known until the pages before are read, or gone.
   const settled = !reading && failure === null;
   const places = useMemo(() => new Map(asks.map((ask) => [ask.id, askPlace(turns, ask, { olderLeft, settled })])), [asks, turns, olderLeft, settled]);
@@ -575,6 +659,14 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   // A pressed question not found yet reads the pages before, one at a time, until it is found or gone; a gone one does nothing.
   const [seek, setSeek] = useState<{ id: string; press: number } | null>(null);
   const [lit, setLit] = useState<(Lit & { press: number }) | null>(null);
+  // The working line Desk's conversation draws too (feedback 1 c3), until the turn ends or waits on the operator, and the agent's own question.
+  const working = running && !reading && !failure;
+  const listed = settled && lines.length > 0;
+  const rows = useMemo(() => (listed ? threadRows(turns, { running, open, handed: startedByDesk, foot: working || ask !== null }) : NO_ROWS), [listed, turns, running, open, startedByDesk, working, ask !== null]);
+  // A selection's rows stay drawn while it stands, and so does the message a question lights while it is lit.
+  const litId = lit?.id ?? null;
+  const keep = useMemo<RowSpan[]>(() => [...(selected ? [selected] : []), ...(litId ? [[litId, litId] as const] : [])], [selected, litId]);
+  const scroller = useThreadList(box, rows, scrollKey, onReachTop, keep);
   const goTo = (ask: AskLine) => {
     if (places.get(ask.id)?.state === "gone") return;
     setSeek((now) => ({ id: ask.id, press: Math.max(now?.press ?? 0, lit?.press ?? 0) + 1 }));
@@ -593,28 +685,66 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
     }
     if (olderLeft) {
       // At the top, the page before reads in above, where the operator is taken to look.
-      const box = scroller.ref.current;
-      if (box) box.scrollTop = 0;
+      if (box.current) box.current.scrollTop = 0;
       onReachTop?.();
     }
-  }, [seek, places, olderLeft, onReachTop, scroller.ref]);
+  }, [seek, places, olderLeft, onReachTop]);
   useEffect(() => {
     if (!lit) return undefined;
-    const message = scroller.ref.current?.querySelector<HTMLElement>(`[data-desk-thread-message="${CSS.escape(lit.id)}"]`);
-    message?.scrollIntoView({ block: "center" });
-    // The sentence is drawn lit a frame later, inside the message's own editor.
-    const frame = window.requestAnimationFrame(() => message?.querySelector("[data-markdown-lit]")?.scrollIntoView({ block: "center" }));
+    // The message is drawn wherever it stands while it is lit, then brought to the middle; the rows on the way are
+    // measured as they are drawn and move it, so it is brought there again until it stays, for at most a second. Its
+    // sentence is drawn lit a frame later, inside the message's own editor, and is what is brought there once drawn.
+    let frame = 0;
+    let frames = 0;
+    let still = 0;
+    let last: number | null = null;
+    const center = () => {
+      const message = box.current?.querySelector<HTMLElement>(`[data-desk-thread-message="${CSS.escape(lit.id)}"]`);
+      const target = message?.querySelector<HTMLElement>("[data-markdown-lit]") ?? message;
+      if (target) {
+        const top = target.getBoundingClientRect().top;
+        if (top === last) still += 1;
+        else {
+          target.scrollIntoView({ block: "center" });
+          last = target.getBoundingClientRect().top;
+          still = 0;
+        }
+      }
+      frames += 1;
+      if (still < LIT_STILL_FRAMES && frames < LIT_SEEK_FRAMES) frame = window.requestAnimationFrame(center);
+    };
+    center();
     const timer = window.setTimeout(() => setLit(null), LIT_MS);
     return () => {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timer);
     };
-  }, [lit, scroller.ref]);
+  }, [lit]);
+  const footNode = (
+    <div className="flex min-w-0 flex-col gap-md">
+      {working ? <WorkingLine phase={threadPhase(turns.at(-1))} since={workingSince} /> : null}
+      {ask}
+    </div>
+  );
   return (
-    <ThreadMarkdownWindow root={scroller.ref}>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job?.id ?? ""}>
-        <div ref={scroller.ref} onScroll={scroller.onScroll} data-desk-thread-conversation="true" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-md py-md">
-          <div className="flex min-w-0 shrink-0 flex-col gap-md" data-thread-content="true">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job?.id ?? ""}>
+      <div ref={box} onScroll={scroller.onScroll} data-desk-thread-conversation="true" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-md [overflow-anchor:none]">
+        {listed ? (
+          // Only the rows near the viewport are drawn, each where its measured height puts it (issue 3101).
+          <ol ref={scroller.list} className="relative w-full min-w-0 shrink-0" style={{ height: scroller.virtualizer.getTotalSize() }} data-desk-thread-lines={lines.length}>
+            {scroller.virtualizer.getVirtualItems().map((item) => {
+              const row = rows[item.index]!;
+              // A line inside the unfolded work keeps its room inside the rail, so the rail runs on unbroken.
+              const inRail = row.kind === "work" && row.rail && row.gap === "member";
+              return (
+                <li key={item.key} ref={scroller.virtualizer.measureElement} data-index={item.index} data-thread-row={row.key} data-scroll-anchor={row.key} data-desk-thread-turn={row.turn || undefined} className={cn("absolute inset-x-0 flex min-w-0 flex-col", !inRail && GAP[row.gap])} style={{ top: item.start }}>
+                  <RowBody row={row} words={words} lit={lit} actions={actions} onToggle={toggle} foot={footNode} />
+                </li>
+              );
+            })}
+          </ol>
+        ) : (
+          <div className="flex min-w-0 shrink-0 flex-col gap-md py-md">
             {failure ? (
               <p role="alert" className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" data-desk-thread-failure={failure}>
                 <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-warning" />
@@ -623,48 +753,43 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
               </p>
             ) : reading ? (
               <p role="status" className="animate-pulse text-caption text-muted-foreground" data-desk-thread-reading="true">{t("desk.thread.reading")}</p>
-            ) : lines.length === 0 ? (
-              <p className="text-caption text-muted-foreground" data-desk-thread-empty="true">{t("desk.thread.empty")}</p>
             ) : (
-              <ol className="flex min-w-0 flex-col gap-lg" data-desk-thread-lines={lines.length}>
-                {turns.map((turn, index) => <Turn key={turn.key} turn={turn} live={running && index === turns.length - 1} handed={startedByDesk && index === 0} words={words} lit={lit} actions={actions} />)}
-              </ol>
+              <p className="text-caption text-muted-foreground" data-desk-thread-empty="true">{t("desk.thread.empty")}</p>
             )}
-            {/* The working line Desk's conversation draws too (feedback 1 c3), until the turn ends or waits on the operator. */}
-            {running && !reading && !failure ? <WorkingLine phase={threadPhase(turns.at(-1))} since={workingSince} /> : null}
+            {working ? <WorkingLine phase={threadPhase(turns.at(-1))} since={workingSince} /> : null}
             {ask}
           </div>
-        </div>
-        {onAsk ? <ThreadAsks asks={asks} onGo={goTo} onSet={onAsk} lit={seek?.id ?? lit?.ask ?? null} gone={gone} /> : null}
-        {foot ?? (composer ? (
-          <div className="flex shrink-0 flex-col gap-xs px-sm pb-sm">
-            {composer.queue}
-            <DeskComposer
-              value={composer.value}
-              label={t("desk.thread.composerLabel", { title: job?.title ?? "" })}
-              placeholder={t("desk.thread.placeholder")}
-              textRef={composer.textRef}
-              tray={composer.tray}
-              focused={composer.focused || composer.menus?.menuOpen}
-              held={composer.held}
-              notice={composer.notice}
-              menu={composer.menus?.menu}
-              menuOpen={composer.menus?.menuOpen}
-              menuEmpty={composer.menus?.menuEmpty}
-              onMenuOpenChange={composer.menus?.onMenuOpenChange}
-              onKeyDown={composer.menus?.onKeyDown}
-              onChange={composer.onChange}
-              onCaret={composer.onCaret}
-              onSend={composer.onSend}
-              answering={composer.onStop !== undefined}
-              stopHint={t("desk.queue.stopHint")}
-              onStop={composer.onStop}
-            >
-              {composer.bar}
-            </DeskComposer>
-          </div>
-        ) : null)}
+        )}
       </div>
-    </ThreadMarkdownWindow>
+      {onAsk ? <ThreadAsks asks={asks} onGo={goTo} onSet={onAsk} lit={seek?.id ?? lit?.ask ?? null} gone={gone} /> : null}
+      {foot ?? (composer ? (
+        <div className="flex shrink-0 flex-col gap-xs px-sm pb-sm">
+          {composer.queue}
+          <DeskComposer
+            value={composer.value}
+            label={t("desk.thread.composerLabel", { title: job?.title ?? "" })}
+            placeholder={t("desk.thread.placeholder")}
+            textRef={composer.textRef}
+            tray={composer.tray}
+            focused={composer.focused || composer.menus?.menuOpen}
+            held={composer.held}
+            notice={composer.notice}
+            menu={composer.menus?.menu}
+            menuOpen={composer.menus?.menuOpen}
+            menuEmpty={composer.menus?.menuEmpty}
+            onMenuOpenChange={composer.menus?.onMenuOpenChange}
+            onKeyDown={composer.menus?.onKeyDown}
+            onChange={composer.onChange}
+            onCaret={composer.onCaret}
+            onSend={composer.onSend}
+            answering={composer.onStop !== undefined}
+            stopHint={t("desk.queue.stopHint")}
+            onStop={composer.onStop}
+          >
+            {composer.bar}
+          </DeskComposer>
+        </div>
+      ) : null)}
+    </div>
   );
 }

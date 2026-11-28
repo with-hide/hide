@@ -17,6 +17,7 @@ import { useUiStore } from "./ui";
 import { DESK_ROOM_CLOSED } from "./deskRoom";
 import { emptyScope } from "../test/legacyAgentScope";
 import type { DispatchFn } from "./ws";
+import { layOutConversation } from "./components/desk/thread-test-layout";
 
 const NO_GLANCE = { sessions: [], files: [], files_more: 0 };
 
@@ -68,6 +69,8 @@ describe("Desk's room", () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     // The `@` menu's list measures itself, which jsdom cannot.
     vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    // The session beside Desk draws only the rows its viewport reaches, which a test window does not lay out.
+    layOutConversation();
     events = [];
     container = document.createElement("div");
     document.body.append(container);
@@ -80,6 +83,7 @@ describe("Desk's room", () => {
     useShellStore.setState(saved, true);
     useUiStore.setState(savedUi, true);
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     clearPreviews();
   });
 

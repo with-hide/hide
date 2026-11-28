@@ -25,6 +25,26 @@ describe("a thread's conversation", () => {
     expect(shown.sessions).toEqual({ "agent-7": { pane_id: "w1:p2", machine: "mac" }, "agent-42": { pane_id: "w1:p3", machine: "mac" } });
   });
 
+  it("names each line so that reading a page above, the live page joining the kept ones, or the oldest one let go moves none", () => {
+    const user = (text: string) => ({ sessionUpdate: "user_message_chunk", content: { type: "text", text } });
+    const older = { updates: [user("처음 질문"), said("처음 답")], parts: {}, sessions: {} };
+    const kept = { updates: [user("둘째 질문"), said("둘째 답")], parts: {}, sessions: {} };
+    const live = { updates: [user("지금 질문"), said("지금 답")], parts: {}, sessions: {} };
+    const ids = (history: ThreadPage[], tail: ThreadPage | null) => {
+      const lines = threadScreen(thread({ tail }), { generation: 2, pages: history }, {}, []).lines;
+      return new Map(lines.map((line) => ["text" in line ? line.text : "", line.id]));
+    };
+    const first = ids([kept], live);
+    // The page before is read in above.
+    const read = ids([older, kept], live);
+    expect(read.get("둘째 답")).toBe(first.get("둘째 답"));
+    expect(read.get("지금 답")).toBe(first.get("지금 답"));
+    // The live page filled and joined the kept pages, and the oldest was let go.
+    const moved = ids([kept, live], null);
+    expect(moved.get("지금 답")).toBe(first.get("지금 답"));
+    expect(new Set(read.values()).size).toBe(read.size);
+  });
+
   it("leaves out the kept pages of a thread that closed", () => {
     const stale: SessionThreadHistorySection = { generation: 1, pages: [page(["다른 스레드"])] };
     expect(threadConversation(thread({ tail: page(["지금"]) }), stale).updates).toHaveLength(1);
