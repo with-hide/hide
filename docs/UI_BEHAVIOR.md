@@ -3153,8 +3153,12 @@ A tool only one chapter needs stays in that chapter's world file, and moves to `
 A world's data is the practice window's own, invented for it: no world imports the gallery's fixtures.
 `worlds/tour.ts` plays on `data/tour.json`, a whole snapshot kept with each time written as how long before now it was (`$msAgo`, `$sAgo`, `$isoAgo`, `$daysAgo`).
 Bump a chapter's `version` when its steps change, so a learner's old progress reads as `바뀜`.
-`web/e2e/practice.spec.ts` plays every chapter to its end with ⏎ alone, so a new chapter is played there without a change to the spec; a step whose ⏎ moves nothing stops it.
+`web/e2e/practice.spec.ts` plays each chapter once to its end with ⏎ alone, one test per chapter file, so a new chapter is played there without a change to the spec; a step whose ⏎ moves nothing stops it.
+It plays the agents chapter again by the guide's button, and starts it over from the list, which the model cannot show: the button, and the shell's screen coming back as it began.
 `web/src/practice/worlds.test.ts` sends every chapter's world, at each step the shell's commands and pane focus can reach, every command the keyboard runs and every pane focus, and fails when the world, its snapshot or a pane's screen throws; a step only a drag, typing or a palette reaches is checked from the state before it.
+`web/src/practice/restart.test.ts` starts every chapter over from each of its steps in the model: it records what reached each step the first time (the step's own command, its typed words, what pressing its target sends, its `enter` event and the world's own beats) and replays it from a fresh `initial()`, and fails, naming the step, when the world at that step, its snapshot and screens, or the end the chapter reaches is not the first run's, or when an event changed a model it was given.
+A step with a `done` that the first run does not reach fails it too: give the step its press in `PRESSED`.
+Both read a world through `stage.ts`, the real shell actions and keyboard in front of it.
 
 ## Search keyboard navigation
 

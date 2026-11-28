@@ -127,7 +127,7 @@
     "web/e2e/plan-review.spec.ts": 2,
     "web/e2e/platform-fixture.ts": 1,
     "web/e2e/platform-program.unit.ts": 1,
-    "web/e2e/practice.spec.ts": 12,
+    "web/e2e/practice.spec.ts": 10,
     "web/e2e/process-tree.ts": 3,
     "web/e2e/project-github-mark.spec.ts": 3,
     "web/e2e/project-panel.spec.ts": 4,

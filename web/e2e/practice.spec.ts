@@ -1,12 +1,14 @@
 // The practice window (UI_BEHAVIOR.md, Practice window) on an isolated
-// engine and hided: opened from the shell's Help menu, every chapter played to
-// its end with Enter alone, and again by the guide's button, without a call to
-// the system clipboard, and the chapter list then reads every chapter as seen
-// from the progress the core kept. The chapters run the shell's own
-// components, so a change that moves what a step points at, presses or waits
-// for stops this journey at that step and names it. A chapter started over
-// from any step plays to its end the same way: nothing the shell's screen held
-// from the run before carries into the next.
+// engine and hided: opened from the shell's Help menu, each chapter played once
+// to its end with Enter alone, after which the chapter list reads it as seen
+// from the progress the core kept, without a call to the system clipboard. The
+// chapters run the shell's own components, so a change that moves what a step
+// points at, presses or waits for stops that chapter's journey at that step and
+// names it. A chapter started over from any step is the practice model's own
+// test (`web/src/practice/restart.test.ts`), which replays every step of every
+// chapter from a fresh world; the browser keeps what only a page can show: the
+// button that starts a chapter over, the guide's button on one chapter, and the
+// shell's screen coming back as it began.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -85,54 +87,6 @@ const pressButton: GuidePress = async (practice) => {
   await practice.locator("[data-practice-layer] [data-practice-go]").click();
 };
 
-/**
- * Presses the guide from the chapter list, each press waiting for the practice to move, and follows each end card on to the
- * flow it leads to. The flows lead round in a circle (the mission's end card leads back to the first), so a press that
- * arrives on a flow already played goes back to the list, which starts a flow not yet played, until every one has been.
- */
-async function playEveryChapter(practice: Page, chapters: number, press: GuidePress = pressEnter): Promise<void> {
-  const played = new Set<string>();
-  let last = "";
-  let now = await practiceState(practice);
-  let presses = 0;
-  do {
-    expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(chapters * PRESSES_PER_CHAPTER);
-    const before = now;
-    await drawn(practice);
-    // A step that waits on the world's own beat takes no press and moves on by itself, in up to the beats' sum.
-    if ((await practice.locator("[data-practice-layer][data-practice-waiting]").count()) > 0) {
-      try {
-        await expect.poll(() => practiceState(practice), { message: `the wait at ${before} never ended`, timeout: 30_000 }).not.toBe(before);
-      } catch (error) {
-        await keepStall(practice);
-        throw error;
-      }
-    } else {
-      await press(practice);
-      presses += 1;
-      await expect.poll(() => practiceState(practice), { message: `a press at ${before} moved nothing`, timeout: 10_000 }).not.toBe(before);
-    }
-    await settled(practice);
-    now = await practiceState(practice);
-    if (!now.startsWith("hub")) {
-      const id = now.split(":")[0];
-      if (played.has(id) && id !== last) {
-        await practice.locator("[data-practice-hub-open]").click();
-        now = await practiceState(practice);
-      } else played.add(id);
-      last = id;
-    }
-    const next = CHAPTER_IDS.find((id) => !played.has(id));
-    if (now === "hub" && next) {
-      last = "";
-      await playFromList(practice, next);
-      now = await practiceState(practice);
-      played.add(next);
-      last = next;
-    }
-  } while (now !== "hub");
-}
-
 /** Opens the practice window from the shell's Help menu of an isolated stack, runs `journey` on it, and stops the stack. */
 async function withPractice(page: Page, journey: (practice: Page, chapters: Locator) => Promise<void>): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -169,29 +123,6 @@ async function withPractice(page: Page, journey: (practice: Page, chapters: Loca
   }
 }
 
-test("the practice window plays every chapter with Enter alone and the core keeps them seen", async ({ page }) => {
-  // The waiting steps run in real time, so the whole list takes minutes.
-  test.setTimeout(600_000);
-  await withPractice(page, async (practice, chapters) => {
-    const count = await chapters.count();
-    await expect(chapters.and(practice.locator('[data-status="new"]'))).toHaveCount(count);
-    await playEveryChapter(practice, count);
-    await expect(chapters.and(practice.locator('[data-status="done"]'))).toHaveCount(count);
-  });
-});
-
-// The guide is not part of the screen it teaches: a press on its button leaves the keyboard in the pane that held it,
-// so a step whose chord acts where the keyboard is (⌘W closes that pane, ⌃⇥ starts from it) plays as ⏎ plays it.
-test("the practice window plays every chapter by the guide's button as it does with Enter", async ({ page }) => {
-  // The waiting steps run in real time, so the whole list takes minutes.
-  test.setTimeout(600_000);
-  await withPractice(page, async (practice, chapters) => {
-    const count = await chapters.count();
-    await playEveryChapter(practice, count, pressButton);
-    await expect(chapters.and(practice.locator('[data-status="done"]'))).toHaveCount(count);
-  });
-});
-
 // B23: a fresh practice page has no daemon socket; replies stay in its world.
 test("the pane conversation practice accepts a reply through the production composer", async ({ page }) => {
   await withPractice(page, async (practice) => {
@@ -206,10 +137,10 @@ test("the pane conversation practice accepts a reply through the production comp
 });
 
 /**
- * Presses Enter in chapter `id` until its step `at` shows, each press waiting for the practice to move; null presses on until the chapter is left.
+ * Presses the guide (Enter, or `press`) in chapter `id` until its step `at` shows, each press waiting for the practice to move; null presses on until the chapter is left.
  * A step that waits on the world's own beat takes no Enter; `hurry`, given by a journey that faked the page's clock, runs it ahead there so the beat comes at once.
  */
-async function pressTo(practice: Page, id: string, at: number | null, hurry: (() => Promise<void>) | null = null): Promise<void> {
+async function pressTo(practice: Page, id: string, at: number | null, hurry: (() => Promise<void>) | null = null, press: GuidePress = pressEnter): Promise<void> {
   const layer = practice.locator(`[data-practice-chapter="${id}"] [data-practice-layer]`);
   for (let presses = 0; ; presses += 1) {
     const now = await practiceState(practice);
@@ -220,7 +151,7 @@ async function pressTo(practice: Page, id: string, at: number | null, hurry: (()
     const waiting = (await layer.getAttribute("data-practice-waiting")) !== null;
     await drawn(practice);
     if (waiting && hurry) await hurry();
-    else if (!waiting) await practice.keyboard.press("Enter");
+    else if (!waiting) await press(practice);
     try {
       await expect.poll(() => practiceState(practice), { message: `Enter at ${now} moved nothing`, timeout: 10_000 }).not.toBe(now);
     } catch (error) {
@@ -263,32 +194,53 @@ async function playFromList(practice: Page, id: string, fromStart = false): Prom
 }
 
 // One test per chapter, so a chapter whose steps grow takes its own time budget and shard rather than every chapter's.
+// Each plays once: starting it over from any step is `restart.test.ts`, which replays every step of every chapter.
 for (const id of CHAPTER_IDS) {
-  test(`chapter ${id} started over from each of its steps plays to its end with Enter alone`, async ({ page }) => {
+  test(`chapter ${id} plays to its end with Enter alone and the list then reads it as done`, async ({ page }) => {
     test.setTimeout(600_000);
     await withPractice(page, async (practice) => {
-      // Chapter 0 waits seconds at a time for its Conductor; replayed from each of its steps that would be minutes, so its clock runs ahead on those steps.
+      // Chapter 0 waits seconds at a time for its Conductor, so its clock runs ahead on those steps.
       await practice.clock.install();
       const hurry = () => practice.clock.fastForward(5_000);
       const row = practice.locator(`[data-practice-hub-chapter="${id}"]`);
-      const layer = practice.locator(`[data-practice-chapter="${id}"] [data-practice-layer]`);
+      await expect(row).toHaveAttribute("data-status", "new");
       await playFromList(practice, id);
-      const steps = Number(await layer.getAttribute("data-practice-steps"));
-      // Each run goes one step further than the one before, and starts over from the list where the learner would.
-      for (let reached = 1; reached < steps; reached += 1) {
-        await pressTo(practice, id, reached, hurry);
-        await practice.locator("[data-practice-hub-open]").click();
-        // A run that reached the last step has seen the chapter, and the list then offers it again from the start.
-        await expect(row).toHaveAttribute("data-status", /^(paused|done)$/);
-        await playFromList(practice, id, true);
-        await expect(layer).toHaveAttribute("data-practice-index", "0");
-      }
       await pressTo(practice, id, null, hurry);
       if ((await practiceState(practice)) !== "hub") await practice.locator("[data-practice-hub-open]").click();
       await expect(row).toHaveAttribute("data-status", "done");
     });
   });
 }
+
+// The guide is not part of the screen it teaches: a press on its button leaves the keyboard in the pane that held it,
+// so a step whose chord acts where the keyboard is (⌘W closes that pane, ⌃⇥ starts from it) plays as ⏎ plays it.
+// The agents chapter is the one that closes a tab and goes back to the one before.
+test("the guide's button plays the agents chapter to its end as Enter does", async ({ page }) => {
+  await withPractice(page, async (practice) => {
+    const clock = practice.clock;
+    await clock.install();
+    await playFromList(practice, "agents");
+    await pressTo(practice, "agents", null, () => clock.fastForward(5_000), pressButton);
+    if ((await practiceState(practice)) !== "hub") await practice.locator("[data-practice-hub-open]").click();
+    await expect(practice.locator('[data-practice-hub-chapter="agents"]')).toHaveAttribute("data-status", "done");
+  });
+});
+
+// The chapter list's From the start: a chapter left part way is offered again from its first step, and the shell's
+// screen is the one it began with, not the one the run before left.
+test("a chapter started over from the list begins at its first step with the screen as it began", async ({ page }) => {
+  await withPractice(page, async (practice) => {
+    await playFromList(practice, "agents");
+    const layer = practice.locator('[data-practice-chapter="agents"] [data-practice-layer]');
+    await pressTo(practice, "agents", 1);
+    await expect(practice.locator("[data-pane-view]")).toHaveCount(2);
+    await practice.locator("[data-practice-hub-open]").click();
+    await expect(practice.locator('[data-practice-hub-chapter="agents"]')).toHaveAttribute("data-status", "paused");
+    await playFromList(practice, "agents", true);
+    await expect(layer).toHaveAttribute("data-practice-index", "0");
+    await expect(practice.locator("[data-pane-view]")).toHaveCount(1);
+  });
+});
 
 test("Back over a step that changed the screen plays the chapter again up to that step as it began", async ({ page }) => {
   await withPractice(page, async (practice) => {
