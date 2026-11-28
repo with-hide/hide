@@ -1253,6 +1253,19 @@ async fn a_machine_a_paired_computer_opens_takes_views_while_that_computer_is_co
     assert!(file.ok, "{}", file.text());
     let page = in_checkout(&host, &project, &["browser", "open", "page.html"]);
     assert!(page.ok, "{}", page.text());
+    // The page is open, and no desktop window here drives it: the agent
+    // connects once one is.
+    let display = page.json()["result"]["view_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        page.json()["result"]["browser_control"],
+        json!({"state": "unavailable", "reason": "browser_unsupported",
+            "next_action": format!("Run hide browser connect --display {display} after the desktop window reconnects")}),
+        "{}",
+        page.text()
+    );
     let diff = in_checkout(&host, &project, &["diff", "open", "notes.md"]);
     assert!(diff.ok, "{}", diff.text());
     // A file outside every checkout is granted by this machine's own
@@ -1323,5 +1336,37 @@ async fn a_machine_a_paired_computer_opens_takes_views_while_that_computer_is_co
         "{}",
         gone.text()
     );
+
+    // This machine's own desktop window opens. A shell outside every pane
+    // does not drive a file page, and is told so with hided's own next step.
+    let desktop = Window::open(&running, "desktop").await;
+    page_renderers_become(&running, 1).await;
+    let file_page = in_checkout(&host, &project, &["browser", "open", "page.html"]);
+    assert!(file_page.ok, "{}", file_page.text());
+    assert_eq!(
+        file_page.json()["result"]["browser_control"],
+        json!({"state": "unavailable", "reason": "file_page_pane_only",
+            "next_action": "Only an agent or a shell in a Hide pane drives a file page; serve its folder over http and open that address to drive it from here"}),
+        "{}",
+        file_page.text()
+    );
+    // A web page that window hands no capability URLs for yet, as right
+    // after an open before it has made the page: the agent is sent to the
+    // page commands that window serves, not told to wait for a window that
+    // is there.
+    let early = in_checkout(&host, &project, &["browser", "open", "http://127.0.0.1:9/"]);
+    assert!(early.ok, "{}", early.text());
+    let display = early.json()["result"]["view_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        early.json()["result"]["browser_control"],
+        json!({"state": "unavailable", "reason": "browser_control_unavailable",
+            "next_action": format!("Run hide browser snapshot {display} and the other page commands")}),
+        "{}",
+        early.text()
+    );
+    drop(desktop);
     drop(running);
 }

@@ -1931,33 +1931,37 @@ fn workspace_query_options(
     display_id: Option<&str>,
     report: bool,
 ) -> Result<serde_json::Value, String> {
-    let mut credential = match crate::workspace_cli::Credential::acquire(env) {
-        Ok(credential) => credential,
-        Err(reason) => {
-            return query_refusal(&reason, bootstrap_next_action(&reason), report);
+    workspace_query_answer(env, query, display_id).map_err(|refusal| {
+        if report {
+            println!("{refusal}");
         }
-    };
+        refusal["reason"]
+            .as_str()
+            .unwrap_or("workspace_request_failed")
+            .to_owned()
+    })
+}
+
+/// A query's answer, or its refusal with the reason and the next step it
+/// gives: hided's own answer, or this CLI's when hided was not reached.
+fn workspace_query_answer(
+    env: &Env,
+    query: &str,
+    display_id: Option<&str>,
+) -> Result<serde_json::Value, serde_json::Value> {
+    let refusal = |reason: &str, next_action: &str| serde_json::json!({"ok":false,"reason":reason,"next_action":next_action});
+    let mut credential = crate::workspace_cli::Credential::acquire(env)
+        .map_err(|reason| refusal(&reason, bootstrap_next_action(&reason)))?;
     let requested = if query == "browser_connect" {
         crate::workspace_cli::browser_connect(&mut credential, display_id)
     } else {
         crate::workspace_cli::request(&mut credential, query)
     };
-    let answer = match requested {
-        Ok(answer) => answer,
-        Err(reason) => {
-            return query_refusal(&reason, request_next_action(&reason), report);
-        }
-    };
+    let answer = requested.map_err(|reason| refusal(&reason, request_next_action(&reason)))?;
     if answer["ok"] == true {
         Ok(answer)
     } else {
-        if report {
-            println!("{answer}");
-        }
-        Err(answer["reason"]
-            .as_str()
-            .unwrap_or("workspace_request_failed")
-            .to_owned())
+        Err(answer)
     }
 }
 
@@ -2004,6 +2008,34 @@ fn view_status(env: &Env, view_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// What `hide browser open` says about driving the page it opened when
+/// `browser connect` handed no capability URLs (`refusal`, hided's answer):
+/// hided's own reason and next step, except in three cases. A desktop
+/// window here that has not made the page yet answers unavailable for a
+/// moment after the open, and a window on another machine hands no URLs of
+/// its loopback (`browser_control_elsewhere`): Hide's page commands drive
+/// the page in both. With no desktop window here (`browser_unsupported`,
+/// which hided answers before it asks any window), the caller connects once
+/// one is, rather than retrying the open, which would make a second page.
+fn open_control(display_id: &str, refusal: &serde_json::Value) -> serde_json::Value {
+    let reason = refusal["reason"]
+        .as_str()
+        .unwrap_or("workspace_request_failed");
+    let next_action = match reason {
+        "browser_control_unavailable" | "browser_control_elsewhere" => {
+            format!("Run hide browser snapshot {display_id} and the other page commands")
+        }
+        "browser_unsupported" => format!(
+            "Run hide browser connect --display {display_id} after the desktop window reconnects"
+        ),
+        _ => refusal["next_action"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+    };
+    serde_json::json!({"state":"unavailable","reason":reason,"next_action":next_action})
+}
+
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 fn browser_open(
     env: &Env,
@@ -2034,28 +2066,16 @@ fn browser_open(
         .as_str()
         .ok_or("invalid_response")?
         .to_owned();
-    match browser_connect_value(env, Some(&display_id), false) {
+    match workspace_query_answer(env, "browser_connect", Some(&display_id)) {
         Ok(connection) => {
             for key in ["cdp_http_url", "browser_ws_url"] {
                 answer["result"][key] = connection["result"][key].clone();
             }
         }
-        Err(reason) => {
-            // Opening already applied. Endpoint discovery cannot recast it as
-            // a failed action and tempt a caller to create the page again.
-            let next_action = if reason == "browser_control_elsewhere" {
-                // The only window showing it is on another machine: its
-                // endpoints are that machine's loopback, its page commands
-                // reach it through Hide.
-                format!("Run hide browser snapshot {display_id} and the other page commands")
-            } else {
-                format!(
-                    "Run hide browser connect --display {display_id} after the desktop window reconnects"
-                )
-            };
-            answer["result"]["browser_control"] = serde_json::json!({
-                "state":"unavailable","reason":reason,"next_action":next_action
-            });
+        // Opening already applied. Endpoint discovery cannot recast it as a
+        // failed action and tempt a caller to create the page again.
+        Err(refusal) => {
+            answer["result"]["browser_control"] = open_control(&display_id, &refusal);
         }
     }
     if !wait {
@@ -3612,6 +3632,61 @@ fn open_browser(state: &DaemonState, health: &serde_json::Value) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What `hide browser open` tells the caller about driving the page it
+    /// opened when discovery handed no capability URLs: the page commands
+    /// where they drive the page, hided's own reason for a refused caller,
+    /// and a connect once a desktop window is attached when none is.
+    #[test]
+    fn an_opened_page_s_control_says_why_and_what_drives_it() {
+        let refused = |(reason, next_action): (&str, &str)| serde_json::json!({"ok": false, "reason": reason, "next_action": next_action});
+        let control = |reason: &str, next_action: &str| serde_json::json!({"state": "unavailable", "reason": reason, "next_action": next_action});
+        let snapshot = "Run hide browser snapshot v1 and the other page commands";
+
+        // The window here has not made the page yet, and a window on
+        // another machine hands no URLs: the page commands drive it.
+        for refusal in [
+            (
+                "browser_control_unavailable",
+                "Reconnect the Hide desktop app and retry",
+            ),
+            (
+                "browser_control_elsewhere",
+                "Use hide browser page commands, which reach that window through Hide",
+            ),
+        ] {
+            assert_eq!(
+                open_control("v1", &refused(refusal)),
+                control(refusal.0, snapshot)
+            );
+        }
+        // A refused caller hears hided's reason and next step unchanged.
+        for refusal in [
+            crate::browser_control::FILE_PAGE_PANE_ONLY,
+            crate::browser_control::OUTSIDE_PAGE_NOT_OPENED,
+            crate::browser_control::FILE_PAGE_ELSEWHERE,
+            (
+                "browser_control_ambiguous",
+                "Keep one desktop window attached to this daemon and retry",
+            ),
+        ] {
+            assert_eq!(
+                open_control("v1", &refused(refusal)),
+                control(refusal.0, refusal.1)
+            );
+        }
+        // No desktop window here: connect once one is, never open again.
+        assert_eq!(
+            open_control(
+                "v1",
+                &refused(("browser_unsupported", "Open the Hide desktop app and retry"))
+            ),
+            control(
+                "browser_unsupported",
+                "Run hide browser connect --display v1 after the desktop window reconnects"
+            )
+        );
+    }
 
     /// The address is decided from the health the daemon answered when it
     /// was found: a daemon that does not answer a second request still gets

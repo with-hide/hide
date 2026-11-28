@@ -46,7 +46,8 @@ Only checkouts in the current connected catalog contribute to that inventory; a 
   The action receipt and page status carry the load stamp, so a concurrent reopen that supersedes the requested load returns `page_superseded` instead of the newer load's result.
   The CLI returns one JSON line, exits nonzero on refusal, and never starts Hide.
   Its successful result includes `cdp_http_url` and `browser_ws_url` when the native gateway can issue a capability for that display.
-  If discovery fails after placement, the result retains its applied View receipt and carries `browser_control.state: unavailable` with a retry command; discovery does not undo or repeat the open.
+  If discovery fails after placement, the result retains its applied View receipt and carries `browser_control: {state: unavailable, reason, next_action}`; discovery does not undo or repeat the open.
+  The `next_action` names what drives the page then (`open_control` in `hided/src/cli.rs`): `hide browser snapshot <id>` and the other page commands when a desktop window here has not made the page yet, which answers `browser_control_unavailable` for a moment after the open while the page commands already work, or when the window is on another machine (`browser_control_elsewhere`); `hide browser connect --display <id>` once a desktop window is attached, never a second open, when none is (`browser_unsupported`); and hided's own reason and next step, unchanged, for a caller it refuses (`file_page_pane_only`, `outside_page_not_opened`, `file_page_elsewhere` and the rest).
 - Click, double-click or press Enter on an HTML file (`.html`, `.htm` or `.xhtml`, case-insensitive) in the Explorer of a local or connected device checkout, or choose Open in Browser in its menu.
   Open source in the same menu opens the file as an ordinary editor tab; Open to the side keeps its editor behavior.
   The device host must have file access consent for a remote page to load.
