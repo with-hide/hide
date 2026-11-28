@@ -4,12 +4,18 @@
 Herdr is gone from Hide, but a few hundred names stay on purpose: the read-only
 import, attribution, the old values Hide still reads, fixtures and test
 messages. `scripts/herdr-names-allowlist.json` lists each file that keeps names,
-its number and one reason. This check fails when:
+its number and one reason. A document split into a table of contents and pieces
+is listed once, under its own path: its entry counts the table of contents,
+every piece its split table (`scripts/split-tables/`) names and that table,
+together, so a split moves names between files without editing a line another
+split edits.
+This check fails when:
 
 - a file that is not listed names Herdr;
 - a listed file names more than its number, so a new name arrived;
 - a listed file names fewer, so its number must come down (the ratchet only goes down);
 - a listed file names nothing any more, or names a reason the list does not define;
+- a piece or the split table of a split document has an entry of its own;
 - a tracked path under the root `agents/` folder exists (that folder is local-only);
 - git cannot read the index, which is reported with git's own message.
 
@@ -34,6 +40,7 @@ CONTRIBUTING.md, CI gates, owns the rule and the reasons; this is its check.
 
 Usage: scripts/check-herdr-names.py   (run from anywhere in the checkout)
 """
+import importlib.util
 import json
 import re
 import subprocess
@@ -65,18 +72,50 @@ def names_in(text):
     return count, lines
 
 
+def split_files(root):
+    """The files each split document is counted with, {piece or table path: table of
+    contents path}, from the split tables as scripts/check-docs.py reads them."""
+    spec = importlib.util.spec_from_file_location('check_docs', Path(__file__).resolve().parent / 'check-docs.py')
+    docs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(docs)
+    files = {}
+    for where, table in docs.read_tables(root)[0]:
+        files[where] = table['source']
+        files.update({f'{table["folder"]}/{piece["name"]}.md': table['source'] for piece in table['pieces']})
+    return files
+
+
+def fold(results, pieces):
+    """`results` with the names of each piece and split table counted under its document;
+    their lines are named `<path>:<line>`."""
+    folded = {path: entry for path, entry in results.items() if path not in pieces}
+    for path, source in sorted(pieces.items()):
+        if path in results:
+            names, lines = results[path]
+            count, before = folded.get(source, (0, []))
+            folded[source] = (count + names, before + [f'{path}:{n}' for n in lines])
+    return folded
+
+
 def where(lines):
     shown = ', '.join(str(n) for n in lines[:SHOWN])
     more = '' if len(lines) <= SHOWN else f' and {len(lines) - SHOWN} more'
     return f'lines {shown}{more}'
 
 
-def check(results, allowlist):
-    """Return errors for `results` ({path: (count, lines)}) against `allowlist`."""
+def check(results, allowlist, pieces=None):
+    """Return errors for `results` ({path: (count, lines)}) against `allowlist`; `pieces`
+    ({piece or split table path: its document}) counts each split document with them."""
+    pieces = pieces or {}
+    documents = set(pieces.values())
+    results = fold(results, pieces)
     reasons = allowlist['reasons']
     listed = allowlist['files']
     errors = []
     for path, entry in sorted(listed.items()):
+        if path in pieces:
+            errors.append(f'{ALLOWLIST}: {path} is counted with the split document {pieces[path]}; remove its entry')
+            continue
         if entry['reason'] not in reasons:
             errors.append(
                 f'{ALLOWLIST}: {path} gives the reason "{entry["reason"]}", '
@@ -91,23 +130,24 @@ def check(results, allowlist):
             continue
         names, lines = results[path]
         entry = listed.get(path)
+        label = f'{path} with its pieces and split table' if path in documents else path
         if entry is None:
             if names:
                 errors.append(
-                    f'{path}: names Herdr in {where(lines)} and is not on {ALLOWLIST}. '
+                    f'{label}: names Herdr in {where(lines)} and is not on {ALLOWLIST}. '
                     'Remove the name (Herdr is gone), or list the file with its count and one reason.'
                 )
             continue
         if names > entry['max']:
             errors.append(
-                f'{path}: names Herdr {names} times, the list allows {entry["max"]} ({where(lines)}). '
+                f'{label}: names Herdr {names} times, the list allows {entry["max"]} ({where(lines)}). '
                 'Remove the new names; a file on the list may not gain any.'
             )
         elif names == 0:
-            errors.append(f'{path}: names Herdr no more; remove its entry from {ALLOWLIST}.')
+            errors.append(f'{label}: names Herdr no more; remove its entry from {ALLOWLIST}.')
         elif names < entry['max']:
             errors.append(
-                f'{path}: names Herdr {names} times, the list allows {entry["max"]}. '
+                f'{label}: names Herdr {names} times, the list allows {entry["max"]}. '
                 f'Lower its "max" to {names} in {ALLOWLIST}; the ratchet only goes down.'
             )
     return errors
@@ -172,7 +212,7 @@ def scan_index(root):
 def main():
     allowlist = json.loads((ROOT / ALLOWLIST).read_text(encoding='utf-8'))
     results, problems = scan_index(ROOT)
-    errors = problems + check(results, allowlist)
+    errors = problems + check(results, allowlist, split_files(ROOT))
     if errors:
         for error in errors:
             print(f'error: {error}', file=sys.stderr)

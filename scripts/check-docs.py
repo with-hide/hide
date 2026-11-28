@@ -232,8 +232,8 @@ def check_records(folder, names):
 
 def read_tables(root):
     """Each split table under TABLES as (its path, the table), and the errors of the ones
-    that are not of scripts/split-doc.py's form. scripts/check-herdr-names.py reads the
-    tables through this too."""
+    that are not of scripts/split-doc.py's form. The retired-name ratchet, which counts a
+    split document with its pieces, reads the tables through this too."""
     tables, errors = [], []
     for path in sorted((Path(root) / TABLES).glob('*.json')):
         where = f'{TABLES}/{path.name}'

@@ -35,16 +35,22 @@
     "docs/AI_PROVIDERS.md": {"max": 1, "reason": "to-rewrite"},
     "docs/ARCHITECTURE.md": {"max": 10, "reason": "to-rewrite"},
     "docs/BROWSER_DISPLAYS.md": {"max": 1, "reason": "to-rewrite"},
+
     "docs/BUILD.md": {"max": 15, "reason": "to-rewrite"},
+
     "docs/INSTALL.md": {"max": 63, "reason": "to-rewrite"},
     "docs/LOCALIZATION.md": {"max": 3, "reason": "to-rewrite"},
+    "docs/PERFORMANCE_TESTING.md": {"max": 14, "reason": "to-rewrite"},
     "docs/README.md": {"max": 8, "reason": "to-rewrite"},
     "docs/TESTING.md": {"max": 11, "reason": "to-rewrite"},
+
     "docs/UI_BEHAVIOR.md": {"max": 42, "reason": "to-rewrite"},
+
     "docs/VERIFICATION.md": {"max": 6, "reason": "to-rewrite"},
     "docs/adr/0002-core-shell-and-engine.md": {"max": 4, "reason": "to-rewrite"},
     "docs/adr/0003-state-placement-and-publication.md": {"max": 2, "reason": "to-rewrite"},
     "docs/adr/0004-drawn-ahead-of-the-engine.md": {"max": 10, "reason": "to-rewrite"},
+
     "docs/adr/0005-platform-layer.md": {"max": 10, "reason": "to-rewrite"},
     "docs/adr/0007-daemon-lives-with-its-panes.md": {"max": 2, "reason": "to-rewrite"},
     "docs/adr/0009-hided-websocket-boundary.md": {"max": 1, "reason": "to-rewrite"},
@@ -62,9 +68,9 @@
     "docs/adr/0057-install-kit.md": {"max": 5, "reason": "to-rewrite"},
     "docs/adr/0058-herdr-left-behind.md": {"max": 17, "reason": "to-rewrite"},
     "docs/agent-hooks.md": {"max": 39, "reason": "to-rewrite"},
+
     "docs/delivery.md": {"max": 12, "reason": "measured"},
-    "docs/performance/procedure.md": {"max": 2, "reason": "to-rewrite"},
-    "docs/performance/web-shell.md": {"max": 12, "reason": "to-rewrite"},
+
     "docs/status-model.md": {"max": 3, "reason": "to-rewrite"},
     "hide-agent-adapter/agents/amp.toml": {"max": 4, "reason": "attribution"},
     "hide-agent-adapter/agents/antigravity.toml": {"max": 4, "reason": "attribution"},
@@ -362,7 +368,7 @@
     "scripts/tests/test_ci_plan.py": {"max": 2, "reason": "test"},
     "scripts/tests/test_ci_verification_entrypoints.py": {"max": 5, "reason": "test"},
     "scripts/tests/test_prepare_vt_inputs.py": {"max": 5, "reason": "test"},
-    "scripts/tests/test_split_doc.py": {"max": 11, "reason": "test"},
+    "scripts/tests/test_split_doc.py": {"max": 8, "reason": "test"},
     "scripts/timed-waits-baseline.json": {"max": 1, "reason": "fixture"},
     "scripts/verify-cargo.sh": {"max": 4, "reason": "old-value"},
     "scripts/web-dev.sh": {"max": 3, "reason": "old-value"},
