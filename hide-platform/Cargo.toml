@@ -11,18 +11,18 @@ publish = false
 # workspace.
 
 [dependencies]
-interprocess = "=2.4.4"
+interprocess = "=2.4.8"
 # Decodes and encodes the path of a `file:` URL (`path::from_file_url`).
 percent-encoding = "=2.3.2"
 # Reads the `bin` of the package an npm launcher runs (`programs::Start`).
-serde_json = "=1.0.151"
-trash = { version = "=5.2.9", default-features = false }
+serde_json = "=1.0.154"
+trash = { version = "=5.3.0", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 # Runs a tied child's supervisor before `main` when this program is started
 # as one (`process::spawn_tied`).
 ctor = { version = "=1.0.13", default-features = false, features = ["std", "proc_macro"] }
-libc = "=0.2.190"
+libc = "=0.2.191"
 notify = "=8.2.0"
 
 [target.'cfg(windows)'.dependencies]

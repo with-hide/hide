@@ -25,9 +25,9 @@ noq = { version = "=1.5.0", default-features = false }
 # iroh's own HTTP client, with the features iroh asks of it: one request to
 # the relay's host, for the reason this machine is not attached (B34).
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider"] }
-tokio = { version = "=1.53.2", features = ["io-util", "macros", "rt", "sync", "time"] }
+tokio = { version = "=1.54.1", features = ["io-util", "macros", "rt", "sync", "time"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 tempfile = "=3.27.0"
-tokio = { version = "=1.53.2", features = ["net", "rt-multi-thread"] }
+tokio = { version = "=1.54.1", features = ["net", "rt-multi-thread"] }
