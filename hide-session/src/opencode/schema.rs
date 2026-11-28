@@ -84,7 +84,14 @@ const V2_COLUMNS: &[(&str, &[&str])] = &[
 /// The columns Hide reads of 2.3's `session_part`.
 const PART_COLUMNS: &[(&str, &[&str])] = &[(
     "session_part",
-    &["message_id", "session_id", "ordinal", "type", "time_updated", "data"],
+    &[
+        "message_id",
+        "session_id",
+        "ordinal",
+        "type",
+        "time_updated",
+        "data",
+    ],
 )];
 
 /// What a 2.x database still holds of the 1.x `message` and `part` tables.
