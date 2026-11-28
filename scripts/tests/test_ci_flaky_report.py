@@ -652,6 +652,18 @@ class NightlyFailures(unittest.TestCase):
         self.assertNotIn("later", issue["body"])
         self.assertEqual(issue["labels"], ["nightly-failure"])
 
+    def test_the_agent_canarys_jobs_are_never_filed(self):
+        # A cell only a latest release fails is the vendor's, kept in that
+        # agent's `agent-canary` issue; one the pins fail too is `agent
+        # journey`'s, which this report files.
+        github = FakeGitHub(
+            [job(1, "agent canary journey / agent journey fake model (linux)", "failure", [("The lane's verdict", "failure")]),
+             job(2, "agent canary record", "failure", [("Rewrite the support record", "failure")])],
+            logs={1: "##[error]Process completed with exit code 1.", 2: "##[error]Process completed with exit code 1."},
+        )
+        nightly(github)
+        self.assertEqual(github.opened(), [])
+
     def test_an_excerpt_carries_no_terminal_control_from_a_log_or_an_annotation(self):
         # gh hands a JSON body over with its controls in caret notation, but a lane
         # writes its annotations from its tool's own report, which carries them raw.
@@ -738,8 +750,12 @@ class Lanes(unittest.TestCase):
         report_job, gate = r.REPORT_JOBS
         self.assertIn(f"    name: {report_job}\n", nightly_yml)
         caller, callee = gate.split(" / ")
-        self.assertRegex(nightly_yml, rf"\n  verify:\n    name: {caller}\n    if: .*\n    uses: ./.github/workflows/pr.yml")
+        self.assertRegex(nightly_yml, rf"\n  verify:\n    name: {caller}\n    needs: scope\n    if: .*\n    uses: ./.github/workflows/pr.yml")
         self.assertIn(f"\n  verify:\n    name: {callee}\n", pr_yml)
+        # The agent canary's jobs, which the report reads none of.
+        canary = re.findall(r"\n  canary-[a-z]+:\n    name: (.+)\n", nightly_yml)
+        self.assertEqual(len(canary), 3)
+        self.assertTrue(all(name.startswith(r.CANARY_JOBS) for name in canary), canary)
 
 
 class Gh(unittest.TestCase):

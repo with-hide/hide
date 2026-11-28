@@ -17,7 +17,9 @@ A pull request runs those macOS jobs only when it changes a macOS path
 its `macos` output leaves out the macOS legs of the others, and main's push
 run and the nightly run every macOS job.
 Nightly explicitly owns agy and the journey in its direct calls and removes
-those two internal lanes from its verify plan.
+those two internal lanes from its verify plan. `nightly-scope` says which of
+the nightly's jobs one run selects and on which systems (Linux and Windows
+daily, macOS twice a week), and `nightly-aggregate` checks that run against it.
 
 A pull request whose last green run still stands plans `policy` alone, or
 also the unit checks when only registered desktop unit tests changed: what
@@ -235,13 +237,9 @@ SHARED_WEB_LANES = ("windows-e2e", "windows-desktop")
 # is a folder. Keep this beside the test that reads the file. A path no other
 # rule claims plans its readers here and nothing else.
 READERS = (
-    # hide-core/src/runtime/tests/snapshot_delta.rs asserts the agent notes.
-    ("AGENTS.md", {"rust"}, {"hide-core"}),
-    ("CLAUDE.md", {"rust"}, {"hide-core"}),
-    # hide-core's structure tests scan the shell (runtime/tests.rs, sidebar.rs)
-    # and the daemon (runtime/tests/snapshot_delta.rs).
-    ("web/src/", {"rust"}, {"hide-core"}),
-    ("hided/src/", {"rust"}, {"hide-core"}),
+    # No row for `web/src/`, `hided/src/`, `AGENTS.md` or `CLAUDE.md`: the text
+    # of them a test holds is read by `scripts/check-shell-structure.py` in
+    # `policy`, which every plan has, and no Rust test reads them.
     # web/e2e/s2, s3 and s7 import the wire path conversion.
     ("desktop/src/main/wirePath.ts", {"checks", "web-e2e", "windows-e2e"}, set()),
     # web/e2e/markdown-html.spec.ts opens the repository README with its logo
@@ -250,6 +248,9 @@ READERS = (
     ("README.md", {"web-e2e"}, set()),
     ("design/brand/hide-icon-blinking.svg", {"web-e2e"}, set()),
     ("site/public/assets/video/kick-conductor.gif", {"web-e2e"}, set()),
+    # site/tests/legal.test.mjs holds the Play data safety answers to what the privacy
+    # policy says (`docs` runs the site's tests); a `.md` is documentation otherwise.
+    ("mobile/store/android/play-forms.md", {"docs"}, set()),
     # web/src/settings.test.ts, theme.test.ts and web/e2e/theme.spec.ts read the tokens.
     ("design/tokens.json", {"checks", "web-e2e"}, set()),
     # web/src/shortcutsDoc.test.ts checks the guide's chord table.
@@ -960,7 +961,7 @@ def every_system(result, why):
 # repository invariants are what reads them.
 POLICY_ONLY = (
     "agents/*",
-    ".gitignore", "web/.gitignore", "desktop/.gitignore",
+    ".gitignore", "web/.gitignore", "desktop/.gitignore", "mobile/.gitignore",
     # hide's own license and copyright notice; no build or package reads them.
     "LICENSE", "NOTICE",
     ".github/pull_request_template.md", ".github/dependabot.yml",
@@ -977,9 +978,22 @@ POLICY_ONLY = (
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py", "scripts/check-device-kits-single-source.py",
     "scripts/check-agent-folders.sh", "scripts/check-adr.py",
+    # What the shell, the daemon and the agent notes must keep saying, read as text.
+    "scripts/check-shell-structure.py",
+    # The check of a retired name in product text and the list of files that keep
+    # it; `policy`'s structural step and its script suite read both, and nothing
+    # else does.
+    "scripts/check-*-names.py", "scripts/*-names-allowlist.json",
+    # The raw-control count and its baseline: `design-contract.yml` runs the check
+    # (through `check-design-contract.mjs`) and `scripts/tests/ui-parts.test.mjs` on every pull request.
+    "scripts/check-ui-parts.mjs", "scripts/ui-parts-baseline.json",
+    # The release checklist runs the generator by hand with Docker; no lane does. The
+    # upgrade tests read the state folders it writes under `hide-core/tests/fixtures/`,
+    # which plan their own crates, not the generator.
+    "scripts/release_state/*",
     "scripts/check-no-workstation-identity.*", "scripts/check-worktree-removal-boundary.sh",
     "scripts/check-release-assets.mjs", "scripts/release-draft.mjs",
-    "scripts/merge-order.py", "scripts/pull_requests.py",
+    "scripts/merge-order.py", "scripts/pull_requests.py", "scripts/merge-hide-cli-contract.py",
     "scripts/web-shell-measure/*",
     # The pane holder's measurement, run by hand on macOS (docs/PERFORMANCE_TESTING.md).
     "scripts/holder-perf.py",
@@ -998,8 +1012,8 @@ WEB_E2E_LANES = {"checks", "web-e2e", "windows-e2e", "windows-desktop", "windows
 DESKTOP_E2E_LANES = {"checks", "windows-desktop", "windows-check"}
 # Desktop Vitest inputs, outside the app's explicit esbuild entry graphs:
 # `checks` and `windows-check` run them. Web tests are deliberately absent:
-# sidebar.rs scans every web/src TypeScript file, and Tailwind's web-root
-# scanner reads web tests as CSS inputs. Their existing app lanes must stay.
+# Tailwind's web-root scanner reads web tests as CSS inputs, so their existing
+# app lanes must stay (`check-shell-structure.py` scans them too, in `policy`).
 # An unregistered convention keeps its folder's existing plan.
 UNIT_TEST_PATHS = (
     "desktop/src/*.test.ts", "desktop/scripts/*.test.mjs",
@@ -1117,6 +1131,24 @@ NAMED_LANES = (
     ("contracts/agent-journey.json", JOURNEY_LANES | AGENT_CLI_LANES | HOLDER_RESTART_LANES),
     ("web/e2e/*", WEB_E2E_LANES),
     ("desktop/e2e/*", DESKTOP_E2E_LANES),
+    # The iOS app host's package (`mobile/package.json` stays out: a dependency
+    # change reaches the lock and every lane). Its unit suite (`verify-web.sh mobile
+    # test`, the `checks` lane) runs vitest over `mobile/scripts/*.test.mjs`, which read
+    # the scripts, the release inputs, the Xcode project and Swift sources
+    # (`release.test.mjs`, `check-versions.mjs`), the Capacitor config, and the real store text
+    # (`check-store-text.test.mjs`). Nothing else reads them: the Android lane builds
+    # `mobile/android` alone, and the iOS app is built on the Mac mini, not in CI.
+    ("mobile/scripts/*", {"checks"}),
+    ("mobile/ios/*", {"checks"}),
+    ("mobile/store/*", {"checks"}),
+    ("mobile/release-env.json", {"checks"}),
+    ("mobile/release-expect.json", {"checks"}),
+    ("mobile/release.env.example", {"checks"}),
+    ("mobile/android-release-env.json", {"checks"}),
+    ("mobile/android-release-expect.json", {"checks"}),
+    ("mobile/android-release.env.example", {"checks"}),
+    ("mobile/capacitor.config.json", {"checks"}),
+    ("mobile/retained-bundles.json", {"checks"}),
     # The user docs' scripts and the build of the live parts they frame; the parts
     # import the web shell's own components, which is why a `web/src` change plans `docs` too.
     ("scripts/docs/*", DOCS_LANES),
@@ -1323,7 +1355,7 @@ def classify(path, status, crates, root):
     if parts[:2] == ("mobile", "android") and len(parts) > 2:
         # The Android app host's Gradle project: its JVM tests and debug build, and
         # `checks`, whose mobile unit test reads its plugin and library lists
-        # (`mobile/scripts/check-versions.mjs`). The rest of `mobile/` plans every lane.
+        # (`mobile/scripts/check-versions.mjs`). The rest of `mobile/` is named in `NAMED_LANES`.
         return {"android", "checks"}, f"Android app host: {path}", set()
     if parts[0] == "desktop" and len(parts) > 1:
         if parts[1] == "e2e" and len(parts) == 3 and path.name.endswith(".spec.ts"):
@@ -1682,23 +1714,71 @@ def aggregate(needs):
         raise ValueError("; ".join(errors))
 
 
+# The nightly's schedule (nightly.yml): Linux and Windows every day, and
+# macOS, whose runners every repository of the account shares five of, on
+# Monday and Thursday in Korea (Sunday and Wednesday 17:17 UTC), when the run
+# is `all` and also runs `verify` (pr.yml whole) and the macOS package. A
+# hand run names its lane; `daily` is what the schedule runs on the other days.
+NIGHTLY_SCHEDULES = {"17 17 * * 0,3": "all", "17 17 * * 1,2,4,5,6": "daily"}
+NIGHTLY_LANES = ("all", "daily", "linux", "macos", "windows", "agy")
+# The jobs the report job waits for and `nightly_aggregate` checks; the agent
+# canary's jobs are left out, so a vendor's release that breaks Hide is filed
+# only in its agent's record (scripts/agent-canary-record.py), never as a
+# nightly failure as well.
+NIGHTLY_JOBS = ("web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
+                "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e", "perf", "verify",
+                "package")
+NIGHTLY_SYSTEMS = {"all": ["linux", "macos", "windows"], "daily": ["linux", "windows"], "linux": ["linux"],
+                   "macos": ["macos"], "windows": ["windows"], "agy": ["linux", "macos", "windows"]}
+
+
+def nightly_scope(lane, schedule=""):
+    """What one nightly run does, from its hand run's lane or, for the
+    schedule, from the cron line that started it: the lane, its systems, the
+    jobs it selects, the desktop suite's systems, the agent canary's systems
+    and whether the package includes macOS. Every job's `if:` and system list
+    in nightly.yml reads this, and `nightly_aggregate` checks against it."""
+    if not lane:
+        if schedule not in NIGHTLY_SCHEDULES:
+            raise ValueError(f"nightly was started by an unknown schedule {schedule!r}")
+        lane = NIGHTLY_SCHEDULES[schedule]
+    if lane not in NIGHTLY_LANES:
+        raise ValueError(f"nightly has no lane {lane!r}")
+    systems = NIGHTLY_SYSTEMS[lane]
+    jobs = {"agy-contract-all", "agent-trust-contract-all"}
+    if lane != "agy":
+        jobs.update({"agent-journey", "holder-restart", "desktop-e2e"})
+    if lane in ("all", "macos"):
+        jobs.update({"web-e2e-macos", "remote-mailbox-macos", "perf"})
+    if lane in ("daily", "windows"):
+        jobs.add("web-e2e-windows")
+    if lane == "all":
+        jobs.add("verify")
+    if lane in ("all", "daily"):
+        jobs.add("package")
+    # `verify` runs the whole desktop suite on macOS and its Windows
+    # `@platform` tests, so an `all` run calls the desktop suite directly on
+    # Linux only.
+    desktop = ["linux"] if lane == "all" else systems
+    # The canary measures each CLI's latest release on Linux and macOS; on
+    # Windows no journey leaves its pane holder inside the CI job
+    # (docs/INSTALL.md), and the agy lane measures no journey.
+    canary = [system for system in systems if system != "windows"] if lane != "agy" else []
+    return {"lane": lane, "systems": systems, "jobs": sorted(jobs), "desktop": desktop, "canary": canary,
+            "package-macos": lane == "all"}
+
+
 def nightly_aggregate(needs, lane):
     """Require the selected nightly jobs to succeed, and all others to skip."""
-    selected = {"agy-contract-all", "agent-trust-contract-all"}
-    if lane != "agy":
-        selected.update({"agent-journey", "holder-restart", "desktop-e2e"})
-    if lane in ("", "all", "macos"):
-        selected.update({"web-e2e-macos", "remote-mailbox-macos", "perf"})
-    if lane == "windows":
-        selected.add("web-e2e-windows")
-    if lane in ("", "all"):
-        selected.update({"verify", "package"})
-    jobs = {"web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
-            "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e", "perf", "verify", "package"}
-    if lane not in ("", "all", "linux", "macos", "windows", "agy") or set(needs) != jobs:
-        raise ValueError("nightly's lane or needs do not match its job contract")
+    if set(needs) != set(NIGHTLY_JOBS) | {"scope"}:
+        raise ValueError("nightly's needs do not match its job contract")
+    if needs["scope"]["result"] != "success":
+        raise ValueError(f"scope: {needs['scope']['result']}")
+    if lane not in NIGHTLY_LANES:
+        raise ValueError(f"nightly has no lane {lane!r}")
+    selected = set(nightly_scope(lane)["jobs"])
     errors = []
-    for job in sorted(jobs):
+    for job in sorted(NIGHTLY_JOBS):
         expected = "success" if job in selected else "skipped"
         result = needs[job]["result"]
         if result != expected:
@@ -1751,9 +1831,26 @@ def main():
                              help="nightly owns agy and the journey in its direct jobs")
     plan_parser.add_argument("--record", type=Path, help="write the plan record a pull request's next run reads here")
     sub.add_parser("aggregate", help="check toJSON(needs), read from NEEDS")
+    scope_parser = sub.add_parser("nightly-scope", help="write what one nightly run does as job outputs")
+    scope_parser.add_argument("--lane", default="", help="the hand run's lane; empty for the schedule")
+    scope_parser.add_argument("--schedule", default="", help="the cron line that started a scheduled run")
     nightly_parser = sub.add_parser("nightly-aggregate", help="check nightly's direct jobs, read from NEEDS")
-    nightly_parser.add_argument("--lane", default="", choices=("", "all", "linux", "macos", "windows", "agy"))
+    nightly_parser.add_argument("--lane", default="", help="the lane nightly-scope chose; empty when it failed")
     args = parser.parse_args()
+
+    if args.command == "nightly-scope":
+        try:
+            scope = nightly_scope(args.lane, args.schedule)
+        except ValueError as error:
+            print(f"nightly scope: {error}", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(scope, indent=2))
+        if os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                for key, value in scope.items():
+                    text = value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
+                    output.write(f"{key}={text}\n")
+        return
 
     if args.command == "plan":
         draft = args.draft == "true"

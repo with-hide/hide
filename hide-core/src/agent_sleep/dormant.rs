@@ -330,6 +330,7 @@ impl DormantRecord {
         SleepingSessionSnapshot {
             sleep_id: id.clone(),
             node_id: self.node_id.clone(),
+            session_id: self.native_session_id.clone(),
             checkout_path: self.context.checkout_path.clone(),
             kind: self.kind.clone(),
             identity_label: self.identity_label.clone(),
@@ -476,6 +477,10 @@ impl AgentSleepStore {
 pub struct SleepingSessionSnapshot {
     pub sleep_id: SleepId,
     pub node_id: String,
+    /// The agent's own conversation id the sleep keeps, which names this
+    /// session apart from another of the same work name in the same checkout
+    /// (a Desk record of a gone pane is this session only when it names it).
+    pub session_id: String,
     pub checkout_path: String,
     pub kind: String,
     pub identity_label: String,

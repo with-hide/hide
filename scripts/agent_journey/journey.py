@@ -487,7 +487,8 @@ class Journey:
         # The first start hands Hide's brief to the agent, which its own
         # record has to confirm: as the start's prompt argument where the
         # agent declares that, as long as a start carries, and typed
-        # otherwise; the untrusted start keeps the agent's prompt argument.
+        # otherwise; the untrusted start keeps the agent's prompt argument
+        # where Hide launches one and types it where Hide does.
         launched = self.own_rungs and self.launches()
         sent = long_brief(first) if launched else brief(first)
         args, answer, attempts = self.spawn("journey-" + self.name, self.repository, self.branch, worktree,
@@ -1078,8 +1079,15 @@ class Journey:
             return
         value = token()
         worktree = self.runtime.probe / "worktrees-untrusted" / self.id
+        # The prompt reaches the agent as Hide's own first input does: the
+        # agent's prompt argument where its ladder starts with it, typed
+        # where Hide never launches one. OpenCode 2.4.2 started cold sends a
+        # `--prompt` before its configuration names the model, to its own
+        # hosted one (hand run 46094104848, Linux and macOS alike), the race
+        # its declaration types around.
+        typed = self.own_rungs and not self.launches()
         args, answer, attempts = self.spawn("journey-untrusted-" + self.id, repository, "journey-untrusted-" + self.id,
-                                            worktree, prompt(value))
+                                            worktree, prompt(value), brief=typed)
         record = {"argv": ["hide", *args], "answers": attempts}
         self.record["start_untrusted"] = record
         spawned = self.spawn_verdict(answer)

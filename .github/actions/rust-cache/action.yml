@@ -6,11 +6,20 @@ description: Restore, and on main save, one dependency set's cache for this syst
 
 inputs:
   set:
-    description: The dependency set, `workspace`, `lint`, `platform` or `release`.
+    description: The dependency set, `workspace`, `lint`, `platform`, `release`, `quick` or `helper`.
     required: true
   save:
-    description: Whether this job saves the set; true only for the set's one builder on main.
+    description: Whether this job saves the set; true only for the set's one builder per system.
     required: true
+  target:
+    description: The target triple the job builds for with `--target`, which keeps its release build in its own folder; empty for the host's.
+    required: false
+    default: ''
+
+outputs:
+  cache-hit:
+    description: Whether an entry with this checkout's exact key was restored, so a save would keep nothing new.
+    value: ${{ steps.cache.outputs.cache-hit }}
 
 runs:
   using: composite
@@ -28,7 +37,8 @@ runs:
         for toolchain in $(rustup toolchain list --quiet); do
           [ "$toolchain" = "$pinned" ] || rustup toolchain uninstall "$toolchain"
         done
-    - uses: Swatinem/rust-cache@v2
+    - id: cache
+      uses: Swatinem/rust-cache@v2
       with:
         workspaces: ". -> target"
         # One key per set and system, not per job. rust-cache ends the key with
@@ -42,10 +52,13 @@ runs:
         save-if: ${{ inputs.save }}
     - name: Build every hide crate of a release from this checkout
       # rust-cache's removal of the workspace's crates before a save swallows
-      # its own errors and saves anyway, so a release removes them again from
-      # what it restored; only third-party dependencies stay.
-      if: inputs.set == 'release'
+      # its own errors and saves anyway, so a job whose binaries ship (the
+      # packages and the device helpers) removes them again from what it
+      # restored; only third-party dependencies stay.
+      if: inputs.set == 'release' || inputs.set == 'helper'
       shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
       run: |
         . scripts/toolchain-env.sh
-        cargo clean --release --workspace
+        cargo clean --release --workspace ${TARGET:+--target "$TARGET"}

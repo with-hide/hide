@@ -225,7 +225,7 @@
     "hide-core/src/runtime/tests/session_archive.rs": {"max": 1, "reason": "test"},
     "hide-core/src/runtime/tests/session_navigation.rs": {"max": 32, "reason": "test"},
     "hide-core/src/runtime/tests/session_state.rs": {"max": 1, "reason": "test"},
-    "hide-core/src/runtime/tests/snapshot_delta.rs": {"max": 4, "reason": "test"},
+    "hide-core/src/runtime/tests/snapshot_delta.rs": {"max": 1, "reason": "test"},
     "hide-core/src/runtime/tests/ssh_hosts.rs": {"max": 1, "reason": "test"},
     "hide-core/src/runtime/tests/ssh_sign_in.rs": {"max": 1, "reason": "test"},
     "hide-core/src/runtime/tests/start_geometry.rs": {"max": 1, "reason": "test"},

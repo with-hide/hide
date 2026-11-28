@@ -8,3 +8,7 @@ hide-agent-hooks/tests/fixtures/hook-bytes/pi-extension.ts text eol=lf
 hide-agent-hooks/tests/fixtures/hook-bytes/omp-extension.ts text eol=lf
 # Hide's patches to libghostty-vt are pinned by sha256 in hide-vt/build-inputs.json.
 hide-vt/patches/*.patch text eol=lf
+
+# contracts/hide-cli.json is generated: merge it command by command (scripts/merge-hide-cli-contract.py, docs/BUILD.md).
+# A clone that has not run `python3 scripts/merge-hide-cli-contract.py --register` merges it as text.
+contracts/hide-cli.json text eol=lf merge=hide-cli-contract
