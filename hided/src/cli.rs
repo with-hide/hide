@@ -2009,31 +2009,61 @@ fn view_status(env: &Env, view_id: &str) -> Result<(), String> {
 }
 
 /// What `hide browser open` says about driving the page it opened when
-/// `browser connect` handed no capability URLs (`refusal`, hided's answer):
-/// hided's own reason and next step, except in three cases. A desktop
-/// window here that has not made the page yet answers unavailable for a
-/// moment after the open, and a window on another machine hands no URLs of
-/// its loopback (`browser_control_elsewhere`): Hide's page commands drive
-/// the page in both. With no desktop window here (`browser_unsupported`,
-/// which hided answers before it asks any window), the caller connects once
-/// one is, rather than retrying the open, which would make a second page.
+/// `browser connect` handed no capability URLs (`refusal`, hided's answer),
+/// after waiting for the window to make the page (`page_made`): hided's own
+/// reason and next step, which is the step for `hide browser connect`, except
+/// in three cases. A window on another machine hands no URLs of its loopback
+/// (`browser_control_elsewhere`), and Hide's page commands drive the page.
+/// With no desktop window here (`browser_unsupported`, which hided answers
+/// before it asks any window), or one that does not answer for a page it has
+/// made (`browser_control_unavailable`), the caller connects once it is back,
+/// rather than opening the page again, which would reload it.
 fn open_control(display_id: &str, refusal: &serde_json::Value) -> serde_json::Value {
     let reason = refusal["reason"]
         .as_str()
         .unwrap_or("workspace_request_failed");
+    let connect = format!("Run hide browser connect --display {display_id}");
     let next_action = match reason {
-        "browser_control_unavailable" | "browser_control_elsewhere" => {
+        "browser_control_elsewhere" => {
             format!("Run hide browser snapshot {display_id} and the other page commands")
         }
-        "browser_unsupported" => format!(
-            "Run hide browser connect --display {display_id} after the desktop window reconnects"
-        ),
+        "browser_unsupported" | "browser_control_unavailable" => {
+            format!("{connect} after the desktop window reconnects")
+        }
         _ => refusal["next_action"]
             .as_str()
-            .unwrap_or_default()
-            .to_owned(),
+            .map_or(connect, str::to_owned),
     };
     serde_json::json!({"state":"unavailable","reason":reason,"next_action":next_action})
+}
+
+/// How long an open waits for the desktop window to make its page before it
+/// reads the window as not answering. A window makes it in about a tenth of
+/// a second.
+const PAGE_MADE_WITHIN: Duration = Duration::from_secs(3);
+
+/// Whether the window has made `load` of `display_id`'s page: the core reads
+/// a page `pending` until the window reports it. False when it stays pending,
+/// a newer load replaced it, or its state cannot be read.
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn page_made(env: &Env, display_id: &str, load: u64) -> bool {
+    let deadline = std::time::Instant::now() + PAGE_MADE_WITHIN;
+    loop {
+        let Ok(status) = view_status_value(env, display_id, false) else {
+            return false;
+        };
+        let page = &status["view"]["page"];
+        if page["load"].as_u64() != Some(load) {
+            return false;
+        }
+        if page["state"] != "pending" {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
@@ -2066,7 +2096,20 @@ fn browser_open(
         .as_str()
         .ok_or("invalid_response")?
         .to_owned();
-    match workspace_query_answer(env, "browser_connect", Some(&display_id)) {
+    let load = answer["result"]["load"]
+        .as_u64()
+        .ok_or("invalid_response")?;
+    let mut connected = workspace_query_answer(env, "browser_connect", Some(&display_id));
+    // A desktop window answers unavailable until it has made the page, which
+    // it says by reporting the page; the open asks once more after that.
+    if connected
+        .as_ref()
+        .is_err_and(|refusal| refusal["reason"] == "browser_control_unavailable")
+        && page_made(env, &display_id, load)
+    {
+        connected = workspace_query_answer(env, "browser_connect", Some(&display_id));
+    }
+    match connected {
         Ok(connection) => {
             for key in ["cdp_http_url", "browser_ws_url"] {
                 answer["result"][key] = connection["result"][key].clone();
@@ -2085,9 +2128,6 @@ fn browser_open(
     let view_id = answer["result"]["view_id"]
         .as_str()
         .ok_or("invalid_response")?;
-    let requested_load = answer["result"]["load"]
-        .as_u64()
-        .ok_or("invalid_response")?;
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let status = match view_status_value(env, view_id, false) {
@@ -2101,7 +2141,7 @@ fn browser_open(
             }
         };
         let page = &status["view"]["page"];
-        if page["load"].as_u64() != Some(requested_load) {
+        if page["load"].as_u64() != Some(load) {
             println!(
                 "{}",
                 serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_superseded","view_id":view_id,"page":page,"next_action":"Run hide view show or open the page again with a new request ID"})
@@ -3635,31 +3675,28 @@ mod tests {
 
     /// What `hide browser open` tells the caller about driving the page it
     /// opened when discovery handed no capability URLs: the page commands
-    /// where they drive the page, hided's own reason for a refused caller,
-    /// and a connect once a desktop window is attached when none is.
+    /// for a window on another machine, hided's own reason and step for a
+    /// refused caller, and a connect once the window is back when none is
+    /// attached or it does not answer.
     #[test]
     fn an_opened_page_s_control_says_why_and_what_drives_it() {
         let refused = |(reason, next_action): (&str, &str)| serde_json::json!({"ok": false, "reason": reason, "next_action": next_action});
         let control = |reason: &str, next_action: &str| serde_json::json!({"state": "unavailable", "reason": reason, "next_action": next_action});
-        let snapshot = "Run hide browser snapshot v1 and the other page commands";
 
-        // The window here has not made the page yet, and a window on
-        // another machine hands no URLs: the page commands drive it.
-        for refusal in [
-            (
-                "browser_control_unavailable",
-                "Reconnect the Hide desktop app and retry",
+        // The window is on another machine: the page commands drive it.
+        assert_eq!(
+            open_control(
+                "v1",
+                &refused((
+                    "browser_control_elsewhere",
+                    "Use hide browser page commands, which reach that window through Hide"
+                ))
             ),
-            (
+            control(
                 "browser_control_elsewhere",
-                "Use hide browser page commands, which reach that window through Hide",
-            ),
-        ] {
-            assert_eq!(
-                open_control("v1", &refused(refusal)),
-                control(refusal.0, snapshot)
-            );
-        }
+                "Run hide browser snapshot v1 and the other page commands"
+            )
+        );
         // A refused caller hears hided's reason and next step unchanged.
         for refusal in [
             crate::browser_control::FILE_PAGE_PANE_ONLY,
@@ -3675,15 +3712,32 @@ mod tests {
                 control(refusal.0, refusal.1)
             );
         }
-        // No desktop window here: connect once one is, never open again.
+        // No desktop window here, or one that does not answer for the page
+        // it made: connect once it is back, never open again.
+        for refusal in [
+            ("browser_unsupported", "Open the Hide desktop app and retry"),
+            (
+                "browser_control_unavailable",
+                "Reconnect the Hide desktop app and retry",
+            ),
+        ] {
+            assert_eq!(
+                open_control("v1", &refused(refusal)),
+                control(
+                    refusal.0,
+                    "Run hide browser connect --display v1 after the desktop window reconnects"
+                )
+            );
+        }
+        // A refusal that names no step still gets one.
         assert_eq!(
             open_control(
                 "v1",
-                &refused(("browser_unsupported", "Open the Hide desktop app and retry"))
+                &serde_json::json!({"ok": false, "reason": "browser_control_busy"})
             ),
             control(
-                "browser_unsupported",
-                "Run hide browser connect --display v1 after the desktop window reconnects"
+                "browser_control_busy",
+                "Run hide browser connect --display v1"
             )
         );
     }

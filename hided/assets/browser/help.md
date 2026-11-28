@@ -3,7 +3,7 @@
 Read and drive a browser display in hide, the one the operator is looking at.
 Every command works on one display of your own checkout, by its View id from `hide view list` (for example `browser-3`).
 Open a page with `hide browser open <url-or-path>`; the display stays when a command ends.
-When its answer carries `browser_control` (no CDP URLs for the page), do what its `next_action` says: the commands below when they drive the page, its `reason` when you may not drive it, and a connect only when no desktop window is attached; never open the page again.
+When its answer carries `browser_control` (no CDP URLs for the page), do what its `next_action` says: the commands below when they drive the page, its `reason` when you may not drive it, and `hide browser connect --display <id>` when it says to retry; never open the page again, which reloads it.
 A web page, a blank one, and an HTML file are driven alike: a file of your checkout, and an HTML file outside every checkout that you opened yourself.
 
 ## Commands
