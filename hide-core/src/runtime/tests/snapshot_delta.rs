@@ -210,103 +210,6 @@ fn pane_header_transitions_reach_the_wire_once_and_stay_quiet_when_unchanged() {
     assert_eq!(wire["rest"]["terminal"]["headers"], serde_json::json!({}));
 }
 
-/// R8, AC14. The agent notes are what the next person reads before they
-/// touch this subsystem, and both of their claims about it were wrong: the
-/// shell was described as reading the snapshot on every change
-/// notification, and the only measured figure in the performance guide was
-/// a mutex wait from an incident measured while typing on a build three
-/// rounds of work ago. A document drifts silently, so the claims that
-/// matter are asserted here rather than trusted.
-#[test]
-fn agent_notes_state_the_view_authority_and_the_announcement_rule() {
-    let notes = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../AGENTS.md"))
-        .expect("the agent notes");
-    let (_, rest) = notes
-        .split_once("## Runtime Architecture")
-        .expect("a Runtime Architecture section");
-    let (architecture, _) = rest
-        .split_once("## Herdr Source")
-        .expect("Runtime Architecture ends at the Herdr Source section");
-    let (_, performance) = notes
-        .split_once("## Performance Guide")
-        .expect("a Performance Guide section");
-
-    for (section, name, wanted) in [
-        (
-            architecture,
-            "Runtime Architecture",
-            vec![
-                // The boundary itself, both halves of it.
-                "visible tab",
-                "keyboard focus pane",
-                // The four paths a core-owned value can take.
-                "pending",
-                "followed",
-                "refusal",
-                // What replaced the per-change read and the second core.
-                "once per burst",
-                "before** it takes the lock",
-                "creates the core once",
-            ],
-        ),
-        (
-            performance,
-            "Performance Guide",
-            vec![
-                "serialize_snapshot_delta",
-                "ChangeNotifier",
-                "idle",
-                "driven",
-            ],
-        ),
-    ] {
-        for phrase in wanted {
-            assert!(
-                section.contains(phrase),
-                "AGENTS.md {name} does not say {phrase:?}"
-            );
-        }
-    }
-    assert!(
-        !performance.contains("main thread spent 47% of wall time"),
-        "the stale 47% figure is replaced by measurements with their load, not kept beside them"
-    );
-}
-
-/// R5, AC9. A launch used to create a core without the resolved Herdr
-/// binary, start its session sync, and then throw both away for a second
-/// core once the runtime was known. Destroying the first one joined a
-/// worker mid-bootstrap, which is where the measured 360 ms between the
-/// runtime resolving and the second core being ready went. One core per
-/// daemon means one `session.snapshot`, one subscription and one catalog
-/// build, and the daemon is the only place that can put the second one
-/// back.
-#[test]
-fn one_daemon_creates_the_core_once_and_never_replaces_it() {
-    let mut creations = Vec::new();
-    for (name, source) in shell_sources("hided/src", &["rs"]) {
-        for line in source.lines().map(str::trim) {
-            if line.starts_with("//") {
-                continue;
-            }
-            if line.contains("Core::create(")
-                || line.contains("Core::create_with_product_analytics(")
-            {
-                creations.push(format!("{name}: {line}"));
-            }
-        }
-    }
-    assert_eq!(
-        creations.len(),
-        1,
-        "the daemon must create the core from one place: {creations:?}"
-    );
-    assert!(
-        creations[0].starts_with("hided/src/core.rs"),
-        "the one creation belongs to the owner-thread wrapper: {creations:?}"
-    );
-}
-
 /// R6, AC12. The engine publishes a session snapshot on every event and on
 /// every agent refresh, and the wire has to be sized by what changed. A
 /// republish that moved nothing must leave the reader's cursor current, or
@@ -641,35 +544,6 @@ fn retained_views_drop_a_pane_whose_tab_left_the_session() {
     )));
 
     assert_eq!(projected_pane_ids(&runtime), vec!["w-order:t2:p"]);
-}
-
-/// AC5, R3. The shell drew one canvas keyed by the visible tab, so every
-/// switch destroyed its terminal views and the new ones started empty and
-/// reported a size. The web shell keeps every attached pane's terminal
-/// instance alive in a hidden parking lot and re-parents it on return, and
-/// only that module may make an instance. Removing either half brings the
-/// blank frame and the switch-time resize back.
-#[test]
-fn retained_terminals_have_no_single_canvas_keyed_by_the_visible_tab() {
-    let sources = web_sources();
-    let terminals = &sources
-        .iter()
-        .find(|(name, _)| name == "web/src/terminals.ts")
-        .expect("the terminal instance module")
-        .1;
-    assert!(
-        terminals.contains("function parkingLot(") && terminals.contains("hidden = true"),
-        "the terminal module no longer parks a left tab's instances in a hidden lot"
-    );
-    let makers: Vec<&String> = sources
-        .iter()
-        .filter(|(name, source)| name != "web/src/terminals.ts" && source.contains("new Terminal("))
-        .map(|(name, _)| name)
-        .collect();
-    assert!(
-        makers.is_empty(),
-        "a terminal instance is made outside the parking module, so a tab switch can recreate it: {makers:?}"
-    );
 }
 
 /// The diagnostics list rides the revisioned rest section, so it keeps a

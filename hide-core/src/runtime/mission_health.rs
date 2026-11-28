@@ -367,6 +367,7 @@ fn skip_lines(node: &mut MissionNode, keys: &[String], decision: &str, now: u64)
         line.skip(
             decision.to_owned(),
             None,
+            None,
             crate::mission_criteria::Recorded {
                 role: crate::mission_criteria::Role::Operator,
                 name: "operator".to_owned(),
@@ -592,8 +593,12 @@ pub(super) fn closing_report_in(
             alone.len()
         ));
         for skip in alone {
+            let follow = skip
+                .follow_up
+                .map(|node| format!(" · follow-up node {node}"))
+                .unwrap_or_default();
             lines.push(format!(
-                "- {} ({}) · {}: {} · {} · at {} Unix ms",
+                "- {} ({}) · {}: {}{follow} · {} · at {} Unix ms",
                 skip.title, skip.node, skip.line, skip.reason, skip.by, skip.at_unix_ms
             ));
         }

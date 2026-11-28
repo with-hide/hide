@@ -489,7 +489,7 @@ fn named_five(folder: &str) -> Vec<hide_session::NamedPr> {
 
 #[test]
 fn an_opencode_call_that_names_a_pull_request_is_named_in_both_schemas() {
-    for schema in ["opencode-1.18.30", "opencode-2.0.29"] {
+    for schema in ["opencode-1.18.30", "opencode-2.0.29", "opencode-2.4.2"] {
         for (command, expected) in [
             ("bash scripts/ship.sh", vec![]),
             ("gh pr view 12", named_twelve(None)),
@@ -557,7 +557,7 @@ fn a_pull_request_its_creating_call_printed_is_made_in_every_format_that_pairs_c
             "{agent:?} tells the label worker too"
         );
     }
-    for schema in ["opencode-1.18.30", "opencode-2.0.29"] {
+    for schema in ["opencode-1.18.30", "opencode-2.0.29", "opencode-2.4.2"] {
         let home = tempfile::tempdir().unwrap();
         let folder = home.path().join(".local/share/opencode");
         fs::create_dir_all(&folder).unwrap();
@@ -744,7 +744,7 @@ fn every_format(
             parse_events(agent, &contents).links,
         ));
     }
-    for schema in ["opencode-1.18.30", "opencode-2.0.29"] {
+    for schema in ["opencode-1.18.30", "opencode-2.0.29", "opencode-2.4.2"] {
         let home = tempfile::tempdir().unwrap();
         let folder = home.path().join(".local/share/opencode");
         fs::create_dir_all(&folder).unwrap();

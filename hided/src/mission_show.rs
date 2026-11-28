@@ -540,9 +540,13 @@ fn draw_mission(mission: &Value, now: u64) -> Result<String, String> {
     if !alone.is_empty() {
         let _ = writeln!(out, "decided by the Conductor {}", alone.len());
         for skip in &alone {
+            let follow = skip["follow_up"]
+                .as_str()
+                .map(|node| format!(" · follow-up {node}"))
+                .unwrap_or_default();
             let _ = writeln!(
                 out,
-                "  ⤳ {} · {} skipped · {} · {} · {}",
+                "  ⤳ {} · {} skipped · {}{follow} · {} · {}",
                 text(skip, "node"),
                 text(skip, "line"),
                 text(skip, "reason"),
@@ -613,6 +617,9 @@ fn draw_line(out: &mut String, line: &Value, now: u64) {
     }
     if let Some(skip) = line["skip"]["reason"].as_str() {
         let _ = write!(words, " · skipped because {skip}");
+    }
+    if let Some(node) = line["skip"]["follow_up"].as_str() {
+        let _ = write!(words, " · follow-up {node}");
     }
     if let Some(summary) = line["summary"].as_str() {
         let _ = write!(words, " · {summary}");
@@ -973,6 +980,8 @@ mod tests {
         value["mission"]["skipped_alone"] = json!([
             {"node": "docs", "title": "Docs", "line": "check", "kind": "check",
              "reason": "main merged, CI passed", "by": "lead", "at_unix_ms": NOW - 40 * MINUTE},
+            {"node": "show", "title": "Show", "line": "review", "kind": "review",
+             "reason": "minor findings left", "follow_up": "show-rest", "by": "lead", "at_unix_ms": NOW - 30 * MINUTE},
         ]);
         let text = draw(&value, NOW).unwrap();
         assert!(
@@ -983,7 +992,7 @@ mod tests {
         );
         assert!(
             text.ends_with(
-                "decided by the Conductor 1\n  ⤳ docs · check skipped · main merged, CI passed · lead · 40m ago\n"
+                "decided by the Conductor 2\n  ⤳ docs · check skipped · main merged, CI passed · lead · 40m ago\n  ⤳ show · review skipped · minor findings left · follow-up show-rest · lead · 30m ago\n"
             ),
             "{text}"
         );

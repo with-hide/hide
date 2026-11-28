@@ -187,12 +187,17 @@ pub(crate) fn operator(now: u64) -> Recorded {
 
 /// Why the Conductor went past a line (D-13). `decision` names the
 /// operator's answered question it rests on, which the check command and
-/// the CI need.
+/// the CI need. `follow_up` names the node of the same mission that carries
+/// what a review or verification left open when its round budget was spent
+/// (`Criterion::budget_spent`), which a skip of such a line needs; an older
+/// build ignores it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Skip {
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_up: Option<String>,
 }
 
 /// One agent of a review or verification: what the plan asked for, the
@@ -312,9 +317,17 @@ pub struct Criterion {
     /// each checker's last answer, so this is what remembers the rounds
     /// before it; it never goes down, and a replan that keeps the line keeps
     /// it too. Counted against the mission's strength
-    /// (`Strength::review_rounds`). A book from before it reads 0.
+    /// (`Strength::review_rounds`) from `budget_from`. A book from before it
+    /// reads 0.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub rounds: u32,
+    /// The `rounds` the node's current worker started from: binding a fresh
+    /// worker to the node (`apply_patch`, `Criterion::fresh_budget`) gives
+    /// its checkers a fresh round budget, so the strength's limit counts the
+    /// rounds since (`budget_rounds`). A book from before it reads 0, every
+    /// round counting, as it did.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub budget_from: u32,
     /// Where the operator answered from, on a human line they passed and on
     /// a defect their answer to its gate wrote; the words are `evidence`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -389,6 +402,7 @@ impl Criterion {
             tally: None,
             found_by: None,
             rounds: 0,
+            budget_from: 0,
             via: None,
             asked: None,
             shown: Vec::new(),
@@ -753,18 +767,51 @@ impl Criterion {
         Ok(true)
     }
 
-    /// Whether this checker line used the `limit` rounds of the mission's
-    /// strength and has not passed or been skipped since.
-    pub fn past_limit(&self, limit: u32) -> bool {
+    /// The rounds this line's checkers opened for the node's current worker
+    /// (`budget_from`), which the strength's limit counts.
+    pub fn budget_rounds(&self) -> u32 {
+        self.rounds.saturating_sub(self.budget_from)
+    }
+
+    /// Whether this checker line spent the `limit` rounds of the mission's
+    /// strength and has not passed or been skipped since: the one fact that
+    /// the node's round limit is reached and no round opens until its
+    /// Conductor chooses how it goes on (operator decision 2026-11-28).
+    /// While it holds, the worker's check wakes no checker
+    /// (`Runtime::ask_checkers`), the Conductor is warned once the line
+    /// stands failed (`WarningKind::ReviewFails`), and a skip of the line
+    /// names a follow-up node (`Runtime::skip_criterion`). It ends only
+    /// when the line passes (a re-look the Conductor asked the checker
+    /// for), is skipped, or the node's fresh worker starts a fresh budget
+    /// (`fresh_budget`): a fresh checker bound in an ended one's place
+    /// carries that slot's rounds (`bind`), so it keeps the stop.
+    pub fn budget_spent(&self, limit: u32) -> bool {
         self.kind.checker_judges()
-            && self.rounds >= limit
+            && self.budget_rounds() >= limit
             && !matches!(self.state, CriterionState::Pass | CriterionState::Skipped)
     }
 
+    /// The node's worker changed: the rounds from now are the fresh
+    /// worker's budget.
+    pub(crate) fn fresh_budget(&mut self) {
+        self.budget_from = self.rounds;
+    }
+
     /// The Conductor goes past the line with its reason (B11, B12); the
-    /// caller has checked the decision a protected line needs.
-    pub(crate) fn skip(&mut self, reason: String, decision: Option<u64>, by: Recorded) -> bool {
-        let skip = Skip { reason, decision };
+    /// caller has checked the decision a protected line needs and the
+    /// follow-up node a spent round budget needs.
+    pub(crate) fn skip(
+        &mut self,
+        reason: String,
+        decision: Option<u64>,
+        follow_up: Option<String>,
+        by: Recorded,
+    ) -> bool {
+        let skip = Skip {
+            reason,
+            decision,
+            follow_up,
+        };
         if self.skip.as_ref() == Some(&skip) {
             return false;
         }
@@ -936,6 +983,7 @@ pub(crate) fn plan_lines(
         line.skip = before.and_then(|line| line.skip.clone());
         line.by = before.and_then(|line| line.by.clone());
         line.rounds = before.map_or(0, |line| line.rounds);
+        line.budget_from = before.map_or(0, |line| line.budget_from);
         line.checkers = input
             .by
             .iter()
@@ -1460,7 +1508,7 @@ mod tests {
             assert_eq!(line.rounds, 2, "{kind:?}");
             answer(&mut line, 1, false, Some("c3d4e5f6a1b2"), 7);
             assert_eq!((line.state, line.rounds), (CriterionState::Fail, 3));
-            line.skip("issues #1".into(), None, by(Role::Conductor));
+            line.skip("issues #1".into(), None, None, by(Role::Conductor));
             assert_eq!((line.state, line.rounds), (CriterionState::Skipped, 3));
         }
     }
@@ -1559,8 +1607,9 @@ mod tests {
         );
     }
 
-    /// A replan that keeps the review line keeps its rounds and each
-    /// checker's, as it keeps its checkers' answers and its skip, so the same
+    /// A replan that keeps the review line keeps its rounds, its current
+    /// worker's budget and each checker's rounds, as it keeps its checkers'
+    /// answers and its skip, so the same
     /// plan applied again leaves the count where the reviews put it.
     #[test]
     fn a_replan_that_keeps_the_review_keeps_its_rounds() {
@@ -1595,11 +1644,14 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(lines[1].rounds, 2);
+        // A fresh worker's budget, which the replan keeps too.
+        lines[1].fresh_budget();
         let again = plan(&lines);
         assert_eq!(
             (again[1].state, again[1].rounds, again[1].checkers[0].rounds),
             (CriterionState::Fail, 2, 2)
         );
+        assert_eq!((again[1].budget_from, again[1].budget_rounds()), (2, 0));
     }
 
     /// A replan that hands a review slot to another worker carries the
@@ -1679,7 +1731,7 @@ mod tests {
     #[test]
     fn a_skip_made_before_any_head_was_read_stands_for_the_first_head_read() {
         let mut line = Criterion::new("ci", CriterionKind::Ci);
-        assert!(line.skip("GitHub unreadable".into(), None, by(Role::Conductor)));
+        assert!(line.skip("GitHub unreadable".into(), None, None, by(Role::Conductor)));
         let effect = line.read_ci(A, CiEnd::Ended(CiResult::Failed), 5);
         assert!(effect.changed, "the head is recorded");
         assert_eq!(line.state, CriterionState::Skipped);

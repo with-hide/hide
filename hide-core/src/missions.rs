@@ -615,9 +615,9 @@ pub struct Woken {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WarningKind {
-    /// The review or verification line failed
-    /// `mission_health::REVIEW_FAILS_THAT_WARN` times in a row
-    /// (`MissionNode::review_fails`).
+    /// The review or verification round at the strength's limit failed
+    /// (`MissionNode::round_hold`): no round opens until the Conductor
+    /// chooses how the node goes on.
     ReviewFails,
     /// Its worker's program runs, its turn ended and it waits on nothing
     /// (`mission_health::stopped_worker`), for
@@ -1769,27 +1769,35 @@ impl MissionNode {
         }
     }
 
-    /// The node's review rounds line (`Criterion::rounds`): the review or
-    /// verification line past `limit` (`Criterion::past_limit`), a failed
-    /// one first and then the one with more rounds, else the one with the
-    /// most rounds; none
-    /// before any checker answered. The one rule the limit's warning, its
-    /// letter and the screens that count rounds read.
+    /// The node's review rounds line (`Criterion::budget_rounds`): the
+    /// review or verification line whose round budget is spent
+    /// (`round_hold`), else the one with the most rounds in the current
+    /// worker's budget; none before any checker answered for it. The one
+    /// rule the limit's warning, its letter and the screens that count
+    /// rounds read.
     pub fn review_line(&self, limit: u32) -> Option<&crate::mission_criteria::Criterion> {
-        let lines = || {
+        self.round_hold(limit).or_else(|| {
             self.criteria
                 .iter()
-                .filter(|line| line.kind.checker_judges() && line.rounds > 0)
-        };
-        lines()
-            .filter(|line| line.past_limit(limit))
+                .filter(|line| line.kind.checker_judges() && line.budget_rounds() > 0)
+                .max_by_key(|line| line.budget_rounds())
+        })
+    }
+
+    /// The review or verification line whose round budget is spent
+    /// (`Criterion::budget_spent`), a failed one first and then the one
+    /// with more rounds: while
+    /// one stands, the node's Conductor owes the choice of how it goes on
+    /// and no round opens (operator decision 2026-11-28).
+    pub fn round_hold(&self, limit: u32) -> Option<&crate::mission_criteria::Criterion> {
+        self.checker_lines()
+            .filter(|line| line.budget_spent(limit))
             .max_by_key(|line| {
                 (
                     line.state == crate::mission_criteria::CriterionState::Fail,
-                    line.rounds,
+                    line.budget_rounds(),
                 )
             })
-            .or_else(|| lines().max_by_key(|line| line.rounds))
     }
 
     /// The worker's signal that its work is ready for its checkers (PRD
@@ -1847,6 +1855,19 @@ impl MissionNode {
 pub(crate) struct CheckSignal {
     pub(crate) at_unix_ms: u64,
     pub(crate) commit: Option<String>,
+}
+
+impl CheckSignal {
+    /// Whether `checker` answered this signal's round: on its commit when
+    /// both name one (an answer on that commit before the signal, a re-look
+    /// the Conductor asked for, included), else after it.
+    pub(crate) fn answered_by(&self, checker: &crate::mission_criteria::Checker) -> bool {
+        checker.at_unix_ms.is_some()
+            && match (&self.commit, &checker.commit) {
+                (Some(round), Some(read)) => crate::mission_criteria::same_commit(round, read),
+                _ => checker.at_unix_ms.is_some_and(|at| at >= self.at_unix_ms),
+            }
+    }
 }
 
 /// The session that conducts a mission (D-23). `actor` is the delivery
@@ -2917,7 +2938,9 @@ pub enum MissionCommand {
         rerun: bool,
     },
     /// The Conductor goes past a line with its reason (B11, B12); a check
-    /// command or CI line also names the operator's answered decision.
+    /// command or CI line also names the operator's answered decision, and
+    /// a review or verification whose round budget is spent the follow-up
+    /// node of the same mission that carries what it left open.
     Skip {
         #[serde(default)]
         mission: Option<String>,
@@ -2926,6 +2949,8 @@ pub enum MissionCommand {
         reason: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         decision: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        follow_up: Option<String>,
     },
     /// The Conductor relays the operator's answer to `node`'s human gate,
     /// given in its pane, with their words quoted (PRD mission-human-gate
@@ -3033,8 +3058,15 @@ impl MissionCommand {
                 node,
                 line,
                 reason,
+                follow_up,
                 ..
-            } => id_ok(mission) && valid_key(node) && valid_key(line) && reason.len() <= LINE_LIMIT,
+            } => {
+                id_ok(mission)
+                    && valid_key(node)
+                    && valid_key(line)
+                    && reason.len() <= LINE_LIMIT
+                    && follow_up.as_deref().is_none_or(valid_key)
+            }
             Self::Defect {
                 mission,
                 node,
@@ -4214,6 +4246,27 @@ pub(crate) fn apply_patch(
         };
     }
     take!(agent_id);
+    // A fresh worker gets a fresh round budget: the strength's limit counts
+    // its checkers' rounds from now (operator decision 2026-11-28).
+    // The worker before is the one bound, else the last that recorded a
+    // line, so unbinding and binding the same worker again starts nothing.
+    let before = node.agent_id.clone().or_else(|| {
+        node.criteria
+            .iter()
+            .filter_map(|line| line.by.as_ref())
+            .filter(|by| by.role == crate::mission_criteria::Role::Worker)
+            .max_by_key(|by| by.at_unix_ms)
+            .and_then(|by| by.agent_id.clone())
+    });
+    if next.agent_id.is_some() && next.agent_id != before {
+        for line in next
+            .criteria
+            .iter_mut()
+            .filter(|line| line.kind.checker_judges())
+        {
+            line.fresh_budget();
+        }
+    }
     // `--pr <n>` makes `n` the node's current pull request beside those it
     // holds; `--no-pr` lets go of every one.
     match patch.pr {
@@ -4672,6 +4725,12 @@ pub fn next_action(code: &str) -> &'static str {
             "On another machine than the project's, a mission runs only a pull-request change node's worker and its checkers: start this node's worker or checker on the project's machine, or bind one that runs there"
         }
         "mission_skip_reason_missing" => "Give the reason with --reason <text>",
+        "mission_skip_follow_up_required" => {
+            "This line spent the review rounds the mission's strength allows: plan the findings it left as a follow-up node of this mission (not an issue) with hide mission plan, then skip with --follow-up <node> --reason <text>; an issue number alone is not accepted"
+        }
+        "mission_follow_up_invalid" => {
+            "Name with --follow-up a node of this mission other than this one that is not done or dropped: add the follow-up node to the plan with hide mission plan first"
+        }
         "mission_criteria_protected" => {
             "A failed CI line is skipped only on the operator's answer: run the CI again, or ask with hide mission decide --line <question> --node <key> and once answered skip with --decision <its key>"
         }

@@ -12,6 +12,10 @@
 //! its first start and leaves the 1.x tables where they were, so a migrated
 //! database holds both. The 2.x tables are the ones OpenCode keeps writing,
 //! and they hold the migrated sessions too, so they win.
+//!
+//! OpenCode 2.3 added `session_part`, and 2.4 writes each item of an
+//! assistant message there instead of in the message's own `content`
+//! (`super::v2`); a 2.x database from before 2.3 has no such table.
 
 use rusqlite::Connection;
 
@@ -24,8 +28,9 @@ pub(crate) const SCHEMA_UNKNOWN: &str = "opencode_db_schema_unknown";
 pub(crate) enum Schema {
     /// OpenCode 1.x: `session`, `message`, `part`.
     V1,
-    /// OpenCode 2.x: `session_v2`, `session_message`.
-    V2,
+    /// OpenCode 2.x: `session_v2`, `session_message`, and, from 2.3 on,
+    /// `session_part`, which `parts` says the database has.
+    V2 { parts: bool },
 }
 
 /// The columns Hide reads, by table.
@@ -76,6 +81,19 @@ const V2_COLUMNS: &[(&str, &[&str])] = &[
     ),
 ];
 
+/// The columns Hide reads of 2.3's `session_part`.
+const PART_COLUMNS: &[(&str, &[&str])] = &[(
+    "session_part",
+    &[
+        "message_id",
+        "session_id",
+        "ordinal",
+        "type",
+        "time_updated",
+        "data",
+    ],
+)];
+
 /// What a 2.x database still holds of the 1.x `message` and `part` tables.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Legacy {
@@ -98,7 +116,8 @@ impl Schema {
             .prepare(
                 "SELECT m.name, p.name FROM sqlite_master AS m, \
                  pragma_table_info(m.name) AS p WHERE m.type = 'table' \
-                 AND m.name IN ('session', 'message', 'part', 'session_v2', 'session_message')",
+                 AND m.name IN ('session', 'message', 'part', 'session_v2', 'session_message', \
+                 'session_part')",
             )
             .map_err(|error| crate::sqlite::refusal(&REASONS, &error))?;
         let columns = statement
@@ -130,7 +149,16 @@ impl Schema {
             } else {
                 Legacy::Absent
             };
-            Ok((Self::V2, legacy))
+            // A `session_part` without a column Hide reads is not a table
+            // OpenCode writes: refused rather than read as one without parts.
+            let parts = if holds(PART_COLUMNS) {
+                true
+            } else if columns.iter().any(|(table, _)| table == "session_part") {
+                return Err(SCHEMA_UNKNOWN.to_owned());
+            } else {
+                false
+            };
+            Ok((Self::V2 { parts }, legacy))
         } else if holds(V1_COLUMNS) {
             Ok((Self::V1, Legacy::Absent))
         } else {
@@ -142,7 +170,7 @@ impl Schema {
     pub(crate) const fn sessions(self) -> &'static str {
         match self {
             Self::V1 => "session",
-            Self::V2 => "session_v2",
+            Self::V2 { .. } => "session_v2",
         }
     }
 
@@ -150,7 +178,7 @@ impl Schema {
     pub(crate) const fn messages(self) -> &'static str {
         match self {
             Self::V1 => "message",
-            Self::V2 => "session_message",
+            Self::V2 { .. } => "session_message",
         }
     }
 
@@ -159,7 +187,7 @@ impl Schema {
     pub(crate) const fn message_order(self) -> &'static str {
         match self {
             Self::V1 => "time_created, id",
-            Self::V2 => "seq",
+            Self::V2 { .. } => "seq",
         }
     }
 }
