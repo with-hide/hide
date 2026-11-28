@@ -5,6 +5,7 @@ apart from Hide's failure and carries no account name or screen text, and a
 login an agent refreshed inside the run goes back to the account."""
 
 import contextlib
+import io
 import json
 from pathlib import Path
 import sqlite3
@@ -80,16 +81,19 @@ class Summary(unittest.TestCase):
             self.assertEqual(daily.agent_state(said), kind, said)
 
     def test_the_record_holds_results_and_no_account_or_screen_text(self):
-        record = {"format": 1, "started": "2026-11-29T05:00+09:00", "source": "main", "run": "ok", "exit": 1,
-                  "commit": "a" * 40, "minutes": 84, "agents": daily.summarize(REPORT)}
-        body = daily.markdown(record)
-        self.assertTrue(body.startswith(daily.MARKER))
-        self.assertIn("| grok | 1.0.52 | fail | reply, title |", body)
-        self.assertIn("| codex | 0.163.0 | login needed | - |", body)
-        payload = json.loads(body.split("```json\n", 1)[1].split("```", 1)[0])
-        self.assertEqual(payload["agents"][2]["failed"], ["reply", "title"])
+        record = {"format": 1, "started": "2026-11-29T05:00+09:00", "if_stale": daily.STALE, "source": "main",
+                  "run": "ok", "exit": 1, "commit": "a" * 40, "minutes": 84, "agents": daily.summarize(REPORT)}
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(daily, "journey_root", return_value=Path(root)):
+            daily.publish(record, io.StringIO())
+            text = (Path(root) / daily.RECORD).read_text()
+            self.assertEqual(sorted(path.name for path in Path(root).iterdir()), [daily.RECORD])
+        read = json.loads(text)
+        self.assertEqual({row["id"]: row["result"] for row in read["agents"]},
+                         {"claude-code": "pass", "codex": "login needed", "grok": "fail", "cursor": "excluded",
+                          "pi": "not measured"})
+        self.assertEqual(read["agents"][2]["failed"], ["reply", "title"])
         for private in ("/Users/", "not logged in", "another process", "private words"):
-            self.assertNotIn(private, body)
+            self.assertNotIn(private, text)
 
 
 class WriteBackTest(unittest.TestCase):

@@ -480,7 +480,7 @@ class Runtime:
                 if child in self.owner.job_failures:
                     failures.append(f"{label} job: {self.owner.job_failures[child]}")
             if processes_confirmed:
-                for path in self.kept_login_paths:
+                for path in getattr(self, "kept_login_paths", ()):
                     try:
                         self.kept_logins[path] = kept_login(path)
                     except Exception as error:

@@ -1050,7 +1050,7 @@ Refresh it this way:
 
 No CI lane signs a real agent in: an agent CLI on CI runs as a compiled stand-in or as the real CLI answered by the journey's fake model, with no key ([VERIFICATION.md: The CI lanes](VERIFICATION.md#the-ci-lanes)).
 Operator decision, 2026-10-27: what only a login proves (the provider's sign-in, quota and billed usage) is the provider's, not Hide's code, and a signed-in lane cost keys and a daily quota rotation and failed for the provider's reasons.
-A real login is measured by the journey's local mode on the operator's Mac, where the agents are already signed in ([VERIFICATION.md: Local mode](VERIFICATION.md#local-mode-macos)).
+A real login is measured by the journey's local mode every day on the Mac mini's journey account, which signs in to every agent itself ([VERIFICATION.md: The daily real-login journey](VERIFICATION.md#the-daily-real-login-journey)).
 A test that needs a real agent asserts what happens before the model answers (the hooks the agent loads, the letter it is handed, a call refused with Hide's reason) against the fake model or a stand-in, never what a provider writes.
 
 ## Flaky tests

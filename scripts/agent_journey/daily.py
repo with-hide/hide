@@ -5,8 +5,10 @@ open, a LaunchAgent runs `run`: it moves the account's one checkout to main
 (or to the commit a `request` names), installs the CLIs contracts/agent-clis.json
 pins, builds the journey's binaries while holding the machine's shared cargo
 lock and no longer, runs every agent's journey on their real logins, and
-replaces the body of one GitHub issue with what an agent reading it acts on:
-each agent's CLI version and result, never an account name or screen text.
+replaces one file, ~/journey/record.json, with what the morning check acts
+on: each agent's CLI version and result, never an account name or screen
+text. The account holds no GitHub login: the morning check reads the file
+over SSH and reports from the operator's machine.
 An agent with a failed cell answers one prompt outside Hide afterwards; when
 it cannot, the failure is the agent's state (`login needed`, `usage limit`,
 `update needed`, `agent error`), not Hide's. Everything else stays in the
@@ -33,10 +35,12 @@ from . import account
 from .cells import FAIL, NOT_MEASURED, PASS
 
 CHECKOUT = Path(__file__).resolve().parents[2]
-REPOSITORY = "with-hide/hide"
-TITLE = "Real-login journey record"
-MARKER = "<!-- real-login-journey-record -->"
 LABEL = "dev.withhide.agent-journey"
+# The one place the morning check and a release read (docs/VERIFICATION.md,
+# The daily real-login journey, for its fields).
+RECORD = "record.json"
+STALE = ("a record older than a day means the run did not start: a restart of the machine ends the account's "
+         "login session, which the run needs, until someone logs in to the account again")
 # 05:00 on the machine's clock (Asia/Seoul on the mini): after the nightly
 # (17:17 UTC, 02:17 KST) and before the morning check reads the record.
 HOUR, MINUTE = 5, 0
@@ -61,7 +65,8 @@ CHECK_PROMPT = "Reply with the single word ok."
 ONE_SHOT = {
     "claude": ["-p", CHECK_PROMPT],
     "codex": ["exec", "--skip-git-repo-check", CHECK_PROMPT],
-    "opencode": ["run", CHECK_PROMPT],
+    # A private server, which ends with the prompt, not the background one.
+    "opencode": ["run", "--standalone", CHECK_PROMPT],
     "pi": ["-p", CHECK_PROMPT],
     "omp": ["-p", CHECK_PROMPT],
     "grok": ["-p", CHECK_PROMPT],
@@ -95,11 +100,11 @@ def log(stream, message):
 
 
 def environment(settings, extra=None):
-    """The run's environment: none of the launching shell's Hide or Herdr
-    variables, the journey's CLIs first on PATH, then the toolchain."""
+    """The run's environment: none of the launching shell's Hide variables
+    or provider keys, the journey's CLIs first on PATH, then the toolchain."""
     root = journey_root()
     base = {key: value for key, value in os.environ.items()
-            if not key.startswith(("HIDE_", "HERDR_")) and not key.endswith("_API_KEY")}
+            if not key.startswith("HIDE_") and not key.endswith("_API_KEY")}
     path = [str(root / "bin"), settings["toolchain_bin"], *SYSTEM_PATH]
     return {**base, "PATH": os.pathsep.join(path), "LANG": "en_US.UTF-8", "PYTHONUTF8": "1",
             "CARGO_HOME": str(root / "cargo-home"), "RUSTUP_HOME": settings["rustup_home"], **(extra or {})}
@@ -242,57 +247,13 @@ def recheck(agents, kinds, stream, env):
                 entry["result"] = state
 
 
-def markdown(record):
-    lines = [MARKER, "",
-             "The newest real-login journey on the Mac mini's journey account, replaced after each run by "
-             "`scripts/agent-journey-daily.py` (docs/VERIFICATION.md, The daily real-login journey). "
-             "Only agents, versions and cell results are here; each run's report and failure captures stay "
-             "on that machine. The run needs that account's login session, which a restart of the machine ends: "
-             "a record older than a day means someone has to log in to it again.", "",
-             f"- Started: {record['started']}, {record.get('minutes', '?')} min",
-             f"- Hide: {record.get('commit') or 'not checked out'} ({record['source']})",
-             f"- Run: {record['run']}" + (f", journey exit {record['exit']}" if record.get("exit") is not None else ""),
-             ""]
-    if record.get("agents"):
-        lines += ["| Agent | CLI | Result | Failed cells | Cells |", "| --- | --- | --- | --- | --- |"]
-        for entry in record["agents"]:
-            counts = ", ".join(f"{count} {status}" for status, count in sorted(entry["cells"].items()))
-            lines.append(f"| {entry['id']} | {entry['cli'] or '?'} | {entry['result']} | "
-                         f"{', '.join(entry['failed']) or '-'} | {counts} |")
-        lines.append("")
-    lines += ["```json", json.dumps(record, indent=1), "```", ""]
-    return "\n".join(lines)
-
-
-def gh(args, env, payload=None):
-    result = subprocess.run(["gh", *args], env=env, input=json.dumps(payload) if payload is not None else None,
-                            capture_output=True, text=True, timeout=120)
-    if result.returncode:
-        raise RuntimeError(f"gh {args[0]} {args[1] if len(args) > 1 else ''}: exit {result.returncode}")
-    return json.loads(result.stdout) if result.stdout.strip() else None
-
-
-def publish(record, stream, env):
-    """Replaces the record issue's body; makes the issue once."""
-    root = journey_root()
-    body = markdown(record)
-    (root / "last-record.json").write_text(json.dumps(record, indent=1))
-    remembered = root / "record-issue"
-    number = remembered.read_text().strip() if remembered.is_file() else None
-    try:
-        if not number:
-            found = gh(["api", "-X", "GET", f"repos/{REPOSITORY}/issues", "-f", "state=open", "-f", "per_page=100",
-                        "-f", "creator=@me"], env) or []
-            number = next((str(issue["number"]) for issue in found if issue["title"] == TITLE), None)
-        if number:
-            gh(["api", "-X", "PATCH", f"repos/{REPOSITORY}/issues/{number}", "--input", "-"], env, {"body": body})
-        else:
-            number = str(gh(["api", "-X", "POST", f"repos/{REPOSITORY}/issues", "--input", "-"], env,
-                            {"title": TITLE, "body": body})["number"])
-        remembered.write_text(number)
-        log(stream, f"record: {REPOSITORY}#{number}")
-    except (RuntimeError, subprocess.TimeoutExpired, ValueError, KeyError) as error:
-        log(stream, f"record not published: {error}")
+def publish(record, stream):
+    """Replaces the record file whole, so a reader never sees half of one."""
+    target = journey_root() / RECORD
+    replacement = target.with_name(target.name + ".next")
+    replacement.write_text(json.dumps(record, indent=1) + "\n")
+    os.replace(replacement, target)
+    log(stream, f"record: {target}")
 
 
 def ancestors():
@@ -351,7 +312,7 @@ def run(settings):
         request = root / "request.json"
         target = json.loads(request.read_text()).get("commit") if request.is_file() else None
         request.unlink(missing_ok=True)
-        record = {"format": 1, "started": started.isoformat(timespec="minutes"),
+        record = {"format": 1, "started": started.isoformat(timespec="minutes"), "if_stale": STALE,
                   "source": f"request {target}" if target else "main", "run": "ok", "exit": None, "agents": []}
         env = environment(settings)
         try:
@@ -380,7 +341,7 @@ def run(settings):
         finally:
             record["minutes"] = round((time.time() - started.timestamp()) / 60)
             cleanup(stream)
-            publish(record, stream, env)
+            publish(record, stream)
     return 0 if record["run"] == "ok" else 1
 
 
@@ -436,7 +397,7 @@ def request(args):
 
 
 def status(args):
-    record = journey_root() / "last-record.json"
+    record = journey_root() / RECORD
     print(record.read_text() if record.is_file() else "{}")
     return 0
 
