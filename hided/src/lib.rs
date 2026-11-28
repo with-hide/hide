@@ -31,6 +31,7 @@ pub mod desktop_notices;
 pub mod device_cli;
 pub mod ending;
 pub mod env;
+pub mod fixture_owner;
 pub mod guide;
 mod herdr_transition;
 pub mod holder_restart;

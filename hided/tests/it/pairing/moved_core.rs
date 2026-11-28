@@ -247,6 +247,10 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
             account: Vec::new(),
         }
     };
+    // An update over SSH starts the core detached, which no process of the
+    // test holds: it ends with the test however the test ends. Declared
+    // before the machines, so it outlives their own teardown.
+    let _core_owner = crate::fixtures::own_fixture_home(&at("ch"));
     // Declared before the machines, so it ends the holders after their
     // daemons stopped.
     let _holders = EndsHolders(hide_kit::layout::device_node_state(&at("mh")));

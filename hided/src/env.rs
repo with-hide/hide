@@ -71,6 +71,13 @@ pub const HIDE_CORE_STARTER: &str = "HIDE_CORE_STARTER";
 /// build; a file, since the fixture's SSH sessions keep the environment
 /// they started with.
 pub const FIXTURE_FAIL_BUILD_FILE: &str = ".hide-e2e-fail-build";
+/// Test-only: a file in a fixture HOME that the test owning the fixture
+/// holds locked for its whole life; every `hided` under that HOME ends once
+/// the lock comes free (`crate::fixture_owner`), so the cores a killed test
+/// started, which no process of the test holds once a core update started
+/// them, end with it. A file, as [`FIXTURE_FAIL_BUILD_FILE`] is, so it
+/// reaches a core however it was started.
+pub const FIXTURE_OWNER_FILE: &str = ".hide-fixture-owner";
 /// Test-only: the version this build presents in a link's hello, so a
 /// journey shows one build as newer or older than another.
 pub const HIDE_BUILD_VERSION_OVERRIDE: &str = "HIDE_BUILD_VERSION_OVERRIDE";
@@ -781,6 +788,15 @@ pub fn fixture_fails_build(build: &str) -> bool {
             && std::fs::read_to_string(home.join(FIXTURE_FAIL_BUILD_FILE))
                 .is_ok_and(|named| named.trim() == build)
     })
+}
+
+/// The owner file of this process's HOME ([`FIXTURE_OWNER_FILE`]), when HOME
+/// is a fixture HOME that has one. Looked for first, so a daemon under the
+/// account's own home pays one look and no fixture check.
+pub fn fixture_owner_file() -> Option<std::path::PathBuf> {
+    let home = hide_platform::host::home_dir().ok()?;
+    let file = home.join(FIXTURE_OWNER_FILE);
+    (file.is_file() && fixture_home(&home)).then_some(file)
 }
 
 /// The home every SSH device's node runs with ([`HIDE_DEV_DEVICE_HOME`]),
