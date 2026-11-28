@@ -97,10 +97,52 @@ function endReopenedApp(app: string): void {
   if (process.platform === "win32") {
     const setup = fs.readdirSync(feed!).find(name => name.endsWith("-setup.exe"));
     if (!setup) throw new Error(`no installer in the feed ${feed}`);
-    const installer = `Get-Process -Name '${path.parse(setup).name.replace(/'/g, "''")}' -ErrorAction SilentlyContinue`;
-    const reopened = `Get-Process hide -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${app.replace(/'/g, "''")}' }`;
-    const script = `${installer} | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue; if (${installer}) { throw 'the installer is still running' }; ${reopened} | Stop-Process -Force -ErrorAction SilentlyContinue; ${reopened} | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue; if (${reopened}) { throw 'the reopened app is still running' }`;
-    execFileSync("pwsh", ["-NoProfile", "-Command", script], { stdio: "inherit" });
+    // Diagnostic for with-hide/hide#3126: every process under the install
+    // folder or named after the installer, with its parent, start time and
+    // command line, at each step of the cleanup.
+    const script = String.raw`
+$app = $env:HIDE_E2E_REOPENED_APP
+$dir = Split-Path $app
+$setup = $env:HIDE_E2E_REOPENED_SETUP
+function Snap([string]$label) {
+  $all = @(Get-CimInstance Win32_Process)
+  $byId = @{}
+  foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p }
+  $now = (Get-Date).ToString('o')
+  $matched = @($all | Where-Object { ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, 'OrdinalIgnoreCase')) -or $_.Name -like 'hide*' })
+  "update-diag $label at=$now matched=$($matched.Count)"
+  foreach ($p in $matched) {
+    $parent = $byId[[int]$p.ParentProcessId]
+    $row = [ordered]@{ label = $label; pid = $p.ProcessId; name = $p.Name; ppid = $p.ParentProcessId; parent = $(if ($parent) { $parent.Name } else { $null }); parentCreated = $(if ($parent) { $parent.CreationDate.ToString('o') } else { $null }); created = $p.CreationDate.ToString('o'); session = $p.SessionId; path = $p.ExecutablePath; cmd = $p.CommandLine }
+    'update-diag-proc ' + ($row | ConvertTo-Json -Compress)
+  }
+  foreach ($g in @(Get-Process hide -ErrorAction SilentlyContinue)) {
+    $row = [ordered]@{ label = $label; pid = $g.Id; path = $g.Path; exited = $g.HasExited; start = $(try { $g.StartTime.ToString('o') } catch { "$_" }); handles = $g.HandleCount; threads = $g.Threads.Count; session = $g.SessionId }
+    'update-diag-gp ' + ($row | ConvertTo-Json -Compress)
+  }
+}
+function Reopened { @(Get-Process hide -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $app }) }
+Snap 'start'
+Get-Process -Name $setup -ErrorAction SilentlyContinue | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue
+if (Get-Process -Name $setup -ErrorAction SilentlyContinue) { Snap 'installer-left'; throw 'the installer is still running' }
+Snap 'installer-ended'
+$victims = Reopened
+"update-diag stopping $($victims.Count): $(($victims | ForEach-Object { $_.Id }) -join ',')"
+$victims | Stop-Process -Force -ErrorAction SilentlyContinue -ErrorVariable stopErrors
+foreach ($e in $stopErrors) { "update-diag stop-error $e" }
+Snap 'stopped'
+$deadline = (Get-Date).AddSeconds(10)
+$i = 0
+while ((Reopened).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500; $i++; Snap "wait-$i" }
+if ((Reopened).Count -gt 0) {
+  Snap 'throw'
+  foreach ($p in Reopened) { "update-diag waitprocess $($p.Id)"; $p | Wait-Process -Timeout 3 -ErrorAction SilentlyContinue -ErrorVariable waitErrors; foreach ($e in $waitErrors) { "update-diag wait-error $e" } }
+  Snap 'after-throw-wait'
+  throw 'the reopened app is still running'
+}
+Snap 'ended'
+`;
+    execFileSync("pwsh", ["-NoProfile", "-Command", script], { stdio: "inherit", env: { ...process.env, HIDE_E2E_REOPENED_APP: app, HIDE_E2E_REOPENED_SETUP: path.parse(setup).name } });
   } else {
     try {
       execFileSync("pkill", ["-f", `^${app}( |$)`], { stdio: "inherit" });
@@ -185,12 +227,15 @@ test("the installed app updates to the next version and the panes and daemon kee
     expect(hostLog(run.env).map((line) => line.event)).toEqual(expect.arrayContaining(["update.check", "update.found", "update.ready"]));
 
     const closed = app.waitForEvent("close", { timeout: 120_000 });
+    console.log(`update-diag test ${new Date().toISOString()} restart pressed`);
     await restart.click();
     await closed;
+    console.log(`update-diag test ${new Date().toISOString()} app closed`);
     app = null;
 
     // The installer of N+1 replaced N (B16) and nothing the core runs ended (D-19).
     await expect.poll(installedVersion, { timeout: 180_000, intervals: [1_000] }).toBe(next);
+    console.log(`update-diag test ${new Date().toISOString()} version ${next} recorded`);
     expect(run.daemonPid()).toBe(daemon);
     expect(await panesNow()).toBe(panes);
     expect(hostLog(run.env).map((line) => line.event)).toContain("update.install");
@@ -200,6 +245,7 @@ test("the installed app updates to the next version and the panes and daemon kee
     throw error;
   } finally {
     await app?.close().catch(() => undefined);
+    console.log(`update-diag test ${new Date().toISOString()} ending the reopened app`);
     try { endReopenedApp(file); } catch (error) {
       if (failed) console.log(`ending the reopened app failed: ${error instanceof Error ? error.message : String(error)}`);
       else leftRunning = error;
