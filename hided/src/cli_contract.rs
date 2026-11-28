@@ -2946,24 +2946,19 @@ fn listed(spec: &Spec, table: &retired::Table) -> Value {
         for option in command["options"].as_array_mut().into_iter().flatten() {
             with_retired(option.get_mut("conflicts"), &renamed);
         }
+        // A retired option is listed as the option it is now, under its old
+        // name: what a caller that types the old spelling reads stays as it
+        // was.
+        let options = command["options"].as_array_mut().expect("options are a list");
         for flag in renamed {
-            let value = spec
-                .options
+            let mut entry = options
                 .iter()
-                .find(|option| option.name == flag.now)
-                .and_then(|option| option.value)
-                .filter(|_| flag.arity > 0)
-                .map(value_json);
-            command["options"]
-                .as_array_mut()
-                .expect("options are a list")
-                .push(json!({
-                    "name": flag.old,
-                    "value": value,
-                    "required": false,
-                    "requires": [],
-                    "retired_for": flag.now,
-                }));
+                .find(|option| option["name"] == flag.now)
+                .cloned()
+                .unwrap_or_else(|| json!({"value": null, "required": false, "requires": []}));
+            entry["name"] = json!(flag.old);
+            entry["retired_for"] = json!(flag.now);
+            options.push(entry);
         }
     }
     command
@@ -4459,6 +4454,61 @@ mod tests {
             parse_args(&hide_line(&["plan", "show"])),
             Ok(CommandKind::Plan(_))
         ));
+    }
+
+    /// An old spelling of the second batch of names (`hided/AGENTS.md`, One
+    /// name per thing) parses as the command it is now, and the rewrite
+    /// leaves an option's value, the words after `--` and a hook's own
+    /// `workspace info --hook` as they are.
+    #[test]
+    fn an_old_spelling_keeps_its_values_the_words_after_dashes_and_the_hooks_command() {
+        let parse = |line: &str| parse_args(&hide_line(&shell_words(line)));
+        let same = |old: &str, now: &str| {
+            let (then, today) = (parse(old), parse(now));
+            assert!(today.is_ok(), "{now}: {today:?}");
+            assert_eq!(then, today, "{old}");
+            format!("{today:?}")
+        };
+        assert!(matches!(parse("workspace info --hook"), Ok(CommandKind::WorkspaceHookInfo)));
+        assert!(matches!(parse("workspace info"), Ok(CommandKind::WorkspaceInfo)));
+        assert!(matches!(parse("checkout show"), Ok(CommandKind::WorkspaceInfo)));
+        same("workspace purpose 'fix login'", "checkout purpose 'fix login'");
+        same("workspace remove ../w --force", "checkout remove ../w --force");
+        same("inbox --ack letter-2~0123456789ab", "inbox ack letter-2~0123456789ab");
+        same("session record agent-7", "session show agent-7");
+        same("view status browser-3", "view show browser-3");
+        same("skill on archify --agent codex", "skill on archify --kind codex");
+        same("mcp off github --agent pi", "mcp off github --kind pi");
+        same(
+            "mission plan --json '{\"nodes\": []}'",
+            "mission plan --inline '{\"nodes\": []}'",
+        );
+        same("plan set --json '{\"nodes\": []}'", "task set --inline '{\"nodes\": []}'");
+        same(
+            "automation edit a1 --own-folder --task 'Say hi'",
+            "automation edit a1 --no-repo --brief 'Say hi'",
+        );
+        // The value of a retired option that looks like one is its value.
+        let added = same(
+            "automation add --name n --task --folder --schedule 'daily 09:00' --kind claude",
+            "automation add --name n --brief --folder --schedule 'daily 09:00' --kind claude",
+        );
+        assert!(added.contains("task: \"--folder\"") && added.contains("folder: None"), "{added}");
+        // The words after `--` are the server's.
+        let edited = same(
+            "mcp update fs -- server --agent codex --task t",
+            "mcp edit fs -- server --agent codex --task t",
+        );
+        assert!(edited.contains("\"--agent\", \"codex\", \"--task\""), "{edited}");
+    }
+
+    /// `line` split as a POSIX shell splits it.
+    fn shell_words(line: &str) -> Vec<String> {
+        hide_shell::shell_line(line, hide_shell::Syntax::Posix)
+            .commands
+            .into_iter()
+            .next()
+            .unwrap_or_default()
     }
 
     /// The retired-words guard catches a row the parser reads otherwise, a

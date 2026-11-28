@@ -1791,17 +1791,17 @@ fn a_stub_text_changes_only_with_its_version() {
         (
             "hide",
             17,
-            "e2442a5b5bab4c39e982001faa46299935bdea3f9bd5fd10b40ae6337cef4c84",
+            "a474aafb6b384436dae3022ccca50dea293841105f455e305df1cb096b9b6d8f",
         ),
         (
             "hide-mission",
             4,
-            "a7ea89f57899a6d251afb12277cfd835c1da5bc2b5b6067759ab22b7baf1b08f",
+            "699b9ac09302dab4892e41a10121787dba8cecc9ef31d2a0728e23a2b6383c4b",
         ),
         (
             "hide-issue",
             2,
-            "01a4b9e83e9a1caafb4e2caafca4ee82ea7d9fb62fac79c88ec29b06a51bb798",
+            "68575be901c70dfaa2aec050bb7e483c29d0b02e92412c2cdce2fb3433a141ad",
         ),
     ];
     for skill in SKILLS {

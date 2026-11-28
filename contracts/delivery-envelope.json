@@ -84,7 +84,7 @@
           "mission": null,
           "conductor": null
         },
-        "hint": "Task: now Core events (1/4) · next Web map · updated 5 min ago\nThe task's steps wait for the operator's review: writing files, git commit and git push are blocked until the operator answers in the conversation. If they approve, run hide task approve; if they ask for changes, send the revised steps with hide task set --json '<plan>' --ask rather than a file; if they say not to, run hide task drop.",
+        "hint": "Task: now Core events (1/4) · next Web map · updated 5 min ago\nThe task's steps wait for the operator's review: writing files, git commit and git push are blocked until the operator answers in the conversation. If they approve, run hide task approve; if they ask for changes, send the revised steps with hide task set --inline '<plan>' --ask rather than a file; if they say not to, run hide task drop.",
         "commands": [
           {
             "tool": "shell",
