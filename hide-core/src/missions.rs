@@ -4569,10 +4569,13 @@ fn shared_code_paths<'a>(
 /// Whether two path keys ([`path_key`]) name the same file or one holds the
 /// other; the project's folder itself (`.`) holds every path in it.
 fn overlapping(a: &str, b: &str) -> bool {
-    let inside = |key: &str| !key.starts_with('/');
+    // The project's folder holds a path below it, never one above it or
+    // outside it (`../x`, `/elsewhere/x`).
+    let inside = |key: &str| !key.starts_with('/') && key != ".." && !key.starts_with("../");
+    if a.is_empty() || b.is_empty() {
+        return inside(a) && inside(b);
+    }
     a == b
-        || (a.is_empty() && inside(b))
-        || (b.is_empty() && inside(a))
         || a.strip_prefix(b).is_some_and(|rest| rest.starts_with('/'))
         || b.strip_prefix(a).is_some_and(|rest| rest.starts_with('/'))
 }
@@ -6141,6 +6144,8 @@ pub(crate) mod tests {
             ("/elsewhere/web/src", "web/src"),
             ("/repo-other/web", "web"),
             (".", "/elsewhere/x"),
+            ("/elsewhere", "."),
+            (".", "../web"),
         ] {
             assert!(
                 planned(&two_on_paths(&[a], &[b], &[], Vec::new())).is_ok(),
