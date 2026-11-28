@@ -36,7 +36,7 @@ from . import scene
 from .journey import STEPS, Journey, token
 from .own_runtime import OwnRuntime
 from .routes import allow_hook_records, allow_hook_route, operator_routing
-from .local import (ROUTES, TRUST, allow_one_shot_references, claude_config, claude_session_folders,
+from .local import (ROUTES, TRUST, agy_home, allow_one_shot_references, claude_config, claude_session_folders,
                     disable_hide_ai, opencode_model, operator_trust, route, wrapper)
 from .account import WriteBack, dedicated as journey_account, write_back
 from .report import save, table_lines
@@ -281,19 +281,15 @@ def wait_kit(daemon, ids):
     return daemon.wait(report, KIT_SECONDS, "the kit to install each agent's hook")["failed"]
 
 
-def prepare_local(runtime, report, table, rows, measured, operator, root, fake, services, dedicated=False):
+def prepare_local(runtime, report, table, rows, measured, operator, root, fake, services, fake_key, dedicated=False):
     """Local mode's guard, write sandbox and each agent's route; the agents
     ready to measure. With `fake` (each agent's fake model URL) no login is
-    read or copied: each agent's private folder points it at the fake. On
-    the journey account (`dedicated`, account.py) each login copy goes back
-    to the account after the run, so no refresh window refuses one."""
+    read or copied: each agent's private folder points it at the fake, with
+    the key the run's fake models take (`fake_key`). On the journey account
+    (`dedicated`, account.py) each login copy goes back to the account after
+    the run, so no refresh window refuses one."""
     run, owner = runtime.run, runtime.owner
     report["agents"].extend({"id": key} for key in measured)
-    for key in measured:
-        unmeasured = ROUTES[rows[key]["agent_cli"]].get("unmeasured")
-        if unmeasured:
-            cells.settle_agent(table, key, unmeasured)
-    measured = [key for key in measured if "unmeasured" not in ROUTES[rows[key]["agent_cli"]]]
     kinds = [rows[key]["agent_cli"] for key in measured]
     known = list(dict.fromkeys(operator / rel for kind in kinds for rel in ROUTES[kind]["known"]))
     roots = list(dict.fromkeys(operator / rel for kind in kinds for rel in ROUTES[kind]["roots"]))
@@ -317,12 +313,14 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
         if not executables[key]:
             cells.settle_agent(table, key, f"CLI not installed: {kind} is not on PATH")
             continue
-        extra = fake_lane.configure(kind, runtime.home, fake[key], root, local=True) if fake else None
+        extra = fake_lane.configure(kind, runtime.home, fake[key], root, local=True, key=fake_key) if fake else None
         keys = {}
         if extra is not None:
             agent["fake_env"] = sorted(extra)
         elif kind == "claude":
             claude_config(runtime.home, root)
+        elif kind == "agy":
+            agy_home(runtime.home, operator)
         elif kind == "opencode":
             keys, refusal = provider_keys(runtime, kind, opencode_model(operator, runtime.home / opencode_service.CONFIG))
             agent["key_env"] = sorted(keys)
@@ -412,7 +410,7 @@ def prepare_fake_local(runtime, report, table, rows, measured, operator, root, u
     legacy_ready = []
     if fallback:
         legacy_sandbox, guard, legacy_ready = prepare_local(runtime, report, table, rows, fallback, operator,
-                                                           root, urls, services)
+                                                           root, urls, services, fake_key)
         runtime.journey_sandboxes = [legacy_sandbox, sandbox]
         runtime.sandbox = sandbox
         for key in fallback:
@@ -663,7 +661,7 @@ def main(argv=None):
             sandbox, guard, ready = prepare_fake_local(runtime, report, table, rows, measured, operator, root, urls, services, fake_key)
         elif local:
             sandbox, guard, ready = prepare_local(runtime, report, table, rows, measured, operator, root, urls, services,
-                                                  dedicated)
+                                                  fake_key, dedicated)
         else:
             sandbox, ready = None, prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, urls,
                                               services, diagnostics)

@@ -11,10 +11,10 @@ HOME and is pointed at its own folder in the private daemon home by the
 variable it documents for that (CLAUDE_CONFIG_DIR, CODEX_HOME, GROK_HOME,
 PI_CODING_AGENT_DIR, OpenCode's XDG folders), which holds the candidate's
 hooks or extension and, but for Claude, whose login stays the operator's
-keychain entry, a copy of the operator's login. omp has no such variable, so
-it runs in the private daemon home itself, as hided and omp share one HOME in
-the product; agy has none either and signs in through the keychain of its
-HOME, so it is not measured here.
+keychain entry, a copy of the operator's login. omp and agy have no such
+variable, so they run in the private daemon home itself, as hided and each
+share one HOME in the product; agy finds its keychain sign-in through that
+HOME's `Library/Keychains`, which is linked to the operator's.
 """
 
 import contextlib
@@ -157,18 +157,30 @@ ROUTES = {
         "login": lambda root, status, margin: opencode_login_refusal(root / "auth.json", margin),
     },
     "agy": {
-        # agy 1.4.0 has no variable or flag for its configuration folder and
-        # signs in through the keychain of the HOME it runs in, so the
-        # candidate's kit could reach it only through the operator's own
-        # ~/.gemini/config, whose hooks would run instead.
-        "unmeasured": ("agy reads its hooks only from ~/.gemini/config in the HOME its keychain sign-in needs, so the "
-                       "candidate's kit cannot reach it without the operator's own hooks running; the CI mode measures "
-                       "it; it closes once agy takes a configuration folder variable or a login kept in a private file"),
+        "args": lambda home: [],
+        # agy 1.5.18 reads its hooks, folder trust and sessions only under
+        # ~/.gemini in its HOME: no variable moves them, and `--settings`
+        # takes settings.json keys, not a hooks file (measured 2026-11-28).
+        # So it runs in the daemon's private HOME, as omp does, where the kit
+        # writes its hooks and Hide's reader reads its sessions, and the
+        # operator's own hooks file is never read; agy_home reaches its
+        # sign-in from there.
+        "env": lambda home: {"HOME": str(home)},
+        "unset": [],
+        "sessions": lambda operator, home: home,
+        "known": [".gemini/config/hooks.json", ".gemini/antigravity-cli/settings.json"],
+        "shared": {},
+        "roots": [".gemini/config", ".gemini/antigravity-cli/settings.json"],
+        "untrusted": None,
+        "config": None,
+        "copies": [],
+        "login": lambda root, status, margin: agy_login_refusal(*status(["models"])),
     },
 }
 
 # Telemetry and self-update stay off in every measured agent.
-QUIET = {"DISABLE_AUTOUPDATER": "1", "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1"}
+QUIET = {"DISABLE_AUTOUPDATER": "1", "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1",
+         "AGY_CLI_DISABLE_AUTO_UPDATE": "1"}
 # The folder under the run's HOME that holds every profile account the
 # `profile` cell makes (fake_lane.profile_account). An agent's wrapper keeps
 # an account variable a start set only when it names a folder here: a start
@@ -220,6 +232,32 @@ def wrapper(directory, executable, operator, state, kind, home, sandbox, path, e
     return target
 
 
+def agy_onboarded(home):
+    """agy's first-run onboarding (a color scheme, then a security notice)
+    finished, the status it saves in `cache/onboarding.json`, as an account's
+    own agy keeps it once it has been used. In a HOME without it the
+    onboarding opens over the first prompt and can hold it, so the start
+    answers nothing (agy 1.5.18 writes it unfinished in a new HOME, and its
+    notice then took a signed-in journey's later input, 2026-11-28)."""
+    folder = home / ".gemini/antigravity-cli/cache"
+    private_directory(folder)
+    write_private(folder / "onboarding.json", json.dumps({
+        "onboardingComplete": True, "consumerOnboardingComplete": True,
+        "enterpriseOnboardingComplete": False}).encode())
+
+
+def agy_home(home, operator):
+    """The daemon home a signed-in agy runs in (ROUTES), made before agy
+    first runs: its first-run onboarding finished, as the operator's own agy
+    keeps it, and HOME's `Library/Keychains`, where agy finds its sign-in
+    (one keychain item), linked to the operator's, so the login stays the
+    operator's own item, read and refreshed in place and never copied."""
+    agy_onboarded(home)
+    keychains = home / "Library/Keychains"
+    private_directory(keychains.parent)
+    keychains.symlink_to(operator / "Library/Keychains", target_is_directory=True)
+
+
 def disable_hide_ai(home):
     """The candidate's Hide AI switched off in its private home: on, it would
     run the operator's signed-in CLI with the private HOME and spend requests
@@ -252,6 +290,14 @@ def claude_login_refusal(code, output):
     except (ValueError, AttributeError):
         logged_in = False
     return None if not code and logged_in else "not logged in: run claude auth login yourself; the journey never logs in"
+
+
+def agy_login_refusal(code, output):
+    """Why agy cannot be measured from `agy models`' answer, or None: signed
+    in, it prints a line per model, its id and its name split by a tab, and
+    runs no model turn (hide-ai's agy probe reads it the same way)."""
+    signed_in = not code and any("\t" in line for line in output.splitlines())
+    return None if signed_in else "not logged in: start agy yourself and sign in; the journey never logs in"
 
 
 def expiry_refusal(cli, expiries, margin, now=None):
