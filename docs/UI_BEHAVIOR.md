@@ -4294,6 +4294,7 @@ Each exception has a dominant convention on Windows and Linux, or a chord the sy
 Ctrl+C copies only while text is selected and clears the selection as it copies, as Windows Terminal does, so the next Ctrl+C interrupts; with nothing selected it reaches the program.
 Every other plain Ctrl key reaches the program, apart from text size (Ctrl+=, Ctrl+- and Ctrl+0) and the tab beside (Ctrl+PageDown and Ctrl+PageUp).
 Settings, Shortcuts refuses a binding on the terminal's copy or paste chord.
+In another computer's screen the page reads no clipboard, so on Windows and Linux Ctrl+Shift+V is left to the page's own paste, which carries the text this computer copied; an image is not pasted there (`web/src/keys.ts`).
 
 While an input method composes (Hangul, kana, pinyin), the keys in this table are the input method's and none is sent; a ⇧↩ that ends a syllable reaches the program after that syllable, never before it (`web/src/terminals.ts`).
 The syllable being composed is drawn in the terminal's own colours, underlined.
