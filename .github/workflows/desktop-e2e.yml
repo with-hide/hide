@@ -16,13 +16,17 @@
 # the tests out as `web-e2e.yml` does, by this suite's own macOS recording,
 # `desktop/e2e/shard-durations.json` (`scripts/e2e-shard.py`).
 #
-# With more than one shard the daemon and kit binaries, the pane holder and the
-# web shell build once, in the one `build` job on the lane's runner, and every
-# shard waits for it and downloads `target/debug` and `web/dist`. They build in
-# one job, one after the other, not in two parallel jobs as `web-e2e.yml` does:
-# the organization runs five macOS jobs at once, and a second build job would
-# hold another of them for the whole build. Before this a shard built both
-# itself, 5 minutes of cargo and 3 of the web shell on each of two shards.
+# With more than one shard the daemon and kit binaries and the pane holder build
+# once, in the `build` job on the lane's runner, and the web shell builds once,
+# in `build-web` on Linux beside it; every shard waits for both and downloads
+# `target/debug` and `web/dist`. The shell is the one output a Linux runner can
+# make for every system: its bundle reads no system's environment, and the
+# relay WebAssembly it embeds compiles from the same locked source for the
+# browser on any host. It builds on Linux, not as a second job on the lane's
+# runner, because the organization runs five macOS jobs at once and a second
+# macOS build job would hold another of them for the whole build. Before this a
+# shard built both itself, 5 minutes of cargo and 3 of the web shell on each of
+# two shards.
 # A single shard still builds in place: a second job would only add its own
 # setup. Every shard keeps what is not a build output: the Electron runtime,
 # Playwright's Chromium, the host's own bundle (`desktop e2e` builds it), the
@@ -65,15 +69,15 @@ permissions:
   contents: read
 
 jobs:
-  # The one build of the lane's Rust and web outputs, for a caller with more
-  # than one shard. The debug `hided` reads `web/dist` from disk at run time,
-  # and the fixture's app bundle links the four binaries below, so those are
-  # what a shard needs; nothing else of a cargo or web build reaches a test.
+  # The one cargo build of the lane, for a caller with more than one shard. The
+  # fixture's app bundle links the four binaries below, so those are what a
+  # shard needs; nothing else of a cargo build reaches a test. The debug `hided`
+  # reads `web/dist` from disk at run time, so the shell is `build-web`'s.
   build:
     name: build desktop ${{ inputs.lane }}
     if: ${{ inputs.shards > 1 }}
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 40
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
@@ -82,16 +86,6 @@ jobs:
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
         timeout-minutes: 5
-      - uses: pnpm/action-setup@v6
-        timeout-minutes: 5
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        timeout-minutes: 5
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
       # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
       # so this job reaches no package host (#2631).
       - uses: ./.github/actions/vt-cache
@@ -132,19 +126,45 @@ jobs:
             target/debug/hide-holder${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
           retention-days: 1
-      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
-      - uses: ./.github/actions/relay-tools
+
+  # Independent of the daemon build: neither debug output embeds the other. On
+  # Linux whatever the lane's runner is (see the header).
+  build-web:
+    name: build web shell ${{ inputs.lane }}
+    if: ${{ inputs.shards > 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+      - uses: pnpm/action-setup@v6
+        timeout-minutes: 5
         with:
-          save: false
+          version: 10
+      - uses: actions/setup-node@v4
+        timeout-minutes: 5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
+      # Restored never saved here: Linux's one saver of the binding tool is
+      # `web-e2e.yml`'s `build-web` on main (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
+      # Install the locked binding tool outside the shell build's budget.
+      - name: Prepare the relay WebAssembly
+        timeout-minutes: 10
+        run: bash scripts/build-relay-wasm.sh
       - name: Build the web shell
         # The desktop app serves web/dist through the hided it starts.
-        # A macOS runner takes 4 to 5 minutes here (236 to 298 s in the
-        # 25 verify runs before 2026-10-28), so a 5-minute cap failed
-        # main on a slow runner rather than on a slow build.
-        timeout-minutes: 10
+        timeout-minutes: 5
         run: bash scripts/verify-web.sh web build
       - name: Keep the web shell for the shards
         uses: actions/upload-artifact@v7
@@ -159,10 +179,10 @@ jobs:
 
   e2e:
     name: desktop e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}
-    needs: build
-    # The build is skipped for a single shard; a failure or cancellation in it
-    # still stops the shards, and the lane reports the failure.
-    if: ${{ !cancelled() && contains(fromJSON('["success","skipped"]'), needs.build.result) }}
+    needs: [build, build-web]
+    # Both builds are skipped for a single shard; a failure or cancellation in
+    # either still stops the shards, and the lane reports the failure.
+    if: ${{ !cancelled() && contains(fromJSON('["success","skipped"]'), needs.build.result) && contains(fromJSON('["success","skipped"]'), needs.build-web.result) }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 45
     defaults:
