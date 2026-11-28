@@ -132,13 +132,12 @@ class Record(unittest.TestCase):
                     path.write_text(json.dumps(report(failing=failing)))
             latest, pinned = record.load_reports(root, record.LATEST), record.load_reports(root, record.PINNED)
             result = self.verdicts(latest, pinned)
-            self.assertEqual(result["codex"][0], "fail")
-            self.assertEqual(result["codex"][2], {"linux": "fail", "macos": "pass"})
-            self.assertEqual(result["claude-code"], ("pass", [], {"linux": "pass", "macos": "pass"}))
+            self.assertEqual(result["codex"]["linux"][0], "fail")
+            self.assertEqual(result["codex"]["macos"], ("pass", []))
+            self.assertEqual(result["claude-code"], {"linux": ("pass", []), "macos": ("pass", [])})
             (root / f"{record.LATEST}-linux/report.json").unlink()
             result = self.verdicts(record.load_reports(root, record.LATEST), pinned)
-            self.assertEqual(result["claude-code"], ("unknown", ["linux: no report"],
-                                                     {"linux": "unknown", "macos": "pass"}))
+            self.assertEqual(result["claude-code"], {"linux": ("unknown", ["linux: no report"]), "macos": ("pass", [])})
 
     def test_the_journey_keeps_its_report_at_its_artifacts_root(self):
         # 2026-11-03 to 2026-11-28 the controller's folder rode in the same
@@ -157,10 +156,10 @@ class Record(unittest.TestCase):
         for name in (record.LATEST, record.PINNED):
             self.assertIn(f"pattern: {name}-*\n", nightly)
 
-    def run_once(self, state, latest, pinned=None, versions=None, systems=None):
+    def run_once(self, state, latest, pinned=None, versions=None, systems=None, today="2026-10-27"):
         versions = versions or self.versions
         after = record.updated_state(state, CONTRACT, versions, self.verdicts(latest, pinned or {}, versions, systems),
-                                     "2026-10-27")
+                                     today)
         found = record.actions(after, state, "https://run", "abc123", self.pins)
         calls = []
 
@@ -181,8 +180,36 @@ class Record(unittest.TestCase):
     def test_a_day_without_macos_judges_linux_alone(self):
         after, calls = self.run_once({"agents": {}}, {"linux": report(failing="codex")}, {"linux": report()},
                                      systems=["linux"])
-        self.assertEqual(after["agents"]["codex"]["systems"], {"linux": "fail"})
+        self.assertEqual({system: entry["status"] for system, entry in after["agents"]["codex"]["systems"].items()},
+                         {"linux": "fail"})
         self.assertEqual(after["agents"]["pi"]["status"], "pass")
+
+    def test_a_linux_only_day_never_clears_a_macos_failure(self):
+        pins = {system: report() for system in record.SYSTEMS}
+        # Monday: the release fails on macOS alone, and its issue opens.
+        monday, calls = self.run_once({"agents": {}}, {"linux": report(), "macos": report(failing="codex")}, pins)
+        self.assertEqual((monday["agents"]["codex"]["status"], monday["agents"]["codex"]["issue"]), ("fail", 77))
+        # Tuesday: Linux passes the same release; macOS was not measured.
+        tuesday, calls = self.run_once(monday, {"linux": report()}, pins, systems=["linux"], today="2026-10-28")
+        codex = tuesday["agents"]["codex"]
+        self.assertEqual((codex["status"], codex["issue"], codex["last_pass"], calls), ("fail", 77, None, []))
+        self.assertEqual(codex["failures"], ["macos: composer is fail (erase: not_empty)"])
+        # Wednesday: a new release passes Linux; macOS has not met it yet, so
+        # nothing says it is fixed there.
+        newer = {**self.versions, "codex": "2.0.1"}
+        wednesday, calls = self.run_once(tuesday, {"linux": report()}, pins, versions=newer, systems=["linux"],
+                                         today="2026-10-29")
+        codex = wednesday["agents"]["codex"]
+        self.assertEqual((codex["status"], codex["issue"], codex["last_pass"], calls), ("unknown", 77, None, []))
+        self.assertIn("macos: not measured at 2.0.1 since 2.0.0, which was fail", codex["failures"])
+        self.assertIn("| codex | 2.0.1 (2026-10-29) | linux ✅ · macos ❌ (2.0.0) |",
+                      record.render(wednesday, {}, {}, "https://run"))
+        # Thursday: macOS passes the current release, and the issue closes.
+        thursday, calls = self.run_once(wednesday, {system: report() for system in record.SYSTEMS}, pins,
+                                        versions=newer, today="2026-10-30")
+        codex = thursday["agents"]["codex"]
+        self.assertEqual((codex["status"], codex["issue"], codex["last_pass"]), ("pass", None, "2.0.1"))
+        self.assertEqual([call[:3] for call in calls], [["issue", "close", "77"]])
 
     def test_a_miss_the_pin_does_not_repeat_opens_one_issue_against_the_release(self):
         before = {"agents": {"codex": {"kind": "codex", "checked": "1.0.0", "last_pass": "1.0.0",
@@ -273,8 +300,8 @@ class Record(unittest.TestCase):
             calls = []
 
             def gh(*args, run=None):
-                calls.append(args[:2])
-                return "[]"
+                calls.append(args[:3])
+                return json.dumps({"state": "OPEN", "body": ""})
             original, record.gh = record.gh, gh
             try:
                 code = record.main(["--versions", str(versions), "--systems", '["linux"]', "--reports", str(root),
@@ -282,7 +309,14 @@ class Record(unittest.TestCase):
             finally:
                 record.gh = original
         self.assertEqual(code, 1)
-        self.assertEqual(calls, [("issue", "list")])
+        # It reads the record by its number and writes nothing.
+        self.assertEqual(calls, [("issue", "view", str(record.RECORD_ISSUE))])
+
+    def test_a_closed_record_is_refused_rather_than_replaced(self):
+        def gh(argv, **_):
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"state": "CLOSED", "body": ""}), "")
+        with self.assertRaisesRegex(SystemExit, "#2552 is closed"):
+            record.record_issue(run=gh)
 
 
 if __name__ == "__main__":

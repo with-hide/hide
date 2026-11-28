@@ -43,7 +43,9 @@ from agent_journey.scene import lane_status  # noqa: E402
 # Where the record and every failure issue live.
 ISSUE_REPOSITORY = "with-hide/hide"
 LABEL = "agent-canary"
-RECORD_TITLE = "Agent CLI support record"
+# The record, "Agent CLI support record", is this one issue, found by its number: a title can be edited or
+# repeated. scripts/check-nightly-green.py exempts the same number.
+RECORD_ISSUE = 2552
 STATE = "<!-- agent-canary-state "
 # The systems the canary can measure; Windows runs no journey while a holder
 # cannot leave the CI job (docs/INSTALL.md). A run names the ones it measured.
@@ -138,35 +140,50 @@ def system_verdict(row, system, versions, pins, latest, pinned):
 
 
 def verdicts(contract, versions, pins, systems, latest, pinned):
-    """Each active agent's `(status, failures, per-system statuses)`: the
-    worst of its systems' verdicts, with every system's failures."""
-    result = {}
-    for row in active_rows(contract):
-        per = {system: system_verdict(row, system, versions, pins, latest, pinned) for system in systems}
-        status = min((status for status, _ in per.values()), key=WORST.index, default="unknown")
-        result[row["id"]] = (status, [text for _, failures in per.values() for text in failures],
-                             {system: status for system, (status, _) in per.items()})
-    return result
+    """Each active agent's `{system: (status, failures)}` on the systems this
+    run measured."""
+    return {row["id"]: {system: system_verdict(row, system, versions, pins, latest, pinned) for system in systems}
+            for row in active_rows(contract)}
 
 
 def updated_state(state, contract, versions, results, today):
-    """The record after this run: `checked` and `date` move for every agent,
-    `last_pass` only for one that passed, and an agent's failure issue stays
-    with it until it passes."""
+    """The record after this run. Each agent keeps one entry per system it was
+    ever measured on, `{status, version, failures}`; this run replaces the
+    entries of the systems it measured and keeps the others, so a day that
+    measures Linux alone says nothing about macOS. An entry for an older
+    version than the one checked now is unknown for the agent's verdict: a
+    failure there is not cleared until that system passes the current
+    version. `checked` and `date` move for every agent, `last_pass` only for
+    one whose every entry passes at the current version, and an agent's
+    failure issue stays with it until then."""
     agents = {}
     for row in active_rows(contract):
         agent, kind = row["id"], row["agent_cli"]
+        version = versions.get(kind)
         before = state["agents"].get(agent, {})
-        status, failures, systems = results[agent]
+        systems = {system: entry for system, entry in (before.get("systems") or {}).items()
+                   if isinstance(entry, dict) and system in SYSTEMS}
+        for system, (status, failures) in results[agent].items():
+            systems[system] = {"status": status, "version": version, "failures": failures}
+        statuses, failures = [], []
+        for system, entry in sorted(systems.items()):
+            if entry["version"] == version:
+                statuses.append(entry["status"])
+                failures += entry["failures"]
+            else:
+                statuses.append("unknown")
+                failures += [f"{system}: not measured at {version} since {entry['version']}, which was "
+                             f"{entry['status']}"] + [f"{text} (at {entry['version']})" for text in entry["failures"]]
+        status = min(statuses, key=WORST.index, default="unknown")
         passed = status == "pass"
         agents[agent] = {
             "kind": kind,
-            "checked": versions.get(kind),
+            "checked": version,
             "date": today,
             "status": status,
             "systems": systems,
             "failures": failures,
-            "last_pass": versions.get(kind) if passed else before.get("last_pass"),
+            "last_pass": version if passed else before.get("last_pass"),
             "last_pass_date": today if passed else before.get("last_pass_date"),
             "issue": None if passed else before.get("issue"),
         }
@@ -189,7 +206,9 @@ def render(state, pins, minimums, run_url):
     ]
     for agent, row in sorted(state["agents"].items()):
         last = f"{row['last_pass']} ({row['last_pass_date']})" if row.get("last_pass") else "—"
-        status = " · ".join(f"{system} {MARK[value]}" for system, value in sorted(row.get("systems", {}).items()))
+        status = " · ".join(f"{system} {MARK[entry['status']]}"
+                            + ("" if entry["version"] == row["checked"] else f" ({entry['version']})")
+                            for system, entry in sorted(row.get("systems", {}).items()))
         issue = f"#{row['issue']}" if row.get("issue") else ""
         lines.append(f"| {agent} | {row['checked']} ({row['date']}) | {status or MARK[row['status']]} | "
                      f"{minimums.get(agent, '—')} | {last} | {pins.get(row['kind'], '—')} | {issue} |")
@@ -250,11 +269,12 @@ def apply(state, found, run=subprocess.run):
 
 
 def record_issue(run=subprocess.run):
-    """(number, body) of the open record issue, or (None, "")."""
-    found = json.loads(gh("issue", "list", "--label", LABEL, "--state", "open", "--search",
-                          f'in:title "{RECORD_TITLE}"', "--json", "number,title,body", run=run))
-    found = [issue for issue in found if issue["title"] == RECORD_TITLE]
-    return (found[0]["number"], found[0]["body"]) if found else (None, "")
+    """The record issue's body; a record that is closed is refused, since the
+    release gate exempts its number only while it holds the record."""
+    issue = json.loads(gh("issue", "view", str(RECORD_ISSUE), "--json", "state,body", run=run))
+    if issue["state"] != "OPEN":
+        raise SystemExit(f"the support record #{RECORD_ISSUE} is {issue['state'].lower()}; reopen it")
+    return issue["body"]
 
 
 def load_reports(folder, name):
@@ -291,8 +311,7 @@ def main(argv=None):
     contract = load_contract(ROOT)
     pins = {kind: row["version"] for kind, row in
             json.loads((ROOT / "contracts/agent-clis.json").read_text())["clis"].items()}
-    number, body = record_issue()
-    state = read_state(body)
+    state = read_state(record_issue())
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     results = verdicts(contract, versions, pins, systems, load_reports(args.reports, LATEST),
                        load_reports(args.reports, PINNED))
@@ -305,23 +324,23 @@ def main(argv=None):
     minimums = {row["id"]: row["minimum_version"] for row in active_rows(contract)}
     text = render(after, pins, minimums, args.run_url)
     if args.write:
-        if number:
-            gh("issue", "edit", str(number), "--body", text)
-        else:
-            gh("issue", "create", "--label", LABEL, "--title", RECORD_TITLE, "--body", text)
-    where = f"#{number}" if number else "a new issue"
+        gh("issue", "edit", str(RECORD_ISSUE), "--body", text)
+    where = f"#{RECORD_ISSUE}"
     done = [f"- {'' if args.write else 'would '}{verb} the issue of {agent}" for verb, agent, _ in found]
     summary(f"### Agent CLI support record ({'written to' if args.write else 'not written; would write'} {where})"
             "\n\n" + text.split(STATE, 1)[0] + "\n" + "\n".join(done or ["- no agent issue to write"]) + "\n")
     if not args.write:
         print(text.split(STATE, 1)[0])
         print("\n".join(done or ["no agent issue to write"]))
-    failed = [agent for agent, row in after["agents"].items() if row["status"] != "pass"]
-    for agent in failed:
-        row = after["agents"][agent]
-        print(f"::error title=agent canary {agent}::{row['checked']} ({row['status']}): "
-              + "; ".join(row["failures"][:5]))
-    return 1 if failed else 0
+    # The job fails on what this run measured; a system it did not measure
+    # (macOS on a Linux-only day) waits for its own run.
+    failed = {agent: [(system, status, failures) for system, (status, failures) in sorted(per.items())
+                      if status != "pass"] for agent, per in results.items()}
+    for agent, misses in failed.items():
+        for system, status, failures in misses:
+            print(f"::error title=agent canary {agent}::{after['agents'][agent]['checked']} on {system} ({status}): "
+                  + "; ".join(failures[:5]))
+    return 1 if any(failed.values()) else 0
 
 
 if __name__ == "__main__":

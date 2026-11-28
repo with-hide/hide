@@ -21,9 +21,10 @@ import sys
 REPOSITORY = "with-hide/hide"
 WORKFLOW = "nightly.yml"
 LABELS = ("nightly-failure", "agent-canary")
-# The always-open record issue `scripts/agent-canary-record.py` keeps under
-# the `agent-canary` label; its title is the record's key there too.
-RECORD_TITLE = "Agent CLI support record"
+# The always-open "Agent CLI support record" issue, by its number, which is
+# `RECORD_ISSUE` in scripts/agent-canary-record.py too: a title can be edited
+# or repeated by another issue.
+RECORD_ISSUE = 2552
 
 
 def gh(path):
@@ -47,7 +48,7 @@ def refusals(repo, call=gh):
         if len(issues) == 100:
             raise RuntimeError(f"100 or more open {label} issues; read them before a release")
         for issue in issues:
-            if "pull_request" in issue or (label == "agent-canary" and issue["title"] == RECORD_TITLE):
+            if "pull_request" in issue or (label == "agent-canary" and issue["number"] == RECORD_ISSUE):
                 continue
             found.append(f"open {label} issue #{issue['number']}: {issue['title']} ({issue['html_url']})")
     return found

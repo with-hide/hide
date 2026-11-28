@@ -69,6 +69,20 @@ class Gate(unittest.TestCase):
                 self.assertIn(f"issue #{number}:", out)
                 self.assertNotIn("#2552", out)
 
+    def test_only_the_record_by_its_number_is_exempt(self):
+        # Another issue with the record's title stops the candidate; the record
+        # renamed stays exempt.
+        same_title = {**RECORD, "number": 9999, "html_url": "https://github.com/with-hide/hide/issues/9999"}
+        code, out = check(answers(canary=[RECORD, same_title]))
+        self.assertEqual(code, 1)
+        self.assertIn("issue #9999:", out)
+        self.assertEqual(check(answers(canary=[{**RECORD, "title": "Agent CLI support table"}]))[0], 0)
+        # The record script keeps the same issue.
+        record_spec = importlib.util.spec_from_file_location("agent_canary_record", ROOT / "scripts/agent-canary-record.py")
+        record = importlib.util.module_from_spec(record_spec)
+        record_spec.loader.exec_module(record)
+        self.assertEqual(gate.RECORD_ISSUE, record.RECORD_ISSUE)
+
     def test_a_pull_request_under_the_label_is_not_an_issue(self):
         pull = {**NIGHTLY_ISSUE, "pull_request": {"url": "x"}}
         self.assertEqual(check(answers(failures=[pull]))[0], 0)
