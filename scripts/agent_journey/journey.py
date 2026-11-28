@@ -1,7 +1,7 @@
 """One agent's journey on the candidate: spawn, reply, letter, sleep and wake, resume.
 
 Each step asks the product to act the way an operator or a parent agent does
-(`hide agent spawn`, `hide request send`, the daemon's Sleep, Wake and terminal
+(`hide agent spawn`, `hide letter send`, the daemon's Sleep, Wake and terminal
 input) and judges only what Hide then reports. A step that cannot run settles
 its cell with the reason; nothing here types into a screen it read, but the
 composer cell, which reads the pane's screen only to judge it.
@@ -603,12 +603,12 @@ class Journey:
         value = token()
         since = self.daemon.mark(self.pane)
         log = self.log_mark()
-        sent = self.controller.hide(["request", "send", self.agent, "--intent", "journey-letter-" + self.name,
+        sent = self.controller.hide(["letter", "send", self.agent, "--intent", "journey-letter-" + self.name,
                                      "--kind", "report", "--body", LETTER_BODY + value])
         record = {"form": form, "token": value, "sent": sent, "shown": []}
         self.record["letter"] = record
         if sent.get("ok") is not True:
-            self.settle("letter", (cells.FAIL, "hide request send refused: " + ": ".join(filter(None, cells.refusal(sent)))),
+            self.settle("letter", (cells.FAIL, "hide letter send refused: " + ": ".join(filter(None, cells.refusal(sent)))),
                         self.evidence("letter", record))
             return
         letter = sent["result"]["id"]
@@ -686,9 +686,9 @@ class Journey:
                 raise Cancelled("run_cancelled")
 
     def send_now(self, intent, value, record):
-        """`hide request send --now` of a letter whose second line is `value`;
+        """`hide letter send --now` of a letter whose second line is `value`;
         the letter's id, or None with the cell's failure settled."""
-        sent = self.controller.hide(["request", "send", self.agent, "--intent", intent, "--kind", "report",
+        sent = self.controller.hide(["letter", "send", self.agent, "--intent", intent, "--kind", "report",
                                      "--now", "--body", LETTER_BODY + value])
         record["sent"] = sent
         if sent.get("ok") is not True:
@@ -731,7 +731,7 @@ class Journey:
         log = self.log_mark()
         letter = self.send_now("journey-letter-busy-" + self.id, value, record)
         if letter is None:
-            self.settle("letter_busy", (cells.FAIL, "hide request send refused: "
+            self.settle("letter_busy", (cells.FAIL, "hide letter send refused: "
                                         + ": ".join(filter(None, cells.refusal(record["sent"])))),
                         self.evidence("letter_busy", record))
             return
@@ -773,11 +773,11 @@ class Journey:
                     self.evidence("letter", record))
 
     def shown(self, letter, record, done, seconds):
-        """`hide request show` until `done(result)` or `seconds` pass; the last answer."""
+        """`hide letter show` until `done(result)` or `seconds` pass; the last answer."""
         end = time.monotonic() + seconds
         shown = {}
         while time.monotonic() < end:
-            answer = self.controller.hide(["request", "show", letter])
+            answer = self.controller.hide(["letter", "show", letter])
             shown = answer.get("result") or {}
             record["shown"].append({key: shown.get(key) for key in (
                 "state", "bell_line", "hook_confirmed", "bell_attempts", "bell_turn", "tool_handovers")})

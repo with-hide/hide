@@ -37,7 +37,7 @@ fn a_line_of_hide_commands_only_is_hide_s_to_answer() {
         "hide mission show mission-1 >/dev/null",
         "hide agent archive agent-3",
         &format!("{HIDE} inbox"),
-        "hide request send a --intent i --body 'use `hide task` here'",
+        "hide letter send a --intent i --body 'use `hide task` here'",
     ] {
         assert!(hide_line_in(line, &place(), POSIX), "{line}");
         assert!(hide_line_in(line, &place(), WINDOWS), "{line}");
@@ -46,7 +46,7 @@ fn a_line_of_hide_commands_only_is_hide_s_to_answer() {
     // a POSIX shell reads: PowerShell has no heredoc, so on Windows the
     // agent asks.
     let heredoc =
-        "hide request send a --intent i --body-file - <<'EOF'\nrun `cargo test` first\nEOF";
+        "hide letter send a --intent i --body-file - <<'EOF'\nrun `cargo test` first\nEOF";
     assert!(hide_line_in(heredoc, &place(), POSIX));
     assert!(!hide_line_in(heredoc, &place(), WINDOWS));
 }
@@ -89,12 +89,12 @@ fn a_line_that_runs_anything_but_hide_or_touches_a_file_is_the_agent_s_to_ask() 
         "hide ps >",
         "hide ps >> &",
         "hide ps > ; hide inbox",
-        "hide request send a --body-file - < notes.md",
+        "hide letter send a --body-file - < notes.md",
         // A substitution, a backquote, a heredoc that substitutes.
-        "hide request send a --body \"$(cat notes.md)\"",
-        "hide request send a --intent i --body \"$(cat <<'EOF'\nhi\nEOF\n)\"",
-        "hide request send a --body \"`touch y`\"",
-        "hide request send a --body-file - <<EOF\n$(touch y)\nEOF",
+        "hide letter send a --body \"$(cat notes.md)\"",
+        "hide letter send a --intent i --body \"$(cat <<'EOF'\nhi\nEOF\n)\"",
+        "hide letter send a --body \"`touch y`\"",
+        "hide letter send a --body-file - <<EOF\n$(touch y)\nEOF",
         // Another `hide`, a variable before it, a function, a compound.
         "PATH=/tmp hide agent list",
         "/tmp/hide agent list",
@@ -143,9 +143,18 @@ fn a_turns_tool_calls_count_as_sessions_read_letters_and_starts() {
     assert_eq!(run("hide agent show agent-3"), Step::Sessions);
     assert_eq!(run("hide ps && hide agent list"), Step::Sessions);
     assert_eq!(
+        run("hide letter send agent-3 --intent k --body hi"),
+        Step::Letter
+    );
+    assert_eq!(run("hide letter reply letter-3 --intent k --body hi"), Step::Letter);
+    assert_eq!(run("hide letter show letter-3"), Step::Sessions);
+    // The spelling letters had before `hide letter`, which session files
+    // keep for good.
+    assert_eq!(
         run("hide request send agent-3 --intent k --body hi"),
         Step::Letter
     );
+    assert_eq!(run("hide request show letter-3"), Step::Sessions);
     assert_eq!(run("hide agent spawn --name a --intent k"), Step::Start);
     assert_eq!(run("hide agent archive agent-3"), Step::Other);
     assert_eq!(run("ls -la"), Step::Other);

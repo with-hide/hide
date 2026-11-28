@@ -16,6 +16,7 @@ Do not copy those contracts here.
 | A machine that runs panes | topic `device`, option `--machine <device id>` | `--device`, which `device accept-ssh` uses between two Hides for the asking machine's id |
 | An agent family | `--kind <kind>` | `--agent` (`skill` and `mcp` `on`/`off` still take it) |
 | The text an agent starts with | `--brief <text>` | `--task` (`automation add` and `edit` still take it) |
+| A message one agent sends another, kept with its answer | topic `letter` (`hide letter send\|reply\|show\|cancel\|ack`) | `request`, which names a letter's kind (`--kind request`) and the verb of `device request` and `access request`; `hide request` is the letters' retired spelling |
 | A session's own plan and its steps | topic `task`, `node`, option `--plan-node` | a second topic for it; the glossary's `task` is the sidebar's unit of work, and this topic keeps the word it has |
 
 ## Shape

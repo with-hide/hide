@@ -2765,7 +2765,7 @@ impl MissionBook {
     /// The other registrations bound to the nodes registration `reader` is
     /// bound to, as their worker or a checker of one of their lines, each
     /// with the Conductor of its mission: the pairs whose letters, either
-    /// way, `reader` may read (`hide request show`). A Conductor points a
+    /// way, `reader` may read (`hide letter show`). A Conductor points a
     /// node's reviewer at the worker's design and its verifier at the
     /// review by the letter's id, so each of them reads what the others of
     /// its node exchanged with the Conductor (with-hide/hide#2298,

@@ -35,7 +35,7 @@ function splitCommands(syntax) {
 /**
  * The commands one `--help` syntax line stands for, each as its words before the first argument.
  * Two shapes, and a line may use both:
- *   `request ack|cancel|show <id>`: alternatives inside one word, one command each;
+ *   `letter ack|cancel|show <id>`: alternatives inside one word, one command each;
  *   `memory show <card> | search <words> | add <text>`: a `|` between whole commands, each with its own
  *   arguments, where every command after the first takes the first one's words before its last word as its prefix.
  */

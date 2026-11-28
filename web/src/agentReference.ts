@@ -6,7 +6,7 @@ import { localDeviceId, type AgentRow, type SnapshotRest } from "./snapshot";
 // in this one: `@<name> (pane <id> · <task>)`. The menu copies it, a
 // sidebar row dropped on a terminal types it, and a pane header's @ types the
 // one chosen from its list into that pane; the agent that reads it gives the
-// pane id to `hide pane read`, `hide pane send` and `hide request send`.
+// pane id to `hide pane read`, `hide pane send` and `hide letter send`.
 // A pane of this machine is named bare (`w9J:p52`); a pane of a connected
 // device carries its full address (`remote:<device>:pane:w2:p7`), because a
 // bare id names a pane only on the machine of whoever reads it.

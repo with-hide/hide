@@ -255,7 +255,7 @@ def release(journey, scene, case, name):
     log = journey.log_mark()
     letter = letter_into(journey, scene, value, record, 1)
     if letter is None:
-        journey.settle(name, (cells.FAIL, "hide request send refused: "
+        journey.settle(name, (cells.FAIL, "hide letter send refused: "
                               + ": ".join(filter(None, cells.refusal(record["sent"])))),
                        journey.evidence(name, record))
         return
@@ -270,7 +270,7 @@ def release(journey, scene, case, name):
     record["rungs"] = journey.rungs_since(log)
     if shown.get("state") != "delivered":
         # A letter left pending would ring into the cells after this one.
-        record["cancelled"] = journey.controller.hide(["request", "cancel", letter])
+        record["cancelled"] = journey.controller.hide(["letter", "cancel", letter])
     verdict = cells.with_turn(cells.menu_letter_verdict(shown, read, journey.session, value, before), turn)
     journey.settle(name, journey.with_rung(verdict, record["rungs"]), journey.evidence(name, record))
 
@@ -305,13 +305,13 @@ def watch_once(journey, scene, case, directory, repetition):
         log = journey.log_mark()
         letter = letter_into(journey, scene, value, record, repetition)
         if letter is None:
-            record.update(candidate="unknown", why="hide request send refused: "
+            record.update(candidate="unknown", why="hide letter send refused: "
                           + ": ".join(filter(None, cells.refusal(record["sent"]))))
             return record
         start = time.monotonic()
         middle = None
         while time.monotonic() - start < WATCH_SECONDS:
-            shown = (journey.controller.hide(["request", "show", letter]).get("result") or {})
+            shown = (journey.controller.hide(["letter", "show", letter]).get("result") or {})
             record["samples"].append({
                 "t": round(time.monotonic() - start, 1), "state": shown.get("state"),
                 "bell_attempts": shown.get("bell_attempts"),
@@ -358,7 +358,7 @@ def watch_once(journey, scene, case, directory, repetition):
         # A letter still pending would ring into the next scene.
         if letter and shown.get("state") != "delivered":
             try:
-                record["cancelled"] = journey.controller.hide(["request", "cancel", letter])
+                record["cancelled"] = journey.controller.hide(["letter", "cancel", letter])
             except (Cancelled, ProcessError) as error:
                 record["cancel_failed"] = str(error)
         write_private(directory / "record.json",

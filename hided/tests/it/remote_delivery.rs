@@ -103,7 +103,7 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
         );
 
         let send = format!(
-            "{} request send remote-child --intent bridge-1 --body {}",
+            "{} letter send remote-child --intent bridge-1 --body {}",
             quote(&fixture.hide),
             quote("DELIVERY_REMOTE_ONCE")
         );

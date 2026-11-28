@@ -58,7 +58,7 @@ function conductorPage(now: number, mission: string): ThreadPage {
       said("계획을 올리고 @1a-desk-room에 첫 층을 맡길게요."),
       shell("p1", "hide task set --file plan.json", "completed"),
       shell("s1", "hide agent spawn --parent here --name 1b-thread", "completed"),
-      shell("l1", "hide request send agent-1a --intent desk:review --body '리뷰 지적 2개 반영해서 다시 올려줘'", "completed"),
+      shell("l1", "hide letter send agent-1a --intent desk:review --body '리뷰 지적 2개 반영해서 다시 올려줘'", "completed"),
       shell("v1", "hide file open shots/thread-dark.png", "completed"),
       shell("m1", `hide mission show --mission ${mission}`, "completed"),
       shell("m2", `hide mission node add --mission ${mission} --key lane`, "completed"),

@@ -20,7 +20,7 @@ pub enum HideCall {
         intent: Option<String>,
         agent_id: Option<String>,
     },
-    /// `hide request send <to>`: a letter, with its body when it was written
+    /// `hide letter send <to>`: a letter, with its body when it was written
     /// on the command line.
     Letter { to: String, body: Option<String> },
     /// `hide browser|file|diff open <target>`: a View the session opened,
@@ -119,7 +119,7 @@ fn read(args: &[String]) -> Option<HideCall> {
             intent: option(tail, "--intent"),
             agent_id: None,
         }),
-        ("request", Some("send")) => Some(HideCall::Letter {
+        ("letter", Some("send")) => Some(HideCall::Letter {
             to: positional(tail, &["--intent", "--body", "--kind", "--reply-to"])?.to_owned(),
             body: option(tail, "--body"),
         }),
@@ -200,9 +200,16 @@ mod tests {
                 }),
             ),
             (
+                "hide letter send agent-7 --kind report --intent m:a --body \"끝났어요\"",
+                Some(letter("agent-7", Some("끝났어요"))),
+            ),
+            // The spelling letters had before `hide letter`, which session
+            // files keep for good.
+            (
                 "hide request send agent-7 --kind report --intent m:a --body \"끝났어요\"",
                 Some(letter("agent-7", Some("끝났어요"))),
             ),
+            ("hide letter show letter-3", None),
             (
                 "hide browser open --wait http://localhost:5173",
                 Some(HideCall::View {
@@ -271,7 +278,7 @@ mod tests {
     fn a_hide_command_is_found_behind_its_capability_path_and_in_a_list() {
         assert_eq!(
             hide_call(
-                "HIDE_CAP_REF='/Users/me/.hide/state/pane-capabilities/a.json' '/Applications/hide.app/Contents/Resources/hide' request send agent-18238 --kind progress --intent m:t --body \"계획\"",
+                "HIDE_CAP_REF='/Users/me/.hide/state/pane-capabilities/a.json' '/Applications/hide.app/Contents/Resources/hide' letter send agent-18238 --kind progress --intent m:t --body \"계획\"",
                 Syntax::Posix
             ),
             Some(letter("agent-18238", Some("계획")))

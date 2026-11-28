@@ -70,7 +70,7 @@ pub const START_CONTEXT: &str = "Inside Hide, read more when you need it:\n\
 | show a file, a diff or a page, or you made one for them to look at | `hide file open <path>`, `hide diff open <path>` or `hide browser open <url-or-path>`, as soon as it is ready and without asking, then say in one line what you opened; never the system opener (`open`, `xdg-open`, `start`) |\n\
 | an agent beside you | `hide agent spawn --beside …`; read `hide guide agents` before your first spawn |\n\
 | hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n\
-| tell another agent something | `hide request send <agent> …`, never by typing into its pane |\n\
+| tell another agent something | `hide letter send <agent> …`, never by typing into its pane |\n\
 | complex work: planning or review first, several PRs or parallel work, another agent reviewing | first ask in one line: Shall I run this as a mission, or do it directly? A mission is `hide mission help` |\n\
 | Hide itself misbehaves | `hide issue help` |";
 
@@ -720,7 +720,7 @@ mod tests {
             "`hide agent spawn --beside …`",
             "read `hide guide agents` before your first spawn",
             "`hide agent spawn --parent here …`",
-            "`hide request send <agent> …`, never by typing into its pane",
+            "`hide letter send <agent> …`, never by typing into its pane",
             "first ask in one line: Shall I run this as a mission, or do it directly?",
             "`hide mission help`",
             "`hide issue help`",
