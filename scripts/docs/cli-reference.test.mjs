@@ -35,8 +35,8 @@ test("a `|` between whole commands is one command each, with its own arguments",
 });
 
 test("alternatives inside one word are one command each, and a `|` inside brackets splits nothing", () => {
-  assert.deepEqual(expand("hide request ack|cancel|show <id>"), ["request ack", "request cancel", "request show"]);
-  assert.deepEqual(expand("hide request send <target> --intent <key> [--kind request|block] [--now | --force]"), ["request send"]);
+  assert.deepEqual(expand("hide letter ack|cancel|show <id>"), ["letter ack", "letter cancel", "letter show"]);
+  assert.deepEqual(expand("hide letter send <target> --intent <key> [--kind request|block] [--now | --force]"), ["letter send"]);
   assert.deepEqual(expand("hide task set (--file <plan.json> | --json <plan>) [--ask [why]]"), ["task set"]);
   assert.deepEqual(expand("hide <path>, hide ."), []);
 });

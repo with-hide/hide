@@ -23,25 +23,25 @@
     "line": "Prints the commands that tools call and the answers they get, as JSON, so a tool can check it matches this build.",
     "example": "hide contract --json"
   },
-  "request send": {
+  "letter send": {
     "line": "Sends a letter from an agent's pane to another agent and keeps its reply; sending again with the same --intent retries that letter without delivering it twice, and a new letter needs a new --intent.",
-    "example": "hide request send parent-name --kind progress --intent task-plan-1 --body 'Plan: core first, then web.'"
+    "example": "hide letter send parent-name --kind progress --intent task-plan-1 --body 'Plan: core first, then web.'"
   },
-  "request reply": {
+  "letter reply": {
     "line": "Answers a letter you received, so the sender gets your answer with the letter it was about.",
-    "example": "hide request reply letter-1 --intent task-answer-1 --body 'The check passed.'"
+    "example": "hide letter reply letter-1 --intent task-answer-1 --body 'The check passed.'"
   },
-  "request ack": {
+  "letter ack": {
     "line": "Records, from the recipient's own pane, that it received a letter, which is the receipt the sender waits for.",
-    "example": "hide request ack letter-1"
+    "example": "hide letter ack letter-1"
   },
-  "request cancel": {
+  "letter cancel": {
     "line": "Cancels a letter you sent that is still waiting for its answer.",
-    "example": "hide request cancel letter-1"
+    "example": "hide letter cancel letter-1"
   },
-  "request show": {
+  "letter show": {
     "line": "Opens one letter in full, including a letter that an inbox bundle only lists by its id.",
-    "example": "hide request show letter-1"
+    "example": "hide letter show letter-1"
   },
   "inbox": {
     "line": "Lists the letters waiting for you and the ones that came back undelivered, with the command that marks them taken.",

@@ -68,6 +68,15 @@ pub const TABLE: Table = Table {
             old: &["plan"],
             now: &["task"],
         },
+        // `hide letter` was `hide request`: the command agents type most,
+        // in every session file, edited skill and calling tool (sasu) since
+        // letters began. `request` stays a letter's kind (`--kind request`)
+        // and the verb of `device request` and `access request`, which this
+        // row, keyed by the topic, never reads.
+        Command {
+            old: &["request"],
+            now: &["letter"],
+        },
     ],
     options: &[],
 };
@@ -211,6 +220,35 @@ mod tests {
         // A retired word is read only where it was the command's.
         assert_eq!(current(&["agent", "plan"]), ["agent", "plan"]);
         assert!(current::<&str>(&[]).is_empty());
+    }
+
+    #[test]
+    fn the_table_reads_hide_request_as_hide_letter() {
+        for verb in ["send", "reply", "show", "cancel", "ack"] {
+            assert_eq!(
+                current(&["request", verb, "x"]),
+                ["letter", verb, "x"],
+                "request {verb}"
+            );
+        }
+        assert_eq!(
+            current(&[
+                "request", "send", "parent", "--kind", "request", "--body", "request"
+            ]),
+            [
+                "letter", "send", "parent", "--kind", "request", "--body", "request"
+            ]
+        );
+        // `request` as another topic's verb is never the letter topic.
+        assert_eq!(
+            current(&["device", "request", "pc"]),
+            ["device", "request", "pc"]
+        );
+        assert_eq!(
+            current(&["access", "request", "--name", "bot"]),
+            ["access", "request", "--name", "bot"]
+        );
+        assert_eq!(current(&["letter", "show", "l1"]), ["letter", "show", "l1"]);
     }
 
     #[test]
