@@ -123,6 +123,8 @@ jobs:
         timeout-minutes: 5
         with:
           name: desktop-binaries-${{ inputs.lane }}
+          # A rerun of this job, whole or only its failed part, uploads the name again.
+          overwrite: true
           path: |
             target/debug/hided${{ runner.os == 'Windows' && '.exe' || '' }}
             target/debug/hide${{ runner.os == 'Windows' && '.exe' || '' }}
@@ -149,6 +151,8 @@ jobs:
         timeout-minutes: 5
         with:
           name: desktop-web-dist-${{ inputs.lane }}
+          # A rerun of this job, whole or only its failed part, uploads the name again.
+          overwrite: true
           path: web/dist
           if-no-files-found: error
           retention-days: 1
