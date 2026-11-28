@@ -1043,6 +1043,6 @@ if __name__ == "__main__":
         code = guard(int(sys.argv[2]), sys.argv[10:], sys.argv[3], sys.argv[4], float(sys.argv[5]),
                      float(sys.argv[6]), Limits(int(sys.argv[7]), int(sys.argv[8])))
     except BaseException as error:
-        sys.stderr.write("guardian_failure:" + type(error).__name__ + "\n")
+        sys.stderr.write("guardian_failure:" + type(error).__name__ + ":" + str(error)[:MAX_FAILURE_REASON] + "\n")
         code = 125
     raise SystemExit(code)

@@ -201,6 +201,21 @@ class Runner(unittest.TestCase):
         for private in PRIVATE.split():
             self.assertNotIn(private, stream.getvalue())
 
+    def test_a_guardians_own_failure_reaches_the_log(self):
+        # What the command printed stays out; why its guardian failed is kept.
+        program = (f"import subprocess, sys, time\nprint({PRIVATE!r}, flush=True)\n"
+                   "for _ in range(3):\n"
+                   "    subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+                   "time.sleep(30)\n")
+        stream = io.StringIO()
+        with daily.OwnedProcesses(run_seconds=60, limits=daily.Limits(descendants=2)) as owner:
+            with self.assertRaises(daily.ProcessError):
+                daily.step(owner, "probe", [sys.executable, "-c", program], stream, dict(os.environ), 20,
+                           cwd=self.root)
+        self.assertIn("probe: guardian_failure:ProcessError:owned_processes_over_budget", stream.getvalue())
+        for private in PRIVATE.split():
+            self.assertNotIn(private, stream.getvalue())
+
     GRANDCHILD = "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(60)"
     PARENT = ("import subprocess, sys, time\n"
               "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])\n"

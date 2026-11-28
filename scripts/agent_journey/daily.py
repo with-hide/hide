@@ -39,7 +39,8 @@ import sys
 import threading
 import time
 
-from agent_live_check.processes import Limits, OwnedProcesses
+from agent_live_check.processes import (GUARDIAN_FAILURES, MAX_FAILURE_REASON, Limits, OwnedProcesses,
+                                        ProcessError)
 
 from . import account
 from .cells import EXCLUDED_AGENTS, FAIL, NOT_MEASURED, PASS
@@ -176,14 +177,24 @@ def step(owner, name, argv, stream, env, seconds, *, cwd=CHECKOUT):
     reader = threading.Thread(target=tail.read, args=(child.stdout,), daemon=True)
     reader.start()
     try:
-        code = child.wait(timeout=max(0.0, end - time.monotonic()))
-    except subprocess.TimeoutExpired as error:
-        log(stream, f"{name}: no end in {seconds} s")
-        raise Stage(f"{name} timed out") from error
-    finally:
-        owner.end(child)
-        reader.join(timeout=5)
-        child.stdout.close()
+        try:
+            code = child.wait(timeout=max(0.0, end - time.monotonic()))
+        except subprocess.TimeoutExpired as error:
+            log(stream, f"{name}: no end in {seconds} s")
+            raise Stage(f"{name} timed out") from error
+        finally:
+            try:
+                owner.end(child)
+            finally:
+                reader.join(timeout=5)
+                child.stdout.close()
+    except ProcessError:
+        # The guardian's own lines, never the command's: why it could not own
+        # or end the command (OwnedProcesses.run reports them the same way).
+        for line in tail.text().splitlines():
+            if line.startswith(GUARDIAN_FAILURES):
+                log(stream, f"{name}: {line[:MAX_FAILURE_REASON]}")
+        raise
     log(stream, f"{name}: exit {code}")
     return code, tail
 
