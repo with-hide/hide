@@ -1534,11 +1534,15 @@ impl ReadPage {
         let sessions = ledger.map_or_else(BTreeMap::new, |ledger| {
             page_sessions(&updates, &parts, ledger, node)
         });
+        let at = page.start.position();
+        let record = page.start.incarnation().to_owned();
         Self {
             start: page.start,
             end: page.end,
             more: page.more,
             snapshot: ThreadPageSnapshot {
+                record,
+                start: at,
                 updates,
                 parts,
                 sessions,
@@ -2145,9 +2149,19 @@ mod tests {
         assert_eq!(kept.pages[1].updates[0]["content"]["text"], "긴 출력");
         let shown = thread(&runtime);
         assert!(!shown.has_older, "the first page starts the session");
+        let tail = shown.tail.expect("the live page");
+        assert_eq!(tail.updates[0]["content"]["text"], "끝");
+        // Each page is named by where it begins in the record: the filled page
+        // keeps the start it had while it was the live page.
         assert_eq!(
-            shown.tail.expect("the live page").updates[0]["content"]["text"],
-            "끝"
+            (kept.pages[0].start, kept.pages[1].start, tail.start),
+            (0, 100, 600_000)
+        );
+        // And by the record file it was read from, which a replaced file does
+        // not share.
+        assert_eq!(
+            [&kept.pages[0].record, &kept.pages[1].record, &tail.record],
+            ["file-1"; 3]
         );
     }
 

@@ -53,7 +53,7 @@ const edit = (toolCallId: string, path: string, oldText: string, newText: string
  */
 function conductorPage(now: number, mission: string): ThreadPage {
   return {
-    updates: [
+    record: "r1", start: 0, updates: [
       asked("Desk 1차를 미션으로 돌려줘"),
       said("계획을 올리고 @1a-desk-room에 첫 층을 맡길게요."),
       shell("p1", "hide task set --file plan.json", "completed"),
@@ -119,7 +119,7 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
     const rows = [row("w1:1a", "1a Desk 방", "done", "codex"), row("w1:1b", "1b 스레드 화면", "going", "codex"), row(job.pane_id!, job.title, state === "paused" ? "done" : (job.mark ?? "going"), job.agent_kind)];
     const page: Record<SceneState, SessionThreadSection> = {
       live: thread(job.pane_id!, conductorPage(now, missions.mission.id)),
-      asking: thread(job.pane_id!, { updates: [asked("gallery 캡처를 라이트·다크로 찍어서 나란히 비교해줘"), shell("c1", "node scripts/capture-gallery.mjs --theme light", "completed"), { ...said(ASKED_IN), _meta: { hide: { at_ms: Date.now() - 10 * 60_000 } } }], parts: {}, sessions: {} }),
+      asking: thread(job.pane_id!, { record: "r1", start: 0, updates: [asked("gallery 캡처를 라이트·다크로 찍어서 나란히 비교해줘"), shell("c1", "node scripts/capture-gallery.mjs --theme light", "completed"), { ...said(ASKED_IN), _meta: { hide: { at_ms: Date.now() - 10 * 60_000 } } }], parts: {}, sessions: {} }),
       failed: thread(job.pane_id!, null, { state: "failed", failure: "no_record" }),
       held: thread(job.pane_id!, conductorPage(now, missions.mission.id), { pane: "changed" }),
       queued: thread(job.pane_id!, conductorPage(now, missions.mission.id), { queue: { state: "waiting", max: 8, full: false, lines: [

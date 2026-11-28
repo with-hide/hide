@@ -9,7 +9,7 @@ export type ConversationModel = DeskModel & { opened: boolean; generation: numbe
 export const conversationThread = (model: ConversationModel): SessionThreadSection => ({
   generation: model.generation, pane_id: model.opened ? CONVERSATION_PANE : null, machine: "practice", state: model.opened ? "ready" : "closed", failure: null,
   pane: "same", connected: true, has_older: false, older: "idle", choice: {}, queue: null, input: model.request ? { request_id: model.request, state: "sent" } : null,
-  tail: { updates: [
+  tail: { record: "r1", start: 0, updates: [
     { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Read the project and list the next steps." } },
     { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "I read the project. The next step is to check the sign-in flow." } },
     ...(model.sent ? [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: model.sent } }, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "I will check that next." } }] : []),
