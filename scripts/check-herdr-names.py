@@ -6,8 +6,8 @@ import, attribution, the old values Hide still reads, fixtures and test
 messages. `scripts/herdr-names-allowlist.json` lists each file that keeps names,
 its number and one reason. A document split into a table of contents and pieces
 is listed once, under its own path: its entry counts the table of contents,
-every piece its split table (`scripts/split-tables/`) names and that table,
-together, so a split moves names between files without editing a line another
+every piece its split table (`scripts/split-tables/`, read from the index like
+the files it counts) names and that table, together, so a split moves names between files without editing a line another
 split edits.
 This check fails when:
 
@@ -74,12 +74,16 @@ def names_in(text):
 
 def split_files(root):
     """The files each split document is counted with, {piece or table path: table of
-    contents path}, from the split tables as scripts/check-docs.py reads them."""
+    contents path}, from the split tables in git's index, the snapshot the names are counted
+    in, parsed as scripts/check-docs.py parses them. Raises GitFailure when git cannot answer."""
     spec = importlib.util.spec_from_file_location('check_docs', Path(__file__).resolve().parent / 'check-docs.py')
     docs = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(docs)
+    listing = git(root, ['ls-files', '-z', '--cached', '--', f'{docs.TABLES}/*.json']).decode('utf-8', errors='replace')
+    indexed = [(path, git(root, ['show', f':{path}']).decode('utf-8', errors='replace'))
+               for path in listing.split('\0') if path and '/' not in path[len(docs.TABLES) + 1:]]
     files = {}
-    for where, table in docs.read_tables(root)[0]:
+    for where, table in docs.parse_tables(indexed)[0]:
         files[where] = table['source']
         files.update({f'{table["folder"]}/{piece["name"]}.md': table['source'] for piece in table['pieces']})
     return files
@@ -212,7 +216,12 @@ def scan_index(root):
 def main():
     allowlist = json.loads((ROOT / ALLOWLIST).read_text(encoding='utf-8'))
     results, problems = scan_index(ROOT)
-    errors = problems + check(results, allowlist, split_files(ROOT))
+    try:
+        pieces = split_files(ROOT)
+    except GitFailure as failure:
+        problems.append(str(failure))
+        pieces = {}
+    errors = problems + check(results, allowlist, pieces)
     if errors:
         for error in errors:
             print(f'error: {error}', file=sys.stderr)

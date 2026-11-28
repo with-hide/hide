@@ -257,13 +257,21 @@ class ASplitDocumentIsCountedWithItsPieces(unittest.TestCase):
                 self.assertEqual(errors, [f'{CHECK.ALLOWLIST}: {path} is counted with the split document docs/GUIDE.md; '
                                           'remove its entry'])
 
-    def test_the_split_files_are_read_from_the_split_tables(self):
+    def test_the_split_files_are_read_from_the_tables_in_the_index_only(self):
+        table = json.dumps({'source': 'docs/GUIDE.md', 'folder': 'docs/guide', 'pieces': [{'name': 'a'}, {'name': 'b'}]})
         with tempfile.TemporaryDirectory() as folder:
-            tables = Path(folder) / 'scripts' / 'split-tables'
+            root = Path(folder)
+            subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+            tables = root / 'scripts' / 'split-tables'
             tables.mkdir(parents=True)
-            (tables / 'guide.json').write_text(json.dumps({'source': 'docs/GUIDE.md', 'folder': 'docs/guide',
-                                                           'pieces': [{'name': 'a'}, {'name': 'b'}]}))
-            self.assertEqual(CHECK.split_files(Path(folder)), self.FILES)
+            (tables / 'guide.json').write_text(table)
+            self.assertEqual(CHECK.split_files(root), {}, 'an untracked table groups nothing')
+            subprocess.run(['git', 'add', 'scripts'], cwd=root, check=True)
+            self.assertEqual(CHECK.split_files(root), self.FILES)
+            (tables / 'guide.json').unlink()
+            self.assertEqual(CHECK.split_files(root), self.FILES, 'a table removed only on disk still groups')
+            (tables / 'guide.json').write_text(table.replace('"b"', '"c"'))
+            self.assertEqual(CHECK.split_files(root), self.FILES, 'an unstaged edit changes nothing')
 
 
 class TheTreeAsItIsPasses(unittest.TestCase):

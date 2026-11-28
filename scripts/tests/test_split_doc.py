@@ -287,8 +287,11 @@ class TwoSplitsMerge(unittest.TestCase):
         for check in (SPLIT.CHECK_DOCS, SPLIT.NAMES_CHECK):
             done = subprocess.run([sys.executable, str(self.root / check)], capture_output=True, text=True)
             self.assertEqual(done.returncode, 0, check + ': ' + done.stderr)
-        self.assertNotIn("'docs/ALPHA.md'", (self.root / 'scripts' / 'check-docs.py').read_text())
-        self.assertNotIn("'docs/BETA.md'", (self.root / 'scripts' / 'check-docs.py').read_text())
+        layout = load('test_check_docs', 'tests/test_check_docs.py').exceptions_layout
+        self.assertEqual(layout((self.root / SPLIT.CHECK_DOCS).read_text()), ([], []), 'both entries gone, the layout kept')
+        # A third split starting from either branch still finds a list it can merge with.
+        self.assertEqual(layout(SPLIT.exceptions_update(self.root, 'docs/ALPHA.md') or
+                                (self.root / SPLIT.CHECK_DOCS).read_text())[1], [])
 
 
 if __name__ == '__main__':

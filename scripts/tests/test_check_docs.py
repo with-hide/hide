@@ -8,6 +8,7 @@ real one.
 """
 import importlib.util
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -255,7 +256,6 @@ class TheSplitTables(Base):
         big = piece(body='x' * CHECK.LIMIT)
         self.assertNamed(self.guide({'a.md': big}), f'docs/guide/a.md: {len(big.encode())} bytes, over the')
         self.assertEqual(self.guide({'a.md': big}, split=table([{'name': 'a', 'over_cap': True}])), [])
-        self.assertEqual(CHECK.excepted(Path('/nowhere')), CHECK.EXCEPTIONS, 'no tables, only the list')
 
     def test_an_over_cap_mark_on_a_small_or_still_divisible_piece_fails(self):
         marked = table([{'name': 'a', 'over_cap': True}])
@@ -265,17 +265,49 @@ class TheSplitTables(Base):
         self.assertNamed(self.guide({'a.md': two}, split=marked), 'more than one section heading; split it further')
 
 
+def exceptions_layout(text):
+    """The EXCEPTIONS entries written in a check-docs.py text, and its layout problems: an entry
+    not alone on its line, or two entries on neighbouring lines. Blank lines a split left
+    behind are allowed."""
+    start = text.index('EXCEPTIONS = {\n') + len('EXCEPTIONS = {\n')
+    lines = text[start:text.index('\n}\n', start - 1) + 1].split('\n')
+    entries, problems, last = [], [], None
+    for number, line in enumerate(lines):
+        if not line.strip():
+            continue
+        match = re.match(r"^    '([^']+)',$", line)
+        if not match:
+            problems.append(f'not an entry alone on its line: {line!r}')
+            continue
+        if last is not None and number == last + 1:
+            problems.append(f'{entries[-1]} and {match.group(1)} are on neighbouring lines')
+        entries.append(match.group(1))
+        last = number
+    return entries, problems
+
+
 class TheExceptionsLayout(unittest.TestCase):
     """Two splits each remove their own EXCEPTIONS entry; a blank line between entries keeps
     those removals off neighbouring lines, so git merges them (test_split_doc merges two)."""
 
-    def test_every_entry_of_the_real_list_has_a_line_of_its_own_with_a_blank_line_between(self):
-        text = (ROOT / 'scripts' / 'check-docs.py').read_text(encoding='utf-8')
-        block = text[text.index('EXCEPTIONS = {\n') + len('EXCEPTIONS = {\n'):text.index('\n}\n', text.index('EXCEPTIONS = {'))]
-        entries = block.split('\n\n')
-        self.assertEqual(sorted(line.strip()[1:-2] for line in entries), sorted(CHECK.EXCEPTIONS))
-        for line in entries:
-            self.assertRegex(line, r"^    '[^']+',$")
+    def test_the_real_list_keeps_every_entry_apart(self):
+        entries, problems = exceptions_layout((ROOT / 'scripts' / 'check-docs.py').read_text(encoding='utf-8'))
+        self.assertEqual(problems, [])
+        self.assertEqual(sorted(entries), sorted(CHECK.EXCEPTIONS))
+
+    def test_the_list_stays_apart_after_each_split_removes_its_entry(self):
+        split = importlib.util.spec_from_file_location('split_doc', ROOT / 'scripts' / 'split-doc.py')
+        module = importlib.util.module_from_spec(split)
+        split.loader.exec_module(module)
+        for source in sorted(CHECK.EXCEPTIONS):
+            with self.subTest(source=source):
+                entries, problems = exceptions_layout(module.exceptions_update(ROOT, source))
+                self.assertEqual(problems, [])
+                self.assertEqual(sorted(entries), sorted(CHECK.EXCEPTIONS - {source}))
+
+    def test_neighbouring_or_shared_lines_are_problems(self):
+        self.assertEqual(exceptions_layout("EXCEPTIONS = {\n    'a',\n    'b',\n}\n")[1], ['a and b are on neighbouring lines'])
+        self.assertEqual(len(exceptions_layout("EXCEPTIONS = {\n    'a', 'b',\n}\n")[1]), 1)
 
 
 if __name__ == '__main__':

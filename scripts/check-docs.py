@@ -230,15 +230,14 @@ def check_records(folder, names):
     return numbers, errors
 
 
-def read_tables(root):
-    """Each split table under TABLES as (its path, the table), and the errors of the ones
-    that are not of scripts/split-doc.py's form. The retired-name ratchet, which counts a
-    split document with its pieces, reads the tables through this too."""
+def parse_tables(files):
+    """The split tables among `files` ((path, text) pairs) as (path, table), and the errors
+    of the ones not of scripts/split-doc.py's form. The retired-name ratchet, which counts a
+    split document with its pieces, parses the tables of git's index through this."""
     tables, errors = [], []
-    for path in sorted((Path(root) / TABLES).glob('*.json')):
-        where = f'{TABLES}/{path.name}'
+    for where, text in files:
         try:
-            table = json.loads(path.read_text(encoding='utf-8'))
+            table = json.loads(text)
             fields = table['source'], table['folder'], table['pieces']
             if not all(isinstance(field, str) for field in fields[:2]) or not isinstance(fields[2], list) or \
                     not all(isinstance(piece.get('name'), str) and piece.get('over_cap', True) is True for piece in fields[2]):
@@ -248,6 +247,14 @@ def read_tables(root):
             continue
         tables.append((where, table))
     return tables, errors
+
+
+def read_tables(root):
+    """The split tables git tracks or would track under TABLES, read from the working tree
+    as the docs check reads every file: (path, table) pairs and errors."""
+    root = Path(root)
+    return parse_tables((where, (root / where).read_text(encoding='utf-8'))
+                        for where in listed(root, f'{TABLES}/*.json') if '/' not in where[len(TABLES) + 1:])
 
 
 def splits(root):
