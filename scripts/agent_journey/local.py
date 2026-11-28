@@ -25,6 +25,7 @@ from pathlib import Path
 import re
 import shlex
 import sqlite3
+import subprocess
 import sys
 import time
 import tomllib
@@ -157,13 +158,34 @@ ROUTES = {
         "login": lambda root, status, margin: opencode_login_refusal(root / "auth.json", margin),
     },
     "agy": {
-        # agy 1.4.0 has no variable or flag for its configuration folder and
-        # signs in through the keychain of the HOME it runs in, so the
-        # candidate's kit could reach it only through the operator's own
-        # ~/.gemini/config, whose hooks would run instead.
-        "unmeasured": ("agy reads its hooks only from ~/.gemini/config in the HOME its keychain sign-in needs, so the "
-                       "candidate's kit cannot reach it without the operator's own hooks running; the CI mode measures "
-                       "it; it closes once agy takes a configuration folder variable or a login kept in a private file"),
+        # agy 1.4.8 has no variable or flag for its configuration folder and
+        # reads its login (keychain service `gemini`) through the keychains
+        # of the HOME it runs in, so on an operator's Mac the candidate's kit
+        # could reach it only through the operator's own ~/.gemini/config,
+        # whose hooks would run instead. The journey account's keychains
+        # are the journey's: there agy runs in the daemon's private HOME, as
+        # omp does, whose `Library/Keychains` links to the account's
+        # (`keychain_link`; measured on the mini 2026-11-28: without the link
+        # agy asked for a sign-in, with it it answered). Its onboarding
+        # status is copied, never its settings, which hold the account's
+        # folder trust.
+        "args": lambda home: [],
+        "env": lambda home: {"HOME": str(home)},
+        "unset": [],
+        "sessions": lambda operator, home: home,
+        "known": [],
+        "shared": {},
+        "roots": [".gemini/config"],
+        "untrusted": None,
+        "config": ".gemini/antigravity-cli",
+        "copies": [[".gemini/antigravity-cli/cache/onboarding.json", "cache/onboarding.json"]],
+        "provenance": "The daemon's private HOME holding a copy of the onboarding status, its keychains linked to "
+                      "the journey account's, where the login is.",
+        "keychain_link": True,
+        "login": lambda root, status, margin: agy_login_refusal(),
+        "account_only": ("agy reads its hooks only from ~/.gemini/config in the HOME its keychain sign-in needs, so "
+                         "the candidate's kit cannot reach it without the operator's own hooks running; the CI mode "
+                         "and the daily real-login journey on the journey account measure it"),
     },
 }
 
@@ -232,6 +254,14 @@ def disable_hide_ai(home):
     folder = home / state / "hide"
     private_directory(folder)
     write_private(folder / "ai.json", b'{"enabled": false}\n')
+
+
+def agy_login_refusal():
+    """Why agy cannot be measured: its login is a keychain item of service
+    `gemini`, whose presence `security` reads without its secret."""
+    found = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", "gemini"],
+                           capture_output=True, timeout=30)
+    return None if not found.returncode else "not logged in: run agy and sign in yourself; the journey never logs in"
 
 
 def codex_login_age(auth, now=None):

@@ -289,11 +289,13 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
     to the account after the run, so no refresh window refuses one."""
     run, owner = runtime.run, runtime.owner
     report["agents"].extend({"id": key} for key in measured)
+    def unmeasured(key):
+        entry = ROUTES[rows[key]["agent_cli"]]
+        return entry.get("unmeasured") or (None if dedicated else entry.get("account_only"))
     for key in measured:
-        unmeasured = ROUTES[rows[key]["agent_cli"]].get("unmeasured")
-        if unmeasured:
-            cells.settle_agent(table, key, unmeasured)
-    measured = [key for key in measured if "unmeasured" not in ROUTES[rows[key]["agent_cli"]]]
+        if unmeasured(key):
+            cells.settle_agent(table, key, unmeasured(key))
+    measured = [key for key in measured if not unmeasured(key)]
     kinds = [rows[key]["agent_cli"] for key in measured]
     known = list(dict.fromkeys(operator / rel for kind in kinds for rel in ROUTES[kind]["known"]))
     roots = list(dict.fromkeys(operator / rel for kind in kinds for rel in ROUTES[kind]["roots"]))
@@ -331,6 +333,13 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
                 cells.settle_agent(table, key, refusal)
                 continue
         private = runtime.home / entry["config"] if entry["config"] else None
+        if entry.get("keychain_link") and not fake:
+            # The account's own keychains, where the agent's login is (only
+            # on the journey account: `account_only` keeps it out elsewhere).
+            keychains = runtime.home / "Library/Keychains"
+            private_directory(keychains.parent)
+            if not keychains.is_symlink():
+                keychains.symlink_to(operator / "Library/Keychains")
         if private is not None and entry["copies"] and not fake:
             # Made before the CLI's first run: any run, `--version` included,
             # makes its folders with the account's umask (OpenCode 2.0.29
