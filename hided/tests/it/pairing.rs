@@ -1127,17 +1127,18 @@ async fn a_cut_ssh_carrier_is_dialed_again() {
 
 /// An SSH attempt given up while it runs leaves no process on either
 /// machine: a carrier whose far command is held before it carries is
-/// signing in when the guest removes the target, and both the guest's `ssh`
-/// and the target's far command end. The removal is the target's to hear,
-/// so the guest goes on dialing it over SSH in attempts of its own
-/// (ARCHITECTURE.md, The peer connection); the given-up attempt's processes
-/// are therefore named while they run and followed by pid and start time,
-/// never read as "no `ssh` at all", which held only until the next attempt
-/// started.
+/// signing in when the guest removes the target, and the attempt's `ssh` and
+/// the target's far command end. The removal is the target's to hear, so the
+/// guest dials it again over SSH in attempts of its own (ARCHITECTURE.md,
+/// The peer connection): the given-up attempt's processes are named by pid
+/// and start time while they run, and "no process at all" is read only once
+/// a second removal has forgotten the target, which nothing dials again.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "the system's sshd; the remote mailbox lane runs it"]
 async fn a_cancelled_ssh_attempt_leaves_no_process_on_either_machine() {
+    use hide_holder_protocol::record::Identity;
+
     let pair = SshOnly::connected().await;
     let bound = Duration::from_secs(10);
     // The far command now reads its input and carries nothing.
@@ -1147,55 +1148,45 @@ async fn a_cancelled_ssh_attempt_leaves_no_process_on_either_machine() {
         pair.carrier_ssh().len() == 1 && !pair.far_carriers().is_empty()
     })
     .await;
-    let ssh: Vec<Running> = pair.carrier_ssh().into_iter().map(Running::of).collect();
-    let far: Vec<Running> = pair.far_carriers().into_iter().map(Running::of).collect();
+    let named = |pid: u32| {
+        Identity::of(pid).unwrap_or_else(|| panic!("process {pid} ended before it was named"))
+    };
+    let ssh: Vec<Identity> = pair.carrier_ssh().into_iter().map(named).collect();
+    let far: Vec<Identity> = pair.far_carriers().into_iter().map(named).collect();
     let removed = pair
         .guest
         .run(&["device", "remove", &pair.host_id(), "--json"]);
     assert!(removed.ok, "{}", removed.text());
     pair.until("the attempt's ssh ends on the guest", bound, || {
-        ssh.iter().all(|process| !process.runs())
+        ssh.iter().all(Identity::gone)
     })
     .await;
     pair.until(
         "the attempt's far command ends on the target",
         bound,
-        || far.iter().all(|process| !process.runs()),
+        || far.iter().all(Identity::gone),
     )
     .await;
     pair.until(
         "the guest dials the target again to tell it",
         WITHIN,
-        || {
-            pair.carrier_ssh()
-                .iter()
-                .any(|pid| ssh.iter().all(|process| process.pid != *pid))
-        },
+        || !pair.carrier_ssh().is_empty(),
     )
     .await;
-}
-
-/// A process named by its pid and start time while it runs, so a later look
-/// asks whether that same process still runs, never one the pid went to
-/// since (TESTING.md, Writing a Rust test).
-#[cfg(unix)]
-struct Running {
-    pid: u32,
-    started: u64,
-}
-
-#[cfg(unix)]
-impl Running {
-    fn of(pid: u32) -> Self {
-        let started = hide_platform::process::start_time(pid)
-            .unwrap_or_else(|error| panic!("process {pid} ended before it was named: {error}"));
-        Self { pid, started }
-    }
-
-    fn runs(&self) -> bool {
-        hide_platform::process::is_alive(self.pid)
-            && hide_platform::process::start_time(self.pid).ok() == Some(self.started)
-    }
+    // Asked again while the target has not answered, the removal forgets
+    // it: nothing dials it any more, and what still ran for it ends.
+    let forgotten = pair
+        .guest
+        .run(&["device", "remove", &pair.host_id(), "--json"]);
+    assert!(forgotten.ok, "{}", forgotten.text());
+    pair.until("no ssh left on the guest", bound, || {
+        pair.carrier_ssh().is_empty()
+    })
+    .await;
+    pair.until("no far command left on the target", bound, || {
+        pair.far_carriers().is_empty()
+    })
+    .await;
 }
 
 /// An alias that now leads to another Hide carries nothing: the carrier
