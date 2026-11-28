@@ -113,6 +113,30 @@ fn a_line_that_runs_anything_but_hide_or_touches_a_file_is_the_agent_s_to_ask() 
     assert_eq!(is_hide_line("HIDE ps"), cfg!(windows));
 }
 
+/// Every retired spelling of the one table (`hide_shell::retired`) counts
+/// as the command it is now: a session file keeps the spelling a call ran
+/// with for good.
+#[test]
+fn a_retired_spelling_counts_as_the_command_it_is_now() {
+    let tails = [
+        "show",
+        "list",
+        "send agent-3 --intent k --body hi",
+        "spawn --name a --intent k",
+    ];
+    let mut counted = 0;
+    for row in hide_shell::retired::TABLE.commands {
+        for tail in tails {
+            let now = hide_step(&format!("hide {} {tail}", row.now.join(" ")));
+            counted += usize::from(now != Step::Other);
+            let old = format!("hide {} {tail}", row.old.join(" "));
+            assert_eq!(hide_step(&old), now, "{old}");
+        }
+    }
+    assert!(counted > 0, "no retired spelling names a step Desk counts");
+    assert_eq!(hide_step("hide plan show"), Step::Sessions);
+}
+
 #[test]
 fn a_turns_tool_calls_count_as_sessions_read_letters_and_starts() {
     let run = |command: &str| step(&json!({"kind": "execute", "rawInput": {"command": command}}));

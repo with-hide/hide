@@ -9735,6 +9735,69 @@
             "answers": [
                 "plan"
             ],
+            "arguments": [],
+            "command": "plan set",
+            "options": [
+                {
+                    "conflicts": [
+                        "--json"
+                    ],
+                    "name": "--file",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--file"
+                    ],
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "json"
+                    }
+                },
+                {
+                    "name": "--ask",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--reason",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "plan_invalid",
+                "plan_order_refused",
+                "plan_too_large",
+                "plan_full",
+                "plan_unavailable",
+                "plan_session_unknown",
+                "plan_evidence_missing",
+                "plan_pr_not_yours",
+                "plan_pr_unconfirmed",
+                "plan_file_outside",
+                "plan_file_missing",
+                "plan_file_unconfirmed",
+                "plan_report_missing"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "task set"
+        },
+        {
+            "answers": [
+                "plan"
+            ],
             "arguments": [
                 {
                     "name": "key",
@@ -9812,6 +9875,84 @@
             "answers": [
                 "plan"
             ],
+            "arguments": [
+                {
+                    "name": "key",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "plan node",
+            "options": [
+                {
+                    "name": "--status",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "done",
+                            "planned",
+                            "working",
+                            "dropped"
+                        ]
+                    }
+                },
+                {
+                    "name": "--line",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--file"
+                    ],
+                    "name": "--pr",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "change_request"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--pr"
+                    ],
+                    "name": "--file",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "plan_missing",
+                "plan_node_unknown",
+                "plan_order_refused",
+                "plan_evidence_missing",
+                "plan_pr_not_yours",
+                "plan_pr_unconfirmed",
+                "plan_file_outside",
+                "plan_file_missing",
+                "plan_file_unconfirmed",
+                "plan_report_missing",
+                "change_request_other_host",
+                "change_request_other_repository",
+                "change_request_project_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "task node"
+        },
+        {
+            "answers": [
+                "plan"
+            ],
             "arguments": [],
             "command": "task approve",
             "options": [],
@@ -9822,6 +9963,22 @@
             ],
             "repeats_at_most": null,
             "rest": null
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
+            "command": "plan approve",
+            "options": [],
+            "refusals": [
+                "plan_missing",
+                "plan_not_yours",
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "task approve"
         },
         {
             "answers": [
@@ -9842,6 +9999,21 @@
                 "plan"
             ],
             "arguments": [],
+            "command": "plan drop",
+            "options": [],
+            "refusals": [
+                "plan_not_yours",
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "task drop"
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
             "command": "task show",
             "options": [],
             "refusals": [
@@ -9849,9 +10021,23 @@
             ],
             "repeats_at_most": null,
             "rest": null
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
+            "command": "plan show",
+            "options": [],
+            "refusals": [
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "task show"
         }
     ],
-    "digest": "sha256:fc858f1f43cf2d2acebee698e9e46650ea3a56d45b3eb6f39fb521d982b9a238",
+    "digest": "sha256:9fa7d3042d79460e77c52b00870a771cca66977bf3d921049b9a268da0457edf",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -9913,6 +10099,11 @@
             "code": "error.code",
             "ok": "ok"
         },
+        "task": {
+            "answer": "result",
+            "code": "reason",
+            "ok": "ok"
+        },
         "watch": {
             "answer": "result",
             "code": "reason",
@@ -9925,6 +10116,16 @@
         }
     },
     "format": 1,
+    "retired_words": [
+        {
+            "now": [
+                "task"
+            ],
+            "old": [
+                "plan"
+            ]
+        }
+    ],
     "value_types": {
         "approval": "not blank, at most 256 bytes, no control characters",
         "body": "not blank, at most 16384 bytes",

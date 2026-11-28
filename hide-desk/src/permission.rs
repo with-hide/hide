@@ -429,6 +429,8 @@ fn hide_step(line: &str) -> Step {
         if !names_hide(program) {
             return Step::Other;
         }
+        // A session file keeps the spelling the command had when it ran.
+        let rest = hide_shell::retired::current(rest);
         let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
         let this = match rest.as_slice() {
             ["request", "send" | "reply", ..] => Step::Letter,
@@ -438,7 +440,7 @@ fn hide_step(line: &str) -> Step {
             | ["inbox", ..]
             | ["request", "show", ..]
             | ["watch", "list", ..]
-            | ["task" | "plan", "show", ..]
+            | ["task", "show", ..]
             | ["mission", "show" | "list", ..]
             | ["view", "list" | "status", ..] => Step::Sessions,
             _ => Step::Other,

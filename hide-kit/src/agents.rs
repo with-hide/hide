@@ -315,6 +315,9 @@ macro_rules! conductor_head {
 /// `hide-mission`; the `hide-plan` entry likewise once the oldest such build
 /// writes `hide-task`, whose entry must stay until the oldest such build
 /// writes only `hide` and `hide-mission`.
+// retired-spellings: kept from here: each text is an earlier build's stub
+// byte for byte, which a kit pass must recognise to take it out, so a
+// command it names keeps the spelling of its day.
 pub const RETIRED_SKILLS: [RetiredSkill; 4] = [
     RetiredSkill {
         name: "hide-browser",
@@ -374,6 +377,7 @@ pub const RETIRED_SKILLS: [RetiredSkill; 4] = [
         )],
     },
 ];
+// retired-spellings: kept to here
 
 /// The marker line of a stub, which proves Hide wrote it and says which
 /// text it was. A file without it is the operator's and is never touched.
@@ -561,8 +565,9 @@ pub(crate) fn login_shell() -> Option<PathBuf> {
 impl Skill {
     /// The text of the stub. The description is a quoted YAML string: a
     /// plain one ends at its first `: `, and a strict reader such as Pi's
-    /// then drops the whole skill (`hide-conductor` version 1).
-    pub(crate) fn text(self) -> String {
+    /// then drops the whole skill (`hide-conductor` version 1). `hided`'s
+    /// guide tests read it as what an agent is taught.
+    pub fn text(self) -> String {
         // A JSON string is a YAML double-quoted scalar.
         let description = serde_json::Value::from(self.description).to_string();
         format!(

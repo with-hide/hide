@@ -224,6 +224,17 @@ fn wrong(reason: String, lines: &str) -> String {
 /// guide holds `access_cli::USAGE` itself, so the pointer is added here.
 const ACCESS_GUIDE_POINTER: &str = "What a bot may do in each mode: hide guide, section Bots.";
 
+/// The usage `hide <topic> <verb> … --help` prints: the one of the parser
+/// that reads the command, which for `agent profile` and `agent read` is
+/// not the `agent` topic's own.
+pub(crate) fn command_usage(topic: &str, verb: Option<&str>) -> Option<String> {
+    match (topic, verb) {
+        ("agent", Some("profile")) => Some(usage(crate::profile_cli::USAGE)),
+        ("agent", Some("read")) => Some(usage(crate::pane_cli::USAGE)),
+        _ => topic_usage(topic),
+    }
+}
+
 /// The usage `hide <topic> … --help` prints, for every command a person or
 /// an agent types.
 fn topic_usage(topic: &str) -> Option<String> {
@@ -271,7 +282,7 @@ fn topic_usage(topic: &str) -> Option<String> {
 /// Hide pane uses. The host's and the hooks' own commands (`connect`,
 /// `serve`, `dev`, `runtime prepare`, `workspace bootstrap`,
 /// `workspace memory`) are not listed.
-fn help_text() -> String {
+pub(crate) fn help_text() -> String {
     let indent =
         |lines: &str| -> String { lines.lines().map(|line| format!("  {line}\n")).collect() };
     let mut text = String::from(
@@ -346,19 +357,18 @@ pub const RELEASE: hide_node::ssh::host::ReleaseIdentity = hide_node::ssh::host:
 };
 
 pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
-    // `hide plan` is what `hide task` was called: a session started under
-    // the old `hide-plan` skill still types it, so it is read as `hide task`
-    // and no table lists it. Drop this once the oldest build that updates in
-    // place writes the `hide-task` skill (`hide_kit::agents::RETIRED_SKILLS`).
-    let renamed: Vec<String>;
-    let args = if args.get(1).map(String::as_str) == Some("plan") {
-        let mut words = args.to_vec();
-        words[1] = "task".to_owned();
-        renamed = words;
-        renamed.as_slice()
-    } else {
-        args
-    };
+    // A retired spelling (`hide plan` for `hide task`) is read as the
+    // command it is now before anything else reads a word: the one table
+    // every reader of a `hide` command shares (`hide_shell::retired`).
+    let renamed: Vec<String> = args
+        .first()
+        .cloned()
+        .into_iter()
+        .chain(hide_shell::retired::current(
+            args.get(1..).unwrap_or_default(),
+        ))
+        .collect();
+    let args = renamed.as_slice();
     // `--help` or `-h` ending any command asks for that command's usage; the
     // guides of `agent spawn`, `mission` and `task` answer it themselves.
     if let (Some(topic), Some("--help" | "-h")) = (
@@ -366,7 +376,7 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         args.last().filter(|_| args.len() > 2).map(String::as_str),
     ) && !(args[2..] == ["spawn", "--help"]
         || (matches!(topic, "mission" | "task" | "automation") && args.len() == 3))
-        && let Some(text) = topic_usage(topic)
+        && let Some(text) = command_usage(topic, args.get(2).map(String::as_str))
     {
         return Ok(CommandKind::Usage(text));
     }
@@ -4034,6 +4044,20 @@ mod tests {
                 CommandKind::Usage(usage(crate::agent_cli::USAGE))
             );
         }
+        // A command another parser reads answers with that parser's usage.
+        for line in [
+            &["hide", "agent", "profile", "--help"][..],
+            &["hide", "agent", "profile", "add", "--help"],
+        ] {
+            assert_eq!(
+                parse(line).unwrap(),
+                CommandKind::Usage(usage(crate::profile_cli::USAGE))
+            );
+        }
+        assert_eq!(
+            parse(&["hide", "agent", "read", "--help"]).unwrap(),
+            CommandKind::Usage(usage(crate::pane_cli::USAGE))
+        );
         let error = parse(&["hide", "agent", "spawn", "--no-watch"]).unwrap_err();
         assert!(error.starts_with(
             "unknown flag for hide agent spawn: --no-watch\nusage:\n  hide agent register"

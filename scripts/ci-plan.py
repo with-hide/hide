@@ -978,6 +978,7 @@ POLICY_ONLY = (
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py", "scripts/check-device-kits-single-source.py",
     "scripts/check-agent-folders.sh",
+    "scripts/check-retired-spellings.py",
     # What the shell, the daemon and the agent notes must keep saying, read as text.
     "scripts/check-shell-structure.py",
     # The check of a retired name in product text and the list of files that keep
