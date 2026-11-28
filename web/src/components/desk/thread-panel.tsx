@@ -347,7 +347,7 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
           notices sit, so it holds no notice floor as the box it replaces did. */}
       {sleep && paneId && !taken ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-md" data-thread-sleep-card="true">
-          <SleepCard paneId={paneId} view={sleep} className="pointer-events-auto max-w-full rounded-lg border border-border bg-raised px-lg py-md shadow-raised" />
+          <SleepCard paneId={paneId} view={sleep} className="pointer-events-auto max-w-full rounded-lg bg-popover px-lg py-md text-popover-foreground shadow-overlay" />
         </div>
       ) : null}
       </div>
