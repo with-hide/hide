@@ -418,14 +418,15 @@ function useSelectedRows(box: RefObject<HTMLDivElement | null>): RowSpan | null 
   return span;
 }
 
-/** What a press on a message's words still gives to the message: a link, a chip, a code block's `복사`. */
+/** What a press on a message's words still gives to the message: a chip, a box, a code block's `복사`. */
 const PRESSABLE = "a, button, input, textarea, select, label, [role='button'], [contenteditable='true']";
 
 /**
  * Leaves a press on a message's words to the browser, so a drag selects across messages as on any page (issue
  * 3101): a message is a read-only editor, which would otherwise take the press and keep the selection inside itself.
  * The press stops above the editor, so the surface is marked for the open layers, as the terminal's is
- * (`useOutsidePressSurface`); a press on something a message draws to be pressed still reaches it. A copy of a
+ * (`useOutsidePressSurface`); a press on something a message draws to be pressed, and a ⌘- or Ctrl-press that opens a
+ * link, still reaches it. A copy of a
  * selection that runs past one message is the browser's too, which copies every message it covers; the browser
  * hands a copy to the message the selection starts in, which would copy only its own part. A selection inside one
  * message is still copied by that message, as its Markdown.
@@ -438,7 +439,8 @@ function useBrowserSelection(box: RefObject<HTMLDivElement | null>) {
     surface(element);
     const press = (event: MouseEvent) => {
       const target = event.target instanceof Element ? event.target : null;
-      if (event.button !== 0 || !target?.closest(".cm-content") || target.closest(PRESSABLE)) return;
+      // A ⌘- or Ctrl-press is a message's own: it opens the link under it.
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || !target?.closest(".cm-content") || target.closest(PRESSABLE)) return;
       event.stopPropagation();
     };
     const messageOf = (node: Node) => (node instanceof Element ? node : node.parentElement)?.closest(".cm-content") ?? null;

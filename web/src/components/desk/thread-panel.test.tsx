@@ -740,8 +740,8 @@ it("leaves a press on a message's words to the browser, so a drag can select acr
   const seen = (event: Event) => reached.push(event.target!);
   document.addEventListener("mousedown", seen);
   try {
-    const press = (target: Element) => {
-      const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 });
+    const press = (target: Element, modifier = false) => {
+      const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, metaKey: modifier, ctrlKey: modifier });
       target.dispatchEvent(event);
       return event;
     };
@@ -750,6 +750,9 @@ it("leaves a press on a message's words to the browser, so a drag can select acr
     const event = press(words);
     expect(event.defaultPrevented).toBe(false);
     expect(reached).not.toContain(words);
+    // A ⌘- or Ctrl-press is still the message's, which opens a link under it.
+    press(words, true);
+    expect(reached).toContain(words);
     // A code block's 복사 is pressed as before, and its head is no part of a copied selection.
     const copy = container.querySelector('[data-code-block-action] [data-copy-words="code block"]')!;
     press(copy);
