@@ -28,7 +28,7 @@ from agent_live_check.runtime import clean_env
 from agent_live_check.sandbox import WriteSandbox
 from agent_live_check.system import STOP_SIGNALS, WINDOWS, exe, git as git_program, launcher, tool_path
 
-from . import ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, hook_records, memory, opencode_service, profiles
+from . import account, ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, hook_records, memory, opencode_service, profiles
 from .controller import Controller
 from .contract import load_contract
 from .failure import FailureLogs, drop_on_pass
@@ -38,6 +38,7 @@ from .own_runtime import OwnRuntime
 from .routes import allow_hook_records, allow_hook_route, operator_routing
 from .local import (ROUTES, TRUST, allow_one_shot_references, claude_config, claude_session_folders,
                     disable_hide_ai, opencode_model, operator_trust, route, wrapper)
+from .account import WriteBack, write_back
 from .report import save, table_lines
 
 KIT_SECONDS = 90
@@ -280,10 +281,12 @@ def wait_kit(daemon, ids):
     return daemon.wait(report, KIT_SECONDS, "the kit to install each agent's hook")["failed"]
 
 
-def prepare_local(runtime, report, table, rows, measured, operator, root, fake, services):
+def prepare_local(runtime, report, table, rows, measured, operator, root, fake, services, dedicated=False):
     """Local mode's guard, write sandbox and each agent's route; the agents
     ready to measure. With `fake` (each agent's fake model URL) no login is
-    read or copied: each agent's private folder points it at the fake."""
+    read or copied: each agent's private folder points it at the fake. On
+    the journey account (`dedicated`, account.py) each login copy goes back
+    to the account after the run, so no refresh window refuses one."""
     run, owner = runtime.run, runtime.owner
     report["agents"].extend({"id": key} for key in measured)
     for key in measured:
@@ -351,8 +354,12 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
             recipe = {"id": key, "overlay": {"env": {}, "copies": entry["copies"], "settings": [],
                                              "provenance": entry["provenance"]}}
             try:
+                write_backs = [WriteBack(operator / source, private / name) for source, name in entry["copies"]] \
+                    if dedicated else []
                 agent["private_configuration"] = prepare_overlay(recipe, runtime.probe, operator, owner=owner,
                                                                  env=clean_env(), root=private)["copies"]
+                runtime.write_backs.extend(write_backs)
+                runtime.kept_login_paths.extend(entry.private for entry in write_backs)
             except CredentialSnapshotUnavailable as error:
                 # Another process has the login open; it is never ended for the journey.
                 agent["login"] = (f"{kind}'s login is open in another process ({error}); close that {kind} "
@@ -364,7 +371,7 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
             code, output, _ = owner.run([str(launch), *args], env=environment, check=False)
             return code, output
         # A copy must outlast what is left of the run, whose deadline ends every process in it.
-        refusal = entry["login"](private, status, owner.deadline - time.monotonic())
+        refusal = entry["login"](private, status, None if dedicated else owner.deadline - time.monotonic())
         if refusal:
             agent["login"] = refusal
             cells.settle_agent(table, key, refusal)
@@ -543,6 +550,7 @@ def main(argv=None):
     if args.fake_model and args.fixture_bin:
         refuse("fake_model_or_fixture_bin: the stand-ins answer for themselves")
     fake = args.fake_model
+    dedicated = local and not fake and account.dedicated()
     if not local and not fake and not args.fixture_bin:
         # CI signs no agent in (operator decision, 2026-10-27); local mode
         # measures the operator's logins on the Mac.
@@ -601,6 +609,7 @@ def main(argv=None):
               **({"fixture_limits": ci.FIXTURE_LIMITS} if fixture_bin else {}),
               **({"fake_model": True, "fake_model_limits": fake_lane.LIMITS} if fake else {}),
               "leftover_copies": leftover_copies(checkout, run), "measured_commit": commit, "created": [],
+              "journey_account": dedicated,
               "cleanup": {"confirmed": False}, "failures": []}
     report["agents"].extend({"id": key, "excluded": excluded[key]} for key in selected if key in excluded)
     for key, reason in unmeasured.items():
@@ -652,7 +661,8 @@ def main(argv=None):
         if local and fake:
             sandbox, guard, ready = prepare_fake_local(runtime, report, table, rows, measured, operator, root, urls, services, fake_key)
         elif local:
-            sandbox, guard, ready = prepare_local(runtime, report, table, rows, measured, operator, root, urls, services)
+            sandbox, guard, ready = prepare_local(runtime, report, table, rows, measured, operator, root, urls, services,
+                                                  dedicated)
         else:
             sandbox, ready = None, prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, urls,
                                               services, diagnostics)
@@ -856,6 +866,9 @@ def main(argv=None):
                 report["configuration"] = {"failures": [{"reason": str(error)}]}
         if local and not fake:
             check_operator_trust(report, operator, run, "after")
+        if dedicated and runtime:
+            # After the configuration check read the account's files as the run left them.
+            report["logins_written_back"] = write_back(runtime.write_backs, runtime.kept_logins)
         if watch:
             try:
                 report["operator_watch"] = watch.compare()

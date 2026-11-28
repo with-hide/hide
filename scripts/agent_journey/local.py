@@ -82,7 +82,7 @@ ROUTES = {
         "config": ".codex",
         "copies": [[".codex/auth.json", "auth.json"]],
         "provenance": "A private CODEX_HOME holding a copy of the login (docs/AI_PROVIDERS.md); a refresh stays in the copy.",
-        "login": lambda root, status, margin: codex_login_refusal(root / "auth.json"),
+        "login": lambda root, status, margin: codex_login_refusal(root / "auth.json", window=margin is not None),
     },
     "grok": {
         "args": lambda home: [],
@@ -256,7 +256,11 @@ def claude_login_refusal(code, output):
 
 def expiry_refusal(cli, expiries, margin, now=None):
     """Why an OAuth login copy whose access tokens expire at `expiries` (Unix
-    seconds) must not be used by a run that ends within `margin` seconds, or None."""
+    seconds) must not be used by a run that ends within `margin` seconds, or None.
+    A `margin` of None is the journey account's, whose copies go back to the
+    account after the run (account.py): a refresh inside the run is its own."""
+    if margin is None:
+        return None
     if not expiries:
         return f"login expiry unreadable; run {cli} once yourself, then rerun"
     left = min(expiries) - (now if now is not None else time.time())
@@ -376,10 +380,13 @@ def opencode_key_names(config):
     return found
 
 
-def codex_login_refusal(auth, now=None):
-    """Why the Codex login copy must not be used, or None."""
+def codex_login_refusal(auth, now=None, window=True):
+    """Why the Codex login copy must not be used, or None; without `window`,
+    the journey account's, its refresh age does not matter."""
     if not auth.is_file():
         return "not logged in: run codex login yourself; the journey never logs in"
+    if not window:
+        return None
     age = codex_login_age(auth, now)
     if age is None:
         return "login refresh time unreadable; run Codex once, then rerun"

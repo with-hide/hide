@@ -3,12 +3,14 @@
 The journey's `OwnRuntime` runs the panes in the core's own engine; this
 base holds the private home, state and daemon every run shares."""
 
+import contextlib
 import hashlib
 from dataclasses import dataclass
 import json
 import os
 import re
 from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 import time
@@ -79,6 +81,18 @@ XDG_FOLDERS = {"XDG_CONFIG_HOME": "config", "XDG_STATE_HOME": "state", "XDG_DATA
 # and runtime configuration must be supplied explicitly by the route.
 PRIVATE_ENV = frozenset(("PATH", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM",
                          "SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT"))
+
+
+def kept_login(path: Path) -> bytes | None:
+    """A private login copy's content once no process has it open, or None
+    when the agent removed it. An SQLite database (omp's `agent.db`) is
+    checkpointed first, so its main file alone holds every change."""
+    if not path.is_file() or path.is_symlink():
+        return None
+    if path.suffix == ".db":
+        with contextlib.closing(sqlite3.connect(path)) as connection:
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    return path.read_bytes()
 
 
 def clean_env(*, private=False) -> dict[str, str]:
@@ -185,6 +199,11 @@ class Runtime:
         self.checkout_directories = set()
         self.pane_credentials = {}
         self.credential_roots = set()
+        # Private login copies whose content close() keeps, read once every
+        # process of the run has ended, before it removes them: on the
+        # journey account they go back to the account (agent_journey/account.py).
+        self.kept_login_paths = []
+        self.kept_logins = {}
         self.sandbox = None
         self.started = False
         self.configuration = {}
@@ -460,6 +479,12 @@ class Runtime:
                 failures.extend(f"{label} guardian: {line}" for line in output.guardian_failures())
                 if child in self.owner.job_failures:
                     failures.append(f"{label} job: {self.owner.job_failures[child]}")
+            if processes_confirmed:
+                for path in self.kept_login_paths:
+                    try:
+                        self.kept_logins[path] = kept_login(path)
+                    except Exception as error:
+                        failures.append(f"login copy unreadable: {path.name}: {error}")
             # A log or protocol failure must not retain disposable auth copies.
             # These exact roots were registered before copying, so even a
             # partially failed copy is removed without touching operator HOME.
