@@ -2,7 +2,8 @@
 # new test that fails one run in ten fails its own pull request (docs/TESTING.md,
 # "Flaky tests"). `pr.yml` calls it from the `repeat` lane with what
 # `scripts/ci-plan.py` selected (web specs, the packages' unit test files and
-# Rust test modules, by file), always on Linux. `scripts/ci-repeat.py` owns
+# Rust test modules, by file), on Linux, except a unit test file whose tests
+# all declare Windows, which runs on Windows. `scripts/ci-repeat.py` owns
 # what counts as a changed test and the two budgets: 2400 recorded test-seconds
 # for the web specs, read from `web/e2e/shard-durations.json`, run on as many
 # of `web-e2e.yml`'s shards as keep each at 600 s or less (at most 4, or 6 when
@@ -94,7 +95,7 @@ jobs:
       run-units: ${{ steps.repeat.outputs.run-units }}
       run-rust: ${{ steps.repeat.outputs.run-rust }}
       rust-plan: ${{ steps.rust-count.outputs.rust-plan || steps.resolve.outputs.rust-plan }}
-      units-plan: ${{ steps.units-count.outputs.units-plan }}
+      units-legs: ${{ steps.repeat.outputs.units-legs }}
       rust-archived: ${{ steps.rust-archive.outputs.rust-archived || 'false' }}
     steps:
       - uses: actions/checkout@v7
@@ -158,13 +159,14 @@ jobs:
       - name: Count the unit tests
         # Each package's own Vitest lists the selected files' tests, so a table
         # that declares them counts as many as it runs. A file that lists none
-        # fails the lane here.
+        # here declares another system for its tests, and its own leg lists it
+        # on Windows, where a file that lists none fails the lane.
         id: units-count
         if: steps.resolve.outputs.units-count-needed == 'true'
         timeout-minutes: 10
         env:
           UNITS: ${{ steps.resolve.outputs.units }}
-        run: python3 scripts/ci-repeat.py units-plan --units "$UNITS"
+        run: python3 scripts/ci-repeat.py units-plan --units "$UNITS" --system linux --elsewhere windows
       - name: Install cargo-nextest
         if: steps.resolve.outputs.rust-count-needed == 'true'
         timeout-minutes: 3
@@ -230,14 +232,17 @@ jobs:
           EVENT: ${{ github.event_name }}
           WEB_LIST: ${{ steps.web-count.outputs.web-list }}
           UNITS_COUNT: ${{ steps.units-count.outputs.units-count }}
+          UNITS_ELSEWHERE: ${{ steps.units-count.outputs.units-elsewhere || '[]' }}
           RUST_COUNT: ${{ steps.rust-count.outputs.rust-count }}
           NAMED: ${{ steps.resolve.outputs.repeat }}
           WEB: ${{ steps.resolve.outputs.web }}
           UNITS: ${{ steps.resolve.outputs.units }}
           RUST: ${{ steps.resolve.outputs.rust }}
+          OS: ${{ steps.resolve.outputs.os }}
         run: |
           python3 scripts/ci-repeat.py choose --event "$EVENT" --web "$WEB" --units "$UNITS" --rust "$RUST" \
-            --repeat "$NAMED" --web-list "$WEB_LIST" --units-count "$UNITS_COUNT" --rust-count "$RUST_COUNT"
+            --repeat "$NAMED" --web-list "$WEB_LIST" --units-count "$UNITS_COUNT" --rust-count "$RUST_COUNT" \
+            --units-elsewhere "$UNITS_ELSEWHERE" --runner "$OS"
 
   web:
     name: repeat web specs
@@ -258,19 +263,36 @@ jobs:
       specs: ${{ needs.count.outputs.web }}
       repeat: ${{ needs.count.outputs.web-repeat }}
 
+  # One leg per system the unit files run on (`choose` in ci-repeat.py): a
+  # pull request's are Linux, and Windows for a file whose tests all declare
+  # it; a hand run's are the system it asked for. Each leg names its outputs
+  # by its system, so the legs do not overwrite each other's.
   units:
-    name: repeat unit tests (${{ needs.count.outputs.os }})
+    name: repeat unit tests (${{ matrix.os }})
     needs: count
     if: needs.count.outputs.run-units == 'true'
-    runs-on: ${{ needs.count.outputs.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.count.outputs.units-legs) }}
     # The unit and Rust budget's 200 runs of a unit test file, after the install and the build.
     timeout-minutes: 40
     outputs:
-      completed: ${{ steps.report.outputs.completed }}
+      completed-linux: ${{ steps.report.outputs.completed-linux }}
+      completed-macos: ${{ steps.report.outputs.completed-macos }}
+      completed-windows: ${{ steps.report.outputs.completed-windows }}
+      repeat-linux: ${{ steps.list.outputs.repeat-linux }}
+      repeat-macos: ${{ steps.list.outputs.repeat-macos }}
+      repeat-windows: ${{ steps.list.outputs.repeat-windows }}
     defaults:
       run:
         shell: bash
     steps:
+      - name: Keep line endings as committed
+        # Windows checks out with CRLF by default, which would make the unit
+        # tests report line endings instead of code.
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
         timeout-minutes: 5
       - uses: pnpm/action-setup@v6
@@ -296,15 +318,26 @@ jobs:
         # per-iteration runs find it up to date.
         timeout-minutes: 10
         run: bash scripts/build-relay-wasm.sh
+      - name: List the unit tests on this system
+        # This system's own Vitest lists the leg's files, so a test declared
+        # for another system is not counted, and a file that lists none fails
+        # the leg here. The repeat is the count's, or, for a leg the count
+        # could not list (`repeat` 0), the one this listing's tests get.
+        id: list
+        timeout-minutes: 10
+        env:
+          FILES: ${{ toJSON(matrix.files) }}
+          OS: ${{ matrix.os }}
+          REPEAT: ${{ matrix.repeat }}
+        run: python3 scripts/ci-repeat.py units-plan --units "$FILES" --system "$OS" --repeat "$REPEAT"
       - name: Repeat the unit tests
         # `--retry=0` over the suites' one retry, so one failed run fails the
         # job. Each file runs `REPEAT` times, and the report below proves the
-        # completed runs. The plan is what the count job listed, so a file
-        # that lists no test fails here too.
+        # completed runs.
         timeout-minutes: 30
         env:
-          PLAN: ${{ needs.count.outputs.units-plan }}
-          REPEAT: ${{ needs.count.outputs.repeat }}
+          PLAN: ${{ steps.list.outputs.units-plan }}
+          REPEAT: ${{ steps.list.outputs.repeat }}
         run: |
           set -euo pipefail
           case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
@@ -345,9 +378,12 @@ jobs:
         # A run that failed fails here even when the loop above went on: the
         # reports name it, and a file that failed every iteration reports no
         # completed run at all.
+        env:
+          OS: ${{ matrix.os }}
+          REPEAT: ${{ steps.list.outputs.repeat }}
         run: |
-          python3 scripts/ci-repeat.py report --junit "$RUNNER_TEMP"/junit-*.*.xml
-          python3 scripts/check-stress-report.py --junit "$RUNNER_TEMP"/junit-*.*.xml --repeat "${{ needs.count.outputs.repeat }}"
+          python3 scripts/ci-repeat.py report --junit "$RUNNER_TEMP"/junit-*.*.xml --leg "$OS"
+          python3 scripts/check-stress-report.py --junit "$RUNNER_TEMP"/junit-*.*.xml --repeat "$REPEAT"
           if [ -s "$RUNNER_TEMP/units-failed.txt" ]; then
             echo "these iterations exited non-zero:" >&2
             cat "$RUNNER_TEMP/units-failed.txt" >&2
