@@ -1,3 +1,4 @@
+// Probe of the repeat lane (closed unmerged): a comment-only change.
 // A Conductor's mission as the operator meets it, on either engine and an
 // isolated hided (PRD software-factory-conductor B14, B15, B19, B21, B48):
 // the real `hide mission` commands from the pane's own shell change the

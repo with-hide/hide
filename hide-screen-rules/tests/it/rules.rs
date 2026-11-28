@@ -1,3 +1,4 @@
+// Probe of the repeat lane (closed unmerged): a comment-only change.
 use hide_screen_rules::{ENGINE_VERSION, Input, Manifest, Rules, State, Version};
 
 fn compile(rules: &str) -> Result<Rules, String> {
