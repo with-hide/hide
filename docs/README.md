@@ -193,4 +193,5 @@ A file that still does not fit is split in the same pull request:
 - Every Code path exists, the table of contents links every piece, and every piece and anchor it links exists; the pair is registered in `SPLITS` in `scripts/check-docs.py`.
 
 `docs/ARCHITECTURE.md` and its decision records under `docs/adr/` are split the same way, with the record's own fields ([adr/0001](adr/0001-record-architecture-decisions.md)).
+`scripts/split-doc.py --source-ref origin/main --table scripts/split-tables/<folder>.json` makes the split from a table that places each heading in a piece and names its Code paths; it moves the text unchanged apart from heading levels and link targets, refuses a heading it does not place, a source already split and any lost line or anchor, and is rerun on the newest main right before the split merges.
 The files that were over the cap when it arrived are listed in `EXCEPTIONS` in `scripts/check-docs.py` until each is split; the list only shrinks, and the check fails on an entry whose file is gone or back within the cap.

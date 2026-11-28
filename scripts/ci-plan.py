@@ -980,6 +980,8 @@ POLICY_ONLY = (
     "scripts/check-agent-folders.sh", "scripts/check-docs.py",
     # The size hook reads check-docs.py at write time; the script suite tests it.
     "scripts/hooks/docs-size-cap.sh",
+    # The guide splitter and its tables: run by hand, tested by the script suite.
+    "scripts/split-doc.py", "scripts/split-tables/*",
     "scripts/check-retired-spellings.py",
     # What the shell, the daemon and the agent notes must keep saying, read as text.
     "scripts/check-shell-structure.py",
