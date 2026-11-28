@@ -102,8 +102,8 @@ export function tileCounts(rest: SnapshotRest | null, _localAgents: AgentRow[], 
   };
   // A paired machine's tile is that machine's own screen, so it counts what
   // that machine told of its own work and nothing else (PRD
-  // device-connect-iroh D-50); this computer's work that runs there opens in
-  // this computer's tile (D-55) and is counted on it.
+  // device-connect-iroh D-50); this computer's work that runs there is
+  // counted on this computer's tile, wherever it opens (D-55).
   const peerKey = devices.find((device) => device.id === deviceId)?.peer_key;
   if (peerKey != null) return peerCounts(rest, peerKey);
   const counts = own(deviceId);

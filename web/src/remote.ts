@@ -114,28 +114,36 @@ export function remoteTabView(session: RemoteSession, view: RemoteView, tabId: s
   return { ...view, tab, layout, focusedPaneId: null };
 }
 
-const paneDevices = new WeakMap<readonly RemoteStatus[], Map<string, string>>();
+/** Where a device's pane is: the device the core names on its rows and the id that device gives it. */
+export type RemotePaneAddress = { device: string; devicePane: string };
+
+const paneAddresses = new WeakMap<readonly RemoteStatus[], Map<string, RemotePaneAddress>>();
 
 /**
- * The device a pane belongs to, read from the device the core names on the
- * pane's own rows in that device's session; the shell never splits a pane id.
- * Null means the pane is no connected device's: this machine's.
+ * A device's pane as the core addresses it on the pane's own rows in that
+ * device's session; the shell never splits a pane id. Null means the pane is
+ * no connected device's: this machine's.
  */
-export function remoteTargetOfPane(rest: SnapshotRest | null, paneId: string): string | null {
+export function remotePaneAddress(rest: SnapshotRest | null, paneId: string): RemotePaneAddress | null {
   const remote = rest?.status?.remote;
   if (!remote) return null;
-  let devices = paneDevices.get(remote);
-  if (!devices) {
-    devices = new Map();
+  let addresses = paneAddresses.get(remote);
+  if (!addresses) {
+    addresses = new Map();
     for (const status of remote) {
       const session = status.session;
       if (!session) continue;
-      for (const agent of session.agents) devices.set(agent.pane_id, agent.device_id);
-      for (const workspace of session.workspaces) for (const checkout of workspace.checkouts) for (const tab of checkout.tabs) for (const pane of tab.panes) devices.set(pane.id, pane.device_id);
+      for (const agent of session.agents) addresses.set(agent.pane_id, { device: agent.device_id, devicePane: agent.device_pane_id });
+      for (const workspace of session.workspaces) for (const checkout of workspace.checkouts) for (const tab of checkout.tabs) for (const pane of tab.panes) addresses.set(pane.id, { device: pane.device_id, devicePane: pane.device_pane_id });
     }
-    paneDevices.set(remote, devices);
+    paneAddresses.set(remote, addresses);
   }
-  return devices.get(paneId) ?? null;
+  return addresses.get(paneId) ?? null;
+}
+
+/** The device a pane belongs to (`remotePaneAddress`); null for this machine's. */
+export function remoteTargetOfPane(rest: SnapshotRest | null, paneId: string): string | null {
+  return remotePaneAddress(rest, paneId)?.device ?? null;
 }
 
 /** The agents the sidebar lists: the selected host's, or this machine's. */

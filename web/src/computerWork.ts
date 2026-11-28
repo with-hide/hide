@@ -10,6 +10,7 @@
 import type { Actions } from "./actions";
 import type { AgentKind } from "./agentPicker";
 import { guestPaneAddress } from "./guestWork";
+import { remotePaneAddress } from "./remote";
 import type { RemoteScreensBridge } from "./host";
 import { HAND_WITHIN_MS, SHOW_ANSWER_MS, TAKE_WITHIN_MS, type RemoteBridge, type RemotePlace, type RemoteShowResult, type RemoteWork, type RemoteWorkResult } from "./remoteView";
 import type { SnapshotRest, Workspace } from "./snapshot";
@@ -71,18 +72,10 @@ export function handedFailure(result: Exclude<RemoteWorkResult, { outcome: "star
  */
 export function ownWorkThere(rest: SnapshotRest | null, paneId: string): { deviceId: string; pane: string } | null {
   const own = localDeviceId(rest);
-  if (!rest || !own) return null;
-  for (const status of rest.status?.remote ?? []) {
-    const session = status.session;
-    if (!session) continue;
-    const row =
-      session.agents.find((agent) => agent.pane_id === paneId) ??
-      session.workspaces.flatMap((workspace) => workspace.checkouts.flatMap((checkout) => checkout.tabs.flatMap((tab) => tab.panes))).find((pane) => pane.id === paneId);
-    if (!row) continue;
-    const paired = rest.navigator?.devices?.some((device) => device.id === row.device_id && device.peer_key != null) ?? false;
-    return paired ? { deviceId: row.device_id, pane: guestPaneAddress(own, row.device_pane_id) } : null;
-  }
-  return null;
+  const address = remotePaneAddress(rest, paneId);
+  if (!own || !address) return null;
+  const paired = rest?.navigator?.devices?.some((device) => device.id === address.device && device.peer_key != null) ?? false;
+  return paired ? { deviceId: address.device, pane: guestPaneAddress(own, address.devicePane) } : null;
 }
 
 /**
@@ -230,7 +223,10 @@ export function takeComputerWork(bridge: Pick<RemoteBridge, "onWork" | "workResu
     if (Date.now() >= current.until) {
       pending = null;
       if (work.op === "start") report(work, { request: work.request, outcome: "late" });
-      else deps.note(`show from another computer: ${work.pane} came too late; nothing opened`);
+      else {
+        deps.note(`show from another computer: ${work.pane} came too late; nothing opened`);
+        if (work.request !== undefined) bridge.workResult?.({ request: work.request, outcome: "late" });
+      }
       return;
     }
     if (!rest || !deps.connected() || !deps.open()) return;
@@ -291,6 +287,7 @@ export function takeComputerWork(bridge: Pick<RemoteBridge, "onWork" | "workResu
     // The same start asked again is the one already taken.
     if (work.op === "start" && (sent.has(work.request) || (pending?.work.op === "start" && pending.work.request === work.request))) return;
     if (pending?.work.op === "start") report(pending.work, { request: pending.work.request, outcome: "late" });
+    else if (pending?.work.request !== undefined) bridge.workResult?.({ request: pending.work.request, outcome: "late" });
     pending = { work, until: Date.now() + TAKE_WITHIN_MS, add: null };
     step();
   });

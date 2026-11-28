@@ -35,11 +35,10 @@ export function registerRemoteScheme(): void {
 const KEPT = 3;
 
 /**
- * The starts, and the shows with a request (D-55), handed to pages whose end
- * is still owed to the shell. Past it the oldest, and every one of a page
- * that went, is answered `unconfirmed`: a start may have been made, so the
- * shell keeps its words and asks to check that computer's screen rather than
- * starting it again; a show's window opens the work in its own tile.
+ * The starts handed to pages whose end is still owed to the shell. Past it
+ * the oldest, and every one of a page that went, is answered `unconfirmed`:
+ * it may have been made, so the shell keeps its words and asks to check that
+ * computer's screen rather than starting it again.
  */
 const OWED = 16;
 
@@ -97,6 +96,12 @@ export class RemoteScreens {
   private readonly waiting = new Map<string, { key: string; work: GoRequest["work"]; at: number }>();
   /** Each start handed to a page, by its request id, with the device it went to: only that device's page may say how it ended. */
   private readonly owed = new Map<string, string>();
+  /**
+   * Per machine, the show asked with a request (D-55) whose page has not
+   * answered yet: one each, since a later show replaces it on the shell's
+   * side too, so a page of an older build that answers none keeps no more.
+   */
+  private readonly shows = new Map<string, string>();
   private readonly sessions = new Set<string>();
   private front: string | null = null;
   private clock = 0;
@@ -131,9 +136,11 @@ export class RemoteScreens {
     ipcMain.on(REMOTE_WORK_DONE_CHANNEL, (event: IpcMainEvent, reported: unknown) => {
       const screen = this.screenOf(event);
       const result = parseWorkResult(reported);
-      if (!screen || !result || this.owed.get(result.request) !== screen.device) return;
+      if (!screen || !result) return;
+      if (this.shows.get(screen.device) === result.request) this.shows.delete(screen.device);
+      else if (this.owed.get(result.request) !== screen.device) return;
       // An agent still coming up is not the end: its end follows from the same page.
-      if (result.outcome !== "starting") this.owed.delete(result.request);
+      else if (result.outcome !== "starting") this.owed.delete(result.request);
       this.deps.log.event("remote.work_result", { device: screen.device, outcome: result.outcome });
       this.toShell(screen.device, result);
     });
@@ -232,7 +239,9 @@ export class RemoteScreens {
   private hand(screen: Screen, work: GoRequest["work"]): void {
     if (screen.view.webContents.isDestroyed()) return this.answer(screen.device, work, "not_shown");
     this.deps.log.event("remote.work_handed", { device: screen.device, op: work.op });
-    if (work.request !== undefined) {
+    if (work.op === "show") {
+      if (work.request !== undefined) this.shows.set(screen.device, work.request);
+    } else {
       this.owed.set(work.request, screen.device);
       for (const [request, device] of this.owed) {
         if (this.owed.size <= OWED) break;
@@ -270,6 +279,11 @@ export class RemoteScreens {
   /** The starts `device`'s page was following go with the page: each is answered `unconfirmed` (see `OWED`). */
   private forget(device: string, reason: string): void {
     for (const [request, owner] of this.owed) if (owner === device) this.unconfirmed(request, device, reason);
+    const show = this.shows.get(device);
+    if (show === undefined) return;
+    this.shows.delete(device);
+    this.deps.log.event("remote.work_unknown", { device, reason });
+    this.toShell(device, { request: show, outcome: "unconfirmed" });
   }
 
   private unconfirmed(request: string, device: string, reason: string): void {

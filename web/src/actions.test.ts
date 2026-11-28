@@ -797,7 +797,7 @@ describe("this computer's work that runs on a paired machine", () => {
   const mini = "mini-machine";
   const KEY = "k".repeat(64);
   const PANE = `remote:${mini}:pane:w1:p3`;
-  const live = () => {
+  const live = (peer: Record<string, unknown> = {}) => {
     useShellStore.setState({
       connection: "live",
       rest: {
@@ -806,7 +806,7 @@ describe("this computer's work that runs on a paired machine", () => {
           devices: [{ id: "core", kind: "local" }, { id: mini, kind: "remote", peer_key: KEY }],
           workspaces: [],
           tools: [],
-          peers: [{ key: KEY, device_id: mini, name: "mini", opens: "active", connected: true }],
+          peers: [{ key: KEY, device_id: mini, name: "mini", opens: "active", connected: true, ...peer }],
         },
         status: { remote: [{ target_id: mini, state: "connected", session: { agents: [{ pane_id: PANE, device_id: mini, device_pane_id: "w1:p3" }], workspaces: [], pane_layouts: [] } }] },
       } as never,
@@ -874,6 +874,51 @@ describe("this computer's work that runs on a paired machine", () => {
     actions.showScreen("other-machine");
     answer("not_listed");
     expect(useUiStore.getState().remoteScreen).toBe("other-machine");
+    expect(opens(sent)).toEqual([]);
+  });
+
+  it("follows no earlier show once that machine's tile is asked for something else", () => {
+    vi.useFakeTimers();
+    live();
+    const { go } = desktop();
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.openAgent(PANE);
+    actions.openComputerAgent(mini, "w2:p1");
+    vi.advanceTimersByTime(SHOW_ANSWER_MS);
+    expect(go).toHaveBeenCalledTimes(2);
+    expect(useUiStore.getState().remoteScreen).toBe(mini);
+    expect(opens(sent)).toEqual([]);
+  });
+
+  it.each(["paused", "confirming"])("opens here at once while that machine's screen cannot show (%s)", (opens_) => {
+    live({ opens: opens_ });
+    const { go } = desktop();
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.openAgent(PANE);
+    expect(go).not.toHaveBeenCalled();
+    expect(useUiStore.getState().remoteScreen).toBeNull();
+    expect(opens(sent)).not.toEqual([]);
+  });
+
+  it("opens here at once while that machine is not connected", () => {
+    live({ connected: false });
+    const { go } = desktop();
+    const actions = createActions(() => true);
+    actions.openAgent(PANE);
+    expect(go).not.toHaveBeenCalled();
+    expect(useUiStore.getState().remoteScreen).toBeNull();
+  });
+
+  it("opens it in that machine's tile from a child chip or a Return, as every open of it does", () => {
+    live();
+    const { go } = desktop();
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.followRelation("w1:p1", PANE, "worker");
+    expect(go).toHaveBeenCalledWith(expect.objectContaining({ device: mini, work: expect.objectContaining({ pane: "guest:core:pane:w1:p3" }) }));
+    expect(useUiStore.getState().remoteScreen).toBe(mini);
     expect(opens(sent)).toEqual([]);
   });
 

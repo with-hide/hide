@@ -62,8 +62,9 @@ export type RemoteWorkResult =
 /**
  * How a show with a `request` ended on that computer's page: `shown`, its
  * guest pane is on that screen now; `not_listed`, that computer lists no such
- * pane of this one's (not yet, or no more), so nothing opened there. The
- * desktop answers `not_shown` for one that never reached the page and
+ * pane of this one's (not yet, or no more), so nothing opened there. The page
+ * answers `late` for one it held past its wait or that a later ask replaced,
+ * the desktop `not_shown` for one that never reached the page and
  * `unconfirmed` for one whose page went before it answered.
  */
 export type RemoteShowResult = { request: string; outcome: "shown" } | { request: string; outcome: "not_listed" };

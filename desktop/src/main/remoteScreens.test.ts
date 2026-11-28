@@ -351,6 +351,20 @@ describe("an ask of a remote screen", () => {
     expect(answers().slice(1)).toEqual([{ device: DEVICE, request: "s-2", outcome: "not_shown" }]);
   });
 
+  // A page of an older build answers no show: the host keeps one per machine, the latest, and answers it when the page goes.
+  it("keeps one unanswered show per machine and answers it unconfirmed when the page goes", async () => {
+    const screens = screensOn(9, { event: vi.fn() });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null, display: null });
+    await loaded(1);
+    const view = views.at(-1)!;
+    const done = ipc.get(REMOTE_WORK_DONE_CHANNEL)!;
+    for (const request of ["s-1", "s-2", "s-3"]) screens.go({ device: DEVICE, key: KEY, work: { op: "show", pane: "guest:mac:pane:w1:p3", request } });
+    done(fromPage(view), { request: "s-1", outcome: "late" });
+    expect(answers()).toEqual([]);
+    screens.closeAll();
+    expect(answers()).toEqual([{ device: DEVICE, request: "s-3", outcome: "unconfirmed" }]);
+  });
+
   // An agent still coming up is not the end; a page that went takes its
   // made starts with it, logged and unanswered, so none is started twice.
   it("passes on an agent still starting and then its end, and forgets the starts of a page that went", async () => {

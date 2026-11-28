@@ -346,6 +346,16 @@ describe("the asking computer's own work that runs here", () => {
     expect(view.results).toEqual([{ request: "s-1", outcome: "not_listed" }]);
   });
 
+  it("answers late a show it held past its wait or that a later ask replaced", () => {
+    const view = page(null);
+    view.ask({ op: "show", pane: GUEST, request: "s-1" });
+    view.ask({ op: "show", pane: GUEST, request: "s-2" });
+    expect(view.results).toEqual([{ request: "s-1", outcome: "late" }]);
+    vi.advanceTimersByTime(TAKE_WITHIN_MS);
+    expect(view.results).toEqual([{ request: "s-1", outcome: "late" }, { request: "s-2", outcome: "late" }]);
+    expect(view.actions.openGuestPane).not.toHaveBeenCalled();
+  });
+
   it("still shows this computer's own work asked without a request as before", () => {
     const view = page(withGuest([GUEST]));
     view.ask({ op: "show", pane: "w1:p2" });
