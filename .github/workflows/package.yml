@@ -216,29 +216,24 @@ jobs:
         with:
           repository: with-hide/hide
           ref: ${{ inputs.source-sha || github.sha }}
-      # The release set is saved by a run on main (the nightly, a candidate
-      # dispatched from main) and read by a release tag. A pull request's quick
-      # build reads the quick set instead, which `package-cache.yml` saves on
-      # main at the same settings; neither is ever saved by a pull request.
-      - if: ${{ !inputs.quick-build }}
-        uses: ./.github/actions/rust-cache
-        timeout-minutes: 10
-        with:
-          set: release
-          save: ${{ github.ref == 'refs/heads/main' }}
+      # A pull request's quick build sets its settings before the restore, so
+      # rust-cache hashes them into the key, and reads the quick set
+      # `package-cache.yml` saves on main at those settings. Every other build
+      # reads the release set, saved by a run on main (the nightly, a
+      # candidate dispatched from main) and read by a release tag. A pull
+      # request saves neither.
       - if: inputs.quick-build
-        uses: ./.github/actions/rust-cache
+        uses: ./.github/actions/quick-release-build
+      - uses: ./.github/actions/rust-cache
         timeout-minutes: 10
         with:
-          set: quick
-          save: false
+          set: ${{ inputs.quick-build && 'quick' || 'release' }}
+          save: ${{ !inputs.quick-build && github.ref == 'refs/heads/main' }}
       # hide-vt's Zig inputs and caches for the pane holder, which the vt
       # lane saves.
       - uses: ./.github/actions/vt-cache
         with:
           save: false
-      - if: inputs.quick-build
-        uses: ./.github/actions/quick-release-build
       - uses: pnpm/action-setup@v6
         with:
           version: 10
@@ -294,29 +289,24 @@ jobs:
         with:
           repository: with-hide/hide
           ref: ${{ inputs.source-sha || github.sha }}
-      # The release set is saved by a run on main (the nightly, a candidate
-      # dispatched from main) and read by a release tag. A pull request's quick
-      # build reads the quick set instead, which `package-cache.yml` saves on
-      # main at the same settings; neither is ever saved by a pull request.
-      - if: ${{ !inputs.quick-build }}
-        uses: ./.github/actions/rust-cache
-        timeout-minutes: 10
-        with:
-          set: release
-          save: ${{ github.ref == 'refs/heads/main' }}
+      # A pull request's quick build sets its settings before the restore, so
+      # rust-cache hashes them into the key, and reads the quick set
+      # `package-cache.yml` saves on main at those settings. Every other build
+      # reads the release set, saved by a run on main (the nightly, a
+      # candidate dispatched from main) and read by a release tag. A pull
+      # request saves neither.
       - if: inputs.quick-build
-        uses: ./.github/actions/rust-cache
+        uses: ./.github/actions/quick-release-build
+      - uses: ./.github/actions/rust-cache
         timeout-minutes: 10
         with:
-          set: quick
-          save: false
+          set: ${{ inputs.quick-build && 'quick' || 'release' }}
+          save: ${{ !inputs.quick-build && github.ref == 'refs/heads/main' }}
       # hide-vt's Zig inputs and caches for the pane holder, which the vt
       # lane saves.
       - uses: ./.github/actions/vt-cache
         with:
           save: false
-      - if: inputs.quick-build
-        uses: ./.github/actions/quick-release-build
       - uses: pnpm/action-setup@v6
         with:
           version: 10
@@ -693,29 +683,24 @@ jobs:
         with:
           repository: with-hide/hide
           ref: ${{ inputs.source-sha || github.sha }}
-      # The release set is saved by a run on main (the nightly, a candidate
-      # dispatched from main) and read by a release tag. A pull request's quick
-      # build reads the quick set instead, which `package-cache.yml` saves on
-      # main at the same settings; neither is ever saved by a pull request.
-      - if: ${{ !inputs.quick-build }}
-        uses: ./.github/actions/rust-cache
-        timeout-minutes: 10
-        with:
-          set: release
-          save: ${{ github.ref == 'refs/heads/main' }}
+      # A pull request's quick build sets its settings before the restore, so
+      # rust-cache hashes them into the key, and reads the quick set
+      # `package-cache.yml` saves on main at those settings. Every other build
+      # reads the release set, saved by a run on main (the nightly, a
+      # candidate dispatched from main) and read by a release tag. A pull
+      # request saves neither.
       - if: inputs.quick-build
-        uses: ./.github/actions/rust-cache
+        uses: ./.github/actions/quick-release-build
+      - uses: ./.github/actions/rust-cache
         timeout-minutes: 10
         with:
-          set: quick
-          save: false
+          set: ${{ inputs.quick-build && 'quick' || 'release' }}
+          save: ${{ !inputs.quick-build && github.ref == 'refs/heads/main' }}
       # hide-vt's Zig inputs and caches for the pane holder, which the vt
       # lane saves.
       - uses: ./.github/actions/vt-cache
         with:
           save: false
-      - if: inputs.quick-build
-        uses: ./.github/actions/quick-release-build
       - uses: pnpm/action-setup@v6
         with:
           version: 10

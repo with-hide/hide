@@ -8,16 +8,18 @@
 #
 # A set is saved only under a key that does not exist yet, and its key moves
 # only with what rust-cache hashes: the lockfile, the members' and the root
-# manifests, the pinned toolchain and the action itself. So a push to main
+# manifests, the pinned toolchain, the action itself and the quick settings,
+# which are in the environment before the restore. So a push to main
 # that changes one of those builds the new generation, and a daily run
 # rebuilds an entry GitHub evicted or let expire. A run whose exact entry
 # exists stops after the restore. `cache-generations.yml` then deletes the
 # generation the new one replaced.
 #
 # Each job runs the same steps as `package.yml`'s compile jobs, in the same
-# order, so its dependencies are the ones they ask for: rust-cache hashes the
-# environment at its restore, before the quick settings are set, and cargo
-# reuses a dependency only when its profile, features and target match.
+# order, so its key and its dependencies are the ones they ask for:
+# rust-cache hashes the environment at its restore, and cargo reuses a
+# dependency only when its profile, features and target match. A changed
+# quick setting therefore moves the key, and this workflow builds it again.
 # `scripts/tests/test_quick_release_build.py` holds the two together. The
 # macOS job runs on GitHub's macos-15, where `compile (macos)` runs while the
 # Mac mini runner is off (docs/BUILD.md, The Mac mini CI runner).
@@ -31,6 +33,7 @@ on:
       - "**/Cargo.toml"
       - rust-toolchain.toml
       - .github/actions/rust-cache/**
+      - .github/actions/quick-release-build/**
       - .github/workflows/package-cache.yml
   schedule:
     - cron: "37 5 * * *"
@@ -72,6 +75,7 @@ jobs:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/quick-release-build
       - id: cache
         uses: ./.github/actions/rust-cache
         timeout-minutes: 10
@@ -82,8 +86,6 @@ jobs:
         uses: ./.github/actions/vt-cache
         with:
           save: false
-      - if: steps.cache.outputs.cache-hit != 'true'
-        uses: ./.github/actions/quick-release-build
       - if: steps.cache.outputs.cache-hit != 'true'
         uses: pnpm/action-setup@v6
         with:

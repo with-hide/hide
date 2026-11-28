@@ -49,25 +49,27 @@ class QuickReleaseBuildTest(unittest.TestCase):
                 self.assertEqual(uses.count(ACTION), 1)
                 quick = steps[uses.index(ACTION)]
                 self.assertEqual(quick['if'], 'inputs.quick-build')
-                self.assertLess(uses.index(CACHE), uses.index(ACTION))
+                # The settings are in the environment before the restore, so the
+                # quick set's key changes with them.
+                self.assertEqual(uses.count(CACHE), 1)
+                self.assertEqual(uses.index(CACHE), uses.index(ACTION) + 1)
                 # The quick build reads the set built at its settings and saves
                 # nothing; every other build reads and on main saves the release set.
-                caches = [(step['if'], step['with']['set'], step['with']['save'])
-                          for step in steps if step.get('uses') == CACHE]
-                self.assertEqual(caches, [('${{ !inputs.quick-build }}', 'release', "${{ github.ref == 'refs/heads/main' }}"),
-                                          ('inputs.quick-build', 'quick', False)])
+                self.assertEqual(steps[uses.index(CACHE)]['with'], {
+                    'set': "${{ inputs.quick-build && 'quick' || 'release' }}",
+                    'save': "${{ !inputs.quick-build && github.ref == 'refs/heads/main' }}"})
 
     def test_main_saves_the_quick_set_with_the_compile_jobs_own_steps(self):
         # The same actions in the same order and the same build: rust-cache
-        # keys the environment it restores in, and cargo reuses a dependency
-        # only at the profile, features and target it was built with.
+        # keys the environment it restores in, the quick settings included, and
+        # cargo reuses a dependency only at the profile, features and target it
+        # was built with.
         def shape(steps):
             return [step.get('uses') or step['run'] for step in steps
                     if step.get('uses') != 'actions/checkout@v7']
         compile_steps = load('package.yml')['jobs']['windows-compile']['steps']
         compiled = shape(compile_steps)
         compiled = compiled[:compiled.index('bash scripts/verify-web.sh desktop package compile') + 1]
-        compiled.remove(CACHE)  # the release set's restore, which a quick build skips
         saver = load('package-cache.yml')['jobs']['quick']
         self.assertEqual(shape(saver['steps']), compiled)
         self.assertEqual(saver['strategy']['matrix']['include'], [
