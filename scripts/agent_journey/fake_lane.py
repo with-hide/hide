@@ -126,7 +126,9 @@ def pi_files(folder, url):
 def omp(home, url, root, local, key=KEY):
     """omp 18.7.0's custom provider (`models.yml`) and default model role
     (`config.yml`) in its agent folder; its key is read from the variable
-    `apiKey` names."""
+    `apiKey` names. The model says it does not reason: omp 19 otherwise
+    probes an undeclared model's thinking controls with eleven requests of
+    its own at an account's first start, past the agent's request budget."""
     del root, local
     omp_files(home / ".omp/agent", url)
     return {"JOURNEY_FAKE_KEY": key}
@@ -137,7 +139,8 @@ def omp_files(folder, url):
     private_directory(folder)
     write_private(folder / "models.yml", (f"providers:\n  {PROVIDER}:\n    baseUrl: {url}/v1\n"
                                           f"    apiKey: JOURNEY_FAKE_KEY\n    api: openai-completions\n"
-                                          f"    models:\n      - id: {MODEL}\n        name: Journey\n").encode())
+                                          f"    models:\n      - id: {MODEL}\n        name: Journey\n"
+                                          f"        reasoning: false\n").encode())
     write_private(folder / "config.yml", (ci.OMP_SET_UP + f"modelRoles:\n  default: {PROVIDER}/{MODEL}\n").encode())
 
 
