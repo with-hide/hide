@@ -314,10 +314,12 @@ class Scenario:
         return f"{shell} moved into dev-b's tab"
 
     def letters(self):
+        # retired-spellings: kept from here: this drives a released core's own hide, which knows letters only by this spelling
         self.checked("dev-a", "hide request send core-a --intent release-state-a-to-core --kind progress "
                               "--body 'dev-a reached the core'")
         self.checked("core-a", "hide request send dev-a --intent release-state-core-to-a --kind request "
                                "--body 'core-a asks dev-a'")
+        # retired-spellings: kept to here
         return "dev-a -> core-a (progress), core-a -> dev-a (request)"
 
     def paired_letter(self):
@@ -337,8 +339,10 @@ class Scenario:
         agent = next((row.get("id") for row in listed.get("items") or [] if row.get("id")), None)
         if agent is None:
             raise Stop(f"{device} lists no agent to write to")
+        # retired-spellings: kept from here: this drives a released core's own hide, which knows letters only by this spelling
         self.checked("core-a", f"hide request send core:{device}:agent:{agent} --intent release-state-core-to-paired "
                                "--kind request --body 'core-a asks the paired machine'")
+        # retired-spellings: kept to here
         return f"core-a -> core:{device}:agent:{agent} (request)"
 
     def memory(self):
