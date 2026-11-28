@@ -4852,6 +4852,18 @@ mod tests {
         }
     }
 
+    /// Claude Code at rest: its prompt box, the screen its start waits for
+    /// (`[start] ready`).
+    fn claude_at_prompt() -> PaneFacts {
+        PaneFacts {
+            screen: hide_node_link::holders::ScreenRead::Read {
+                state: hide_node_link::holders::ScreenState::Idle,
+                rule: Some("live_prompt_box".to_owned()),
+            },
+            ..running("claude", hide_node_link::holders::ScreenState::Idle)
+        }
+    }
+
     /// The rules given to each pane, by agent id, in order.
     type Given = Vec<(String, Option<String>)>;
 
@@ -4984,7 +4996,7 @@ mod tests {
             Readiness::Launching,
             "the pane id names its agent too, still starting until it rests"
         );
-        holders.say(&pane, &running("claude", ScreenState::Idle));
+        holders.say(&pane, &claude_at_prompt());
         let done = engine.agent_state(WAIT, "worker").unwrap();
         assert_eq!(done.status, "done", "a rest after work is done");
         assert!(done.state_change_seq > working.state_change_seq);
@@ -7566,12 +7578,11 @@ mod tests {
     /// the restore does not name it.
     #[test]
     fn a_resumed_agent_that_ends_after_its_start_settled_is_not_named() {
-        use hide_node_link::holders::ScreenState;
         let (rebooted, holders, next) = resumed_after_reboot();
         let [claude, _] = &rebooted.panes;
-        holders.say(claude, &running("claude", ScreenState::Idle));
+        holders.say(claude, &claude_at_prompt());
         settle_start(&next, claude);
-        holders.say(claude, &running("claude", ScreenState::Idle));
+        holders.say(claude, &claude_at_prompt());
         holders.say(claude, &PaneFacts::default());
         assert!(next.session(WAIT).unwrap().not_resumed.is_empty());
         assert!(next.topology().pane(claude).unwrap().agent.is_none());

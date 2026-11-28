@@ -83,7 +83,9 @@ fn every_captured_screen_reads_as_the_state_the_operator_saw() {
 /// An agent whose start waits for a ready screen (`[start] ready`) shows it
 /// in every idle capture but the ones taken before it takes a line, named
 /// `idle-loading-<what>`: OpenCode 2.0.29's composer before its model
-/// loaded, which refused the Enter of a brief typed into it.
+/// loaded, which refused the Enter of a brief typed into it, and a Claude
+/// Code fork's pane before it drew its prompt box, which kept a prompt typed
+/// then without its Enter (#3171).
 #[test]
 fn a_start_waits_for_the_ready_screen_only_until_the_agent_takes_a_line() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/screens");
@@ -119,7 +121,10 @@ fn a_start_waits_for_the_ready_screen_only_until_the_agent_takes_a_line() {
         );
         agents += 1;
     }
-    assert!(agents >= 1, "OpenCode waits for its model line");
+    assert!(
+        agents >= 2,
+        "OpenCode waits for its model line and Claude Code for its prompt box"
+    );
 }
 
 /// The known cost of reading Codex's numbered menus by their shape

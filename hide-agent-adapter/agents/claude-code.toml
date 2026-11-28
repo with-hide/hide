@@ -13,6 +13,14 @@ aliases = ["claude", "claude_code"]
 home = "~/.claude"
 hooks = "claude"
 
+# Claude Code (2.1.302, 2.1.332) takes the terminal's keys as soon as it
+# starts and draws its prompt box up to seconds later (a fork's
+# `--resume --fork-session` drew past 7 s on the Mac mini); a line typed in
+# between lands in its composer without its Enter, so a fork's first prompt
+# was never sent (#3171). A start waits until the prompt box shows.
+[start]
+ready = "live_prompt_box"
+
 [resume]
 session = ["--resume", "{session}"]
 
