@@ -1085,6 +1085,199 @@ fn opencode_2_activity_answers_its_newest_write_and_count_only_for_its_proven_ow
     );
 }
 
+/// OpenCode 2.4 writes each item of an assistant message as a `session_part`
+/// row and leaves the message's `content` empty, and reads the rows back in
+/// place of it; a message it never split keeps its items inline. The 2.4.2
+/// fixture holds the 2.0.29 conversation as 2.4.2 writes it.
+mod part_rows {
+    use super::*;
+
+    fn home() -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(database(home.path()).parent().unwrap()).unwrap();
+        writer(home.path())
+            .execute_batch(
+                &std::fs::read_to_string(fixtures().join("opencode-2.4.2/opencode.sql")).unwrap(),
+            )
+            .unwrap();
+        home
+    }
+
+    /// The items of `message` as 2.4.2 writes them, replacing any it had.
+    fn parts(writer: &Connection, message: &str, at: u64, items: &[Value]) {
+        writer
+            .execute("DELETE FROM session_part WHERE message_id = ?1", [message])
+            .unwrap();
+        for (ordinal, item) in items.iter().enumerate() {
+            writer
+                .execute(
+                    "INSERT INTO session_part VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
+                    params![
+                        message,
+                        ROOT,
+                        ordinal as i64,
+                        item["type"].as_str().unwrap(),
+                        item["id"].as_str(),
+                        at,
+                        item.to_string()
+                    ],
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn opencode_2_4_reads_its_part_rows_to_the_same_facts_as_2_0() {
+        let split = home();
+        let inline = super::home();
+        let read = read_whole(split.path(), Agent::OpenCode);
+        assert_same_facts("OpenCode 2.4.2", &read);
+        let before = read_whole(inline.path(), Agent::OpenCode);
+        assert_eq!(read.events, before.events);
+        assert_eq!(read.pr_sightings, before.pr_sightings);
+        assert_eq!(read.memory_receipts, before.memory_receipts);
+        assert_eq!(read.turns, before.turns);
+        assert_eq!(read.checkpoint.offset(), FIXTURE_MESSAGES);
+        let scope = hide_session::SessionReadScope {
+            id: ROOT.to_owned(),
+            cwd: "/work/app".to_owned(),
+        };
+        let conversation = |home: &Path| {
+            hide_session::opencode::read_conversation(
+                &hide_session::Accounts::new(home),
+                &scope,
+                None,
+            )
+            .unwrap()
+        };
+        let (split, inline) = (conversation(split.path()), conversation(inline.path()));
+        assert_eq!(split.events, inline.events);
+        assert_eq!(split.event_offsets, inline.event_offsets);
+    }
+
+    /// OpenCode reads a message's part rows in place of its `content` once
+    /// it has any, and a message it never split from its `content`.
+    #[test]
+    fn a_message_with_part_rows_reads_them_and_one_without_reads_its_content() {
+        let home = home();
+        let writer = writer(home.path());
+        assistant(
+            &writer,
+            ADDED,
+            ADDED_SEQ,
+            ADDED_AT,
+            true,
+            vec![text_item("written inline")],
+        );
+        let texts = |home: &Path| {
+            read_whole(home, Agent::OpenCode)
+                .events
+                .into_iter()
+                .filter(|event| event.offset == FIXTURE_MESSAGES)
+                .map(|event| event.text)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts(home.path()), ["written inline"]);
+        parts(
+            &writer,
+            ADDED,
+            ADDED_AT,
+            &[
+                json!({"type": "reasoning", "text": "private"}),
+                text_item("first part"),
+                text_item("second part"),
+            ],
+        );
+        assert_eq!(texts(home.path()), ["first part\nsecond part"]);
+    }
+
+    #[test]
+    fn a_question_in_a_part_row_waits_until_it_is_answered() {
+        let home = home();
+        let writer = writer(home.path());
+        let first = read_root(home.path()).unwrap();
+        assistant(&writer, ADDED, ADDED_SEQ, ADDED_AT, false, Vec::new());
+        parts(&writer, ADDED, ADDED_AT, &[question_item("running")]);
+        let asking = read(
+            &hide_session::Accounts::new(home.path()),
+            &continued(&first),
+        )
+        .unwrap();
+        assert!(asking.events.is_empty());
+        assert_eq!(
+            asking.turns.as_ref().unwrap().waiting(),
+            Some(Waiting::Question)
+        );
+        let content = serde_json::to_value(
+            asking
+                .turns
+                .as_ref()
+                .unwrap()
+                .user_turn()
+                .unwrap()
+                .content
+                .unwrap(),
+        )
+        .unwrap()
+        .to_string();
+        assert!(content.contains("어느 브랜치에 올릴까요?"), "{content}");
+        assistant(&writer, ADDED, ADDED_SEQ, ADDED_AT, true, Vec::new());
+        parts(&writer, ADDED, ADDED_AT, &[question_item("completed")]);
+        let answered = read(
+            &hide_session::Accounts::new(home.path()),
+            &continued(&asking),
+        )
+        .unwrap();
+        assert_eq!(
+            answered.turns.as_ref().unwrap().waiting(),
+            Some(Waiting::Nothing)
+        );
+    }
+
+    /// OpenCode 2.4 appends an item without touching its message, so a part
+    /// row's write is the session's newest.
+    #[test]
+    fn a_part_row_written_after_its_message_is_the_sessions_newest_write() {
+        use hide_session::session_activity::{SessionActivityRequest, read as activity};
+        let home = home();
+        parts(
+            &writer(home.path()),
+            "msg_06",
+            START + 500_000,
+            &[text_item("still streaming")],
+        );
+        let answer = activity(
+            &hide_session::Accounts::new(home.path()),
+            &SessionActivityRequest {
+                account: Default::default(),
+                agent: Agent::OpenCode,
+                reference_kind: "id".into(),
+                reference_value: ROOT.into(),
+                cwd: Some("/work/app".into()),
+                exact_route: true,
+                expected_id: Some(ROOT.into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(answer.modified_at_unix_ms, START + 500_000);
+    }
+
+    #[test]
+    fn a_part_table_missing_a_column_hide_reads_is_refused_rather_than_read_without_parts() {
+        let home = home();
+        writer(home.path())
+            .execute_batch(
+                "DROP INDEX session_part_session_message_idx; \
+                 ALTER TABLE session_part DROP COLUMN session_id;",
+            )
+            .unwrap();
+        assert_eq!(
+            read_root(home.path()).unwrap_err(),
+            hide_session::ReadRefusal::Refused("opencode_db_schema_unknown".into())
+        );
+    }
+}
+
 mod schema {
     use super::*;
 
