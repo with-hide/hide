@@ -1082,8 +1082,10 @@ def runner_jobs(block):
         # With more than one shard parallel daemon and web builds precede them.
         return shards + (2 if shards > 1 else 0)
     if "uses: ./.github/workflows/desktop-e2e.yml" in block:
-        # Each shard builds in place.
-        return int(re.search(r"\n      shards: (\d+)", block).group(1))
+        shards = int(re.search(r"\n      shards: (\d+)", block).group(1))
+        # With more than one shard the cargo build and the web shell build, two
+        # parallel jobs, precede them.
+        return shards + (2 if shards > 1 else 0)
     if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-clis")):
         # A lane whose macOS or Windows leg follows the plan; the most is every leg.
         systems = re.search(r"\n      systems: (.*)", block).group(1)
@@ -1243,6 +1245,11 @@ class Workflows(unittest.TestCase):
         # Native and WASM relay interoperability adds one job on each OS.
         # The package lane already ran six preparation/compile jobs omitted
         # from the old count; correcting the accounting starts no new job.
+        # The macOS desktop lane's daemon and kit binaries build once in one
+        # macOS `build` job and its web shell once in a Linux `build-web` job
+        # beside it, ahead of its two shards, which build nothing; that is one
+        # macOS job and one Linux job for the 8 minutes of builds each shard
+        # did itself (docs/TESTING.md, "Balancing the e2e shards"): two jobs.
         # Every suite runs once, on the core's own engine, since the Herdr lanes
         # were removed (PRD engine-bundle-4-herdr-removal D-2).
         # The remote mailbox lane's Linux arm64 leg adds one, planned only
@@ -1271,7 +1278,8 @@ class Workflows(unittest.TestCase):
         # most six with their two builds and their total (from 71 to 79), so a
         # pull request that changes a spec no longer waits on one runner
         # repeating it for up to 91 minutes (docs/TESTING.md, "The repeat lane").
-        self.assertLessEqual(most, 79, "a run starts more jobs than the suites and native SDK contracts need")
+        # The macOS desktop lane's two builds (see above) are two of the 81.
+        self.assertLessEqual(most, 81, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

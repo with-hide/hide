@@ -1,5 +1,7 @@
 # Native Linux builds reuse the same release recipe as the Linux package.
-# No release artifacts or build directories cross runs or source revisions.
+# No release artifacts or build directories cross runs or source revisions;
+# only the third-party dependencies of the helper set do, and every hide crate
+# is built from the checkout.
 name: device helpers
 
 on:
@@ -57,6 +59,20 @@ jobs:
         with:
           repository: with-hide/hide
           ref: ${{ inputs.source-sha }}
+      # The helper set: the release profile's dependencies for this target,
+      # built on this runner's image, saved by a run on main (the nightly, a
+      # candidate dispatched from main) and read by a pull request and a
+      # release tag. Its own set, not the Linux package's release set: that
+      # one is built on ubuntu-latest, whose newer C library a dependency's C
+      # code would carry into a helper meant for older systems, and rust-cache
+      # keys by system and processor, not by image (docs/BUILD.md, "CI's Rust
+      # caches").
+      - uses: ./.github/actions/rust-cache
+        timeout-minutes: 10
+        with:
+          set: helper
+          save: ${{ github.ref == 'refs/heads/main' }}
+          target: ${{ matrix.target }}
       - uses: pnpm/action-setup@v6
         with:
           version: 10

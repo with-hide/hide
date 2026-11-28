@@ -8109,6 +8109,8 @@
                 "mission_dependency_line_unknown",
                 "mission_dependency_stack_split",
                 "mission_merge_order_stack",
+                "mission_paths_unordered",
+                "mission_paths_in_other_mission",
                 "mission_criteria_missing",
                 "mission_criteria_too_many",
                 "mission_steps_invalid",
@@ -9832,7 +9834,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:08b30a92fbd1a57136b0cf625553b382b994b356844219b69543c7228f77dfce",
+    "digest": "sha256:5ca687f3abda19a85f7ac29b29050d0ccb8380da388f5d19a9310f3b941409a4",
     "envelopes": {
         "access": {
             "answer": "value",
