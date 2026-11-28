@@ -4506,8 +4506,21 @@ pub(crate) fn overlaps(book: &MissionBook, mission: &Mission) -> Vec<Overlap> {
 /// the merge (AGENTS.md, Working Beside Open Pull Requests), so they order
 /// no nodes and are no overlap.
 pub(crate) fn document_path(path: &str) -> bool {
-    let path = path.trim_end_matches('/');
+    let path = path_key(path);
     path.ends_with(".md") || path.ends_with(".pen") || path == "site" || path.starts_with("site/")
+}
+
+/// A declared path in the one spelling both path rules compare: names joined
+/// by `/` (a Windows `\` too), no empty or `.` names, so `./web/src/` is
+/// `web/src`, and in lower case, since the volume that holds the project may
+/// not tell case apart (macOS and Windows do not by default). The plan keeps
+/// the path as it was written; only the comparison reads this.
+fn path_key(path: &str) -> String {
+    path.split(['/', '\\'])
+        .filter(|name| !name.is_empty() && *name != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+        .to_lowercase()
 }
 
 /// The code paths of `mine` that name a code path of `theirs`, hold it or
@@ -4524,11 +4537,14 @@ fn shared_code_paths<'a>(
     })
 }
 
-/// Whether two declared paths name the same file or one holds the other.
+/// Whether two declared paths name the same file or one holds the other; the
+/// project's folder itself (`.`) holds every path.
 fn overlapping(a: &str, b: &str) -> bool {
-    let a = a.trim_end_matches('/');
-    let b = b.trim_end_matches('/');
+    let (a, b) = (path_key(a), path_key(b));
+    let (a, b) = (a.as_str(), b.as_str());
     a == b
+        || a.is_empty()
+        || b.is_empty()
         || a.strip_prefix(b).is_some_and(|rest| rest.starts_with('/'))
         || b.strip_prefix(a).is_some_and(|rest| rest.starts_with('/'))
 }
@@ -4602,10 +4618,12 @@ fn check_paths_ordered(mission: &Mission) -> Result<(), String> {
 
 /// A change node of `mission` not started yet that changes the code of a
 /// change node at work in another open mission of its project waits for that
-/// node: it depends on a waiting node of this plan on that node's pull
-/// request, on the node itself (the one form while it has no pull request)
-/// or on its whole mission. Otherwise the plan is refused naming the other
-/// mission, its node and the paths.
+/// node's work to merge: it depends on a waiting node of this plan on that
+/// node's current pull request, or on the node itself while it has none. A
+/// node or mission wait is not taken once the pull request exists, since a
+/// node of a `pr`-scope mission is done when its pull request is ready, before
+/// the merge. Otherwise the plan is refused naming the other mission, its node
+/// and the paths, with the waiting node to write.
 pub(crate) fn check_paths_across(book: &MissionBook, mission: &Mission) -> Result<(), String> {
     for other in neighbours(book, mission) {
         let working = other
@@ -4613,19 +4631,18 @@ pub(crate) fn check_paths_across(book: &MissionBook, mission: &Mission) -> Resul
             .iter()
             .filter(|node| node.kind == NodeKind::Change && node.status == NodeStatus::Working);
         for theirs in working {
-            let ordered = |target: &crate::waits::WaitTarget| match target {
-                crate::waits::WaitTarget::Pr(number) => theirs.prs.contains(number),
-                crate::waits::WaitTarget::Node { mission, node } => {
-                    *mission == other.id && *node == theirs.key
-                }
-                crate::waits::WaitTarget::Mission(id) => *id == other.id,
-                _ => false,
+            let target = match theirs.current_pr() {
+                Some(number) => crate::waits::WaitTarget::Pr(number),
+                None => crate::waits::WaitTarget::Node {
+                    mission: other.id.clone(),
+                    node: theirs.key.clone(),
+                },
             };
             let waits: Vec<&str> = mission
                 .nodes
                 .iter()
                 .filter(|node| node.kind == NodeKind::Wait)
-                .filter(|node| node.wait_target.as_ref().is_some_and(ordered))
+                .filter(|node| node.wait_target.as_ref() == Some(&target))
                 .map(|node| node.key.as_str())
                 .collect();
             for mine in unstarted_changes(mission) {
@@ -4639,9 +4656,9 @@ pub(crate) fn check_paths_across(book: &MissionBook, mission: &Mission) -> Resul
                 {
                     continue;
                 }
-                let wait = match theirs.current_pr() {
-                    Some(number) => format!("{{\"pr\": {number}}}"),
-                    None => format!(
+                let wait = match &target {
+                    crate::waits::WaitTarget::Pr(number) => format!("{{\"pr\": {number}}}"),
+                    _ => format!(
                         "{{\"mission\": \"{}\", \"node\": \"{}\"}}",
                         other.id, theirs.key
                     ),
@@ -4721,7 +4738,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Two change nodes not started yet change the same code: add one's key to the other's depends_on so they run one after the other (a finish line such as <node>:c1 does not order them), or take the shared path off one; documents (*.md, *.pen, site/) never order nodes"
         }
         "mission_paths_in_other_mission" => {
-            "A change node not started yet changes code a node of another open mission of this project is changing now: add a waiting node on that node's pull request, {\"kind\": \"wait\", \"wait\": {\"pr\": <n>}} ({\"mission\": \"<id>\", \"node\": \"<key>\"} while it has none), and put its key in your node's depends_on"
+            "A change node not started yet changes code a node of another open mission of this project is changing now: add a waiting node on that node's current pull request, {\"kind\": \"wait\", \"wait\": {\"pr\": <n>}} ({\"mission\": \"<id>\", \"node\": \"<key>\"} only while it has none), and put its key in your node's depends_on"
         }
         "mission_merge_order_stack" => {
             "Name the node a stacked node waits on by a line before it in merge_order, or leave both out: a stacked pull request merges after the one under it, and a node merge_order leaves out merges after every node it names"
@@ -6043,6 +6060,33 @@ pub(crate) mod tests {
             .is_ok()
         );
         assert!(planned(&two_on_paths(&["web/src"], &["web/srcs"], &[], Vec::new())).is_ok());
+        // One file in another spelling is the same file: a leading `./`, a
+        // Windows separator, another case, a doubled or trailing `/`; the
+        // project's folder holds every path.
+        for (a, b) in [
+            ("./web/src", "web/src/App.tsx"),
+            ("web\\src", "web/src/App.tsx"),
+            ("Web/Src", "web/src/app.tsx"),
+            ("web//src/", "web/src"),
+            (".", "hided/src/main.rs"),
+        ] {
+            let refused = planned(&two_on_paths(&[a], &[b], &[], Vec::new())).unwrap_err();
+            assert_eq!(
+                crate::coordination::split_refusal(&refused).0,
+                "mission_paths_unordered",
+                "{a} and {b}"
+            );
+        }
+        // A document in another spelling is still a document.
+        assert!(
+            planned(&two_on_paths(
+                &["./site", "README.MD", "docs\\a.md"],
+                &["site/index.html", "README.md", "docs/a.md"],
+                &[],
+                Vec::new(),
+            ))
+            .is_ok()
+        );
         let mut general = two_on_paths(&["web/src"], &["web/src"], &[], Vec::new());
         general.nodes[1].kind = NodeKind::General.into();
         general.nodes[1].delivery = None;
@@ -6118,6 +6162,39 @@ pub(crate) mod tests {
         // A waiting node the node does not depend on orders nothing.
         assert!(check_paths_across(&book, &mine(&[], vec![on_pr()])).is_err());
         assert!(check_paths_across(&book, &mine(&["w"], vec![on_pr()])).is_ok());
+        let on_node = || {
+            waiting(crate::waits::WaitInput {
+                mission: Some("mission-2".into()),
+                node: Some("x".into()),
+                ..Default::default()
+            })
+        };
+        let on_mission = waiting(crate::waits::WaitInput {
+            mission: Some("mission-2".into()),
+            ..Default::default()
+        });
+        let on_ci = waiting(crate::waits::WaitInput {
+            pr: Some(41),
+            ci: true,
+            ..Default::default()
+        });
+        // Once the pull request exists only its merge orders them: a node of
+        // a pr-scope mission is done, and its mission closes, when the pull
+        // request is ready, and its CI ends before the merge.
+        for wait in [on_node(), on_mission, on_ci] {
+            let refused = check_paths_across(&book, &mine(&["w"], vec![wait])).unwrap_err();
+            assert!(refused.contains("{\"pr\": 41}"), "{refused}");
+        }
+        // A node that moved to a new pull request is waited on by that one:
+        // the one before may have merged already.
+        book.missions[0].nodes[0].prs = vec![41, 42];
+        let refused = check_paths_across(&book, &mine(&["w"], vec![on_pr()])).unwrap_err();
+        assert!(refused.contains("{\"pr\": 42}"), "{refused}");
+        let on_new = waiting(crate::waits::WaitInput {
+            pr: Some(42),
+            ..Default::default()
+        });
+        assert!(check_paths_across(&book, &mine(&["w"], vec![on_new])).is_ok());
         // Without a pull request yet, the node itself is waited on.
         book.missions[0].nodes[0].prs.clear();
         let refused = check_paths_across(&book, &mine(&[], Vec::new())).unwrap_err();
@@ -6125,12 +6202,7 @@ pub(crate) mod tests {
             refused.contains("{\"mission\": \"mission-2\", \"node\": \"x\"}"),
             "{refused}"
         );
-        let on_node = waiting(crate::waits::WaitInput {
-            mission: Some("mission-2".into()),
-            node: Some("x".into()),
-            ..Default::default()
-        });
-        assert!(check_paths_across(&book, &mine(&["w"], vec![on_node])).is_ok());
+        assert!(check_paths_across(&book, &mine(&["w"], vec![on_node()])).is_ok());
         // A node of mine at work keeps working.
         let mut started = mine(&[], Vec::new());
         started.nodes[0].status = NodeStatus::Working;
