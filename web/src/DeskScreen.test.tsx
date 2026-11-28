@@ -1267,6 +1267,36 @@ describe("Desk's room", () => {
     await act(async () => useShellStore.setState({ paneChoice: { request_id: String(second.request_id), ok: false, reason: "stale" } }));
     expect(sent("pane_ask")).toHaveLength(asks + 1);
   });
+
+  // Review round 1 F1 (#3113): a session whose sleep closes its pane (Pi, OpenCode, omp) also gets the record the core
+  // keeps of a gone pane; asleep, it stays a sleeping session to wake beside Desk, not an ended one to resume.
+  it.each(["pi", "opencode", "omp"])("keeps a %s session whose sleep closed its pane asleep beside Desk when its record arrives", async (kind) => {
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([]));
+    const liveRest = structuredClone(rest);
+    liveRest.navigator!.workspaces![0]!.checkouts[0]!.tabs = [{ id: "t1", panes: [{ id: "w1:p2" }] }] as never;
+    const row = { pane_id: "w1:p2", device_id: "local", identity_label: "fixer", agent_kind: kind, mark: "going", state: { working: false, asking: false } } as never;
+    await act(async () => {
+      useShellStore.setState({ rest: liveRest, agents: [row] });
+      useUiStore.getState().setDeskRoom((now) => ({ ...now, session: "w1:p2" }));
+    });
+    const asleepRest = structuredClone(rest);
+    asleepRest.navigator!.sleeping_sessions = [{ sleep_id: "sleep-2", node_id: "local", checkout_path: "/work/repo-fix", kind, identity_label: "fixer", group: "seen", phase: "sleeping", since_unix_ms: 1, wake_available: true, reason: null, checking: false }];
+    await act(async () => useShellStore.setState({ agents: [], rest: asleepRest }));
+    expect(document.body.querySelector("[data-thread-sleep-card]")).not.toBeNull();
+    const record: DeskRecord = { pane_id: "w1:p2", session: { device_id: "local", agent: kind, session_id: "session-2" }, agent_kind: kind, title: "fixer", started_at_unix_ms: 1, ended_at_unix_ms: 2, line: "last progress", pull_requests: [], cwd: "/work/repo-fix", path: "/sessions/session-2.jsonl", project: "/work/repo-fix", thread: true };
+    await act(async () => useShellStore.setState({ deskJobs: { ...useShellStore.getState().deskJobs!, records: [record] } }));
+    expect({
+      card: document.body.querySelector("[data-thread-sleep-card] [data-pane-sleep]")?.getAttribute("data-pane-sleep"),
+      head: document.body.querySelector("[data-desk-session-head]")?.getAttribute("data-desk-session-head"),
+      recordFoot: document.body.querySelector("[data-desk-session-record-foot]") !== null,
+    }).toEqual({ card: "sleeping", head: "sleeping", recordFoot: false });
+    await press("[data-agent-wake]");
+    expect(sent("wake_sleeping_session")).toEqual([{ sleep_id: "sleep-2" }]);
+    // Woken, its sleeping session goes: the record of the gone pane is what stands, as for any ended session.
+    await act(async () => useShellStore.setState({ rest: structuredClone(rest) }));
+    expect(document.body.querySelector("[data-desk-session-record-foot]")).not.toBeNull();
+  });
 });
 
 /** The file channel's answer to `read`: one frame with `bytes` of a file `total` long. */

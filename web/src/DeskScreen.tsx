@@ -677,9 +677,24 @@ const NO_WIDTHS: import("./snapshot").DeskLane = { view_width: null, session_wid
  * card in its middle and no box (`ThreadPanel`).
  */
 function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: string; actions: Actions; deskActions: Actions; room: RoomActions }) {
-  const listed = useShellStore((s) => agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(paneId));
-  const record = useShellStore((s) => (listed ? null : ((s.deskJobs?.records ?? []).find((one) => one.pane_id === paneId) ?? null)));
-  return record ? <DeskRecordPanel record={record} actions={actions} deskActions={deskActions} room={room} /> : <DeskLivePanel paneId={paneId} actions={actions} deskActions={deskActions} room={room} />;
+  const row = useShellStore((s) => agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).get(paneId) ?? null);
+  const checkoutPath = useShellStore((s) => checkoutOfPane(s.rest, paneId)?.checkout.path ?? null);
+  const record = useShellStore((s) => (row ? null : ((s.deskJobs?.records ?? []).find((one) => one.pane_id === paneId) ?? null)));
+  // Who the session is, kept while its row is listed: a session that sleeps or whose pane closes loses its row and its
+  // card, and the panel still names it and finds it among the sleeping sessions (B6, B43); one opened after its row
+  // went is named by the record the core kept of it.
+  const known = useRef<SessionIdentity | null>(null);
+  if (row && checkoutPath) known.current = { title: row.identity_label, node: row.device_id, checkout: checkoutPath };
+  const identity = known.current;
+  const asleep = useShellStore((s) => {
+    const sessions = s.rest?.navigator?.sleeping_sessions;
+    return (identity ? sleepingOf(sessions, identity) : null) ?? (record ? sleepingOfRecord(sessions, record) : null);
+  });
+  // A session whose sleep closed its pane (Pi, OpenCode, omp) also has the record the core keeps of a gone pane: asleep,
+  // it is a sleeping session to wake, not an ended one to resume.
+  return record && !asleep
+    ? <DeskRecordPanel record={record} actions={actions} deskActions={deskActions} room={room} />
+    : <DeskLivePanel paneId={paneId} identity={identity ?? (record && asleep ? { title: asleep.identity_label, node: asleep.node_id, checkout: asleep.checkout_path } : null)} asleep={asleep} actions={actions} deskActions={deskActions} room={room} />;
 }
 
 /** The way back to 한눈에 above the session beside Desk, naming it as its head does: each panel hands it the title it gives its head. */
@@ -772,7 +787,7 @@ function DeskRecordPanel({ record, actions, deskActions, room }: { record: DeskR
 }
 
 /** The session beside Desk while its pane is there, or was, with no record to read in its place. */
-function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string; actions: Actions; deskActions: Actions; room: RoomActions }) {
+function DeskLivePanel({ paneId, identity, asleep, actions, deskActions, room }: { paneId: string; identity: SessionIdentity | null; asleep: SleepingSession | null; actions: Actions; deskActions: Actions; room: RoomActions }) {
   const { t } = useInterfaceTranslation();
   const job = useShellStore((s) => (s.deskJobs ? laneCards(s.deskJobs).find((one) => one.pane_id === paneId) ?? null : null));
   const ownJob = useShellStore((s) => s.deskJobs?.jobs.some((one) => one.pane_id === paneId) ?? false);
@@ -788,14 +803,8 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
   const answer = useUiStore((s) => s.deskRoom.answer === paneId);
   const filesChord = useShellStore((s) => commandLabel("toggle_lane_explorer", s.rest?.ui_state)) || null;
   const terminalChord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state)) || null;
-  // Who the session is, kept while its row is listed: a session that sleeps or whose pane closes loses its row and its
-  // card, and the panel still names it and finds it among the sleeping sessions (B6, B43).
-  const known = useRef<SessionIdentity | null>(null);
-  if (row && checkoutPath) known.current = { title: row.identity_label, node: row.device_id, checkout: checkoutPath };
-  const identity = known.current;
   // Most agents sleep in their own pane, which stays (PRD agent-sleep) and wakes there; an agent whose sleep closes
-  // its pane (Pi's) is found among the sleeping sessions and wakes in a new one (B43). `conversationSleep` decides.
-  const asleep = useShellStore((s) => (identity ? sleepingOf(s.rest?.navigator?.sleeping_sessions, identity) : null));
+  // its pane (Pi's) is found among the sleeping sessions (`asleep`) and wakes in a new one (B43). `conversationSleep` decides.
   const sleeping = conversationSleep(paneId, { row, job, session: asleep }, actions) !== null;
   const title = row?.identity_label ?? job?.title ?? identity?.title ?? "";
   const [waking, setWaking] = useState<SessionIdentity | null>(null);
@@ -871,6 +880,12 @@ type SessionIdentity = { title: string; node: string; checkout: string };
 
 function sleepingOf(sessions: SleepingSession[] | undefined, identity: SessionIdentity): SleepingSession | null {
   return sessions?.find((one) => one.node_id === identity.node && one.checkout_path === identity.checkout && one.identity_label === identity.title) ?? null;
+}
+
+/** The sleeping session a gone pane's record names: its machine, its name and the checkout its folder is in. */
+function sleepingOfRecord(sessions: SleepingSession[] | undefined, record: DeskRecord): SleepingSession | null {
+  const folder = record.cwd ?? record.project;
+  return sessions?.find((one) => one.node_id === record.session.device_id && one.identity_label === record.title && folder !== null && (folder === one.checkout_path || folder.startsWith(`${one.checkout_path}/`))) ?? null;
 }
 
 /**
