@@ -47,7 +47,7 @@ Do not copy those contracts here.
 ## Help
 
 - `hide --help` (also `hide help` and `hide -h`) is one screen of 80 columns and 40 lines: the topics by group, each on one row with what it is for, and no command's syntax but `hide [open] [<path>]`.
-  Every topic a person or an agent types is on it once; a hook's and the host's own commands are not topics, and a topic left off it says why (`Shown::Off`).
+  Every topic a person or an agent types is on it once, as a row or, for `open` and `guide`, in its first or last lines (`Shown::Around`); a hook's and the host's own commands are not topics, and a topic left off it says why (`Shown::Off`).
 - `TOPICS` in `cli.rs` is the one list of topics: the first screen, `hide <topic> --help`, `hide help <topic>` and the guide's test of what an agent is taught all read it, so a new topic, or a change of the screen's wording or grouping, is an edit of that list.
 - A topic's help is its own: `hide <topic> --help` prints that topic's commands and no other topic's, and a wrong command prints its reason, then that topic's usage.
 - `--help` is a topic's commands and its `help` verb is its guide: `hide mission --help` lists the mission commands and ends with the line naming `hide mission help`; only `hide agent spawn --help` prints a guide.
@@ -55,7 +55,7 @@ Do not copy those contracts here.
 - Usage text and the contract table hold each other: every command and option of the table is in its topic's `--help`, and every `hide` line and `--option` in a usage is in the table.
   A test fails either way, so change both in the same commit.
 - `hide <topic> <verb> --help` prints the usage of the parser that reads the command (`command_usage` in `cli.rs`), which for `agent profile` is not the `agent` topic's own.
-- The site's CLI reference reads the topics and their groups from the first screen and each topic's commands from its `--help` (`scripts/docs/cli-reference.mjs`), so a command added to a topic's help needs its note in `site/src/data/cli-notes.json`.
+- The site's CLI reference reads the topics and their groups from the first screen (a topic its last lines name, `guide`, joins the last group) and each topic's commands from its `--help` (`scripts/docs/cli-reference.mjs`), so a command added to a topic's help needs its note in `site/src/data/cli-notes.json`.
 
 ## Commands a program calls
 

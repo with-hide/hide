@@ -39,7 +39,7 @@ test("alternatives inside one word are one command each, and a `|` inside bracke
   assert.deepEqual(expand("hide <path>, hide ."), []);
 });
 
-test("the first screen's rows are its topics, under the group named on a group's first row", () => {
+test("the first screen's rows are its topics, under the group named on a group's first row, and a topic its last lines name", () => {
   const screen = [
     "usage: hide [open] [<path>]       open Hide, or a folder in it as a project",
     "       hide <topic> <verb> ...    run one of a topic's commands",
@@ -49,8 +49,11 @@ test("the first screen's rows are its topics, under the group named on a group's
     "Work done  mission     plan and run agents that carry pull requests together",
     "",
     "A topic's commands: hide <topic> --help, or hide help <topic>.",
+    "The guide to working in Hide: hide guide, or one part: hide guide <part>.",
+    "A folder named like a topic: hide ./<name>, or hide open <name>.",
   ].join("\n");
-  assert.deepEqual([...topicsOf(screen)], [["agent", "Agents"], ["ps", "Agents"], ["mission", "Work done"]]);
+  // A topic the last lines name after a colon joins the last group; `open` and `<topic>` are not rows.
+  assert.deepEqual([...topicsOf(screen)], [["agent", "Agents"], ["ps", "Agents"], ["mission", "Work done"], ["guide", "Work done"]]);
 });
 
 test("a topic's help gives its own commands only", () => {

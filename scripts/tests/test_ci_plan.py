@@ -817,8 +817,9 @@ class NamedPaths(unittest.TestCase):
         source = (ROOT / "hided/src/cli.rs").read_text()
         table = source[source.index("pub(crate) const TOPICS"):]
         table = table[:table.index("\n];\n")]
-        # The topics on the first screen, each with the modules whose text its `--help` prints.
-        listed = [block for block in table.split("    Topic {")[1:] if "Shown::Row" in block]
+        # The topics the first screen names (a row, or its first or last lines), each with the modules whose text
+        # its `--help` prints.
+        listed = [block for block in table.split("    Topic {")[1:] if "Shown::Off" not in block]
         joined = {f"hided/src/{name}.rs" for block in listed for name in re.findall(r"crate::(\w+)::\w*USAGE\b", block)}
         self.assertEqual(joined | {"hided/src/cli.rs"}, set(ci.HELP_SOURCES))
 

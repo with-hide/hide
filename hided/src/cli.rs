@@ -274,7 +274,8 @@ fn topic_usage(word: &str) -> Option<String> {
 pub(crate) enum Shown {
     /// A row of the screen: the topic's group, then what it is for.
     Row(&'static str, &'static str),
-    /// Named by the screen's first line (`hide [open] [<path>]`).
+    /// Named by the screen's first or last lines (`hide [open] [<path>]`,
+    /// `hide guide`).
     Around,
     /// Left off the screen, for the reason given: no person or agent types
     /// it in their work.
@@ -332,13 +333,13 @@ pub(crate) const TOPICS: &[Topic] = &[
     },
     Topic {
         word: "watch",
-        shown: Shown::Row("Letters", "watch an agent and be told when it goes quiet"),
+        shown: Shown::Row("Waiting", "watch an agent and be told when it goes quiet"),
         usage: || usage(crate::delivery_cli::WATCH_USAGE),
     },
     Topic {
         word: "wait",
         shown: Shown::Row(
-            "Letters",
+            "Waiting",
             "wake when a pull request, a branch or a mission moves",
         ),
         usage: || usage(crate::wait_cli::USAGE),
@@ -379,23 +380,20 @@ pub(crate) const TOPICS: &[Topic] = &[
     Topic {
         word: "checkout",
         shown: Shown::Row(
-            "Checkouts",
+            "Project",
             "this pane's checkout: show, name its purpose, remove",
         ),
         usage: || usage(CHECKOUT_USAGE),
     },
     Topic {
         word: "session",
-        shown: Shown::Row(
-            "Checkouts",
-            "this project's past sessions: list, show, read",
-        ),
+        shown: Shown::Row("Project", "this project's past sessions: list, show, read"),
         usage: || format!("{}\n{SESSION_NOTE}", usage(crate::session_cli::USAGE)),
     },
     Topic {
         word: "memory",
         shown: Shown::Row(
-            "Checkouts",
+            "Project",
             "Project Memory: what agents learned in this project",
         ),
         usage: || format!("{MEMORY_USAGE}\n{MEMORY_NOTE}"),
@@ -403,25 +401,25 @@ pub(crate) const TOPICS: &[Topic] = &[
     Topic {
         word: "links",
         shown: Shown::Row(
-            "Checkouts",
+            "Project",
             "what links to a pull request, issue, branch or session",
         ),
         usage: || format!("{LINKS_USAGE}\n{LINKS_NOTE}"),
     },
     Topic {
         word: "file",
-        shown: Shown::Row("Screen", "open a file beside the pane, in Hide's window"),
+        shown: Shown::Row("Views", "open a file beside the pane, in Hide's window"),
         usage: || format!("{FILE_USAGE}\n{SCREEN_NOTE}"),
     },
     Topic {
         word: "diff",
-        shown: Shown::Row("Screen", "open a change beside the pane"),
+        shown: Shown::Row("Views", "open a change beside the pane"),
         usage: || format!("{DIFF_USAGE}\n{SCREEN_NOTE}"),
     },
     Topic {
         word: "view",
         shown: Shown::Row(
-            "Screen",
+            "Views",
             "list, select, split, move and close the open Views",
         ),
         usage: || format!("{VIEW_USAGE}\n{SCREEN_NOTE}"),
@@ -429,7 +427,7 @@ pub(crate) const TOPICS: &[Topic] = &[
     Topic {
         word: "browser",
         shown: Shown::Row(
-            "Screen",
+            "Views",
             "open a page beside the pane, then read or drive it",
         ),
         usage: || format!("{BROWSER_USAGE}\n{SCREEN_NOTE}"),
@@ -449,7 +447,7 @@ pub(crate) const TOPICS: &[Topic] = &[
     },
     Topic {
         word: "access",
-        shown: Shown::Row("Devices", "connect a tool outside Hide's panes as a bot"),
+        shown: Shown::Row("Bots", "connect a tool outside Hide's panes as a bot"),
         usage: || {
             usage(&format!(
                 "{}\n{ACCESS_NOTE}\n{ACCESS_GUIDE_POINTER}",
@@ -459,12 +457,12 @@ pub(crate) const TOPICS: &[Topic] = &[
     },
     Topic {
         word: "skill",
-        shown: Shown::Row("Kit", "the skills Hide gives every agent"),
+        shown: Shown::Row("Tools", "the skills Hide gives every agent"),
         usage: || usage(crate::store_cli::SKILL_USAGE),
     },
     Topic {
         word: "mcp",
-        shown: Shown::Row("Kit", "the MCP servers Hide gives every agent"),
+        shown: Shown::Row("Tools", "the MCP servers Hide gives every agent"),
         usage: || usage(crate::store_cli::MCP_USAGE),
     },
     Topic {
@@ -484,7 +482,7 @@ pub(crate) const TOPICS: &[Topic] = &[
     },
     Topic {
         word: "guide",
-        shown: Shown::Row("Hide", "the guide to working in Hide, or one part of it"),
+        shown: Shown::Around,
         usage: || crate::guide::USAGE.to_owned(),
     },
     Topic {
@@ -520,7 +518,7 @@ pub(crate) const TOPICS: &[Topic] = &[
 const SCREEN_TOP: &str = "usage: hide [open] [<path>]       open Hide, or a folder in it as a project\n       hide <topic> [<verb>] ...  run one of a topic's commands\n\n";
 
 /// The first screen's lines below its topics.
-const SCREEN_END: &str = "\nA topic's commands: hide <topic> --help, or hide help <topic>.\nA folder named like a topic: hide ./<name>, or hide open <name>.\n";
+const SCREEN_END: &str = "\nA topic's commands: hide <topic> --help, or hide help <topic>.\nThe guide to working in Hide: hide guide, or one part: hide guide <part>.\nA folder named like a topic: hide ./<name>, or hide open <name>.\n";
 
 /// `hide --help`, `hide help` and `hide -h`: one screen of the topics by
 /// group, each with what it is for; a topic's commands are its own

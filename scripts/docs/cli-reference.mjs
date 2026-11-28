@@ -67,16 +67,22 @@ export function expand(syntax) {
 
 /**
  * The topics the first screen (`hide --help`) lists: `Map<topic, group>`. A row is an optional group name, the topic's
- * word, two or more spaces, then what the topic is for; the lines above and below the rows match none.
+ * word, two or more spaces, then what the topic is for. A line below the rows that names a topic after its colon
+ * (`The guide to working in Hide: hide guide, …`) adds that topic to the last group; the screen's other lines name
+ * no topic word there (`hide <topic>`, `hide ./<name>`).
  */
 export function topicsOf(screen) {
   const topics = new Map();
   let group = "";
   for (const line of screen.split("\n")) {
     const row = line.match(/^([A-Z]\S*(?: \S+)*)?\s+([a-z][a-z-]*)\s{2,}\S/);
-    if (!row) continue;
-    if (row[1]) group = row[1];
-    topics.set(row[2], group);
+    if (row) {
+      if (row[1]) group = row[1];
+      topics.set(row[2], group);
+      continue;
+    }
+    const named = topics.size ? line.match(/^[A-Z][^:]*: hide ([a-z][a-z-]*)[,.\s]/) : null;
+    if (named && !topics.has(named[1])) topics.set(named[1], group);
   }
   return topics;
 }
