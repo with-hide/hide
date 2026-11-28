@@ -191,9 +191,9 @@ def pane_record(runtime, pane, cap, install=None):
 
     The sessions the pane's record holds, oldest first, by the agent and the
     session its hook named and the turn it last reported, and the pane's
-    lines of the end of the hooks' log ([`LOG_TAIL_BYTES`]); when they do not
-    all fit, the oldest log lines go first, then the oldest sessions, and
-    `cut` says so. A start that names another agent's session then shows
+    lines of the end of the hooks' log ([`LOG_TAIL_BYTES`]); when the log is
+    longer, or what was read does not all fit, the oldest log lines go
+    first, then the oldest sessions, and `cut` says so. A start that names another agent's session then shows
     whether the pane's hook named it (with-hide/hide#3124). Only ids, kinds,
     turns and times are copied, and a file that cannot be read is named by
     its error code: no prompt, task, command, sentence or path.
@@ -220,9 +220,14 @@ def pane_record(runtime, pane, cap, install=None):
         kept["sessions"] = [{key: session.get(key) for key in ("agent", "session", "turn")
                              if isinstance(session.get(key), (str, int, type(None)))}
                             for session in sessions if isinstance(session, dict)]
+    # Set when the log's start was left unread, so a reader never takes a
+    # missing earlier line for one the hooks never wrote.
+    cut = False
     try:
         with (records / LOG_NAME).open("rb") as file:
-            file.seek(max(0, file.seek(0, 2) - LOG_TAIL_BYTES))
+            start = max(0, file.seek(0, 2) - LOG_TAIL_BYTES)
+            cut = start > 0
+            file.seek(start)
             tail = file.read(LOG_TAIL_BYTES).decode("utf-8", errors="replace").splitlines()
     except FileNotFoundError:
         tail = []
@@ -242,7 +247,6 @@ def pane_record(runtime, pane, cap, install=None):
         return None
     kept = {"pane": pane, **kept}
     sessions = kept.pop("sessions", None)
-    cut = False
     while True:
         shown = {**kept, **({"sessions": sessions} if sessions is not None else {}),
                  **({"log": logged} if logged else {}), **({"cut": True} if cut else {})}

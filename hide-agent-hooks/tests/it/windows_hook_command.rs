@@ -670,14 +670,42 @@ fn agys_windows_session_hook_answers_only_a_conversation_this_agy_opened() {
         output
     };
 
+    // The guidance agy is given, read from the answer as agy reads it: the
+    // text carries newlines, which the JSON answer escapes.
+    let injected = |stdout: &[u8]| -> Vec<String> {
+        String::from_utf8_lossy(stdout)
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .flat_map(|line| {
+                let answer: Value = serde_json::from_str(line.trim())
+                    .unwrap_or_else(|error| panic!("{error}: {line}"));
+                answer["injectSteps"]
+                    .as_array()
+                    .map_or_else(Vec::new, |steps| {
+                        steps
+                            .iter()
+                            .map(|step| {
+                                step["systemMessage"]["systemMessage"]
+                                    .as_str()
+                                    .unwrap_or_default()
+                                    .to_owned()
+                            })
+                            .collect()
+                    })
+            })
+            .collect()
+    };
+
     let output = answer(&[&elsewhere]);
-    assert!(
-        !String::from_utf8_lossy(&output.stdout).contains(START_CONTEXT),
+    assert_eq!(
+        injected(&output.stdout),
+        Vec::<String>::new(),
         "another folder's conversation is answered nothing: {output:?}"
     );
     let output = answer(&[&elsewhere, &here]);
+    let given = injected(&output.stdout);
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains(START_CONTEXT),
+        given.len() == 1 && given[0].contains(START_CONTEXT),
         "a conversation this agy opened is answered: {output:?}"
     );
 }

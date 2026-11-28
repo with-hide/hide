@@ -341,3 +341,16 @@ class PaneRecord(unittest.TestCase):
             kept = json.loads(text)
             self.assertTrue(kept["cut"])
             self.assertEqual(kept["sessions"][-1]["session"], "s499")
+
+    def test_a_log_longer_than_its_read_says_it_was_cut_even_when_the_panes_lines_fit(self):
+        with tempfile.TemporaryDirectory() as root:
+            run = runtime(Path(root))
+            records = hook_records.folder(run)
+            records.mkdir(parents=True)
+            line = lambda pane, at: json.dumps({"kind": "antigravity.conversation_opened_elsewhere",
+                                                "pane": pane, "event": "Stop", "at_unix_ms": at}) + "\n"
+            (records / hook_records.LOG_NAME).write_text(
+                line("hW:p2", 1) + "".join(line("hV:p9", n) for n in range(1500)) + line("hW:p2", 2))
+            kept = json.loads(hook_records.pane_record(run, "hW:p2", 32 * 1024))
+            self.assertEqual([entry["at_unix_ms"] for entry in kept["log"]], [2])
+            self.assertTrue(kept["cut"])
