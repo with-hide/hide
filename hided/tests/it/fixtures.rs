@@ -51,9 +51,10 @@ pub struct FixtureOwner {
     _lock: hide_platform::fs::lock::Lock,
 }
 
-/// Owns the fixture HOME `home` ([`FixtureOwner`]); taken before the first
-/// daemon starts under it.
+/// Makes `home` a fixture HOME ([`fixture_home`]) this test owns
+/// ([`FixtureOwner`]); taken before the first daemon starts under it.
 pub fn own_fixture_home(home: &std::path::Path) -> FixtureOwner {
+    fixture_home(home);
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)

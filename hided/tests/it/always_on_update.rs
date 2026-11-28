@@ -57,7 +57,6 @@ impl Machine {
         let root = hide_platform::fs::identity::canonical(dir.path()).unwrap();
         let home = root.join("home");
         let state = root.join("state");
-        crate::fixtures::fixture_home(&home);
         let owner = crate::fixtures::own_fixture_home(&home);
         let core_root = hide_kit::layout::core_root(&home);
         let resources = package(&root.join("app"));
