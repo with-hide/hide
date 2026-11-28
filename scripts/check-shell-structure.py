@@ -203,36 +203,84 @@ def check_core_is_created_once(root):
     return []
 
 
+class ShapeError(Exception):
+    """The Rust source no longer has the shape this script reads; it never guesses."""
+
+
+def strip_rust_comments(text):
+    """`text` without `//` and `/* */` comments, so a commented-out arm or entry
+    is not one that Rust sees. String literals are kept whole."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        two = text[i:i + 2]
+        if two == "//":
+            while i < n and text[i] != "\n":
+                i += 1
+        elif two == "/*":
+            end = text.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+        elif text[i] == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
 def rust_block(text, start, what):
     """The text from `start` to the first closing brace in column 0."""
     begin = text.find(start)
     if begin == -1:
-        raise SystemExit(f"product_analytics.rs: {what} is missing ({start!r})")
+        raise ShapeError(f"{ANALYTICS}: {what} is missing ({start!r})")
     end = text.find("\n}\n", begin)
     return text[begin:end if end != -1 else len(text)]
 
 
 def practice_chapters(analytics):
-    """The ids `PracticeChapter::of` names."""
+    """The ids `PracticeChapter::of` names, each by an arm that returns a chapter
+    and is not commented out, ending in the arm that names none."""
     block = rust_block(analytics, "impl PracticeChapter {", "PracticeChapter::of")
-    return set(re.findall(r'"([\w-]+)"\s*=>\s*Self::', block))
+    if not re.search(r"_\s*=>\s*return None\s*,", block):
+        raise ShapeError(f"{ANALYTICS}: PracticeChapter::of no longer ends in `_ => return None`")
+    return set(re.findall(r'"([\w-]+)"\s*=>\s*Self::\w+\s*,', block))
+
+
+# What `measures()` does besides listing events: one measure per feature in
+# `Feature::ALL`, named by `Feature::name`. Any other shape is refused.
+FEATURE_EXTENSION = re.compile(
+    r'measures\.extend\(\s*Feature::ALL\s*\.iter\(\)\s*'
+    r'\.map\(\|feature\|\s*format!\(\s*"hide_feature_used:\{\}"\s*,\s*feature\.name\(\)\s*\)\s*\)\s*,?\s*\)\s*;'
+)
 
 
 def measures(analytics):
-    """What `product_analytics::measures()` returns: the events it spells and
-    `hide_feature_used:` and the name of each feature in `Feature::ALL`."""
+    """What `product_analytics::measures()` returns: the events its array lists
+    and `hide_feature_used:` and the name of each feature in `Feature::ALL`."""
     block = rust_block(analytics, "pub fn measures()", "measures()")
-    events = set(re.findall(r'"(hide_\w+)"', block))
-    feature = rust_block(analytics, "impl Feature {", "Feature")
-    listed = re.search(r"const ALL: \[Self; \d+\] = \[(.*?)\];", feature, re.S)
+    listed = re.search(r"let mut measures: Vec<String> = \[(.*?)\]\s*\.map\(str::to_owned\)\s*\.to_vec\(\);", block, re.S)
     if listed is None:
-        raise SystemExit("product_analytics.rs: Feature::ALL is missing")
-    variants = re.findall(r"Self::(\w+)", listed.group(1))
-    names = dict(re.findall(r'Self::(\w+)\s*=>\s*"([\w-]+)"', feature))
+        raise ShapeError(f"{ANALYTICS}: measures() no longer starts from an array mapped with `str::to_owned`")
+    if not FEATURE_EXTENSION.search(block):
+        raise ShapeError(f"{ANALYTICS}: measures() no longer extends the list with `hide_feature_used:` and each `Feature::ALL` name")
+    events = set(re.findall(r'"(hide_\w+)"', listed.group(1)))
+    feature = rust_block(analytics, "impl Feature {", "Feature")
+    all_variants = re.search(r"const ALL: \[Self; \d+\] = \[(.*?)\];", feature, re.S)
+    if all_variants is None:
+        raise ShapeError(f"{ANALYTICS}: Feature::ALL is missing")
+    variants = re.findall(r"Self::(\w+)", all_variants.group(1))
+    names = dict(re.findall(r'Self::(\w+)\s*=>\s*"([\w-]+)"\s*,', feature.split("fn name", 1)[-1]))
     unnamed = [variant for variant in variants if variant not in names]
     if unnamed:
-        raise SystemExit(f"product_analytics.rs: Feature::name does not name {unnamed}")
+        raise ShapeError(f"{ANALYTICS}: Feature::name does not name {unnamed}")
     return events | {f"hide_feature_used:{names[variant]}" for variant in variants}
+
+
+def analytics_source(root):
+    return strip_rust_comments((root / ANALYTICS).read_text())
 
 
 ANALYTICS = "hide-core/src/product_analytics.rs"
@@ -242,7 +290,10 @@ def check_practice_chapters_are_named(root):
     """A chapter added under `web/src/practice/chapters/` without its name in
     `PracticeChapter::of` would count nothing (CONTRIBUTING.md, A main feature
     brings its practice, its scene and its measure)."""
-    named = practice_chapters((root / ANALYTICS).read_text())
+    try:
+        named = practice_chapters(analytics_source(root))
+    except ShapeError as error:
+        return [str(error)]
     folder = root / SHELL / "practice" / "chapters"
     ids = {}
     for path in sorted(folder.glob("*.ts")):
@@ -272,7 +323,10 @@ def check_highlights_name_a_measure(root):
     """Every main feature the What's new window shows from 1.2.11 on names how
     its use is counted, and the measure is one this build sends, so a main
     feature cannot ship without one."""
-    sent = measures((root / ANALYTICS).read_text())
+    try:
+        sent = measures(analytics_source(root))
+    except ShapeError as error:
+        return [str(error)]
     releases = json.loads((root / SHELL / "releases.json").read_text())
     problems = []
     checked = 0

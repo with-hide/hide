@@ -758,6 +758,8 @@ class NamedPaths(unittest.TestCase):
                 self.assertFalse(result["full"])
                 self.assertEqual(result["lanes"], ["policy", "checks"])
                 self.assertEqual(result["rust_packages"], [])
+        # The Play data safety answers are a document the docs lane's site tests read.
+        self.assertEqual(plan("mobile/store/android/play-forms.md")["lanes"], ["policy", "docs"])
         # A changed unit test is also repeated, as everywhere.
         self.assertEqual(plan("mobile/scripts/release.test.mjs")["lanes"], ["policy", "checks", "repeat"])
         # The package manifest reaches the lock, which every lane reads.

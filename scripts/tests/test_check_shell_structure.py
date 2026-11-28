@@ -232,6 +232,38 @@ class ShellStructure(unittest.TestCase):
         self.replace("hide-core/src/product_analytics.rs", "[Self; 2]", "[Self; 1]")
         self.assertIn("hide_feature_used:gitlab", self.fails(self.check.check_highlights_name_a_measure)[0])
 
+    def test_a_commented_out_chapter_arm_is_not_a_name(self):
+        self.replace("hide-core/src/product_analytics.rs", '            "mission" => Self::Mission,', '            // "mission" => Self::Mission,')
+        self.assertIn("mission", self.fails(self.check.check_practice_chapters_are_named)[0])
+
+    def test_a_chapter_match_with_no_catch_all_is_refused(self):
+        self.replace("hide-core/src/product_analytics.rs", "            _ => return None,\n", "")
+        self.assertIn("return None", self.fails(self.check.check_practice_chapters_are_named)[0])
+
+    def test_a_commented_out_event_is_not_a_measure(self):
+        self.replace("hide-core/src/product_analytics.rs", '        "hide_practice",', '        // "hide_practice",')
+        self.assertIn("hide_practice", self.fails(self.check.check_highlights_name_a_measure)[0])
+
+    def test_a_commented_out_feature_is_not_a_measure(self):
+        self.replace("hide-core/src/product_analytics.rs", "        Self::Gitlab,\n    ];", "        // Self::Gitlab,\n    ];")
+        self.assertIn("hide_feature_used:gitlab", self.fails(self.check.check_highlights_name_a_measure)[0])
+
+    def test_measures_that_stop_extending_with_the_features_are_refused(self):
+        path = self.root / "hide-core/src/product_analytics.rs"
+        text = path.read_text()
+        start = text.index("    measures.extend(")
+        end = text.index("    measures\n}", start)
+        path.write_text(text[:start] + text[end:])
+        self.assertIn("no longer extends", self.fails(self.check.check_highlights_name_a_measure)[0])
+
+    def test_measures_that_extend_with_another_prefix_are_refused(self):
+        self.replace("hide-core/src/product_analytics.rs", "hide_feature_used:{}", "hide_other:{}")
+        self.assertIn("no longer extends", self.fails(self.check.check_highlights_name_a_measure)[0])
+
+    def test_a_block_comment_hides_an_arm_too(self):
+        self.replace("hide-core/src/product_analytics.rs", '            "mission" => Self::Mission,', '            /* "mission" => Self::Mission, */')
+        self.assertIn("mission", self.fails(self.check.check_practice_chapters_are_named)[0])
+
 
 if __name__ == "__main__":
     unittest.main()
