@@ -240,6 +240,9 @@ fn wrong(reason: String, lines: &str) -> String {
     }
 }
 
+/// What `hide access --help` says of a bot before it points at the guide.
+const ACCESS_NOTE: &str = "A tool outside Hide's panes runs these on the machine where Hide's core runs; once the operator approves it as a bot, it runs Hide's commands as its connection: in its own space, only on the agents and missions it started, or Full, as the operator.";
+
 /// Where `hide access --help` sends a bot for what each mode may do; the
 /// guide holds `access_cli::USAGE` itself, so the pointer is added here.
 const ACCESS_GUIDE_POINTER: &str = "What a bot may do in each mode: hide guide, section Bots.";
@@ -295,7 +298,10 @@ pub(crate) struct Topic {
 pub(crate) const TOPICS: &[Topic] = &[
     Topic {
         word: "agent",
-        shown: Shown::Row("Agents", "start, show, read and end agents; their profiles"),
+        shown: Shown::Row(
+            "Agents",
+            "spawn, list, show, read and end agents; their profiles",
+        ),
         usage: || usage(crate::agent_cli::USAGE),
     },
     Topic {
@@ -343,23 +349,38 @@ pub(crate) const TOPICS: &[Topic] = &[
             "Missions",
             "plan and run agents that carry pull requests together",
         ),
-        usage: || usage(crate::mission_cli::USAGE),
+        usage: || {
+            format!(
+                "{}\nHow a Conductor runs a mission: hide mission help.",
+                usage(crate::mission_cli::USAGE)
+            )
+        },
     },
     Topic {
         word: "task",
         shown: Shown::Row("Missions", "your own plan's steps, drawn beside your pane"),
-        usage: || usage(crate::plan_cli::USAGE),
+        usage: || {
+            format!(
+                "{}\nHow to keep your own plan: hide task help.",
+                usage(crate::plan_cli::USAGE)
+            )
+        },
     },
     Topic {
         word: "automation",
         shown: Shown::Row("Missions", "agents that start on a schedule"),
-        usage: || usage(crate::automation_cli::USAGE),
+        usage: || {
+            format!(
+                "{}\nHow to schedule an agent: hide automation help.",
+                usage(crate::automation_cli::USAGE)
+            )
+        },
     },
     Topic {
         word: "checkout",
         shown: Shown::Row(
             "Checkouts",
-            "this pane's checkout: show it, name its purpose",
+            "this pane's checkout: show, name its purpose, remove",
         ),
         usage: || usage(CHECKOUT_USAGE),
     },
@@ -375,7 +396,7 @@ pub(crate) const TOPICS: &[Topic] = &[
         word: "memory",
         shown: Shown::Row(
             "Checkouts",
-            "what agents learned in this project, kept as cards",
+            "Project Memory: what agents learned in this project",
         ),
         usage: || format!("{MEMORY_USAGE}\n{MEMORY_NOTE}"),
     },
@@ -420,7 +441,10 @@ pub(crate) const TOPICS: &[Topic] = &[
     },
     Topic {
         word: "phone",
-        shown: Shown::Row("Devices", "the phones paired with this computer"),
+        shown: Shown::Row(
+            "Devices",
+            "pair a phone with this computer, list and remove them",
+        ),
         usage: || usage(crate::phone_cli::USAGE),
     },
     Topic {
@@ -428,7 +452,7 @@ pub(crate) const TOPICS: &[Topic] = &[
         shown: Shown::Row("Devices", "connect a tool outside Hide's panes as a bot"),
         usage: || {
             usage(&format!(
-                "{}\n{ACCESS_GUIDE_POINTER}",
+                "{}\n{ACCESS_NOTE}\n{ACCESS_GUIDE_POINTER}",
                 crate::access_cli::USAGE
             ))
         },
@@ -465,7 +489,7 @@ pub(crate) const TOPICS: &[Topic] = &[
     },
     Topic {
         word: "issue",
-        shown: Shown::Row("Hide", "report a bug in Hide itself"),
+        shown: Shown::Row("Hide", "how to report a bug in Hide itself"),
         usage: || usage(crate::issue_cli::USAGE),
     },
     Topic {
@@ -493,10 +517,10 @@ pub(crate) const TOPICS: &[Topic] = &[
 ];
 
 /// The first screen's lines above its topics.
-const SCREEN_TOP: &str = "usage: hide [open] [<path>]       open Hide, or a folder in it as a project\n       hide <topic> <verb> ...    run one of a topic's commands\n\n";
+const SCREEN_TOP: &str = "usage: hide [open] [<path>]       open Hide, or a folder in it as a project\n       hide <topic> [<verb>] ...  run one of a topic's commands\n\n";
 
 /// The first screen's lines below its topics.
-const SCREEN_END: &str = "\nA topic's commands: hide <topic> --help, or hide help <topic>.\n";
+const SCREEN_END: &str = "\nA topic's commands: hide <topic> --help, or hide help <topic>.\nA folder named like a topic: hide ./<name>, or hide open <name>.\n";
 
 /// `hide --help`, `hide help` and `hide -h`: one screen of the topics by
 /// group, each with what it is for; a topic's commands are its own
@@ -526,14 +550,7 @@ fn help_of(words: &[String]) -> Result<CommandKind, String> {
         .map(str::to_owned)
         .collect();
     match parse_args(&line) {
-        Ok(
-            kind @ (CommandKind::Usage(_)
-            | CommandKind::AgentSpawnHelp
-            | CommandKind::Mission(crate::mission_cli::MissionCli::Help)
-            | CommandKind::Plan(crate::plan_cli::PlanCli::Help)
-            | CommandKind::Wait(crate::wait_cli::WaitCli::Help)
-            | CommandKind::Automation(crate::automation_cli::AutomationCli::Help)),
-        ) => Ok(kind),
+        Ok(kind @ (CommandKind::Usage(_) | CommandKind::AgentSpawnHelp)) => Ok(kind),
         _ => Err(format!(
             "unknown topic: hide help {} (run hide --help for the topics)",
             words.join(" ")
@@ -602,13 +619,13 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         ))
         .collect();
     let args = renamed.as_slice();
-    // `--help` or `-h` ending any command asks for that command's usage; the
-    // guides of `agent spawn`, `mission` and `task` answer it themselves.
+    // `--help` or `-h` ending any command asks for that command's usage;
+    // the guide of `agent spawn` answers it itself, and a topic's guide is
+    // its `help` verb (`hide mission help`).
     if let (Some(topic), Some("--help" | "-h")) = (
         args.get(1).map(String::as_str),
         args.last().filter(|_| args.len() > 2).map(String::as_str),
-    ) && !(args[2..] == ["spawn", "--help"]
-        || (matches!(topic, "mission" | "task" | "automation") && args.len() == 3))
+    ) && args[2..] != ["spawn", "--help"]
         && let Some(text) = command_usage(topic, args.get(2).map(String::as_str))
     {
         return Ok(CommandKind::Usage(text));
@@ -919,7 +936,7 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             })
         }
         Some(other) => Err(format!(
-            "unknown command: hide {other} (run hide --help for the commands)"
+            "unknown command: hide {other} (run hide --help for the topics)"
         )),
     }
 }
@@ -4312,9 +4329,9 @@ mod tests {
             CommandKind::Usage(usage(crate::agent_cli::USAGE))
         );
         assert!(
-            parse(&["hide", "agent", "read", "w1:p1", "--lines", "x"])
+            parse(&["hide", "agent", "read"])
                 .unwrap_err()
-                .starts_with("usage:\n  hide agent register")
+                .ends_with(&usage(crate::agent_cli::USAGE))
         );
         let error = parse(&["hide", "agent", "spawn", "--no-watch"]).unwrap_err();
         assert!(error.starts_with(
@@ -4415,8 +4432,15 @@ mod tests {
         ] {
             assert_eq!(parse(args).unwrap(), CommandKind::Usage(lines), "{args:?}");
         }
+        // A topic's `--help` is its commands, and its `help` verb its guide.
+        for topic in ["mission", "task", "automation"] {
+            let CommandKind::Usage(text) = parse(&["hide", topic, "--help"]).unwrap() else {
+                panic!("hide {topic} --help prints its usage");
+            };
+            assert!(text.ends_with(&format!("hide {topic} help.")), "{text}");
+        }
         assert_eq!(
-            parse(&["hide", "mission", "--help"]).unwrap(),
+            parse(&["hide", "mission", "help"]).unwrap(),
             CommandKind::Mission(crate::mission_cli::MissionCli::Help)
         );
         assert_eq!(
@@ -4433,11 +4457,11 @@ mod tests {
         );
         assert_eq!(
             parse(&["hide", "--foo"]).unwrap_err(),
-            "unknown command: hide --foo (run hide --help for the commands)"
+            "unknown command: hide --foo (run hide --help for the topics)"
         );
         assert_eq!(
             parse(&["hide", "foo", "bar"]).unwrap_err(),
-            "unknown command: hide foo (run hide --help for the commands)"
+            "unknown command: hide foo (run hide --help for the topics)"
         );
         assert_eq!(
             parse(&["hide", "help", "extra"]).unwrap_err(),
@@ -4579,16 +4603,16 @@ mod tests {
         let browser = command_usage("browser", None).unwrap();
         for verb in crate::browser_page::VERBS {
             assert!(
-                browser.contains(&format!("|{verb}|"))
-                    || browser.contains(&format!(" {verb}|"))
-                    || browser.contains(&format!("|{verb} ")),
-                "{verb}"
+                browser
+                    .split(|c: char| c == '|' || c.is_whitespace())
+                    .any(|word| word == *verb),
+                "hide browser --help does not name {verb}"
             );
         }
     }
 
     /// `hide help <topic>` prints exactly what `hide <topic> --help` does,
-    /// for every topic and for the guides that answer `--help` themselves,
+    /// for every topic and for `agent spawn`, whose `--help` is its guide;
     /// a retired topic word prints the help of the topic it is now, and a
     /// word that names no topic is refused with where the topics are.
     #[test]
@@ -4603,21 +4627,14 @@ mod tests {
                 topic.word
             );
             assert!(
-                matches!(
-                    help,
-                    CommandKind::Usage(_)
-                        | CommandKind::Mission(crate::mission_cli::MissionCli::Help)
-                        | CommandKind::Plan(crate::plan_cli::PlanCli::Help)
-                        | CommandKind::Wait(crate::wait_cli::WaitCli::Help)
-                        | CommandKind::Automation(crate::automation_cli::AutomationCli::Help)
-                ),
+                matches!(help, CommandKind::Usage(_)),
                 "hide help {}: {help:?}",
                 topic.word
             );
         }
         assert_eq!(
-            parse(&["help", "mission"]).unwrap(),
-            CommandKind::Mission(crate::mission_cli::MissionCli::Help)
+            parse(&["help", "mission", "node"]).unwrap(),
+            parse(&["mission", "node", "--help"]).unwrap()
         );
         assert_eq!(
             parse(&["help", "agent", "spawn"]).unwrap(),

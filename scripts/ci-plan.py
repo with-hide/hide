@@ -1072,9 +1072,9 @@ SYSTEM_TESTS = (
 # frames and the `hide` this checkout builds (docs/TESTING.md, The user docs).
 DOCS_LANES = {"docs"}
 # The files that own the help the CLI reference reads (scripts/docs/cli-reference.mjs): the first
-# screen and each listed topic's `hide <topic> --help`, which is the topic's usage (`TOPICS` in
-# hided/src/cli.rs and the command modules it names) or, for the topics whose `--help` is their
-# guide, that guide. A command added in any of them needs its note in the same pull request. The
+# screen and each listed topic's `hide <topic> --help`, the topic's usage (`TOPICS` in
+# hided/src/cli.rs and the command modules it names). A command added in any of them needs its
+# note in the same pull request. The
 # test `help_text_owners_are_the_files_the_topics_name` keeps this list equal to what `TOPICS` names.
 HELP_SOURCES = (
     "hided/src/cli.rs",
@@ -1093,11 +1093,6 @@ HELP_SOURCES = (
     "hided/src/store_cli.rs",
     "hided/src/guide.rs",
     "hided/src/issue_cli.rs",
-    # The topics whose `--help` prints their guide.
-    "hided/assets/mission/help.md",
-    "hided/assets/task/help.md",
-    "hided/assets/wait/help.md",
-    "hided/assets/automation/help.md",
 )
 NAMED_LANES = (
     ("web/e2e/worker-owned.ts", WEB_E2E_LANES | {"relay-protocol"}),

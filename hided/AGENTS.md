@@ -50,12 +50,12 @@ Do not copy those contracts here.
   Every topic a person or an agent types is on it once; a hook's and the host's own commands are not topics, and a topic left off it says why (`Shown::Off`).
 - `TOPICS` in `cli.rs` is the one list of topics: the first screen, `hide <topic> --help`, `hide help <topic>` and the guide's test of what an agent is taught all read it, so a new topic, or a change of the screen's wording or grouping, is an edit of that list.
 - A topic's help is its own: `hide <topic> --help` prints that topic's commands and no other topic's, and a wrong command prints its reason, then that topic's usage.
-  The topics whose `--help` is their guide (`mission`, `task`, `wait`, `automation`, and `agent spawn`) keep it.
+- `--help` is a topic's commands and its `help` verb is its guide: `hide mission --help` lists the mission commands and ends with the line naming `hide mission help`; only `hide agent spawn --help` prints a guide.
 - `hide help <topic> …` is read as `hide <topic> … --help` by the same parser, so the two print the same text; a retired topic word prints the help of the topic it is now, and a word that names no topic is refused with `hide --help`.
 - Usage text and the contract table hold each other: every command and option of the table is in its topic's `--help`, and every `hide` line and `--option` in a usage is in the table.
   A test fails either way, so change both in the same commit.
 - `hide <topic> <verb> --help` prints the usage of the parser that reads the command (`command_usage` in `cli.rs`), which for `agent profile` is not the `agent` topic's own.
-- The site's CLI reference reads the topics from the first screen and each topic's commands from its `--help` (`scripts/docs/cli-reference.mjs`), so a command added to a topic's help needs its note in `site/src/data/cli-notes.json`.
+- The site's CLI reference reads the topics and their groups from the first screen and each topic's commands from its `--help` (`scripts/docs/cli-reference.mjs`), so a command added to a topic's help needs its note in `site/src/data/cli-notes.json`.
 
 ## Commands a program calls
 

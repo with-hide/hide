@@ -18,7 +18,7 @@
 //      check-map-fits.mjs frames the mission map in a stand-in page running the real head script and fails when
 //      content is hidden or blank space is left under it, or the height does not settle, at 1440 and 390.
 // Usage: check-all.mjs (--hide <binary> | HIDE_BIN=<binary>) [--ci] [--checks-only]
-//   --hide / HIDE_BIN  the `hide` whose `--help` is the one authority for which commands exist (missing notes, notes for
+//   --hide / HIDE_BIN  the `hide` whose topics' help is the one authority for which commands exist (missing notes, notes for
 //                      gone commands, the generated cli.md). It must be built from THIS commit: CI builds it in the job
 //                      and passes its path here.
 //   --ci               (or CI=true) a missing binary is a hard failure before anything is generated; there is no default

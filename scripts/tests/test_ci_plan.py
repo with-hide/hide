@@ -820,14 +820,7 @@ class NamedPaths(unittest.TestCase):
         # The topics on the first screen, each with the modules whose text its `--help` prints.
         listed = [block for block in table.split("    Topic {")[1:] if "Shown::Row" in block]
         joined = {f"hided/src/{name}.rs" for block in listed for name in re.findall(r"crate::(\w+)::\w*USAGE\b", block)}
-        # A topic whose `--help` is its guide: the guide's file, which its module includes.
-        guides = {path for path in ci.HELP_SOURCES if path.startswith("hided/assets/")}
-        for path in guides:
-            topic = path.split("/")[2]
-            module = {"task": "plan_cli"}.get(topic, f"{topic}_cli")
-            self.assertIn(f'include_str!("../assets/{topic}/help.md")', (ROOT / f"hided/src/{module}.rs").read_text())
-            self.assertIn(f'"{topic}"', "".join(listed))
-        self.assertEqual(joined | {"hided/src/cli.rs"} | guides, set(ci.HELP_SOURCES))
+        self.assertEqual(joined | {"hided/src/cli.rs"}, set(ci.HELP_SOURCES))
 
     def test_web_e2e_helpers_reach_the_desktop_and_windows_lanes_but_not_rust(self):
         want = {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"}
