@@ -146,16 +146,6 @@ where
         asks: None,
         sessions: None,
     };
-    // A doorbell's turn is the bell's line, not the operator's words: no card
-    // answers it, and its open questions ride beside this answer.
-    if ask.event == HookEvent::UserPromptSubmit
-        && ask
-            .prompt
-            .as_deref()
-            .is_some_and(hide_session::is_bell_line)
-    {
-        return without(HookOutcome::Empty);
-    }
     // A store that does not exist yet costs no node call.
     if !scope.store.is_file() {
         return without(HookOutcome::Unavailable);
@@ -350,8 +340,11 @@ mod tests {
         .unwrap()
     }
 
+    /// The line the core's own bell writer types reads as no words of the
+    /// operator's; that such a turn opens no store is `hide_memory::hook`'s
+    /// to show.
     #[test]
-    fn a_doorbells_turn_gets_no_card_and_reads_no_store() {
+    fn a_doorbells_turn_gets_no_card() {
         use crate::delivery::bell::{Ring, line};
         use crate::model::InterfaceLanguage;
         let temp = tempfile::tempdir().unwrap();
@@ -377,14 +370,6 @@ mod tests {
             HookOutcome::Provided { count: 1 },
             "the bells' own words find the card when the operator types them"
         );
-
-        // A store that is not there would answer `Unavailable`, so `Empty`
-        // proves the bell was answered before the store was looked at.
-        let missing = Scope {
-            store: temp.path().join("missing.sqlite3"),
-            project: scope.project.clone(),
-            task_context: scope.task_context.clone(),
-        };
         for (runtime, bell) in [
             ("claude", &claude),
             ("codex", &codex),
@@ -394,11 +379,6 @@ mod tests {
             let result = answer_until(&scope, &ask, never);
             assert_eq!(result.outcome, HookOutcome::Empty, "{bell}");
             assert!(result.context.is_none(), "{bell}");
-            assert_eq!(
-                answer_until(&missing, &ask, never).outcome,
-                HookOutcome::Empty,
-                "{bell}"
-            );
         }
     }
 

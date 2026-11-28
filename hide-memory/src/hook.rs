@@ -182,6 +182,19 @@ where
 {
     let base = || HookContext::without(HookOutcome::Unavailable);
     let deadline = || HookContext::without(HookOutcome::Deadline);
+    // Only the operator's own words find a prompt's cards: what the agent
+    // runtime put in the prompt (a background task's notification) or what
+    // Hide's doorbell typed is not theirs, and a prompt with nothing else
+    // gets no card without the store being opened.
+    let prompt = match request.event {
+        HookEvent::UserPromptSubmit => {
+            hide_session::operator_words(request.prompt.unwrap_or_default())
+        }
+        HookEvent::SessionStart => "",
+    };
+    if request.event == HookEvent::UserPromptSubmit && prompt.is_empty() {
+        return HookContext::without(HookOutcome::Empty);
+    }
     let Ok(store) = MemoryStore::open_hook_read_only_with_expiry(store_path, expired.clone())
     else {
         if expired() {
@@ -208,7 +221,7 @@ where
                 // could record what it is given, so it gets none (B26).
                 Ok(None) | Err(_) => return base(),
             };
-            RetrievalQuery::prompt(&project.id, request.prompt.unwrap_or_default(), excluded)
+            RetrievalQuery::prompt(&project.id, prompt, excluded)
         }
     };
     if expired() {
@@ -220,11 +233,10 @@ where
         }
         return base();
     };
-    // Native hooks give text, not a continuation flag: a prompt that matches
+    // Native hooks give text, not a continuation flag: a prompt that fits
     // any card, even one the session was already given, has its own topic.
-    // Only a brief one that matches none is ranked again, on the same open
+    // Only a brief one that fits none is ranked again, on the same open
     // store, with its task. No language-specific words decide it.
-    let prompt = request.prompt.unwrap_or_default();
     let continues = request.event == HookEvent::UserPromptSubmit
         && injection.matched == 0
         && !prompt.trim().is_empty()
@@ -438,6 +450,191 @@ mod tests {
         }
     }
 
+    /// A Project's cards as analysis writes them, each with its title and
+    /// aliases: four name PRs, two CI, one each SSH devices and tests.
+    const PROJECT: [(&str, &[&str], &str); 12] = [
+        (
+            "SSH 기기는 서버 연결을 먼저 권함",
+            &[
+                "SSH 기기",
+                "서버 연결",
+                "원격 기기",
+                "ssh host",
+                "server connection",
+            ],
+            "SSH로 기기를 추가할 때는 그 기기에 Hide를 띄워 두 Hide를 잇는 서버 연결을 먼저 권하고, SSH로 바로 잇는 방식은 두 번째로 보여 준다.",
+        ),
+        (
+            "테스트는 nextest로 돌린다",
+            &["테스트", "nextest", "test runner", "테스트 실행"],
+            "Rust 테스트는 cargo test 대신 nextest로 돌린다. 한 크레이트만 바꿨다면 그 크레이트의 테스트만 돌린다.",
+        ),
+        (
+            "PR 본문은 템플릿 순서대로",
+            &["PR 본문", "PR 템플릿", "pull request body"],
+            "PR 본문은 저장소 템플릿 순서를 지키고, 화면이 바뀐 PR에는 스크린샷을 붙인다.",
+        ),
+        (
+            "초록 PR만 머지 큐에 넣는다",
+            &["머지 큐", "merge queue", "초록 PR"],
+            "CI가 통과한 PR만 머지 큐에 넣고, 빨간 PR은 고친 뒤 다시 넣는다.",
+        ),
+        (
+            "CI 실패는 로그부터 읽는다",
+            &["CI 실패", "CI 로그", "failed run"],
+            "CI가 실패하면 다시 돌리기 전에 실패한 작업의 로그를 먼저 읽고 원인을 PR에 적는다.",
+        ),
+        (
+            "리뷰어는 PR마다 새로 띄운다",
+            &["리뷰어", "reviewer", "PR 리뷰"],
+            "PR 리뷰는 작업자와 다른 에이전트를 새로 띄워 맡긴다.",
+        ),
+        (
+            "Desk 대화는 오른쪽에 스레드로 연다",
+            &["Desk 스레드", "대화 스레드", "thread"],
+            "Desk에서 이어지는 대화는 가운데가 아니라 오른쪽 칸에 스레드로 연다.",
+        ),
+        (
+            "디스크 여유가 모자라면 빌드를 멈춘다",
+            &["디스크 여유", "disk space", "빌드 중단"],
+            "이 Mac의 디스크 여유가 6GiB 밑으로 내려가면 cargo 빌드를 멈추고 부모에게 알린다.",
+        ),
+        (
+            "편지는 결론부터 한국어로",
+            &["편지", "letter", "보고 편지"],
+            "부모에게 보내는 편지는 첫 줄에 결론을 쓰고, 운영자에게 보이는 글은 한국어로 쓴다.",
+        ),
+        (
+            "설치된 앱은 운영자의 것",
+            &["설치된 앱", "installed app", "hide.app"],
+            "운영자가 요청하지 않았다면 설치된 hide.app을 바꾸지 않는다.",
+        ),
+        (
+            "아이콘은 기존 표시를 재사용",
+            &["아이콘", "icon", "기존 표시"],
+            "새 화면의 상태 아이콘은 이미 있는 Hide 표시를 먼저 쓴다.",
+        ),
+        (
+            "알림은 운영자가 할 일이 있을 때만",
+            &["알림", "notification", "조용한 화면"],
+            "운영자가 할 일이 없는 상태는 화면에 띄우지 않고 로그에 남긴다.",
+        ),
+    ];
+
+    fn project_cards() -> Vec<Candidate> {
+        (1..)
+            .zip(PROJECT)
+            .map(|(offset, (title, aliases, text))| Candidate {
+                title: title.into(),
+                aliases: aliases.iter().map(|alias| (*alias).to_owned()).collect(),
+                source_offsets: vec![offset],
+                human_offsets: vec![offset],
+                ..rule(text, 0.9)
+            })
+            .collect()
+    }
+
+    /// What Claude Code submits as the prompt when a background command
+    /// ends: here the watch of a pull request's CI run, in the words the
+    /// operator would use for the CI card.
+    const CI_FINISHED: &str = concat!(
+        "<task-notification>\n",
+        "<task-id>b8k2x1q9z</task-id>\n",
+        "<tool-use-id>toolu_01Hd7pqVaKaue47Lgp75oovw</tool-use-id>\n",
+        "<output-file>/tmp/claude/tasks/b8k2x1q9z.output</output-file>\n",
+        "<status>completed</status>\n",
+        "<summary>Background command \"CI 실패 로그 확인\" completed (exit code 0)</summary>\n",
+        "</task-notification>"
+    );
+
+    #[test]
+    fn only_the_operators_words_find_a_prompts_cards() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, project) =
+            enabled_store(temp.path(), &temp.path().join("project"), &project_cards());
+        let given = |session: &str, prompt: &str| {
+            context_for(
+                &path,
+                &project,
+                ask(HookEvent::UserPromptSubmit, session, Some(prompt)),
+                frozen(),
+            )
+        };
+        // The same words typed by the operator find the CI card.
+        let typed = given("typed", "CI 실패 로그 확인");
+        assert_eq!(typed.outcome, HookOutcome::Provided { count: 1 });
+        assert!(typed.context.unwrap().contains("실패한 작업의 로그"));
+        for (session, prompt) in [
+            ("notified", CI_FINISHED),
+            (
+                "belled",
+                "🦉 ci-lead 보고: CI 실패 로그를 PR에 적었습니다 · hide inbox",
+            ),
+        ] {
+            let answer = given(session, prompt);
+            assert_eq!(answer.outcome, HookOutcome::Empty, "{prompt}");
+            assert!(answer.context.is_none(), "{prompt}");
+        }
+        // Words the operator adds after a notification are theirs.
+        let both = given("both", &format!("{CI_FINISHED}\n테스트를 돌려줘"));
+        assert_eq!(both.outcome, HookOutcome::Provided { count: 1 });
+        assert!(both.context.unwrap().contains("nextest로 돌린다"));
+
+        // A turn with none of the operator's words is answered before the
+        // store is opened: a store that is not there answers `Unavailable`.
+        let missing = temp.path().join("missing.sqlite3");
+        let without_store = |prompt: &str| {
+            context_for(
+                &missing,
+                &project,
+                ask(HookEvent::UserPromptSubmit, "missing", Some(prompt)),
+                frozen(),
+            )
+            .outcome
+        };
+        assert_eq!(without_store(CI_FINISHED), HookOutcome::Empty);
+        assert_eq!(without_store("CI 실패 로그 확인"), HookOutcome::Unavailable);
+    }
+
+    #[test]
+    fn a_prompt_gets_only_cards_that_fit_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, project) =
+            enabled_store(temp.path(), &temp.path().join("project"), &project_cards());
+        let given = |session: &str, prompt: &str| {
+            context_for(
+                &path,
+                &project,
+                ask(HookEvent::UserPromptSubmit, session, Some(prompt)),
+                frozen(),
+            )
+        };
+        for (prompt, card) in [
+            ("SSH 서버 추천 목업", "두 Hide를 잇는 서버 연결"),
+            ("테스트를 돌려줘", "nextest로 돌린다"),
+            ("CI 실패하면 로그 봐줘", "실패한 작업의 로그"),
+        ] {
+            let answer = given(prompt, prompt);
+            assert_eq!(
+                answer.outcome,
+                HookOutcome::Provided { count: 1 },
+                "{prompt}"
+            );
+            assert!(answer.context.unwrap().contains(card), "{prompt}");
+        }
+        // A third of the cards name PRs: the word alone fits none of them,
+        // though a search for it still lists every one.
+        for prompt in ["이 PR 어때?", "PR 확인"] {
+            assert_eq!(
+                given(prompt, prompt).outcome,
+                HookOutcome::Empty,
+                "{prompt}"
+            );
+        }
+        let store = MemoryStore::open(&path).unwrap();
+        assert_eq!(store.search(&project.id, "PR", 10).unwrap().len(), 4);
+    }
+
     #[test]
     fn a_realistic_korean_card_is_delivered_within_the_budget() {
         // The operator writes mostly Korean: a card of 350 to 600 Hangul
@@ -541,7 +738,9 @@ mod tests {
     fn a_prompt_omits_cards_the_session_was_already_given_in_full() {
         // B12: a card given at an earlier prompt is not given again.
         let temp = tempfile::tempdir().unwrap();
-        let cards = (0..6)
+        // Four cards share the prompt's two words: few enough that the two
+        // together fit each of them.
+        let cards = (0..4)
             .map(|index| rule(&format!("Rule {index} about durable hooks"), 0.9))
             .collect::<Vec<_>>();
         let (path, project) = enabled_store(temp.path(), &temp.path().join("project"), &cards);
@@ -582,10 +781,17 @@ mod tests {
         // B10, B13: the index is not a delivery, so it records nothing and
         // the first prompt does not wait for it.
         let temp = tempfile::tempdir().unwrap();
+        // The first three rules and the fact share the prompt's words; a
+        // word every card held would fit none of them.
         let mut cards = (0..22)
             .map(|index| {
+                let topic = if index < 3 {
+                    "durable hooks"
+                } else {
+                    "quiet panes"
+                };
                 rule(
-                    &format!("Race rule {index} about durable hooks"),
+                    &format!("Race rule {index} about {topic}"),
                     1.0 - f64::from(index) / 100.0,
                 )
             })
@@ -788,11 +994,22 @@ mod tests {
     fn escaped_index_and_bodies_include_the_envelope_in_the_shared_budget() {
         let temp = tempfile::tempdir().unwrap();
         let cards = (0..22)
-            .map(|index| Candidate {
-                // Escapes cost about a token per two symbols, so an
-                // escape-heavy card is sized to fit the budget alone.
-                title: format!("{index} {}", "<durable&hooks>".repeat(8)),
-                ..rule(&format!("durable hooks {}", "<&>".repeat(60)), 0.9)
+            .map(|index| {
+                // Four cards name the prompt's words, few enough to fit it.
+                let topic = if index < 4 {
+                    "durable&hooks"
+                } else {
+                    "quiet&panes"
+                };
+                Candidate {
+                    // Escapes cost about a token per two symbols, so an
+                    // escape-heavy card is sized to fit the budget alone.
+                    title: format!("{index} {}", format!("<{topic}>").repeat(8)),
+                    ..rule(
+                        &format!("{} {}", topic.replace('&', " "), "<&>".repeat(60)),
+                        0.9,
+                    )
+                }
             })
             .collect::<Vec<_>>();
         let (path, project) = enabled_store(temp.path(), &temp.path().join("project"), &cards);
@@ -818,8 +1035,14 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let cards = (0..12)
             .map(|index| {
+                // Four cards name the prompt's words, few enough to fit it.
+                let topic = if index < 4 {
+                    "durable hooks"
+                } else {
+                    "quiet panes"
+                };
                 rule(
-                    &format!("durable hooks {index} {}", "한글漢字かな".repeat(25)),
+                    &format!("{topic} {index} {}", "한글漢字かな".repeat(25)),
                     0.9,
                 )
             })

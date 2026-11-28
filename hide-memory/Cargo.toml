@@ -8,6 +8,8 @@ publish = false
 hide-ai = { path = "../hide-ai" }
 hide-platform = { path = "../hide-platform" }
 hide-project = { path = "../hide-project" }
+# What of a hook's prompt is the operator's words (`hook`).
+hide-session = { path = "../hide-session" }
 regex = "=1.13.1"
 ring = "=0.17.14"
 rusqlite = { version = "=0.32.1", features = ["bundled", "hooks"] }

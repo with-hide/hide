@@ -2002,6 +2002,18 @@ pub(crate) fn strip_injected(text: &str) -> &str {
     }
 }
 
+/// The operator's own words in a prompt an agent's prompt hook received,
+/// trimmed: the prompt without the blocks the agent runtime put in front of
+/// it ([`strip_injected`], the same table the transcript readers use, such as
+/// Claude Code's `<task-notification>` turn when a background task ends),
+/// and empty when the rest is the line Hide's doorbell typed
+/// ([`is_bell_line`]). Empty means the turn carries none of the operator's
+/// words.
+pub fn operator_words(prompt: &str) -> &str {
+    let words = strip_injected(prompt).trim();
+    if is_bell_line(words) { "" } else { words }
+}
+
 /// The length of a receipt line (`<hide-memory-receipt …/>` or
 /// `<hide-asks-receipt …/>`) `text` begins with. It ends a delivery of
 /// context and is injected only after one: a receipt alone is as likely to be
@@ -2669,6 +2681,43 @@ mod tests {
 
         assert!(parsed.events.is_empty());
         assert_eq!(parsed.skipped_lines, 1);
+    }
+
+    #[test]
+    fn a_prompt_keeps_only_the_operators_words() {
+        // What Claude Code submits as the prompt when a background command
+        // ends, alone and as the API renders it.
+        let finished = concat!(
+            "<task-notification>\n",
+            "<task-id>b8k2x1q9z</task-id>\n",
+            "<tool-use-id>toolu_01Hd7pqVaKaue47Lgp75oovw</tool-use-id>\n",
+            "<output-file>/tmp/claude/tasks/b8k2x1q9z.output</output-file>\n",
+            "<status>completed</status>\n",
+            "<summary>Background command \"Watch the CI run of the PR\" completed (exit code 0)</summary>\n",
+            "</task-notification>"
+        );
+        let rendered = format!(
+            "<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\n{finished}\n</system-reminder>"
+        );
+        for prompt in [
+            finished.to_owned(),
+            rendered,
+            "🦉 ci-lead 보고: CI가 통과했습니다 · 외 1통 · hide inbox".to_owned(),
+            "  \n".to_owned(),
+        ] {
+            assert_eq!(operator_words(&prompt), "", "{prompt}");
+        }
+        assert_eq!(
+            operator_words(&format!("{finished}\nCI 끝났으면 머지해줘\n")),
+            "CI 끝났으면 머지해줘"
+        );
+        for prompt in [
+            "테스트를 돌려줘",
+            "왜 <task-notification> 턴에도 카드가 붙지?",
+            "🦉 아이콘은 항상 파란색으로",
+        ] {
+            assert_eq!(operator_words(prompt), prompt);
+        }
     }
 
     #[test]
