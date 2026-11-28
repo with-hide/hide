@@ -28,7 +28,8 @@ const FADE = "[mask-image:linear-gradient(to_left,transparent,currentColor_var(-
 export function CodeBlockHead({ language, action }: { language: string | null; action?: ReactNode }) {
   const { t } = useInterfaceTranslation();
   return (
-    <div className="flex h-(--size-control-compact) min-w-0 items-center justify-between gap-xs border-b border-hairline px-md font-sans text-caption text-muted-foreground" data-code-block-head="true">
+    // The head is the block's controls, not its words: a selection dragged over the block copies the code alone.
+    <div className="flex h-(--size-control-compact) min-w-0 select-none items-center justify-between gap-xs border-b border-hairline px-md font-sans text-caption text-muted-foreground" data-code-block-head="true">
       <span className="min-w-0 truncate" data-code-block-language={language ?? ""}>{language ?? t("common.code")}</span>
       {action ? <span className="flex shrink-0 items-center" data-code-block-action="true">{action}</span> : null}
     </div>

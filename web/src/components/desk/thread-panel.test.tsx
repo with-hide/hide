@@ -2,20 +2,22 @@
 import { Blob as NodeBlob } from "node:buffer";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAttachments } from "../../attachments";
 import { configureFileBytes, receiveBytes } from "../../fileBytes";
 import { keepSent } from "../../deskComposer";
 import type { CopyText } from "../human-turn-copy";
 import type { AskLine } from "../open-asks";
 import type { DeskJob } from "../../desk";
-import type { AgentRow, DeskMentions, SessionThreadSection, SnapshotRest, ThreadPage } from "../../snapshot";
+import type { AgentRow, AgentSleep, DeskMentions, SessionThreadSection, SleepingSession, SnapshotRest, ThreadPage } from "../../snapshot";
 import { useShellStore } from "../../store";
 import { receiveThreadInputResult } from "../../sessionDraftSends";
 import { useUiStore } from "../../ui";
 import { NO_SESSION_DRAFTS, SESSION_DRAFT_BYTES } from "../../sessionDrafts";
 import { TooltipProvider } from "../ui/tooltip";
 import { ThreadPanel } from "./thread-panel";
+import { forgetScrolls } from "../../conversationScroll";
+import { drawnRows, layOutConversation, scrollConversation, watchResizes } from "./thread-test-layout";
 import { clearPreviews } from "../../filePreview";
 import { drawPreview } from "../../previewDraw";
 
@@ -34,7 +36,7 @@ const said = (text: string) => ({ sessionUpdate: "agent_message_chunk", content:
 
 function section(extra: Partial<SessionThreadSection> = {}): SessionThreadSection {
   return { generation: 4, state: "ready", pane_id: "w1:p2", machine: "mac", failure: null, pane: "same", connected: true, has_older: false, older: "idle", input: null, queue: null, choice: {},
-    tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는 끝났어요")], parts: {}, sessions: {} }, ...extra };
+    tail: { record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는 끝났어요")], parts: {}, sessions: {} }, ...extra };
 }
 
 // Display snapshots and request completions are separate wire messages.
@@ -43,6 +45,18 @@ function completeInput(next: SessionThreadSection) {
   if (next.input) receiveThreadInputResult(next.input);
 }
 
+/** The rows each turn draws, oldest first: a turn is the rows it draws, not one element. */
+function turnsIn(container: HTMLElement): HTMLElement[][] {
+  const turns = new Map<string, HTMLElement[]>();
+  for (const row of container.querySelectorAll<HTMLElement>("[data-desk-thread-turn]")) turns.set(row.dataset.deskThreadTurn!, [...(turns.get(row.dataset.deskThreadTurn!) ?? []), row]);
+  return [...turns.values()];
+}
+const within = (rows: readonly HTMLElement[], selector: string) => rows.flatMap((row) => Array.from(row.querySelectorAll<HTMLElement>(selector)));
+const wordsOf = (rows: readonly HTMLElement[]) => rows.map((row) => row.textContent).join("");
+const drawnWords = (container: HTMLElement) => drawnRows(container).map((row) => row.textContent ?? "");
+const layOut = layOutConversation;
+let laidOut: () => Promise<void>;
+
 let saved: ReturnType<typeof useShellStore.getState>;
 let events: { kind: string; payload: Record<string, unknown> }[];
 let mounted: ReturnType<typeof createRoot>[] = [];
@@ -50,7 +64,8 @@ let mounted: ReturnType<typeof createRoot>[] = [];
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // The input box holds the corner's notices above it by its measured box (`noticeFloor.ts`).
-  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  ({ laidOut } = watchResizes());
+  layOut();
   saved = useShellStore.getState();
   useUiStore.setState({ threadLease: null, paneConversation: null });
   useShellStore.setState({ connection: "live", threadInputResult: null });
@@ -65,11 +80,14 @@ afterEach(async () => {
   mounted = [];
   useShellStore.setState(saved, true);
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  // A conversation left above its foot is remembered by its pane, which every test shares.
+  forgetScrolls();
   document.body.innerHTML = "";
 });
 
-async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined, pane = "w1:p2", answer = false }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void; pane?: string; answer?: boolean } = {}) {
-  const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn(), switchThread: vi.fn(() => "switch-1"), observeCatalog: vi.fn(() => noop), requestFileIndex: vi.fn(), deskCommandsCheck: vi.fn(), inputQueue: vi.fn(), interruptThread: vi.fn(() => "stop-1") };
+async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined, pane = "w1:p2", answer = false, asleep = null, onSessionWake }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void; pane?: string; answer?: boolean; asleep?: SleepingSession | null; onSessionWake?: () => void } = {}) {
+  const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn(), switchThread: vi.fn(() => "switch-1"), observeCatalog: vi.fn(() => noop), requestFileIndex: vi.fn(), deskCommandsCheck: vi.fn(), inputQueue: vi.fn(), interruptThread: vi.fn(() => "stop-1"), wakeAgent: vi.fn(), wakeSleepingSession: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -78,7 +96,7 @@ async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks 
   const answered = vi.fn();
   const draw = (asked: boolean, shownCard: DeskJob | null = card) => root.render(
     <TooltipProvider>
-      <ThreadPanel job={shownCard} paneId={pane} answer={asked} onAnswered={answered} actions={actions} foot={foot} ask={ask} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
+      <ThreadPanel job={shownCard} paneId={pane} answer={asked} onAnswered={answered} actions={actions} foot={foot} asleep={asleep} onSessionWake={onSessionWake} ask={ask} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
     </TooltipProvider>,
   );
   await act(async () => draw(answer));
@@ -109,8 +127,8 @@ it("opens its pane's thread while shown, draws what the core read, and closes it
   expect(actions.closeThread).toHaveBeenCalledTimes(1);
 });
 
-it("keeps a sleeping session's record above the foot that wakes it once its card is gone with its pane (PRD desk-2-ui B43)", async () => {
-  const { container } = await mount(null, <p data-foot="true">에이전트 깨우기</p>);
+it("keeps an ended session's record above the foot that stands in its box's place", async () => {
+  const { container } = await mount(null, <p data-foot="true">이어서 하기</p>);
   await act(async () => useShellStore.setState({ sessionThread: section({ pane: "gone" }), sessionThreadHistory: { generation: 4, pages: [] } }));
   expect(container.textContent).toContain("다크도 찍어줘");
   expect(container.textContent).toContain("라이트는 끝났어요");
@@ -118,6 +136,65 @@ it("keeps a sleeping session's record above the foot that wakes it once its card
   const conversation = container.querySelector('[data-desk-thread-conversation="true"]')!;
   expect(conversation.compareDocumentPosition(container.querySelector('[data-foot="true"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(container.querySelector("textarea")).toBeNull();
+});
+
+// A sleeping session's conversation (operator decision 2026-11-28, A-1): readable and dimmed, the sleep card in its
+// middle, and no box until the agent is awake, beside Desk and over its pane alike.
+describe("a sleeping session", () => {
+  const asleepRow = (sleep: AgentSleep | null) => ({ pane_id: "w1:p2", agent_kind: "claude", sleep, state: { working: false, asking: false } }) as AgentRow;
+  const dimmed = (container: HTMLElement) => container.querySelector<HTMLElement>("[data-thread-taken]")!;
+
+  it("dims its conversation, keeps it readable, and offers Wake agent in its middle in place of the box", async () => {
+    const { container, actions } = await mount(job, null, { answer: true });
+    await act(async () => useShellStore.setState({ sessionThread: section(), sessionThreadHistory: { generation: 4, pages: [] }, agents: [asleepRow({ state: "sleeping", since_unix_ms: 0, progress: "다크 캡처 중" })] }));
+    expect(container.textContent).toContain("라이트는 끝났어요");
+    expect(dimmed(container).className).toContain("opacity-(--opacity-dimmed)");
+    expect(dimmed(container).hasAttribute("inert")).toBe(false);
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(container.querySelector("[data-desk-composer]")).toBeNull();
+    const card = container.querySelector("[data-thread-sleep-card] [data-pane-sleep]")!;
+    expect(card.getAttribute("data-pane-sleep")).toBe("sleeping");
+    expect(card.textContent).toContain("다크 캡처 중");
+    // The card is not dimmed with the conversation, and stands after it for Tab.
+    expect(dimmed(container).contains(card)).toBe(false);
+    expect(container.querySelector('[data-desk-thread-conversation="true"]')!.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-agent-wake="w1:p2"]')!.click());
+    expect(actions.wakeAgent).toHaveBeenCalledWith("w1:p2");
+  });
+
+  it("brings the box back once the agent is awake, and the press that opened it gives the box the keyboard then", async () => {
+    useShellStore.setState({ sessionThread: section(), agents: [asleepRow({ state: "waking", since_unix_ms: 0 })] });
+    const { container, answered } = await mount(job, null, { answer: true });
+    expect(container.querySelector("[data-pane-sleep]")?.getAttribute("data-pane-sleep")).toBe("waking");
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(answered).not.toHaveBeenCalled();
+    await act(async () => useShellStore.setState({ agents: [asleepRow(null)] }));
+    expect(container.querySelector("[data-pane-sleep]")).toBeNull();
+    expect(dimmed(container).className).not.toContain("opacity-(--opacity-dimmed)");
+    expect(document.activeElement).toBe(container.querySelector("textarea"));
+    expect(answered).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Retry and a new session after a failed wake, each dispatched for its pane", async () => {
+    const { container, actions } = await mount();
+    await act(async () => useShellStore.setState({ sessionThread: section(), agents: [asleepRow({ state: "failed", since_unix_ms: 0, reason: "The conversation file is gone" })] }));
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("The conversation file is gone");
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-agent-wake-retry]")!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-agent-wake-fresh]")!.click());
+    expect(actions.wakeAgent.mock.calls).toEqual([["w1:p2"], ["w1:p2", true]]);
+  });
+
+  it("wakes a session whose sleep closed its pane from its sleeping session, its record kept to read", async () => {
+    const asleep: SleepingSession = { sleep_id: "sleep-1", node_id: "mac", checkout_path: "/repo", kind: "pi", identity_label: "갤러리 캡처 비교", group: "seen", phase: "sleeping", since_unix_ms: 0, reason: null, wake_available: true, checking: false };
+    const follow = vi.fn();
+    const { container, actions } = await mount(null, null, { asleep, onSessionWake: follow });
+    await act(async () => useShellStore.setState({ sessionThread: section({ pane: "gone" }), agents: [] }));
+    expect(container.textContent).toContain("다크도 찍어줘");
+    expect(container.querySelector("textarea")).toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-agent-wake]")!.click());
+    expect(actions.wakeSleepingSession).toHaveBeenCalledWith("sleep-1");
+    expect(follow).toHaveBeenCalledTimes(1);
+  });
 });
 
 it("sends the box's words on Enter, takes them out of the box at once, and never sends mid-composition", async () => {
@@ -378,7 +455,7 @@ it("draws the files a sent message typed before its words over its bubble, by th
   const stage = "0b7a3c52-9a1e-4f7d-8c2b-1a2b3c4d5e6f";
   const typed = `"/Users/me/.hide/state/attachments/${stage}-0-화면 1.png" "C:/Users/me/.hide/state/terminal-attachments/hide-${stage}-1.log" 이것 좀 봐 줘`;
   keepSent(`${stage}-1`, "install.log", null);
-  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: typed } }], parts: {}, sessions: {} } }) }));
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: typed } }], parts: {}, sessions: {} } }) }));
   const sent = container.querySelector("[data-desk-sent-attachments]");
   expect([...sent!.querySelectorAll("[data-desk-attachment]")].map((tile) => tile.querySelector('[role="img"]')?.getAttribute("aria-label"))).toEqual(["화면 1.png", "install.log"]);
   expect(container.querySelector('[data-desk-thread-line="user"] p')?.textContent).toBe("이것 좀 봐 줘");
@@ -389,7 +466,7 @@ it("draws an image the session showed as its tile's picture, made from the file'
   configureFileBytes((event) => { reads.push(event.payload as Record<string, unknown>); });
   const { container } = await mount();
   const shown = { sessionUpdate: "tool_call", toolCallId: "f", kind: "execute", title: "hide file open /repo/shots/dark.png", status: "completed" };
-  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { updates: [shown], parts: { f: { kind: "view", view: "file", target: "/repo/shots/dark.png" } }, sessions: {} } }) }));
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { record: "r1", start: 0, updates: [shown], parts: { f: { kind: "view", view: "file", target: "/repo/shots/dark.png" } }, sessions: {} } }) }));
   const answer = async (read: Record<string, unknown>, bytes: number[], total: number) => {
     const header = new TextEncoder().encode(JSON.stringify({ type: "file_bytes", request_id: read.request_id, path: "/repo/shots/dark.png", offset: 0, total, eof: true }));
     const frame = new Uint8Array(4 + header.length + bytes.length);
@@ -412,7 +489,7 @@ it("draws an image the session showed as its tile's picture, made from the file'
 it("draws a turn an agent recorded as interrupted as one quiet line, never as the operator's bubble", async () => {
   const { container } = await mount();
   const interrupted = { sessionUpdate: "user_message_chunk", content: { type: "text", text: "[Request interrupted by user]" }, _meta: { hide: { origin: "interrupted" } } };
-  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는"), interrupted], parts: {}, sessions: {} };
+  const tail = { record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는"), interrupted], parts: {}, sessions: {} };
   await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
   const line = container.querySelector('[data-desk-thread-line="interrupted"]');
   expect(line?.textContent).toBe("Interrupted");
@@ -430,7 +507,7 @@ const shown = async (tail: ThreadPage) => act(async () => useShellStore.setState
 it("draws what one turn leads to once per target, with its newest state, and a mission chip without its title beside it", async () => {
   const { container } = await mount({ ...job, state: "done" });
   await shown({
-    updates: [
+    record: "r1", start: 0, updates: [
       operator("미션 돌려줘"),
       shell("m1", "hide mission show --mission mission-3"),
       shell("l1", "hide request send agent-7 --body 첫 편지"),
@@ -452,25 +529,25 @@ it("draws what one turn leads to once per target, with its newest state, and a m
     },
     sessions: {},
   });
-  const turns = Array.from(container.querySelectorAll("[data-desk-thread-turn]"));
-  const parts = (turn: Element) => Array.from(turn.querySelectorAll("[data-desk-hide-part]")).map((part) => part.getAttribute("data-desk-hide-part"));
+  const parts = (turn: number) => within(turnsIn(container)[turn]!, "[data-desk-hide-part]").map((part) => part.getAttribute("data-desk-hide-part"));
+  const first = () => turnsIn(container)[0]!;
   // Three mission calls and two letters to one session are one chip and one letter line, where the turn first reached them.
-  expect(parts(turns[0]!)).toEqual(["mission", "letter"]);
-  expect(turns[0]!.querySelector('[data-desk-hide-part="letter"]')?.textContent).toContain("둘째 편지");
-  expect(turns[0]!.textContent).not.toContain("첫 편지");
+  expect(parts(0)).toEqual(["mission", "letter"]);
+  expect(within(first(), '[data-desk-hide-part="letter"]')[0]?.textContent).toContain("둘째 편지");
+  expect(wordsOf(first())).not.toContain("첫 편지");
   // The chip names the mission once, inside it.
-  expect(turns[0]!.querySelector('[data-desk-hide-part="mission"]')?.textContent?.split("Desk 1차").length).toBe(2);
+  expect(within(first(), '[data-desk-hide-part="mission"]')[0]?.textContent?.split("Desk 1차").length).toBe(2);
   // Another turn that reaches the same mission draws it again: the rule holds within a turn.
-  expect(parts(turns[1]!)).toEqual(["mission"]);
+  expect(parts(1)).toEqual(["mission"]);
   // Unfolded, the work draws each target once too.
-  await act(async () => (turns[0]!.querySelector("[data-desk-turn-toggle]") as HTMLElement).click());
-  expect(parts(turns[0]!)).toEqual(["mission", "letter"]);
+  await act(async () => within(first(), "[data-desk-turn-toggle]")[0]!.click());
+  expect(parts(0)).toEqual(["mission", "letter"]);
 });
 
 it("folds a running turn's calls into one line with its newest call under it, never what came out, and unfolds every call", async () => {
   const { container } = await mount();
   const tail = (newest: object[]) => ({
-    updates: [
+    record: "r1", start: 0, updates: [
       operator("칩을 고쳐줘"),
       said("먼저 칩을 고칠게요."),
       shell("r0", "rg -n mission web/src"),
@@ -483,18 +560,18 @@ it("folds a running turn's calls into one line with its newest call under it, ne
     sessions: {},
   }) as ThreadPage;
   await shown(tail([edit("e2", "web/src/thread-view.tsx", "a\nb", "a2\nb2", "in_progress")]));
-  const turn = container.querySelector("[data-desk-thread-turn]")!;
-  const toggle = turn.querySelector("[data-desk-turn-toggle]")!;
+  const turn = turnsIn(container)[0]!;
+  const toggle = within(turn, "[data-desk-turn-toggle]")[0]!;
   expect(toggle.getAttribute("data-desk-turn-toggle")).toBe("folded");
   // One command is a command, in the singular; two files are files.
   expect(toggle.textContent).toBe("Working · 1 command · 2 files");
   // What it said and the mission it reached stay in view; its calls and their output do not.
-  expect(turn.textContent).toContain("먼저 칩을 고칠게요.");
-  expect(turn.querySelectorAll('[data-desk-hide-part="mission"]')).toHaveLength(1);
-  expect(turn.querySelectorAll('[data-desk-thread-line="tool"]')).toHaveLength(0);
-  expect(turn.textContent).not.toContain("threadView.ts:105");
+  expect(wordsOf(turn)).toContain("먼저 칩을 고칠게요.");
+  expect(within(turn, '[data-desk-hide-part="mission"]')).toHaveLength(1);
+  expect(within(turn, '[data-desk-thread-line="tool"]')).toHaveLength(0);
+  expect(wordsOf(turn)).not.toContain("threadView.ts:105");
   // The newest call is its file and what it changed.
-  expect(turn.querySelector("[data-desk-thread-newest]")?.textContent).toMatch(/^Edit web\/src\/thread-view\.tsx\+2 −2/);
+  expect(within(turn, "[data-desk-thread-newest]")[0]?.textContent).toMatch(/^Edit web\/src\/thread-view\.tsx\+2 −2/);
   // A command that comes next takes its place, as its first line alone.
   await shown(tail([edit("e2", "web/src/thread-view.tsx", "a\nb", "a2\nb2"), shell("r1", "pnpm --dir web test\n  --run desk", "in_progress")]));
   expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toMatch(/^pnpm --dir web testRunning/);
@@ -511,7 +588,7 @@ it("folds a running turn's calls into one line with its newest call under it, ne
 it("tells parts apart by what they lead to, not by how they are drawn or typed", async () => {
   const { container } = await mount({ ...job, state: "done" });
   await shown({
-    updates: [
+    record: "r1", start: 0, updates: [
       operator("둘 다 리뷰 맡기고 노트 열어줘"),
       shell("s1", "hide agent spawn --name review"),
       shell("s2", "hide agent spawn --name review"),
@@ -534,7 +611,7 @@ it("tells parts apart by what they lead to, not by how they are drawn or typed",
 
 it("names a running turn's newest call whatever it was: a Hide call by its command, a search by its term", async () => {
   const { container } = await mount();
-  const running = (calls: object[], parts: ThreadPage["parts"] = {}) => shown({ updates: [operator("찾아줘"), ...calls], parts, sessions: {} } as ThreadPage);
+  const running = (calls: object[], parts: ThreadPage["parts"] = {}) => shown({ record: "r1", start: 0, updates: [operator("찾아줘"), ...calls], parts, sessions: {} } as ThreadPage);
   // A call drawn as a Hide part is still the newest step, as the command it was.
   await running([shell("r", "rg old-step"), shell("m", "hide mission show --mission mission-3")], { m: { kind: "mission", mission: "mission-3" } });
   expect(container.querySelector("[data-desk-thread-newest]")?.textContent).toBe("hide mission show --mission mission-3");
@@ -557,7 +634,7 @@ it("names a running turn's newest call whatever it was: a Hide call by its comma
 
 it("folds a finished turn under 작업 · 파일 n · 명령 m with no newest call", async () => {
   const { container } = await mount({ ...job, state: "done" });
-  await shown({ updates: [operator("고쳐줘"), shell("r0", "rg -n mission"), edit("e1", "web/src/desk.ts", "a", "b"), said("고쳤어요")], parts: {}, sessions: {} });
+  await shown({ record: "r1", start: 0, updates: [operator("고쳐줘"), shell("r0", "rg -n mission"), edit("e1", "web/src/desk.ts", "a", "b"), said("고쳤어요")], parts: {}, sessions: {} });
   expect(container.querySelector("[data-desk-turn-toggle]")?.textContent).toBe("Work · 1 file · 1 command");
   expect(container.querySelector("[data-desk-thread-newest]")).toBeNull();
   expect(container.querySelectorAll('[data-desk-thread-line="tool"]')).toHaveLength(0);
@@ -570,7 +647,7 @@ it("draws the agent's words as Markdown, copies a code block's code, and offers 
   const copied: [string, string][] = [];
   const { container } = await mount(job, null, { onCopy: async (text, what) => { copied.push([text, what]); return true; } });
   const words = "**라이트**는 끝났어요.\n\n```\nopen https://play.google.com/console\n```";
-  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said(words)], parts: {}, sessions: {} };
+  const tail = { record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said(words)], parts: {}, sessions: {} };
   await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
   await codeCopyDrawn(container);
   const message = container.querySelector('[data-desk-thread-line="agent"]')!;
@@ -587,7 +664,7 @@ it("keeps every message's view while the operator types and while the last messa
   // Mounted as Desk mounts it: no mentions passed.
   const { container, type } = await mount();
   const answer = (id: string, text: string) => ({ sessionUpdate: "agent_message_chunk", messageId: id, content: { type: "text", text } });
-  const turns = (last: string) => ({ updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "첫 질문" } }, answer("a", "첫 **답**"), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "둘째 질문" } }, answer("b", last)], parts: {}, sessions: {} });
+  const turns = (last: string) => ({ record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "첫 질문" } }, answer("a", "첫 **답**"), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "둘째 질문" } }, answer("b", last)], parts: {}, sessions: {} });
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: turns("쓰는 중") }), sessionThreadHistory: { generation: 4, pages: [] } }));
   const views = () => Array.from(container.querySelectorAll('[data-desk-thread-line="agent"] .cm-editor'));
   const [first, second] = views();
@@ -601,88 +678,214 @@ it("keeps every message's view while the operator types and while the last messa
 });
 
 const answer = (text: string, at: number) => ({ sessionUpdate: "agent_message_chunk", messageId: text, content: { type: "text", text }, _meta: { hide: { at_ms: at } } });
-const asked = (...updates: ThreadPage["updates"]) => ({ updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, ...updates], parts: {}, sessions: {} });
+const asked = (...updates: ThreadPage["updates"]) => ({ record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, ...updates], parts: {}, sessions: {} });
 
-/** JSDOM has no layout; the browser boundary reports which messages approach the viewport. */
-function conversationVisibility() {
-  const observers: { callback: IntersectionObserverCallback; targets: Set<Element>; disconnected: boolean; root: Element | Document | null }[] = [];
-  vi.stubGlobal("IntersectionObserver", class {
-    readonly state;
-    constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
-      this.state = { callback, targets: new Set<Element>(), disconnected: false, root: options?.root ?? null };
-      observers.push(this.state);
-    }
-    observe(target: Element) { this.state.targets.add(target); }
-    unobserve(target: Element) { this.state.targets.delete(target); }
-    disconnect() { this.state.disconnected = true; this.state.targets.clear(); }
-    takeRecords() { return []; }
-  });
-  const conversation = () => observers.filter((one) => one.root instanceof Element && one.root.hasAttribute("data-desk-thread-conversation"));
-  return {
-    conversation,
-    see: (target: Element, shown: boolean) => act(async () => {
-      const observer = conversation().find((one) => one.targets.has(target));
-      expect(observer, "the conversation watches this message").toBeDefined();
-      observer!.callback([{ target, isIntersecting: shown } as IntersectionObserverEntry], {} as IntersectionObserver);
-    }),
-  };
-}
-
-it("releases offscreen Markdown in one long turn, restoring it on return and retaining a selected message until copying ends", async () => {
-  const visibility = conversationVisibility();
-  const { container, type, root } = await mount();
+it("draws only the rows near the viewport, one long turn's messages each a row of its own, and draws a row again on return", async () => {
+  layOut({ viewport: 400, row: 100 });
+  const { container, type } = await mount();
+  // One running turn whose work holds forty messages: it must not stay drawn whole.
   const updates = Array.from({ length: 40 }, (_, index) => [
     answer(`Past **answer ${index}**`, index + 1),
     { sessionUpdate: "tool_call", toolCallId: `call-${index}`, kind: "execute", title: "echo work", status: "completed" },
   ]).flat();
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: asked(...updates, answer("Newest **answer**", 100)) }), sessionThreadHistory: { generation: 4, pages: [] } }));
-  expect(container.querySelectorAll(".cm-editor")).toHaveLength(0);
-  const messages = Array.from(container.querySelectorAll<HTMLElement>("[data-thread-markdown]"));
-  expect(messages).toHaveLength(41);
-  const first = messages[0]!, last = messages.at(-1)!;
-  expect(first.textContent).toContain("answer 0");
-  await visibility.see(last, true);
-  const latestEditor = last.querySelector(".cm-editor");
-  expect(latestEditor).not.toBeNull();
+  // The rows it drew are measured taller than their estimates, and the conversation follows its foot as they grow.
+  await laidOut();
+  await laidOut();
+  expect(container.querySelector("[data-desk-thread-lines]")?.getAttribute("data-desk-thread-lines")).toBe("82");
+  // It opens at its foot: the newest answer is drawn, the first is not, and no more rows than the viewport and a few past it.
+  const bounded = () => expect(drawnRows(container).length).toBeLessThanOrEqual(4 + 2 * 6 + 2);
+  bounded();
+  expect(drawnWords(container).some((words) => words.includes("Newest answer"))).toBe(true);
+  expect(drawnWords(container).some((words) => words.includes("answer 0"))).toBe(false);
   await type("keep my draft");
-  expect(last.querySelector(".cm-editor")).toBe(latestEditor);
-  await visibility.see(first, true);
-  expect(first.querySelector(".cm-editor")).not.toBeNull();
-  await visibility.see(first, false);
-  expect(first.querySelector(".cm-editor")).toBeNull();
-  expect(first.textContent).toContain("answer 0");
-  await visibility.see(first, true);
-  const selectedEditor = first.querySelector(".cm-editor");
-  await act(async () => {
-    const range = document.createRange();
-    range.selectNodeContents(first.querySelector(".cm-content")!);
-    document.getSelection()!.removeAllRanges();
-    document.getSelection()!.addRange(range);
+  await scrollConversation(container, 0);
+  bounded();
+  expect(drawnWords(container).some((words) => words.includes("answer 0"))).toBe(true);
+  expect(drawnWords(container).some((words) => words.includes("Newest answer"))).toBe(false);
+  expect(container.querySelector("textarea")!.value).toBe("keep my draft");
+  // Back at the foot, the newest answer is drawn again as Markdown.
+  await scrollConversation(container, "end");
+  const newest = drawnRows(container).find((row) => row.textContent?.includes("Newest answer"));
+  expect(newest?.querySelector(".cm-editor")).not.toBeNull();
+  expect(container.querySelector("textarea")!.value).toBe("keep my draft");
+});
+
+it("keeps a turn's unfolded work while its rows leave the viewport and come back", async () => {
+  layOut({ viewport: 400, row: 100 });
+  const { container } = await mount({ ...job, state: "done" });
+  const later = Array.from({ length: 20 }, (_, index) => [operator(`later ${index}`), said(`later answer ${index}`)]).flat();
+  await shown({ record: "r1", start: 0, updates: [operator("고쳐줘"), shell("r0", "rg -n first-turn"), said("고쳤어요"), ...later], parts: {}, sessions: {} });
+  await scrollConversation(container, 0);
+  await act(async () => container.querySelector<HTMLElement>("[data-desk-turn-toggle]")!.click());
+  expect(container.querySelector("[data-desk-turn-toggle]")?.getAttribute("data-desk-turn-toggle")).toBe("open");
+  expect(drawnWords(container).some((words) => words.includes("rg -n first-turn"))).toBe(true);
+  await scrollConversation(container, "end");
+  expect(drawnWords(container).some((words) => words.includes("first-turn") || words.includes("고쳐줘"))).toBe(false);
+  await scrollConversation(container, 0);
+  expect(container.querySelector("[data-desk-turn-toggle]")?.getAttribute("data-desk-turn-toggle")).toBe("open");
+  expect(drawnWords(container).some((words) => words.includes("rg -n first-turn"))).toBe(true);
+});
+
+it("forgets the fold of a turn whose page was let go, so the same turn read again starts folded", async () => {
+  const { container } = await mount({ ...job, state: "done" });
+  const older = { record: "r1", start: 0, updates: [operator("고쳐줘"), shell("r0", "rg -n first-turn"), said("고쳤어요")], parts: {}, sessions: {} };
+  const tail = { record: "r1", start: 500, updates: [operator("다음"), said("했어요")], parts: {}, sessions: {} };
+  const read = (pages: ThreadPage[]) => act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages } }));
+  await read([older]);
+  await act(async () => container.querySelector<HTMLElement>("[data-desk-turn-toggle]")!.click());
+  expect(container.querySelector("[data-desk-turn-toggle]")?.getAttribute("data-desk-turn-toggle")).toBe("open");
+  // The core let the older page go, then read it again.
+  await read([]);
+  await read([older]);
+  expect(container.querySelector("[data-desk-turn-toggle]")?.getAttribute("data-desk-turn-toggle")).toBe("folded");
+});
+
+it("starts a record replaced at the same path with fresh rows, none of the old record's folds on them", async () => {
+  const { container } = await mount({ ...job, state: "done" });
+  const page = (record: string, task: string, command: string) => ({ record, start: 0, updates: [operator(task), shell("c1", command), said(`${task} 했어요`)], parts: {}, sessions: {} });
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: page("r1", "고쳐줘", "rg -n old-record") }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  await act(async () => container.querySelector<HTMLElement>("[data-desk-turn-toggle]")!.click());
+  expect(drawnWords(container).some((words) => words.includes("rg -n old-record"))).toBe(true);
+  // The agent's record was replaced: the core reads the new file from its start, in the same thread, with no empty frame between.
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: page("r2", "다른 일", "rg -n new-record") }) }));
+  expect(container.querySelector("[data-desk-turn-toggle]")?.getAttribute("data-desk-turn-toggle")).toBe("folded");
+  expect(drawnWords(container).some((words) => words.includes("rg -n new-record"))).toBe(false);
+});
+
+it("reads a page in above without moving the row the operator reads", async () => {
+  layOut({ viewport: 400, row: 40 });
+  const { container } = await mount({ ...job, state: "done" });
+  const pageOf = (from: number) => ({ record: "r1", start: from * 100, updates: Array.from({ length: 20 }, (_, index) => [operator(`question ${from + index}`), said(`answer ${from + index}`)]).flat(), parts: {}, sessions: {} });
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: pageOf(20), has_older: true }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  await scrollConversation(container, 600);
+  const box = container.querySelector<HTMLElement>("[data-desk-thread-conversation]")!;
+  // The row at the viewport's top edge, and how far below the edge it stands.
+  const reading = () => {
+    const row = drawnRows(container).find((one) => Number.parseFloat(one.style.top) + 40 > box.scrollTop)!;
+    return { key: row.dataset.threadRow, words: row.textContent, offset: Number.parseFloat(row.style.top) - box.scrollTop };
+  };
+  const before = reading();
+  await act(async () => useShellStore.setState({ sessionThreadHistory: { generation: 4, pages: [pageOf(0)] } }));
+  expect(container.querySelector("[data-desk-thread-lines]")?.getAttribute("data-desk-thread-lines")).toBe("80");
+  expect(reading()).toEqual(before);
+});
+
+it("keeps the row being read in place when a row above it grows, while the reader scrolls up", async () => {
+  const heights = new Map<string, number>();
+  layOut({ viewport: 400, row: (row) => heights.get(row.dataset.threadRow!) ?? 40 });
+  const { container } = await mount({ ...job, state: "done" });
+  await shown({ record: "r1", start: 0, updates: Array.from({ length: 30 }, (_, index) => [operator(`question ${index}`), said(`answer ${index}`)]).flat(), parts: {}, sessions: {} });
+  await laidOut();
+  const box = container.querySelector<HTMLElement>("[data-desk-thread-conversation]")!;
+  const heightOf = (row: HTMLElement) => heights.get(row.dataset.threadRow!) ?? 40;
+  // The row at the viewport's top edge, and how far below the edge it stands.
+  const reading = () => {
+    const row = drawnRows(container).find((one) => Number.parseFloat(one.style.top) + heightOf(one) > box.scrollTop)!;
+    return { key: row.dataset.threadRow, offset: Number.parseFloat(row.style.top) - box.scrollTop };
+  };
+  await scrollConversation(container, 1400);
+  await laidOut();
+  await scrollConversation(container, 1200);
+  await laidOut();
+  // Every row drawn is measured. The reader scrolls up a little, and a row above what they read grows, as a picture
+  // that arrives late makes it; nothing else changes height.
+  await scrollConversation(container, box.scrollTop - 20);
+  const before = reading();
+  const above = drawnRows(container).find((one) => Number.parseFloat(one.style.top) + heightOf(one) < box.scrollTop)!;
+  heights.set(above.dataset.threadRow!, 140);
+  await laidOut();
+  expect(reading()).toEqual(before);
+});
+
+it("draws the message a question goes to wherever it stands, keeps it drawn while lit, and lets it go after", async () => {
+  layOut({ viewport: 400, row: 100 });
+  const scrolled: string[] = [];
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this.textContent ?? ""); };
+  const { container } = await mount({ ...job, state: "done" }, null, { asks: [{ id: "far-0", text: "어느 화면을 찍을지", at_unix_ms: 1_500, quote: "어느 화면을 찍을까요?" }] });
+  const later = Array.from({ length: 30 }, (_, index) => [operator(`later ${index}`), answer(`later answer ${index}`, 2_000 + index)]).flat();
+  await shown({ record: "r1", start: 0, updates: [operator("찍어줘"), answer("어느 화면을 찍을까요? 라이트와 다크가 있어요.", 1_000), ...later], parts: {}, sessions: {} });
+  const asking = () => drawnWords(container).some((words) => words.includes("어느 화면을 찍을까요?"));
+  expect(asking()).toBe(false);
+  vi.useFakeTimers();
+  try {
+    await act(async () => container.querySelector<HTMLElement>('[data-desk-thread-ask="far-0"]')!.click());
+    expect(asking()).toBe(true);
+    expect(scrolled.some((text) => text.includes("어느 화면을 찍을까요?"))).toBe(true);
+    await act(async () => vi.advanceTimersByTime(2_000));
+    // Lit no more and still away from the viewport, the message is let go.
+    expect(asking()).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps every row between a selection's ends drawn while it stands, so a copy holds all of it", async () => {
+  layOut({ viewport: 400, row: 100 });
+  const { container } = await mount({ ...job, state: "done" });
+  await shown({ record: "r1", start: 0, updates: Array.from({ length: 30 }, (_, index) => [operator(`question ${index}`), said(`answer ${index}`)]).flat(), parts: {}, sessions: {} });
+  await scrollConversation(container, 0);
+  const start = drawnRows(container).find((row) => row.textContent?.includes("answer 1"))!;
+  const select = (to: Node | null) => act(async () => {
+    const selection = document.getSelection()!;
+    if (to) selection.setBaseAndExtent(start, 0, to, 0);
+    else selection.removeAllRanges();
     document.dispatchEvent(new Event("selectionchange"));
   });
-  await visibility.see(first, false);
-  expect(first.querySelector(".cm-editor")).toBe(selectedEditor);
-  await act(async () => {
-    document.getSelection()!.removeAllRanges();
-    document.dispatchEvent(new Event("selectionchange"));
-  });
-  expect(first.querySelector(".cm-editor")).toBeNull();
-  expect(last.querySelector(".cm-editor")).toBe(latestEditor);
-  expect(visibility.conversation()).toHaveLength(1);
-  await act(async () => root.unmount());
-  mounted = [];
-  expect(visibility.conversation()[0]!.disconnected).toBe(true);
-  expect(visibility.conversation()[0]!.targets.size).toBe(0);
+  await select(start.nextElementSibling);
+  // The drag goes on to the foot: the browser scrolls, and the rows between both ends stay drawn.
+  await scrollConversation(container, "end");
+  const last = drawnRows(container).at(-1)!;
+  await select(last);
+  const words = drawnWords(container);
+  for (let index = 1; index < 30; index += 1) expect(words.some((one) => one.includes(`answer ${index}`)), `answer ${index}`).toBe(true);
+  expect(document.getSelection()!.toString()).toContain("answer 1");
+  await select(null);
+  expect(drawnRows(container).length).toBeLessThanOrEqual(4 + 2 * 6);
+});
+
+it("leaves a press on a message's words to the browser, so a drag can select across messages, and a code block's 복사 still takes its press", async () => {
+  const { container } = await mount({ ...job, state: "done" });
+  await shown({ record: "r1", start: 0, updates: [operator("보여줘"), said("첫 답이에요"), operator("코드도"), said("이 코드예요\n\n```\nconst a = 1;\n```")], parts: {}, sessions: {} });
+  await codeCopyDrawn(container);
+  const reached: EventTarget[] = [];
+  const seen = (event: Event) => reached.push(event.target!);
+  document.addEventListener("mousedown", seen);
+  // A message that takes a press finds its place by the words' boxes, which a test window does not lay out.
+  const laidOut = { getClientRects: () => [] as unknown as DOMRectList, getBoundingClientRect: () => new DOMRect() };
+  for (const [name, value] of Object.entries(laidOut)) Object.defineProperty(Range.prototype, name, { configurable: true, writable: true, value });
+  try {
+    const press = (target: Element, modifier = false) => {
+      const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, metaKey: modifier, ctrlKey: modifier });
+      target.dispatchEvent(event);
+      return event;
+    };
+    // The words: no message takes the press, so the browser's own selection starts and can run on into the next message.
+    const words = container.querySelector('[data-desk-thread-line="agent"] .cm-line')!;
+    const event = press(words);
+    expect(event.defaultPrevented).toBe(false);
+    expect(reached).not.toContain(words);
+    // A ⌘- or Ctrl-press is still the message's, which opens a link under it.
+    press(words, true);
+    expect(reached).toContain(words);
+    // A code block's 복사 is pressed as before, and its head is no part of a copied selection.
+    const copy = container.querySelector('[data-code-block-action] [data-copy-words="code block"]')!;
+    press(copy);
+    expect(reached).toContain(copy);
+    expect(container.querySelector("[data-code-block-head]")?.className).toContain("select-none");
+  } finally {
+    document.removeEventListener("mousedown", seen);
+    for (const name of Object.keys(laidOut)) delete (Range.prototype as unknown as Record<string, unknown>)[name];
+  }
 });
 
 it("shows a question in the agent's own sentence above the box and lights only that sentence in its message for 2 s (Doop N3 가)", async () => {
-  conversationVisibility();
   const scrolled: string[] = [];
   vi.stubGlobal("CSS", { escape: (value: string) => value });
   Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this.textContent ?? ""); };
   const { container } = await mount(job, null, { asks: [{ id: "missed-1-0", text: "다크 화면을 넣을지", at_unix_ms: 1_500, quote: "다크 화면도 넣을까요?" }] });
   await act(async () => useShellStore.setState({ sessionThread: section({ tail: asked(answer("라이트를 찍었어요. 다크 화면도 넣을까요? 넣으면 두 배예요.", 1_000)) }), sessionThreadHistory: { generation: 4, pages: [] } }));
-  expect(container.querySelector(".cm-editor")).toBeNull();
   const line = container.querySelector("[data-desk-thread-asks]")!;
   const row = line.querySelector('[data-desk-thread-ask-row="missed-1-0"]')!;
   // One row above the box: 확인할 것, the agent's sentence, when it was asked and ×; no message unfolds under it.
@@ -701,13 +904,13 @@ it("shows a question in the agent's own sentence above the box and lights only t
     await act(async () => row.querySelector<HTMLElement>('[data-desk-thread-ask="missed-1-0"]')!.click());
     const lit = () => Array.from(container.querySelectorAll("[data-desk-thread-message] [data-markdown-lit]")).map((one) => one.textContent);
     expect(lit()).toEqual(["다크 화면도 넣을까요?"]);
-    expect(scrolled.some((text) => text.includes("라이트를 찍었어요."))).toBe(true);
+    // The lit sentence is what is brought to the middle of the conversation.
+    expect(scrolled.at(-1)).toBe("다크 화면도 넣을까요?");
     expect(row.getAttribute("data-lit")).toBe("true");
     await act(async () => vi.advanceTimersByTime(1_999));
     expect(lit()).toHaveLength(1);
     await act(async () => vi.advanceTimersByTime(1));
     expect(lit()).toEqual([]);
-    expect(container.querySelector(".cm-editor")).toBeNull();
     expect(row.getAttribute("data-lit")).toBeNull();
   } finally {
     vi.useRealTimers();
@@ -847,7 +1050,7 @@ it("draws a code block under a head row with its language and 복사, the code b
   const copied: string[] = [];
   const { container } = await mount(job, null, { onCopy: async (text) => { copied.push(text); return true; } });
   const words = "한 줄:\n\n```\nopen https://play.google.com/console\n```\n\n여러 줄:\n\n```bash\npnpm --dir web install\npnpm --dir web build\n```\n\n> 인용 안:\n> ```sh\n> echo hi\n> ```";
-  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "알려 줘" } }, said(words)], parts: {}, sessions: {} };
+  const tail = { record: "r1", start: 0, updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "알려 줘" } }, said(words)], parts: {}, sessions: {} };
   await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
   await act(() => vi.waitFor(() => expect(container.querySelectorAll("[data-code-block-head]")).toHaveLength(3)));
   const [one, several] = Array.from(container.querySelectorAll<HTMLElement>("[data-code-block]"));

@@ -221,13 +221,13 @@ fn read_connection(
     if legacy == Legacy::Partial {
         return Err(Refusal::Schema);
     }
-    let migrated = schema == Schema::V2 && legacy == Legacy::Complete;
+    let migrated = matches!(schema, Schema::V2 { .. }) && legacy == Legacy::Complete;
     let started = Instant::now();
     // A 2.x row is scanned in place up to its own cap, which SQLite refuses to
     // load past this limit; a 1.x value is never over the read budget.
     db.set_limit(
         rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH,
-        (if schema == Schema::V2 {
+        (if matches!(schema, Schema::V2 { .. }) {
             ROW_2_BYTES.max(READ_BYTES)
         } else {
             READ_BYTES
@@ -334,7 +334,7 @@ fn read_connection(
                 }
             }
         }
-        if schema == Schema::V2 {
+        if matches!(schema, Schema::V2 { .. }) {
             match next_2(db, &mut step, horizon, &mut scanned)? {
                 Next::Row => continue,
                 Next::End => break,

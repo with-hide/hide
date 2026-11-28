@@ -262,6 +262,7 @@ jobs:
           python3 scripts/check-device-kits-single-source.py
           bash scripts/check-agent-folders.sh
           python3 scripts/check-herdr-names.py
+          python3 scripts/check-shell-structure.py
 
       # Reads the pull request's body, which no merge group carries, so a merge
       # group's `policy` leaves it out.
@@ -833,6 +834,7 @@ jobs:
             scripts/ci-plan.py
             scripts/ci-repeat.py
             scripts/rust_scan.py
+            scripts/e2e-shard.py
             scripts/ci-flaky-report.py
           sparse-checkout-cone-mode: false
       - name: Every planned lane succeeded and every other lane was skipped

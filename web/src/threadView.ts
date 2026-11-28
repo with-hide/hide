@@ -15,9 +15,15 @@ export type ThreadConversation = {
   parts: Record<string, ThreadPart>;
   /** Where each session the thread names runs, by the name as written; a later page's placing wins. */
   sessions: Record<string, ThreadSession>;
+  /**
+   * Each update's name, which neither a page read in above, the live page filling and joining the kept ones, nor the
+   * oldest kept page being let go moves, and a record replaced at the same path never reuses: its page's record file,
+   * where the page begins in it and its place in the page, whatever stands before it. A screen keeps a line's fold, its measured height and the place a reader stands at by it.
+   */
+  ids: string[];
 };
 
-const EMPTY: ThreadConversation = { updates: [], parts: {}, sessions: {} };
+const EMPTY: ThreadConversation = { updates: [], parts: {}, sessions: {}, ids: [] };
 
 /**
  * The thread's conversation. Kept pages of another generation belong to a
@@ -32,6 +38,7 @@ export function threadConversation(thread: SessionThreadSection | null, history:
     updates: pages.flatMap((page) => page.updates),
     parts: Object.assign({}, ...pages.map((page) => page.parts)) as Record<string, ThreadPart>,
     sessions: Object.assign({}, ...pages.map((page) => page.sessions)) as Record<string, ThreadSession>,
+    ids: pages.flatMap((page) => page.updates.map((_, index) => `${page.record}@${page.start}:${index}`)),
   };
 }
 
@@ -79,7 +86,7 @@ export function threadScreen(thread: SessionThreadSection | null, history: Sessi
     if (drawn) parts[id] = drawn;
   }
   return {
-    lines: threadLines(conversation.updates as unknown as AcpSessionUpdate[], parts, session),
+    lines: threadLines(conversation.updates as unknown as AcpSessionUpdate[], parts, session, conversation.ids),
     reading: thread?.state === "loading",
     failure: thread?.state === "failed" ? thread.failure : null,
   };

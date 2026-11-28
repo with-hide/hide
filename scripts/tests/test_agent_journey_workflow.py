@@ -68,10 +68,12 @@ class JourneyCap(unittest.TestCase):
         jobs = yaml.safe_load((ROOT / WORKFLOWS[0]).read_text())["jobs"]
         steps = [step for job in jobs.values() for step in job["steps"]]
         fake = next(step["run"] for step in steps if "--fake-model" in step.get("run", ""))
-        # The only selection is the caller's `agents` input, empty for every agent.
+        # The only selection is a hand run's `agents` input, empty for every
+        # agent; a calling workflow measures every agent.
         self.assertEqual(re.findall(r'--agents ("\$AGENTS"|\S+)', fake), ['"$AGENTS"'])
-        self.assertEqual(yaml.safe_load((ROOT / WORKFLOWS[0]).read_text())[True]["workflow_call"]["inputs"]
-                         ["agents"]["default"], "")
+        triggers = yaml.safe_load((ROOT / WORKFLOWS[0]).read_text())[True]
+        self.assertEqual(triggers["workflow_dispatch"]["inputs"]["agents"]["default"], "")
+        self.assertNotIn("agents", triggers["workflow_call"]["inputs"])
         installer = [step["run"] for step in steps if "install-agent-clis.py --all" in step.get("run", "")]
         self.assertEqual(len(installer), 1)
 

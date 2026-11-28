@@ -10278,14 +10278,40 @@ fn the_review_round_at_the_limit_failing_tells_the_conductor_once_how_to_settle_
         .find(|wake| wake.event == crate::missions::WakeEvent::Warning)
         .unwrap();
     let body = super::super::missions::wake_body(mission, wake);
+    assert!(body.len() <= 700, "one cell shows it whole: {body}");
+    // The longest node key, a long title and an earlier worker's rounds
+    // still fit the cell (mission-112 review O3).
+    let mut long = mission.clone();
+    long.title = "t".repeat(160);
+    let key = "k".repeat(40);
+    long.nodes[0].key.clone_from(&key);
+    for line in long.nodes[0]
+        .criteria
+        .iter_mut()
+        .filter(|line| line.key == "review")
+    {
+        line.rounds = 103;
+        line.budget_from = 100;
+    }
+    let mut far = wake.clone();
+    far.node.clone_from(&key);
+    let longest = super::super::missions::wake_body(&long, &far);
+    assert!(
+        longest.len() <= 700 && longest.contains("(2) a serious one back in the same area"),
+        "{} bytes: {longest}",
+        longest.len()
+    );
     for words in [
-        "reached its review round limit",
-        "failed in round 3, with 3 rounds",
-        "`normal` strength",
-        "fix the serious findings in the node",
-        "follow-up issues",
-        "hide mission skip fix review --reason",
+        "hit its review round limit",
+        "review failed round 3 of 3",
+        "no checker wakes until you choose",
         "without the operator",
+        "fixes just the serious ones here",
+        "the rest become a follow-up node",
+        "hide mission skip fix review --follow-up <node>",
+        "fresh worker on another model",
+        "a handover and a do-not-retry list",
+        "(3) a fresh worker failing here too: `hide mission decide`",
     ] {
         assert!(body.contains(words), "{words:?} in {body}");
     }
@@ -19795,6 +19821,360 @@ fn a_check_wakes_the_nodes_reviewer_and_its_failure_goes_to_the_worker() {
     );
 }
 
+/// Heads of the worker's later rounds, after `HEAD` and `HEAD_2`.
+const HEADS_LATER: [&str; 6] = [
+    "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+    "d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",
+    "e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
+    "f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1",
+    "0a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b",
+    "1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c",
+];
+
+/// The Conductor's cells about `fix`'s round limit, taken as read.
+fn limit_letters(runtime: &mut Runtime) -> Vec<String> {
+    runtime
+        .take_conductor_cells("mission-1")
+        .into_iter()
+        .map(|cell| cell.line)
+        .filter(|line| line.contains("review round limit"))
+        .collect()
+}
+
+/// One round of `fix`'s review: `worker` (in pane `pane`) records its check
+/// on `head`, which asks the reviewer `agent-3`, and the reviewer fails it.
+fn failed_round(runtime: &mut Runtime, pane: &str, head: &str) {
+    checkout_at(runtime, head);
+    command(
+        runtime,
+        pane,
+        record_of("fix", "check", json!({"commit": head})),
+    )
+    .unwrap();
+    let asked = read_cells(runtime, "agent-3");
+    assert!(
+        asked.len() == 1 && asked[0].contains("ready for your review"),
+        "{asked:?}"
+    );
+    let fail =
+        json!({"commit": head, "pass": false, "evidence": format!("serious: drops v1 on {head}")});
+    command(runtime, "reviewer", record_of("fix", "review", fail)).unwrap();
+}
+
+/// `fix`'s review rounds as `hide mission show` counts them.
+fn fix_rounds(runtime: &Runtime) -> Option<(u32, u32)> {
+    let shown = runtime.mission_view_of("mission-1").unwrap();
+    shown.nodes[0]
+        .review_rounds
+        .as_ref()
+        .map(|rounds| (rounds.rounds, rounds.limit))
+}
+
+/// mission-112 c1 (operator decision 2026-11-28): the review round at the
+/// strength's limit failing holds the node: its worker is told to wait for
+/// its Conductor, the Conductor gets one letter naming the node and its two
+/// choices, the worker's next check wakes no checker and no second letter,
+/// and no round opens before the Conductor chose. Binding a fresh worker is
+/// one choice: its checkers count a fresh budget, its check opens round 1
+/// of it, and its own limit failing tells the Conductor that the fresh
+/// worker failed too, so the operator decides.
+#[test]
+fn the_review_round_at_the_limit_failing_holds_the_node_until_the_conductor_chooses() {
+    use crate::missions::WarningKind;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    for (at, head) in [HEAD, HEAD_2, HEADS_LATER[0]].into_iter().enumerate() {
+        failed_round(&mut runtime, "recipient", head);
+        let told = read_cells(&mut runtime, "agent-2");
+        assert_eq!(
+            told.len() == 1 && told[0].contains("wait for its letter"),
+            at == 2,
+            "round {}: {told:?}",
+            at + 1
+        );
+        runtime.drive_mission_health(now);
+    }
+    assert_eq!(fix_rounds(&runtime), Some((3, 3)));
+    let letters = limit_letters(&mut runtime);
+    assert!(
+        letters.len() == 1
+            && letters[0].contains("Node fix of mission mission-1 hit its review round limit")
+            && letters[0].contains("(1) only ordinary or minor findings left")
+            && letters[0].contains("(2) a serious one back in the same area")
+            && !letters[0].contains("earlier worker")
+            && !letters[0].ends_with('…'),
+        "{letters:?}"
+    );
+    // The worker checks its fix: no round opens and nothing more is said.
+    checkout_at(&mut runtime, HEADS_LATER[1]);
+    assert!(
+        command(
+            &mut runtime,
+            "recipient",
+            record_of("fix", "check", json!({"commit": HEADS_LATER[1]})),
+        )
+        .unwrap()
+        .1
+    );
+    runtime.drive_mission_health(now);
+    assert!(
+        read_cells(&mut runtime, "agent-3").is_empty(),
+        "no round opens"
+    );
+    assert!(limit_letters(&mut runtime).is_empty(), "one letter");
+    assert!(
+        runtime
+            .take_conductor_cells("mission-1")
+            .iter()
+            .all(|cell| !cell.line.contains("ready for")),
+        "nor a checker asked of the Conductor"
+    );
+    assert_eq!(fix_rounds(&runtime), Some((3, 3)));
+    // The Conductor hands the node to a fresh worker: a fresh budget.
+    with_second_reviewer(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-4", "attempts": 2}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now);
+    assert_eq!(fix_rounds(&runtime), None, "a fresh budget");
+    assert_eq!(warnings_of(&runtime).0, Vec::<WarningKind>::new());
+    for head in &HEADS_LATER[2..5] {
+        failed_round(&mut runtime, "reviewer2", head);
+        runtime.drive_mission_health(now);
+    }
+    assert_eq!(fix_rounds(&runtime), Some((3, 3)));
+    let again = limit_letters(&mut runtime);
+    assert!(
+        again.len() == 1
+            && again[0].contains("if its earlier worker (3 rounds) was handed over here, ask the operator with `hide mission decide`")
+            && again[0].contains("(2) a serious one back in the same area")
+            && !again[0].ends_with('…'),
+        "{again:?}"
+    );
+}
+
+/// mission-112 (Conductor's decision on review-cap): a fresh checker bound
+/// in an ended checker's place at the limit carries that slot's rounds, so
+/// the node stays stopped: the worker's check wakes neither checker, the
+/// rounds stay at the limit and the warning stands. The re-look the
+/// Conductor asks of that checker by letter is its record on the fixed
+/// commit: a pass passes the line, which ends the stop and the warning.
+#[test]
+fn a_fresh_checker_bound_at_the_round_limit_keeps_the_node_stopped_until_a_re_look_passes() {
+    use crate::missions::WarningKind;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    for head in [HEAD, HEAD_2, HEADS_LATER[0]] {
+        failed_round(&mut runtime, "recipient", head);
+        read_cells(&mut runtime, "agent-2");
+    }
+    runtime.drive_mission_health(now);
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::ReviewFails]);
+    // The reviewer ends; the Conductor binds a fresh one in its place.
+    with_second_reviewer(&mut runtime);
+    let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
+    for record in ledger
+        .agents
+        .iter_mut()
+        .filter(|record| record.id == "agent-3")
+    {
+        record.ended = true;
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"reviewer": "agent-4"}}),
+    )
+    .unwrap();
+    let line = runtime.missions.book.get("mission-1").unwrap().nodes[0]
+        .criteria
+        .iter()
+        .find(|line| line.key == "review")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (
+            line.checkers[0].agent_id.as_deref(),
+            line.checkers[0].rounds
+        ),
+        (Some("agent-4"), 3),
+        "the fresh checker carries the slot's rounds"
+    );
+    checkout_at(&mut runtime, HEADS_LATER[1]);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEADS_LATER[1]})),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now);
+    assert!(
+        read_cells(&mut runtime, "agent-4").is_empty(),
+        "still stopped"
+    );
+    assert_eq!(fix_rounds(&runtime), Some((3, 3)));
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::ReviewFails]);
+    limit_letters(&mut runtime);
+    // A re-look that fails leaves the node stopped, with no second letter.
+    let fail =
+        json!({"commit": HEADS_LATER[1], "pass": false, "evidence": "serious: still drops v1"});
+    command(&mut runtime, "reviewer2", record_of("fix", "review", fail)).unwrap();
+    runtime.drive_mission_health(now);
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::ReviewFails]);
+    assert!(limit_letters(&mut runtime).is_empty(), "one letter");
+    assert!(
+        read_cells(&mut runtime, "agent-4").is_empty(),
+        "no round asked"
+    );
+    // The re-look the Conductor asked for by letter passes the line.
+    command(
+        &mut runtime,
+        "reviewer2",
+        record_of("fix", "review", json!({"commit": HEADS_LATER[1]})),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now);
+    assert_eq!(warnings_of(&runtime).0, Vec::<WarningKind>::new());
+    let shown = runtime.mission_view_of("mission-1").unwrap();
+    let review = shown.nodes[0]
+        .criteria
+        .iter()
+        .find(|line| line.key == "review")
+        .unwrap();
+    assert_eq!(review.state, crate::mission_criteria::CriterionState::Pass);
+    assert!(
+        read_cells(&mut runtime, "agent-4").is_empty(),
+        "the re-look answered the held check itself"
+    );
+}
+
+/// mission-112 c2: a review or verification that spent its round budget is
+/// skipped only naming a follow-up node of the same mission that is not
+/// done or dropped; an issue number alone is refused with what to do, the
+/// node itself, one not in the mission and a dropped one are refused too,
+/// and the skip that names one keeps it, is the same skip when sent again,
+/// and lets the check the hold kept reach the node's other checker, the
+/// verifier, which had not answered it (by its answer, not the clock).
+#[test]
+fn a_skip_at_the_round_limit_names_a_follow_up_node_of_the_mission() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    let by = json!([{"agent": "codex", "model": "gpt-6-astra"}]);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"check": "cargo test", "nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+             "criteria": ["the parser keeps v1 files"],
+             "checks": [{"as": "review", "by": by}, {"as": "verify", "by": by}]},
+            {"key": "fix-rest", "title": "The review's minor findings", "kind": "change", "delivery": "pr",
+             "criteria": ["each finding fixed"], "depends_on": ["fix"]},
+            {"key": "docs", "title": "Docs", "kind": "research", "criteria": ["the guide says it"]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    with_second_reviewer(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-2", "pr": 7, "reviewer": "agent-3", "verifier": "agent-4"}}),
+    )
+    .unwrap();
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    for head in [HEAD, HEAD_2, HEADS_LATER[0]] {
+        read_cells(&mut runtime, "agent-4");
+        failed_round(&mut runtime, "recipient", head);
+        command(
+            &mut runtime,
+            "reviewer2",
+            record_of("fix", "verify", json!({"commit": head})),
+        )
+        .unwrap();
+    }
+    read_cells(&mut runtime, "agent-4");
+    checkout_at(&mut runtime, HEADS_LATER[1]);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEADS_LATER[1]})),
+    )
+    .unwrap();
+    assert!(read_cells(&mut runtime, "agent-4").is_empty(), "held");
+    let skip = |runtime: &mut Runtime, line: &str, follow_up: Option<&str>| {
+        let mut skip = json!({"op": "skip", "node": "fix", "line": line, "reason": "minor findings left: issue 12"});
+        if let Some(follow_up) = follow_up {
+            skip["follow_up"] = json!(follow_up);
+        }
+        command(runtime, "sender", skip)
+    };
+    let refused = skip(&mut runtime, "review", None).unwrap_err();
+    assert!(
+        refused.starts_with("mission_skip_follow_up_required"),
+        "{refused}"
+    );
+    let next = crate::missions::next_action(crate::coordination::split_refusal(&refused).0);
+    assert!(
+        next.contains("follow-up node of this mission (not an issue)")
+            && next.contains("--follow-up <node>")
+            && next.contains("an issue number alone is not accepted"),
+        "{next}"
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    for wrong in ["fix", "nowhere", "docs"] {
+        let refused = skip(&mut runtime, "review", Some(wrong)).unwrap_err();
+        assert!(
+            refused.starts_with("mission_follow_up_invalid"),
+            "{wrong}: {refused}"
+        );
+    }
+    assert!(read_cells(&mut runtime, "agent-4").is_empty(), "still held");
+    skip(&mut runtime, "review", Some("fix-rest")).unwrap();
+    let line = runtime.missions.book.get("mission-1").unwrap().nodes[0]
+        .criteria
+        .iter()
+        .find(|line| line.key == "review")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        line.skip.and_then(|skip| skip.follow_up).as_deref(),
+        Some("fix-rest")
+    );
+    let asked = read_cells(&mut runtime, "agent-4");
+    assert!(
+        asked.len() == 1 && asked[0].contains("ready for your verify again"),
+        "the held check reaches the verifier: {asked:?}"
+    );
+    assert!(
+        read_cells(&mut runtime, "agent-3").is_empty(),
+        "the skipped review asks no one"
+    );
+    // The same skip again is the skip it was.
+    assert!(!skip(&mut runtime, "review", Some("fix-rest")).unwrap().1);
+}
+
 /// A checker's `hide mission record` of its line is its report: Hide ends
 /// its parent's watch on it and marks it to sleep at its next rest, as a
 /// confirmed `report` letter from it does, so a checker that never writes
@@ -20367,10 +20747,12 @@ fn a_plan_that_waits_for_a_whole_change_node_suggests_its_line() {
 }
 
 /// PRD mission-speed-2 B15: a node worker's brief ends with what starts its
-/// checkers, the same each time it is asked; a node without checkers and
-/// another intent keep the brief as written.
+/// checkers and the four things it checks itself before its first `check`,
+/// each with the document that owns it (operator decision 2026-11-28), the
+/// same each time it is asked; a node without checkers and another intent
+/// keep the brief as written.
 #[test]
-fn a_node_workers_brief_ends_with_what_starts_its_checkers() {
+fn a_node_workers_brief_ends_with_what_starts_its_checkers_and_its_self_check() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     let conductor = fixture.conductor.clone();
@@ -20401,9 +20783,84 @@ fn a_node_workers_brief_ends_with_what_starts_its_checkers() {
         first.starts_with("Fix it.\n\n") && first.contains("recording `check` starts"),
         "{first}"
     );
+    let end = first.rsplit("\n\n").next().unwrap();
+    // Each item and its document, which `hide mission help` section 9
+    // lists the same (mission-112 review m4).
+    let help = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../hided/assets/mission/help.md"
+    ))
+    .unwrap();
+    let nine = help.split("## 9. ").nth(1).unwrap();
+    assert!(end.contains("Before your first `check`"), "{end}");
+    for words in [
+        "where it has one",
+        "tests: every behaviour you add or change has a test at the right layer that fails without your change (its testing guide, such as `docs/TESTING.md`)",
+        "docs: the guide that owns the behaviour and its references change with it (its docs index, such as `docs/README.md`)",
+        "every OS and every agent: nothing assumes one operating system or one agent runtime (its agent instructions, such as `AGENTS.md`)",
+        "the pull request body: its pull or merge request template filled from the diff, not from intent (such as `.github/pull_request_template.md`)",
+    ] {
+        assert!(end.contains(words), "{words:?} in {end}");
+        assert!(nine.contains(words), "{words:?} in help.md section 9");
+    }
     assert_eq!(brief(&mut runtime, "mission-1:fix"), first);
     assert_eq!(brief(&mut runtime, "mission-1:docs"), "Fix it.");
     assert_eq!(brief(&mut runtime, "mission-1:review-fix"), "Fix it.");
+}
+
+/// mission-112 verify F2: every accepted brief of a node with checkers ends
+/// with the whole line and its self-check, right up to the letter limit: a
+/// brief with no room for it is refused `mission_brief_too_long`, naming
+/// the bytes over, and one exactly that much shorter is accepted at the
+/// limit with the line whole.
+#[test]
+fn a_brief_with_no_room_for_the_self_check_is_refused_and_one_that_fits_keeps_it() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let conductor = fixture.conductor.clone();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug", "cap": 3}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let brief = |runtime: &mut Runtime, text: &str| {
+        runtime
+            .prepare_delivery(
+                crate::node::TEST_NODE,
+                &conductor.pane_id,
+                &authority(&conductor).context,
+                None,
+                spawn(None, "mission-1:fix", Some(text)),
+            )
+            .map(|prepared| prepared.spawn_brief().map(str::to_owned).unwrap())
+    };
+    let near = "x".repeat(crate::delivery::BODY_LIMIT - 200);
+    let refused = brief(&mut runtime, &near).unwrap_err();
+    let (code, detail) = crate::coordination::split_refusal(&refused);
+    assert_eq!(code, "mission_brief_too_long", "{refused}");
+    let over: usize = detail
+        .and_then(|detail| detail.strip_suffix(" bytes over"))
+        .and_then(|bytes| bytes.parse().ok())
+        .unwrap();
+    assert!(
+        brief(&mut runtime, &"x".repeat(near.len() - over + 1))
+            .unwrap_err()
+            .starts_with("mission_brief_too_long")
+    );
+    let fits = "x".repeat(near.len() - over);
+    let sent = brief(&mut runtime, &fits).unwrap();
+    assert_eq!(sent.len(), crate::delivery::BODY_LIMIT);
+    let end = sent.rsplit("\n\n").next().unwrap();
+    assert!(
+        sent.starts_with(&fits)
+            && end.starts_with("Before you record your `check` line")
+            && end.contains("Before your first `check`")
+            && end.contains("(such as `.github/pull_request_template.md`)."),
+        "{end}"
+    );
 }
 
 /// PRD mission-speed-2 D-03: an agent that takes letters at its tools takes

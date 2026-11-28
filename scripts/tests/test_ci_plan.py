@@ -80,18 +80,17 @@ class Selection(unittest.TestCase):
             for path in ("mobile/android/app/src/main/java/me/grab/hide/android/BridgeGate.java", "mobile/android/app/build.gradle"):
                 with self.subTest(status=status, path=path):
                     self.assertEqual(plan(path, status=status)["lanes"], ["policy", "checks", "android"])
-        # The scripts that build it and check its lists are shared with the iOS app and plan every lane.
-        self.assertIn("android", plan("mobile/scripts/check-versions.mjs")["lanes"])
-        self.assertIn("rust", plan("mobile/scripts/check-versions.mjs")["lanes"])
+        # The script that checks its lists is the iOS app host's unit suite's, which `checks` runs.
+        self.assertEqual(plan("mobile/scripts/check-versions.mjs")["lanes"], ["policy", "checks"])
 
-    def test_web_unit_tests_keep_their_rust_and_css_build_readers(self):
-        # sidebar.rs scans all web/src TS, including comments in test files;
-        # Tailwind's web-root scan also reads source and e2e unit tests.
+    def test_web_unit_tests_keep_their_css_build_readers_and_plan_no_rust(self):
+        # Tailwind's web-root scan reads source and e2e unit tests; no Rust test
+        # reads web/src, so a web-only change builds no crate.
         for path in ("web/src/new.test.ts", "web/src/components/new.test.tsx"):
             with self.subTest(path=path):
                 result = plan(path)
-                self.assertEqual(set(result["lanes"]), {"policy", "rust", "checks", "web-e2e", "desktop-e2e", "repeat"})
-                self.assertEqual(result["rust_packages"], ["hide-core"])
+                self.assertEqual(set(result["lanes"]), {"policy", "checks", "web-e2e", "desktop-e2e", "repeat"})
+                self.assertEqual(result["rust_packages"], [])
                 self.assertEqual(result["repeat"]["units"], [path])
         self.assertEqual(set(plan("web/e2e/platform-program.unit.ts")["lanes"]),
                          {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check", "repeat"})
@@ -120,10 +119,14 @@ class Selection(unittest.TestCase):
         self.assertEqual(result["rust_packages"], [])
 
     def test_a_file_another_lane_reads_plans_that_lane(self):
-        notes = plan("AGENTS.md")
-        self.assertEqual(notes["lanes"], ["policy", "rust"])
-        self.assertEqual(notes["rust_packages"], ["hide-core"])
-        self.assertIn("hide-core", plan("hided/src/core.rs")["rust_packages"])
+        # The agent notes and the daemon's text are held by `check-shell-structure.py`
+        # in `policy`; no Rust test reads them, so hide-core is not built for them.
+        for path in ("AGENTS.md", "CLAUDE.md"):
+            with self.subTest(path=path):
+                notes = plan(path)
+                self.assertEqual(notes["lanes"], ["policy"])
+                self.assertEqual(notes["rust_packages"], [])
+        self.assertNotIn("hide-core", plan("hided/src/core.rs")["rust_packages"])
         self.assertTrue({"web-e2e", "windows-e2e"} <= set(plan("desktop/src/main/wirePath.ts")["lanes"]))
         self.assertTrue({"checks", "web-e2e"} <= set(plan("design/tokens.json")["lanes"]))
         # The README e2e spec reads the README, its logo and its hero picture.
@@ -135,14 +138,14 @@ class Selection(unittest.TestCase):
         guide = plan("docs/AI_PROVIDERS.md")
         self.assertEqual(guide["lanes"], ["policy", "rust"])
         self.assertEqual(guide["rust_packages"], ["hide-agent-adapter"])
-        self.assertEqual(plan("web/src/assets/agents/manifest.json")["rust_packages"], ["hide-agent-adapter", "hide-core"])
+        self.assertEqual(plan("web/src/assets/agents/manifest.json")["rust_packages"], ["hide-agent-adapter"])
 
     def test_a_web_display_change_runs_both_suites_of_the_shell_and_skips_windows(self):
         result = plan("web/src/components/ui/button.tsx", "web/src/Overview.tsx")
-        # hide-core's structure tests scan the shell's sources, and the
-        # desktop suite drives the same shell inside the app.
-        self.assertEqual(set(result["lanes"]), {"policy", "checks", "docs", "web-e2e", "desktop-e2e", "rust"})
-        self.assertEqual(result["rust_packages"], ["hide-core"])
+        # The desktop suite drives the same shell inside the app; no Rust test
+        # reads the shell's sources, so no Rust lane builds for it.
+        self.assertEqual(set(result["lanes"]), {"policy", "checks", "docs", "web-e2e", "desktop-e2e"})
+        self.assertEqual(result["rust_packages"], [])
         # The phone page is served by hided, and the app never loads it.
         for path in ("web/mobile.html", "web/public/m/sw.js"):
             with self.subTest(path=path):
@@ -544,7 +547,7 @@ class Selection(unittest.TestCase):
             (("hide-core/src/lib.rs", "desktop/src/main/index.ts"),
              ["policy", "rust", "checks", "os-contract", "agent-journey", "windows-check", "windows-e2e",
               "windows-desktop", "web-e2e", "remote-mailbox", "desktop-e2e"]),
-            (("web/src/Overview.tsx",), ["policy", "rust", "checks", "docs", "web-e2e", "desktop-e2e"]),
+            (("web/src/Overview.tsx",), ["policy", "checks", "docs", "web-e2e", "desktop-e2e"]),
             (("docs/TESTING.md",), ["policy"]),
             (("mystery/file.txt",), FULL),
             (("desktop/scripts/package.mjs", "mystery/file.txt"), PACKAGED),
@@ -640,10 +643,8 @@ class Selection(unittest.TestCase):
         for name in ("agy-contract-all", "agent-journey"):
             block = nightly[nightly.index(f"\n  {name}:\n"):].split("\n\n")[0]
             self.assertNotIn("continue-on-error", block)
-            self.assertIn("inputs.lane == 'linux'", block)
-            self.assertIn("inputs.lane == 'macos'", block)
-            self.assertIn("inputs.lane == 'windows'", block)
-            self.assertIn('["linux","macos","windows"]', block)
+            # Its systems are the run's scope's (nightly-scope).
+            self.assertIn("systems: ${{ needs.scope.outputs.systems }}", block)
             if name == "agent-journey":
                 self.assertIn("fake: true", block)
                 self.assertNotIn("stand-ins: false", block)
@@ -698,6 +699,13 @@ class Selection(unittest.TestCase):
             self.assertEqual(result["lanes"], ["policy"])
 
 
+# The retired-name check and its list, found by their naming convention.
+NAMES_GUARD = tuple(sorted(
+    found.relative_to(ROOT).as_posix()
+    for pattern in ("check-*-names.py", "*-names-allowlist.json") for found in (ROOT / "scripts").glob(pattern)
+))
+
+
 class NamedPaths(unittest.TestCase):
     """The paths `ci-plan.py` names; every other path still plans every lane."""
 
@@ -705,6 +713,7 @@ class NamedPaths(unittest.TestCase):
         return set(plan(*paths)["lanes"])
 
     def test_paths_no_lane_reads_plan_policy_alone(self):
+        self.assertEqual(len(NAMES_GUARD), 2, NAMES_GUARD)
         for path in (
             "agents/prd/x/prd.md",
             ".gitignore", "web/.gitignore", "LICENSE", "NOTICE", ".github/pull_request_template.md", ".github/dependabot.yml",
@@ -714,13 +723,67 @@ class NamedPaths(unittest.TestCase):
             # The design contract's generators and checks, which `design-contract.yml` runs.
             "scripts/gen-tokens.mjs",
             "scripts/check-design-contract.mjs", "scripts/check-web-tokens.mjs", "scripts/check-agent-logos.mjs",
-            "scripts/merge-order.py", "scripts/pull_requests.py",
+            "scripts/merge-order.py", "scripts/pull_requests.py", "scripts/merge-hide-cli-contract.py",
             "contracts/README.md",
-        ):
+            # `check-shell-structure.py` and the checks `policy` and `design-contract.yml` run.
+            "scripts/check-shell-structure.py",
+            "scripts/check-ui-parts.mjs", "scripts/ui-parts-baseline.json", "mobile/.gitignore",
+            # The release checklist's generator; the upgrade tests read what it writes, not it.
+            "scripts/release_state/generate.py", "scripts/release_state/scenario.py", "scripts/release_state/Dockerfile",
+        ) + NAMES_GUARD:
             with self.subTest(path=path):
                 result = plan(path)
                 self.assertEqual(result["lanes"], ["policy"])
                 self.assertFalse(result["full"])
+
+    def test_the_ios_app_host_files_plan_its_unit_suite_and_nothing_else(self):
+        # `verify-web.sh mobile test` is the `checks` lane's step; the Android lane builds
+        # `mobile/android` alone and the iOS app is built on the Mac mini, so no other lane
+        # reads the scripts, the release inputs, the Xcode project, the Swift sources or the store text.
+        for path in (
+            "mobile/scripts/build-ios.sh", "mobile/scripts/mini-ios.sh",
+            "mobile/scripts/check-store-text.mjs", "mobile/scripts/check-versions.mjs",
+            "mobile/ios/App/App/Info.plist", "mobile/ios/App/App.xcodeproj/project.pbxproj",
+            "mobile/ios/App/HideShell/Sources/HideShell/BridgeGate.swift",
+            "mobile/store/metadata/en-US/description.txt", "mobile/store/metadata/ko/subtitle.txt",
+            "mobile/store/android/metadata/ko-KR/full_description.txt", "mobile/store/shots.json",
+            "mobile/release-env.json", "mobile/release-expect.json", "mobile/release.env.example",
+            "mobile/android-release-env.json", "mobile/android-release-expect.json", "mobile/android-release.env.example",
+            "mobile/capacitor.config.json", "mobile/retained-bundles.json",
+        ):
+            with self.subTest(path=path):
+                result = plan(path)
+                self.assertFalse(result["full"])
+                self.assertEqual(result["lanes"], ["policy", "checks"])
+                self.assertEqual(result["rust_packages"], [])
+        # The Play data safety answers are a document the docs lane's site tests read.
+        self.assertEqual(plan("mobile/store/android/play-forms.md")["lanes"], ["policy", "docs"])
+        # A changed unit test is also repeated, as everywhere.
+        self.assertEqual(plan("mobile/scripts/release.test.mjs")["lanes"], ["policy", "checks", "repeat"])
+        # The package manifest reaches the lock, which every lane reads.
+        self.assertTrue(plan("mobile/package.json")["full"])
+
+    def test_a_web_only_change_plans_no_rust_lane(self):
+        # hide-core's tests used to read the shell, the daemon and the agent notes, so each of
+        # these built the crate's whole test binary; `check-shell-structure.py` reads that text in `policy` now.
+        for paths in (
+            ("web/src/Overview.tsx",), ("web/src/PaneGrid.tsx",), ("web/src/terminals.ts",), ("web/src/store.ts",),
+            ("web/src/releases.json",), ("web/src/practice/chapters/mission.ts",), ("web/src/new.test.ts",),
+            ("web/src/components/ui/button.tsx", "web/src/sidebar.tsx", "web/src/App.test.tsx"),
+        ):
+            with self.subTest(paths=paths):
+                result = plan(*paths)
+                self.assertFalse(result["full"])
+                self.assertNotIn("rust", result["lanes"])
+                self.assertEqual(result["rust_packages"], [])
+        # The text the check reads still plans the lane that runs it.
+        for path in ("web/src/PaneGrid.tsx", "web/src/releases.json", "hided/src/core.rs", "AGENTS.md", "CLAUDE.md",
+                     "hide-core/src/product_analytics.rs", "scripts/check-shell-structure.py"):
+            with self.subTest(read=path):
+                self.assertIn("policy", self.lanes(path))
+        # The daemon's own crates still build for the daemon, and hide-core for nothing of it.
+        self.assertNotIn("hide-core", plan("hided/src/core.rs")["rust_packages"])
+        self.assertIn("hided", plan("hided/src/core.rs")["rust_packages"])
 
     def test_the_user_docs_lane_reads_the_site_the_parts_the_shell_and_the_cli_list(self):
         for path in ("site/public/index.html", "site/src/content/docs/docs/guides/x.md", "site/README.md", "site/astro.config.mjs",
@@ -1030,9 +1093,10 @@ def runner_jobs(block):
     if "uses: ./.github/workflows/relay-protocol.yml" in block:
         return 3
     if "uses: ./.github/workflows/repeat.yml" in block:
-        # The count, the web specs' run, the unit tests' run, the Rust modules'
-        # run and the verdict.
-        return 5
+        # The count, the unit tests' run, the Rust modules' run and the
+        # verdict, and the web specs' run at its most: its daemon and shell
+        # builds, as many shards as an over-budget plan may take, and their total.
+        return 4 + 2 + ci.ci_repeat.WEB_OVER_BUDGET_MAX_SHARDS + 1
     if "uses: ./.github/workflows/windows-check.yml" in block:
         # The compile, the Rust tests and the unit suites, each on its own runner.
         return len(yaml.safe_load((ROOT / ".github/workflows/windows-check.yml").read_text())["jobs"])
@@ -1203,7 +1267,11 @@ class Workflows(unittest.TestCase):
         # unit suites on three runners (from 69 to 71), so a pull request with a
         # Windows path ends near the Linux lines, not 27 minutes in
         # (docs/TESTING.md, "Where the Windows runners went").
-        self.assertLessEqual(most, 71, "a run starts more jobs than the suites and native SDK contracts need")
+        # The repeat lane's web specs moved onto `web-e2e.yml`'s shards, at
+        # most six with their two builds and their total (from 71 to 79), so a
+        # pull request that changes a spec no longer waits on one runner
+        # repeating it for up to 91 minutes (docs/TESTING.md, "The repeat lane").
+        self.assertLessEqual(most, 79, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
@@ -1386,7 +1454,7 @@ class MacosOnPullRequests(unittest.TestCase):
         before = plan("web/src/Overview.tsx")
         self.assertIn("desktop-e2e", before["lanes"])
         result = pr_plan("web/src/Overview.tsx")
-        self.assertEqual(result["lanes"], ["policy", "rust", "checks", "docs", "web-e2e"])
+        self.assertEqual(result["lanes"], ["policy", "checks", "docs", "web-e2e"])
         self.assertNoMacos(result)
         self.assertIn("macOS jobs: skipped", ci.summary(result))
 
@@ -1399,7 +1467,7 @@ class MacosOnPullRequests(unittest.TestCase):
                 "hide-kit/src/lib.rs", "hide-ai/src/omp.rs", "hide-holder/src/lib.rs",
                 "desktop/scripts/build-identity.mjs", "desktop/scripts/macos-signing.test.mjs",
                 "desktop/src/main/updater.test.ts", "Cargo.lock", "mystery/file.txt",
-                ".github/workflows/agent-canary.yml", ".github/workflows/nightly.yml", "docs/TESTING.md",
+                ".github/workflows/nightly.yml", "docs/TESTING.md",
             ):
                 with self.subTest(status=status, path=path):
                     self.assertNoMacos(pr_plan(path, status=status))
@@ -1409,7 +1477,7 @@ class MacosOnPullRequests(unittest.TestCase):
         self.assertIn("vt", pr_plan("hide-holder/src/lib.rs")["lanes"])
         self.assertTrue({"os-contract", "windows-check"} <= set(pr_plan("hide-platform/src/wsl.rs")["lanes"]))
         # A CI definition outside the macOS and Windows jobs still exercises every other lane.
-        self.assertEqual(pr_plan(".github/workflows/agent-canary.yml")["lanes"],
+        self.assertEqual(pr_plan(".github/workflows/nightly.yml")["lanes"],
                          [lane for lane in ALL if lane not in ci.MACOS_ONLY_LANES + ci.WINDOWS_ONLY_LANES])
 
     def test_a_pull_request_that_changes_a_macos_path_plans_its_macos_jobs(self):
@@ -1482,7 +1550,7 @@ class MacosOnPullRequests(unittest.TestCase):
             pr.commit("topic", "web", {"web/src/x.ts": "two\n"})
             pr.check_out_merge()
             result = pr.plan(None)
-            self.assertEqual(result["lanes"], ["policy", "rust", "checks", "docs", "web-e2e"])
+            self.assertEqual(result["lanes"], ["policy", "checks", "docs", "web-e2e"])
             self.assertFalse(result["macos"]["runs"])
             pr.commit("topic", "platform", {"hide-platform/src/a.rs": '#[cfg(target_os = "macos")]\nfn a() {}\n'})
             pr.check_out_merge()
@@ -1739,9 +1807,7 @@ class WindowsOnPullRequests(unittest.TestCase):
                     self.assertNoWindows(pr_plan(path, status=status))
         # A CI definition with no Windows job a pull request runs plans no
         # Windows lane; `package`, which every CI edit plans, takes its own.
-        for path in (".github/workflows/agent-canary.yml", ".github/workflows/nightly.yml"):
-            with self.subTest(path=path):
-                self.assertNoWindows(pr_plan(path))
+        self.assertNoWindows(pr_plan(".github/workflows/nightly.yml"))
         self.assertNoWindows(pr_plan("docs/TESTING.md", "design/tokens.json", status="D"))
 
     def test_every_package_input_runs_the_package_lane_and_its_windows_jobs(self):
@@ -2090,12 +2156,36 @@ class Aggregate(unittest.TestCase):
                     for sibling in re.findall(r'Path\(__file__\)\.resolve\(\)\.parent / "([^"]+\.py)"', (ROOT / script).read_text()):
                         self.assertIn(f"scripts/{sibling}", listed, f"{workflow.name}: {script} loads {sibling}")
 
+    def test_the_nightly_runs_linux_and_windows_daily_and_macos_twice_a_week(self):
+        nightly = (ROOT / ".github/workflows/nightly.yml").read_text()
+        crons = re.findall(r'- cron: "([^"]+)"', nightly)
+        self.assertEqual(sorted(crons), sorted(ci.NIGHTLY_SCHEDULES))
+        # Every weekday is one schedule's, never two.
+        days = [day for cron in crons for day in cron.split()[-1].split(",")]
+        self.assertEqual(sorted(days), [str(day) for day in range(7)])
+        scopes = {lane: ci.nightly_scope("", cron) for cron, lane in ci.NIGHTLY_SCHEDULES.items()}
+        daily, full = scopes["daily"], scopes["all"]
+        self.assertEqual(daily["systems"], ["linux", "windows"])
+        self.assertEqual(full["systems"], ["linux", "macos", "windows"])
+        self.assertEqual((daily["canary"], full["canary"]), (["linux"], ["linux", "macos"]))
+        self.assertEqual((daily["package-macos"], full["package-macos"]), (False, True))
+        # No macOS job on a daily run: its macOS-only jobs and `verify`, which runs macOS lanes.
+        for job in ("web-e2e-macos", "remote-mailbox-macos", "perf", "verify"):
+            self.assertNotIn(job, daily["jobs"])
+            self.assertIn(job, full["jobs"])
+        self.assertNotIn("macos", daily["desktop"])
+        # A hand run names its lane; the schedule's cron line names it otherwise.
+        self.assertEqual(ci.nightly_scope("macos", "17 17 * * 1,2,4,5,6")["lane"], "macos")
+        for lane, schedule in (("", ""), ("", "0 0 * * *"), ("nightly", "")):
+            with self.subTest(lane=lane, schedule=schedule), self.assertRaises(ValueError):
+                ci.nightly_scope(lane, schedule)
+
     def test_nightly_requires_selected_jobs_and_rejects_failed_or_missing_agent_checks(self):
-        jobs = {"web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
-                "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e", "perf", "verify", "package"}
+        jobs = set(ci.NIGHTLY_JOBS)
         for lane, selected in (
-            ("", jobs - {"web-e2e-windows"}),
             ("all", jobs - {"web-e2e-windows"}),
+            ("daily", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e",
+                       "web-e2e-windows", "package"}),
             ("linux", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e"}),
             ("macos", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e",
                        "web-e2e-macos", "remote-mailbox-macos", "perf"}),
@@ -2103,9 +2193,11 @@ class Aggregate(unittest.TestCase):
                          "web-e2e-windows"}),
             ("agy", {"agy-contract-all", "agent-trust-contract-all"}),
         ):
+            self.assertEqual(set(ci.nightly_scope(lane)["jobs"]), selected)
             needs = {job: {"result": "success" if job in selected else "skipped"} for job in jobs}
+            needs["scope"] = {"result": "success"}
             ci.nightly_aggregate(needs, lane)
-            for job in jobs:
+            for job in jobs | {"scope"}:
                 # Includes the direct agy and journey calls: a failed OS,
                 # stand-in or forms job fails that call, then this aggregate.
                 for outcome in {"success", "skipped", "failure", "cancelled"} - {needs[job]["result"]}:
@@ -2114,17 +2206,27 @@ class Aggregate(unittest.TestCase):
                             ci.nightly_aggregate({**needs, job: {"result": outcome}}, lane)
             with self.assertRaisesRegex(ValueError, "job contract"):
                 ci.nightly_aggregate({job: value for job, value in needs.items() if job != "agent-journey"}, lane)
-        with self.assertRaisesRegex(ValueError, "job contract"):
+        with self.assertRaisesRegex(ValueError, "no lane"):
             ci.nightly_aggregate(needs, "unknown")
         nightly = (ROOT / ".github/workflows/nightly.yml").read_text()
         report = nightly.split("\n  report:\n", 1)[1]
         actual = {job.strip() for job in re.search(r"needs: \[([^\]]+)\]", report).group(1).split(",")}
-        self.assertEqual(actual, jobs)
-        self.assertIn('run: python3 scripts/ci-plan.py nightly-aggregate --lane "$LANE_INPUT"', report)
+        # The agent canary's jobs are not the report's to read.
+        self.assertEqual(actual, jobs | {"scope"})
+        self.assertIn('run: python3 scripts/ci-plan.py nightly-aggregate --lane "$LANE"', report)
         self.assertIn("NEEDS: ${{ toJSON(needs) }}", report)
         self.assertIn("if: ${{ always() }}", report.split("steps:", 1)[0])
         reporting = report.split("- name: Open, comment on and close", 1)[1]
         self.assertIn("if: ${{ always() && github.ref == 'refs/heads/main' }}", reporting)
+        # Each selectable job reads the scope's job list in its `if:`.
+        for job in jobs:
+            block = nightly.split(f"\n  {job}:\n", 1)[1].split("\n\n", 1)[0]
+            self.assertIn(f"if: ${{{{ contains(fromJSON(needs.scope.outputs.jobs), '{job}') }}}}", block, job)
+        canary = [name for name in re.findall(r"\n  (canary-[a-z]+):\n", nightly)]
+        self.assertEqual(canary, ["canary-latest", "canary-journey", "canary-record"])
+        for job in canary:
+            name = re.search(r"name: (.+)", nightly.split(f"\n  {job}:\n", 1)[1]).group(1)
+            self.assertTrue(name.startswith("agent canary "), name)
 
     def test_planned_success_and_unplanned_skip_pass(self):
         for result in (plan("docs/BUILD.md"), plan("web/src/Overview.tsx"), plan(".github/workflows/pr.yml"),
@@ -2521,9 +2623,9 @@ class LastGreenRun(unittest.TestCase):
 
     def test_only_a_path_no_lane_but_policy_reads_is_left_out_of_the_comparison(self):
         for name in ("docs/ARCHITECTURE.md", "CONTRIBUTING.md", "design/hide-ui.lib.pen",
-                     "scripts/tests/test_ci_plan.py"):
+                     "scripts/tests/test_ci_plan.py", "AGENTS.md", "CLAUDE.md"):
             self.assertTrue(ci.reads_no_lane("M", name, CRATES, ROOT), name)
-        for name in ("docs/UI_BEHAVIOR.md", "AGENTS.md", "hided/README.md", "web/src/App.tsx", "Cargo.lock",
+        for name in ("docs/UI_BEHAVIOR.md", "hided/README.md", "web/src/App.tsx", "Cargo.lock",
                      "contracts/conpty.json", "web/e2e/cmdk.spec.ts", "unknown/file", "site/public/index.html"):
             self.assertFalse(ci.reads_no_lane("M", name, CRATES, ROOT), name)
         self.assertFalse(ci.reads_no_lane("T", "docs/ARCHITECTURE.md", CRATES, ROOT))

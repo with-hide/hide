@@ -153,7 +153,8 @@ test("the session beside Desk comes back to the turn the operator was reading af
     await row.click();
     const box = page.locator(`[data-desk-thread-panel="${pane}"] [data-desk-thread-conversation]`);
     await expect(box.locator("[data-desk-thread-lines]")).toBeVisible({ timeout: 30_000 }); // wait-ok: the core's first read of the Pi session file
-    await expect.poll(() => box.locator("[data-scroll-anchor]").count()).toBeGreaterThan(PAIRS / 2);
+    // Every turn is read; only the rows near the viewport are drawn (issue 3101).
+    await expect(box.locator("[data-desk-thread-lines]")).toHaveAttribute("data-desk-thread-lines", String(2 * PAIRS));
     await expect.poll(() => footDistance(box)).toBeLessThan(24);
     await wheel(page, box, -1_600);
     const reading = await placeIn(box);

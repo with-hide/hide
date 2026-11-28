@@ -2,7 +2,9 @@
 //! where it is, the read lock and the proof that a session is the root one
 //! of this checkout). 1.x writes a `message` row per message and a `part`
 //! row per piece of it; 2.x writes one `session_message` row per message,
-//! the pieces inside its data. Both are drawn by the same piece reader;
+//! the pieces inside its data until 2.4, which writes an assistant's pieces
+//! as `session_part` rows and reads them back ahead of any the message still
+//! holds itself (`crate::opencode::v2`). All are drawn by the same piece reader;
 //! titles and kinds follow OpenCode's own ACP server (`opencode acp`, D-04).
 //!
 //! A page is a run of whole messages, newest first, within the page's byte
@@ -21,8 +23,9 @@ use crate::{ReadRefusal, SessionReadScope};
 
 /// The most messages one page holds, whatever their size.
 const MESSAGES_PER_PAGE: u64 = 200;
-/// The most pieces one 1.x message is read with; past it the rest are
-/// counted as `part_capacity`.
+/// The most pieces one message kept in rows (a 1.x `part`, a 2.4
+/// `session_part`) is read with; past it the rest are counted as
+/// `part_capacity`.
 const PARTS_PER_MESSAGE: i64 = 256;
 
 /// One message as its row holds it, before it is drawn.
@@ -30,7 +33,8 @@ struct Message {
     id: String,
     /// The message's data, `None` when it is past the page cap.
     data: Option<Value>,
-    /// 1.x: the message's pieces, each `None` past the page cap.
+    /// The message's pieces kept in rows of their own (1.x, and a 2.4
+    /// assistant's), each `None` past the page cap.
     parts: Vec<Option<Value>>,
     bytes: u64,
 }
@@ -115,10 +119,8 @@ fn page_from(
     }
     messages.truncate(kept);
     let next = start + kept as u64;
-    if schema == Schema::V1 {
-        for message in &mut messages {
-            message.parts = parts(connection, &message.id)?;
-        }
+    for message in &mut messages {
+        message.parts = parts(connection, schema, &message.id)?;
     }
     Ok((messages, next < total))
 }
@@ -148,10 +150,8 @@ fn page(
     }
     let start = window + kept as u64;
     messages.drain(..kept);
-    if schema == Schema::V1 {
-        for message in &mut messages {
-            message.parts = parts(connection, &message.id)?;
-        }
+    for message in &mut messages {
+        message.parts = parts(connection, schema, &message.id)?;
     }
     Ok((start, messages))
 }
@@ -160,7 +160,7 @@ fn page(
 fn count(connection: &Connection, schema: Schema, session: &str) -> Result<u64, ReadRefusal> {
     let count = match schema {
         Schema::V1 => "SELECT count(*) FROM message WHERE session_id = ?1",
-        Schema::V2 => "SELECT count(*) FROM session_message WHERE session_id = ?1",
+        Schema::V2 { .. } => "SELECT count(*) FROM session_message WHERE session_id = ?1",
     };
     Ok(connection
         .query_row(count, params![session], |row| row.get::<_, i64>(0))
@@ -184,9 +184,15 @@ fn rows(
              + (SELECT coalesce(sum(length(data)), 0) FROM part WHERE part.message_id = message.id) \
              FROM message WHERE session_id = ?1 ORDER BY time_created, id LIMIT ?3 OFFSET ?4"
         }
-        Schema::V2 => {
+        Schema::V2 { parts: false } => {
             "SELECT id, CASE WHEN length(data) <= ?2 THEN json_set(data, '$.type', type) END, \
              length(data) FROM session_message WHERE session_id = ?1 ORDER BY seq LIMIT ?3 OFFSET ?4"
+        }
+        Schema::V2 { parts: true } => {
+            "SELECT id, CASE WHEN length(data) <= ?2 THEN json_set(data, '$.type', type) END, \
+             length(data) + (SELECT coalesce(sum(length(data)), 0) FROM session_part \
+             WHERE session_part.message_id = message.id) \
+             FROM session_message AS message WHERE session_id = ?1 ORDER BY seq LIMIT ?3 OFFSET ?4"
         }
     };
     let mut statement = connection
@@ -216,12 +222,27 @@ fn rows(
         .map_err(|error| sql_refusal(&error))
 }
 
-fn parts(connection: &Connection, message: &str) -> Result<Vec<Option<Value>>, ReadRefusal> {
-    let mut statement = connection
-        .prepare(
+/// The pieces of `message` kept in rows of their own, in OpenCode's order:
+/// none for a 2.x database without `session_part`, and none for a message
+/// with no part rows.
+fn parts(
+    connection: &Connection,
+    schema: Schema,
+    message: &str,
+) -> Result<Vec<Option<Value>>, ReadRefusal> {
+    let parts = match schema {
+        Schema::V1 => {
             "SELECT CASE WHEN length(data) <= ?2 THEN data END FROM part \
-             WHERE message_id = ?1 ORDER BY id LIMIT ?3",
-        )
+             WHERE message_id = ?1 ORDER BY id LIMIT ?3"
+        }
+        Schema::V2 { parts: true } => {
+            "SELECT CASE WHEN length(data) <= ?2 THEN data END FROM session_part \
+             WHERE message_id = ?1 ORDER BY ordinal LIMIT ?3"
+        }
+        Schema::V2 { parts: false } => return Ok(Vec::new()),
+    };
+    let mut statement = connection
+        .prepare(parts)
         .map_err(|error| sql_refusal(&error))?;
     statement
         .query_map(
@@ -251,18 +272,9 @@ fn draw(message: &Message, schema: Schema, thread: &mut Thread) {
                 thread.unreadable("opencode_message_shape");
                 return;
             }
-            if message.parts.len() as i64 > PARTS_PER_MESSAGE {
-                thread.skip("part_capacity");
-            }
-            let user = role == Some("user");
-            for part in message.parts.iter().take(PARTS_PER_MESSAGE as usize) {
-                match part {
-                    Some(part) => piece(id, part, user, thread),
-                    None => thread.skip("line_capacity"),
-                }
-            }
+            pieces(id, &message.parts, role == Some("user"), thread);
         }
-        Schema::V2 => match data["type"].as_str() {
+        Schema::V2 { .. } => match data["type"].as_str() {
             Some("user") => {
                 let mut parts = Vec::new();
                 if let Some(text) = data["text"].as_str() {
@@ -282,15 +294,35 @@ fn draw(message: &Message, schema: Schema, thread: &mut Thread) {
                 };
                 thread.user(id, origin, parts);
             }
+            // OpenCode reads an assistant as its part rows followed by its
+            // own `content`, which an older build may still write after the
+            // split (`SessionHistory.withParts`).
             Some("assistant") => match data["content"].as_array() {
-                Some(content) => content
-                    .iter()
-                    .for_each(|item| piece(id, item, false, thread)),
+                Some(content) => {
+                    pieces(id, &message.parts, false, thread);
+                    content
+                        .iter()
+                        .for_each(|item| piece(id, item, false, thread));
+                }
+                None if !message.parts.is_empty() => pieces(id, &message.parts, false, thread),
                 None => thread.unreadable("opencode_message_shape"),
             },
             // Turn ends, compactions and the like are not conversation.
             _ => {}
         },
+    }
+}
+
+/// The pieces of a message kept in rows, up to [`PARTS_PER_MESSAGE`].
+fn pieces(id: Option<&str>, parts: &[Option<Value>], user: bool, thread: &mut Thread) {
+    if parts.len() as i64 > PARTS_PER_MESSAGE {
+        thread.skip("part_capacity");
+    }
+    for part in parts.iter().take(PARTS_PER_MESSAGE as usize) {
+        match part {
+            Some(part) => piece(id, part, user, thread),
+            None => thread.skip("line_capacity"),
+        }
     }
 }
 
