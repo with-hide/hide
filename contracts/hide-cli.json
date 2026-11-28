@@ -15,7 +15,7 @@
             "access_key_unreadable": "This tool's key file cannot be read; run hide access request --name <name>, which replaces it and asks the operator again",
             "access_limit": "16 tools are connected; ask the operator to disconnect one in Settings > Bots, then run hide access request again",
             "access_name_taken": "A connected bot, or one the operator made, has this name; ask the operator to disconnect it in Settings > Bots, or choose another --name, then run hide access request again",
-            "access_needs_agent": "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide letter send",
+            "access_needs_agent": "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide request send",
             "access_not_connected": "Run hide access request --name <name> first",
             "access_not_own_work": "This bot acts on its own work only: the agents it started, the agents under them and the missions they conduct; start an agent with hide agent spawn and ask it, or ask the operator to give the bot the whole Hide in Settings",
             "access_operator_only": "Only the operator adds or removes a device, in Settings > Devices; ask the operator",
@@ -2278,7 +2278,7 @@
                         },
                         "forced": {
                             "default": false,
-                            "description": "Sent with `hide letter send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
+                            "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
                             "type": "boolean"
                         },
                         "from": {
@@ -2320,7 +2320,7 @@
                         },
                         "immediate": {
                             "default": false,
-                            "description": "Sent with `hide letter send --now`: delivered at the recipient's next safe gap while it works, without the mid-turn wait (PRD letters-to-busy-agents D-05). An older build drops the field at its next save, and the letter then waits as any other.",
+                            "description": "Sent with `hide request send --now`: delivered at the recipient's next safe gap while it works, without the mid-turn wait (PRD letters-to-busy-agents D-05). An older build drops the field at its next save, and the letter then waits as any other.",
                             "type": "boolean"
                         },
                         "input_noticed": {
@@ -2544,7 +2544,7 @@
                     ]
                 },
                 "folded": {
-                    "description": "Per sender, the older letters the bundle folded, oldest first; each opens with `hide letter show <id>`.",
+                    "description": "Per sender, the older letters the bundle folded, oldest first; each opens with `hide request show <id>`.",
                     "items": {
                         "$ref": "#/definitions/Folded"
                     },
@@ -2901,7 +2901,7 @@
                 },
                 "forced": {
                     "default": false,
-                    "description": "Sent with `hide letter send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
+                    "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
                     "type": "boolean"
                 },
                 "from": {
@@ -2943,7 +2943,7 @@
                 },
                 "immediate": {
                     "default": false,
-                    "description": "Sent with `hide letter send --now`: delivered at the recipient's next safe gap while it works, without the mid-turn wait (PRD letters-to-busy-agents D-05). An older build drops the field at its next save, and the letter then waits as any other.",
+                    "description": "Sent with `hide request send --now`: delivered at the recipient's next safe gap while it works, without the mid-turn wait (PRD letters-to-busy-agents D-05). An older build drops the field at its next save, and the letter then waits as any other.",
                     "type": "boolean"
                 },
                 "input_noticed": {
@@ -4622,7 +4622,7 @@
         "refusals": {
             "outbox_full": "Too many letters wait for the Hide this work belongs to; send again once it has reconnected",
             "outbox_unavailable": "This machine could not keep the letter; send again once the Hide this work belongs to has reconnected",
-            "owner_offline": "The Hide this work belongs to is not connected and reconnects by itself; run the command again then. A letter (hide letter send) is kept and delivered once it is back"
+            "owner_offline": "The Hide this work belongs to is not connected and reconnects by itself; run the command again then. A letter (hide request send) is kept and delivered once it is back"
         }
     },
     "commands": [
@@ -7622,7 +7622,7 @@
                     }
                 }
             ],
-            "command": "letter send",
+            "command": "request send",
             "options": [
                 {
                     "name": "--intent",
@@ -7700,7 +7700,7 @@
                     }
                 }
             ],
-            "command": "letter reply",
+            "command": "request reply",
             "options": [
                 {
                     "name": "--intent",
@@ -7734,7 +7734,7 @@
                     }
                 }
             ],
-            "command": "letter ack",
+            "command": "request ack",
             "options": [],
             "repeats_at_most": null,
             "rest": null
@@ -7751,7 +7751,7 @@
                     }
                 }
             ],
-            "command": "letter cancel",
+            "command": "request cancel",
             "options": [],
             "repeats_at_most": null,
             "rest": null
@@ -7768,7 +7768,7 @@
                     }
                 }
             ],
-            "command": "letter show",
+            "command": "request show",
             "options": [],
             "repeats_at_most": null,
             "rest": null
@@ -9705,6 +9705,69 @@
             "answers": [
                 "plan"
             ],
+            "arguments": [],
+            "command": "plan set",
+            "options": [
+                {
+                    "conflicts": [
+                        "--json"
+                    ],
+                    "name": "--file",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--file"
+                    ],
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "json"
+                    }
+                },
+                {
+                    "name": "--ask",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--reason",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "plan_invalid",
+                "plan_order_refused",
+                "plan_too_large",
+                "plan_full",
+                "plan_unavailable",
+                "plan_session_unknown",
+                "plan_evidence_missing",
+                "plan_pr_not_yours",
+                "plan_pr_unconfirmed",
+                "plan_file_outside",
+                "plan_file_missing",
+                "plan_file_unconfirmed",
+                "plan_report_missing"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "task set"
+        },
+        {
+            "answers": [
+                "plan"
+            ],
             "arguments": [
                 {
                     "name": "key",
@@ -9777,111 +9840,6 @@
             ],
             "repeats_at_most": null,
             "rest": null
-        },
-        {
-            "answers": [
-                "plan"
-            ],
-            "arguments": [],
-            "command": "task approve",
-            "options": [],
-            "refusals": [
-                "plan_missing",
-                "plan_not_yours",
-                "plan_agent_unknown"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "plan"
-            ],
-            "arguments": [],
-            "command": "task drop",
-            "options": [],
-            "refusals": [
-                "plan_not_yours",
-                "plan_agent_unknown"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "plan"
-            ],
-            "arguments": [],
-            "command": "task show",
-            "options": [],
-            "refusals": [
-                "plan_agent_unknown"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "plan"
-            ],
-            "arguments": [],
-            "command": "plan set",
-            "options": [
-                {
-                    "conflicts": [
-                        "--json"
-                    ],
-                    "name": "--file",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "conflicts": [
-                        "--file"
-                    ],
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "json"
-                    }
-                },
-                {
-                    "name": "--ask",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                },
-                {
-                    "name": "--reason",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "refusals": [
-                "plan_invalid",
-                "plan_order_refused",
-                "plan_too_large",
-                "plan_full",
-                "plan_unavailable",
-                "plan_session_unknown",
-                "plan_evidence_missing",
-                "plan_pr_not_yours",
-                "plan_pr_unconfirmed",
-                "plan_file_outside",
-                "plan_file_missing",
-                "plan_file_unconfirmed",
-                "plan_report_missing"
-            ],
-            "repeats_at_most": null,
-            "rest": null,
-            "retired_for": "task set"
         },
         {
             "answers": [
@@ -9966,6 +9924,21 @@
                 "plan"
             ],
             "arguments": [],
+            "command": "task approve",
+            "options": [],
+            "refusals": [
+                "plan_missing",
+                "plan_not_yours",
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
             "command": "plan approve",
             "options": [],
             "refusals": [
@@ -9976,6 +9949,20 @@
             "repeats_at_most": null,
             "rest": null,
             "retired_for": "task approve"
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
+            "command": "task drop",
+            "options": [],
+            "refusals": [
+                "plan_not_yours",
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
         },
         {
             "answers": [
@@ -9997,6 +9984,19 @@
                 "plan"
             ],
             "arguments": [],
+            "command": "task show",
+            "options": [],
+            "refusals": [
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
             "command": "plan show",
             "options": [],
             "refusals": [
@@ -10005,178 +10005,9 @@
             "repeats_at_most": null,
             "rest": null,
             "retired_for": "task show"
-        },
-        {
-            "answers": [
-                "letter",
-                "queued"
-            ],
-            "arguments": [
-                {
-                    "name": "target",
-                    "value": {
-                        "type": "key"
-                    }
-                }
-            ],
-            "command": "request send",
-            "options": [
-                {
-                    "name": "--intent",
-                    "required": true,
-                    "requires": [],
-                    "value": {
-                        "type": "key"
-                    }
-                },
-                {
-                    "name": "--body",
-                    "required": true,
-                    "requires": [],
-                    "value": {
-                        "type": "body"
-                    }
-                },
-                {
-                    "name": "--kind",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "one_of",
-                        "values": [
-                            "request",
-                            "block",
-                            "report",
-                            "progress"
-                        ]
-                    }
-                },
-                {
-                    "conflicts": [
-                        "--force"
-                    ],
-                    "name": "--now",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                },
-                {
-                    "conflicts": [
-                        "--now"
-                    ],
-                    "name": "--force",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "composer_not_empty",
-                "composer_unconfirmed",
-                "force_target_asleep",
-                "machine_not_permitted",
-                "no_parent",
-                "outbox_full",
-                "outbox_unavailable",
-                "participant_registering",
-                "recipient_not_agent",
-                "sender_not_registered"
-            ],
-            "repeats_at_most": null,
-            "rest": null,
-            "retired_for": "letter send"
-        },
-        {
-            "answers": [
-                "letter"
-            ],
-            "arguments": [
-                {
-                    "name": "id",
-                    "value": {
-                        "type": "key"
-                    }
-                }
-            ],
-            "command": "request reply",
-            "options": [
-                {
-                    "name": "--intent",
-                    "required": true,
-                    "requires": [],
-                    "value": {
-                        "type": "key"
-                    }
-                },
-                {
-                    "name": "--body",
-                    "required": true,
-                    "requires": [],
-                    "value": {
-                        "type": "body"
-                    }
-                }
-            ],
-            "repeats_at_most": null,
-            "rest": null,
-            "retired_for": "letter reply"
-        },
-        {
-            "answers": [
-                "letter"
-            ],
-            "arguments": [
-                {
-                    "name": "id",
-                    "value": {
-                        "type": "key"
-                    }
-                }
-            ],
-            "command": "request ack",
-            "options": [],
-            "repeats_at_most": null,
-            "rest": null,
-            "retired_for": "letter ack"
-        },
-        {
-            "answers": [
-                "letter"
-            ],
-            "arguments": [
-                {
-                    "name": "id",
-                    "value": {
-                        "type": "key"
-                    }
-                }
-            ],
-            "command": "request cancel",
-            "options": [],
-            "repeats_at_most": null,
-            "rest": null,
-            "retired_for": "letter cancel"
-        },
-        {
-            "answers": [
-                "letter"
-            ],
-            "arguments": [
-                {
-                    "name": "id",
-                    "value": {
-                        "type": "key"
-                    }
-                }
-            ],
-            "command": "request show",
-            "options": [],
-            "repeats_at_most": null,
-            "rest": null,
-            "retired_for": "letter show"
         }
     ],
-    "digest": "sha256:98093aa58e2ae2ad4f88685972b3365930256eb485e62d47be6739d1ad3fc4e2",
+    "digest": "sha256:a068074a34285882e85d06c8ad6ac724d31965fe46147d8d6273ad46f39dee01",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -10199,11 +10030,6 @@
             "ok": "ok"
         },
         "inbox": {
-            "answer": "result",
-            "code": "reason",
-            "ok": "ok"
-        },
-        "letter": {
             "answer": "result",
             "code": "reason",
             "ok": "ok"
@@ -10260,6 +10086,16 @@
         }
     },
     "format": 1,
+    "retired_words": [
+        {
+            "now": [
+                "task"
+            ],
+            "old": [
+                "plan"
+            ]
+        }
+    ],
     "value_types": {
         "approval": "not blank, at most 256 bytes, no control characters",
         "body": "not blank, at most 16384 bytes",
