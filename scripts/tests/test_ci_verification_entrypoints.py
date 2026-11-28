@@ -324,35 +324,71 @@ if name == 'playwright' and '--list' in args:
         self.assertNotIn("--list", calls[-1])
         self.assertTrue(all("--grep-invert" not in call for call in calls))
 
+    def stage_repeat_scripts(self):
+        # `ci-repeat.py` reads `src` test declarations through `rust_scan.py`
+        # and weighs web tests through `e2e-shard.py`, so a staged run needs
+        # all three.
+        for name in ("ci-repeat.py", "rust_scan.py", "e2e-shard.py"):
+            shutil.copyfile(ROOT / "scripts" / name, self.root / "scripts" / name)
+
+    def repeat_step(self, specs, repeat, shard, parts="1"):
+        return self.workflow_step("web-e2e.yml", "e2e", "End-to-end",
+                                  RUNNER_TEMP=str(self.root), GITHUB_STEP_SUMMARY=str(self.root / "summary.md"),
+                                  HIDE_E2E_SCREENSHOT_DIR=str(self.root / "screenshots"),
+                                  GREP="", SPECS=specs, REPEAT=repeat, SHARD=shard, PARTS=parts)
+
     def test_web_repeat_runs_the_named_specs_n_times_with_no_retry(self):
         self.enable_package_scripts()
-        # `ci-repeat.py` reads `src` test declarations through `rust_scan.py`,
-        # so a staged run needs both.
-        for name in ("ci-repeat.py", "rust_scan.py"):
-            shutil.copyfile(ROOT / "scripts" / name, self.root / "scripts" / name)
-        result = self.workflow_step("web-e2e.yml", "e2e", "End-to-end",
-                                    RUNNER_TEMP=str(self.root), GITHUB_STEP_SUMMARY=str(self.root / "summary.md"),
-                                    HIDE_E2E_SCREENSHOT_DIR=str(self.root / "screenshots"),
-                                    GREP="", SPECS="web/e2e/s3.spec.ts web/e2e/s7.spec.ts", REPEAT="10", SHARD="1/1")
+        self.stage_repeat_scripts()
+        result = self.repeat_step("web/e2e/s3.spec.ts web/e2e/s7.spec.ts", "10", "1/1")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.tool_calls("playwright", "web")
         self.assertEqual(calls, [[
             "test", "--retries=0", "--repeat-each=10", r"web/e2e/s3\.spec\.ts$", r"web/e2e/s7\.spec\.ts$",
         ]])
 
-    def test_web_repeat_refuses_a_bad_repeat_and_a_second_shard(self):
+    def test_a_sharded_web_repeat_runs_its_group_of_the_tests_for_its_part_of_the_repeat(self):
+        # Four shards in two repeat parts: two groups of the two listed tests,
+        # dealt by the table as the suite's shards are, and ten repeats cut
+        # into 5 + 5. Shard 4 is group 2 of 2 in the second part.
         self.enable_package_scripts()
-        # `ci-repeat.py` reads `src` test declarations through `rust_scan.py`,
-        # so a staged run needs both.
-        for name in ("ci-repeat.py", "rust_scan.py"):
-            shutil.copyfile(ROOT / "scripts" / name, self.root / "scripts" / name)
-        for repeat, shard in (("", "1/1"), ("0", "1/1"), ("ten", "1/1"), ("10", "1/2")):
-            with self.subTest(repeat=repeat, shard=shard):
-                result = self.workflow_step("web-e2e.yml", "e2e", "End-to-end",
-                                            RUNNER_TEMP=str(self.root), GITHUB_STEP_SUMMARY=str(self.root / "summary.md"),
-                                            HIDE_E2E_SCREENSHOT_DIR=str(self.root / "screenshots"),
-                                            GREP="", SPECS="web/e2e/s3.spec.ts", REPEAT=repeat, SHARD=shard)
+        self.stage_repeat_scripts()
+        (self.root / "web/e2e").mkdir()
+        (self.root / "web/e2e/shard-durations.json").write_text(
+            json.dumps({"a.spec.ts › one": 3, "a.spec.ts › two": 1}))
+        result = self.repeat_step("web/e2e/a.spec.ts", "10", "4/4", parts="2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.tool_calls("playwright", "web")
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(r"web/e2e/a\.spec\.ts$" in call for call in calls))
+        self.assertTrue(all("--list" in call for call in calls[:2]))
+        self.assertEqual(calls[-1][:3], ["test", "--retries=0", "--repeat-each=5"])
+        self.assertIn("--test-list", calls[-1])
+        self.assertEqual((self.root / "web-e2e-shard.txt").read_text(), "a.spec.ts › two\n")
+        self.assertIn("shard 4/4 runs test group 2/2 5 times of 10", (self.root / "summary.md").read_text())
+
+    def test_a_repeat_split_into_parts_alone_deals_no_test(self):
+        # One group, three parts: every shard runs every test, 4, 3 and 3 times.
+        self.enable_package_scripts()
+        self.stage_repeat_scripts()
+        for shard, times in (("1/3", "4"), ("3/3", "3")):
+            with self.subTest(shard=shard):
+                self.record.unlink(missing_ok=True)
+                result = self.repeat_step("web/e2e/s3.spec.ts", "10", shard, parts="3")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.tool_calls("playwright", "web"),
+                                 [["test", "--retries=0", f"--repeat-each={times}", r"web/e2e/s3\.spec\.ts$"]])
+
+    def test_web_repeat_refuses_a_bad_repeat_and_a_shard_with_no_share(self):
+        self.enable_package_scripts()
+        self.stage_repeat_scripts()
+        # No number; three parts of four shards; more parts than repeats.
+        for repeat, shard, parts in (("", "1/1", "1"), ("0", "1/1", "1"), ("ten", "1/1", "1"),
+                                     ("10", "1/4", "3"), ("2", "1/3", "3")):
+            with self.subTest(repeat=repeat, shard=shard, parts=parts):
+                result = self.repeat_step("web/e2e/s3.spec.ts", repeat, shard, parts=parts)
                 self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.record.exists() and self.tool_calls("playwright", "web"))
 
     def test_desktop_execution_always_builds_and_propagates_prerequisite_and_test_failures(self):
         self.enable_package_scripts()

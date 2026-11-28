@@ -28,7 +28,7 @@ def entries(*paths, status="M"):
 
 
 class Budget(unittest.TestCase):
-    """200 test runs for the whole pull request, 3 to 10 repeats of each test."""
+    """200 runs of the unit and Rust tests of a pull request, 3 to 10 repeats of each test."""
 
     def test_the_repeat_is_the_budget_over_the_changed_tests_between_three_and_ten(self):
         for changed, expected in [(1, 10), (5, 10), (20, 10), (21, 9), (50, 4), (66, 3), (67, 3), (100, 3), (101, 3), (1000, 3)]:
@@ -45,7 +45,7 @@ class Budget(unittest.TestCase):
         self.assertEqual(len(found["web"]), 1)
         self.assertEqual(repeat.repeats(12), 10)
         self.assertEqual(12 * repeat.repeats(12), 120)
-        # Web and Rust tests share the one budget: 3 web + 47 Rust tests are 50 tests, 4 runs each.
+        # Unit and Rust tests share the one budget: 3 unit + 47 Rust tests are 50 tests, 4 runs each.
         self.assertEqual(repeat.repeats(3 + 47), 4)
         # A selected helper module lists no test, so it adds nothing: 20 web tests and a helper are N = 20.
         self.assertEqual(repeat.repeats(20 + 0), 10)
@@ -60,6 +60,125 @@ class Budget(unittest.TestCase):
             self.assertTrue(repeat.MIN_REPEAT <= repeat.repeats(changed) <= repeat.MAX_REPEAT)
             if changed <= repeat.BUDGET // repeat.MIN_REPEAT:
                 self.assertLessEqual(changed * repeat.repeats(changed), repeat.BUDGET)
+
+
+def listing(*tests):
+    """`playwright test --list --reporter=list` output naming these `file › title` tests."""
+    lines = [f"  {test.split(' › ')[0]}:1:1 › {test.split(' › ', 1)[1]}" for test in tests]
+    files = len({test.split(" › ")[0] for test in tests})
+    return "Listing tests:\n" + "".join(f"{line}\n" for line in lines) + f"Total: {len(tests)} tests in {files} files\n"
+
+
+class WebBudget(unittest.TestCase):
+    """2400 recorded test-seconds of web specs, on shards of 600 s or less.
+
+    The expected numbers are worked by hand from the contract: repeat =
+    clamp(floor(2400 / one pass), 3, 10); shards = the fewest that keep each at
+    600 s or less, at most 4, or at most 6 when even 3 repeats exceed 2400.
+    """
+
+    def plan(self, table, *tests):
+        return repeat.web_plan(listing(*(tests or table)), table)
+
+    def test_the_repeat_is_the_seconds_budget_over_one_pass_between_three_and_ten(self):
+        for seconds, expected in [(10, 10), (240, 10), (241, 9), (600, 4), (800, 3), (801, 3), (5000, 3)]:
+            with self.subTest(seconds=seconds):
+                self.assertEqual(self.plan({"a.spec.ts › one": seconds})["repeat"], expected)
+
+    def test_one_pass_is_every_listed_test_and_a_test_the_table_lacks_weighs_its_median(self):
+        # The table's median is 20 s (10, 20, 30): `new` counts 20, as
+        # `e2e-shard.py` deals it, so one pass is 10 + 30 + 20 = 60 s.
+        table = {"a.spec.ts › one": 10, "a.spec.ts › two": 30, "b.spec.ts › other": 20}
+        plan = self.plan(table, "a.spec.ts › one", "a.spec.ts › two", "a.spec.ts › new")
+        self.assertEqual((plan["tests"], plan["seconds"], plan["repeat"]), (3, 60.0, 10))
+        self.assertEqual(repeat.e2e_shard.weights(["a.spec.ts › new"], table), {"a.spec.ts › new": 20.0})
+
+    def test_a_spec_under_600_s_of_repeats_runs_on_one_shard(self):
+        plan = self.plan({"a.spec.ts › one": 6.6})
+        self.assertEqual((plan["repeat"], plan["shards"], plan["parts"], plan["heaviest"]), (10, 1, 1, 66.0))
+
+    def test_the_shards_are_as_many_as_keep_each_at_600_s(self):
+        # 8 tests of 30 s: one pass 240 s, 10 repeats, 2400 s: four groups of
+        # two tests each plan 600 s, so four shards; three would plan 900.
+        table = {f"a.spec.ts › t{index}": 30 for index in range(8)}
+        plan = self.plan(table)
+        self.assertEqual((plan["repeat"], plan["shards"], plan["heaviest"]), (10, 4, 600.0))
+        # Half the seconds fits in two shards.
+        table = {f"a.spec.ts › t{index}": 15 for index in range(8)}
+        self.assertEqual((self.plan(table)["shards"], self.plan(table)["heaviest"]), (2, 600.0))
+
+    def test_one_test_heavier_than_a_shard_repeats_on_several(self):
+        # 150 s x 10 = 1500 s: no dealing of one test splits it, so the ten
+        # repeats are cut into 4 + 3 + 3 on three shards.
+        plan = self.plan({"a.spec.ts › slow": 150})
+        self.assertEqual((plan["repeat"], plan["shards"], plan["parts"], plan["heaviest"]), (10, 3, 3, 600.0))
+        self.assertEqual([repeat.shard_share(shard, 3, 3, 10) for shard in (1, 2, 3)],
+                         [(1, 1, 4), (1, 1, 3), (1, 1, 3)])
+
+    def test_within_the_budget_the_shards_stop_at_four(self):
+        # 2 tests of 240 s: one pass 480 s, 5 repeats, 2400 s; within the
+        # budget, at most four shards of 600 s each.
+        table = {"a.spec.ts › one": 240, "a.spec.ts › two": 240}
+        plan = self.plan(table)
+        self.assertEqual((plan["repeat"], plan["shards"]), (5, 4))
+        self.assertLessEqual(plan["heaviest"], 720.0)
+
+    def test_three_repeats_over_the_budget_run_anyway_on_at_most_six_shards(self):
+        # 30 tests of 50 s: one pass 1500 s, 3 x 1500 = 4500 s over 2400: still
+        # three repeats, and six shards plan 750 s each, the most there may be.
+        table = {f"a.spec.ts › t{index:02}": 50 for index in range(30)}
+        plan = self.plan(table)
+        self.assertEqual((plan["repeat"], plan["shards"], plan["heaviest"]), (3, 6, 750.0))
+        # Over the budget yet under 600 s a shard at five: five, not six.
+        table = {f"a.spec.ts › t{index:02}": 40 for index in range(25)}
+        plan = self.plan(table)
+        self.assertEqual((plan["repeat"], plan["shards"], plan["heaviest"]), (3, 5, 600.0))
+
+    def test_every_shard_holds_a_test_and_a_run_and_every_group_runs_every_repeat(self):
+        for seconds in ([1], [100], [700], [50] * 30, [5, 90, 200], [600, 1, 1]):
+            table = {f"a.spec.ts › t{index:02}": value for index, value in enumerate(seconds)}
+            plan = self.plan(table)
+            with self.subTest(seconds=seconds, plan=plan):
+                groups = plan["shards"] // plan["parts"]
+                self.assertEqual(plan["shards"] % plan["parts"], 0)
+                self.assertLessEqual(groups, len(table))
+                self.assertLessEqual(plan["parts"], plan["repeat"])
+                shares = [repeat.shard_share(shard, plan["shards"], plan["parts"], plan["repeat"])
+                          for shard in range(1, plan["shards"] + 1)]
+                for group in range(1, groups + 1):
+                    self.assertEqual(sum(times for found, _, times in shares if found == group), plan["repeat"])
+                    self.assertTrue(all(times >= 1 for _, _, times in shares))
+
+    def test_tests_the_linux_lane_only_skips_repeat_the_most(self):
+        self.assertEqual(self.plan({"a.spec.ts › skipped": 0})["repeat"], 10)
+
+    def test_a_listing_that_names_no_test_or_disagrees_with_its_total_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "names no test"):
+            repeat.web_plan("Listing tests:\nTotal: 0 tests in 0 files\n", {"a.spec.ts › one": 1})
+        with self.assertRaisesRegex(ValueError, "totals 3 tests but names 1"):
+            repeat.web_plan("Listing tests:\n  a.spec.ts:1:1 › one\nTotal: 3 tests in 1 file\n", {})
+
+    def test_a_shard_outside_its_repeat_has_no_share(self):
+        for shard, shards, parts, times in ((0, 2, 1, 10), (3, 2, 1, 10), (1, 4, 3, 10), (1, 3, 3, 2), (1, 2, 0, 10)):
+            with self.subTest(shard=shard, shards=shards, parts=parts, times=times), self.assertRaises(ValueError):
+                repeat.shard_share(shard, shards, parts, times)
+
+    def test_the_total_is_one_count_from_every_shard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for index, count in enumerate((40, 30, 30), 1):
+                paths.append(Path(directory) / f"{index}.txt")
+                paths[-1].write_text(f"{count}\n", encoding="utf-8")
+            self.assertEqual(repeat.total_completed(paths, 3), 100)
+            for wrong in (2, 4):
+                with self.subTest(shards=wrong), self.assertRaisesRegex(ValueError, "shard counts"):
+                    repeat.total_completed(paths, wrong)
+            paths[0].write_text("0\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "zero"):
+                repeat.total_completed(paths, 3)
+            paths[0].write_text("\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                repeat.total_completed(paths, 3)
 
 
 class Detection(unittest.TestCase):
@@ -440,26 +559,47 @@ class Command(unittest.TestCase):
         return result, dict(line.split("=", 1) for line in written.splitlines())
 
     def test_hand_and_pr_decisions_always_write_both_run_flags(self):
-        for event, web, rust, extra, expected in [
-            ("workflow_dispatch", "web/e2e/s3.spec.ts", "[]", ["--repeat", "10"], ("true", "false", "10")),
-            ("workflow_dispatch", "", '[{"package":"hided","module":"seat"}]', ["--repeat", "3"], ("false", "true", "3")),
-            ("pull_request", "web/e2e/s3.spec.ts", "[]", ["--web-count", "50"], ("true", "false", "4")),
-            ("pull_request", "web/e2e/s3.spec.ts", '[{"package":"hided","module":"seat"}]',
-             ["--web-count", "3", "--rust-count", "47"], ("true", "true", "4")),
-            ("pull_request", "", "[]", [], ("false", "false", "0")),
-        ]:
-            with self.subTest(event=event, expected=expected):
-                result, outputs = self.run_script("choose", "--event", event, "--web", web, "--rust", rust, *extra)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual((outputs["run-web"], outputs["run-rust"], outputs["repeat"]), expected)
+        with tempfile.TemporaryDirectory() as directory:
+            # One test of 150 s: 10 repeats on 3 shards; 8 of 30 s: 10 on 4.
+            table = Path(directory) / "durations.json"
+            table.write_text(json.dumps({"s3.spec.ts › slow": 150, **{f"s3.spec.ts › t{i}": 30 for i in range(8)}}))
+            slow, many = Path(directory) / "slow.txt", Path(directory) / "many.txt"
+            slow.write_text(listing("s3.spec.ts › slow"), encoding="utf-8")
+            many.write_text(listing(*(f"s3.spec.ts › t{i}" for i in range(8))), encoding="utf-8")
+            web_only = ["--table", str(table), "--web-list"]
+            for event, web, rust, extra, expected in [
+                ("workflow_dispatch", "web/e2e/s3.spec.ts", "[]", ["--repeat", "10"], ("true", "false", "0", "10", "1", "1")),
+                ("workflow_dispatch", "", '[{"package":"hided","module":"seat"}]', ["--repeat", "3"],
+                 ("false", "true", "3", "0", "0", "0")),
+                ("pull_request", "web/e2e/s3.spec.ts", "[]", [*web_only, str(slow)], ("true", "false", "0", "10", "3", "3")),
+                # The web specs are planned by their seconds and the Rust
+                # tests by their count, each with its own repeat.
+                ("pull_request", "web/e2e/s3.spec.ts", '[{"package":"hided","module":"seat"}]',
+                 [*web_only, str(many), "--rust-count", "47"], ("true", "true", "4", "10", "4", "1")),
+                ("pull_request", "", "[]", [], ("false", "false", "0", "0", "0", "0")),
+            ]:
+                with self.subTest(event=event, expected=expected):
+                    result, outputs = self.run_script("choose", "--event", event, "--web", web, "--rust", rust, *extra)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual((outputs["run-web"], outputs["run-rust"], outputs["repeat"], outputs["web-repeat"],
+                                      outputs["web-shards"], outputs["web-parts"]), expected)
 
     def test_a_pr_selection_needs_a_real_positive_count(self):
-        for kind, selection in (("web", "web/e2e/s3.spec.ts"), ("units", '["web/src/searchDetail.test.ts"]'),
+        with tempfile.TemporaryDirectory() as directory:
+            empty = Path(directory) / "list.txt"
+            empty.write_text("Listing tests:\nTotal: 0 tests in 0 files\n", encoding="utf-8")
+            for arguments in ([], ["--web-list", str(empty)], ["--web-list", str(Path(directory) / "missing.txt")]):
+                with self.subTest(web=arguments):
+                    result, outputs = self.run_script("choose", "--event", "pull_request", "--web", "web/e2e/s3.spec.ts",
+                                                      "--rust", "[]", *arguments)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(outputs, {})
+        for kind, selection in (("units", '["web/src/searchDetail.test.ts"]'),
                                 ("rust", '[{"package":"hided","test":"lib","module":"seat"}]')):
             for count in ("", "0", "-1"):
                 with self.subTest(kind=kind, count=count):
                     result, outputs = self.run_script(
-                        "choose", "--event", "pull_request", "--web", selection if kind == "web" else "",
+                        "choose", "--event", "pull_request", "--web", "",
                         "--units", selection if kind == "units" else "[]",
                         "--rust", selection if kind == "rust" else "[]", f"--{kind}-count", count,
                     )
@@ -467,7 +607,8 @@ class Command(unittest.TestCase):
                     self.assertEqual(outputs, {})
 
     def test_the_workflow_verdict_exits_nonzero_for_a_successful_zero_run(self):
-        needs = {"count": {"result": "success", "outputs": {"run-web": "true", "run-units": "false", "run-rust": "false", "repeat": "10"}},
+        needs = {"count": {"result": "success", "outputs": {"run-web": "true", "run-units": "false", "run-rust": "false",
+                                                            "repeat": "0", "web-repeat": "10"}},
                  "web": {"result": "success", "outputs": {"completed": "0"}}, "units": {"result": "skipped"},
                  "rust": {"result": "skipped"}}
         result, _ = self.run_script("verdict", needs=needs)
@@ -516,8 +657,6 @@ class Command(unittest.TestCase):
         self.assertEqual(outputs, {})
 
     def test_the_commands_the_jobs_pipe_through(self):
-        result, _ = self.run_script("count-listed", stdin="Listing tests:\n  a\nTotal: 4 tests in 1 file\n")
-        self.assertEqual(result.stdout.strip(), "4")
         result, _ = self.run_script("count-nextest", stdin=json.dumps(NEXTEST_LIST))
         self.assertEqual(result.stdout.strip(), "3")
         result, _ = self.run_script("spec-patterns", "web/e2e/s3.spec.ts")
@@ -528,7 +667,12 @@ class Command(unittest.TestCase):
                            {"package": "hide-platform", "test": "lib", "filter": "", "tests": 9, "run_ignored": "ignored-only"}])
         result, _ = self.run_script("plan-lines", "--plan", plan)
         self.assertEqual((result.returncode, result.stderr), (0, ""))
-        self.assertEqual(result.stdout, "hided\x1fit\x1ftest(/^(seat)::/)\x1f\nhide-platform\x1flib\x1f\x1fignored-only\n")
+        self.assertEqual(result.stdout, "hided\x1fit\x1ftest(/^(seat)::/)\x1f\x1fhided-it.tar.zst\n"
+                                        "hide-platform\x1flib\x1f\x1fignored-only\x1fhide-platform-lib.tar.zst\n")
+        result, outputs = self.run_script("shard-share", "--shard", "2/3", "--parts", "3", "--repeat", "10")
+        self.assertEqual((result.returncode, result.stdout), (0, "1/1 3\n"))
+        result, _ = self.run_script("shard-share", "--shard", "2/3", "--parts", "2", "--repeat", "10")
+        self.assertEqual(result.returncode, 1)
         units = json.dumps([{"package": "web", "files": ["web/src/a.test.ts"], "tests": 2},
                             {"package": "desktop", "files": ["desktop/src/main/env.test.ts"], "tests": 5}])
         result, _ = self.run_script("units-lines", "--plan", units)
@@ -540,7 +684,7 @@ class Command(unittest.TestCase):
         plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1, "run_ignored": "ignored-only"}])
         result, _ = self.run_script("plan-lines", "--plan", plan)
         self.assertEqual((result.returncode, result.stderr), (0, ""))
-        self.assertEqual(result.stdout, "hided\x1fit\x1ftest(/^(seat)::/)\x1fignored-only\n")
+        self.assertEqual(result.stdout, "hided\x1fit\x1ftest(/^(seat)::/)\x1fignored-only\x1fhided-it.tar.zst\n")
         self.assertNotIn("\r", result.stdout)
 
     def test_the_rust_job_reads_an_empty_filterset_as_its_own_field(self):
@@ -549,11 +693,11 @@ class Command(unittest.TestCase):
         plan = json.dumps([{"package": "hide-platform", "test": "lib", "filter": "", "tests": 9, "run_ignored": "ignored-only"}])
         result, _ = self.run_script("plan-lines", "--plan", plan)
         read = subprocess.run(
-            ["bash", "-c", "while IFS=$'\\x1f' read -r package test expression run_ignored; do "
-                           "printf '%s|%s|%s|%s\\n' \"$package\" \"$test\" \"$expression\" \"$run_ignored\"; done"],
+            ["bash", "-c", "while IFS=$'\\x1f' read -r package test expression run_ignored archive; do "
+                           "printf '%s|%s|%s|%s|%s\\n' \"$package\" \"$test\" \"$expression\" \"$run_ignored\" \"$archive\"; done"],
             input=result.stdout, text=True, capture_output=True, check=True,
         )
-        self.assertEqual(read.stdout, "hide-platform|lib||ignored-only\n")
+        self.assertEqual(read.stdout, "hide-platform|lib||ignored-only|hide-platform-lib.tar.zst\n")
 
 
 class Verdict(unittest.TestCase):
@@ -563,8 +707,8 @@ class Verdict(unittest.TestCase):
         selected = {"web": kind == "web", "units": kind == "units", "rust": kind == "rust"}
         decision = repeat.choose(event, "web/e2e/s3.spec.ts" if selected["web"] else "",
                                  [{"package": "hided", "test": "lib", "module": "seat"}] if selected["rust"] else [],
-                                 "3", "100", "100",
-                                 ["web/src/searchDetail.test.ts"] if selected["units"] else [], "100")
+                                 "3", {"tests": 10, "seconds": 900.0, "repeat": 3, "shards": 2, "parts": 1, "heaviest": 600.0},
+                                 "100", ["web/src/searchDetail.test.ts"] if selected["units"] else [], "100")
         return {"count": {"result": "success", "outputs": decision},
                 "web": {"result": "skipped", "outputs": {}}, "units": {"result": "skipped", "outputs": {}},
                 "rust": {"result": "skipped", "outputs": {}},
@@ -583,7 +727,7 @@ class Verdict(unittest.TestCase):
                             repeat.verdict(self.needs(event, kind, result=outcome))
 
     def test_missing_decisions_failed_count_and_missing_jobs_fail_closed(self):
-        for field in ("run-web", "run-units", "run-rust", "repeat"):
+        for field in ("run-web", "run-units", "run-rust", "repeat", "web-repeat"):
             needs = self.needs("workflow_dispatch", "web")
             del needs["count"]["outputs"][field]
             with self.subTest(field=field), self.assertRaises((ValueError, KeyError)):
@@ -597,13 +741,31 @@ class Verdict(unittest.TestCase):
             repeat.verdict(needs)
 
     def test_only_a_pr_with_nothing_chosen_may_skip_every_leg(self):
-        decision = repeat.choose("pull_request", "", [], "", "", "")
+        decision = repeat.choose("pull_request", "", [], "", None, "")
         needs = {"count": {"result": "success", "outputs": decision},
                  "web": {"result": "skipped"}, "units": {"result": "skipped"}, "rust": {"result": "skipped"}}
         repeat.verdict(needs)
-        decision["repeat"] = "10"
-        with self.assertRaises(ValueError):
-            repeat.verdict(needs)
+        for field in ("repeat", "web-repeat"):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                repeat.verdict({**needs, "count": {"result": "success", "outputs": {**decision, field: "10"}}})
+
+    def test_each_leg_is_proved_against_its_own_repeat(self):
+        # The web specs repeat 3 times and the Rust tests 4: 30 web runs prove
+        # the web leg and not the Rust one, and 40 Rust runs the reverse.
+        decision = repeat.choose("pull_request", "web/e2e/s3.spec.ts", [{"package": "hided", "test": "lib", "module": "seat"}],
+                                 "", {"tests": 10, "seconds": 900.0, "repeat": 3, "shards": 2, "parts": 1, "heaviest": 600.0},
+                                 "50")
+        self.assertEqual((decision["web-repeat"], decision["repeat"]), (3, 4))
+
+        def needs(web, rust):
+            return {"count": {"result": "success", "outputs": decision}, "units": {"result": "skipped"},
+                    "web": {"result": "success", "outputs": {"completed": web}},
+                    "rust": {"result": "success", "outputs": {"completed": rust}}}
+
+        repeat.verdict(needs("30", "200"))
+        for web, rust in (("40", "200"), ("30", "30")):
+            with self.subTest(web=web, rust=rust), self.assertRaises(ValueError):
+                repeat.verdict(needs(web, rust))
 
     def test_the_required_verify_aggregate_receives_a_failed_repeat_lane(self):
         lanes = {"lanes": '["repeat"]'}
@@ -948,3 +1110,120 @@ class RustLegRuns(unittest.TestCase):
         self.assertIn('[bash(), "scripts/verify-cargo.sh"', source)
         # The helper is the repository's own answer to that trap.
         self.assertIn("shutil.which", source)
+
+
+class RustArchive(unittest.TestCase):
+    """A pull request's Rust tests are built once: the listing builds them, the
+    archive packs what it built, and the Rust leg runs the archive."""
+
+    PLAN = [{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 3, "run_ignored": ""},
+            {"package": "hide-kit", "test": "lib", "filter": "", "tests": 9, "run_ignored": ""},
+            {"package": "hide-agent-hooks", "test": "bin", "filter": "", "tests": 2, "run_ignored": ""}]
+
+    def cargo_arguments(self, command):
+        """What a `verify-cargo.sh` call hands cargo to pick the tests it builds."""
+        arguments = command[command.index("scripts/verify-cargo.sh") + 2:]
+        if command[command.index("scripts/verify-cargo.sh") + 1] == "nextest-archive":
+            arguments = arguments[1:]
+        picked, skip = [], False
+        for index, argument in enumerate(arguments):
+            if skip:
+                skip = False
+            elif argument in ("--profile", "-E", "--message-format", "--run-ignored"):
+                skip = True
+            else:
+                picked.append(argument)
+        return picked
+
+    def test_each_target_is_packed_with_the_cargo_arguments_that_listed_it(self):
+        # Same arguments, same build: cargo finds the listed tests fresh and
+        # only packs them, so no test compiles twice.
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(NEXTEST_LIST), stderr="")
+
+        original = repeat.subprocess.run
+        repeat.subprocess.run = run
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                for entry in self.PLAN:
+                    repeat.nextest_lister(entry["package"], entry["test"], entry["filter"])
+                repeat.rust_archive(self.PLAN, directory, repeat.nextest_packer)
+                packed = [Path(command[command.index("nextest-archive") + 1]) for command in calls[3:]]
+                self.assertEqual([path.parent for path in packed], [Path(directory)] * 3)
+        finally:
+            repeat.subprocess.run = original
+        listed, archived = calls[:3], calls[3:]
+        self.assertEqual([self.cargo_arguments(command) for command in listed],
+                         [self.cargo_arguments(command) for command in archived])
+        self.assertEqual([self.cargo_arguments(command) for command in archived],
+                         [["-p", "hided", "--test", "it"], ["-p", "hide-kit", "--lib"], ["-p", "hide-agent-hooks", "--bins"]])
+        self.assertEqual([path.name for path in packed], ["hided-it.tar.zst", "hide-kit-lib.tar.zst", "hide-agent-hooks-bin.tar.zst"])
+
+    def test_a_plan_that_asks_for_an_ignored_test_or_is_malformed_packs_nothing(self):
+        for entry in ({**self.PLAN[0], "run_ignored": "ignored-only"}, {**self.PLAN[0], "test": "doc"},
+                      {**self.PLAN[0], "filter": "all()"}):
+            with self.subTest(entry=entry), self.assertRaises(ValueError):
+                repeat.rust_archive([entry], "unused", lambda *args: self.fail("packed"))
+
+    def workflow(self):
+        import yaml
+        return yaml.safe_load((ROOT / ".github/workflows/repeat.yml").read_text())["jobs"]
+
+    def test_the_count_job_keeps_the_archives_it_packed_after_the_listing(self):
+        steps = self.workflow()["count"]["steps"]
+        names = [step.get("id") or step.get("name") for step in steps]
+        self.assertLess(names.index("rust-count"), names.index("rust-archive"))
+        kept = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact"))
+        self.assertEqual(kept["with"]["name"], "rust-repeat-tests")
+        self.assertEqual(self.workflow()["count"]["outputs"]["rust-archived"],
+                         "${{ steps.rust-archive.outputs.rust-archived || 'false' }}")
+
+    def test_a_pull_requests_rust_leg_runs_the_archive_and_builds_nothing(self):
+        steps = self.workflow()["rust"]["steps"]
+        archived = "needs.count.outputs.rust-archived == 'true'"
+        # The caches a build reads are a hand run's alone.
+        for action in ("./.github/actions/rust-cache", "./.github/actions/vt-cache"):
+            step = next(step for step in steps if step.get("uses") == action)
+            self.assertEqual(step["if"], "needs.count.outputs.rust-archived != 'true'")
+        fetched = next(step for step in steps if step.get("uses", "").startswith("actions/download-artifact"))
+        self.assertEqual((fetched["if"], fetched["with"]["name"]), (archived, "rust-repeat-tests"))
+        run = next(step for step in steps if "plan-lines" in (step.get("run") or ""))
+        self.assertEqual(run["env"]["ARCHIVED"], "${{ needs.count.outputs.rust-archived }}")
+        script = run["run"]
+        self.assertIn('target=(--archive-file "$RUNNER_TEMP/rust-repeat/$archive")', script)
+        # An archive run takes no package flag: `-p` is only in the build branch.
+        archive_branch = script[script.index('if [ "$ARCHIVED" = true ]'):script.index("else", script.index('if [ "$ARCHIVED" = true ]'))]
+        self.assertNotIn("-p", archive_branch.replace("--archive-file", ""))
+
+
+class WebLegShards(unittest.TestCase):
+    """The web leg runs on `web-e2e.yml`'s shards with the count job's plan."""
+
+    def test_the_web_leg_takes_the_planned_shards_parts_and_repeat(self):
+        import yaml
+        jobs = yaml.safe_load((ROOT / ".github/workflows/repeat.yml").read_text())["jobs"]
+        web = jobs["web"]["with"]
+        self.assertEqual(jobs["web"]["uses"], "./.github/workflows/web-e2e.yml")
+        self.assertEqual(web["shards"], "${{ fromJSON(needs.count.outputs.web-shards) }}")
+        self.assertEqual(web["repeat-parts"], "${{ fromJSON(needs.count.outputs.web-parts) }}")
+        self.assertEqual(web["repeat"], "${{ needs.count.outputs.web-repeat }}")
+        choose = next(step for step in jobs["count"]["steps"] if step.get("id") == "repeat")
+        self.assertIn('--web-list "$WEB_LIST"', choose["run"])
+
+    def test_the_lanes_completed_runs_are_every_shards_summed(self):
+        import yaml
+        # PyYAML reads the key `on` as true.
+        lane = yaml.safe_load((ROOT / ".github/workflows/web-e2e.yml").read_text())
+        self.assertEqual(lane[True]["workflow_call"]["outputs"]["completed"]["value"],
+                         "${{ jobs.repeat-total.outputs.completed }}")
+        total = lane["jobs"]["repeat-total"]
+        self.assertEqual(total["needs"], "e2e")
+        self.assertIn('total --shards "$SHARDS"', total["steps"][-1]["run"])
+        kept = next(step for step in lane["jobs"]["e2e"]["steps"] if step.get("name") == "Keep this shard's completed repeat runs")
+        self.assertEqual(kept["with"]["name"], "repeat-completed-${{ inputs.lane }}-${{ matrix.shard }}")
+        fetched = next(step for step in total["steps"] if step.get("uses", "").startswith("actions/download-artifact"))
+        self.assertEqual(fetched["with"]["pattern"], "repeat-completed-${{ inputs.lane }}-*")
+

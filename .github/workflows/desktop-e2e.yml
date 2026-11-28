@@ -14,9 +14,23 @@
 # cap on main (2026-10-17), and pull request #1306's run was ended at the cap
 # with every test it reached passing. A caller with more than one shard deals
 # the tests out as `web-e2e.yml` does, by this suite's own macOS recording,
-# `desktop/e2e/shard-durations.json` (`scripts/e2e-shard.py`). Each shard
-# builds in place: a `build` job would be one more macOS job ahead of two, for
-# about two minutes of cargo it saves each.
+# `desktop/e2e/shard-durations.json` (`scripts/e2e-shard.py`).
+#
+# With more than one shard the daemon and kit binaries and the pane holder build
+# once, in the `build` job on the lane's runner, and the web shell builds once,
+# in `build-web` on Linux beside it; every shard waits for both and downloads
+# `target/debug` and `web/dist`. The shell is the one output a Linux runner can
+# make for every system: its bundle reads no system's environment, and the
+# relay WebAssembly it embeds compiles from the same locked source for the
+# browser on any host. It builds on Linux, not as a second job on the lane's
+# runner, because the organization runs five macOS jobs at once and a second
+# macOS build job would hold another of them for the whole build. Before this a
+# shard built both itself, 5 minutes of cargo and 3 of the web shell on each of
+# two shards.
+# A single shard still builds in place: a second job would only add its own
+# setup. Every shard keeps what is not a build output: the Electron runtime,
+# Playwright's Chromium, the host's own bundle (`desktop e2e` builds it), the
+# Windows fixture programs and the holder's ConPTY runtime.
 
 name: desktop e2e lane
 
@@ -55,8 +69,120 @@ permissions:
   contents: read
 
 jobs:
+  # The one cargo build of the lane, for a caller with more than one shard. The
+  # fixture's app bundle links the four binaries below, so those are what a
+  # shard needs; nothing else of a cargo build reaches a test. The debug `hided`
+  # reads `web/dist` from disk at run time, so the shell is `build-web`'s.
+  build:
+    name: build desktop ${{ inputs.lane }}
+    if: ${{ inputs.shards > 1 }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+      # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
+      # so this job reaches no package host (#2631).
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
+      # macOS's one saver of the workspace set: the one macOS job of every main
+      # push that builds the daemon (docs/BUILD.md, "CI's Rust caches"). It is
+      # this job now that the shards build nothing. Windows's saver is
+      # `windows check`.
+      - uses: ./.github/actions/rust-cache
+        timeout-minutes: 5
+        with:
+          set: workspace
+          save: ${{ github.ref == 'refs/heads/main' && runner.os == 'macOS' }}
+      - name: Build the desktop app's daemon and kit binaries
+        # hide-agent-hooks too, which the fixture's app bundle links beside
+        # them: the home-layout spec stages every binary the packaged app
+        # carries, and a device runs hided itself as its node.
+        timeout-minutes: 20
+        run: bash scripts/verify-cargo.sh cli
+      - name: Build the pane holder
+        # The daemon starts each pane's holder from the `hide-holder` beside
+        # it, which the fixture's app bundle links too.
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
+      - name: Keep the binaries for the shards
+        uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          name: desktop-binaries-${{ inputs.lane }}
+          # A rerun of this job, whole or only its failed part, uploads the name again.
+          overwrite: true
+          path: |
+            target/debug/hided${{ runner.os == 'Windows' && '.exe' || '' }}
+            target/debug/hide${{ runner.os == 'Windows' && '.exe' || '' }}
+            target/debug/hide-agent-hooks${{ runner.os == 'Windows' && '.exe' || '' }}
+            target/debug/hide-holder${{ runner.os == 'Windows' && '.exe' || '' }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # Independent of the daemon build: neither debug output embeds the other. On
+  # Linux whatever the lane's runner is (see the header).
+  build-web:
+    name: build web shell ${{ inputs.lane }}
+    if: ${{ inputs.shards > 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+      - uses: pnpm/action-setup@v6
+        timeout-minutes: 5
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        timeout-minutes: 5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh install
+      # Restored never saved here: Linux's one saver of the binding tool is
+      # `web-e2e.yml`'s `build-web` on main (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
+      # Install the locked binding tool outside the shell build's budget.
+      - name: Prepare the relay WebAssembly
+        timeout-minutes: 10
+        run: bash scripts/build-relay-wasm.sh
+      - name: Build the web shell
+        # The desktop app serves web/dist through the hided it starts.
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh web build
+      - name: Keep the web shell for the shards
+        uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          name: desktop-web-dist-${{ inputs.lane }}
+          # A rerun of this job, whole or only its failed part, uploads the name again.
+          overwrite: true
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 1
+
   e2e:
     name: desktop e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}
+    needs: [build, build-web]
+    # Both builds are skipped for a single shard; a failure or cancellation in
+    # either still stops the shards, and the lane reports the failure.
+    if: ${{ !cancelled() && contains(fromJSON('["success","skipped"]'), needs.build.result) && contains(fromJSON('["success","skipped"]'), needs.build-web.result) }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 45
     defaults:
@@ -85,20 +211,20 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
-      # so this job reaches no package host (#2631).
+      # A single shard builds for itself; with more it downloads what `build`
+      # made, so it reaches neither cargo nor the vt inputs.
       - uses: ./.github/actions/vt-cache
+        if: ${{ inputs.shards == 1 }}
         timeout-minutes: 5
         with:
           save: false
-      # macOS's one saver of the workspace set: the one macOS lane of every main
-      # push that builds the daemon (docs/BUILD.md, "CI's Rust caches"). The
-      # shards build the same thing; the first saves it. Windows's saver is
-      # `windows check`.
+      # Restored only: a single shard on a system whose saver is another job
+      # never saves (`windows check` on Windows, `build` above on macOS).
       - uses: ./.github/actions/rust-cache
+        if: ${{ inputs.shards == 1 }}
         with:
           set: workspace
-          save: ${{ github.ref == 'refs/heads/main' && matrix.shard == 1 && runner.os == 'macOS' }}
+          save: false
       - name: Install zsh and the virtual display on Linux
         if: runner.os == 'Linux'
         timeout-minutes: 6
@@ -107,16 +233,29 @@ jobs:
           packages: zsh xvfb
           minutes: 3
       - name: Build the desktop app's daemon and kit binaries
+        if: ${{ inputs.shards == 1 }}
         # hide-agent-hooks too, which the fixture's app bundle links beside
         # them: the home-layout spec stages every binary the packaged app
         # carries, and a device runs hided itself as its node.
         timeout-minutes: 20
         run: bash scripts/verify-cargo.sh cli
       - name: Build the pane holder
+        if: ${{ inputs.shards == 1 }}
         # The daemon starts each pane's holder from the `hide-holder` beside
         # it, which the fixture's app bundle links too.
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
+      - name: Fetch the binaries from the build job
+        if: ${{ inputs.shards > 1 }}
+        uses: actions/download-artifact@v8
+        timeout-minutes: 5
+        with:
+          name: desktop-binaries-${{ inputs.lane }}
+          path: target/debug
+      - name: Mark the binaries executable
+        if: ${{ inputs.shards > 1 && runner.os != 'Windows' }}
+        # An artifact does not keep the executable bit.
+        run: chmod +x target/debug/hided target/debug/hide target/debug/hide-agent-hooks target/debug/hide-holder
       - name: Fetch the pane holder's pinned ConPTY runtime
         # On Windows a node loads the holder's ConPTY from `holder-conpty`
         # beside its own program (`hide_kit::holders::CONPTY_SOURCE`); the
@@ -126,6 +265,7 @@ jobs:
         run: python scripts/fetch-conpty.py --out target/debug/holder-conpty
       # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
       - uses: ./.github/actions/relay-tools
+        if: ${{ inputs.shards == 1 }}
         with:
           save: false
       - name: Install dependencies
@@ -136,12 +276,20 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/verify-web.sh desktop electron-install
       - name: Build the web shell
+        if: ${{ inputs.shards == 1 }}
         # The desktop app serves web/dist through the hided it starts.
         # A macOS runner takes 4 to 5 minutes here (236 to 298 s in the
         # 25 verify runs before 2026-10-28), so a 5-minute cap failed
         # main on a slow runner rather than on a slow build.
         timeout-minutes: 10
         run: bash scripts/verify-web.sh web build
+      - name: Fetch the web shell from the build job
+        if: ${{ inputs.shards > 1 }}
+        uses: actions/download-artifact@v8
+        timeout-minutes: 5
+        with:
+          name: desktop-web-dist-${{ inputs.lane }}
+          path: web/dist
       - name: Install Playwright Chromium
         # The browser spec opens a page in Chromium beside the Electron app.
         timeout-minutes: 5

@@ -3,7 +3,7 @@ scripts/install-agent-clis.py to install them and by the journey to say in
 its report whether the CLI it measured answered the pinned version.
 
 `HIDE_AGENT_CLIS_TABLE` names another table of the same shape, which the
-daily agent canary (`.github/workflows/agent-canary.yml`) writes with each
+nightly's agent canary (`.github/workflows/nightly.yml`) writes with each
 vendor's latest release (scripts/agent-cli-latest.py), so the install, the
 report and the lane's verdict all measure those versions instead."""
 

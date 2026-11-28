@@ -17,7 +17,9 @@ A pull request runs those macOS jobs only when it changes a macOS path
 its `macos` output leaves out the macOS legs of the others, and main's push
 run and the nightly run every macOS job.
 Nightly explicitly owns agy and the journey in its direct calls and removes
-those two internal lanes from its verify plan.
+those two internal lanes from its verify plan. `nightly-scope` says which of
+the nightly's jobs one run selects and on which systems (Linux and Windows
+daily, macOS twice a week), and `nightly-aggregate` checks that run against it.
 
 A pull request whose last green run still stands plans `policy` alone, or
 also the unit checks when only registered desktop unit tests changed: what
@@ -1712,23 +1714,71 @@ def aggregate(needs):
         raise ValueError("; ".join(errors))
 
 
+# The nightly's schedule (nightly.yml): Linux and Windows every day, and
+# macOS, whose runners every repository of the account shares five of, on
+# Monday and Thursday in Korea (Sunday and Wednesday 17:17 UTC), when the run
+# is `all` and also runs `verify` (pr.yml whole) and the macOS package. A
+# hand run names its lane; `daily` is what the schedule runs on the other days.
+NIGHTLY_SCHEDULES = {"17 17 * * 0,3": "all", "17 17 * * 1,2,4,5,6": "daily"}
+NIGHTLY_LANES = ("all", "daily", "linux", "macos", "windows", "agy")
+# The jobs the report job waits for and `nightly_aggregate` checks; the agent
+# canary's jobs are left out, so a vendor's release that breaks Hide is filed
+# only in its agent's record (scripts/agent-canary-record.py), never as a
+# nightly failure as well.
+NIGHTLY_JOBS = ("web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
+                "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e", "perf", "verify",
+                "package")
+NIGHTLY_SYSTEMS = {"all": ["linux", "macos", "windows"], "daily": ["linux", "windows"], "linux": ["linux"],
+                   "macos": ["macos"], "windows": ["windows"], "agy": ["linux", "macos", "windows"]}
+
+
+def nightly_scope(lane, schedule=""):
+    """What one nightly run does, from its hand run's lane or, for the
+    schedule, from the cron line that started it: the lane, its systems, the
+    jobs it selects, the desktop suite's systems, the agent canary's systems
+    and whether the package includes macOS. Every job's `if:` and system list
+    in nightly.yml reads this, and `nightly_aggregate` checks against it."""
+    if not lane:
+        if schedule not in NIGHTLY_SCHEDULES:
+            raise ValueError(f"nightly was started by an unknown schedule {schedule!r}")
+        lane = NIGHTLY_SCHEDULES[schedule]
+    if lane not in NIGHTLY_LANES:
+        raise ValueError(f"nightly has no lane {lane!r}")
+    systems = NIGHTLY_SYSTEMS[lane]
+    jobs = {"agy-contract-all", "agent-trust-contract-all"}
+    if lane != "agy":
+        jobs.update({"agent-journey", "holder-restart", "desktop-e2e"})
+    if lane in ("all", "macos"):
+        jobs.update({"web-e2e-macos", "remote-mailbox-macos", "perf"})
+    if lane in ("daily", "windows"):
+        jobs.add("web-e2e-windows")
+    if lane == "all":
+        jobs.add("verify")
+    if lane in ("all", "daily"):
+        jobs.add("package")
+    # `verify` runs the whole desktop suite on macOS and its Windows
+    # `@platform` tests, so an `all` run calls the desktop suite directly on
+    # Linux only.
+    desktop = ["linux"] if lane == "all" else systems
+    # The canary measures each CLI's latest release on Linux and macOS; on
+    # Windows no journey leaves its pane holder inside the CI job
+    # (docs/INSTALL.md), and the agy lane measures no journey.
+    canary = [system for system in systems if system != "windows"] if lane != "agy" else []
+    return {"lane": lane, "systems": systems, "jobs": sorted(jobs), "desktop": desktop, "canary": canary,
+            "package-macos": lane == "all"}
+
+
 def nightly_aggregate(needs, lane):
     """Require the selected nightly jobs to succeed, and all others to skip."""
-    selected = {"agy-contract-all", "agent-trust-contract-all"}
-    if lane != "agy":
-        selected.update({"agent-journey", "holder-restart", "desktop-e2e"})
-    if lane in ("", "all", "macos"):
-        selected.update({"web-e2e-macos", "remote-mailbox-macos", "perf"})
-    if lane == "windows":
-        selected.add("web-e2e-windows")
-    if lane in ("", "all"):
-        selected.update({"verify", "package"})
-    jobs = {"web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
-            "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e", "perf", "verify", "package"}
-    if lane not in ("", "all", "linux", "macos", "windows", "agy") or set(needs) != jobs:
-        raise ValueError("nightly's lane or needs do not match its job contract")
+    if set(needs) != set(NIGHTLY_JOBS) | {"scope"}:
+        raise ValueError("nightly's needs do not match its job contract")
+    if needs["scope"]["result"] != "success":
+        raise ValueError(f"scope: {needs['scope']['result']}")
+    if lane not in NIGHTLY_LANES:
+        raise ValueError(f"nightly has no lane {lane!r}")
+    selected = set(nightly_scope(lane)["jobs"])
     errors = []
-    for job in sorted(jobs):
+    for job in sorted(NIGHTLY_JOBS):
         expected = "success" if job in selected else "skipped"
         result = needs[job]["result"]
         if result != expected:
@@ -1781,9 +1831,26 @@ def main():
                              help="nightly owns agy and the journey in its direct jobs")
     plan_parser.add_argument("--record", type=Path, help="write the plan record a pull request's next run reads here")
     sub.add_parser("aggregate", help="check toJSON(needs), read from NEEDS")
+    scope_parser = sub.add_parser("nightly-scope", help="write what one nightly run does as job outputs")
+    scope_parser.add_argument("--lane", default="", help="the hand run's lane; empty for the schedule")
+    scope_parser.add_argument("--schedule", default="", help="the cron line that started a scheduled run")
     nightly_parser = sub.add_parser("nightly-aggregate", help="check nightly's direct jobs, read from NEEDS")
-    nightly_parser.add_argument("--lane", default="", choices=("", "all", "linux", "macos", "windows", "agy"))
+    nightly_parser.add_argument("--lane", default="", help="the lane nightly-scope chose; empty when it failed")
     args = parser.parse_args()
+
+    if args.command == "nightly-scope":
+        try:
+            scope = nightly_scope(args.lane, args.schedule)
+        except ValueError as error:
+            print(f"nightly scope: {error}", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(scope, indent=2))
+        if os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                for key, value in scope.items():
+                    text = value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
+                    output.write(f"{key}={text}\n")
+        return
 
     if args.command == "plan":
         draft = args.draft == "true"

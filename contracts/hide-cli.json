@@ -6322,6 +6322,7 @@
                 "sender_not_registered",
                 "codex_capability_unknown",
                 "invalid_brief",
+                "mission_brief_too_long",
                 "invalid_agent_name",
                 "brief_not_submitted",
                 "mission_brief_missing",
@@ -8125,6 +8126,8 @@
                 "mission_dependency_line_unknown",
                 "mission_dependency_stack_split",
                 "mission_merge_order_stack",
+                "mission_paths_unordered",
+                "mission_paths_in_other_mission",
                 "mission_criteria_missing",
                 "mission_criteria_too_many",
                 "mission_steps_invalid",
@@ -8604,6 +8607,14 @@
                     "value": {
                         "type": "unsigned"
                     }
+                },
+                {
+                    "name": "--follow-up",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
                 }
             ],
             "refusals": [
@@ -8612,7 +8623,9 @@
                 "mission_criterion_unknown",
                 "mission_ambiguous",
                 "mission_skip_reason_missing",
-                "mission_criteria_protected"
+                "mission_criteria_protected",
+                "mission_skip_follow_up_required",
+                "mission_follow_up_invalid"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -9838,7 +9851,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e2cf8fb8ed15b21d6f992f9f42673ccdc5d27e74e8b04f3fcd9867d54c70d058",
+    "digest": "sha256:fc858f1f43cf2d2acebee698e9e46650ea3a56d45b3eb6f39fb521d982b9a238",
     "envelopes": {
         "access": {
             "answer": "value",

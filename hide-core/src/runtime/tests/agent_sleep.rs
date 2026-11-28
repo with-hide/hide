@@ -88,8 +88,10 @@ fn asleep() -> (Runtime, String) {
 
 // The own engine stops listing an agent the moment its process ends, so the
 // session that no longer lists it is applied while the record is still
-// ending, which draws no row. The end landing asks for the session again,
-// and that session draws the sleeping row from the record (PRD agent-sleep B10).
+// ending: the record draws the pane's row from then, not asleep yet, so the
+// pane never reads as holding no agent (a screen open on its conversation
+// keeps it). The end landing asks for the session again, and that session
+// draws the row asleep (PRD agent-sleep B10).
 #[test]
 fn a_sleep_whose_agent_left_the_session_before_its_end_landed_draws_its_row_on_the_next_read() {
     let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
@@ -102,13 +104,8 @@ fn a_sleep_whose_agent_left_the_session_before_its_end_landed_draws_its_row_on_t
     ));
     runtime.ingest_session(Ok(session(None)));
     assert!(
-        !runtime
-            .snapshot()
-            .navigator
-            .agents
-            .iter()
-            .any(|agent| agent.pane_id == SLEEPER),
-        "an ending record draws no row of its own"
+        row(&runtime).get("sleep").is_none(),
+        "an ending record draws the row, not asleep until its end lands"
     );
     runtime.take_republish_request();
     assert!(runtime.ingest_agent_sleep_end(SLEEPER, Ok(4)));

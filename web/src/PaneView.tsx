@@ -4,7 +4,7 @@ import { usePaneMove } from "./PaneMoveControls";
 import { keyboardCommandOwner, keyboardInputRevision, useKeyboardOwner } from "./viewFocus";
 import type { TFunction } from "i18next";
 import { agentWithProfile, markWords } from "./agentRow";
-import { CircleAlertIcon, Columns2Icon, EllipsisIcon, GripVerticalIcon, Maximize2Icon, MessageSquareIcon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
+import { CircleAlertIcon, Columns2Icon, EllipsisIcon, GripVerticalIcon, Maximize2Icon, MessageSquareIcon, TerminalSquareIcon, XIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useOutsidePressSurface } from "./components/ui/layer";
 import type { Actions } from "./actions";
@@ -37,7 +37,8 @@ import { chordLabel, commandLabel } from "./shortcutLabels";
 import { keySystem } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
 import { modChord, TERMINAL_COPY, TERMINAL_PASTE } from "./shortcuts";
-import { wakeFailureReason, wakingLine } from "./sleep";
+import { conversationSleep } from "./sleep";
+import { SleepCard } from "./components/sleep-card";
 import type { AgentSleep, AgentStatusCode, PaneRow, RowMark, TerminalPane } from "./snapshot";
 import { PaneNoticeBody } from "./PaneNotice";
 import { caughtUp } from "./operatorFocus";
@@ -106,51 +107,8 @@ function terminalMenuChords(): TerminalMenuContext["chords"] {
  * talking to, so the terminal stays hidden until the agent is back.
  */
 function SleepBody({ paneId, sleep, actions }: { paneId: string; sleep: AgentSleep; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  const now = Date.now();
-  return (
-    <div
-      className="absolute inset-0 flex flex-col items-center justify-center gap-sm bg-card px-lg text-center"
-      data-pane-sleep={sleep.state}
-    >
-      {sleep.state === "sleeping" ? (
-        <>
-          <MoonIcon className="size-(--size-icon-lg) text-muted-foreground" aria-hidden="true" />
-          <p className="text-subhead text-foreground">{t("panes.sleep.sleeping")}</p>
-          {sleep.progress ? <p className="max-w-full truncate text-caption text-muted-foreground">{sleep.progress}</p> : null}
-          <Button variant="secondary" size="sm" className="mt-xs" data-agent-wake={paneId} onClick={() => actions.wakeAgent(paneId)}>
-            {t("panes.sleep.wake")}
-          </Button>
-        </>
-      ) : sleep.state === "waking" ? (
-        <>
-          <MoonIcon className="size-(--size-icon-lg) text-muted-foreground" aria-hidden="true" />
-          <p className="text-subhead text-foreground" role="status">
-            {t("panes.sleep.waking")}
-          </p>
-          <p className="text-caption text-muted-foreground">{wakingLine(sleep, now, t)}</p>
-        </>
-      ) : (
-        <>
-          <CircleAlertIcon className="size-(--size-icon-lg) text-destructive" aria-hidden="true" />
-          <p className="text-subhead text-foreground">{t("panes.sleep.resumeFailed")}</p>
-          {sleep.reason ? (
-            <p className="max-w-full text-caption text-muted-foreground" role="alert">
-              {wakeFailureReason(sleep, t)}
-            </p>
-          ) : null}
-          <div className="mt-xs flex items-center gap-sm">
-            <Button size="sm" variant="secondary" data-agent-wake-retry={paneId} onClick={() => actions.wakeAgent(paneId)}>
-              {t("common.retry")}
-            </Button>
-            <Button size="sm" variant="outline" data-agent-wake-fresh={paneId} onClick={() => actions.wakeAgent(paneId, true)}>
-              {t("panes.sleep.newSession")}
-            </Button>
-          </div>
-        </>
-      )}
-    </div>
-  );
+  const view = conversationSleep(paneId, { row: { sleep } }, actions);
+  return view ? <div className="absolute inset-0 flex items-center justify-center bg-card px-lg"><SleepCard paneId={paneId} view={view} className="max-w-full" /></div> : null;
 }
 
 export const PaneView = memo(function PaneView({

@@ -115,12 +115,18 @@ pub const REQUESTS_PER_TURN: u32 = 3;
 /// The most model requests one token-only turn may take, declared for each
 /// agent's CLI: `REQUESTS_PER_TURN`, but Grok 1.0.52 makes four for every
 /// turn, three chat requests and one more (its title request to `grok-4.6`
-/// in a new session), measured with the journey's fake model on 2026-10-18.
+/// in a new session), measured with the journey's fake model on 2026-10-18,
+/// and omp 19.2.1 four on a session's first turn: the answer, a title asked
+/// inside the conversation, and the session's name and its title card, with
+/// its composer predictions off as the journey runs it (each turn adds one
+/// more while they are on). Measured with the journey's fake model on
+/// 2026-11-28.
 const fn requests_per_turn(start: super::LaunchDialect) -> u32 {
     use super::LaunchDialect::*;
     match start {
         Grok => 4,
-        Claude | Codex | OpenCode | Pi | Omp | Cursor | Antigravity => REQUESTS_PER_TURN,
+        Omp => 4,
+        Claude | Codex | OpenCode | Pi | Cursor | Antigravity => REQUESTS_PER_TURN,
     }
 }
 

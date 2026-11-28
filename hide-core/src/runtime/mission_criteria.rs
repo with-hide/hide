@@ -663,6 +663,9 @@ impl Runtime {
         };
         let kind = line.kind;
         let signal_before = row.check_signal();
+        let held = row
+            .round_hold(crate::mission_health::review_limit(mission))
+            .is_some();
         let mut next = row.clone();
         // The checker whose record this is: its record is its report.
         let mut reported = None;
@@ -787,6 +790,7 @@ impl Runtime {
             self.ask_checkers(&id, node);
         } else if kind.checker_judges() {
             self.tell_worker(&id, node);
+            self.release_round(&id, node, held);
         }
         self.record_mission_events(&id, events);
         if let Some(agent) = &reported {
@@ -800,14 +804,17 @@ impl Runtime {
 
     /// `hide mission skip` (B11, B12): the Conductor goes past a line with
     /// its reason; the check command and the CI only on an answered
-    /// decision that named the node.
+    /// decision that named the node, and a review or verification whose
+    /// round budget is spent (`Criterion::budget_spent`) only naming the
+    /// follow-up node of the same mission that carries what it left open
+    /// (operator decision 2026-11-28).
     pub(super) fn skip_criterion(
         &mut self,
         actor: &Actor,
         named: Option<&str>,
         node: &str,
         key: &str,
-        (reason, decision): (String, Option<u64>),
+        (reason, decision, follow_up): (String, Option<u64>, Option<String>),
         now: u64,
     ) -> Result<(Value, bool), String> {
         let ledger = self.delivery_state().ok();
@@ -878,6 +885,39 @@ impl Runtime {
                 &format!("{node}: {key}"),
             ));
         }
+        // The same skip again is the skip it was (engineering #11), even once
+        // its follow-up node has finished.
+        if line.state == CriterionState::Skipped
+            && line
+                .skip
+                .as_ref()
+                .is_some_and(|kept| kept.reason == reason && kept.follow_up == follow_up)
+        {
+            return Ok((
+                json!({"mission": self.mission_view_for(&id, &caller)}),
+                false,
+            ));
+        }
+        // What a review or verification left open at its round limit is
+        // carried by a node of this mission, never an issue alone.
+        let limit = crate::mission_health::review_limit(mission);
+        if let Some(follow) = follow_up.as_deref() {
+            let carries = mission.node(follow).is_some_and(|other| {
+                other.key != node && other.kind != NodeKind::Wait && !other.status.finished()
+            });
+            if !carries {
+                return Err(crate::coordination::refusal(
+                    "mission_follow_up_invalid",
+                    &format!("{node}: {key} --follow-up {follow}"),
+                ));
+            }
+        } else if line.budget_spent(limit) {
+            return Err(crate::coordination::refusal(
+                "mission_skip_follow_up_required",
+                &format!("{node}: {key}"),
+            ));
+        }
+        let held = mission.nodes[index].round_hold(limit).is_some();
         // A decision is kept only where it was needed, so the line says
         // `operator 결정` only when it was one, and the lines skipped without
         // one are the Conductor's own (`Conductor가 정한 것`).
@@ -890,7 +930,8 @@ impl Runtime {
         };
         let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
         let was_met = target.nodes[index].own_lines_met();
-        let changed = target.nodes[index].criteria[at].skip(reason.clone(), decision, by);
+        let changed =
+            target.nodes[index].criteria[at].skip(reason.clone(), decision, follow_up, by);
         target.nodes[index].note_own_met(was_met, now);
         if !changed {
             return Ok((
@@ -904,6 +945,7 @@ impl Runtime {
             .line(Some(&reason));
         event.criterion = Some(key.to_owned());
         self.record_mission_events(&id, vec![event]);
+        self.release_round(&id, node, held);
         Ok((
             json!({"mission": self.mission_view_for(&id, &caller)}),
             true,
@@ -1193,17 +1235,35 @@ fn read_node_ci(
 }
 
 /// The line a node worker's brief ends with (PRD mission-speed-2 B15): on a
-/// node with a check command, then on one without.
+/// node with a check command, then on one without. `BRIEF_SELF_CHECK`
+/// follows it; a spawn asked before it was added kept the line alone
+/// (`brief_round_line`).
 const BRIEF_LINES: [&str; 2] = [
     "Before you record your `check` line, run the local checks the change touches: recording `check` starts the node's review and verification.",
     "Recording every one of your lines passed starts the node's review and verification.",
 ];
 
+/// The self-check the worker does before its first `check`, each item with
+/// the kind of document that owns it in the project, Hide's own as the
+/// example, since every project's worker reads it (operator decision
+/// 2026-11-28: these four were most of a week's review findings).
+/// `hided/assets/mission/help.md`, section 9, lists the same.
+const BRIEF_SELF_CHECK: &str = "Before your first `check`, check these four yourself and fix what you find, each against the project's own guide where it has one: (1) tests: every behaviour you add or change has a test at the right layer that fails without your change (its testing guide, such as `docs/TESTING.md`); (2) docs: the guide that owns the behaviour and its references change with it (its docs index, such as `docs/README.md`); (3) every OS and every agent: nothing assumes one operating system or one agent runtime (its agent instructions, such as `AGENTS.md`); (4) the pull request body: its pull or merge request template filled from the diff, not from intent (such as `.github/pull_request_template.md`).";
+
+/// The text `brief_round_line` ends a brief with, after `line`.
+fn brief_end(line: &str) -> String {
+    format!("{line} {BRIEF_SELF_CHECK}")
+}
+
 impl Runtime {
     /// A new check signal on `node` (`MissionNode::check_signal`, PRD
-    /// mission-speed-2 D-01, D-05) asks each live checker bound to it to
-    /// check, and its Conductor for a checker line with none alive. A push
-    /// alone, or the same record again, signals nothing (B3, B17).
+    /// mission-speed-2 D-01, D-05) asks each live checker bound to it that
+    /// has not answered it yet to check, and its Conductor for a checker
+    /// line with none alive. A push alone, or the same record again,
+    /// signals nothing (B3, B17). While the node's round budget is spent
+    /// (`MissionNode::round_hold`) it asks no one: the Conductor, warned
+    /// once, owes the choice of how the node goes on, and the hold ending
+    /// asks for the check it held (`release_round`).
     fn ask_checkers(&mut self, id: &str, node: &str) {
         let ledger = self.delivery_state().ok();
         let records = ledger.as_deref().map(|ledger| &ledger.agents);
@@ -1228,6 +1288,13 @@ impl Runtime {
         let Some(signal) = row.check_signal() else {
             return;
         };
+        if let Some(line) = row.round_hold(crate::mission_health::review_limit(mission)) {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.round_held",
+                "mission": id, "node": node, "line": line.key, "rounds": line.budget_rounds(),
+            }));
+            return;
+        }
         let (mut asked, mut needed) = (Vec::<String>::new(), Vec::new());
         for line in row
             .checker_lines()
@@ -1242,9 +1309,17 @@ impl Runtime {
             if alive.is_empty() || alive.len() < bound.len() {
                 needed.push(line.key.clone());
             }
+            // A checker that answered this signal already (a re-look the
+            // Conductor asked for on the held commit) is not asked again.
+            let answered = |agent: &&str| {
+                line.checkers.iter().any(|checker| {
+                    checker.agent_id.as_deref() == Some(*agent) && signal.answered_by(checker)
+                })
+            };
             asked.extend(
                 alive
                     .into_iter()
+                    .filter(|agent| !answered(agent))
                     .filter(|a| !asked.iter().any(|kept| kept == a))
                     .map(str::to_owned)
                     .collect::<Vec<_>>(),
@@ -1299,6 +1374,36 @@ impl Runtime {
         self.letter_wakes.touch();
     }
 
+    /// The round hold that stood on `node` (`held`) ended (a pass, a skip):
+    /// a check the hold kept from a checker of a line still open, which that
+    /// checker has not answered (`CheckSignal::answered_by`, by its answer
+    /// and never by the clock), asks it now.
+    fn release_round(&mut self, id: &str, node: &str, held: bool) {
+        let Some(mission) = self.missions.book.get(id).filter(|_| held) else {
+            return;
+        };
+        let Some(row) = mission.node(node) else {
+            return;
+        };
+        if row
+            .round_hold(crate::mission_health::review_limit(mission))
+            .is_some()
+        {
+            return;
+        }
+        let Some(signal) = row.check_signal() else {
+            return;
+        };
+        let owed = row
+            .checker_lines()
+            .filter(|line| line.state != CriterionState::Skipped)
+            .flat_map(|line| &line.checkers)
+            .any(|checker| checker.agent_id.is_some() && !signal.answered_by(checker));
+        if owed {
+            self.ask_checkers(id, node);
+        }
+    }
+
     /// A checker's answer that fails a line in the round goes to `node`'s
     /// worker (D-02, D-04, B6, B8); a round with no failure tells it
     /// nothing, and the Conductor is told no result (B9, B16).
@@ -1349,37 +1454,46 @@ impl Runtime {
         intent: &str,
         brief: &mut String,
         earlier: Option<&crate::coordination::SpawnRecord>,
-    ) {
+    ) -> Result<(), String> {
         if let Some(asked) = earlier.and_then(|earlier| {
             std::iter::once(brief.clone())
                 .chain(BRIEF_LINES.iter().map(|line| format!("{brief}\n\n{line}")))
+                .chain(
+                    BRIEF_LINES
+                        .iter()
+                        .map(|line| format!("{brief}\n\n{}", brief_end(line))),
+                )
                 .find(|text| earlier.asked_with(Some(text)))
         }) {
             *brief = asked;
-            return;
+            return Ok(());
         }
         let Some(mission) = self.missions.book.conducted_open(actor) else {
-            return;
+            return Ok(());
         };
         let Some(node) = mission
             .intent_node(intent)
             .filter(|node| node.checker_lines().next().is_some())
         else {
-            return;
+            return Ok(());
         };
         let checked = node
             .criteria
             .iter()
             .any(|line| line.kind == CriterionKind::Check);
-        let line = BRIEF_LINES[usize::from(!checked)];
-        if brief.len() + line.len() + 2 > crate::delivery::BODY_LIMIT {
-            crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.brief_line_skipped",
-                "mission": mission.id, "node": node.key, "cause": "brief_limit",
-            }));
-            return;
+        let line = brief_end(BRIEF_LINES[usize::from(!checked)]);
+        // Every brief of a node with checkers ends with the whole line
+        // (mission-112 verify F2): one with no room for it is refused, with
+        // how far over it is, rather than sent without it.
+        let over = (brief.len() + line.len() + 2).saturating_sub(crate::delivery::BODY_LIMIT);
+        if over > 0 {
+            return Err(crate::coordination::refusal(
+                "mission_brief_too_long",
+                &format!("{over} bytes over"),
+            ));
         }
         brief.push_str("\n\n");
-        brief.push_str(line);
+        brief.push_str(&line);
+        Ok(())
     }
 }

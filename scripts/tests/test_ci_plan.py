@@ -643,10 +643,8 @@ class Selection(unittest.TestCase):
         for name in ("agy-contract-all", "agent-journey"):
             block = nightly[nightly.index(f"\n  {name}:\n"):].split("\n\n")[0]
             self.assertNotIn("continue-on-error", block)
-            self.assertIn("inputs.lane == 'linux'", block)
-            self.assertIn("inputs.lane == 'macos'", block)
-            self.assertIn("inputs.lane == 'windows'", block)
-            self.assertIn('["linux","macos","windows"]', block)
+            # Its systems are the run's scope's (nightly-scope).
+            self.assertIn("systems: ${{ needs.scope.outputs.systems }}", block)
             if name == "agent-journey":
                 self.assertIn("fake: true", block)
                 self.assertNotIn("stand-ins: false", block)
@@ -1084,8 +1082,10 @@ def runner_jobs(block):
         # With more than one shard parallel daemon and web builds precede them.
         return shards + (2 if shards > 1 else 0)
     if "uses: ./.github/workflows/desktop-e2e.yml" in block:
-        # Each shard builds in place.
-        return int(re.search(r"\n      shards: (\d+)", block).group(1))
+        shards = int(re.search(r"\n      shards: (\d+)", block).group(1))
+        # With more than one shard the cargo build and the web shell build, two
+        # parallel jobs, precede them.
+        return shards + (2 if shards > 1 else 0)
     if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-clis")):
         # A lane whose macOS or Windows leg follows the plan; the most is every leg.
         systems = re.search(r"\n      systems: (.*)", block).group(1)
@@ -1095,9 +1095,10 @@ def runner_jobs(block):
     if "uses: ./.github/workflows/relay-protocol.yml" in block:
         return 3
     if "uses: ./.github/workflows/repeat.yml" in block:
-        # The count, the web specs' run, the unit tests' run, the Rust modules'
-        # run and the verdict.
-        return 5
+        # The count, the unit tests' run, the Rust modules' run and the
+        # verdict, and the web specs' run at its most: its daemon and shell
+        # builds, as many shards as an over-budget plan may take, and their total.
+        return 4 + 2 + ci.ci_repeat.WEB_OVER_BUDGET_MAX_SHARDS + 1
     if "uses: ./.github/workflows/windows-check.yml" in block:
         # The compile, the Rust tests and the unit suites, each on its own runner.
         return len(yaml.safe_load((ROOT / ".github/workflows/windows-check.yml").read_text())["jobs"])
@@ -1244,6 +1245,11 @@ class Workflows(unittest.TestCase):
         # Native and WASM relay interoperability adds one job on each OS.
         # The package lane already ran six preparation/compile jobs omitted
         # from the old count; correcting the accounting starts no new job.
+        # The macOS desktop lane's daemon and kit binaries build once in one
+        # macOS `build` job and its web shell once in a Linux `build-web` job
+        # beside it, ahead of its two shards, which build nothing; that is one
+        # macOS job and one Linux job for the 8 minutes of builds each shard
+        # did itself (docs/TESTING.md, "Balancing the e2e shards"): two jobs.
         # Every suite runs once, on the core's own engine, since the Herdr lanes
         # were removed (PRD engine-bundle-4-herdr-removal D-2).
         # The remote mailbox lane's Linux arm64 leg adds one, planned only
@@ -1268,7 +1274,12 @@ class Workflows(unittest.TestCase):
         # unit suites on three runners (from 69 to 71), so a pull request with a
         # Windows path ends near the Linux lines, not 27 minutes in
         # (docs/TESTING.md, "Where the Windows runners went").
-        self.assertLessEqual(most, 71, "a run starts more jobs than the suites and native SDK contracts need")
+        # The repeat lane's web specs moved onto `web-e2e.yml`'s shards, at
+        # most six with their two builds and their total (from 71 to 79), so a
+        # pull request that changes a spec no longer waits on one runner
+        # repeating it for up to 91 minutes (docs/TESTING.md, "The repeat lane").
+        # The macOS desktop lane's two builds (see above) are two of the 81.
+        self.assertLessEqual(most, 81, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
@@ -1464,7 +1475,7 @@ class MacosOnPullRequests(unittest.TestCase):
                 "hide-kit/src/lib.rs", "hide-ai/src/omp.rs", "hide-holder/src/lib.rs",
                 "desktop/scripts/build-identity.mjs", "desktop/scripts/macos-signing.test.mjs",
                 "desktop/src/main/updater.test.ts", "Cargo.lock", "mystery/file.txt",
-                ".github/workflows/agent-canary.yml", ".github/workflows/nightly.yml", "docs/TESTING.md",
+                ".github/workflows/nightly.yml", "docs/TESTING.md",
             ):
                 with self.subTest(status=status, path=path):
                     self.assertNoMacos(pr_plan(path, status=status))
@@ -1474,7 +1485,7 @@ class MacosOnPullRequests(unittest.TestCase):
         self.assertIn("vt", pr_plan("hide-holder/src/lib.rs")["lanes"])
         self.assertTrue({"os-contract", "windows-check"} <= set(pr_plan("hide-platform/src/wsl.rs")["lanes"]))
         # A CI definition outside the macOS and Windows jobs still exercises every other lane.
-        self.assertEqual(pr_plan(".github/workflows/agent-canary.yml")["lanes"],
+        self.assertEqual(pr_plan(".github/workflows/nightly.yml")["lanes"],
                          [lane for lane in ALL if lane not in ci.MACOS_ONLY_LANES + ci.WINDOWS_ONLY_LANES])
 
     def test_a_pull_request_that_changes_a_macos_path_plans_its_macos_jobs(self):
@@ -1804,9 +1815,7 @@ class WindowsOnPullRequests(unittest.TestCase):
                     self.assertNoWindows(pr_plan(path, status=status))
         # A CI definition with no Windows job a pull request runs plans no
         # Windows lane; `package`, which every CI edit plans, takes its own.
-        for path in (".github/workflows/agent-canary.yml", ".github/workflows/nightly.yml"):
-            with self.subTest(path=path):
-                self.assertNoWindows(pr_plan(path))
+        self.assertNoWindows(pr_plan(".github/workflows/nightly.yml"))
         self.assertNoWindows(pr_plan("docs/TESTING.md", "design/tokens.json", status="D"))
 
     def test_every_package_input_runs_the_package_lane_and_its_windows_jobs(self):
@@ -2155,12 +2164,36 @@ class Aggregate(unittest.TestCase):
                     for sibling in re.findall(r'Path\(__file__\)\.resolve\(\)\.parent / "([^"]+\.py)"', (ROOT / script).read_text()):
                         self.assertIn(f"scripts/{sibling}", listed, f"{workflow.name}: {script} loads {sibling}")
 
+    def test_the_nightly_runs_linux_and_windows_daily_and_macos_twice_a_week(self):
+        nightly = (ROOT / ".github/workflows/nightly.yml").read_text()
+        crons = re.findall(r'- cron: "([^"]+)"', nightly)
+        self.assertEqual(sorted(crons), sorted(ci.NIGHTLY_SCHEDULES))
+        # Every weekday is one schedule's, never two.
+        days = [day for cron in crons for day in cron.split()[-1].split(",")]
+        self.assertEqual(sorted(days), [str(day) for day in range(7)])
+        scopes = {lane: ci.nightly_scope("", cron) for cron, lane in ci.NIGHTLY_SCHEDULES.items()}
+        daily, full = scopes["daily"], scopes["all"]
+        self.assertEqual(daily["systems"], ["linux", "windows"])
+        self.assertEqual(full["systems"], ["linux", "macos", "windows"])
+        self.assertEqual((daily["canary"], full["canary"]), (["linux"], ["linux", "macos"]))
+        self.assertEqual((daily["package-macos"], full["package-macos"]), (False, True))
+        # No macOS job on a daily run: its macOS-only jobs and `verify`, which runs macOS lanes.
+        for job in ("web-e2e-macos", "remote-mailbox-macos", "perf", "verify"):
+            self.assertNotIn(job, daily["jobs"])
+            self.assertIn(job, full["jobs"])
+        self.assertNotIn("macos", daily["desktop"])
+        # A hand run names its lane; the schedule's cron line names it otherwise.
+        self.assertEqual(ci.nightly_scope("macos", "17 17 * * 1,2,4,5,6")["lane"], "macos")
+        for lane, schedule in (("", ""), ("", "0 0 * * *"), ("nightly", "")):
+            with self.subTest(lane=lane, schedule=schedule), self.assertRaises(ValueError):
+                ci.nightly_scope(lane, schedule)
+
     def test_nightly_requires_selected_jobs_and_rejects_failed_or_missing_agent_checks(self):
-        jobs = {"web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
-                "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e", "perf", "verify", "package"}
+        jobs = set(ci.NIGHTLY_JOBS)
         for lane, selected in (
-            ("", jobs - {"web-e2e-windows"}),
             ("all", jobs - {"web-e2e-windows"}),
+            ("daily", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e",
+                       "web-e2e-windows", "package"}),
             ("linux", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e"}),
             ("macos", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e",
                        "web-e2e-macos", "remote-mailbox-macos", "perf"}),
@@ -2168,9 +2201,11 @@ class Aggregate(unittest.TestCase):
                          "web-e2e-windows"}),
             ("agy", {"agy-contract-all", "agent-trust-contract-all"}),
         ):
+            self.assertEqual(set(ci.nightly_scope(lane)["jobs"]), selected)
             needs = {job: {"result": "success" if job in selected else "skipped"} for job in jobs}
+            needs["scope"] = {"result": "success"}
             ci.nightly_aggregate(needs, lane)
-            for job in jobs:
+            for job in jobs | {"scope"}:
                 # Includes the direct agy and journey calls: a failed OS,
                 # stand-in or forms job fails that call, then this aggregate.
                 for outcome in {"success", "skipped", "failure", "cancelled"} - {needs[job]["result"]}:
@@ -2179,17 +2214,27 @@ class Aggregate(unittest.TestCase):
                             ci.nightly_aggregate({**needs, job: {"result": outcome}}, lane)
             with self.assertRaisesRegex(ValueError, "job contract"):
                 ci.nightly_aggregate({job: value for job, value in needs.items() if job != "agent-journey"}, lane)
-        with self.assertRaisesRegex(ValueError, "job contract"):
+        with self.assertRaisesRegex(ValueError, "no lane"):
             ci.nightly_aggregate(needs, "unknown")
         nightly = (ROOT / ".github/workflows/nightly.yml").read_text()
         report = nightly.split("\n  report:\n", 1)[1]
         actual = {job.strip() for job in re.search(r"needs: \[([^\]]+)\]", report).group(1).split(",")}
-        self.assertEqual(actual, jobs)
-        self.assertIn('run: python3 scripts/ci-plan.py nightly-aggregate --lane "$LANE_INPUT"', report)
+        # The agent canary's jobs are not the report's to read.
+        self.assertEqual(actual, jobs | {"scope"})
+        self.assertIn('run: python3 scripts/ci-plan.py nightly-aggregate --lane "$LANE"', report)
         self.assertIn("NEEDS: ${{ toJSON(needs) }}", report)
         self.assertIn("if: ${{ always() }}", report.split("steps:", 1)[0])
         reporting = report.split("- name: Open, comment on and close", 1)[1]
         self.assertIn("if: ${{ always() && github.ref == 'refs/heads/main' }}", reporting)
+        # Each selectable job reads the scope's job list in its `if:`.
+        for job in jobs:
+            block = nightly.split(f"\n  {job}:\n", 1)[1].split("\n\n", 1)[0]
+            self.assertIn(f"if: ${{{{ contains(fromJSON(needs.scope.outputs.jobs), '{job}') }}}}", block, job)
+        canary = [name for name in re.findall(r"\n  (canary-[a-z]+):\n", nightly)]
+        self.assertEqual(canary, ["canary-latest", "canary-journey", "canary-record"])
+        for job in canary:
+            name = re.search(r"name: (.+)", nightly.split(f"\n  {job}:\n", 1)[1]).group(1)
+            self.assertTrue(name.startswith("agent canary "), name)
 
     def test_planned_success_and_unplanned_skip_pass(self):
         for result in (plan("docs/BUILD.md"), plan("web/src/Overview.tsx"), plan(".github/workflows/pr.yml"),

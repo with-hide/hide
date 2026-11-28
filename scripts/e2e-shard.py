@@ -82,12 +82,21 @@ def listed_tests(text, allow_none=False):
     return tests
 
 
+def weights(tests, table):
+    """Each test's recorded seconds; a test the table does not know weighs the table's median.
+
+    `scripts/ci-repeat.py` sizes the repeat lane's web shards with the same
+    weights, so the plan it makes and the shards dealt here agree.
+    """
+    unknown = statistics.median(table.values()) if table else 1.0
+    return {test: float(table.get(test, unknown)) for test in tests}
+
+
 def split(tests, table, shards):
     """Shard index (0-based) for each test: longest first into the lightest shard."""
     if shards < 1:
         raise Refused("a run has at least one shard")
-    unknown = statistics.median(table.values()) if table else 1.0
-    weight = {test: float(table.get(test, unknown)) for test in tests}
+    weight = weights(tests, table)
     load = [0.0] * shards
     assigned = {}
     for test in sorted(tests, key=lambda test: (-weight[test], test)):

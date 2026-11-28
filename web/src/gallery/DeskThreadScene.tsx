@@ -12,7 +12,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import type { DeskJob, DeskMention } from "../desk";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
-import type { AgentRow, SessionThreadSection, SnapshotRest, ThreadPage } from "../snapshot";
+import type { AgentRow, AgentSleep, SessionThreadSection, SnapshotRest, ThreadPage } from "../snapshot";
 import { useShellStore } from "../store";
 import { storyJobs } from "./deskSceneData";
 import { missionFixture } from "./MissionScene";
@@ -25,7 +25,17 @@ export const DESK_THREAD_SCENES = [
   { state: "held", label: "Thread from the store: its pane runs another session (B29)" },
   { state: "queued", label: "Thread from the store: words sent while the agent works wait over the box, ■ in send's place (PRD desk-queue B1, B10)" },
   { state: "paused", label: "Thread from the store: the waiting line paused, a line Hide could not confirm (PRD desk-queue B14, B23)" },
+  { state: "sleeping", label: "Thread from the store: asleep, dimmed with the sleep card in its middle and no box (operator decision 2026-11-28, A-1)" },
+  { state: "waking", label: "Thread from the store: waking, how old the resumed conversation is" },
+  { state: "wake-failed", label: "Thread from the store: a wake that failed, the core's reason, Retry and Start new session" },
 ] as const;
+
+/** What the agent row says of its sleep in each sleeping scene. */
+const SLEEPS: Partial<Record<SceneState, AgentSleep>> = {
+  sleeping: { state: "sleeping", since_unix_ms: Date.now() - 5 * 60 * 60_000, progress: "e2e 기다리는 방식 바꾸는 중" },
+  waking: { state: "waking", since_unix_ms: Date.now() - 5 * 60 * 60_000 },
+  "wake-failed": { state: "failed", since_unix_ms: Date.now() - 5 * 60 * 60_000, reason: "agent_wake.not_resumed" },
+};
 
 type SceneState = (typeof DESK_THREAD_SCENES)[number]["state"];
 
@@ -53,7 +63,7 @@ const edit = (toolCallId: string, path: string, oldText: string, newText: string
  */
 function conductorPage(now: number, mission: string): ThreadPage {
   return {
-    updates: [
+    record: "r1", start: 0, updates: [
       asked("Desk 1차를 미션으로 돌려줘"),
       said("계획을 올리고 @1a-desk-room에 첫 층을 맡길게요."),
       shell("p1", "hide task set --file plan.json", "completed"),
@@ -112,14 +122,17 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
   // The job counts the plan the store holds for its pane, so the head's plan chip and the plan part agree.
   const job: DeskJob = useMemo(() => {
     const base = state === "asking" ? jobs.gallery! : jobs.conductor!;
-    return { ...base, plan: { done: plan.progress.done, total: plan.progress.total } };
+    // A sleeping session's card reads asleep: no turn of it is running.
+    return { ...base, ...(state in SLEEPS ? { state: "sleeping" as const, mark: "asleep" as const } : {}), plan: { done: plan.progress.done, total: plan.progress.total } };
   }, [jobs, plan, state]);
 
   useLayoutEffect(() => {
-    const rows = [row("w1:1a", "1a Desk 방", "done", "codex"), row("w1:1b", "1b 스레드 화면", "going", "codex"), row(job.pane_id!, job.title, state === "paused" ? "done" : (job.mark ?? "going"), job.agent_kind)];
+    const sleep = SLEEPS[state] ?? null;
+    const own = sleep ? { ...row(job.pane_id!, job.title, "asleep", job.agent_kind), state: { working: false, asking: false }, sleep } as AgentRow : row(job.pane_id!, job.title, state === "paused" ? "done" : (job.mark ?? "going"), job.agent_kind);
+    const rows = [row("w1:1a", "1a Desk 방", "done", "codex"), row("w1:1b", "1b 스레드 화면", "going", "codex"), own];
     const page: Record<SceneState, SessionThreadSection> = {
       live: thread(job.pane_id!, conductorPage(now, missions.mission.id)),
-      asking: thread(job.pane_id!, { updates: [asked("gallery 캡처를 라이트·다크로 찍어서 나란히 비교해줘"), shell("c1", "node scripts/capture-gallery.mjs --theme light", "completed"), { ...said(ASKED_IN), _meta: { hide: { at_ms: Date.now() - 10 * 60_000 } } }], parts: {}, sessions: {} }),
+      asking: thread(job.pane_id!, { record: "r1", start: 0, updates: [asked("gallery 캡처를 라이트·다크로 찍어서 나란히 비교해줘"), shell("c1", "node scripts/capture-gallery.mjs --theme light", "completed"), { ...said(ASKED_IN), _meta: { hide: { at_ms: Date.now() - 10 * 60_000 } } }], parts: {}, sessions: {} }),
       failed: thread(job.pane_id!, null, { state: "failed", failure: "no_record" }),
       held: thread(job.pane_id!, conductorPage(now, missions.mission.id), { pane: "changed" }),
       queued: thread(job.pane_id!, conductorPage(now, missions.mission.id), { queue: { state: "waiting", max: 8, full: false, lines: [
@@ -130,6 +143,9 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
         { id: 1, text: "테스트도 같이 돌려 줘", files: [], sending: false, failure: "uncertain" },
         { id: 2, text: "끝나면 PR 열어 줘", files: [], sending: false },
       ] } }),
+      sleeping: thread(job.pane_id!, conductorPage(now, missions.mission.id)),
+      waking: thread(job.pane_id!, conductorPage(now, missions.mission.id)),
+      "wake-failed": thread(job.pane_id!, conductorPage(now, missions.mission.id)),
     };
     // The model Hide launched the Conductor with, which the head's second line names (letter-18465).
     const overview_graph = { sessions: [{ device_id: "mac", pane_id: job.pane_id!, session_digest: "d", launch_model: "opus", launch_effort: "high" }] };
@@ -145,7 +161,7 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
     <TooltipProvider>
       <div className="flex h-screen min-w-0 justify-end bg-background text-foreground" data-desk-thread-scene={state}>
         <div className="flex min-h-0 w-full max-w-(--size-lane-ideal) min-w-0 flex-col border-l border-border">
-          <ThreadPanel job={job} paneId={job.pane_id} actions={actions} mentions={mentions} startedByDesk={state === "asking"} asks={state === "asking" ? ASKS : undefined} onAsk={noop} head={<SessionHead paneId={job.pane_id!} title={job.title} job={job} row={null} pane={null} machine={state === "live" ? "Mac mini" : null} disconnected={false} sleeping={false} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} />} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={() => Promise.resolve(true)} />
+          <ThreadPanel job={job} paneId={job.pane_id} actions={actions} mentions={mentions} startedByDesk={state === "asking"} asks={state === "asking" ? ASKS : undefined} onAsk={noop} head={<SessionHead paneId={job.pane_id!} title={job.title} job={job} row={null} pane={null} machine={state === "live" ? "Mac mini" : null} disconnected={false} sleeping={state in SLEEPS} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} />} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={() => Promise.resolve(true)} />
         </div>
       </div>
     </TooltipProvider>
