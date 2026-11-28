@@ -9819,9 +9819,195 @@
             ],
             "repeats_at_most": null,
             "rest": null
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
+            "command": "plan set",
+            "options": [
+                {
+                    "conflicts": [
+                        "--json"
+                    ],
+                    "name": "--file",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--file"
+                    ],
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "json"
+                    }
+                },
+                {
+                    "name": "--ask",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--reason",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "plan_invalid",
+                "plan_order_refused",
+                "plan_too_large",
+                "plan_full",
+                "plan_unavailable",
+                "plan_session_unknown",
+                "plan_evidence_missing",
+                "plan_pr_not_yours",
+                "plan_pr_unconfirmed",
+                "plan_file_outside",
+                "plan_file_missing",
+                "plan_file_unconfirmed",
+                "plan_report_missing"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "task set"
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [
+                {
+                    "name": "key",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "plan node",
+            "options": [
+                {
+                    "name": "--status",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "done",
+                            "planned",
+                            "working",
+                            "dropped"
+                        ]
+                    }
+                },
+                {
+                    "name": "--line",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--file"
+                    ],
+                    "name": "--pr",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "change_request"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--pr"
+                    ],
+                    "name": "--file",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "plan_missing",
+                "plan_node_unknown",
+                "plan_order_refused",
+                "plan_evidence_missing",
+                "plan_pr_not_yours",
+                "plan_pr_unconfirmed",
+                "plan_file_outside",
+                "plan_file_missing",
+                "plan_file_unconfirmed",
+                "plan_report_missing",
+                "change_request_other_host",
+                "change_request_other_repository",
+                "change_request_project_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "task node"
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
+            "command": "plan approve",
+            "options": [],
+            "refusals": [
+                "plan_missing",
+                "plan_not_yours",
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "task approve"
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
+            "command": "plan drop",
+            "options": [],
+            "refusals": [
+                "plan_not_yours",
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "task drop"
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
+            "command": "plan show",
+            "options": [],
+            "refusals": [
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "task show"
         }
     ],
-    "digest": "sha256:c7d1f6b4af82b31c72fbcc13937a48e7f3fbd476d94388abe368169031fb0f4f",
+    "digest": "sha256:c401ec684225aa06ee959a6fd842bf6d9c1f80374908ec8685ad899f84f7131f",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -9881,6 +10067,11 @@
         "skill": {
             "answer": "value",
             "code": "error.code",
+            "ok": "ok"
+        },
+        "task": {
+            "answer": "result",
+            "code": "reason",
             "ok": "ok"
         },
         "watch": {

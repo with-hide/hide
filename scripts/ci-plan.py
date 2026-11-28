@@ -977,6 +977,7 @@ POLICY_ONLY = (
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py", "scripts/check-device-kits-single-source.py",
     "scripts/check-agent-folders.sh",
+    "scripts/check-retired-spellings.py",
     "scripts/check-no-workstation-identity.*", "scripts/check-worktree-removal-boundary.sh",
     "scripts/check-release-assets.mjs", "scripts/release-draft.mjs",
     "scripts/merge-order.py", "scripts/pull_requests.py",

@@ -561,8 +561,9 @@ pub(crate) fn login_shell() -> Option<PathBuf> {
 impl Skill {
     /// The text of the stub. The description is a quoted YAML string: a
     /// plain one ends at its first `: `, and a strict reader such as Pi's
-    /// then drops the whole skill (`hide-conductor` version 1).
-    pub(crate) fn text(self) -> String {
+    /// then drops the whole skill (`hide-conductor` version 1). `hided`'s
+    /// guide tests read it as what an agent is taught.
+    pub fn text(self) -> String {
         // A JSON string is a YAML double-quoted scalar.
         let description = serde_json::Value::from(self.description).to_string();
         format!(

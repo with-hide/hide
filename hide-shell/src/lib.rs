@@ -13,10 +13,13 @@
 //! recorded through it (`hide-session`, the pull requests a call names). It
 //! reads text only: it starts nothing, opens nothing and keeps no state.
 //! [`quote`] is the other direction, how a word is written for a shell to
-//! read it back.
+//! read it back. [`retired`] is what one program's words mean once a line
+//! is read: the `hide` command line's retired spellings, which every reader
+//! of a `hide` command reads its words through.
 
 mod powershell;
 pub mod quote;
+pub mod retired;
 
 /// The syntax of the shell that reads a line: the one place a shell's kind
 /// is named, for reading a line ([`shell_line`]) and for writing a word

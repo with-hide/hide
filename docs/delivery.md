@@ -143,6 +143,12 @@ A tool that runs these commands from a program (such as a dispatch client) check
 - `answers`: the JSON Schema of each answer, and `digest`, the `sha256:` of the document without it, its keys sorted and written compactly.
 
 A caller compares the digest it was written against, or the commands and options it uses, and refuses a mismatch before running anything.
+
+The contract only grows within a `format`: a caller looks a command up by the words it types, its arguments by name and its envelope by topic, so none of them leaves the document while the CLI still runs it.
+A renamed command keeps its old spelling for good, read as the command it is now by the one retired-words table every reader of a `hide` command shares (`hide-shell/src/retired.rs`), and keeps its entry: the current entry's own arguments, options and answers under the old words, with `retired_for` naming the command it is now (the entry `plan set` carries `"retired_for": "task set"`).
+A renamed option stays in its command's `options` with `retired_for` naming the option it is now, and a retired topic word keeps its key in `envelopes` beside the new one (`plan` beside `task`).
+An argument's name and a value's type do not change within a `format`.
+A calling tool offers neither a `retired_for` nor a `hidden` entry to a person; `hided/AGENTS.md`, Renaming, owns how a rename is written.
 The CLI admits only the commands and flags the contract names (`hided/src/cli_contract.rs`), its tests hold each parser to the table, and the answer schemas come from the core's answer types (`hide-core/src/delivery/answer.rs`), so a changed command name, option or answer field changes the exported contract.
 A command whose standard output is closed by its reader (`hide agent list | head`) ends quietly with status 141 and prints nothing to standard error; `docs/ARCHITECTURE.md`, The platform layer, owns the rule.
 `contracts/hide-cli.json` is the committed copy, and a test fails until it is regenerated with `target/debug/hide contract --json | python3 -m json.tool > contracts/hide-cli.json`.

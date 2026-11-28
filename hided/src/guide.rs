@@ -339,16 +339,88 @@ mod tests {
         assert!(TEXT.contains(crate::worktree_cli::USAGE));
     }
 
-    /// What an agent is taught at its session's start, by `hide guide` and
-    /// by `hide mission help`.
-    fn taught() -> Vec<(&'static str, String)> {
-        vec![
-            ("session start", hide_agent_hooks::START_CONTEXT.to_owned()),
-            ("hide guide", text()),
-            ("hide mission help", crate::mission_cli::HELP.to_owned()),
-            ("hide issue help", crate::issue_cli::HELP.to_owned()),
+    /// What an agent is taught: the session start, `hide guide`, every
+    /// topic's help and usage, `hide --help`, the skill stubs Hide writes and
+    /// Desk's instructions.
+    fn taught() -> Vec<(String, String)> {
+        let mut taught = vec![
+            (
+                "session start".to_owned(),
+                hide_agent_hooks::START_CONTEXT.to_owned(),
+            ),
+            ("hide guide".to_owned(), text()),
+            ("hide --help".to_owned(), crate::cli::help_text()),
+            (
+                "Desk's instructions".to_owned(),
+                hide_desk::INSTRUCTIONS.to_owned(),
+            ),
+        ];
+        for (name, help) in helps() {
+            taught.push((name.to_owned(), help.to_owned()));
+        }
+        for skill in hide_kit::agents::SKILLS {
+            taught.push((format!("the {} skill", skill.name), skill.text()));
+        }
+        for topic in USAGE_TOPICS {
+            let usage = crate::cli::command_usage(topic, None)
+                .unwrap_or_else(|| panic!("hide {topic} has no usage"));
+            taught.push((format!("hide {topic} --help"), usage));
+        }
+        taught.push((
+            "hide agent profile --help".to_owned(),
+            crate::cli::command_usage("agent", Some("profile")).unwrap(),
+        ));
+        taught
+    }
+
+    /// The guides `hide <topic> help` prints.
+    fn helps() -> [(&'static str, &'static str); 6] {
+        [
+            ("hide mission help", crate::mission_cli::HELP),
+            ("hide issue help", crate::issue_cli::HELP),
+            ("hide automation help", crate::automation_cli::HELP),
+            ("hide task help", crate::plan_cli::HELP),
+            ("hide wait help", crate::wait_cli::HELP),
+            ("hide browser help", crate::browser_page::HELP),
         ]
     }
+
+    /// Every topic whose usage `hide <topic> --help` prints, but `import`:
+    /// the read-only import of Herdr's state is a person's command, never
+    /// taught to an agent.
+    const USAGE_TOPICS: &[&str] = &[
+        "request",
+        "inbox",
+        "watch",
+        "agent",
+        "ps",
+        "skill",
+        "mcp",
+        "device",
+        "phone",
+        "access",
+        "mission",
+        "task",
+        "wait",
+        "automation",
+        "links",
+        "session",
+        "memory",
+        "browser",
+        "file",
+        "diff",
+        "view",
+        "pane",
+        "workspace",
+        "status",
+        "stop",
+        "always-on",
+        "open",
+        "version",
+        "guide",
+        "issue",
+        "contract",
+    ];
 
     /// PRD engine-bundle-1 D-6, B1: an agent is taught Hide's commands only,
     /// never Herdr's program, its variables or its commands.
@@ -366,16 +438,7 @@ mod tests {
     /// is written in its English form.
     #[test]
     fn what_an_agent_is_taught_is_english() {
-        let helps = [
-            ("hide automation help", crate::automation_cli::HELP),
-            ("hide task help", crate::plan_cli::HELP),
-            ("hide wait help", crate::wait_cli::HELP),
-            ("hide browser help", crate::browser_page::HELP),
-        ];
-        let taught = taught()
-            .into_iter()
-            .chain(helps.map(|(name, text)| (name, text.to_owned())));
-        for (name, text) in taught {
+        for (name, text) in taught() {
             let other: Vec<&str> = text
                 .lines()
                 .filter(|line| line.chars().any(korean_chinese_or_japanese))
@@ -400,45 +463,122 @@ mod tests {
         )
     }
 
-    /// Every `hide` command of the contract's topics that an agent is taught
-    /// is a command of the contract, so a guide cannot point at one that
-    /// does not exist.
-    #[test]
-    fn every_contract_command_an_agent_is_taught_is_in_the_contract() {
+    /// What is wrong with the `hide` commands `taught` names: one of the
+    /// contract's topics that the contract does not name, and a retired
+    /// spelling (`hide_shell::retired`), which an agent would copy into a
+    /// new session; and how many commands were checked.
+    fn taught_problems(taught: &[(String, String)]) -> (Vec<String>, usize) {
+        let mut problems = Vec::new();
         let mut checked = 0;
-        for (name, text) in taught() {
+        for (name, text) in taught {
             for (at, _) in text.match_indices("hide ") {
-                let words: Vec<&str> = text[at + "hide ".len()..]
-                    .split(|c: char| c.is_whitespace() || c == '`' || c == ',')
-                    .take(3)
-                    .take_while(|word| {
-                        !word.is_empty() && word.chars().all(|c| c.is_ascii_lowercase() || c == '-')
-                    })
-                    .collect();
-                let Some(topic) = words.first() else { continue };
-                if !crate::cli_contract::topic(topic) && *topic != "workspace" {
-                    continue;
-                }
-                if words.get(1) == Some(&"help")
-                    || (*topic == "workspace"
-                        && !matches!(words.get(1), Some(&"purpose" | &"remove")))
+                // A word that ends in `hide` (`inside hide`) names no command.
+                if text[..at]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '_')
                 {
                     continue;
                 }
-                let args: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
-                // A topic named on its own (`the hide mission commands`)
-                // names no command.
-                if args.len() == 1 && !crate::cli_contract::names(&args) {
-                    continue;
+                let line = text[at + "hide ".len()..]
+                    .split(['\n', '`'])
+                    .next()
+                    .unwrap_or_default();
+                let typed: Vec<&str> = line
+                    .split_whitespace()
+                    .map(|word| word.trim_end_matches(['.', ',', ';', ':', ')']))
+                    .collect();
+                let now = hide_shell::retired::current(&typed);
+                if now != typed {
+                    problems.push(format!(
+                        "{name} teaches the retired hide {}; write hide {}",
+                        typed.join(" "),
+                        now.join(" ")
+                    ));
                 }
-                assert!(
-                    crate::cli_contract::names(&args),
-                    "{name} teaches hide {}, which the contract does not name",
-                    words.join(" ")
-                );
-                checked += 1;
+                // `request ack|cancel|show` names three commands.
+                let mut commands: Vec<Vec<&str>> = vec![Vec::new()];
+                for word in text[at + "hide ".len()..]
+                    .split(|c: char| c.is_whitespace() || c == '`' || c == ',')
+                    .take(3)
+                    .take_while(|word| {
+                        !word.is_empty()
+                            && word
+                                .chars()
+                                .all(|c| c.is_ascii_lowercase() || c == '-' || c == '|')
+                    })
+                {
+                    commands = commands
+                        .iter()
+                        .flat_map(|words| {
+                            word.split('|').map(move |alternative| {
+                                let mut words = words.clone();
+                                words.push(alternative);
+                                words
+                            })
+                        })
+                        .collect();
+                }
+                for words in commands {
+                    let Some(topic) = words.first() else { continue };
+                    if !crate::cli_contract::topic(topic) && *topic != "workspace" {
+                        continue;
+                    }
+                    if words.get(1) == Some(&"help")
+                        || (*topic == "workspace"
+                            && !matches!(words.get(1), Some(&"purpose" | &"remove")))
+                    {
+                        continue;
+                    }
+                    let args: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
+                    if !crate::cli_contract::names(&args) {
+                        // A topic, or a topic inside one, named on its own
+                        // (`the hide mission commands`, `hide agent profile
+                        // --help`) names no command.
+                        if crate::cli_contract::COMMANDS
+                            .iter()
+                            .any(|spec| spec.words.starts_with(&words))
+                        {
+                            continue;
+                        }
+                        problems.push(format!(
+                            "{name} teaches hide {}, which the contract does not name",
+                            words.join(" ")
+                        ));
+                    }
+                    checked += 1;
+                }
             }
         }
-        assert!(checked > 40, "only {checked} commands were checked");
+        (problems, checked)
+    }
+
+    /// Every `hide` command of the contract's topics that an agent is taught
+    /// is a command of the contract, and none is a retired spelling, so a
+    /// guide cannot point at one that does not exist or teach a word that
+    /// is gone (`hided/AGENTS.md`, Renaming).
+    #[test]
+    fn every_contract_command_an_agent_is_taught_is_in_the_contract() {
+        let (problems, checked) = taught_problems(&taught());
+        assert_eq!(problems, Vec::<String>::new());
+        assert!(checked > 60, "only {checked} commands were checked");
+    }
+
+    #[test]
+    fn the_taught_commands_guard_catches_a_retired_and_an_unknown_command() {
+        let taught = [(
+            "fixture".to_owned(),
+            "Run `hide plan show`, then `hide agent frobnicate a1`. Nothing else.".to_owned(),
+        )];
+        let (problems, _) = taught_problems(&taught);
+        let problems = problems.join("\n");
+        assert!(
+            problems.contains("teaches the retired hide plan show; write hide task show"),
+            "{problems}"
+        );
+        assert!(
+            problems.contains("teaches hide agent frobnicate"),
+            "{problems}"
+        );
     }
 }
