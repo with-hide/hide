@@ -68,9 +68,18 @@ function RunWords({ counts }: { counts: RunCounts }) {
 /**
  * A run of tools between two pieces of the agent's words, as one gray line (mockup v3 section 2): its mark, its counts
  * by kind (`명령 10개 실행 · 1개 실패 · 파일 2개 읽음 · 파일 1개 고침 +182 −0`) and a chevron, right while folded and down
- * while its lines stand open under it. Pressing it opens or folds them in place.
+ * while its lines stand open under it. Pressing it opens or folds them in place. Without `onToggle` (the phone, whose
+ * runs never open) it is the same mark and words alone, with no button and no chevron.
  */
-export function ToolRunLine({ run, open, onToggle }: { run: ToolRun; open: boolean; onToggle: () => void }) {
+export function ToolRunLine({ run, open, onToggle }: { run: ToolRun; open: boolean; onToggle?: () => void }) {
+  if (!onToggle) {
+    return (
+      <p className="flex max-w-full min-w-0 items-center gap-xs self-start text-body text-muted-foreground" data-conversation-run="still">
+        <ToolMarkIcon mark={run.mark} />
+        <RunWords counts={run.counts} />
+      </p>
+    );
+  }
   const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
   return (
     <Button variant="text" size="inline" className="max-w-full min-w-0 self-start gap-xs text-body text-muted-foreground hover:text-foreground" aria-expanded={open} data-conversation-run={open ? "open" : "folded"} onClick={onToggle}>

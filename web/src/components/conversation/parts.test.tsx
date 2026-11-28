@@ -49,6 +49,16 @@ it("says a run's counts in one gray line, a failure alone in red, and opens or f
   expect(toggle).toHaveBeenCalledTimes(1);
 });
 
+it("draws a run that cannot open, as the phone draws it, as its mark and words alone with no button or chevron", async () => {
+  const run = runOf([command("c1", "completed"), command("c2", "failed")]);
+  const host = await render(<ToolRunLine run={run} open={false} />);
+  const line = host.querySelector<HTMLElement>("[data-conversation-run]")!;
+  expect(line.getAttribute("data-conversation-run")).toBe("still");
+  expect(line.textContent).toBe("Ran 2 commands · 1 failed");
+  expect(host.querySelector("button")).toBeNull();
+  expect(host.querySelectorAll("svg")).toHaveLength(1);
+});
+
 const letter: Letter = { key: "l1", direction: "received", peer: { name: "m110-mini-journey", mark: "going", agent_kind: "claude", pane_id: "w1:p2" }, kind: "reply", first: "1) 지웠어요", text: "1) 지웠어요\n2) 다시 돌렸어요", command: null };
 
 it("draws a letter's band by its arrow, name, kind and first line, opens the whole letter on a press, and leaves the name to open its session", async () => {
