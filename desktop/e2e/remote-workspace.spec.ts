@@ -174,7 +174,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
     const page = await app.firstWindow();
     await enterWorkspace(page, "fixture");
     for (const [args, label] of [
-      [["workspace", "info"], "local-info"],
+      [["checkout", "show"], "local-info"],
       [["file", "open", localFile], "local-file"],
       [["diff", "open", localFile], "local-diff"],
     ] as const) {
@@ -242,7 +242,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
       const detachedEnv: NodeJS.ProcessEnv = { ...run.env, HIDE_CAP_REF: reference! };
       delete detachedEnv.HERDR_PANE_ID;
       delete detachedEnv.HIDE_PANE_ID;
-      const detached = spawnSync(HIDE_CLI, ["workspace", "info"], {
+      const detached = spawnSync(HIDE_CLI, ["checkout", "show"], {
         env: detachedEnv,
         encoding: "utf8", timeout: 10_000,
       });
@@ -258,7 +258,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
       "#!/bin/bash", "set -euo pipefail", "for i in $(seq 1 65); do",
       `  reference=$(${quote(HIDE_CLI)} workspace info --hook | jq -er .reference)`,
       "  test -n \"$reference\"",
-      `  HIDE_CAP_REF="$reference" ${quote(HIDE_CLI)} workspace info >/dev/null`,
+      `  HIDE_CAP_REF="$reference" ${quote(HIDE_CLI)} checkout show >/dev/null`,
       "  printf '%s\\n' \"$reference\"", "done", "",
     ].join("\n"), { mode: 0o700 });
     const stressCommand = `HIDE_STATE_DIR=${quote(path.dirname(bridge))} bash ${quote(stressScript)} > ${quote(stressOutput)} 2> ${quote(stressError)}; printf '%s' "$?" > ${quote(stressExit)}\n`;
@@ -268,7 +268,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
     const repeatedReferences = fs.readFileSync(stressOutput, "utf8").trim().split("\n");
     expect(repeatedReferences).toHaveLength(65);
     expect(new Set(repeatedReferences)).toEqual(new Set(sessionReferences));
-    const info = await commandFromPane(remote, run, bridge, ["workspace", "info"], "remote-info");
+    const info = await commandFromPane(remote, run, bridge, ["checkout", "show"], "remote-info");
     expect(info.status, JSON.stringify(info.answer)).toBe(0);
     expect(info.answer).toMatchObject({ ok: true, result: { context: { device_id: "ssh-e2e", checkout_path: fs.realpathSync(path.join(remote.root, "fixture")) } } });
 
@@ -284,7 +284,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
     await expect.poll(() => daemonEvents(daemonLog).some((line) => line.kind === "host.closed"), { timeout: 30_000 }).toBe(true);
     await sendFrame(page, state, { kind: "device_host_retry", payload: { device_id: "ssh-e2e" } });
     await expect.poll(() => liveBridges(bridge).filter((name) => !firstBridges.includes(name)).length, { timeout: 60_000 }).toBe(1);
-    const reconnected = await commandFromPane(remote, run, bridge, ["workspace", "info"], "remote-info-reconnected");
+    const reconnected = await commandFromPane(remote, run, bridge, ["checkout", "show"], "remote-info-reconnected");
     expect(reconnected.status, JSON.stringify(reconnected.answer)).toBe(0);
     expect(reconnected.answer).toMatchObject({ ok: true, result: { context: { device_id: "ssh-e2e" } } });
     // Each connection started the device's pane service on its own link.
@@ -308,10 +308,10 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
     } });
     await expect.poll(() => liveBridges(bridge).length, { timeout: 60_000 }).toBe(2);
     await second.attach(run, "ssh-e2e-2");
-    const secondInfo = await commandFromPane(second, run, bridge, ["workspace", "info"], "second-info");
+    const secondInfo = await commandFromPane(second, run, bridge, ["checkout", "show"], "second-info");
     expect(secondInfo.status, JSON.stringify(secondInfo.answer)).toBe(0);
     expect(secondInfo.answer).toMatchObject({ ok: true, result: { context: { device_id: "ssh-e2e-2", checkout_path: secondCheckout } } });
-    const firstInfo = await commandFromPane(remote, run, bridge, ["workspace", "info"], "first-info-beside-second");
+    const firstInfo = await commandFromPane(remote, run, bridge, ["checkout", "show"], "first-info-beside-second");
     expect(firstInfo.status, JSON.stringify(firstInfo.answer)).toBe(0);
     expect(firstInfo.answer).toMatchObject({ ok: true, result: { context: { device_id: "ssh-e2e", checkout_path: firstCheckout } } });
     twinServer = http.createServer((_request, response) => {
@@ -357,7 +357,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
       .toBe("another registered device reaches the same account on that machine");
     expect(fs.readlinkSync(deviceCli)).toBe(path.join(fs.realpathSync(helper), "current", "hide"));
     expect(JSON.stringify(readSettings(claudeSettings(deviceAccount)))).toContain(path.join(fs.realpathSync(helper), "current", "hide-agent-hooks"));
-    const survivor = await commandFromPane(remote, run, bridge, ["workspace", "info"], "first-info-after-removal");
+    const survivor = await commandFromPane(remote, run, bridge, ["checkout", "show"], "first-info-after-removal");
     expect(survivor.status, JSON.stringify(survivor.answer)).toBe(0);
     expect(survivor.answer).toMatchObject({ ok: true, result: { context: { device_id: "ssh-e2e" } } });
     expect(daemonEvents(daemonLog).slice(beforeRemoval).filter((line) =>
@@ -510,7 +510,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
     }), { timeout: 20_000 }).toEqual(expect.arrayContaining(["device=remote", ""]));
     await showDevice(page, state, "ssh-e2e");
     const devViewId = (openedDev.answer.result as { view_id: string }).view_id;
-    const status = await commandFromPane(remote, run, bridge, ["view", "status", devViewId], "remote-dev-status");
+    const status = await commandFromPane(remote, run, bridge, ["view", "show", devViewId], "remote-dev-status");
     expect(status.status, JSON.stringify(status.answer)).toBe(0);
     expect(status.answer).toMatchObject({ ok: true, view: { page: { state: "loaded" } } });
     const waited = await commandFromPane(remote, run, bridge, ["browser", "open", `http://localhost:${remotePort}/remote.html`, "--wait"], "remote-dev-wait");

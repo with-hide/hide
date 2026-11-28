@@ -340,7 +340,7 @@ class Runtime:
         # CLI claims the reference even when Info has no renderer to answer.
         # That explicit refusal is expected in this headless measurement.
         try:
-            self.pane_command(pane, [str(self.hide), "workspace", "info"], name + "-claim").answer(
+            self.pane_command(pane, [str(self.hide), "checkout", "show"], name + "-claim").answer(
                 allowed_refusals=("renderer_unavailable",))
         except ProcessError as error:
             raise ProtectionError(f"private_pane_reference_not_claimed: {error}") from error

@@ -248,7 +248,7 @@ Each of them, and `hide browser open` for a page, opens one View, or finds the s
 An open with `--beside` opens nothing and is refused with the next action to run it again without `--beside`.
 What an agent opens is unseen until the operator looks at it, and waits in Needs You as `볼 것` (To look at) on its row ([status-model.md](status-model.md#a-view-to-look-at)).
 Where it lands follows Views per Agent tab below: only the pane the operator watches puts it on a desk, and any other agent's waits in its pane's Views list (PRD lane-desk-pair-view B1, B2, D-36).
-`hide view select` follows the same rule as an open; `close`, `list` and `status` work on any View of the checkout, on a desk or not.
+`hide view select` follows the same rule as an open; `close`, `list` and `show` work on any View of the checkout, on a desk or not.
 `hide view split` and `move` apply to a View on a desk only; one waiting in its pane's list is refused with `view_not_in_lane` and the next action to leave its layout to the operator (B33).
 A browser page's own new target, bound to its area, does not open the lane.
 

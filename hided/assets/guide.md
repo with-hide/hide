@@ -210,7 +210,7 @@ hide file open <path>
 hide diff open <path>
 hide browser open <url-or-path> [--wait]
 hide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...
-hide view list [--session <id|here>] | status <view-id> | select <view-id> | close <view-id>
+hide view list [--session <id|here>] | show <view-id> | select <view-id> | close <view-id>
 hide view split <view-id> --area <area-id> --edge left|right|up|down
 hide view move <view-id> --area <area-id> --index <n>
 ```
