@@ -121,6 +121,7 @@ On 2026-09-27 one session replaced it with a build that predated a merged fix, d
 ## Runtime Architecture
 
 Before changing anything under `hide-core/`, `hided/` or `desktop/`, read the table in `docs/ARCHITECTURE.md` and then the records under `docs/adr/` whose Code paths cover the files you change; together they own the reasons behind these boundaries, and `docs/adr/0001-record-architecture-decisions.md` says how a record is written and replaced.
+A change to behavior a record covers edits that record in place in the same pull request; a change that reverses its decision adds a new record and marks the old one `Superseded by NNNN`, as 0001 says.
 
 - The core owns all state behind one `Mutex<Runtime>`; the shell dispatches typed events in and pulls one snapshot out when the notifier announces, and holds no authority of its own.
 - The engine (the core's own, `hide-core/src/engine/own/`, over each pane's holder) owns pane existence, split geometry, zoom, cwd, agent lifecycle and the PTY; the core owns each checkout's visible tab, the keyboard focus pane, panel visibility and text scale, and changes those on the event that asked for it, telling the engine afterwards.
