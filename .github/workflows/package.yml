@@ -205,7 +205,7 @@ jobs:
       HIDE_VERSION: ${{ needs.helper-identity.outputs.version }}
       HIDE_BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 80
     defaults:
       run:
         shell: bash
@@ -246,7 +246,8 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
       - name: Build the web shell and the release binaries
-        timeout-minutes: 50
+        # A candidate's build has taken 33 to 37 minutes, and once ran past 50.
+        timeout-minutes: 70
         env:
           HIDE_WEB_TYPECHECKED_SHA: ${{ inputs.web-typechecked && (inputs.source-sha || github.sha) || '' }}
         run: bash scripts/verify-web.sh desktop package compile
