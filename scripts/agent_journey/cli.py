@@ -352,8 +352,8 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
             recipe = {"id": key, "overlay": {"env": {}, "copies": entry["copies"], "settings": [],
                                              "provenance": entry["provenance"]}}
             try:
-                write_backs = [WriteBack(operator / source, private / name) for source, name in entry["copies"]] \
-                    if dedicated else []
+                write_backs = [WriteBack(operator / source, private / name) for source, name in entry["copies"]
+                               if source not in entry.get("not_written_back", ())] if dedicated else []
                 agent["private_configuration"] = prepare_overlay(recipe, runtime.probe, operator, owner=owner,
                                                                  env=clean_env(), root=private)["copies"]
                 runtime.write_backs.extend(write_backs)

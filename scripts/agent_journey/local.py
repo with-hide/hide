@@ -151,10 +151,19 @@ ROUTES = {
         "roots": [".config/opencode", ".local/share/opencode"],
         "untrusted": None,
         "config": str(opencode_service.DATA),
-        "copies": [[".local/share/opencode/auth.json", "auth.json"]],
+        # OpenCode 2.0.29 keeps its login in its database (`opencode.db`,
+        # table `credential`) and no longer reads `auth.json`, which an older
+        # OpenCode's login may still be (measured on the mini, 2026-11-28).
+        # The database also holds every session, so the journey account
+        # writes it back to nothing: a key never refreshes, and the account's
+        # file would grow with each run's sessions (account.py).
+        "copies": [[".local/share/opencode/auth.json", "auth.json"],
+                   [".local/share/opencode/opencode.db", "opencode.db"]],
+        "not_written_back": [".local/share/opencode/opencode.db"],
         "provenance": "Private XDG folders holding a copy of the login, the operator's model choice and a private "
                       "server port; a refresh stays in the copy.",
-        "login": lambda root, status, margin: opencode_login_refusal(root / "auth.json", margin),
+        "login": lambda root, status, margin: opencode_login_refusal(root / "auth.json", margin,
+                                                                     database=root / "opencode.db"),
     },
     "agy": {
         "args": lambda home: [],
@@ -376,20 +385,28 @@ def omp_login_refusal(database, margin, now=None):
     return expiry_refusal("omp", [value / 1000 for value in expiries], margin, now)
 
 
-def opencode_login_refusal(auth, margin, now=None):
-    """OpenCode keeps one entry per provider: an API key, which never
-    refreshes, or an OAuth login with `expires` in ms."""
-    if not auth.is_file():
-        return "not logged in: run opencode auth login yourself; the journey never logs in"
+def opencode_login_refusal(auth, margin, now=None, database=None):
+    """OpenCode keeps one entry per provider: a key, which never refreshes,
+    or an OAuth login with `expires` in ms; OpenCode 2's are the active rows
+    of its database's `credential` table (`database`, the run's copy), an
+    older one's the entries of `auth.json`."""
+    entries = []
     try:
-        entries = [entry for entry in json.loads(auth.read_text()).values() if isinstance(entry, dict)]
-    except (OSError, ValueError, AttributeError):
+        if auth.is_file():
+            entries += [entry for entry in json.loads(auth.read_text()).values() if isinstance(entry, dict)]
+        if database is not None and database.is_file():
+            with contextlib.closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+                rows = connection.execute("SELECT value FROM credential WHERE active = 1").fetchall()
+            entries += [entry for (value,) in rows if isinstance(entry := json.loads(value), dict)]
+    except (OSError, ValueError, AttributeError, TypeError, sqlite3.Error):
         return expiry_refusal("opencode", [], margin, now)
     if not entries:
         return "not logged in: run opencode auth login yourself; the journey never logs in"
-    if all(entry.get("type") == "api" for entry in entries):
+    if all(entry.get("type") in ("api", "key") for entry in entries):
         return None
-    return expiry_refusal("opencode", json_expiries(auth, "expires", 1000), margin, now)
+    expiries = [entry["expires"] / 1000 for entry in entries
+                if isinstance(entry.get("expires"), (int, float)) and not isinstance(entry.get("expires"), bool)]
+    return expiry_refusal("opencode", expiries, margin, now)
 
 
 def opencode_model(operator, folder):

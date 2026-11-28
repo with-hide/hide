@@ -162,6 +162,10 @@ def install_clis(stream, env):
     return programs
 
 
+def controller_provider():
+    return journey_root() / "controller/claude"
+
+
 def size(path):
     total = 0
     for folder, _, files in os.walk(path):
@@ -181,6 +185,14 @@ def build(settings, stream, env):
     argv = ["/usr/bin/lockf", "-k", "-t", str(LOCK_WAIT_SECONDS), settings["cargo_lock"], "/bin/bash", "-c", script]
     try:
         if run_logged(argv, stream, env, timeout=LOCK_WAIT_SECONDS + BUILD_SECONDS):
+            raise Stage("build failed")
+        # The controller's spawn provider, built here as CI builds it: inside
+        # the journey a compile shares one command's 15 s cap, which a loaded
+        # mini's first compile in the session outlasted (2026-11-28).
+        provider = controller_provider()
+        provider.parent.mkdir(parents=True, exist_ok=True)
+        if run_logged(["/usr/bin/cc", "-O2", "-o", str(provider), "web/e2e/shims/spawn-provider.c"], stream, env,
+                      timeout=600):
             raise Stage("build failed")
     except subprocess.TimeoutExpired as error:
         raise Stage("build timed out") from error
@@ -328,7 +340,8 @@ def run(settings):
             run_dir = CHECKOUT / "agents/runs" / f"daily-{stamp}"
             try:
                 record["exit"] = run_logged([sys.executable, "-X", "utf8", "scripts/agent-journey-check.py",
-                                             "--run-dir", str(run_dir)], stream, env, timeout=JOURNEY_SECONDS)
+                                             "--run-dir", str(run_dir), "--controller-provider",
+                                             str(controller_provider())], stream, env, timeout=JOURNEY_SECONDS)
             except subprocess.TimeoutExpired as error:
                 raise Stage("journey timed out") from error
             report = run_dir / "report.json"
