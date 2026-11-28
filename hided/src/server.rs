@@ -596,6 +596,9 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "program": state.program.as_deref(),
         "schema_version": SCHEMA_VERSION,
         "clients": state.clients.load(Ordering::SeqCst),
+        // The screens attached now, whose first and last turn the
+        // screen-only reads on and off (`renderers_drawn`).
+        "renderers": state.renderers.load(Ordering::SeqCst),
         // What draws this machine's browser displays now: its desktop
         // windows and the views of it whose app draws pages (`draws_pages`).
         "page_renderers": state.page_renderers.load(Ordering::SeqCst),
@@ -2368,6 +2371,7 @@ async fn scoped_client_loop(
                         let desktop_renderers = Arc::clone(&state.desktop_renderers);
                         let page_renderers = Arc::clone(&state.page_renderers);
                         let browser_control = Arc::clone(&state.browser_control);
+                        let peers = Arc::clone(&state.peers);
                         let query_token = token.clone();
                         let command_request_id = request_id.clone();
                         let caller_node = source.as_ref().map(|(node, _)| node.clone());
@@ -2387,7 +2391,7 @@ async fn scoped_client_loop(
                             // Desk's file open waits in the core for a window
                             // showing Desk, so it needs none now.
                             let desk = cap.pane_id == hide_core::workspace_control::DESK_CALLER;
-                            if command.needs_renderer() && !desk && renderers.load(Ordering::SeqCst) == 0 {
+                            if command.needs_renderer() && !desk && !seen(&renderers, &peers) {
                                 return Err((
                                     "renderer_unavailable".to_owned(),
                                     "Open Hide's web or desktop shell and retry",
@@ -2614,7 +2618,7 @@ async fn scoped_client_loop(
                                     scope_page_query(
                                         &mut result,
                                         desktop_renderers.load(Ordering::SeqCst) > 0,
-                                        page_renderers.load(Ordering::SeqCst) > 0,
+                                        seen(&page_renderers, &peers),
                                     );
                                     serde_json::to_value(result).map_err(|_| {
                                         ("result_encoding_failed".to_owned(), "Reconnect Hide and retry")
@@ -2650,7 +2654,7 @@ async fn scoped_client_loop(
                                         }
                                         None => action,
                                     };
-                                    if matches!(action, hide_core::workspace_control::Action::OpenBrowser { .. }) && page_renderers.load(Ordering::SeqCst) == 0 {
+                                    if matches!(action, hide_core::workspace_control::Action::OpenBrowser { .. }) && !seen(&page_renderers, &peers) {
                                         return Err(("browser_unsupported".to_owned(), NO_PAGE_RENDERER));
                                     }
                                     let preparation = core
@@ -6196,6 +6200,18 @@ pub(crate) fn scope_page_query(
             }
         }
     }
+}
+
+/// Whether anyone can see what `drawers` would draw of this machine: one of
+/// them is attached now, or a paired computer that opens this machine is
+/// connected and shows its screen once its operator turns to it. That
+/// computer's desktop closes a hidden screen's socket (PRD
+/// device-connect-iroh B63), so the attached count alone reads a machine
+/// watched only from another computer as watched by nobody. What is
+/// recorded meanwhile is drawn when that screen shows it. The work only a
+/// drawn screen starts (`renderers_drawn`) keeps reading the count.
+fn seen(drawers: &AtomicUsize, peers: &crate::peer_host::PeerHost) -> bool {
+    drawers.load(Ordering::SeqCst) > 0 || peers.viewer_connected()
 }
 
 /// What an agent is told when nothing on this machine or another one could
