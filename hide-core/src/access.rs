@@ -1018,7 +1018,7 @@ pub enum CoreStanding {
 pub const MACHINE_NOT_PERMITTED: &str = "machine_not_permitted";
 
 /// What an agent refused with [`MACHINE_NOT_PERMITTED`] does next.
-pub const MACHINE_NOT_PERMITTED_NEXT: &str = "Another machine's core does this only for a machine it opened itself to: an agent on the machine that connected (hide device list) lists, shows, reads and starts agents there and writes to them; an agent there answers with hide letter reply and reports to the agent that started it, and writes nothing first. hide pane send types into no pane of another machine's core, and an agent on a connected device cannot use --machine";
+pub const MACHINE_NOT_PERMITTED_NEXT: &str = "Another machine's core does this only for a machine it opened itself to: an agent on the machine that connected (hide device list) lists, shows, reads and starts agents there, writes to them and types into their panes with hide pane send; an agent there answers with hide letter reply and reports to the agent that started it, and writes nothing first. An agent on a connected device cannot use --machine";
 
 /// Where `machine` stands: it opens this machine while its grant here is
 /// active, and otherwise it only answers while this machine's grant there
@@ -1081,12 +1081,12 @@ pub fn core_admit(
     }
 }
 
-/// Whether a core standing as `standing` runs the read or the start
-/// `asked` here. Only a core that opens this machine asks one, and only
-/// these: listing and showing agents, reading a pane, and a start, each as
+/// Whether a core standing as `standing` runs the call `asked` here. Only a
+/// core that opens this machine asks one, and only these: listing and
+/// showing agents, reading a pane, typing into one, and a start, each as
 /// the bot table judges it for the whole Hide, so a start under a parent,
-/// beside a pane or for a plan step is refused as a bot's is. Typing into a
-/// pane and everything else such a bot may do is not another machine's.
+/// beside a pane or for a plan step is refused as a bot's is. Opening a pane
+/// and everything else such a bot may do is not another machine's.
 pub fn core_call_admit(
     standing: CoreStanding,
     asked: &crate::core_calls::Asked,
@@ -1112,7 +1112,8 @@ pub fn core_call_admit(
         Asked::Pane(
             command @ (PaneCommand::Read { .. }
             | PaneCommand::ReadScreen { .. }
-            | PaneCommand::AgentRead { .. }),
+            | PaneCommand::AgentRead { .. }
+            | PaneCommand::Send { .. }),
         ) => admit(Mode::All, pane_need(command)),
         _ => Err(MACHINE_NOT_PERMITTED),
     }
@@ -1633,6 +1634,33 @@ mod tests {
                 Err(MACHINE_NOT_PERMITTED)
             );
         }
+    }
+
+    #[test]
+    fn a_core_that_opens_this_machine_types_into_its_panes_and_one_that_only_answers_does_not() {
+        use crate::core_calls::Asked;
+        use crate::pane_command::PaneCommand;
+        let send = Asked::Pane(PaneCommand::Send {
+            pane: "h5:pA".into(),
+            text: Some("retry".into()),
+            keys: vec![crate::engine::keys::PaneKey::Esc],
+            enter: true,
+            paste: false,
+        });
+        let open = Asked::Pane(PaneCommand::Open {
+            command: "ls".into(),
+            focus: false,
+        });
+        assert_eq!(core_call_admit(CoreStanding::Opens, &send), Ok(()));
+        assert_eq!(
+            core_call_admit(CoreStanding::Answers, &send),
+            Err(MACHINE_NOT_PERMITTED)
+        );
+        // Opening a pane there stays no other machine's.
+        assert_eq!(
+            core_call_admit(CoreStanding::Opens, &open),
+            Err(MACHINE_NOT_PERMITTED)
+        );
     }
 
     #[test]

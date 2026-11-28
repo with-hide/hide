@@ -58,8 +58,8 @@ use crate::peer_host::{HostPeers, Incoming, Link, PeerHost, Stream};
 const LETTER_WITHIN: Duration = Duration::from_secs(5);
 /// How long a letter waits for its answer before this daemon sends it again.
 const RESEND_AFTER: Duration = Duration::from_secs(30);
-/// How long a read asked of another core may take, and a start, which
-/// makes a worktree and waits for its agent.
+/// How long a read or a pane send asked of another core may take, and a
+/// start, which makes a worktree and waits for its agent.
 const READ_WITHIN: Duration = Duration::from_secs(15);
 const START_WITHIN: Duration = Duration::from_secs(180);
 /// The messages one stream holds to be written.

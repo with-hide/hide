@@ -1463,13 +1463,13 @@ A letter's `core:` address is read where every key that names an agent is (`Runt
 A letter it wrote shows that name, so its recipient reads which machine wrote it.
 
 `hide_core::access` judges it from where its machine stands (`core_standing`), which the core reads from the paired machines the daemon told it in one event (`peer_machines`); the daemon filters nothing.
-A machine this one opened itself to (its grant here is active) runs what a bot of the whole Hide runs (`core_admit`, `core_call_admit`, judged as `Mode::All`: a machine is opened whole or not at all, so none stands in own mode): it writes letters, reads with `hide agent list --machine <device>`, `hide agent show`, `hide agent read` and `hide pane read`, and starts agents with `hide agent spawn --machine <device>` and no `--parent`.
+A machine this one opened itself to (its grant here is active) runs what a bot of the whole Hide runs (`core_admit`, `core_call_admit`, judged as `Mode::All`: a machine is opened whole or not at all, so none stands in own mode): it writes letters, reads with `hide agent list --machine <device>`, `hide agent show`, `hide agent read` and `hide pane read`, types into a pane there with `hide pane send core:<device>:pane:<id>` (its text, `--key` keys, `--enter` and `--paste`, which that core's own engine writes and answers as a send of its own agents), and starts agents with `hide agent spawn --machine <device>` and no `--parent`.
 A machine that is only opened (this machine's grant there is active, and none here) answers the letters it got and sends the `report` of a start this machine's agent asked it for, and writes nothing first: the rest is refused `machine_not_permitted`, where it is written and again by the core that would keep it.
 The receiving core judges it twice with the same table (`core_inbound_admit`): when the command is prepared and again just before it is stored or changes anything (`core_command_current`, `core_mutation_current`), so a first letter or a start prepared under a grant that was paused or taken back meanwhile is refused there, even while the other direction still stands.
 With grants both ways both write.
 Only an agent writes to another core: a tool, Hide's own identities and another core's agent are refused `machine_not_permitted`, so nothing is passed on through a third machine.
 A bot in own mode is refused `access_not_own_work` before that, as for any agent it did not start.
-`hide pane send` types into no pane of another core and is refused `machine_not_permitted`; a read or a start asked while the two are not connected is refused `machine_unavailable`.
+`hide pane send` names a pane there, as it does here, so one to an agent's address (`core:<device>:agent:<id>`) is refused `pane_unavailable`; a read, a send or a start asked while the two are not connected is refused `machine_unavailable`.
 
 A letter between two machines is between two registrations, as every letter is (PRD letters-missions-simplify D-21).
 Its target is `core:<device>:agent:<id>`, the registration id or the registered name of an agent there; a pane's address is refused `recipient_not_agent` where it is written.

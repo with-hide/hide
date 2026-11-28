@@ -809,8 +809,7 @@ fn a_bot_writes_to_no_agent_of_another_machine_in_either_mode() {
 
 /// B66: an agent of the machine that opens reads the other machine's
 /// agents through that machine's core; the machine that is only opened
-/// reads nothing, typing into a pane is no machine's, and a machine that is
-/// away is not asked.
+/// reads nothing, and a machine that is away is not asked.
 #[test]
 fn an_agent_reads_another_cores_agents_and_the_opened_machine_reads_none() {
     use crate::coordination::Command as Agents;
@@ -928,16 +927,6 @@ fn an_agent_reads_another_cores_agents_and_the_opened_machine_reads_none() {
     };
     let pane_there = format!("core:{MINI}:pane:worker");
     assert_eq!(
-        pane(PaneCommand::Send {
-            pane: pane_there.clone(),
-            text: Some("hello".into()),
-            keys: Vec::new(),
-            enter: true,
-            paste: false,
-        }),
-        Err("machine_not_permitted".into())
-    );
-    assert_eq!(
         pane(PaneCommand::Read {
             pane: pane_there.clone(),
             lines: 10
@@ -957,6 +946,102 @@ fn an_agent_reads_another_cores_agents_and_the_opened_machine_reads_none() {
             lines: 10
         }),
         Err("machine_unavailable".into())
+    );
+}
+
+/// An agent of the machine that opens types into a pane of the other
+/// machine's core as it does into one of its own: that core runs the send
+/// on its pane, its text, keys, Enter and paste as given. A send names a
+/// pane, never an agent; the machine that is only opened types into none,
+/// where it is written and again by the core it would reach; and a machine
+/// that is away is not asked.
+#[test]
+fn an_agent_types_into_a_pane_of_the_machine_that_opened_itself_and_the_opened_machine_into_none() {
+    use crate::engine::keys::PaneKey;
+    use crate::pane_command::{PaneCommand, Step};
+    let pair = Pair::start();
+    let typing = |pane: &str| PaneCommand::Send {
+        pane: pane.to_owned(),
+        text: Some("retry".into()),
+        keys: vec![PaneKey::Down],
+        enter: true,
+        paste: false,
+    };
+    let pane_as = |fixture: &Fixture, node: &str, command: PaneCommand| {
+        let mut context = crate::runtime::delivery::tests::authority(&crate::delivery::Actor {
+            pane_id: "worker".into(),
+            name: "worker".into(),
+            kind: "codex".into(),
+            device_id: node.into(),
+            session: None,
+        })
+        .context;
+        context.device_id = node.into();
+        fixture
+            .runtime
+            .lock()
+            .unwrap()
+            .prepare_pane_command(node, "worker", &context, command)
+            .map(|prepared| prepared.step)
+    };
+    let mac = |command| pane_as(&pair.mac, crate::node::TEST_NODE, command);
+
+    // The Mac's core asks the Mac mini's, which types into its own pane.
+    let handed = format!("core:{MINI}:pane:worker");
+    assert!(matches!(mac(typing(&handed)), Ok(Step::Core(_))));
+    let there = pair.mini.runtime.lock().unwrap().prepare_core_call(
+        &mac_key(),
+        &worker(&pair.mac),
+        Asked::Pane(typing("worker")),
+    );
+    match there.map(|call| match call {
+        crate::core_calls::Call::Pane(prepared) => prepared.step,
+        _ => panic!("a pane call"),
+    }) {
+        Ok(Step::Send {
+            pane,
+            raw,
+            text,
+            keys,
+            enter,
+            paste,
+        }) => assert_eq!(
+            (pane, raw, text, keys, enter, paste),
+            (
+                handed.clone(),
+                "worker".to_owned(),
+                Some("retry".to_owned()),
+                vec![PaneKey::Down],
+                true,
+                false
+            )
+        ),
+        Ok(_) => panic!("a send"),
+        Err(reason) => panic!("the send was refused: {reason}"),
+    }
+    // A send names a pane, as it does on this machine.
+    assert_eq!(
+        mac(typing(&agent_there(MINI, &pair.mini.ids["worker"]))).err(),
+        Some("pane_unavailable".to_owned())
+    );
+
+    // The Mac mini only answers: it types into no pane of the Mac, and the
+    // Mac's core refuses such a send that reached it all the same.
+    assert_eq!(
+        pane_as(&pair.mini, MINI, typing(&format!("core:{MAC}:pane:worker"))).err(),
+        Some("machine_not_permitted".to_owned())
+    );
+    let forged = pair.mac.runtime.lock().unwrap().prepare_core_call(
+        &mini_key(),
+        &worker(&pair.mini),
+        Asked::Pane(typing("worker")),
+    );
+    assert_eq!(forged.err().as_deref(), Some("machine_not_permitted"));
+
+    pair.paired(true, false, false);
+    assert_eq!(
+        mac(typing(&handed)).err(),
+        Some("machine_unavailable".to_owned())
     );
 }
 

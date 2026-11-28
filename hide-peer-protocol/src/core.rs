@@ -86,8 +86,8 @@ pub enum CoreMessage {
     /// The receiving core keeps nothing of letter `id`, and why: the
     /// letter ends with no recipient for its sender.
     LetterRefused { id: String, reason: String },
-    /// A read or a start `from` asks the receiving core for. `call` names
-    /// the answer.
+    /// A read, a typed send or a start `from` asks the receiving core for.
+    /// `call` names the answer.
     Call {
         call: u64,
         from: Party,

@@ -356,7 +356,8 @@ pub(crate) enum Step {
         text: Option<String>,
         enter: bool,
     },
-    /// A read another machine's core answers (`Runtime::core_pane_forward`).
+    /// A read or a send another machine's core answers
+    /// (`Runtime::core_pane_forward`).
     Core(Box<crate::core_calls::Forward>),
     Open {
         /// The caller's pane as the core names it, whose tab's line the
