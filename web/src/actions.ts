@@ -712,8 +712,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     const remote = hostBridge()?.remoteScreens;
     if (!there || !remote?.showAnswers || !remote.onWorkResult) return false;
     const screen = pairedComputer(rest(), there.deviceId)?.screen;
+    if (!screen) return false;
     const request = remoteRequestId();
-    if (handComputerWork(there.deviceId, { op: "show", pane: there.pane, request }) !== "handed" || !screen) return false;
+    if (handComputerWork(there.deviceId, { op: "show", pane: there.pane, request }) !== "handed") return false;
     stopShow = followShow({ onWorkResult: remote.onWorkResult }, request, (why) => {
       stopShow = null;
       diagnostic(`show on ${there.deviceId}: ${why}; opened in this computer's tile`);
