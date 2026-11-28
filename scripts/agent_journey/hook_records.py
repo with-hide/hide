@@ -187,7 +187,8 @@ def unread(error):
 def pane_record(runtime, pane, cap, install=None):
     """What the hooks kept of `pane`, for a failed cell to keep beside it, as
     JSON text of at most `cap` bytes, its own `cut` mark and formatting
-    included, or None when they kept nothing.
+    included, or None when they kept nothing; a log whose start was left
+    unread always answers, if only with `cut`.
 
     The sessions the pane's record holds, oldest first, by the agent and the
     session its hook named and the turn it last reported, and the pane's
@@ -243,7 +244,7 @@ def pane_record(runtime, pane, cap, install=None):
         if isinstance(entry, dict) and entry.get("pane") == pane:
             logged.append({key: entry[key] for key in LOG_FIELDS
                            if isinstance(entry.get(key), (str, int)) and not isinstance(entry.get(key), bool)})
-    if not kept and not logged:
+    if not kept and not logged and not cut:
         return None
     kept = {"pane": pane, **kept}
     sessions = kept.pop("sessions", None)

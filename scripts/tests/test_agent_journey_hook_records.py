@@ -354,3 +354,10 @@ class PaneRecord(unittest.TestCase):
             kept = json.loads(hook_records.pane_record(run, "hW:p2", 32 * 1024))
             self.assertEqual([entry["at_unix_ms"] for entry in kept["log"]], [2])
             self.assertTrue(kept["cut"])
+
+            # With no line of the pane left in what was read, and no record
+            # of it, the answer still says the log was cut.
+            (records / hook_records.LOG_NAME).write_text(
+                line("hW:p2", 1) + "".join(line("hV:p9", n) for n in range(1500)))
+            self.assertEqual(json.loads(hook_records.pane_record(run, "hW:p2", 32 * 1024)),
+                             {"pane": "hW:p2", "cut": True})
