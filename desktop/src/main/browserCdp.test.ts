@@ -70,7 +70,7 @@ class CdpClient {
 
 const shutdown: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of shutdown.splice(0).reverse()) await close(); });
-async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseResponse?: boolean; refuseOpen?: boolean; deferCloseRetirement?: boolean; revive?: (scope: CdpScope, pages: CdpPage[], grant?: string) => Promise<"none" | "loaded" | "failed"> } = {}) {
+async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseResponse?: boolean; refuseOpen?: boolean; deferCloseRetirement?: boolean; revive?: (scope: CdpScope, pages: CdpPage[], grant?: string, file?: boolean) => Promise<"none" | "loaded" | "failed"> } = {}) {
   const first = electronPage(11, "d1");
   const second = electronPage(12, "d2");
   const foreign = electronPage(13, "d3", "a2");
@@ -93,7 +93,7 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
     incarnation: () => incarnation,
     changed: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     attached: (page, value) => { attached.set(page.id, value); },
-    ...(options.revive ? { revive: (scope: CdpScope, grant?: string) => options.revive!(scope, pages, grant) } : {}),
+    ...(options.revive ? { revive: (scope: CdpScope, file: boolean, grant?: string) => options.revive!(scope, pages, grant, file) } : {}),
     externalOpen: async (path, page) => { externalOpens.push({ path, page }); return { grant: { id: "a1".repeat(16), name: "r.html", kind: page ? "html" : "text" } }; },
     externalRead: async (grant, file, limit) => {
       externalReads.push({ grant, file, limit });
@@ -1120,7 +1120,7 @@ describe("file capability on a local file page", () => {
   });
 
   it("keeps the agent's boundary and moves the page only as the page itself may move", async () => {
-    const { checkout, connect, scope, client } = await withFilePages();
+    const { checkout, connect, scope, client, actions } = await withFilePages();
     const driver = await client((await connect({ ...scope("d9"), purpose: "file" })).body.browser_ws_url!);
     const session = await attach(driver, "page-21");
     const sent = reached(checkout.contents.debugger);
@@ -1139,6 +1139,8 @@ describe("file capability on a local file page", () => {
       ["Network.setRequestInterception", { patterns: [{ urlPattern: "*" }] }], ["Network.continueInterceptedRequest", { interceptionId: "1" }],
       // No world with universal access.
       ["Page.createIsolatedWorld", { frameId: "page-21", worldName: "x", grantUniveralAccess: true }],
+      // No close or select: `hide view close` and `hide view select` do that.
+      ["Page.close", {}], ["Page.bringToFront", {}], ["Target.closeTarget", { targetId: "page-21" }], ["Target.activateTarget", { targetId: "page-21" }],
       ["Target.sendMessageToTarget", { sessionId: session, message: JSON.stringify({ id: 1, method: "Page.navigate", params: { url: "https://example.test/" } }) }],
     ];
     for (const [method, params] of refused) {
@@ -1148,6 +1150,7 @@ describe("file capability on a local file page", () => {
       expect(answer.error, `${method} ${JSON.stringify(params)}`).toBeDefined();
     }
     expect(sent).not.toHaveBeenCalled();
+    expect(actions).toEqual([]);
     expect(checkout.contents.debugger.file).toBe("unchanged");
   });
 
@@ -1196,17 +1199,19 @@ describe("file capability on a local file page", () => {
   });
 
   it("loads an unloaded file page again for a file capability, an outside page by its grant, never for Comment", async () => {
-    const revived: [CdpScope, string | undefined][] = [];
-    const { connect, scope } = await withFilePages({ revive: async (asked, _pages, grant) => { revived.push([asked, grant]); return "none"; } });
+    const revived: [CdpScope, string | undefined, boolean | undefined][] = [];
+    const { connect, scope } = await withFilePages({ revive: async (asked, _pages, grant, file) => { revived.push([asked, grant, file]); return "none"; } });
     const grant = "ab".repeat(16);
     expect((await connect({ ...scope("d9"), purpose: "file" })).status).toBe(200);
     expect((await connect({ ...scope("d8"), purpose: "file", grant })).status).toBe(200);
     expect((await connect({ ...scope("d9"), purpose: "comment" })).status).toBe(200);
-    expect(revived).toEqual([[scope("d9"), undefined], [scope("d8"), grant]]);
+    // A web capability's connection names no file purpose, so the host never loads a file page for it.
+    expect((await connect(scope("d9"))).status).toBe(409);
+    expect(revived).toEqual([[scope("d9"), undefined, true], [scope("d8"), grant, true], [scope("d9"), undefined, false]]);
     // A grant is a file capability's alone, in the host's own shape.
     for (const body of [{ ...scope("d8"), purpose: "comment", grant }, { ...scope("d8"), grant }, { ...scope("d8"), purpose: "file", grant: "../../etc" }, { ...scope("d8"), purpose: "file", grant: 7 }]) {
       expect((await connect(body)).status, JSON.stringify(body)).toBe(400);
     }
-    expect(revived).toHaveLength(2);
+    expect(revived).toHaveLength(3);
   });
 });

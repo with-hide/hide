@@ -660,13 +660,13 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       const update = (change: Record<string, unknown>) => Reflect.get(subject, "update").call(subject, revived, change);
       const scope = { workspace, area_id: "a1", display_id: "mock" };
       send.mockClear();
-      const first = subject.cdpRevive(scope);
+      const first = subject.cdpRevive(scope, false);
       expect(created).toEqual([{ owner: workspace, id: "mock", area_id: "a1", url: "https://mock.example/", load: 3, rect: null, visible: false }]);
       expect(revived.view.setVisible).not.toHaveBeenCalled();
       update({ loading: false, failure: "Failed to load (-105)" });
       expect(await first).toBe("failed");
       // The next connection loads the failed page again, in place.
-      const second = subject.cdpRevive(scope);
+      const second = subject.cdpRevive(scope, false);
       expect(load).toHaveBeenCalledExactlyOnceWith(revived, "https://mock.example/");
       update({ loading: true, failure: null });
       update({ loading: false });
@@ -675,17 +675,17 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       await pass(EVERY);
       expect(pages.has(revived.key as string)).toBe(true);
       // Loaded and settled, its record is gone: the next connection drives it as it is.
-      expect(await subject.cdpRevive(scope)).toBe("none");
+      expect(await subject.cdpRevive(scope, false)).toBe("none");
       // Nothing moved on the operator's screen.
       expect(send.mock.calls.map(([, event]) => (event as { kind: string }).kind).filter((kind) => kind !== "state")).toEqual([]);
       expect(log.event.mock.calls.filter(([name]) => name === "browser.reloaded_for_agent")).toEqual([["browser.reloaded_for_agent", { id: "mock" }], ["browser.reloaded_for_agent", { id: "mock" }]]);
       // A display not yet shown since the app started stays pending, so its connection keeps the 409 (D-16, B15);
       // one it never unloaded, or an area that does not hold it, has nothing to load either.
       (Reflect.get(subject, "cdpAreas") as Map<string, string>).set(`${workspace}\u0001pending`, "a1");
-      expect(await subject.cdpRevive({ ...scope, display_id: "pending" })).toBe("none");
+      expect(await subject.cdpRevive({ ...scope, display_id: "pending" }, false)).toBe("none");
       expect(pages.has(`${workspace}\u0001pending`)).toBe(false);
-      expect(await subject.cdpRevive({ ...scope, display_id: "other" })).toBe("none");
-      expect(await subject.cdpRevive({ ...scope, area_id: "a2" })).toBe("none");
+      expect(await subject.cdpRevive({ ...scope, display_id: "other" }, false)).toBe("none");
+      expect(await subject.cdpRevive({ ...scope, area_id: "a2" }, false)).toBe("none");
     } finally {
       vi.useRealTimers();
     }
@@ -707,8 +707,8 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       const scope = { workspace, area_id: "a1", display_id: "slow" };
       let first: string | null = null;
       let second: string | null = null;
-      void subject.cdpRevive(scope).then((outcome) => { first = outcome; });
-      void subject.cdpRevive(scope).then((outcome) => { second = outcome; });
+      void subject.cdpRevive(scope, false).then((outcome) => { first = outcome; });
+      void subject.cdpRevive(scope, false).then((outcome) => { second = outcome; });
       await vi.advanceTimersByTimeAsync(0);
       expect(pages.size).toBe(1);
       expect([first, second]).toEqual([null, null]);
@@ -717,7 +717,7 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       expect([first, second]).toEqual(["loaded", "loaded"]);
       // Its load fails later: the next connection loads it again.
       update({ loading: false, failure: "Failed to load (-105)" });
-      const retry = subject.cdpRevive(scope);
+      const retry = subject.cdpRevive(scope, false);
       expect(load).toHaveBeenCalledExactlyOnceWith(revived, "https://slow.example/");
       update({ loading: true, failure: null });
       update({ loading: false });
@@ -744,16 +744,21 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
         created.push(display);
         return page(display.id as string, { fileRestricted: false, state: { url: display.url, loading: false, failure: null } });
       });
-      expect(await subject.cdpRevive({ workspace, area_id: "a1", display_id: "report" })).toBe("loaded");
+      const report = { workspace, area_id: "a1", display_id: "report" };
+      // A web capability never loads a file page; a file capability does.
+      expect(await subject.cdpRevive(report, false)).toBe("none");
+      expect(created).toEqual([]);
+      expect(await subject.cdpRevive(report, true)).toBe("loaded");
       expect(created).toEqual([{ id: "report", area_id: "a1", url: "file:///checkout/report.html", load: 3, rect: null, visible: false }]);
       // An outside page leaves no record when it unloads: it loads again only by the grant hided read from the core's display, while this window holds it.
       const outside = { workspace, area_id: "a1", display_id: "outside" };
       const grant = (Reflect.get(subject, "externals") as ExternalFiles).grant("/outside/r.html", "html")!.id;
-      expect(await subject.cdpRevive(outside)).toBe("none");
-      expect(await subject.cdpRevive(outside, "cd".repeat(16))).toBe("none");
-      expect(await subject.cdpRevive({ ...outside, area_id: "a2" }, grant)).toBe("none");
+      expect(await subject.cdpRevive(outside, true)).toBe("none");
+      expect(await subject.cdpRevive(outside, true, "cd".repeat(16))).toBe("none");
+      expect(await subject.cdpRevive({ ...outside, area_id: "a2" }, true, grant)).toBe("none");
+      expect(await subject.cdpRevive(outside, false, grant)).toBe("none");
       expect(created).toHaveLength(1);
-      expect(await subject.cdpRevive(outside, grant)).toBe("loaded");
+      expect(await subject.cdpRevive(outside, true, grant)).toBe("loaded");
       expect(created[1]).toEqual({ id: "outside", area_id: "a1", url: "", load: 0, rect: null, visible: false, grant });
     } finally {
       vi.useRealTimers();

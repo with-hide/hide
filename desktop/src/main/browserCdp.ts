@@ -51,7 +51,7 @@ type Options = {
    * Loads a display's unloaded page again, hidden, for an agent's connection to it, an outside
    * page by the grant hided read from the core's display (`BrowserViews.cdpRevive`).
    */
-  revive?: (scope: CdpScope, grant?: string) => Promise<"none" | "loaded" | "failed">;
+  revive?: (scope: CdpScope, file: boolean, grant?: string) => Promise<"none" | "loaded" | "failed">;
   /**
    * Grants this window a file outside every checkout that an agent on this
    * computer asked to open (`externalFiles.ts`, `agentOpen`): `path` is its
@@ -163,7 +163,12 @@ const COMMENT_EVENTS = new Set(["Runtime.bindingCalled", "Page.frameNavigated", 
 // only as the page itself may move: no navigation of its own (a file page's web links open
 // beside it, its file links follow the page's rules), and no request interception, which
 // could answer or redirect one of the page's own loads.
-const FILE_DENIED_METHODS = new Set(["Page.navigate", "Network.setRequestInterception", "Network.continueInterceptedRequest"]);
+// A file capability moves no page and answers none of its loads; its tab is
+// closed or selected with `hide view close` and `hide view select`.
+const FILE_DENIED_METHODS = new Set([
+  "Page.navigate", "Network.setRequestInterception", "Network.continueInterceptedRequest",
+  "Page.close", "Page.bringToFront", "Target.closeTarget", "Target.activateTarget",
+]);
 const SCOPED_BROWSER_METHODS = new Set(["Browser.getVersion", "Target.getTargets", "Target.getTargetInfo", "Target.getBrowserContexts", "Target.attachToTarget", "Target.detachFromTarget"]);
 // These act on the shared Chromium session or the host filesystem, even when
 // sent through a page debugger. They never reach Electron.
@@ -471,7 +476,7 @@ export class BrowserCdpGateway {
         // answers `none` at once.
         if (scope.display_id && purpose !== "comment" && this.options.revive) {
           const revocations = this.revocations;
-          const revived = await this.options.revive(scope, grant);
+          const revived = await this.options.revive(scope, purpose === "file", grant);
           // A revoke during the load ended what this request was granted.
           if (this.stopped || !this.available || this.revocations !== revocations) { this.reply(response, 503, { error: "Desktop is not attached" }); return; }
           if (revived === "failed") { this.reply(response, 409, { error: "Display page failed to load" }); return; }

@@ -3,7 +3,7 @@
 // Workspace credential, and drives the display through the desktop's scoped
 // gateway. The operator's app, engine and browser are never used.
 import { expect, type Dialog, type ElectronApplication, type Page } from "@playwright/test";
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -395,8 +395,11 @@ test("hide browser: a busy, hidden, file or missing display and a stale ref are 
   // A shell bound only to the checkout, not to a pane, is told who drives a file page.
   const shellEnv: NodeJS.ProcessEnv = { ...run.env };
   for (const key of ["HIDE_PANE_ID", "HIDE_CAP_REF"]) delete shellEnv[key];
-  const outsidePane = spawnSync(HIDE_CLI, ["browser", "snapshot", fileDisplay], { cwd: checkout, env: shellEnv, encoding: "utf8" });
-  expect(outsidePane.status, outsidePane.stdout).not.toBe(0);
+  // Asynchronous, so the test's own bound ends a CLI that never answers.
+  const outsidePane = await new Promise<{ failed: boolean; stdout: string }>((resolve) => {
+    execFile(HIDE_CLI, ["browser", "snapshot", fileDisplay], { cwd: checkout, env: shellEnv, encoding: "utf8" }, (error, stdout) => resolve({ failed: error !== null, stdout }));
+  });
+  expect(outsidePane.failed, outsidePane.stdout).toBe(true);
   expect(JSON.parse(outsidePane.stdout.trim().split("\n").at(-1)!)).toMatchObject({ ok: false, reason: "file_page_pane_only" });
   expect(await json(["snapshot", "browser-missing"])).toMatchObject({ ok: false, reason: "display_missing" });
 });

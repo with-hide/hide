@@ -193,7 +193,7 @@ type Closing = CdpRetirement["reason"] | "idle";
  * What an unloaded web page needs to load again hidden for an agent: one per
  * display the core still retains, so the core's inventory bounds them.
  */
-type Unloaded = { workspace: string; id: string; area_id: string; url: string; load: number; device: BrowserDevicePlacement | null; bounds: BrowserRect | null; grant?: string };
+type Unloaded = { workspace: string; id: string; area_id: string; url: string; load: number; device: BrowserDevicePlacement | null; bounds: BrowserRect | null };
 
 /** The idle bound and its check, with the clock both read; tests shorten them. */
 export type IdleClock = { bound: number; every: number; now: () => number };
@@ -2090,21 +2090,23 @@ export class BrowserViews {
    * Loads a display's page again, hidden, for an agent's connection to it: one this host
    * unloaded, by its record, or an outside page by `grant`, which hided read from the core's
    * display, since no inventory row names it; this window holds the grant while a tab stands on it.
+   * A file page, of a checkout or outside, loads again only for a file capability (`file`).
    */
-  async cdpRevive(scope: CdpScope, grant?: string): Promise<"none" | "loaded" | "failed"> {
+  async cdpRevive(scope: CdpScope, file: boolean, grant?: string): Promise<"none" | "loaded" | "failed"> {
     const window = this.window;
     if (!window || !scope.display_id) return "none";
     const key = viewKey(scope.workspace, scope.display_id);
     const record: Unloaded | undefined = grant === undefined ? this.unloaded.get(key)
-      : this.externals.pageUrl(grant) ? { workspace: scope.workspace, id: scope.display_id, area_id: scope.area_id, url: "", load: 0, device: null, bounds: null, grant } : undefined;
+      : file && this.externals.pageUrl(grant) ? { workspace: scope.workspace, id: scope.display_id, area_id: scope.area_id, url: "", load: 0, device: null, bounds: null } : undefined;
     if (!record || record.area_id !== scope.area_id || this.cdpAreas.get(key) !== scope.area_id) return "none";
+    if (!file && isFileAddress(record.url)) return "none";
     let page = this.pages.get(key);
     if (page && !page.state.loading && !page.state.failure) {
       this.unloaded.delete(key);
       return "none";
     }
     if (!page || page.state.failure) {
-      const display = { id: record.id, area_id: record.area_id, url: record.url, load: record.load, rect: null, visible: false, ...(record.grant ? { grant: record.grant } : {}) };
+      const display = { id: record.id, area_id: record.area_id, url: record.url, load: record.load, rect: null, visible: false, ...(grant ? { grant } : {}) };
       if (page) this.load(page, this.addressOf(display));
       else {
         page = this.create(this.local, window, record.workspace, display);

@@ -3,7 +3,7 @@
 Read and drive a browser display in hide, the one the operator is looking at.
 Every command works on one display of your own checkout, by its View id from `hide view list` (for example `browser-3`).
 Open a page with `hide browser open <url-or-path>`; the display stays when a command ends.
-A web page, a blank one, and an HTML file are driven alike: a file of your checkout, and a file outside every checkout that you opened yourself.
+A web page, a blank one, and an HTML file are driven alike: a file of your checkout, and an HTML file outside every checkout that you opened yourself.
 
 ## Commands
 
@@ -118,9 +118,9 @@ Follow `next_action`; the reasons you will meet:
 | `dialog_open` | A JavaScript dialog, or a script that never yields, holds the page; the operator must answer it in hide. Dialogs are never accepted for you. |
 | `display_hidden` | Ask the operator to show the display. |
 | `display_busy` | Another debugger (agent-browser, Playwright) or another `hide browser` command holds the display; let it finish. |
-| `display_unsupported` | Only http(s), blank and file pages can be driven; open the page with `hide browser open <url-or-path>`. |
-| `file_page_pane_only` | Only an agent in a Hide pane drives a file page; serve its folder over http and open that address to drive it from here. |
-| `outside_page_not_opened` | Only the agent that opened an outside page drives it; open the file yourself with `hide browser open <path>`. |
+| `display_unsupported` | Only http(s), blank and HTML file pages can be driven; open the page with `hide browser open <url-or-path>`, and read other outside files with `hide file open`. |
+| `file_page_pane_only` | Only an agent or a shell in a Hide pane drives a file page; serve its folder over http and open that address to drive it from here. |
+| `outside_page_not_opened` | Only the agent that opened an outside page drives it, and Hide knows that agent only when it reads the agent's sessions, never for a plain shell; serve the file's folder over http and open that address to drive it. |
 | `file_page_elsewhere` | A file page is driven only from a pane on the computer whose Hide window loads it; serve its folder over http and open that address. |
 | `display_missing`, `display_closed` | Run `hide view list` and choose a current browser display. |
 | `page_unresponsive` | The page did not answer in time; retry or ask the operator. For a ref whose frame may be one that did not answer, take a fresh snapshot (`hide browser snapshot <display>`) and use its refs, since retrying a stale ref repeats the failure. After an input (click, type, press, drag, scroll) the event was sent and may already have taken effect: look with `snapshot --diff` before repeating it. |

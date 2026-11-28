@@ -213,7 +213,7 @@ pub struct View {
     /// Whether an agent opened it and the operator has not looked at it yet
     /// (PRD unseen-agent-views D-21); the last of `openers` opened it.
     pub unseen: bool,
-    /// An outside page's grant in the desktop window that holds its file,
+    /// An outside HTML page's grant in the desktop window that holds its file,
     /// which hided hands that window to load the page for the agent that
     /// opened it (`hided/src/browser_control.rs`); never in an answer, since
     /// an agent reads that a View is there and nothing of the file (PRD

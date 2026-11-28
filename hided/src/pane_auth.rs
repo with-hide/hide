@@ -124,9 +124,11 @@ impl Capability {
     /// outside pages it opened (`docs/BROWSER_DISPLAYS.md`, Agent page
     /// commands): an agent or shell in one of the operator's panes, which
     /// reads those files through its own shell already. A bot in any mode,
-    /// Desk and a shell bound only to a checkout never do.
+    /// Desk and a shell bound only to a checkout never do; a bot is bound to
+    /// its own connection (`Binding::Access`), never to a pane, so a pane
+    /// binding is the whole answer.
     pub(crate) fn drives_file_pages(&self) -> bool {
-        self.reach().is_none() && matches!(self.binding, Binding::Pane { .. })
+        matches!(self.binding, Binding::Pane { .. })
     }
 
     /// The shell a pane-bound credential was proved against; none for any
@@ -2386,9 +2388,8 @@ mod tests {
             shell_started: 1,
         };
         assert!(capability(pane(), None).drives_file_pages());
-        // A mode on a pane-bound credential is a bot's, which never drives one.
+        // A bot, in either mode, is bound to its connection.
         for mode in [hide_core::access::Mode::All, hide_core::access::Mode::Own] {
-            assert!(!capability(pane(), Some(mode)).drives_file_pages());
             assert!(
                 !capability(
                     Binding::Access {
