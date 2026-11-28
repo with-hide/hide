@@ -3026,11 +3026,12 @@ mod tests {
             Ok(state.to_owned())
         });
         assert_eq!(late.await, Err("added_not_connected"));
-        // The stop comes between two reads, and the next one would say it
-        // connected.
+        // The stop comes after the first read said it is connecting, and the
+        // next read would say it connected.
         let shutdown = Ending::new();
+        let read = Arc::new(tokio::sync::Notify::new());
         let waiting = tokio::spawn({
-            let shutdown = shutdown.clone();
+            let (shutdown, read) = (shutdown.clone(), Arc::clone(&read));
             async move {
                 let told = shutdown.clone();
                 connects(&shutdown, Instant::now() + within, move || {
@@ -3039,12 +3040,13 @@ mod tests {
                     } else {
                         "connecting"
                     };
+                    read.notify_one();
                     async move { Ok(state.to_owned()) }
                 })
                 .await
             }
         });
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        read.notified().await;
         shutdown.end();
         assert_eq!(waiting.await.unwrap(), Err("added_not_connected"));
         // A read that never answers ends at the deadline, and at a stop.
