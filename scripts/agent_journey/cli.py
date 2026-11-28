@@ -37,7 +37,7 @@ from .journey import STEPS, Journey, token
 from .own_runtime import OwnRuntime
 from .routes import allow_hook_records, allow_hook_route, operator_routing
 from .local import (ROUTES, TRUST, allow_one_shot_references, claude_config, claude_session_folders,
-                    disable_hide_ai, opencode_model, operator_trust, route, wrapper)
+                    disable_hide_ai, link_operator, opencode_model, operator_trust, route, wrapper)
 from .report import save, table_lines
 
 KIT_SECONDS = 90
@@ -286,11 +286,6 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
     read or copied: each agent's private folder points it at the fake."""
     run, owner = runtime.run, runtime.owner
     report["agents"].extend({"id": key} for key in measured)
-    for key in measured:
-        unmeasured = ROUTES[rows[key]["agent_cli"]].get("unmeasured")
-        if unmeasured:
-            cells.settle_agent(table, key, unmeasured)
-    measured = [key for key in measured if "unmeasured" not in ROUTES[rows[key]["agent_cli"]]]
     kinds = [rows[key]["agent_cli"] for key in measured]
     known = list(dict.fromkeys(operator / rel for kind in kinds for rel in ROUTES[kind]["known"]))
     roots = list(dict.fromkeys(operator / rel for kind in kinds for rel in ROUTES[kind]["roots"]))
@@ -334,6 +329,11 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
             # makes its XDG data folder 0755), and the login copy below
             # refuses a folder that is not private.
             private_directory(private)
+        if not fake:
+            # Before the CLI's first run, `--version` below; a fake model
+            # needs no login, so none is reachable.
+            for relative in entry["links"]:
+                link_operator(runtime.home, operator, relative)
         launch = wrapper(runtime.bin, executables[key], operator, runtime.state, kind, runtime.home, sandbox,
                          os.environ.get("PATH", ""), extra, keys, rows[key]["account_vars"])
         environment = {**clean_env(), "HOME": str(operator), "TMPDIR": str(run / "agent-tmp")}
