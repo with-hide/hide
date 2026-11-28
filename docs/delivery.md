@@ -146,6 +146,7 @@ A caller compares the digest it was written against, or the commands and options
 The CLI admits only the commands and flags the contract names (`hided/src/cli_contract.rs`), its tests hold each parser to the table, and the answer schemas come from the core's answer types (`hide-core/src/delivery/answer.rs`), so a changed command name, option or answer field changes the exported contract.
 A command whose standard output is closed by its reader (`hide agent list | head`) ends quietly with status 141 and prints nothing to standard error; `docs/ARCHITECTURE.md`, The platform layer, owns the rule.
 `contracts/hide-cli.json` is the committed copy, and a test fails until it is regenerated with `target/debug/hide contract --json | python3 -m json.tool > contracts/hide-cli.json`.
+A merge of main into a branch merges the file command by command through a git merge driver a clone registers once (`docs/BUILD.md`, Merging contracts/hide-cli.json).
 
 ## Safe intake and manual fallback
 

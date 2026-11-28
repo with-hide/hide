@@ -317,6 +317,36 @@ The Windows/Linux package smoke uses an isolated HOME and state folder to check 
 It then uses a second complete package fixture with an executable overlay that changes the daemon hash, proving replacement, refreshed command and hook paths, same-build reuse and standalone refusal.
 All test daemons and temporary files are cleaned up on failure as well as success.
 
+## Merging contracts/hide-cli.json
+
+`contracts/hide-cli.json` is one generated 10,000-line file, so two branches that each add or change a command used to conflict on it when main was merged in, and the only fix was to build `hide` and regenerate the file.
+`scripts/merge-hide-cli-contract.py` is a git merge driver that merges the three versions as data instead, and `.gitattributes` names it for the file.
+
+Register it once in each clone, from any worktree of it:
+
+```
+python3 scripts/merge-hide-cli-contract.py --register
+```
+
+That writes `merge.hide-cli-contract.driver` into the clone's own git config, which every worktree of the clone reads; running it again changes nothing.
+A clone that never ran it merges the file as plain text, as before, because git ignores a driver nobody configured.
+`.gitattributes` is read from the checked-out tree, so the first merge of main into a branch that does not have the attribute line yet still merges as text.
+
+What the driver does:
+
+- Objects merge key by key, and `commands` merges entry by entry on each `command` name, so a command one side added, removed or changed, and a field of a command one side changed, are taken.
+- The order of the commands is merged by `git merge-file` over their names, so two branches that add a command at the same place in the list still conflict: only the Rust source says which comes first.
+- `digest` is computed again exactly as `digest_of` in `hided/src/cli_contract.rs` does: the sha256 of the body without it, keys sorted, written compactly.
+- The file is written in the committed format (`python3 -m json.tool`, four spaces, non-ASCII escaped, one final newline).
+- When both sides changed the same entry differently, or one changed what the other removed, the driver picks neither: it leaves git's ordinary text merge of the three files with its conflict markers and exits non-zero.
+  Merge it by hand, or take either side and regenerate with `target/debug/hide contract --json | python3 -m json.tool > contracts/hide-cli.json`.
+
+The driver never builds `hide`.
+It merges what the three files say, so a merge whose Rust changes alter the contract in a way neither file shows (a command another branch added that the merged code now hides, a refusal the merged code now returns) comes out clean and wrong.
+`the_committed_contract_is_the_exported_one` in `hided/src/cli_contract.rs` is the check for that: it fails in CI until the file is regenerated.
+Of the 54 merges of main that conflicted on the file between 11-10 and 11-28, 39 finish with exactly the file the author committed, 1 differed only by a digest the author had left stale, 4 changed one entry on both sides and stay conflicts, and 10 were regenerated after the code merged and differ.
+`scripts/tests/test_merge_hide_cli_contract.py` replays them by commit id and runs a real `git merge` of two branches in a temporary repository, registered and not; the replay skips in a shallow clone.
+
 ## Product analytics build input
 
 `HIDE_POSTHOG_PROJECT_TOKEN` is an optional public ingestion token embedded into hided at build time, validated by `hided/build.rs` and listed in `hided/src/env.rs` and `hided/.env.example`.
