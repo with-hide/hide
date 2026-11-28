@@ -386,7 +386,7 @@ mod tests {
     }
 
     /// Every topic whose usage `hide <topic> --help` prints, but `import`:
-    /// the read-only import of Herdr's state is a person's command, never
+    /// a person's one-time import from the engine Hide ran before, never
     /// taught to an agent.
     const USAGE_TOPICS: &[&str] = &[
         "letter",
