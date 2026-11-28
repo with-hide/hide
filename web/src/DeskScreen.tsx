@@ -684,7 +684,7 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
   // card, and the panel still names it and finds it among the sleeping sessions (B6, B43); one opened after its row
   // went is named by the record the core kept of it.
   const known = useRef<SessionIdentity | null>(null);
-  if (row && checkoutPath) known.current = { title: row.identity_label, node: row.device_id, checkout: checkoutPath };
+  if (row && checkoutPath) known.current = { title: row.identity_label, node: row.device_id, checkout: checkoutPath, session: row.session_id ?? null };
   const identity = known.current;
   const asleep = useShellStore((s) => {
     const sessions = s.rest?.navigator?.sleeping_sessions;
@@ -694,7 +694,7 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
   // it is a sleeping session to wake, not an ended one to resume.
   return record && !asleep
     ? <DeskRecordPanel record={record} actions={actions} deskActions={deskActions} room={room} />
-    : <DeskLivePanel paneId={paneId} identity={identity ?? (record && asleep ? { title: asleep.identity_label, node: asleep.node_id, checkout: asleep.checkout_path } : null)} asleep={asleep} actions={actions} deskActions={deskActions} room={room} />;
+    : <DeskLivePanel paneId={paneId} identity={identity ?? (record && asleep ? { title: asleep.identity_label, node: asleep.node_id, checkout: asleep.checkout_path, session: asleep.session_id ?? null } : null)} asleep={asleep} actions={actions} deskActions={deskActions} room={room} />;
 }
 
 /** The way back to 한눈에 above the session beside Desk, naming it as its head does: each panel hands it the title it gives its head. */
@@ -876,16 +876,24 @@ function DeskLivePanel({ paneId, identity, asleep, actions, deskActions, room }:
 }
 
 /** A session by what outlives its pane: its work name, its machine and its checkout (O3: a name alone is not one session). */
-type SessionIdentity = { title: string; node: string; checkout: string };
+type SessionIdentity = { title: string; node: string; checkout: string; session: string | null };
 
+/**
+ * The sleeping session that is this one: on its machine, the conversation its sleep keeps. A work name, a checkout or
+ * an agent kind is no identity (two sessions of one agent can share all three), so nothing matches without the
+ * session itself.
+ */
 function sleepingOf(sessions: SleepingSession[] | undefined, identity: SessionIdentity): SleepingSession | null {
-  return sessions?.find((one) => one.node_id === identity.node && one.checkout_path === identity.checkout && one.identity_label === identity.title) ?? null;
+  return identity.session ? sleepingSession(sessions, identity.node, identity.session) : null;
 }
 
-/** The sleeping session a gone pane's record names: its machine, its name and the checkout its folder is in. */
+/** The sleeping session a gone pane's record names, by the same rule. */
 function sleepingOfRecord(sessions: SleepingSession[] | undefined, record: DeskRecord): SleepingSession | null {
-  const folder = record.cwd ?? record.project;
-  return sessions?.find((one) => one.node_id === record.session.device_id && one.identity_label === record.title && folder !== null && (folder === one.checkout_path || folder.startsWith(`${one.checkout_path}/`))) ?? null;
+  return sleepingSession(sessions, record.session.device_id, record.session.session_id);
+}
+
+function sleepingSession(sessions: SleepingSession[] | undefined, node: string, session: string): SleepingSession | null {
+  return sessions?.find((one) => one.node_id === node && one.session_id === session) ?? null;
 }
 
 /**
