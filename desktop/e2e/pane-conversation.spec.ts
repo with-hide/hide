@@ -118,8 +118,14 @@ test("another window takes the thread once and only an explicit press reclaims i
  * lets go on the lowest answer standing in view; answers that answer's number.
  */
 async function dragAcrossMessages(page: Page, scroll: Locator, from: Locator): Promise<number> {
-  const start = (await from.locator(".cm-line").first().boundingBox())!;
-  await page.mouse.move(start.x + 1, start.y + start.height / 2);
+  // The first visual line of the message's first line, where its words begin.
+  const start = await from.locator(".cm-line").first().evaluate((line) => {
+    const words = document.createRange();
+    words.selectNodeContents(line);
+    const first = words.getClientRects()[0]!;
+    return { x: first.left + 1, y: first.top + first.height / 2 };
+  });
+  await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   const box = (await scroll.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height - 4, { steps: 5 });
@@ -162,8 +168,8 @@ test("long conversation history draws the rows near the reader, keeps the readin
     const answer = (n: number) => cover.locator('[data-desk-thread-line="agent"]').filter({ hasText: `History ${n}:` });
     const first = answer(0), last = answer(119);
     await expect(last.locator(".cm-editor")).toHaveCount(1);
-    await expect(cover.locator("[data-desk-thread-lines]")).toHaveAttribute("data-desk-thread-lines", "240");
-    // Every line is read, and only the rows near the foot are drawn.
+    await expect(cover.locator("[data-desk-thread-lines]")).toHaveAttribute("data-desk-thread-lines", "242");
+    // Every line is read (the fixture's own first turn and these 120), and only the rows near the foot are drawn.
     await expect(first).toHaveCount(0);
     expect(await cover.locator("[data-thread-row]").count()).toBeLessThan(60);
     // A real scroll, rather than scrollIntoView's implicit programmatic jump,
@@ -177,7 +183,7 @@ test("long conversation history draws the rows near the reader, keeps the readin
     await composer.fill("읽던 곳을 유지해요");
     expect(await first.locator(".cm-editor").evaluate((element, before) => element === before, firstEditor)).toBe(true);
     continueFixtureTranscript(fixture, "fixture-one", { task: "History 120: 새 답변이 왔어요", at: Date.now() });
-    await expect(cover.locator("[data-desk-thread-lines]")).toHaveAttribute("data-desk-thread-lines", "242");
+    await expect(cover.locator("[data-desk-thread-lines]")).toHaveAttribute("data-desk-thread-lines", "244");
     await expect(first).toBeInViewport();
     await compositorPresents(page);
     await captureElectronWindow(app, "pane-conversation-history", { turns: 121, state: run.env.HIDE_STATE_DIR, condition: "reading oldest answer while a new answer arrives" });
