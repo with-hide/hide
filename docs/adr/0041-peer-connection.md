@@ -206,7 +206,7 @@ A relayed screen (a node's screen the core draws through its link) is a window w
 
 Each machine of a pair has a core of its own, and the `core` stream (kind 11) is the one stream the two cores talk on, apart from a guest's node and its management stream (PRD device-connect-iroh D-62, D-72).
 A side that holds an active grant on the other opens it when the connection comes up or the grant turns active, at most one each way, and both sides write on whichever is open, so a machine that is only opened answers on the stream the other opened.
-Its messages are one tagged list (`hide_peer_protocol::core::CoreMessage`, in `contracts/peer-link.json`): a letter with the sending core's id for it and its sender's registration id and name (`Agent`), `letter_taken` with the registration that took it or `letter_refused` with a reason, and a read or a start one core asks of the other (`call`) with its `call_answer`.
+Its messages are one tagged list (`hide_peer_protocol::core::CoreMessage`, in `contracts/peer-link.json`): a letter with the sending core's id for it and its sender's registration id and name (`Agent`), `letter_taken` with the registration that took it or `letter_refused` with a reason, and a read, a typed send or a start one core asks of the other (`call`) with its `call_answer`.
 A later build adds a kind to the list, and a reader skips a type it does not know.
 
 `hided/src/peer_core.rs` is the one place a daemon handles it, and it decides nothing: who may write, read or start is the core's to judge from the pairing it was told ([delivery.md: Another machine's agents](../delivery.md#another-machines-agents)), and the letters wait in the core's ledger, not in the daemon.

@@ -794,8 +794,9 @@ impl Runtime {
 
     /// What of a pane command another core runs for the agent in
     /// `caller_pane`: a read of a pane or an agent it names as that core's
-    /// (`core:<device>:pane|agent:<id>`). Typing into one is refused: a
-    /// machine asks another's agents by letter.
+    /// (`core:<device>:pane|agent:<id>`), or typing into a pane it names.
+    /// A send names a pane, as it does on this machine, so one to an agent's
+    /// address is refused as a screen read of one is.
     pub(super) fn core_pane_forward(
         &self,
         caller_pane: &str,
@@ -832,8 +833,27 @@ impl Runtime {
                     lines: *lines,
                 }
             }
-            PaneCommand::ReadScreen { .. } => return Err("pane_unavailable".into()),
-            _ => return Err(MACHINE_NOT_PERMITTED.into()),
+            // Named keys go as given: that core's own engine encodes them
+            // for its pane, as it does for a send of its own agents.
+            PaneCommand::Send {
+                text,
+                keys,
+                enter,
+                paste,
+                ..
+            } if address.item == CoreItem::Pane => PaneCommand::Send {
+                pane: address.id.to_owned(),
+                text: text.clone(),
+                keys: keys.clone(),
+                enter: *enter,
+                paste: *paste,
+            },
+            PaneCommand::ReadScreen { .. } | PaneCommand::Send { .. } => {
+                return Err("pane_unavailable".into());
+            }
+            PaneCommand::Open { .. } | PaneCommand::Purpose { .. } => {
+                unreachable!("answered above")
+            }
         };
         let actor = self
             .delivery_observations

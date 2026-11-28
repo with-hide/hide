@@ -77,13 +77,13 @@ pub enum Outcome {
     Refused { reason: String },
 }
 
-/// A read or a start an agent of one core asks of another.
+/// A read, a typed send or a start an agent of one core asks of another.
 #[derive(Clone, Debug)]
 pub enum Asked {
     /// `hide agent list`, `hide agent show` or a `hide agent spawn` with no
     /// parent.
     Delivery(Box<crate::delivery::Command>),
-    /// `hide pane read` or `hide agent read`.
+    /// `hide pane read`, `hide agent read` or `hide pane send`.
     Pane(crate::pane_command::PaneCommand),
 }
 
