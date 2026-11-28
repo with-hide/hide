@@ -39,7 +39,7 @@ import sys
 import threading
 import time
 
-from agent_live_check.processes import (GUARDIAN_FAILURES, MAX_FAILURE_REASON, Limits, OwnedProcesses,
+from agent_live_check.processes import (GUARDIAN_FAILURES, Limits, OwnedProcesses,
                                         ProcessError)
 
 from . import account
@@ -152,6 +152,35 @@ def log(stream, message):
     stream.flush()
 
 
+# What a failure may say in the log: its kind, never its message, which can
+# carry a path, an account or what a command printed. A guardian's line keeps
+# its prefix and up to two names after it: an exception's (OSError) or a
+# reason's (owned_processes_remain), which name no path, account or word.
+KIND = re.compile(r"[a-z]+(?:_[a-z]+)+")
+NAME = r"(?:[A-Z][A-Za-z]{0,63}|[a-z]+(?:_[a-z]+)+)"
+GUARDIAN_LINE = re.compile(rf"guardian(?:_[a-z]+)*_failure(?::{NAME}(?=:|$)){{1,2}}")
+
+
+def failure_kinds(error, output):
+    """The kinds a ProcessError and the guardian's lines in `output` name."""
+    kinds = [match.group(0)] if (match := KIND.fullmatch(str(error).split(":", 1)[0])) else [type(error).__name__]
+    for line in output.splitlines():
+        if line.startswith(GUARDIAN_FAILURES) and (match := GUARDIAN_LINE.match(line)):
+            kinds.append(match.group(0))
+    return kinds[:5]
+
+
+def quiet_failures():
+    """An uncaught failure, in the runner or one of its threads, names only
+    its kind on stderr, which launchd keeps in the account's log."""
+    def report(kind):
+        sys.stderr.write(f"agent-journey-daily: failed: {kind.__name__}\n")
+        sys.stderr.flush()
+
+    sys.excepthook = lambda kind, value, trace: report(kind)
+    threading.excepthook = lambda failure: report(failure.exc_type)
+
+
 def environment(settings, extra=None):
     """The run's environment: none of the launching shell's Hide variables
     or provider keys, the journey's CLIs first on PATH, then the toolchain."""
@@ -188,12 +217,10 @@ def step(owner, name, argv, stream, env, seconds, *, cwd=CHECKOUT):
             finally:
                 reader.join(timeout=5)
                 child.stdout.close()
-    except ProcessError:
-        # The guardian's own lines, never the command's: why it could not own
-        # or end the command (OwnedProcesses.run reports them the same way).
-        for line in tail.text().splitlines():
-            if line.startswith(GUARDIAN_FAILURES):
-                log(stream, f"{name}: {line[:MAX_FAILURE_REASON]}")
+    except ProcessError as error:
+        # Why the guardian could not own or end the command, by kind only.
+        for kind in failure_kinds(error, tail.text()):
+            log(stream, f"{name}: {kind}")
         raise
     log(stream, f"{name}: exit {code}")
     return code, tail
@@ -476,8 +503,12 @@ def run(settings):
         except Stopped:
             record["run"] = "runner stopped"
             log(stream, "stopped by launchd")
-        except BaseException as error:
+        except Exception as error:
             # Only the kind: a message can carry a path or what a command said.
+            record["run"] = f"runner failed: {type(error).__name__}"
+            log(stream, record["run"])
+        except BaseException as error:
+            # An interrupt still ends the runner, through quiet_failures.
             record["run"] = f"runner failed: {type(error).__name__}"
             log(stream, record["run"])
             raise

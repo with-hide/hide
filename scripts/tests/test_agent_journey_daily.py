@@ -136,10 +136,7 @@ class Runner(unittest.TestCase):
     def run_with(self, failure):
         (self.root / "request.json").write_text(json.dumps({"commit": "b" * 40, "id": "0123abcd"}))
         with mock.patch.object(daily, "checkout", side_effect=failure):
-            try:
-                code = daily.run(self.SETTINGS)
-            except BaseException as error:  # noqa: BLE001 - the run re-raises what it did not expect
-                code = type(error).__name__
+            code = daily.run(self.SETTINGS)
         return code, json.loads((self.root / daily.RECORD).read_text())
 
     def test_a_run_that_did_not_finish_never_reads_as_ok(self):
@@ -216,6 +213,36 @@ class Runner(unittest.TestCase):
         self.assertIn("probe: guardian_failure:ProcessError:owned_processes_over_budget", stream.getvalue())
         for private in PRIVATE.split():
             self.assertNotIn(private, stream.getvalue())
+
+    def test_a_guardians_failure_keeps_its_kind_and_none_of_its_message(self):
+        # The guardian's own error names the program it could not start; the
+        # log keeps the error's kind, not the path or address in its message.
+        missing = PRIVATE.split()[0] + "/" + PRIVATE.split()[1]
+        stream = io.StringIO()
+        with daily.OwnedProcesses(run_seconds=60) as owner:
+            with self.assertRaises(daily.ProcessError):
+                daily.step(owner, "probe", [missing, PRIVATE.split()[2]], stream, dict(os.environ), 20,
+                           cwd=self.root)
+        self.assertIn("probe: guardian_failure:FileNotFoundError", stream.getvalue())
+        for private in PRIVATE.split() + ["someone", "Errno"]:
+            self.assertNotIn(private, stream.getvalue())
+
+    def test_an_uncaught_failure_names_only_its_kind_on_stderr(self):
+        # launchd keeps the runner's stderr in the account's log.
+        for where in ("runner", "thread"):
+            with self.subTest(where=where):
+                program = ("import sys, threading\n"
+                           "from agent_journey.daily import quiet_failures\n"
+                           "quiet_failures()\n"
+                           f"failure = OSError({PRIVATE!r})\n"
+                           "def fail():\n"
+                           "    raise failure\n"
+                           + ("fail()\n" if where == "runner" else
+                              "thread = threading.Thread(target=fail); thread.start(); thread.join()\n"))
+                done = subprocess.run([sys.executable, "-c", program], cwd=Path(daily.__file__).parents[1],
+                                      capture_output=True, text=True, timeout=60)
+                self.assertEqual(done.stderr, "agent-journey-daily: failed: OSError\n")
+                self.assertEqual(done.returncode, 1 if where == "runner" else 0)
 
     GRANDCHILD = "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(60)"
     PARENT = ("import subprocess, sys, time\n"
