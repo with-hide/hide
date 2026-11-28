@@ -41,7 +41,6 @@ EXCEPTIONS = {
     'docs/BROWSER_DISPLAYS.md',
     'docs/BUILD.md',
     'docs/INSTALL.md',
-    'docs/PERFORMANCE_TESTING.md',
     'docs/TESTING.md',
     'docs/UI_BEHAVIOR.md',
     'docs/VERIFICATION.md',
@@ -52,12 +51,14 @@ EXCEPTIONS = {
     'docs/adr/0059-mobile-companion.md',
     'docs/agent-hooks.md',
     'docs/delivery.md',
+    'docs/performance/resident-ticks.md',
     'docs/status-model.md',
     'hided/assets/mission/help.md',
 }
 # Each split document: its table of contents and the folder of its pieces.
 SPLITS = {
     'docs/ARCHITECTURE.md': 'docs/adr',
+    'docs/PERFORMANCE_TESTING.md': 'docs/performance',
 }
 # The pieces in this folder are decision records, in ADR 0001's form.
 RECORDS = 'docs/adr'
