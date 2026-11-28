@@ -77,7 +77,7 @@ The text of an agent's conversation is produced by the person's own agent on the
 Paste this into the instructions field, as one set named "Demo", kept short because the field is small:
 
 ```
-No login. The app pairs with the user's own computer, which a reviewer does not have, so open it and tap "Try the demo" on the first screen (Korean: "체험해 보기"). It opens every screen with sample data: Agents, Missions, PRs, Settings. Nothing goes to a computer. Contact: hello@withhide.dev
+No login. The app pairs with the user's own computer, which a reviewer does not have, so open it and tap "Try the demo" on the first screen (Korean: "체험해 보기"). It opens every screen with sample data: Agents, Missions, Automations, PRs, Settings. Nothing goes to a computer. Contact: hello@withhide.dev
 ```
 
 The longer reviewer note the App Store uses is `mobile/store/metadata/review_information/notes.txt`; its demo steps (agents, mission, pull requests, "To look at", Settings) hold for the Android app too, except that Android asks its notification permission only when the person turns the Notifications switch on.
