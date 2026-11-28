@@ -1567,6 +1567,7 @@ While the session sleeps, over its pane and beside Desk alike (operator decision
 The head is not dimmed.
 `conversationSleep` (`web/src/sleep.ts`) decides it once for every place: the pane's row while the agent sleeps in its pane, which wakes there; beside Desk, a session whose sleep closed its pane (Pi, OpenCode, omp) found among the sleeping sessions by its name, machine and checkout, which wakes in a new pane that then takes its place beside Desk, Retry waking it again and no new session offered; or a Desk card that reads asleep before either says more, with nothing to press yet.
 The box comes back once the agent is awake, and a press that asked for it (`답하기`, or opening the conversation over the pane) gives it the keyboard then.
+The conversation reads the same session through the sleep and the wake, opened before the sleep or during it, so the pane's `대화` choice stays through both ([ARCHITECTURE.md: Agent sleep](ARCHITECTURE.md#agent-sleep)).
 `desk_terminal`, named `대화 ⇄ 터미널` (`Conversation ⇄ terminal`), works with Desk on or off: ⌘J on macOS, Ctrl+Shift+J on Windows and Linux, or Alt+Shift+J in a browser.
 In a workspace it toggles the focused ready agent, focusing the composer on entry and the terminal on return; on a shell or a pending or unsupported agent it does nothing.
 In Desk it opens the adjacent session's terminal as before, and in that pane the next press toggles its own conversation rather than returning to Desk.

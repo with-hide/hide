@@ -655,13 +655,25 @@ impl AgentSleepStore {
             .map(|workspace| (workspace.workspace_id.as_str(), workspace.label.clone()))
             .collect::<HashMap<_, _>>();
         // A sleeping pane's row is drawn from its record alone, whatever
-        // the engine still lists for the pane.
+        // the engine still lists for the pane. While the end is in flight
+        // the engine's own row stands; once the engine drops the ended agent
+        // before the end lands, the record's row stands in its place, so the
+        // pane never reads for a frame as holding no agent, and a screen open
+        // on its conversation keeps it (the row carries the same session).
         let mut rows = Vec::new();
         for (pane_id, record) in &self.records {
-            if record.phase == SleepPhase::Ending || !scope.holds(pane_id) {
+            if !scope.holds(pane_id) {
                 continue;
             }
             let pane_id = scope.session_id(pane_id);
+            if record.phase == SleepPhase::Ending
+                && payload
+                    .agents
+                    .iter()
+                    .any(|agent| agent.pane_id.as_deref().or(agent.id.as_deref()) == Some(pane_id))
+            {
+                continue;
+            }
             payload
                 .agents
                 .retain(|agent| agent.pane_id.as_deref().or(agent.id.as_deref()) != Some(pane_id));
@@ -1402,6 +1414,51 @@ mod tests {
         // A record written before the parent's session was kept proves nothing.
         child.declared_parent_session = None;
         assert_eq!(lineage_of(&child), None);
+    }
+
+    /// The engine can drop the ended agent before the end lands: the pane
+    /// keeps a row, with the same session, through every frame of the sleep,
+    /// so a screen open on its conversation never sees it leave.
+    #[test]
+    fn an_agent_whose_end_is_in_flight_keeps_its_row_once_the_engine_drops_it() {
+        let mut ending = agent("w1:p2");
+        ending.session_id = Some("session-two".into());
+        let mut store = AgentSleepStore::default();
+        store.records.insert(
+            ending.pane_id.clone(),
+            SleepRecord::ending(&ending, Some("/tmp".into()), 5).unwrap(),
+        );
+        let rows_of = |store: &mut AgentSleepStore, agents: serde_json::Value| {
+            let mut session = payload(agents, &["w1:p1", "w1:p2"]);
+            assert!(
+                store
+                    .settle_payload(&mut session, SleepScope::Core, None)
+                    .is_empty()
+            );
+            let mut rows = crate::sidebar::project_agents(session).agents;
+            store.annotate(&mut rows);
+            rows.into_iter()
+                .map(|row| {
+                    (
+                        row.pane_id,
+                        row.session_id,
+                        row.sleep.map(|sleep| sleep.state),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        // Listed still: the engine's own row stands, not asleep yet.
+        let listed = serde_json::json!([{"id": "w1:p2", "pane_id": "w1:p2", "agent": "claude",
+            "agent_status": "idle", "agent_session": {"kind": "id", "value": "session-two"}}]);
+        assert_eq!(
+            rows_of(&mut store, listed),
+            [("w1:p2".to_owned(), Some("session-two".to_owned()), None)]
+        );
+        // Dropped before the end landed: the record's row, same session.
+        assert_eq!(
+            rows_of(&mut store, serde_json::json!([])),
+            [("w1:p2".to_owned(), Some("session-two".to_owned()), None)]
+        );
     }
 
     #[test]
