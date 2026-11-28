@@ -167,7 +167,7 @@ Three things made the copies: a key named after the job, so the rust lane, the w
 
 | Set | What it holds | Saved by, on main only | Read by |
 | --- | --- | --- | --- |
-| `workspace` | The debug build of the dependencies, one feature set for every member (`workspace-hack`) | `rust workspace / build tests` on Linux, `windows check / rust tests` on Windows, `desktop e2e` shard 1 on macOS | Every other lane that builds Rust, and a release tag's tests |
+| `workspace` | The debug build of the dependencies, one feature set for every member (`workspace-hack`) | `rust workspace / build tests` on Linux, `windows check / rust tests` on Windows, `desktop e2e` `build` job on macOS | Every other lane that builds Rust, and a release tag's tests |
 | `lint` | Clippy's check of the dependencies, which a test build does not make | `rust workspace / lint` on Linux | `merge check rust` |
 | `platform` | `hide-platform` built alone, outside that feature set | `os contract` on each system | Nothing else |
 | `release` | The release profile's dependencies | `package.yml`'s Windows and Linux package jobs and its macOS compile | The packages of a pull request and a release tag, and the nightly measurement |
