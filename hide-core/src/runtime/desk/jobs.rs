@@ -12,7 +12,7 @@ use super::super::Runtime;
 use crate::coordination::{Command as AgentCommand, SPAWN_BUSY};
 use crate::delivery::{Actor, Command, HIDE_DESK_ROLE};
 use crate::desk::{MAX_QUEUE, QueuedJob, QueuedState};
-use crate::model::{DeskJobState, SidebarAgentSnapshot};
+use crate::model::{DeskJobActivity, DeskJobState, SidebarAgentSnapshot};
 
 impl Runtime {
     fn desk_actor(&self) -> Actor {
@@ -634,7 +634,7 @@ pub(crate) const MAX_CARDS: usize = 64;
 
 /// The places the cards' jobs hold.
 fn places_in(cards: &[crate::model::DeskJobSnapshot]) -> usize {
-    cards.iter().filter(|card| card.state.holds_place()).count()
+    cards.iter().filter(|card| card.holds_place()).count()
 }
 
 /// What every card reads, gathered once per build of the cards rather than
@@ -712,7 +712,7 @@ impl Runtime {
     /// Desk's jobs as cards, newest first: the queue's, then the newest
     /// [`MAX_CARDS`] of the ledger's, before the section's cap.
     fn desk_cards(&self, index: &CardIndex<'_>) -> Vec<crate::model::DeskJobSnapshot> {
-        use crate::model::{AgentStatusCode, DeskJobFailure, DeskJobReason, DeskJobSnapshot};
+        use crate::model::{DeskJobFailure, DeskJobReason, DeskJobSnapshot};
         let mut cards: Vec<DeskJobSnapshot> = Vec::new();
         let ledger = self.delivery_state().ok();
         let spawns = self.desk_spawns();
@@ -761,17 +761,13 @@ impl Runtime {
                 .filter(|spawn| spawn.machine.is_none())
                 .and_then(|spawn| spawn.pane.as_deref())
                 .filter(|pane| !self.desk_pane_closed(pane));
-            let following = opened
+            let activity = opened
                 .and_then(|pane| index.rows.get(pane))
-                .and_then(|row| match row.status_code {
-                    AgentStatusCode::Question
-                    | AgentStatusCode::Approval
-                    | AgentStatusCode::Error => Some(DeskJobState::Asking),
-                    AgentStatusCode::Done | AgentStatusCode::Idle | AgentStatusCode::Stopped => {
-                        None
-                    }
-                    _ => Some(DeskJobState::Working),
-                });
+                .map(|row| DeskJobActivity::of(row));
+            let following = matches!(
+                activity,
+                Some(DeskJobActivity::Working | DeskJobActivity::Asking)
+            );
             let (state, reason) = match job.state {
                 QueuedState::Waiting => {
                     position += 1;
@@ -790,7 +786,11 @@ impl Runtime {
                 }
                 QueuedState::Failed => (DeskJobState::Failed, Some(DeskJobReason::SpawnFailed)),
             };
-            let (state, reason) = following.map_or((state, reason), |state| (state, None));
+            let (state, reason) = if following {
+                (DeskJobState::Open, None)
+            } else {
+                (state, reason)
+            };
             let AgentCommand::Spawn {
                 name,
                 kind,
@@ -814,6 +814,7 @@ impl Runtime {
                 job.queued_at_ms,
             );
             card.state = state;
+            card.activity = activity;
             card.reason = reason;
             card.failure = (state == DeskJobState::Failed)
                 .then(|| job.code.as_deref().map(DeskJobFailure::of))
@@ -873,6 +874,7 @@ impl Runtime {
                 label: branch.to_owned(),
             },
             state: DeskJobState::Starting,
+            activity: None,
             queue_position: None,
             now: None,
             plan: None,
@@ -943,29 +945,23 @@ impl Runtime {
             .child
             .as_deref()
             .is_some_and(|child| index.archived.contains(child));
+        card.activity = row.map(DeskJobActivity::of);
         card.state = if archived {
             DeskJobState::Archived
         } else if mark.is_some_and(|mark| mark.closed) {
             DeskJobState::Closed
         } else if mark.is_some_and(|mark| mark.moved_out) {
             DeskJobState::MovedOut
-        } else if row.is_some_and(|row| row.sleep.is_some()) {
-            DeskJobState::Sleeping
         } else if !spawn.completed {
             DeskJobState::Starting
-        } else if card.disconnected {
-            DeskJobState::Working
-        } else if let Some(row) = row {
-            row_state(row)
-        } else if registration.is_none_or(|registration| registration.ended) {
-            card.reason = Some(if card.disconnected {
-                DeskJobReason::DeviceDisconnected
-            } else {
-                DeskJobReason::Exited
-            });
+        } else if row.is_none()
+            && !card.disconnected
+            && registration.is_none_or(|registration| registration.ended)
+        {
+            card.reason = Some(DeskJobReason::Exited);
             DeskJobState::Failed
         } else {
-            DeskJobState::Working
+            DeskJobState::Open
         };
         if let Some(row) = row {
             self.desk_card_from_row(&mut card, row, index);
@@ -1012,9 +1008,9 @@ impl Runtime {
             (None, AgentStatusCode::Error) => DeskAskKind::Blocked,
             (None, _) => DeskAskKind::Question,
         };
-        card.ask = (card.state == DeskJobState::Asking).then_some(ask);
+        card.ask = (card.activity == Some(DeskJobActivity::Asking)).then_some(ask);
         card.now = row.detail.clone();
-        card.question = (card.state == DeskJobState::Asking)
+        card.question = (card.activity == Some(DeskJobActivity::Asking))
             .then(|| {
                 row.state
                     .ask
@@ -1023,7 +1019,7 @@ impl Runtime {
                     .or_else(|| row.expected_reply.clone())
             })
             .flatten();
-        card.summary = (card.state == DeskJobState::Done)
+        card.summary = (card.activity == Some(DeskJobActivity::Done))
             .then(|| {
                 row.request
                     .as_ref()
@@ -1224,30 +1220,11 @@ impl Runtime {
         };
         card.pane_id = Some(row.pane_id.clone());
         card.disconnected = machine.is_some_and(|machine| !index.connected.contains(machine));
-        card.state = if row.sleep.is_some() {
-            DeskJobState::Sleeping
-        } else if card.disconnected {
-            DeskJobState::Working
-        } else {
-            row_state(row)
-        };
+        card.state = DeskJobState::Open;
+        card.activity = Some(DeskJobActivity::of(row));
         self.desk_card_from_row(&mut card, row, index);
         desk_card_from_pane(&mut card, &row.pane_id, index);
         card
-    }
-}
-
-/// A card's state from its session's row as the sidebar reads it.
-fn row_state(row: &SidebarAgentSnapshot) -> DeskJobState {
-    use crate::model::AgentStatusCode;
-    match row.status_code {
-        AgentStatusCode::Question | AgentStatusCode::Approval | AgentStatusCode::Error => {
-            DeskJobState::Asking
-        }
-        AgentStatusCode::Done | AgentStatusCode::Idle | AgentStatusCode::Stopped => {
-            DeskJobState::Done
-        }
-        _ => DeskJobState::Working,
     }
 }
 
@@ -1591,12 +1568,20 @@ impl Runtime {
             {
                 next.joined = true;
             }
+            if next.pane.as_deref() != Some(pane.as_str()) {
+                if next.pane.is_some() {
+                    next.grouped = false;
+                    next.moved_out = false;
+                }
+                next.pane = Some(pane.clone());
+            }
             if spawn.machine.is_none() && !next.closed && !next.moved_out {
-                // Placed once, from whatever group its tab opened in; out of
-                // the group after that is the operator's move.
+                // Its pane's tab is placed once, from whatever group it
+                // opened in; out of the group after that is the operator's
+                // move.
                 match self.desk_tab_group(&pane) {
                     Some((_, _, Some(true))) => next.grouped = true,
-                    Some((path, tab, _)) if !mark.grouped => {
+                    Some((path, tab, _)) if !next.grouped => {
                         next.grouped = self.desk_place_in_group(&path, &tab);
                     }
                     Some(_) => next.moved_out = true,
@@ -2152,7 +2137,7 @@ mod tests {
     fn a_spawn_past_the_cap_waits_in_order_and_cancel_moves_the_rest_up() {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = desk(root.path(), 2, &["a", "b"]);
-        assert_eq!(card(&runtime, "a").state, DeskJobState::Working);
+        assert_eq!(card(&runtime, "a").state, DeskJobState::Open);
         assert_eq!(runtime.desk_places_taken(), 2);
 
         let answer = admit(&mut runtime, "c").expect("queued");
@@ -2663,7 +2648,10 @@ mod tests {
             .iter()
             .find(|card| card.pane_id.as_deref() == Some("p7"))
             .unwrap();
-        assert_eq!(asking.state, DeskJobState::Asking);
+        assert_eq!(
+            (asking.state, asking.activity),
+            (DeskJobState::Open, Some(DeskJobActivity::Asking))
+        );
         assert_eq!(asking.mark, Some(row("p7", "blocked").mark));
         assert!(section.jobs.is_empty() && section.workers.is_empty());
     }

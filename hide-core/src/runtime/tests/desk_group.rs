@@ -4,7 +4,7 @@ use crate::agent_groups::GroupRole;
 use crate::coordination::started::tests::{Child, register, spawn};
 use crate::delivery::ledger::Ledger;
 use crate::delivery::{Actor, HIDE_DESK_ROLE};
-use crate::model::{AgentGroupSnapshot, DeskJobState};
+use crate::model::{AgentGroupSnapshot, DeskJobActivity, DeskJobState};
 use serde_json::{Value, json};
 
 // Expected outcomes come from PRD Desk 1차 B20, B37 and B38: a session Desk
@@ -88,7 +88,7 @@ fn a_session_desk_started_joins_the_desk_group_once_and_the_screen_stays() {
         .find(|group| group.role == Some(GroupRole::Desk))
         .expect("the Desk group was made");
     assert_eq!(desk.tabs, [TABS[1]]);
-    assert_eq!(job_state(&runtime), DeskJobState::Working);
+    assert_eq!(job_state(&runtime), DeskJobState::Open);
 
     // A second publish places nothing again.
     runtime.refresh_desk_jobs();
@@ -160,12 +160,53 @@ fn a_tab_moved_out_of_the_desk_group_reads_moved_out_and_stays_out() {
     );
 }
 
-/// A start of Desk's that failed after its tab opened (its brief not taken
-/// in time) leaves its agent in that tab: the tab is Desk's like any other,
-/// and the card follows the pane while its agent works, reading failed while
-/// it rests, where `다시 시도` hands the brief over in the same pane.
+/// Where a job stands for Desk and what its agent does are two facts: a
+/// session moved out of the Desk group goes on working and asking, and its
+/// card reads that from the session's sidebar row, the value the row's mark
+/// shows, whatever the card's own place.
 #[test]
-fn a_start_that_failed_after_its_tab_opened_joins_the_group_and_its_card_follows_the_pane() {
+fn a_moved_out_session_reads_what_its_agent_does_from_its_sidebar_row() {
+    let mut runtime = setup();
+    runtime.refresh_desk_jobs();
+    runtime.sync_workspace_view();
+    move_tab(&mut runtime, None);
+    let row = |runtime: &mut Runtime, status: &str| {
+        let payload: crate::sidebar::SessionSnapshotPayload =
+            serde_json::from_value(json!({"agents": [
+                {"pane_id": format!("{}:p", TABS[1]), "workspace_id": "w-order",
+                 "tab_id": TABS[1], "terminal_id": "t2", "revision": 1, "focused": false,
+                 "agent_status": status, "agent": "claude", "name": "child-fix",
+                 "cwd": PATH, "state_change_seq": 1},
+            ]}))
+            .unwrap();
+        runtime.snapshot.navigator.agents = crate::sidebar::project_agents(payload).agents;
+        runtime.refresh_desk_jobs();
+        let row = runtime.snapshot.navigator.agents[0].state.clone();
+        let card = runtime.snapshot.desk_jobs.as_ref().unwrap().jobs[0].clone();
+        (row.working, row.asking, card)
+    };
+
+    let (working, asking, card) = row(&mut runtime, "working");
+    assert_eq!((working, asking), (true, false));
+    assert_eq!(card.state, DeskJobState::MovedOut);
+    assert_eq!(card.activity, Some(DeskJobActivity::Working));
+
+    let (working, asking, card) = row(&mut runtime, "blocked");
+    assert_eq!((working, asking), (false, true));
+    assert_eq!(card.state, DeskJobState::MovedOut);
+    assert_eq!(card.activity, Some(DeskJobActivity::Asking));
+    assert!(card.ask.is_some(), "its card says what it asks");
+
+    let (working, asking, card) = row(&mut runtime, "done");
+    assert_eq!((working, asking), (false, false));
+    assert_eq!(card.state, DeskJobState::MovedOut);
+    assert_eq!(card.activity, Some(DeskJobActivity::Done));
+}
+
+/// A runtime running Desk whose start failed after its tab opened, the
+/// pane of the second tab: its pane made and its agent started, no child
+/// bound and the spawn not completed, as `brief_not_submitted` leaves it.
+fn failed_start() -> Runtime {
     use crate::coordination::{Command, Mutation, apply};
     let (runtime, _) = tab_order_runtime(PATH);
     let mut runtime = with_new_views(runtime, "desk-group-failed-start");
@@ -226,6 +267,17 @@ fn a_start_that_failed_after_its_tab_opened_joins_the_group_and_its_card_follows
     runtime.delivery_ledger = Ok(Arc::new(ledger));
     runtime.start_test_desk();
     runtime.fail_test_desk_start(command, "brief_not_submitted");
+    runtime
+}
+
+/// A start of Desk's that failed after its tab opened (its brief not taken
+/// in time) leaves its agent in that tab: the tab is Desk's like any other,
+/// and the card follows the pane while its agent works, reading failed while
+/// it rests, where `다시 시도` hands the brief over in the same pane.
+#[test]
+fn a_start_that_failed_after_its_tab_opened_joins_the_group_and_its_card_follows_the_pane() {
+    let mut runtime = failed_start();
+    let pane = format!("{}:p", TABS[1]);
     runtime.refresh_desk_jobs();
     runtime.sync_workspace_view();
 
@@ -248,6 +300,51 @@ fn a_start_that_failed_after_its_tab_opened_joins_the_group_and_its_card_follows
         .unwrap();
     runtime.snapshot.navigator.agents = crate::sidebar::project_agents(payload).agents;
     runtime.refresh_desk_jobs();
-    assert_eq!(card(&runtime).state, DeskJobState::Working);
+    assert_eq!(card(&runtime).state, DeskJobState::Open);
+    assert_eq!(card(&runtime).activity, Some(DeskJobActivity::Working));
     assert_eq!(card(&runtime).failure, None);
+}
+
+/// A start that failed after Desk put its tab in the Desk group and was
+/// started again in a new tab, its first tab gone with its pane: the new tab
+/// goes into the group too and the job is not read as moved out. Desk's
+/// placement was about the first pane; reading it for the new one marked a
+/// session moved out seconds after it started and kept it that way.
+#[test]
+fn a_start_retried_in_a_new_tab_joins_the_desk_group_and_is_not_moved_out() {
+    let mut runtime = failed_start();
+    runtime.refresh_desk_jobs();
+    runtime.sync_workspace_view();
+    let left = [TABS[0], TABS[2]];
+    runtime.ingest_session(Ok(tab_order_payload(PATH, &left, &left, TABS[0])));
+    runtime.sync_workspace_view();
+    let mut ledger = Ledger::default();
+    let desk = Actor::hide(HIDE_DESK_ROLE, crate::node::TEST_NODE);
+    let origin = register(&mut ledger, &desk);
+    let pane = format!("{}:p", TABS[2]);
+    spawn(
+        &mut ledger,
+        &desk,
+        &origin,
+        false,
+        None,
+        "fix",
+        Child {
+            machine: crate::node::TEST_NODE,
+            pane: &pane,
+            session: "retried",
+        },
+    )
+    .unwrap();
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    runtime.refresh_desk_jobs();
+    runtime.sync_workspace_view();
+
+    let (_, groups_now) = groups(&runtime);
+    let group = groups_now
+        .iter()
+        .find(|group| group.role == Some(GroupRole::Desk))
+        .expect("the Desk group was kept");
+    assert_eq!(group.tabs, [TABS[2]]);
+    assert_eq!(job_state(&runtime), DeskJobState::Open);
 }

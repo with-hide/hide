@@ -592,8 +592,14 @@ pub(crate) enum QueuedState {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct JobMark {
     pub intent: String,
-    /// Its tab was put in the reserved Desk group once; leaving it after that
-    /// is the operator's move (B37).
+    /// The pane `grouped` and `moved_out` are about. A start that failed and
+    /// was started again runs in a new pane, in a tab Desk has not placed,
+    /// so a new pane starts both over. Absent in a mark an older Hide saved,
+    /// which is taken as about the pane the job holds now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<String>,
+    /// Its pane's tab was put in the reserved Desk group once; leaving it
+    /// after that is the operator's move (B37).
     pub grouped: bool,
     pub moved_out: bool,
     pub closed: bool,

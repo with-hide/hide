@@ -724,7 +724,7 @@ fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_pla
             .iter()
             .map(|job| (job.id.as_str(), job.state))
             .collect();
-        assert_eq!(cards, [("first", crate::model::DeskJobState::Working)]);
+        assert_eq!(cards, [("first", crate::model::DeskJobState::Open)]);
     }
 
     let waiting = ask("second").unwrap();
@@ -2370,7 +2370,7 @@ fn a_queued_spawn_waits_while_desk_is_off_and_starts_when_it_is_on_again() {
             break state;
         }
     };
-    assert_eq!(state, Some(crate::model::DeskJobState::Working));
+    assert_eq!(state, Some(crate::model::DeskJobState::Open));
     // The second spawn made its own worktree on the device, as the first did.
     assert_eq!(spawner.count("create_worktree"), 2);
 }
