@@ -238,7 +238,7 @@ class ShellStructure(unittest.TestCase):
 
     def test_a_chapter_match_with_no_catch_all_is_refused(self):
         self.replace("hide-core/src/product_analytics.rs", "            _ => return None,\n", "")
-        self.assertIn("return None", self.fails(self.check.check_practice_chapters_are_named)[0])
+        self.assertIn("no longer has the shape", self.fails(self.check.check_practice_chapters_are_named)[0])
 
     def test_a_commented_out_event_is_not_a_measure(self):
         self.replace("hide-core/src/product_analytics.rs", '        "hide_practice",', '        // "hide_practice",')
@@ -254,15 +254,43 @@ class ShellStructure(unittest.TestCase):
         start = text.index("    measures.extend(")
         end = text.index("    measures\n}", start)
         path.write_text(text[:start] + text[end:])
-        self.assertIn("no longer extends", self.fails(self.check.check_highlights_name_a_measure)[0])
+        self.assertIn("no longer has the shape", self.fails(self.check.check_highlights_name_a_measure)[0])
 
     def test_measures_that_extend_with_another_prefix_are_refused(self):
         self.replace("hide-core/src/product_analytics.rs", "hide_feature_used:{}", "hide_other:{}")
-        self.assertIn("no longer extends", self.fails(self.check.check_highlights_name_a_measure)[0])
+        self.assertIn("no longer has the shape", self.fails(self.check.check_highlights_name_a_measure)[0])
 
     def test_a_block_comment_hides_an_arm_too(self):
         self.replace("hide-core/src/product_analytics.rs", '            "mission" => Self::Mission,', '            /* "mission" => Self::Mission, */')
         self.assertIn("mission", self.fails(self.check.check_practice_chapters_are_named)[0])
+
+    def test_a_nested_block_comment_hides_an_arm(self):
+        self.replace("hide-core/src/product_analytics.rs", '            "mission" => Self::Mission,',
+                     '            /* disabled /* reason */ "mission" => Self::Mission, */')
+        self.assertIn("mission", self.fails(self.check.check_practice_chapters_are_named)[0])
+
+    def test_a_block_comment_that_never_closes_is_refused(self):
+        self.append("hide-core/src/product_analytics.rs", "/* open\n")
+        self.assertIn("never closed", self.fails(self.check.check_practice_chapters_are_named)[0])
+
+    def test_measures_that_clear_the_list_before_returning_are_refused(self):
+        self.replace("hide-core/src/product_analytics.rs", "    measures\n}", "    measures.clear();\n    measures\n}")
+        self.assertIn("no longer has the shape", self.fails(self.check.check_highlights_name_a_measure)[0])
+
+    def test_measures_that_return_something_else_are_refused(self):
+        self.replace("hide-core/src/product_analytics.rs", "    measures\n}", "    Vec::new()\n}")
+        self.assertIn("no longer has the shape", self.fails(self.check.check_highlights_name_a_measure)[0])
+
+    def test_a_chapter_match_with_a_guard_or_an_extra_statement_is_refused(self):
+        self.replace("hide-core/src/product_analytics.rs", '            "mission" => Self::Mission,',
+                     '            "mission" if false => Self::Mission,')
+        self.assertIn("no longer has the shape", self.fails(self.check.check_practice_chapters_are_named)[0])
+        self.replace("hide-core/src/product_analytics.rs", "        Some(match id {", "        let id = id.trim();\n        Some(match id {")
+        self.assertIn("no longer has the shape", self.fails(self.check.check_practice_chapters_are_named)[0])
+
+    def test_a_feature_name_function_that_changes_shape_is_refused(self):
+        self.replace("hide-core/src/product_analytics.rs", "        match self {\n            Self::Focus", "        match self {\n            Self::Focus if false => \"x\",\n            Self::Focus")
+        self.assertIn("no longer has the shape", self.fails(self.check.check_highlights_name_a_measure)[0])
 
 
 if __name__ == "__main__":

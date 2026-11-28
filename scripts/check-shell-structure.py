@@ -208,8 +208,9 @@ class ShapeError(Exception):
 
 
 def strip_rust_comments(text):
-    """`text` without `//` and `/* */` comments, so a commented-out arm or entry
-    is not one that Rust sees. String literals are kept whole."""
+    """`text` without `//` and `/* */` comments (which nest in Rust), so a
+    commented-out arm or entry is not one that Rust sees. String literals are
+    kept whole."""
     out, i, n = [], 0, len(text)
     while i < n:
         two = text[i:i + 2]
@@ -217,8 +218,16 @@ def strip_rust_comments(text):
             while i < n and text[i] != "\n":
                 i += 1
         elif two == "/*":
-            end = text.find("*/", i + 2)
-            i = n if end == -1 else end + 2
+            depth, i = 1, i + 2
+            while i < n and depth:
+                if text[i:i + 2] == "/*":
+                    depth, i = depth + 1, i + 2
+                elif text[i:i + 2] == "*/":
+                    depth, i = depth - 1, i + 2
+                else:
+                    i += 1
+            if depth:
+                raise ShapeError(f"{ANALYTICS}: a block comment is never closed")
         elif text[i] == '"':
             j = i + 1
             while j < n and text[j] != '"':
@@ -231,48 +240,111 @@ def strip_rust_comments(text):
     return "".join(out)
 
 
-def rust_block(text, start, what):
-    """The text from `start` to the first closing brace in column 0."""
+TOKEN = re.compile(r'"(?:[^"\\]|\\.)*"|[A-Za-z_]\w*|::|=>|->|\S')
+STR, IDENT = "<string>", "<identifier>"
+
+
+def braced(text, start, what):
+    """The tokens between the braces that open at the first `{` after `start`,
+    which has to be in `text`; braces inside a string literal do not count."""
     begin = text.find(start)
     if begin == -1:
         raise ShapeError(f"{ANALYTICS}: {what} is missing ({start!r})")
-    end = text.find("\n}\n", begin)
-    return text[begin:end if end != -1 else len(text)]
+    tokens = TOKEN.findall(text[begin + len(start):])
+    if not tokens or tokens[0] != "{":
+        raise ShapeError(f"{ANALYTICS}: {what} does not open with `{{` after {start!r}")
+    depth = 0
+    for index, token in enumerate(tokens):
+        depth += token == "{"
+        depth -= token == "}"
+        if depth == 0:
+            return tokens[1:index]
+    raise ShapeError(f"{ANALYTICS}: {what} is never closed")
+
+
+def shaped(tokens, pattern, what):
+    """The captures of `tokens` read as exactly `pattern`, or a ShapeError.
+
+    A pattern item is a literal token, STR, IDENT, or `(repeat, items)` which
+    matches its items as many times as they follow (and captures each pass).
+    Any token left over, or any statement the pattern does not name, is a
+    refusal: the Rust function would then do more than this script reads.
+    """
+    position, captures = 0, []
+
+    def one(items, at):
+        got = []
+        for item in items:
+            if at >= len(tokens):
+                return None
+            token = tokens[at]
+            if item == STR:
+                if not token.startswith('"'):
+                    return None
+                got.append(token[1:-1])
+            elif item == IDENT:
+                if not re.fullmatch(r"[A-Za-z_]\w*", token):
+                    return None
+                got.append(token)
+            elif token != item:
+                return None
+            at += 1
+        return got, at
+
+    for item in pattern:
+        if isinstance(item, tuple):
+            while (found := one(item[1], position)) is not None:
+                captures.append(found[0])
+                position = found[1]
+        else:
+            found = one([item], position)
+            if found is None:
+                raise ShapeError(f"{ANALYTICS}: {what} no longer has the shape this check reads (stopped at token {position}: {' '.join(tokens[position:position + 6])!r})")
+            position = found[1]
+    if position != len(tokens):
+        raise ShapeError(f"{ANALYTICS}: {what} no longer has the shape this check reads (unread: {' '.join(tokens[position:position + 8])!r})")
+    return captures
+
+
+def repeat(*items):
+    return ("repeat", list(items))
 
 
 def practice_chapters(analytics):
-    """The ids `PracticeChapter::of` names, each by an arm that returns a chapter
-    and is not commented out, ending in the arm that names none."""
-    block = rust_block(analytics, "impl PracticeChapter {", "PracticeChapter::of")
-    if not re.search(r"_\s*=>\s*return None\s*,", block):
-        raise ShapeError(f"{ANALYTICS}: PracticeChapter::of no longer ends in `_ => return None`")
-    return set(re.findall(r'"([\w-]+)"\s*=>\s*Self::\w+\s*,', block))
-
-
-# What `measures()` does besides listing events: one measure per feature in
-# `Feature::ALL`, named by `Feature::name`. Any other shape is refused.
-FEATURE_EXTENSION = re.compile(
-    r'measures\.extend\(\s*Feature::ALL\s*\.iter\(\)\s*'
-    r'\.map\(\|feature\|\s*format!\(\s*"hide_feature_used:\{\}"\s*,\s*feature\.name\(\)\s*\)\s*\)\s*,?\s*\)\s*;'
-)
+    """The ids `PracticeChapter::of` names: its body is one `match` of
+    `"id" => Self::Chapter,` arms and the arm that names none."""
+    if "impl PracticeChapter {" not in analytics:
+        raise ShapeError(f"{ANALYTICS}: impl PracticeChapter is missing")
+    impl = analytics[analytics.index("impl PracticeChapter {"):]
+    body = braced(impl, "pub(crate) fn of(id: &str) -> Option<Self>", "PracticeChapter::of")
+    arms = shaped(body, ["Some", "(", "match", "id", "{", repeat(STR, "=>", "Self", "::", IDENT, ","),
+                         "_", "=>", "return", "None", ",", "}", ")"], "PracticeChapter::of")
+    return {arm[0].strip('"') for arm in arms}
 
 
 def measures(analytics):
     """What `product_analytics::measures()` returns: the events its array lists
-    and `hide_feature_used:` and the name of each feature in `Feature::ALL`."""
-    block = rust_block(analytics, "pub fn measures()", "measures()")
-    listed = re.search(r"let mut measures: Vec<String> = \[(.*?)\]\s*\.map\(str::to_owned\)\s*\.to_vec\(\);", block, re.S)
+    and `hide_feature_used:` and the name of each feature in `Feature::ALL`.
+    Both functions are read whole: any other statement is a refusal."""
+    body = braced(analytics, "pub fn measures() -> Vec<String>", "measures()")
+    events = shaped(body, ["let", "mut", "measures", ":", "Vec", "<", "String", ">", "=", "[",
+                           repeat(STR, ","), "]", ".", "map", "(", "str", "::", "to_owned", ")", ".", "to_vec", "(", ")", ";",
+                           "measures", ".", "extend", "(", "Feature", "::", "ALL", ".", "iter", "(", ")", ".", "map", "(", "|",
+                           "feature", "|", "format", "!", "(", '"hide_feature_used:{}"', ",", "feature", ".", "name", "(", ")", ")",
+                           ")", repeat(","), ")", ";", "measures"], "measures()")
+    events = {event[0] for event in events if event and event[0].startswith("hide_")}
+    if not events:
+        raise ShapeError(f"{ANALYTICS}: measures() lists no event")
+    if "impl Feature {" not in analytics:
+        raise ShapeError(f"{ANALYTICS}: impl Feature is missing")
+    impl = analytics[analytics.index("impl Feature {"):]
+    listed = re.search(r"const ALL: \[Self; \d+\] = \[(.*?)\];", impl, re.S)
     if listed is None:
-        raise ShapeError(f"{ANALYTICS}: measures() no longer starts from an array mapped with `str::to_owned`")
-    if not FEATURE_EXTENSION.search(block):
-        raise ShapeError(f"{ANALYTICS}: measures() no longer extends the list with `hide_feature_used:` and each `Feature::ALL` name")
-    events = set(re.findall(r'"(hide_\w+)"', listed.group(1)))
-    feature = rust_block(analytics, "impl Feature {", "Feature")
-    all_variants = re.search(r"const ALL: \[Self; \d+\] = \[(.*?)\];", feature, re.S)
-    if all_variants is None:
         raise ShapeError(f"{ANALYTICS}: Feature::ALL is missing")
-    variants = re.findall(r"Self::(\w+)", all_variants.group(1))
-    names = dict(re.findall(r'Self::(\w+)\s*=>\s*"([\w-]+)"\s*,', feature.split("fn name", 1)[-1]))
+    variants = [row[0] for row in shaped(TOKEN.findall(listed.group(1)), [repeat("Self", "::", IDENT, ",")], "Feature::ALL")]
+    names = {row[0]: row[1].strip('"') for row in shaped(
+        braced(impl, "fn name(self) -> &'static str", "Feature::name"),
+        ["match", "self", "{", repeat("Self", "::", IDENT, "=>", STR, ","), "}"], "Feature::name")}
     unnamed = [variant for variant in variants if variant not in names]
     if unnamed:
         raise ShapeError(f"{ANALYTICS}: Feature::name does not name {unnamed}")
