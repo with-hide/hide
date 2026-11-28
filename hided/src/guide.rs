@@ -373,8 +373,8 @@ mod tests {
         taught
     }
 
-    /// The guides `hide <topic> help` prints.
-    fn helps() -> [(&'static str, &'static str); 6] {
+    /// The guides `hide <topic> help` and `hide agent spawn --help` print.
+    fn helps() -> [(&'static str, &'static str); 7] {
         [
             ("hide mission help", crate::mission_cli::HELP),
             ("hide issue help", crate::issue_cli::HELP),
@@ -382,6 +382,7 @@ mod tests {
             ("hide task help", crate::plan_cli::HELP),
             ("hide wait help", crate::wait_cli::HELP),
             ("hide browser help", crate::browser_page::HELP),
+            ("hide agent spawn --help", crate::agent_cli::SPAWN_HELP),
         ]
     }
 

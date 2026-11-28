@@ -81,7 +81,7 @@
         },
         "acknowledged": {
             "$schema": "http://json-schema.org/draft-07/schema#",
-            "description": "`hide inbox ack`: the bundle it took and how many letters were in it.",
+            "description": "`hide inbox --ack`: the bundle it took and how many letters were in it.",
             "properties": {
                 "acknowledged": {
                     "format": "uint",
@@ -3581,7 +3581,7 @@
         },
         "purpose_set": {
             "$schema": "http://json-schema.org/draft-07/schema#",
-            "description": "`hide checkout purpose`: the purpose the checkout now shows.",
+            "description": "`hide workspace purpose`: the purpose the checkout now shows.",
             "properties": {
                 "checkout": {
                     "description": "The folder of the checkout that shows it.",
@@ -4587,7 +4587,7 @@
         },
         "worktree_removed": {
             "$schema": "http://json-schema.org/draft-07/schema#",
-            "description": "`hide checkout remove`: the worktree removed, with its workspace and panes closed first.",
+            "description": "`hide workspace remove`: the worktree removed, with its workspace and panes closed first.",
             "properties": {
                 "branch": {
                     "description": "Its local branch, when it had one.",
@@ -4807,7 +4807,7 @@
             "command": "skill on",
             "options": [
                 {
-                    "name": "--kind",
+                    "name": "--agent",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -4827,15 +4827,6 @@
                     "required": false,
                     "requires": [],
                     "value": null
-                },
-                {
-                    "name": "--agent",
-                    "required": false,
-                    "requires": [],
-                    "retired_for": "--kind",
-                    "value": {
-                        "type": "text"
-                    }
                 }
             ],
             "refusals": [
@@ -4864,7 +4855,7 @@
             "command": "skill off",
             "options": [
                 {
-                    "name": "--kind",
+                    "name": "--agent",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -4884,15 +4875,6 @@
                     "required": false,
                     "requires": [],
                     "value": null
-                },
-                {
-                    "name": "--agent",
-                    "required": false,
-                    "requires": [],
-                    "retired_for": "--kind",
-                    "value": {
-                        "type": "text"
-                    }
                 }
             ],
             "refusals": [
@@ -5126,7 +5108,7 @@
                     }
                 }
             ],
-            "command": "mcp edit",
+            "command": "mcp update",
             "options": [
                 {
                     "conflicts": [
@@ -5224,7 +5206,7 @@
             "command": "mcp on",
             "options": [
                 {
-                    "name": "--kind",
+                    "name": "--agent",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -5244,15 +5226,6 @@
                     "required": false,
                     "requires": [],
                     "value": null
-                },
-                {
-                    "name": "--agent",
-                    "required": false,
-                    "requires": [],
-                    "retired_for": "--kind",
-                    "value": {
-                        "type": "text"
-                    }
                 }
             ],
             "refusals": [
@@ -5281,7 +5254,7 @@
             "command": "mcp off",
             "options": [
                 {
-                    "name": "--kind",
+                    "name": "--agent",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -5301,15 +5274,6 @@
                     "required": false,
                     "requires": [],
                     "value": null
-                },
-                {
-                    "name": "--agent",
-                    "required": false,
-                    "requires": [],
-                    "retired_for": "--kind",
-                    "value": {
-                        "type": "text"
-                    }
                 }
             ],
             "refusals": [
@@ -7583,7 +7547,7 @@
                     }
                 }
             ],
-            "command": "checkout purpose",
+            "command": "workspace purpose",
             "options": [],
             "refusals": [
                 "pane_required",
@@ -7607,7 +7571,7 @@
                     }
                 }
             ],
-            "command": "checkout remove",
+            "command": "workspace remove",
             "options": [
                 {
                     "name": "--delete-branch",
@@ -7897,7 +7861,7 @@
                     }
                 }
             ],
-            "command": "inbox ack",
+            "command": "inbox --ack",
             "options": [],
             "repeats_at_most": null,
             "rest": null
@@ -8111,8 +8075,7 @@
                 },
                 {
                     "conflicts": [
-                        "--json",
-                        "--inline"
+                        "--json"
                     ],
                     "name": "--file",
                     "required": false,
@@ -8125,18 +8088,9 @@
                     "conflicts": [
                         "--file"
                     ],
-                    "name": "--inline",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "json"
-                    }
-                },
-                {
                     "name": "--json",
                     "required": false,
                     "requires": [],
-                    "retired_for": "--inline",
                     "value": {
                         "type": "json"
                     }
@@ -9117,7 +9071,7 @@
                     }
                 },
                 {
-                    "name": "--brief",
+                    "name": "--task",
                     "required": true,
                     "requires": [],
                     "value": {
@@ -9171,7 +9125,7 @@
                     }
                 },
                 {
-                    "name": "--repo",
+                    "name": "--folder",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -9182,7 +9136,7 @@
                     "name": "--worktree",
                     "required": false,
                     "requires": [
-                        "--repo"
+                        "--folder"
                     ],
                     "value": null
                 },
@@ -9191,24 +9145,6 @@
                     "required": false,
                     "requires": [],
                     "value": null
-                },
-                {
-                    "name": "--task",
-                    "required": false,
-                    "requires": [],
-                    "retired_for": "--brief",
-                    "value": {
-                        "type": "body"
-                    }
-                },
-                {
-                    "name": "--folder",
-                    "required": false,
-                    "requires": [],
-                    "retired_for": "--repo",
-                    "value": {
-                        "type": "text"
-                    }
                 }
             ],
             "refusals": [
@@ -9352,13 +9288,10 @@
             "needs_one_of": [
                 "--name",
                 "--task",
-                "--brief",
                 "--schedule",
                 "--kind",
                 "--folder",
-                "--repo",
                 "--own-folder",
-                "--no-repo",
                 "--worktree",
                 "--no-worktree"
             ],
@@ -9372,7 +9305,7 @@
                     }
                 },
                 {
-                    "name": "--brief",
+                    "name": "--task",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -9427,10 +9360,9 @@
                 },
                 {
                     "conflicts": [
-                        "--own-folder",
-                        "--no-repo"
+                        "--own-folder"
                     ],
-                    "name": "--repo",
+                    "name": "--folder",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -9439,10 +9371,9 @@
                 },
                 {
                     "conflicts": [
-                        "--folder",
-                        "--repo"
+                        "--folder"
                     ],
-                    "name": "--no-repo",
+                    "name": "--own-folder",
                     "required": false,
                     "requires": [],
                     "value": null
@@ -9463,31 +9394,6 @@
                     "name": "--no-worktree",
                     "required": false,
                     "requires": [],
-                    "value": null
-                },
-                {
-                    "name": "--task",
-                    "required": false,
-                    "requires": [],
-                    "retired_for": "--brief",
-                    "value": {
-                        "type": "body"
-                    }
-                },
-                {
-                    "name": "--folder",
-                    "required": false,
-                    "requires": [],
-                    "retired_for": "--repo",
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--own-folder",
-                    "required": false,
-                    "requires": [],
-                    "retired_for": "--no-repo",
                     "value": null
                 }
             ],
@@ -9742,8 +9648,7 @@
             "options": [
                 {
                     "conflicts": [
-                        "--json",
-                        "--inline"
+                        "--json"
                     ],
                     "name": "--file",
                     "required": false,
@@ -9756,7 +9661,7 @@
                     "conflicts": [
                         "--file"
                     ],
-                    "name": "--inline",
+                    "name": "--json",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -9775,15 +9680,6 @@
                     "requires": [],
                     "value": {
                         "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "retired_for": "--inline",
-                    "value": {
-                        "type": "json"
                     }
                 }
             ],
@@ -9804,6 +9700,69 @@
             ],
             "repeats_at_most": null,
             "rest": null
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
+            "command": "plan set",
+            "options": [
+                {
+                    "conflicts": [
+                        "--json"
+                    ],
+                    "name": "--file",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--file"
+                    ],
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "json"
+                    }
+                },
+                {
+                    "name": "--ask",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--reason",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "plan_invalid",
+                "plan_order_refused",
+                "plan_too_large",
+                "plan_full",
+                "plan_unavailable",
+                "plan_session_unknown",
+                "plan_evidence_missing",
+                "plan_pr_not_yours",
+                "plan_pr_unconfirmed",
+                "plan_file_outside",
+                "plan_file_missing",
+                "plan_file_unconfirmed",
+                "plan_report_missing"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "task set"
         },
         {
             "answers": [
@@ -9881,121 +9840,6 @@
             ],
             "repeats_at_most": null,
             "rest": null
-        },
-        {
-            "answers": [
-                "plan"
-            ],
-            "arguments": [],
-            "command": "task approve",
-            "options": [],
-            "refusals": [
-                "plan_missing",
-                "plan_not_yours",
-                "plan_agent_unknown"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "plan"
-            ],
-            "arguments": [],
-            "command": "task drop",
-            "options": [],
-            "refusals": [
-                "plan_not_yours",
-                "plan_agent_unknown"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "plan"
-            ],
-            "arguments": [],
-            "command": "task show",
-            "options": [],
-            "refusals": [
-                "plan_agent_unknown"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "plan"
-            ],
-            "arguments": [],
-            "command": "plan set",
-            "options": [
-                {
-                    "conflicts": [
-                        "--json",
-                        "--inline"
-                    ],
-                    "name": "--file",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "conflicts": [
-                        "--file"
-                    ],
-                    "name": "--inline",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "json"
-                    }
-                },
-                {
-                    "name": "--ask",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                },
-                {
-                    "name": "--reason",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "retired_for": "--inline",
-                    "value": {
-                        "type": "json"
-                    }
-                }
-            ],
-            "refusals": [
-                "plan_invalid",
-                "plan_order_refused",
-                "plan_too_large",
-                "plan_full",
-                "plan_unavailable",
-                "plan_session_unknown",
-                "plan_evidence_missing",
-                "plan_pr_not_yours",
-                "plan_pr_unconfirmed",
-                "plan_file_outside",
-                "plan_file_missing",
-                "plan_file_unconfirmed",
-                "plan_report_missing"
-            ],
-            "repeats_at_most": null,
-            "rest": null,
-            "retired_for": "task set"
         },
         {
             "answers": [
@@ -10080,6 +9924,21 @@
                 "plan"
             ],
             "arguments": [],
+            "command": "task approve",
+            "options": [],
+            "refusals": [
+                "plan_missing",
+                "plan_not_yours",
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
             "command": "plan approve",
             "options": [],
             "refusals": [
@@ -10090,6 +9949,20 @@
             "repeats_at_most": null,
             "rest": null,
             "retired_for": "task approve"
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
+            "command": "task drop",
+            "options": [],
+            "refusals": [
+                "plan_not_yours",
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
         },
         {
             "answers": [
@@ -10111,6 +9984,19 @@
                 "plan"
             ],
             "arguments": [],
+            "command": "task show",
+            "options": [],
+            "refusals": [
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
             "command": "plan show",
             "options": [],
             "refusals": [
@@ -10119,199 +10005,9 @@
             "repeats_at_most": null,
             "rest": null,
             "retired_for": "task show"
-        },
-        {
-            "answers": [
-                "purpose_set"
-            ],
-            "arguments": [
-                {
-                    "name": "text",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "workspace purpose",
-            "options": [],
-            "refusals": [
-                "pane_required",
-                "purpose_invalid",
-                "purpose_too_long",
-                "purpose_no_workspace",
-                "purpose_checkout_unlisted"
-            ],
-            "repeats_at_most": null,
-            "rest": null,
-            "retired_for": "checkout purpose"
-        },
-        {
-            "answers": [
-                "worktree_removed"
-            ],
-            "arguments": [
-                {
-                    "name": "path",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "workspace remove",
-            "options": [
-                {
-                    "name": "--delete-branch",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                },
-                {
-                    "name": "--force",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "worktree_remove_unknown",
-                "worktree_remove_blocked",
-                "worktree_remove_needs_force",
-                "worktree_remove_desk_no_force",
-                "worktree_remove_branch_unmerged",
-                "worktree_remove_branch_kept",
-                "worktree_remove_agent_working",
-                "worktree_remove_own_checkout",
-                "worktree_remove_busy",
-                "worktree_remove_unavailable",
-                "worktree_remove_stopped",
-                "worktree_remove_still_running",
-                "worktree_remove_pane_appeared",
-                "worktree_remove_changed",
-                "worktree_remove_close_failed",
-                "worktree_remove_host_failed",
-                "worktree_remove_result_unknown",
-                "worktree_remove_pending"
-            ],
-            "repeats_at_most": null,
-            "rest": null,
-            "retired_for": "checkout remove"
-        },
-        {
-            "answers": [
-                "acknowledged"
-            ],
-            "arguments": [
-                {
-                    "name": "id",
-                    "value": {
-                        "type": "key"
-                    }
-                }
-            ],
-            "command": "inbox --ack",
-            "options": [],
-            "repeats_at_most": null,
-            "rest": null,
-            "retired_for": "inbox ack"
-        },
-        {
-            "answers": [
-                "store_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "name",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "mcp update",
-            "options": [
-                {
-                    "conflicts": [
-                        "--env",
-                        "--"
-                    ],
-                    "name": "--url",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "conflicts": [
-                        "--env",
-                        "--"
-                    ],
-                    "name": "--sse",
-                    "required": false,
-                    "requires": [
-                        "--url"
-                    ],
-                    "value": null
-                },
-                {
-                    "conflicts": [
-                        "--env",
-                        "--"
-                    ],
-                    "name": "--header",
-                    "repeats_at_most": 64,
-                    "required": false,
-                    "requires": [
-                        "--url"
-                    ],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "conflicts": [
-                        "--url",
-                        "--sse",
-                        "--header"
-                    ],
-                    "name": "--env",
-                    "repeats_at_most": 64,
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused",
-                "store_declined",
-                "store_unanswered"
-            ],
-            "repeats_at_most": null,
-            "rest": "a local server's command and its arguments, which --url replaces",
-            "retired_for": "mcp edit"
         }
     ],
-    "digest": "sha256:70c53d8cc06508d7b08c1677e6734c5f43dca03147bfb4cf5da15ad027028c3f",
+    "digest": "sha256:a068074a34285882e85d06c8ad6ac724d31965fe46147d8d6273ad46f39dee01",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -10324,11 +10020,6 @@
             "ok": "ok"
         },
         "automation": {
-            "answer": "value",
-            "code": "error.code",
-            "ok": "ok"
-        },
-        "checkout": {
             "answer": "value",
             "code": "error.code",
             "ok": "ok"
@@ -10395,6 +10086,16 @@
         }
     },
     "format": 1,
+    "retired_words": [
+        {
+            "now": [
+                "task"
+            ],
+            "old": [
+                "plan"
+            ]
+        }
+    ],
     "value_types": {
         "approval": "not blank, at most 256 bytes, no control characters",
         "body": "not blank, at most 16384 bytes",

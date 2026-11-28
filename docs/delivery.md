@@ -146,7 +146,8 @@ A caller compares the digest it was written against, or the commands and options
 
 The contract only grows within a `format`: a caller looks a command up by the words it types, its arguments by name and its envelope by topic, so none of them leaves the document while the CLI still runs it.
 A renamed command keeps its old spelling for good, read as the command it is now by the one retired-words table every reader of a `hide` command shares (`hide-shell/src/retired.rs`), and keeps its entry: the current entry's own arguments, options and answers under the old words, with `retired_for` naming the command it is now (the entry `plan set` carries `"retired_for": "task set"`).
-A renamed option stays in its command's `options` with `retired_for` naming the option it is now, and a retired topic word keeps its key in `envelopes` beside the new one (`plan` beside `task`).
+A renamed option stays in its command's `options` with the value type it had and `retired_for` naming the option it is now, and a retired topic word keeps its key in `envelopes` beside the new one (`plan` beside `task`).
+`retired_words` lists the table's command rows (`{"old": ["plan"], "now": ["task"]}`), rows that keep a longer old spelling as it is included, for a reader that reads old spellings in text.
 A list of options a command takes any of (`conflicts`, `needs_one_of`) names a retired option right before the one it is now, while `requires`, which takes all it names, names only the current option: a caller reads a retired option through its `retired_for` before it reads `requires`.
 An argument's name and a value's type do not change within a `format`.
 A calling tool offers neither a `retired_for` nor a `hidden` entry to a person; `hided/AGENTS.md`, Renaming, owns how a rename is written.
