@@ -440,6 +440,7 @@ pub enum DeskMissionTurn {
 #[serde(rename_all = "snake_case")]
 pub enum DeskJobState {
     Queued,
+    /// Desk started it and its session's row is not read yet.
     Starting,
     /// Its session is open where Desk follows it.
     Open,
@@ -497,7 +498,9 @@ pub enum DeskAskKind {
 impl DeskJobSnapshot {
     /// Whether the job holds one of Desk's places (B21, B22, B37, B38): it
     /// starts, or it is open and its agent has not come to rest (done or
-    /// asleep), its row not read yet included.
+    /// asleep), a device's session whose row is not there while the device
+    /// is not connected included. The place is the job's, not a reading of
+    /// what its agent does.
     pub fn holds_place(&self) -> bool {
         match self.state {
             DeskJobState::Starting => true,

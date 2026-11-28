@@ -49,7 +49,8 @@ function activityWords(t: T, job: DeskJob): string | null {
 /**
  * A job's state in its words (B21-B24, B36-B39): what the second line says
  * when nothing more specific does. A job not ended for Desk says what its
- * agent does; one moved out of Desk's group says both facts.
+ * agent does, and nothing while no row says it (a device not connected);
+ * one moved out of Desk's group says both facts.
  */
 export function jobStateWords(t: T, job: DeskJob): string {
   const doing = activityWords(t, job);
@@ -59,7 +60,7 @@ export function jobStateWords(t: T, job: DeskJob): string {
     case "starting":
       return t("desk.job.starting");
     case "open":
-      return doing ?? t("desk.job.working");
+      return doing ?? "";
     case "failed":
       return t("desk.job.failed");
     case "cancelled":
@@ -127,7 +128,7 @@ function jobWords(t: T, job: DeskJob): Words {
     case "moved_out": {
       const doing = doingWords(t, job);
       const place = job.state === "moved_out" ? t("desk.job.moved_out") : null;
-      if (!doing) return { verb: jobStateWords(t, job), words: null, tone: null, mono: false };
+      if (!doing) return { verb: jobStateWords(t, job) || null, words: null, tone: null, mono: false };
       return { ...doing, verb: [place, doing.verb].filter(Boolean).join(" · ") || null };
     }
     default:

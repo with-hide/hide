@@ -92,11 +92,11 @@ export const ENDED_JOB_STATES: ReadonlySet<DeskJob["state"]> = new Set<DeskJob["
 
 /**
  * Whether a job's agent is at work as Desk counts it: its row says it works,
- * whatever the job's place (moved out of Desk's group included); an open job
- * whose row is not read yet counts too, as it holds one of Desk's places.
+ * whatever the job's place (moved out of Desk's group included). A job with
+ * no row read says nothing of its agent; the place it holds is the core's.
  */
 export function jobWorking(job: DeskJob): boolean {
-  return job.activity === "working" || (job.state === "open" && job.activity === null);
+  return job.activity === "working";
 }
 
 /** Where a session stands in 한눈에: waiting on the operator, at work, or idle (its agent done or asleep, or its job ended with nothing at work), shown as 끝남. */

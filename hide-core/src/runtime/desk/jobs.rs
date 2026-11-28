@@ -954,13 +954,18 @@ impl Runtime {
             DeskJobState::MovedOut
         } else if !spawn.completed {
             DeskJobState::Starting
-        } else if row.is_none()
-            && !card.disconnected
-            && registration.is_none_or(|registration| registration.ended)
-        {
-            card.reason = Some(DeskJobReason::Exited);
-            DeskJobState::Failed
+        } else if row.is_none() && !card.disconnected {
+            if registration.is_none_or(|registration| registration.ended) {
+                card.reason = Some(DeskJobReason::Exited);
+                DeskJobState::Failed
+            } else {
+                // Its agent registered and its row is not read yet: still
+                // starting for Desk, which says nothing of what it does.
+                DeskJobState::Starting
+            }
         } else {
+            // A device that is not connected keeps the job open with no
+            // row to say what its agent does.
             DeskJobState::Open
         };
         if let Some(row) = row {
@@ -1543,10 +1548,22 @@ impl Runtime {
             let mark = self.desk_mark(&spawn.intent).cloned().unwrap_or_default();
             let mut next = mark.clone();
             next.intent.clone_from(&spawn.intent);
+            // What the mark says of its placement and of 한눈에 is about one
+            // pane: a start retried in a new pane is placed and listed again.
+            // A mark saved before it named its pane is about the pane there
+            // now.
+            if next.pane.as_deref() != Some(pane.as_str()) {
+                if next.pane.is_some() {
+                    next.grouped = false;
+                    next.moved_out = false;
+                    next.glanced = false;
+                }
+                next.pane = Some(pane.clone());
+            }
             // Put among 한눈에's sessions once, when its pane is first found;
             // one pushed out after it stays out, so a refresh never churns
             // a full list.
-            if !mark.glanced {
+            if !next.glanced {
                 marked |= self.keep_desk_glance(&pane, spawn.reserved_at_unix_ms);
                 next.glanced = true;
             }
@@ -1567,13 +1584,6 @@ impl Runtime {
                     .is_some_and(|seen| seen.last_input_at_unix_ms > seen.observed_since_unix_ms)
             {
                 next.joined = true;
-            }
-            if next.pane.as_deref() != Some(pane.as_str()) {
-                if next.pane.is_some() {
-                    next.grouped = false;
-                    next.moved_out = false;
-                }
-                next.pane = Some(pane.clone());
             }
             if spawn.machine.is_none() && !next.closed && !next.moved_out {
                 // Its pane's tab is placed once, from whatever group it
@@ -2137,7 +2147,8 @@ mod tests {
     fn a_spawn_past_the_cap_waits_in_order_and_cancel_moves_the_rest_up() {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = desk(root.path(), 2, &["a", "b"]);
-        assert_eq!(card(&runtime, "a").state, DeskJobState::Open);
+        // Registered with no row read yet: starting, and holding its place.
+        assert_eq!(card(&runtime, "a").state, DeskJobState::Starting);
         assert_eq!(runtime.desk_places_taken(), 2);
 
         let answer = admit(&mut runtime, "c").expect("queued");

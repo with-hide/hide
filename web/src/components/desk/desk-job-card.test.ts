@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DeskJob } from "../../desk";
+import { jobWorking, type DeskJob } from "../../desk";
 import { jobLine, jobStateWords } from "./desk-job-card";
 
 // Mission-115 (activity): a job's place for Desk and what its agent does are two facts, and its card says both.
@@ -27,7 +27,9 @@ describe("a job card's words", () => {
     expect(jobLine(t, job({ now: "캡처 중" }))).toBe("캡처 중");
     expect(jobLine(t, job({ activity: "asking", ask: "approval", question: "rm -rf dist" }))).toBe("desk.ask.approval · rm -rf dist");
     expect(jobLine(t, job({ activity: "sleeping" }))).toBe("desk.job.sleeping");
-    // An open job whose row is not read yet counts as at work, as it holds one of Desk's places.
-    expect(jobLine(t, job({ activity: null }))).toBe("desk.job.working");
+    // With no row to say it (its device not connected), an open job says nothing of its agent and is not counted at work.
+    expect(jobLine(t, job({ activity: null }))).toBe("");
+    expect(jobWorking(job({ activity: null }))).toBe(false);
+    expect(jobLine(t, job({ activity: null, disconnected: true, now: "12분 전까지의 기록" }))).toBe("desk.job.disconnected · 12분 전까지의 기록");
   });
 });

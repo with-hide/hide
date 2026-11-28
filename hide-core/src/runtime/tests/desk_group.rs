@@ -88,7 +88,8 @@ fn a_session_desk_started_joins_the_desk_group_once_and_the_screen_stays() {
         .find(|group| group.role == Some(GroupRole::Desk))
         .expect("the Desk group was made");
     assert_eq!(desk.tabs, [TABS[1]]);
-    assert_eq!(job_state(&runtime), DeskJobState::Open);
+    // Its row is not read yet, so it is still starting for Desk.
+    assert_eq!(job_state(&runtime), DeskJobState::Starting);
 
     // A second publish places nothing again.
     runtime.refresh_desk_jobs();
@@ -307,44 +308,127 @@ fn a_start_that_failed_after_its_tab_opened_joins_the_group_and_its_card_follows
 
 /// A start that failed after Desk put its tab in the Desk group and was
 /// started again in a new tab, its first tab gone with its pane: the new tab
-/// goes into the group too and the job is not read as moved out. Desk's
-/// placement was about the first pane; reading it for the new one marked a
-/// session moved out seconds after it started and kept it that way.
+/// goes into the group too, the job is not read as moved out, and 한눈에 lists
+/// the new session. Desk's placement and its 한눈에 mark were about the first
+/// pane; reading them for the new one marked a session moved out seconds
+/// after it started and left it out of 한눈에. A second retry ends the same
+/// way, and a refresh of the same pane does not list again a session 한눈에
+/// let go.
 #[test]
 fn a_start_retried_in_a_new_tab_joins_the_desk_group_and_is_not_moved_out() {
     let mut runtime = failed_start();
     runtime.refresh_desk_jobs();
     runtime.sync_workspace_view();
-    let left = [TABS[0], TABS[2]];
-    runtime.ingest_session(Ok(tab_order_payload(PATH, &left, &left, TABS[0])));
-    runtime.sync_workspace_view();
-    let mut ledger = Ledger::default();
-    let desk = Actor::hide(HIDE_DESK_ROLE, crate::node::TEST_NODE);
-    let origin = register(&mut ledger, &desk);
-    let pane = format!("{}:p", TABS[2]);
-    spawn(
-        &mut ledger,
-        &desk,
-        &origin,
-        false,
-        None,
-        "fix",
-        Child {
-            machine: crate::node::TEST_NODE,
-            pane: &pane,
-            session: "retried",
-        },
-    )
-    .unwrap();
-    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    for (left, session) in [
+        ([TABS[0], TABS[2]], "retried"),
+        ([TABS[0], "w-order:t4"], "again"),
+    ] {
+        let tab = left[1];
+        let pane = format!("{tab}:p");
+        runtime.ingest_session(Ok(tab_order_payload(PATH, &left, &left, TABS[0])));
+        runtime.sync_workspace_view();
+        let mut ledger = Ledger::default();
+        let desk = Actor::hide(HIDE_DESK_ROLE, crate::node::TEST_NODE);
+        let origin = register(&mut ledger, &desk);
+        spawn(
+            &mut ledger,
+            &desk,
+            &origin,
+            false,
+            None,
+            "fix",
+            Child {
+                machine: crate::node::TEST_NODE,
+                pane: &pane,
+                session,
+            },
+        )
+        .unwrap();
+        runtime.delivery_ledger = Ok(Arc::new(ledger));
+        working_row(&mut runtime, tab);
+        runtime.refresh_desk_jobs();
+        runtime.sync_workspace_view();
+
+        let (_, groups_now) = groups(&runtime);
+        let group = groups_now
+            .iter()
+            .find(|group| group.role == Some(GroupRole::Desk))
+            .expect("the Desk group was kept");
+        assert_eq!(group.tabs, [tab], "{session}");
+        assert_eq!(job_state(&runtime), DeskJobState::Open, "{session}");
+        assert_eq!(glance_sessions(&runtime), vec![pane.clone()], "{session}");
+    }
+
+    // 한눈에 let go of it (a full list pushes the oldest out): the same pane
+    // is not listed again.
+    let pane = "w-order:t4:p";
+    runtime
+        .test_desk_stored()
+        .glance
+        .retain(|kept| kept.pane_id != pane);
+    runtime.refresh_desk_jobs();
+    assert!(glance_sessions(&runtime).is_empty());
+}
+
+/// A mark a release saved before marks named their pane is about the pane
+/// there now: what it says of 한눈에 and of the tab's move out of the group
+/// stays, so an upgrade lists no session again and puts no tab back.
+#[test]
+fn a_mark_saved_without_its_pane_keeps_what_it_says_of_the_pane_there_now() {
+    let mut runtime = setup();
     runtime.refresh_desk_jobs();
     runtime.sync_workspace_view();
+    move_tab(&mut runtime, None);
+    runtime.refresh_desk_jobs();
+    let pane = format!("{}:p", TABS[1]);
+    for mark in &mut runtime.test_desk_stored().marks {
+        assert_eq!(mark.pane.as_deref(), Some(pane.as_str()));
+        mark.pane = None;
+    }
+    runtime
+        .test_desk_stored()
+        .glance
+        .retain(|kept| kept.pane_id != pane);
 
+    runtime.refresh_desk_jobs();
+    runtime.sync_workspace_view();
+    assert!(glance_sessions(&runtime).is_empty(), "not listed again");
+    assert_eq!(job_state(&runtime), DeskJobState::MovedOut);
     let (_, groups_now) = groups(&runtime);
-    let group = groups_now
-        .iter()
-        .find(|group| group.role == Some(GroupRole::Desk))
-        .expect("the Desk group was kept");
-    assert_eq!(group.tabs, [TABS[2]]);
-    assert_eq!(job_state(&runtime), DeskJobState::Open);
+    assert!(
+        groups_now
+            .iter()
+            .filter(|group| group.role == Some(GroupRole::Desk))
+            .all(|group| !group.tabs.iter().any(|tab| tab == TABS[1])),
+        "its tab is not put back"
+    );
+    let marks = &runtime.test_desk_stored().marks;
+    assert!(
+        marks
+            .iter()
+            .all(|mark| mark.pane.as_deref() == Some(pane.as_str()))
+    );
+}
+
+/// One working sidebar row, for the pane of `tab`.
+fn working_row(runtime: &mut Runtime, tab: &str) {
+    let payload: crate::sidebar::SessionSnapshotPayload =
+        serde_json::from_value(json!({"agents": [
+            {"pane_id": format!("{tab}:p"), "workspace_id": "w-order", "tab_id": tab,
+             "terminal_id": "t2", "revision": 1, "focused": false, "agent_status": "working",
+             "agent": "claude", "name": "child-fix", "cwd": PATH, "state_change_seq": 1},
+        ]}))
+        .unwrap();
+    runtime.snapshot.navigator.agents = crate::sidebar::project_agents(payload).agents;
+}
+
+fn glance_sessions(runtime: &Runtime) -> Vec<String> {
+    runtime
+        .snapshot
+        .desk_jobs
+        .as_ref()
+        .unwrap()
+        .glance
+        .sessions
+        .clone()
 }
