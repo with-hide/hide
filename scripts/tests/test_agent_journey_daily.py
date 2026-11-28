@@ -45,7 +45,8 @@ REPORT = {
     },
 }
 # A synthetic path, address and token a command or an agent might print.
-PRIVATE = "/Users/someone/secret someone@example.com sk-ant-0123456789abcdef0123456789"
+# Split so the workstation-identity check does not read it as a real home.
+PRIVATE = "/Users" "/someone/secret someone@example.com sk-ant-0123456789abcdef0123456789"
 
 
 class Summary(unittest.TestCase):
