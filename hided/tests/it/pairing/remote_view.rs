@@ -1132,6 +1132,58 @@ async fn this_machine_s_core_hears_whether_a_window_shows_its_own_screen() {
     assert_eq!(told, ["computer", "own", "computer", "own"]);
 }
 
+/// A desktop window's browser gateway that answers `/connect` as the real
+/// one does for a display whose page the window has not made yet (409, no
+/// eligible target), counting those, and with the display's capability URLs
+/// once `made` is set (`desktop/src/main/browserCdp.ts`).
+#[cfg(unix)]
+struct StandInGateway {
+    endpoint: String,
+    capability: String,
+    made: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    refused: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[cfg(unix)]
+impl StandInGateway {
+    async fn start() -> Self {
+        use axum::http::StatusCode;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let gateway = Self {
+            capability: format!("{endpoint}/cdp/{}", "c".repeat(40)),
+            endpoint,
+            made: Default::default(),
+            refused: Default::default(),
+        };
+        let (made, refused) = (gateway.made.clone(), gateway.refused.clone());
+        let capability = gateway.capability.clone();
+        let connect = move || {
+            let (made, refused, capability) = (made.clone(), refused.clone(), capability.clone());
+            async move {
+                if made.load(std::sync::atomic::Ordering::SeqCst) {
+                    let ws = capability.replacen("http", "ws", 1);
+                    (
+                        StatusCode::OK,
+                        axum::Json(json!({"cdp_http_url": capability, "browser_ws_url": ws})),
+                    )
+                } else {
+                    refused.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    (
+                        StatusCode::CONFLICT,
+                        axum::Json(json!({"error": "Display has no eligible browser target"})),
+                    )
+                }
+            }
+        };
+        let app = axum::Router::new()
+            .route("/connect", axum::routing::post(connect))
+            .fallback(|| async { axum::Json(json!({})) });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        gateway
+    }
+}
+
 /// `hide args` run from `folder`, a registered checkout of the host: the
 /// daemon binds the caller to that checkout by its working directory.
 #[cfg(unix)]
@@ -1253,6 +1305,19 @@ async fn a_machine_a_paired_computer_opens_takes_views_while_that_computer_is_co
     assert!(file.ok, "{}", file.text());
     let page = in_checkout(&host, &project, &["browser", "open", "page.html"]);
     assert!(page.ok, "{}", page.text());
+    // The page is open, and no desktop window here drives it: the agent
+    // connects once one is.
+    let display = page.json()["result"]["view_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        page.json()["result"]["browser_control"],
+        json!({"state": "unavailable", "reason": "browser_unsupported",
+            "next_action": format!("Run hide browser connect --display {display} after the desktop window reconnects")}),
+        "{}",
+        page.text()
+    );
     let diff = in_checkout(&host, &project, &["diff", "open", "notes.md"]);
     assert!(diff.ok, "{}", diff.text());
     // A file outside every checkout is granted by this machine's own
@@ -1323,5 +1388,108 @@ async fn a_machine_a_paired_computer_opens_takes_views_while_that_computer_is_co
         "{}",
         gone.text()
     );
+
+    // This machine's own desktop window opens. A shell outside every pane
+    // does not drive a file page, and is told so with hided's own next step.
+    let mut desktop = Window::open(&running, "desktop").await;
+    page_renderers_become(&running, 1).await;
+    let file_page = in_checkout(&host, &project, &["browser", "open", "page.html"]);
+    assert!(file_page.ok, "{}", file_page.text());
+    assert_eq!(
+        file_page.json()["result"]["browser_control"],
+        json!({"state": "unavailable", "reason": "file_page_pane_only",
+            "next_action": "Only an agent or a shell in a Hide pane drives a file page; serve its folder over http and open that address to drive it from here"}),
+        "{}",
+        file_page.text()
+    );
+    // A page the window never makes, with no gateway to answer for it: the
+    // open waits for the page, then tells the agent to connect once the
+    // window answers, not to drive a page nobody serves.
+    let unmade = in_checkout(
+        &host,
+        &project,
+        &["browser", "open", "http://127.0.0.1:9/unmade"],
+    );
+    assert!(unmade.ok, "{}", unmade.text());
+    let display = unmade.json()["result"]["view_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        unmade.json()["result"]["browser_control"],
+        json!({"state": "unavailable", "reason": "browser_control_unavailable",
+            "next_action": format!("Run hide browser connect --display {display} after the desktop window reconnects")}),
+        "{}",
+        unmade.text()
+    );
+
+    // The window's gateway refuses a page the window has not made yet, as
+    // right after an open: the open waits until the window reports the
+    // page, asks again, and hands the agent the page's capability URLs.
+    let gateway = StandInGateway::start().await;
+    let registered = ureq::post(format!("http://127.0.0.1:{}/browser-control", running.port))
+        .header("Authorization", format!("Bearer {}", running.token))
+        .header("Content-Type", "application/json")
+        .send(
+            json!({"owner_pid": std::process::id(), "endpoint": gateway.endpoint,
+                "token": "0123456789abcdef0123456789abcdef"})
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+    assert_eq!(registered.status().as_u16(), 204);
+    let url = "http://127.0.0.1:9/race";
+    let opening = host
+        .command(&["browser", "open", url])
+        .current_dir(&project)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + WITHIN;
+    while gateway.refused.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the open never asked the gateway"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await; // wait-ok: the open's first ask crosses the daemon to the stand-in gateway, which counts it
+    }
+    let listed = in_checkout(&host, &project, &["view", "list"]);
+    let listed = listed.json()["result"].clone();
+    let view = listed["views"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|view| view["target"] == url)
+        .unwrap_or_else(|| panic!("no view of {url}: {listed}"))
+        .clone();
+    assert_eq!(view["page"]["state"], "pending", "{view}");
+    gateway
+        .made
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    desktop
+        .send(
+            "browser_state",
+            json!({"workspace": {"device_id": listed["context"]["device_id"],
+                    "path": listed["context"]["checkout_path"]},
+                "display_id": view["view_id"], "url": url, "title": "",
+                "load": view["page"]["load"], "loading": false, "failure": null,
+                "present": true}),
+        )
+        .await;
+    let raced = super::Ran::of(opening.wait_with_output().unwrap());
+    assert!(raced.ok, "{}", raced.text());
+    assert_eq!(
+        raced.json()["result"]["cdp_http_url"],
+        gateway.capability,
+        "{}",
+        raced.text()
+    );
+    assert!(
+        raced.json()["result"].get("browser_control").is_none(),
+        "{}",
+        raced.text()
+    );
+    drop(desktop);
     drop(running);
 }
