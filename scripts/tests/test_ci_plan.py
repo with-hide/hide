@@ -1030,9 +1030,10 @@ def runner_jobs(block):
     if "uses: ./.github/workflows/relay-protocol.yml" in block:
         return 3
     if "uses: ./.github/workflows/repeat.yml" in block:
-        # The count, the web specs' run, the unit tests' run, the Rust modules'
-        # run and the verdict.
-        return 5
+        # The count, the unit tests' run, the Rust modules' run and the
+        # verdict, and the web specs' run at its most: its daemon and shell
+        # builds, as many shards as an over-budget plan may take, and their total.
+        return 4 + 2 + ci.ci_repeat.WEB_OVER_BUDGET_MAX_SHARDS + 1
     if "uses: ./.github/workflows/windows-check.yml" in block:
         # The compile, the Rust tests and the unit suites, each on its own runner.
         return len(yaml.safe_load((ROOT / ".github/workflows/windows-check.yml").read_text())["jobs"])
@@ -1203,7 +1204,11 @@ class Workflows(unittest.TestCase):
         # unit suites on three runners (from 69 to 71), so a pull request with a
         # Windows path ends near the Linux lines, not 27 minutes in
         # (docs/TESTING.md, "Where the Windows runners went").
-        self.assertLessEqual(most, 71, "a run starts more jobs than the suites and native SDK contracts need")
+        # The repeat lane's web specs moved onto `web-e2e.yml`'s shards, at
+        # most six with their two builds and their total (from 71 to 79), so a
+        # pull request that changes a spec no longer waits on one runner
+        # repeating it for up to 91 minutes (docs/TESTING.md, "The repeat lane").
+        self.assertLessEqual(most, 79, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
