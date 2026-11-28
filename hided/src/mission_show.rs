@@ -817,7 +817,7 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
 }
 
 /// A list of a node's letters under `head`, each with the id
-/// `hide request show` reads it by.
+/// `hide letter show` reads it by.
 fn draw_letters(out: &mut String, head: &str, letters: &Value, now: u64) {
     match letters.as_array() {
         None => {
@@ -1145,7 +1145,7 @@ mod tests {
     /// with-hide/hide-private#552 c1: one node in full: its state, worker,
     /// pull requests, last push, warnings, every line with its evidence and each
     /// checker's answer, its worker's newest letters, and the letters its
-    /// checkers wrote to the Conductor, each with the id `hide request show`
+    /// checkers wrote to the Conductor, each with the id `hide letter show`
     /// reads it by (with-hide/hide-private#668).
     #[test]
     fn a_node_reads_in_full_with_its_lines_reviews_and_letters() {

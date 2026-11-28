@@ -15,7 +15,7 @@
             "access_key_unreadable": "This tool's key file cannot be read; run hide access request --name <name>, which replaces it and asks the operator again",
             "access_limit": "16 tools are connected; ask the operator to disconnect one in Settings > Bots, then run hide access request again",
             "access_name_taken": "A connected bot, or one the operator made, has this name; ask the operator to disconnect it in Settings > Bots, or choose another --name, then run hide access request again",
-            "access_needs_agent": "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide request send",
+            "access_needs_agent": "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide letter send",
             "access_not_connected": "Run hide access request --name <name> first",
             "access_not_own_work": "This bot acts on its own work only: the agents it started, the agents under them and the missions they conduct; start an agent with hide agent spawn and ask it, or ask the operator to give the bot the whole Hide in Settings",
             "access_operator_only": "Only the operator adds or removes a device, in Settings > Devices; ask the operator",
@@ -2278,7 +2278,7 @@
                         },
                         "forced": {
                             "default": false,
-                            "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
+                            "description": "Sent with `hide letter send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
                             "type": "boolean"
                         },
                         "from": {
@@ -2320,7 +2320,7 @@
                         },
                         "immediate": {
                             "default": false,
-                            "description": "Sent with `hide request send --now`: delivered at the recipient's next safe gap while it works, without the mid-turn wait (PRD letters-to-busy-agents D-05). An older build drops the field at its next save, and the letter then waits as any other.",
+                            "description": "Sent with `hide letter send --now`: delivered at the recipient's next safe gap while it works, without the mid-turn wait (PRD letters-to-busy-agents D-05). An older build drops the field at its next save, and the letter then waits as any other.",
                             "type": "boolean"
                         },
                         "input_noticed": {
@@ -2544,7 +2544,7 @@
                     ]
                 },
                 "folded": {
-                    "description": "Per sender, the older letters the bundle folded, oldest first; each opens with `hide request show <id>`.",
+                    "description": "Per sender, the older letters the bundle folded, oldest first; each opens with `hide letter show <id>`.",
                     "items": {
                         "$ref": "#/definitions/Folded"
                     },
@@ -2901,7 +2901,7 @@
                 },
                 "forced": {
                     "default": false,
-                    "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
+                    "description": "Sent with `hide letter send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
                     "type": "boolean"
                 },
                 "from": {
@@ -2943,7 +2943,7 @@
                 },
                 "immediate": {
                     "default": false,
-                    "description": "Sent with `hide request send --now`: delivered at the recipient's next safe gap while it works, without the mid-turn wait (PRD letters-to-busy-agents D-05). An older build drops the field at its next save, and the letter then waits as any other.",
+                    "description": "Sent with `hide letter send --now`: delivered at the recipient's next safe gap while it works, without the mid-turn wait (PRD letters-to-busy-agents D-05). An older build drops the field at its next save, and the letter then waits as any other.",
                     "type": "boolean"
                 },
                 "input_noticed": {
@@ -4622,7 +4622,7 @@
         "refusals": {
             "outbox_full": "Too many letters wait for the Hide this work belongs to; send again once it has reconnected",
             "outbox_unavailable": "This machine could not keep the letter; send again once the Hide this work belongs to has reconnected",
-            "owner_offline": "The Hide this work belongs to is not connected and reconnects by itself; run the command again then. A letter (hide request send) is kept and delivered once it is back"
+            "owner_offline": "The Hide this work belongs to is not connected and reconnects by itself; run the command again then. A letter (hide letter send) is kept and delivered once it is back"
         }
     },
     "commands": [
@@ -7640,7 +7640,7 @@
                     }
                 }
             ],
-            "command": "request send",
+            "command": "letter send",
             "options": [
                 {
                     "name": "--intent",
@@ -7708,6 +7708,86 @@
         },
         {
             "answers": [
+                "letter",
+                "queued"
+            ],
+            "arguments": [
+                {
+                    "name": "target",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "request send",
+            "options": [
+                {
+                    "name": "--intent",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--body",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "body"
+                    }
+                },
+                {
+                    "name": "--kind",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "request",
+                            "block",
+                            "report",
+                            "progress"
+                        ]
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--force"
+                    ],
+                    "name": "--now",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--now"
+                    ],
+                    "name": "--force",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "composer_not_empty",
+                "composer_unconfirmed",
+                "force_target_asleep",
+                "machine_not_permitted",
+                "no_parent",
+                "outbox_full",
+                "outbox_unavailable",
+                "participant_registering",
+                "recipient_not_agent",
+                "sender_not_registered"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "letter send"
+        },
+        {
+            "answers": [
                 "letter"
             ],
             "arguments": [
@@ -7718,7 +7798,7 @@
                     }
                 }
             ],
-            "command": "request reply",
+            "command": "letter reply",
             "options": [
                 {
                     "name": "--intent",
@@ -7752,7 +7832,77 @@
                     }
                 }
             ],
+            "command": "request reply",
+            "options": [
+                {
+                    "name": "--intent",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--body",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "body"
+                    }
+                }
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "letter reply"
+        },
+        {
+            "answers": [
+                "letter"
+            ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "letter ack",
+            "options": [],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "letter"
+            ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
             "command": "request ack",
+            "options": [],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "letter ack"
+        },
+        {
+            "answers": [
+                "letter"
+            ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "letter cancel",
             "options": [],
             "repeats_at_most": null,
             "rest": null
@@ -7772,6 +7922,24 @@
             "command": "request cancel",
             "options": [],
             "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "letter cancel"
+        },
+        {
+            "answers": [
+                "letter"
+            ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "letter show",
+            "options": [],
+            "repeats_at_most": null,
             "rest": null
         },
         {
@@ -7789,7 +7957,8 @@
             "command": "request show",
             "options": [],
             "repeats_at_most": null,
-            "rest": null
+            "rest": null,
+            "retired_for": "letter show"
         },
         {
             "answers": [
@@ -10037,7 +10206,7 @@
             "retired_for": "task show"
         }
     ],
-    "digest": "sha256:9fa7d3042d79460e77c52b00870a771cca66977bf3d921049b9a268da0457edf",
+    "digest": "sha256:f523649b31026480aae8362115bd6d01b78221253771f807d1d60cf1d35bae2a",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -10060,6 +10229,11 @@
             "ok": "ok"
         },
         "inbox": {
+            "answer": "result",
+            "code": "reason",
+            "ok": "ok"
+        },
+        "letter": {
             "answer": "result",
             "code": "reason",
             "ok": "ok"
@@ -10123,6 +10297,14 @@
             ],
             "old": [
                 "plan"
+            ]
+        },
+        {
+            "now": [
+                "letter"
+            ],
+            "old": [
+                "request"
             ]
         }
     ],

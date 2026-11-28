@@ -1229,7 +1229,7 @@ impl AgentRecord {
 
     /// The name this agent has on the wire and in the ledger: the name it
     /// registered under, else its registration id, which is stable and which
-    /// `hide request send` and `--parent` already resolve. Never a pane id and
+    /// `hide letter send` and `--parent` already resolve. Never a pane id and
     /// never a title, so a letter's envelope names its sender the way the
     /// label worker later names that sender's work (`wire_name`).
     pub fn wire_name(&self) -> &str {
@@ -1562,7 +1562,7 @@ pub fn archive_next_action(code: &str) -> &'static str {
 /// The id `hide agent show` and `--parent` take for the caller itself.
 pub const HERE: &str = "here";
 
-/// The recipient `hide request send` takes for the sender's own parent; it
+/// The recipient `hide letter send` takes for the sender's own parent; it
 /// wins over an agent that registered under the same name.
 pub const PARENT: &str = "parent";
 

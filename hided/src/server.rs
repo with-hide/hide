@@ -1652,7 +1652,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         }
         // `hide agent ask-human` (PRD ask-human B2, B3).
         "human_kind_unknown" => {
-            "hide agent ask-human takes auth (a sign-in, a re-authentication, an unlock) or permission (an app connection, an OS permission); for a decision or anything else, send your parent a letter with hide request send"
+            "hide agent ask-human takes auth (a sign-in, a re-authentication, an unlock) or permission (an app connection, an OS permission); for a decision or anything else, send your parent a letter with hide letter send"
         }
         "human_place_required" => {
             "Name where the person acts: the page's address (github.com/login), the app (1Password) or the setting (System Settings > Privacy & Security > Camera)"

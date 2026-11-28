@@ -1,7 +1,7 @@
 // A mission node's worker reads the letter its node's reviewer wrote, on the
 // core's own engine and an isolated hided, through the real `hide` command
 // from each agent's pane (with-hide/hide-private#656): the worker of the node
-// reads it with `hide request show` and another node's worker is refused.
+// reads it with `hide letter show` and another node's worker is refused.
 
 import { expect, test } from "@playwright/test";
 import fs from "node:fs";
@@ -83,13 +83,13 @@ test("the worker of a mission node reads its node's reviewer's letter and anothe
     await ok(conductor, ["mission", "node", "docs", "--status", "working", "--agent-id", agents.neighbor.id]);
 
     // The reviewer writes its verdict to the Conductor, and the worker reads it.
-    const verdict = idOf(await ok(as("reviewer"), ["request", "send", conductorId, "--intent", "verdict", "--kind", "report", "--body", "리뷰 결과: 고칠 곳 하나"]));
-    const read = await ok(as("worker"), ["request", "show", verdict]);
+    const verdict = idOf(await ok(as("reviewer"), ["letter", "send", conductorId, "--intent", "verdict", "--kind", "report", "--body", "리뷰 결과: 고칠 곳 하나"]));
+    const read = await ok(as("worker"), ["letter", "show", verdict]);
     expect(JSON.stringify(read)).toContain("리뷰 결과: 고칠 곳 하나");
     // Another node's worker is refused. The rest of the boundary (the letter's parties, taking it in,
     // cancelling, the node's checkers reading the worker's and each other's letters) is proved under the
     // store in `mission_letters.rs`.
-    expect(refusal(await answer(as("neighbor"), ["request", "show", verdict]))).toBe("letter_unavailable");
+    expect(refusal(await answer(as("neighbor"), ["letter", "show", verdict]))).toBe("letter_unavailable");
   } finally {
     daemon?.stop();
     fixture.stop();

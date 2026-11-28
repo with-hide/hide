@@ -389,35 +389,6 @@ class Runtime:
                 "budget_seconds": BOOTSTRAP_SECONDS, "last_refusal": last_reason,
             }).encode())
 
-    def send_letter(self, pane, intent, body):
-        if pane not in self.pane_credentials:
-            raise ProtectionError("unowned_letter_recipient")
-        environment = {**self.daemon_env, "HIDE_PANE_ID": pane,
-                       "HIDE_CAP_REF": str(self.pane_credentials[pane])}
-        _, output, _ = self.owner.run([str(self.hide), "request", "send", pane,
-                                      "--intent", intent, "--kind", "report", "--body", body],
-                                     env=environment)
-        answer = json.loads(output)
-        if answer.get("ok") is not True or not isinstance(answer.get("result", {}).get("id"), str):
-            raise ProcessError("private_mailbox_send_refused")
-        return answer["result"]["id"]
-
-    def bell_line(self, pane, letter_id, *, seconds=15, deadline=None):
-        """The line hided's doorbell typed for the letter, or None before it rang."""
-        if pane not in self.pane_credentials:
-            raise ProtectionError("unowned_letter_reader")
-        environment = {**self.daemon_env, "HIDE_PANE_ID": pane,
-                       "HIDE_CAP_REF": str(self.pane_credentials[pane])}
-        _, output, _ = self.owner.run([str(self.hide), "request", "show", letter_id],
-                                     env=environment, seconds=seconds, deadline=deadline)
-        answer = json.loads(output)
-        if answer.get("ok") is not True or not isinstance(answer.get("result"), dict):
-            raise ProcessError("private_mailbox_show_refused")
-        line = answer["result"].get("bell_line")
-        if line is not None and not isinstance(line, str):
-            raise ProcessError("private_mailbox_show_format")
-        return line
-
     def close(self) -> dict:
         failures = []
         processes_confirmed = False

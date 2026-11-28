@@ -1315,12 +1315,12 @@ const VIEW_NOT_IN_LANE: Refusal = Refusal {
 };
 
 /// Desk has no pane and no checkout: it acts through delivery commands
-/// (`hide agent`, `hide request`, `hide inbox`, `hide watch`, `hide ps`) and
+/// (`hide agent`, `hide letter`, `hide inbox`, `hide watch`, `hide ps`) and
 /// shows a file on Desk's desk (`desk/opens.rs`), never through a
 /// Workspace or View command.
 pub(super) const DESK_REFUSAL: Refusal = Refusal {
     reason: "desk_has_no_checkout",
-    next_action: "Use hide agent, hide request, hide inbox or hide ps; show the operator a file with hide file open <path>",
+    next_action: "Use hide agent, hide letter, hide inbox or hide ps; show the operator a file with hide file open <path>",
 };
 
 /// The refusal for a caller whose checkout membership no longer matches what
