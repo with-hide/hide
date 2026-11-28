@@ -134,7 +134,7 @@ function candidates(step: PracticeChapter["steps"][number], inputs: StageInput[]
 
 describe.each(CHAPTERS.map((chapter) => [chapter.id, chapter] as const))("practice chapter %s started over", (_id, chapter) => {
   it("plays from each of its steps to its end in a fresh world as the first run did", () => {
-    const { world, inputs, play, uninstall, initial } = stage(chapter);
+    const { world, inputs, play, uninstall, initial } = stage(chapter, { record: true });
     const runs: StepRun[] = [];
     /** The steps with a `done` the first run did not bring about. */
     const unreached: string[] = [];

@@ -41,13 +41,17 @@ export function removeStandInHost() {
 /** One input the shell can send: a command by id, or a pane clicked. */
 export type StageInput = { name: string; run: () => void };
 
-export function stage(chapter: PracticeChapter) {
+/**
+ * `record` keeps the events each input sends the world (`play`'s `events`), for the test that replays them;
+ * without it nothing is kept or copied, so a test that only looks at the states pays nothing for them.
+ */
+export function stage(chapter: PracticeChapter, { record = false }: { record?: boolean } = {}) {
   const world = chapter.world;
   let model = world.initial();
-  /** The events the world was sent since the last input started. */
+  /** The events the world was sent since the last input started, when recording. */
   const sent: CoreEvent[] = [];
   const send = (event: CoreEvent) => {
-    sent.push(event);
+    if (record) sent.push(event);
     const after = world.apply(model, event);
     if (after) model = after;
     return true;
@@ -83,12 +87,12 @@ export function stage(chapter: PracticeChapter) {
   const play = (from: unknown, input: StageInput) => {
     show(from);
     useUiStore.setState(calm, true);
-    sent.length = 0;
+    if (record) sent.length = 0;
     input.run();
     if (useUiStore.getState().pendingClose) actions.confirmClose();
     const reached = model;
     show(reached);
-    return { model: reached, events: [...sent] };
+    return { model: reached, events: record ? [...sent] : [] };
   };
   const uninstall = () => {
     uninstallKeyboard();
