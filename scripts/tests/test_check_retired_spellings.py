@@ -88,6 +88,14 @@ class WhatIsLeftOut(unittest.TestCase):
         }
         self.assertEqual(errors_of(files), [])
 
+    def test_a_test_only_item_does_not_hide_the_code_after_it(self):
+        errors = errors_of({'hide-core/src/mailbox.rs': (
+            '#[cfg(test)]\npub(crate) fn tool_pull() {}\n'
+            'const NEXT: &str = "hide plan show";\n'
+            '#[cfg(test)]\n#[allow(dead_code)]\npub mod tests {\n    const S: &str = "hide plan set";\n}\n'
+        )})
+        self.assertEqual(errors, ['hide-core/src/mailbox.rs:3: hide plan show is retired; write hide task show'])
+
     def test_the_same_word_elsewhere_passes(self):
         files = {
             'docs/a.md': '`hide device request k1`, a letter of kind request, the hide-plan skill, hide planning.\n',
