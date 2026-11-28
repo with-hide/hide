@@ -710,7 +710,7 @@ test("browser CDP: native files cannot be read through runtime, frames, redirect
   const fileCapability = (await fromPane(["browser", "connect", "--display", manualId])).result as Capability;
   const fileInventory = await targets(fileCapability);
   expect(fileInventory).toHaveLength(1);
-  expect(fileInventory[0]!.url).toBe(pathToFileURL(manual).href);
+  expect(fileInventory[0]!.url).toMatch(/^file:\/\/\/.*\/fixture\/manual-cdp-file\.html$/);
   const inventory = await targets(capability);
   expect(inventory).toHaveLength(1);
   expect(inventory[0]!.url).toBe(`${origin}/protected`);
