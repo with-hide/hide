@@ -81,7 +81,7 @@
         },
         "acknowledged": {
             "$schema": "http://json-schema.org/draft-07/schema#",
-            "description": "`hide inbox --ack`: the bundle it took and how many letters were in it.",
+            "description": "`hide inbox ack`: the bundle it took and how many letters were in it.",
             "properties": {
                 "acknowledged": {
                     "format": "uint",
@@ -3581,7 +3581,7 @@
         },
         "purpose_set": {
             "$schema": "http://json-schema.org/draft-07/schema#",
-            "description": "`hide workspace purpose`: the purpose the checkout now shows.",
+            "description": "`hide checkout purpose`: the purpose the checkout now shows.",
             "properties": {
                 "checkout": {
                     "description": "The folder of the checkout that shows it.",
@@ -4587,7 +4587,7 @@
         },
         "worktree_removed": {
             "$schema": "http://json-schema.org/draft-07/schema#",
-            "description": "`hide workspace remove`: the worktree removed, with its workspace and panes closed first.",
+            "description": "`hide checkout remove`: the worktree removed, with its workspace and panes closed first.",
             "properties": {
                 "branch": {
                     "description": "Its local branch, when it had one.",
@@ -4807,7 +4807,7 @@
             "command": "skill on",
             "options": [
                 {
-                    "name": "--agent",
+                    "name": "--kind",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -4827,6 +4827,15 @@
                     "required": false,
                     "requires": [],
                     "value": null
+                },
+                {
+                    "name": "--agent",
+                    "required": false,
+                    "requires": [],
+                    "retired_for": "--kind",
+                    "value": {
+                        "type": "text"
+                    }
                 }
             ],
             "refusals": [
@@ -4855,7 +4864,7 @@
             "command": "skill off",
             "options": [
                 {
-                    "name": "--agent",
+                    "name": "--kind",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -4875,6 +4884,15 @@
                     "required": false,
                     "requires": [],
                     "value": null
+                },
+                {
+                    "name": "--agent",
+                    "required": false,
+                    "requires": [],
+                    "retired_for": "--kind",
+                    "value": {
+                        "type": "text"
+                    }
                 }
             ],
             "refusals": [
@@ -5108,7 +5126,7 @@
                     }
                 }
             ],
-            "command": "mcp update",
+            "command": "mcp edit",
             "options": [
                 {
                     "conflicts": [
@@ -5203,10 +5221,55 @@
                     }
                 }
             ],
-            "command": "mcp on",
+            "command": "mcp update",
             "options": [
                 {
-                    "name": "--agent",
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--url",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--sse",
+                    "required": false,
+                    "requires": [
+                        "--url"
+                    ],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--header",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [
+                        "--url"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--url",
+                        "--sse",
+                        "--header"
+                    ],
+                    "name": "--env",
+                    "repeats_at_most": 64,
                     "required": false,
                     "requires": [],
                     "value": {
@@ -5226,6 +5289,66 @@
                     "required": false,
                     "requires": [],
                     "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused",
+                "store_declined",
+                "store_unanswered"
+            ],
+            "repeats_at_most": null,
+            "rest": "a local server's command and its arguments, which --url replaces",
+            "retired_for": "mcp edit"
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "mcp on",
+            "options": [
+                {
+                    "name": "--kind",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--agent",
+                    "required": false,
+                    "requires": [],
+                    "retired_for": "--kind",
+                    "value": {
+                        "type": "text"
+                    }
                 }
             ],
             "refusals": [
@@ -5254,7 +5377,7 @@
             "command": "mcp off",
             "options": [
                 {
-                    "name": "--agent",
+                    "name": "--kind",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -5274,6 +5397,15 @@
                     "required": false,
                     "requires": [],
                     "value": null
+                },
+                {
+                    "name": "--agent",
+                    "required": false,
+                    "requires": [],
+                    "retired_for": "--kind",
+                    "value": {
+                        "type": "text"
+                    }
                 }
             ],
             "refusals": [
@@ -7547,6 +7679,30 @@
                     }
                 }
             ],
+            "command": "checkout purpose",
+            "options": [],
+            "refusals": [
+                "pane_required",
+                "purpose_invalid",
+                "purpose_too_long",
+                "purpose_no_workspace",
+                "purpose_checkout_unlisted"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "purpose_set"
+            ],
+            "arguments": [
+                {
+                    "name": "text",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
             "command": "workspace purpose",
             "options": [],
             "refusals": [
@@ -7555,6 +7711,57 @@
                 "purpose_too_long",
                 "purpose_no_workspace",
                 "purpose_checkout_unlisted"
+            ],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "checkout purpose"
+        },
+        {
+            "answers": [
+                "worktree_removed"
+            ],
+            "arguments": [
+                {
+                    "name": "path",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "checkout remove",
+            "options": [
+                {
+                    "name": "--delete-branch",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--force",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "worktree_remove_unknown",
+                "worktree_remove_blocked",
+                "worktree_remove_needs_force",
+                "worktree_remove_desk_no_force",
+                "worktree_remove_branch_unmerged",
+                "worktree_remove_branch_kept",
+                "worktree_remove_agent_working",
+                "worktree_remove_own_checkout",
+                "worktree_remove_busy",
+                "worktree_remove_unavailable",
+                "worktree_remove_stopped",
+                "worktree_remove_still_running",
+                "worktree_remove_pane_appeared",
+                "worktree_remove_changed",
+                "worktree_remove_close_failed",
+                "worktree_remove_host_failed",
+                "worktree_remove_result_unknown",
+                "worktree_remove_pending"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7607,7 +7814,8 @@
                 "worktree_remove_pending"
             ],
             "repeats_at_most": null,
-            "rest": null
+            "rest": null,
+            "retired_for": "checkout remove"
         },
         {
             "answers": [
@@ -7861,10 +8069,28 @@
                     }
                 }
             ],
-            "command": "inbox --ack",
+            "command": "inbox ack",
             "options": [],
             "repeats_at_most": null,
             "rest": null
+        },
+        {
+            "answers": [
+                "acknowledged"
+            ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "inbox --ack",
+            "options": [],
+            "repeats_at_most": null,
+            "rest": null,
+            "retired_for": "inbox ack"
         },
         {
             "answers": [
@@ -8075,7 +8301,8 @@
                 },
                 {
                     "conflicts": [
-                        "--json"
+                        "--json",
+                        "--inline"
                     ],
                     "name": "--file",
                     "required": false,
@@ -8088,9 +8315,21 @@
                     "conflicts": [
                         "--file"
                     ],
+                    "name": "--inline",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "json"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--file"
+                    ],
                     "name": "--json",
                     "required": false,
                     "requires": [],
+                    "retired_for": "--inline",
                     "value": {
                         "type": "json"
                     }
@@ -9071,7 +9310,7 @@
                     }
                 },
                 {
-                    "name": "--task",
+                    "name": "--brief",
                     "required": true,
                     "requires": [],
                     "value": {
@@ -9125,7 +9364,7 @@
                     }
                 },
                 {
-                    "name": "--folder",
+                    "name": "--repo",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -9136,7 +9375,7 @@
                     "name": "--worktree",
                     "required": false,
                     "requires": [
-                        "--folder"
+                        "--repo"
                     ],
                     "value": null
                 },
@@ -9145,6 +9384,24 @@
                     "required": false,
                     "requires": [],
                     "value": null
+                },
+                {
+                    "name": "--task",
+                    "required": true,
+                    "requires": [],
+                    "retired_for": "--brief",
+                    "value": {
+                        "type": "body"
+                    }
+                },
+                {
+                    "name": "--folder",
+                    "required": false,
+                    "requires": [],
+                    "retired_for": "--repo",
+                    "value": {
+                        "type": "text"
+                    }
                 }
             ],
             "refusals": [
@@ -9288,10 +9545,13 @@
             "needs_one_of": [
                 "--name",
                 "--task",
+                "--brief",
                 "--schedule",
                 "--kind",
                 "--folder",
+                "--repo",
                 "--own-folder",
+                "--no-repo",
                 "--worktree",
                 "--no-worktree"
             ],
@@ -9305,7 +9565,7 @@
                     }
                 },
                 {
-                    "name": "--task",
+                    "name": "--brief",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -9360,9 +9620,10 @@
                 },
                 {
                     "conflicts": [
-                        "--own-folder"
+                        "--own-folder",
+                        "--no-repo"
                     ],
-                    "name": "--folder",
+                    "name": "--repo",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -9371,9 +9632,10 @@
                 },
                 {
                     "conflicts": [
-                        "--folder"
+                        "--folder",
+                        "--repo"
                     ],
-                    "name": "--own-folder",
+                    "name": "--no-repo",
                     "required": false,
                     "requires": [],
                     "value": null
@@ -9394,6 +9656,39 @@
                     "name": "--no-worktree",
                     "required": false,
                     "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--task",
+                    "required": false,
+                    "requires": [],
+                    "retired_for": "--brief",
+                    "value": {
+                        "type": "body"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--own-folder",
+                        "--no-repo"
+                    ],
+                    "name": "--folder",
+                    "required": false,
+                    "requires": [],
+                    "retired_for": "--repo",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--folder",
+                        "--repo"
+                    ],
+                    "name": "--own-folder",
+                    "required": false,
+                    "requires": [],
+                    "retired_for": "--no-repo",
                     "value": null
                 }
             ],
@@ -9648,7 +9943,8 @@
             "options": [
                 {
                     "conflicts": [
-                        "--json"
+                        "--json",
+                        "--inline"
                     ],
                     "name": "--file",
                     "required": false,
@@ -9661,7 +9957,7 @@
                     "conflicts": [
                         "--file"
                     ],
-                    "name": "--json",
+                    "name": "--inline",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -9680,6 +9976,18 @@
                     "requires": [],
                     "value": {
                         "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--file"
+                    ],
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "retired_for": "--inline",
+                    "value": {
+                        "type": "json"
                     }
                 }
             ],
@@ -9710,7 +10018,8 @@
             "options": [
                 {
                     "conflicts": [
-                        "--json"
+                        "--json",
+                        "--inline"
                     ],
                     "name": "--file",
                     "required": false,
@@ -9723,7 +10032,7 @@
                     "conflicts": [
                         "--file"
                     ],
-                    "name": "--json",
+                    "name": "--inline",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -9742,6 +10051,18 @@
                     "requires": [],
                     "value": {
                         "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--file"
+                    ],
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "retired_for": "--inline",
+                    "value": {
+                        "type": "json"
                     }
                 }
             ],
@@ -10007,7 +10328,7 @@
             "retired_for": "task show"
         }
     ],
-    "digest": "sha256:a068074a34285882e85d06c8ad6ac724d31965fe46147d8d6273ad46f39dee01",
+    "digest": "sha256:d646ae9cb10a2525e949f0800a0a8e99f61dc356bdf0fde998ae4e649dad52fc",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -10020,6 +10341,11 @@
             "ok": "ok"
         },
         "automation": {
+            "answer": "value",
+            "code": "error.code",
+            "ok": "ok"
+        },
+        "checkout": {
             "answer": "value",
             "code": "error.code",
             "ok": "ok"
@@ -10093,6 +10419,88 @@
             ],
             "old": [
                 "plan"
+            ]
+        },
+        {
+            "now": [
+                "checkout",
+                "show"
+            ],
+            "old": [
+                "workspace",
+                "info"
+            ]
+        },
+        {
+            "now": [
+                "workspace",
+                "info",
+                "--hook"
+            ],
+            "old": [
+                "workspace",
+                "info",
+                "--hook"
+            ]
+        },
+        {
+            "now": [
+                "checkout",
+                "purpose"
+            ],
+            "old": [
+                "workspace",
+                "purpose"
+            ]
+        },
+        {
+            "now": [
+                "checkout",
+                "remove"
+            ],
+            "old": [
+                "workspace",
+                "remove"
+            ]
+        },
+        {
+            "now": [
+                "inbox",
+                "ack"
+            ],
+            "old": [
+                "inbox",
+                "--ack"
+            ]
+        },
+        {
+            "now": [
+                "session",
+                "show"
+            ],
+            "old": [
+                "session",
+                "record"
+            ]
+        },
+        {
+            "now": [
+                "view",
+                "show"
+            ],
+            "old": [
+                "view",
+                "status"
+            ]
+        },
+        {
+            "now": [
+                "mcp",
+                "edit"
+            ],
+            "old": [
+                "mcp",
+                "update"
             ]
         }
     ],

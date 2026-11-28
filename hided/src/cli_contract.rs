@@ -4410,21 +4410,30 @@ mod tests {
                 .filter(|spec| spec.words.starts_with(row.now))
                 .map(|spec| argv(spec, &[], None, spec.repeats.unwrap_or(1)))
                 .collect();
-            // A command outside the table is read by its words alone, and
-            // must be one: the parser reads both lines through the table, so
-            // a row whose words now name nothing reads the same either way.
+            // A command outside the table is read by its words alone, or
+            // with one subject after them (`session show <id>`), and must
+            // be one: the parser reads both lines through the table, so a
+            // row whose words now name nothing reads the same either way.
             if lines.is_empty() {
-                let now = hide_line(row.now);
-                if matches!(
-                    parse_args(&now),
-                    Err(_) | Ok(CommandKind::Open | CommandKind::OpenPath { .. })
-                ) {
-                    problems.push(format!(
-                        "hide {} names no command; the row would read hide {old} as nothing",
-                        row.now.join(" ")
-                    ));
+                let bare = hide_line(row.now);
+                let mut subject = bare.clone();
+                subject.push("probe-1".to_owned());
+                let command = |line: &Vec<String>| {
+                    !matches!(
+                        parse_args(line),
+                        Err(_) | Ok(CommandKind::Open | CommandKind::OpenPath { .. })
+                    )
+                };
+                match [bare, subject].into_iter().find(command) {
+                    Some(now) => lines.push(now),
+                    None => {
+                        problems.push(format!(
+                            "hide {} names no command; the row would read hide {old} as nothing",
+                            row.now.join(" ")
+                        ));
+                        lines.push(hide_line(row.now));
+                    }
                 }
-                lines.push(now);
             }
             // A topic of the table keeps its retired word's envelope.
             if let ([old_topic], [now_topic]) = (row.old, row.now)
@@ -4675,8 +4684,15 @@ mod tests {
         assert_eq!(retired, names.len() - COMMANDS.len());
         assert_eq!(
             document["retired_words"],
-            json!([{"old": ["plan"], "now": ["task"]}])
+            json!(
+                retired::TABLE
+                    .commands
+                    .iter()
+                    .map(|row| json!({"old": row.old, "now": row.now}))
+                    .collect::<Vec<_>>()
+            )
         );
+        assert_eq!(document["retired_words"][0], json!({"old": ["plan"], "now": ["task"]}));
         assert_eq!(document["envelopes"]["plan"], document["envelopes"]["task"]);
         assert_eq!(document["envelopes"]["task"]["answer"], "result");
     }
