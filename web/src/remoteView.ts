@@ -112,6 +112,12 @@ export type RemoteBridge = {
   /** Tells the guest how a start it handed here ended. */
   workResult?(result: RemoteWorkResult): void;
   /**
+   * Tells the window that shows this screen which pane of another machine's
+   * work this page shows now, or none (D-55): that window counts its own
+   * work as looked at while it shows here. Absent from an older desktop app.
+   */
+  showing?(shown: ShownGuestPane | null): void;
+  /**
    * The browser displays this screen places, which the showing window's
    * desktop app draws in this screen's tile with every request leaving
    * through this machine (docs/BROWSER_DISPLAYS.md, A page in another
@@ -120,6 +126,9 @@ export type RemoteBridge = {
    */
   browser?: BrowserBridge;
 };
+
+/** A pane of another machine's work a page shows: that machine's device id and its node's own id for the pane (`navigator.guest_panes`). */
+export type ShownGuestPane = { device: string; pane: string };
 
 /** The close the desktop gives the socket of a tile it hid: nothing to show, nothing to reconnect. */
 export const HIDDEN_CLOSE = 4012;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { followShow, handedFailure, ownWorkThere, SENT_CAP, startWork, takeComputerWork } from "./computerWork";
+import { followShow, handedFailure, ownWorkThere, SENT_CAP, shownGuestPane, startWork, takeComputerWork } from "./computerWork";
 import { SHOW_ANSWER_MS, TAKE_WITHIN_MS, type RemoteWork, type RemoteWorkResult } from "./remoteView";
 import type { SnapshotRest, Workspace } from "./snapshot";
 import { START_ANSWER_TIMEOUT_MS } from "./startAnswer";
@@ -361,6 +361,17 @@ describe("the asking computer's own work that runs here", () => {
     view.ask({ op: "show", pane: "w1:p2" });
     expect(view.actions.openListedAgent).toHaveBeenCalledWith("w1:p2");
     expect(view.results).toEqual([]);
+  });
+});
+
+describe("which pane of another machine's work this page shows", () => {
+  const rest = { navigator: { guest_panes: [{ device_id: "macbook", key: "a".repeat(64), panes: [{ id: "guest:macbook:pane:w1:p3", pane: "w1:p3", since_unix_ms: 0 }] }] } } as unknown as SnapshotRest;
+
+  it("names the guest pane page's pane by its machine and its node's id, and none on any other page", () => {
+    expect(shownGuestPane(rest, { kind: "guest", paneId: "guest:macbook:pane:w1:p3" })).toEqual({ device: "macbook", pane: "w1:p3" });
+    expect(shownGuestPane(rest, { kind: "guest", paneId: "guest:macbook:pane:w9:p9" })).toBeNull();
+    expect(shownGuestPane(rest, { kind: "workspace" })).toBeNull();
+    expect(shownGuestPane(null, { kind: "guest", paneId: "guest:macbook:pane:w1:p3" })).toBeNull();
   });
 });
 

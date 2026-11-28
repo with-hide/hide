@@ -911,6 +911,22 @@ describe("this computer's work that runs on a paired machine", () => {
     expect(useUiStore.getState().remoteScreen).toBeNull();
   });
 
+  // The page there says which pane it shows; this window tells its core its own pane shown there, so the core reads it as looked at.
+  it("tells the core this computer's pane that machine's screen shows, and no pane once it shows another", () => {
+    live();
+    desktop();
+    useShellStore.setState({ rest: { ...useShellStore.getState().rest, navigator: { ...useShellStore.getState().rest!.navigator, devices: [{ id: "core", kind: "local" }, { id: mini, kind: "remote", peer_key: KEY }] } } as never });
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.noteWindowScreen();
+    actions.openAgent(PANE);
+    actions.noteRemoteShowing(mini, { device: "core", pane: "w1:p3" });
+    actions.noteRemoteShowing(mini, { device: "core", pane: "w1:p3" });
+    actions.noteRemoteShowing(mini, null);
+    const screens = sent.filter((event) => event.kind === "window_screen").map((event) => event.payload);
+    expect(screens).toEqual([{ screen: "own" }, { screen: "computer" }, { screen: "computer", shown_there: PANE }, { screen: "computer" }]);
+  });
+
   it("opens it in that machine's tile from a child chip or a Return, as every open of it does", () => {
     live();
     const { go } = desktop();

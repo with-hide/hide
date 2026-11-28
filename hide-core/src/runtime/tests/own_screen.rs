@@ -10,7 +10,8 @@
 //! so no notification came.
 
 use super::read_on_look::{
-    DEVICE, T1, T2, device, device_session, local_two_tabs, origins, two_finished_tabs, unread,
+    DEVICE, T1, T2, device, device_session, local_two_tabs, origins, pane_id, two_finished_tabs,
+    unread,
 };
 use super::remote_views::{choose, event, guest, row, views};
 use super::*;
@@ -217,4 +218,67 @@ fn a_window_screen_it_does_not_know_is_refused() {
             "{payload}: refused, the look stays"
         );
     }
+}
+
+/// D-55: this machine's work that runs on a paired machine, opened in that
+/// machine's tile on the page that reads and types into it, is looked at
+/// while a window of this machine shows it there: a turn that ends then is
+/// read, the other panes there are news, and once the window shows something
+/// else a turn that ends is news again. Nothing else moves.
+#[test]
+fn this_machine_s_pane_a_paired_screen_shows_is_read_while_it_shows() {
+    for origin in origins() {
+        let t = super::device_catalog::tree();
+        let (mut runtime, _views) = device(origin.clone(), false);
+        let working = [("t1", "working", 1), ("t2", "working", 1)];
+        runtime.ingest_remote_session(DEVICE, Ok(device_session(&t.main, &working, "t2")));
+        runtime.dispatch_json(&event(
+            "window_screen",
+            json!({"screen": "computer", "shown_there": [pane_id("t1")]}),
+        ));
+        let done = [("t1", "done", 2), ("t2", "done", 2)];
+        runtime.ingest_remote_session(DEVICE, Ok(device_session(&t.main, &done, "t2")));
+        assert!(
+            !unread(&runtime, "t1"),
+            "{origin:?}: read while shown there"
+        );
+        assert!(
+            unread(&runtime, "t2"),
+            "{origin:?}: the pane not shown is news"
+        );
+        assert_eq!(runtime.look.focus(), None, "{origin:?}: no focus moved");
+
+        runtime.dispatch_json(&event("window_screen", json!({"screen": "computer"})));
+        let again = [("t1", "done", 3), ("t2", "done", 2)];
+        runtime.ingest_remote_session(DEVICE, Ok(device_session(&t.main, &again, "t2")));
+        assert!(
+            unread(&runtime, "t1"),
+            "{origin:?}: news once it is shown no more"
+        );
+    }
+}
+
+/// A report naming more panes shown on paired screens than windows can show
+/// is refused whole, and what was shown before stays.
+#[test]
+fn too_many_panes_shown_there_are_refused() {
+    let path = "/private/tmp/hide-own-screen-shown-there";
+    let mut runtime = two_finished_tabs(path);
+    shows(&mut runtime, "computer");
+    runtime.dispatch_json(&event(
+        "window_screen",
+        json!({"screen": "computer", "shown_there": [T1]}),
+    ));
+    let many = (0..17).map(|n| format!("p{n}")).collect::<Vec<_>>();
+    runtime.dispatch_json(&event(
+        "window_screen",
+        json!({"screen": "computer", "shown_there": many}),
+    ));
+    runtime.ingest_session(Ok(local_two_tabs(path, [2, 2])));
+    assert_eq!(
+        row(&runtime, T1),
+        (false, "seen".to_owned()),
+        "still shown there"
+    );
+    assert_eq!(row(&runtime, T2), (true, "done".to_owned()));
 }

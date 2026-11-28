@@ -7,7 +7,7 @@
 // Node or this machine. The page holds no token: the main process opens the socket.
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import { REMOTE_BROWSER_CAPTURE_CHANNEL, REMOTE_BROWSER_COMMAND_CHANNEL, REMOTE_BROWSER_CYCLE_END_CHANNEL, REMOTE_BROWSER_EVENT_CHANNEL, REMOTE_BROWSER_SYNC_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL } from "../channel";
+import { REMOTE_BROWSER_CAPTURE_CHANNEL, REMOTE_BROWSER_COMMAND_CHANNEL, REMOTE_BROWSER_CYCLE_END_CHANNEL, REMOTE_BROWSER_EVENT_CHANNEL, REMOTE_BROWSER_SYNC_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_PAGE_SHOWING_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL } from "../channel";
 
 type SocketEvent = { op: "open" } | { op: "message"; data: string | ArrayBuffer } | { op: "close"; code: number; reason: string };
 type Viewer = { language: string; name: string | null; display: unknown };
@@ -84,6 +84,10 @@ contextBridge.exposeInMainWorld("hideRemote", {
   // The main process reads it as a result of a start it handed this page, or drops it.
   workResult(result: unknown): void {
     ipcRenderer.send(REMOTE_WORK_DONE_CHANNEL, result);
+  },
+  // The main process checks it and tells the window that shows this screen.
+  showing(shown: unknown): void {
+    ipcRenderer.send(REMOTE_PAGE_SHOWING_CHANNEL, shown);
   },
   // The browser displays this screen places, drawn by this window's desktop
   // app with every request leaving through the screen's machine; the main

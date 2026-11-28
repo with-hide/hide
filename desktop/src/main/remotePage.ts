@@ -5,7 +5,7 @@
 
 import type { BrowserRect } from "../../../web/src/host";
 import { readDisplayPreferences, type DisplayPreferences } from "../../../web/src/displayPreferences";
-import type { RemotePlace, RemoteWork, RemoteWorkResult } from "../../../web/src/remoteView";
+import type { RemotePlace, RemoteWork, RemoteWorkResult, ShownGuestPane } from "../../../web/src/remoteView";
 
 /** The page's own scheme: `hide-remote://<device>/`, one origin per machine. */
 export const REMOTE_SCHEME = "hide-remote";
@@ -186,6 +186,14 @@ export function parseWorkResult(value: unknown): RemoteWorkResult | undefined {
     default:
       return undefined;
   }
+}
+
+/** What a page says it shows of another machine's work (D-55): that machine's device id and its node's id for the pane, or none; undefined when it is neither. */
+export function parseShowing(value: unknown): ShownGuestPane | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== "object") return undefined;
+  const { device, pane } = value as Record<string, unknown>;
+  return typeof device === "string" && DEVICE.test(device) && named(pane) ? { device, pane } : undefined;
 }
 
 /** The page's first address. */

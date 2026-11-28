@@ -105,9 +105,9 @@ import { deskOpenSend, deskTabCount, deskViewOf, deskWorkspaceOf, DESK_SCREEN, i
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type ExplorerTarget, type PendingClose, type PendingViewsClose } from "./ui";
 import { visitSessionTerminal } from "./sessionDrafts";
-import { windowScreen, type WindowScreen } from "./windowScreen";
+import { sameWindowScreen, windowScreen, type WindowScreenReport } from "./windowScreen";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
-import { isRemoteView, remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
+import { isRemoteView, remoteBridge, remoteClipboard, type RemoteWork, type ShownGuestPane } from "./remoteView";
 import { isLocalNetworkHost, isLoopbackHost } from "./loopbackHost";
 import type { PairingVerb } from "./pairing";
 import type { DispatchFn } from "./ws";
@@ -189,7 +189,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const board = clipboard ?? (remote ? remoteClipboard(remote, diagnostic) : browserClipboard(diagnostic));
   const ui = () => useUiStore.getState();
   /** What this page's live connection was last told of the screen it shows, null before it was told anything. */
-  let toldScreen: WindowScreen | null = null;
+  let toldScreen: WindowScreenReport | null = null;
   /**
    * Tells the daemon which machine's screen this window shows: `again` to a
    * new connection (`installWindowScreen`), then each change, which an
@@ -204,9 +204,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       return;
     }
     const screen = windowScreen();
-    if (!again && (toldScreen === null || screen === toldScreen)) return;
+    if (!again && (toldScreen === null || sameWindowScreen(screen, toldScreen))) return;
     toldScreen = screen;
-    dispatch({ schema_version: 2, kind: "window_screen", payload: { screen } });
+    dispatch({ schema_version: 2, kind: "window_screen", payload: screen });
   };
   /** The show handed to a paired machine's screen that has not answered yet (D-55); a move of the screen stops following it. */
   let stopShow: (() => void) | null = null;
@@ -1756,6 +1756,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** Which machine's screen this window shows, told to a new connection, which has heard nothing yet (`windowScreen.ts`). */
     noteWindowScreen() {
       tellWindowScreen(true);
+    },
+    /** What this window shows may have changed outside an action (a snapshot, a screen's page): told when it did. */
+    followWindowScreen() {
+      tellWindowScreen();
+    },
+    /** A paired machine's screen says which pane of another machine's work its page shows now (D-55). */
+    noteRemoteShowing(device: string, shown: ShownGuestPane | null) {
+      ui().setRemoteShowing(device, shown);
+      tellWindowScreen();
     },
     /**
      * Shows `device`'s screen in this window, or this machine's own with

@@ -10,9 +10,10 @@
 import type { Actions } from "./actions";
 import type { AgentKind } from "./agentPicker";
 import { guestPaneAddress } from "./guestWork";
-import { remotePaneAddress } from "./remote";
+import { pairedMachines } from "./pairing";
+import { remotePaneAddress, remotePaneOf } from "./remote";
 import type { RemoteScreensBridge } from "./host";
-import { HAND_WITHIN_MS, SHOW_ANSWER_MS, TAKE_WITHIN_MS, type RemoteBridge, type RemotePlace, type RemoteShowResult, type RemoteWork, type RemoteWorkResult } from "./remoteView";
+import { HAND_WITHIN_MS, SHOW_ANSWER_MS, TAKE_WITHIN_MS, type RemoteBridge, type RemotePlace, type RemoteShowResult, type RemoteWork, type RemoteWorkResult, type ShownGuestPane } from "./remoteView";
 import type { SnapshotRest, Workspace } from "./snapshot";
 import { agentFailure, startFailure, startRefusal, type StartFailure } from "./startDraft";
 import { localDeviceId } from "./snapshot";
@@ -76,6 +77,40 @@ export function ownWorkThere(rest: SnapshotRest | null, paneId: string): { devic
   if (!own || !address) return null;
   const paired = rest?.navigator?.devices?.some((device) => device.id === address.device && device.peer_key != null) ?? false;
   return paired ? { deviceId: address.device, pane: guestPaneAddress(own, address.devicePane) } : null;
+}
+
+/**
+ * The pane of this computer's own work that the paired machine whose screen
+ * shows as `screenDevice` shows on that screen now (D-55), by this core's
+ * pane id: `shown` is what that screen's page told it shows, which is this
+ * computer's when it names this computer's device. Null for another
+ * machine's work, a screen that shows none, or a pane this core does not
+ * list on that machine's device.
+ */
+export function ownPaneShownThere(rest: SnapshotRest | null, screenDevice: string, shown: ShownGuestPane | null): string | null {
+  if (!shown || !rest || shown.device !== localDeviceId(rest)) return null;
+  const keys = new Set(pairedMachines(rest).filter((peer) => peer.device_id === screenDevice).map((peer) => peer.key));
+  for (const device of rest.navigator?.devices ?? []) {
+    if (device.peer_key == null || !keys.has(device.peer_key)) continue;
+    const pane = remotePaneOf(rest, device.id, shown.pane);
+    if (pane) return pane;
+  }
+  return null;
+}
+
+/**
+ * The pane of another machine's work this page shows now, as the window
+ * that shows this screen is told (`RemoteBridge.showing`, D-55): the guest
+ * pane page's pane, by its machine and its node's id for it; null on any
+ * other page.
+ */
+export function shownGuestPane(rest: SnapshotRest | null, screen: { kind: string; paneId?: string } | null): ShownGuestPane | null {
+  if (screen?.kind !== "guest" || !screen.paneId) return null;
+  for (const guest of rest?.navigator?.guest_panes ?? []) {
+    const pane = guest.panes.find((row) => row.id === screen.paneId);
+    if (pane) return { device: guest.device_id, pane: pane.pane };
+  }
+  return null;
 }
 
 /**

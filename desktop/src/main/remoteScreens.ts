@@ -17,14 +17,14 @@ import { sameDisplayPreferences, type DisplayPreferences } from "../../../web/sr
 import type { InterfaceLanguage } from "../../../web/src/i18n/locale";
 import { HAND_WITHIN_MS, type RemoteWorkResult } from "../../../web/src/remoteView";
 import { matchHost, type Command } from "../../../web/src/shortcuts";
-import { COMMAND_CHANNEL, REMOTE_BROWSER_CAPTURE_CHANNEL, REMOTE_BROWSER_COMMAND_CHANNEL, REMOTE_BROWSER_CYCLE_END_CHANNEL, REMOTE_BROWSER_SYNC_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_STATE_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
+import { COMMAND_CHANNEL, REMOTE_BROWSER_CAPTURE_CHANNEL, REMOTE_BROWSER_COMMAND_CHANNEL, REMOTE_BROWSER_CYCLE_END_CHANNEL, REMOTE_BROWSER_SYNC_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_STATE_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_PAGE_SHOWING_CHANNEL, REMOTE_SHOWING_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
 import { PRESS_WITHIN_MS, toBounds } from "./browserSync";
 import type { BrowserRect } from "../../../web/src/host";
 import { isLocalNetworkHost } from "../../../web/src/loopbackHost";
 import type { BrowserViews, RemoteRoute, RemoteSource } from "./browser";
 import type { HostLog } from "./log";
 import { pairName, type RemoteEgress, type RemoteStorage } from "./remoteEgress";
-import { fetchPath, HIDDEN_CLOSE, MAX_SEND_BYTES, ofPage, pageAddress, pagePath, parseWorkResult, queueAllows, REMOTE_SCHEME, requestAllowed, socketAddress, type GoRequest, type ShowRequest } from "./remotePage";
+import { fetchPath, HIDDEN_CLOSE, MAX_SEND_BYTES, ofPage, pageAddress, pagePath, parseShowing, parseWorkResult, queueAllows, REMOTE_SCHEME, requestAllowed, socketAddress, type GoRequest, type ShowRequest } from "./remotePage";
 
 /** Registered before the app is ready, as Electron requires of a privileged scheme. */
 export function registerRemoteScheme(): void {
@@ -143,6 +143,14 @@ export class RemoteScreens {
       else if (result.outcome !== "starting") this.owed.delete(result.request);
       this.deps.log.event("remote.work_result", { device: screen.device, outcome: result.outcome });
       this.toShell(screen.device, result);
+    });
+    // Which pane of another machine's work the screen's page shows now (D-55), from that page only, to the window.
+    ipcMain.on(REMOTE_PAGE_SHOWING_CHANNEL, (event: IpcMainEvent, value: unknown) => {
+      const screen = this.screenOf(event);
+      const shown = parseShowing(value);
+      if (!screen || shown === undefined) return;
+      const window = this.deps.window();
+      if (window && !window.isDestroyed()) window.webContents.send(REMOTE_SHOWING_CHANNEL, { device: screen.device, shown });
     });
     // The browser displays the screen's page places, as this window's shell places its own.
     ipcMain.on(REMOTE_BROWSER_SYNC_CHANNEL, (event: IpcMainEvent, value: unknown) => {

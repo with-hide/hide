@@ -117,7 +117,30 @@ export function remoteTabView(session: RemoteSession, view: RemoteView, tabId: s
 /** Where a device's pane is: the device the core names on its rows and the id that device gives it. */
 export type RemotePaneAddress = { device: string; devicePane: string };
 
-const paneAddresses = new WeakMap<readonly RemoteStatus[], Map<string, RemotePaneAddress>>();
+/** Each device pane's address by its core pane id, and its core pane id by device and that device's own id for it. */
+type PaneIndex = { addresses: Map<string, RemotePaneAddress>; panes: Map<string, string> };
+
+const paneIndexes = new WeakMap<readonly RemoteStatus[], PaneIndex>();
+
+const deviceKey = (device: string, devicePane: string) => `${device}\n${devicePane}`;
+
+function paneIndex(remote: readonly RemoteStatus[]): PaneIndex {
+  let index = paneIndexes.get(remote);
+  if (index) return index;
+  index = { addresses: new Map(), panes: new Map() };
+  const add = (id: string, device: string, devicePane: string) => {
+    index!.addresses.set(id, { device, devicePane });
+    index!.panes.set(deviceKey(device, devicePane), id);
+  };
+  for (const status of remote) {
+    const session = status.session;
+    if (!session) continue;
+    for (const agent of session.agents) add(agent.pane_id, agent.device_id, agent.device_pane_id);
+    for (const workspace of session.workspaces) for (const checkout of workspace.checkouts) for (const tab of checkout.tabs) for (const pane of tab.panes) add(pane.id, pane.device_id, pane.device_pane_id);
+  }
+  paneIndexes.set(remote, index);
+  return index;
+}
 
 /**
  * A device's pane as the core addresses it on the pane's own rows in that
@@ -126,19 +149,13 @@ const paneAddresses = new WeakMap<readonly RemoteStatus[], Map<string, RemotePan
  */
 export function remotePaneAddress(rest: SnapshotRest | null, paneId: string): RemotePaneAddress | null {
   const remote = rest?.status?.remote;
-  if (!remote) return null;
-  let addresses = paneAddresses.get(remote);
-  if (!addresses) {
-    addresses = new Map();
-    for (const status of remote) {
-      const session = status.session;
-      if (!session) continue;
-      for (const agent of session.agents) addresses.set(agent.pane_id, { device: agent.device_id, devicePane: agent.device_pane_id });
-      for (const workspace of session.workspaces) for (const checkout of workspace.checkouts) for (const tab of checkout.tabs) for (const pane of tab.panes) addresses.set(pane.id, { device: pane.device_id, devicePane: pane.device_pane_id });
-    }
-    paneAddresses.set(remote, addresses);
-  }
-  return addresses.get(paneId) ?? null;
+  return remote ? (paneIndex(remote).addresses.get(paneId) ?? null) : null;
+}
+
+/** The core's pane id of the pane `device` gives `devicePane` (`remotePaneAddress` the other way); null when no connected device's row names it. */
+export function remotePaneOf(rest: SnapshotRest | null, device: string, devicePane: string): string | null {
+  const remote = rest?.status?.remote;
+  return remote ? (paneIndex(remote).panes.get(deviceKey(device, devicePane)) ?? null) : null;
 }
 
 /** The device a pane belongs to (`remotePaneAddress`); null for this machine's. */
