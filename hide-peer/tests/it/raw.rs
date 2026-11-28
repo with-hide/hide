@@ -44,7 +44,10 @@ async fn a_stream_is_judged_by_its_kind_and_the_generation_it_names() {
 
     // The first exchange: the header of the hello stream and one hello each
     // way, then the host says what it grants.
-    let conn = guest.dial(&host.addr()).await.unwrap();
+    let conn = guest
+        .dial(&host.addr(), hide_peer::DialBound::start())
+        .await
+        .unwrap();
     let (mut send, mut recv) = conn.open(StreamKind::Hello.priority()).await.unwrap();
     send.write_all(&stream::encode_header(StreamKind::Hello, 0))
         .await
@@ -138,9 +141,12 @@ async fn a_peer_that_never_sends_its_hello_holds_up_no_other_machine() {
     let mut host = Machine::new(&net, "windows-pc");
     let guest = Machine::new(&net, "macbook");
     let silent = net.join(MachineKey::generate().unwrap());
-    let quiet = within("the silent machine's connection", silent.dial(&host.addr()))
-        .await
-        .unwrap();
+    let quiet = within(
+        "the silent machine's connection",
+        silent.dial(&host.addr(), hide_peer::DialBound::start()),
+    )
+    .await
+    .unwrap();
 
     let started = tokio::time::Instant::now();
     guest
@@ -189,7 +195,10 @@ async fn dial_with(
     host: &Machine,
     ours: &[u8],
 ) -> CloseCode {
-    let conn = guest.dial(&host.addr()).await.unwrap();
+    let conn = guest
+        .dial(&host.addr(), hide_peer::DialBound::start())
+        .await
+        .unwrap();
     let (mut send, _recv) = conn.open(StreamKind::Hello.priority()).await.unwrap();
     send.write_all(&stream::encode_header(StreamKind::Hello, 0))
         .await

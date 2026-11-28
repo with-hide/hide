@@ -1410,7 +1410,7 @@ async fn a_host_streaming_into_sixteen_mux_tunnels_passes_the_budget_by_at_most_
     let far = Arc::new(PipeTransport::accepting(MachineKey::generate().unwrap()));
     let near = {
         let far = Arc::clone(&far);
-        PipeTransport::dialing(MachineKey::generate().unwrap(), move |_| {
+        PipeTransport::dialing(MachineKey::generate().unwrap(), move |_, _| {
             let (near, other) = LocalStream::pair().unwrap();
             far.arrived(other.into(), PathKind::Local);
             async move { Ok(Carrier::from(near)) }
@@ -1418,7 +1418,7 @@ async fn a_host_streaming_into_sixteen_mux_tunnels_passes_the_budget_by_at_most_
     };
     let to = PeerAddr::new(far.key(), vec![Candidate::Wsl("Ubuntu".to_owned())]);
     let (dialed, accepted) = within("the connection", async {
-        tokio::join!(near.dial(&to), far.accept())
+        tokio::join!(near.dial(&to, hide_peer::DialBound::start()), far.accept())
     })
     .await;
     let (ours, theirs) = (dialed.unwrap(), accepted.unwrap());
