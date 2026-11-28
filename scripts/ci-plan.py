@@ -977,7 +977,7 @@ POLICY_ONLY = (
     "scripts/check-timed-waits.py", "scripts/timed-waits-baseline.json",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py", "scripts/check-device-kits-single-source.py",
-    "scripts/check-agent-folders.sh",
+    "scripts/check-agent-folders.sh", "scripts/check-adr.py",
     "scripts/check-retired-spellings.py",
     # What the shell, the daemon and the agent notes must keep saying, read as text.
     "scripts/check-shell-structure.py",
