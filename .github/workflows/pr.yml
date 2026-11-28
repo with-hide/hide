@@ -833,6 +833,7 @@ jobs:
             scripts/ci-plan.py
             scripts/ci-repeat.py
             scripts/rust_scan.py
+            scripts/e2e-shard.py
             scripts/ci-flaky-report.py
           sparse-checkout-cone-mode: false
       - name: Every planned lane succeeded and every other lane was skipped

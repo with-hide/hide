@@ -24,7 +24,11 @@
 #
 # `specs` turns the lane into the repeat lane's web leg (`repeat.yml`): the
 # named spec files run `repeat` times each with no retry, so one failed run
-# fails the job. It is one shard that builds in place, and it files no flaky
+# fails the job. The shards are `shards / repeat-parts` groups of the tests,
+# dealt by recorded durations as the suite's shards are, each run for one part
+# of the repeat (`scripts/ci-repeat.py`, "shard_share"), so a test heavier than
+# a shard's share repeats on several runners. Every shard keeps its completed
+# runs, `repeat total` adds them up for the caller, and none files a flaky
 # issue: a retry is what classifies a test as flaky, and this run has none.
 name: web e2e lane
 
@@ -32,8 +36,8 @@ on:
   workflow_call:
     outputs:
       completed:
-        description: Actual completed test runs from the single-shard repeat report.
-        value: ${{ jobs.e2e.outputs.completed }}
+        description: Actual completed test runs of a repeat, summed from every shard's own report.
+        value: ${{ jobs.repeat-total.outputs.completed }}
     inputs:
       lane:
         description: Names the lane in job names and artifact names.
@@ -62,6 +66,11 @@ on:
         type: string
         required: false
         default: ""
+      repeat-parts:
+        description: With `specs`, how many parts the repeat is cut into; the tests are dealt into `shards / repeat-parts` groups.
+        type: number
+        required: false
+        default: 1
       table:
         description: The suite's duration table for this system's runner; a system records its own.
         type: string
@@ -102,6 +111,10 @@ on:
         description: With `specs`, how many times each test runs (`--repeat-each`), with no retry.
         type: string
         default: ""
+      repeat-parts:
+        description: With `specs`, how many parts the repeat is cut into; the tests are dealt into `shards / repeat-parts` groups.
+        type: number
+        default: 1
       table:
         description: The suite's duration table for this system's runner.
         type: string
@@ -213,11 +226,10 @@ jobs:
     # in either still stops the shards, and the lane reports the failure.
     if: ${{ !cancelled() && contains(fromJSON('["success","skipped"]'), needs.build.result) && contains(fromJSON('["success","skipped"]'), needs.build-web.result) }}
     runs-on: ${{ inputs.runner }}
-    # A repetition is bounded by the repeat lane's budget of test runs, not by
-    # the suite, and a Windows runner is the slowest.
+    # A repetition is bounded by the repeat lane's seconds budget, not by the
+    # suite: a pull request plans 600 s of tests a shard, but a hand run names
+    # its own repeat on one shard, and a Windows runner is the slowest.
     timeout-minutes: ${{ inputs.specs != '' && 150 || 40 }}
-    outputs:
-      completed: ${{ steps.repeat-report.outputs.completed }}
     defaults:
       run:
         shell: bash
@@ -337,26 +349,36 @@ jobs:
           SPECS: ${{ inputs.specs }}
           REPEAT: ${{ inputs.repeat }}
           SHARD: ${{ format('{0}/{1}', matrix.shard, inputs.shards) }}
+          PARTS: ${{ inputs.repeat-parts }}
           TABLE: ${{ inputs.table }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
           # The caller names this system's table; the default is the Linux
           # suite's, which is also what a step run without the input reads.
           table="${TABLE:-web/e2e/shard-durations.json}"
-          args=()
-          if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
+          # `filters` pick the tests, for the listing and the run alike;
+          # `flags` change only how the run runs them. An array may be empty,
+          # so each is spelled to expand to nothing under `set -u`.
+          filters=()
+          flags=()
+          deal="$SHARD"
+          if [ -n "$GREP" ]; then filters+=(--grep "$GREP"); fi
           if [ -n "$SPECS" ]; then
-            # The repeat lane: these spec files, `REPEAT` times each, no retry
-            # (the config retries once under CI), so one failed run fails the
-            # step. Each spec is a file filter that matches that path alone.
-            [ "${SHARD#*/}" = 1 ] || { echo "a repeat run is one shard, not $SHARD" >&2; exit 1; }
-            case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
+            # The repeat lane: these spec files with no retry (the config
+            # retries once under CI), so one failed run fails the step. Each
+            # spec is a file filter that matches that path alone. The shard
+            # runs one group of their tests for its part of the repeat.
+            # A repeat that is no positive number, or a shard with no share
+            # of it, stops here.
+            share=$(python3 scripts/ci-repeat.py shard-share --shard "$SHARD" --parts "${PARTS:-1}" --repeat "$REPEAT")
+            read -r deal times <<<"$share"
             # shellcheck disable=SC2086 # the spec paths hold no space or glob character
             python3 scripts/ci-repeat.py spec-patterns $SPECS > "$RUNNER_TEMP/web-e2e-specs.txt"
-            while IFS= read -r pattern; do args+=("$pattern"); done < "$RUNNER_TEMP/web-e2e-specs.txt"
-            echo "repeat: $REPEAT x $SPECS" | tee -a "$GITHUB_STEP_SUMMARY"
-            bash scripts/verify-web.sh web e2e --retries=0 --repeat-each="$REPEAT" "${args[@]}"
-          elif [ "${SHARD#*/}" -gt 1 ]; then
+            while IFS= read -r pattern; do filters+=("$pattern"); done < "$RUNNER_TEMP/web-e2e-specs.txt"
+            flags+=(--retries=0 --repeat-each="$times")
+            echo "repeat: shard $SHARD runs test group $deal $times times of $REPEAT x $SPECS" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "${deal#*/}" -gt 1 ]; then
             # The shard's tests are dealt by their recorded durations, not by
             # Playwright's equal counts. Playwright counts a `--test-list` that
             # matches nothing as a pass, so `check` fails the step unless it
@@ -365,27 +387,49 @@ jobs:
             # a shard none to run.
             list="$RUNNER_TEMP/web-e2e-list.txt"
             shard_file="$RUNNER_TEMP/web-e2e-shard.txt"
-            bash scripts/verify-web.sh web e2e-list --reporter=list "${args[@]}" > "$list"
-            # `--budget`: a shard that plans more than 720 s (60 % of this
-            # step's cap) warns on the first shard, and the answer is another
-            # shard (docs/TESTING.md, "Balancing the e2e shards").
-            python3 scripts/e2e-shard.py split --table "$table" --budget 720 --shard "$SHARD" "$list" > "$shard_file"
+            bash scripts/verify-web.sh web e2e-list --reporter=list ${filters[@]+"${filters[@]}"} > "$list"
+            # `--budget`: a suite shard that plans more than 720 s (60 % of
+            # this step's cap) warns on the first shard, and the answer is
+            # another shard (docs/TESTING.md, "Balancing the e2e shards"). A
+            # repeat's shards were sized by the count job, in seconds times
+            # the repeat, which this one-pass plan does not show.
+            budget=()
+            if [ -z "$SPECS" ]; then budget=(--budget 720); fi
+            python3 scripts/e2e-shard.py split --table "$table" ${budget[@]+"${budget[@]}"} --shard "$deal" "$list" > "$shard_file"
             if [ ! -s "$shard_file" ]; then
-              echo "shard $SHARD is dealt no test: fewer tests than shards"
+              # A repeat has no more groups than tests (`web_plan`), so a
+              # group dealt none is a fault, not a narrow grep.
+              if [ -n "$SPECS" ]; then echo "repeat group $deal is dealt no test" >&2; exit 1; fi
+              echo "shard $deal is dealt no test: fewer tests than shards"
               exit 0
             fi
-            bash scripts/verify-web.sh web e2e-list --reporter=list --test-list "$shard_file" "${args[@]}" > "$RUNNER_TEMP/web-e2e-shard-list.txt"
-            python3 scripts/e2e-shard.py check --table "$table" --shard "$SHARD" "$list" "$RUNNER_TEMP/web-e2e-shard-list.txt"
-            args+=(--test-list "$shard_file")
-            bash scripts/verify-web.sh web e2e "${args[@]}"
-          else
-            bash scripts/verify-web.sh web e2e "${args[@]}"
+            bash scripts/verify-web.sh web e2e-list --reporter=list --test-list "$shard_file" ${filters[@]+"${filters[@]}"} > "$RUNNER_TEMP/web-e2e-shard-list.txt"
+            python3 scripts/e2e-shard.py check --table "$table" --shard "$deal" "$list" "$RUNNER_TEMP/web-e2e-shard-list.txt"
+            filters+=(--test-list "$shard_file")
           fi
+          bash scripts/verify-web.sh web e2e ${flags[@]+"${flags[@]}"} ${filters[@]+"${filters[@]}"}
       - name: Report completed repeat runs
-        id: repeat-report
+        # From this shard's own report: its passed runs, never zero.
         if: inputs.specs != ''
         timeout-minutes: 2
-        run: python3 scripts/ci-repeat.py report --playwright web/e2e-report.json
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+        run: |
+          completed=$(python3 scripts/ci-repeat.py report --playwright web/e2e-report.json)
+          echo "$completed"
+          mkdir -p "$RUNNER_TEMP/repeat-completed"
+          echo "${completed#completed=}" > "$RUNNER_TEMP/repeat-completed/$SHARD_INDEX.txt"
+      - name: Keep this shard's completed repeat runs
+        if: inputs.specs != ''
+        uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          name: repeat-completed-${{ inputs.lane }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/repeat-completed
+          if-no-files-found: error
+          retention-days: 1
+          # A rerun of a failed shard writes its count again.
+          overwrite: true
       - name: Mint the development issues token
         # Development issues live in this repository (docs/TESTING.md,
         # Flaky tests); the App's token reads this run and files them. A run
@@ -440,3 +484,31 @@ jobs:
             ${{ runner.temp }}/hide-e2e
             web/test-results
           if-no-files-found: ignore
+
+  # A matrix job hands its caller one shard's output, not their sum, so the
+  # repeat's completed runs are added up here from the count every shard kept.
+  # It runs only after every shard passed; a failed shard fails the lane.
+  repeat-total:
+    name: repeat total ${{ inputs.lane }}
+    needs: e2e
+    if: ${{ inputs.specs != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      completed: ${{ steps.total.outputs.completed }}
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+      - name: Fetch every shard's completed runs
+        uses: actions/download-artifact@v8
+        timeout-minutes: 5
+        with:
+          pattern: repeat-completed-${{ inputs.lane }}-*
+          path: ${{ runner.temp }}/repeat-completed
+          merge-multiple: true
+      - name: Add up the completed runs
+        id: total
+        timeout-minutes: 2
+        env:
+          SHARDS: ${{ inputs.shards }}
+        run: python3 scripts/ci-repeat.py total --shards "$SHARDS" "$RUNNER_TEMP"/repeat-completed/*.txt
