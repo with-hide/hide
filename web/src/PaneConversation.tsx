@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "./actions";
 import { answerPlace } from "./answerPaths";
@@ -17,8 +17,10 @@ export function PaneConversation({ paneId, actions }: { paneId: string; actions:
   const checkout = useShellStore((s) => checkoutOfPane(s.rest, paneId)?.checkout.path ?? null);
   const job = useShellStore((s) => [...(s.deskJobs?.jobs ?? []), ...(s.deskJobs?.workers ?? [])].find((job) => job.pane_id === paneId) ?? null);
   const location = useMemo(() => place && checkout ? { device: place.device, checkout, folder: place.cwd ?? checkout } : null, [place, checkout]);
+  // Opening the conversation over the pane is its press: the box takes the keyboard once it stands, and once only.
+  const [answer, setAnswer] = useState(true);
   return <ThreadPanel
-    job={job} paneId={paneId} actions={actions} paneConversation focused answer={1}
+    job={job} paneId={paneId} actions={actions} paneConversation focused answer={answer} onAnswered={() => setAnswer(false)}
     asks={row?.open_asks?.items}
     onAsk={(id, status) => { const session = row ? askingSession(row) : null; if (session) actions.setMissedStatus(session, id, status); }}
     ask={row?.state.asking || job?.state === "asking" ? <SessionThreadAsk paneId={paneId} deviceId={row?.device_id ?? null} job={job} row={row} actions={actions} onTerminal={() => actions.togglePaneConversation(paneId)} onWrite={() => document.querySelector<HTMLTextAreaElement>(`[data-pane-conversation] [data-desk-composer-input]`)?.focus()} /> : null}

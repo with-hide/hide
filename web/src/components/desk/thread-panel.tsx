@@ -44,7 +44,7 @@ const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "u
  * the outputs shelf under it), the agent's choice card, the questions Hide
  * found and what stands in the box's place while it sleeps are the caller's.
  */
-export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = 0, head = null, ask = null, asks, onAsk, foot = null, onTerminal, ...parts }: {
+export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = false, onAnswered, head = null, ask = null, asks, onAsk, foot = null, onTerminal, ...parts }: {
   /** The session's card; a session that is no job of Desk's opens before its card arrives, by its pane (D-87). */
   job: DeskJob | null;
   paneConversation?: boolean;
@@ -54,8 +54,10 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
   mentions?: readonly DeskMention[];
   startedByDesk?: boolean;
   focused?: boolean;
-  /** Moves when `답하기` asks for this thread's input box (B29): the box takes the keyboard. */
-  answer?: number;
+  /** A press asks for this session's input box and no box has taken it yet (`답하기`, B29, or opening the conversation over its pane): the box takes the keyboard. */
+  answer?: boolean;
+  /** The box took the keyboard for that press, which is spent. */
+  onAnswered?: () => void;
   /** The panel's head, drawn once the card is here. */
   head?: ReactNode;
   ask?: ReactNode;
@@ -263,15 +265,17 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
     actions.readOlderThread(thread.generation);
   };
 
-  // Only a press made while this session is open takes the keyboard: an earlier session's `답하기` left the count
-  // raised, and a session opened later must not read it as its own.
+  // A `답하기` press names the session it was pressed for, and that session's box takes the keyboard once it stands,
+  // whether the session was open at the press or opened because of it (its card and record may still be on their way).
   const root = useRef<HTMLDivElement>(null);
-  const answered = useRef(paneConversation ? 0 : answer);
+  const boxStands = paneId !== null && !foot && !taken;
   useEffect(() => {
-    if (taken || answer === answered.current) return;
-    answered.current = answer;
-    root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]")?.focus();
-  }, [answer, taken]);
+    if (!answer || !boxStands) return;
+    const input = root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]");
+    if (!input) return;
+    input.focus();
+    onAnswered?.();
+  }, [answer, boxStands]);
 
   if (!paneId && !foot) {
     // The thread opened from the first frame and its card is on its way, or the session has no card any more (its

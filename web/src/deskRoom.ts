@@ -21,11 +21,16 @@ export type DeskRoomWindow = {
   expanded: boolean;
   /** The Explorer's column at the desk's left, the session's checkout (B37). */
   explorer: boolean;
-  /** Moves each time `답하기` or `직접 쓰기` asks for the session's input box, so it takes the keyboard once per press. */
-  answer: number;
+  /**
+   * The pane whose input box a `답하기` or `직접 쓰기` press asked for and has not given the keyboard yet: that
+   * session's panel takes it once its box stands (`takeAnswer`), whether the session was open at the press or
+   * opened because of it; its pane closing or moving, any other open, a close or leaving Desk lets it go, so a
+   * session opened or resumed later takes nothing from it.
+   */
+  answer: string | null;
 };
 
-export const DESK_ROOM_CLOSED: DeskRoomWindow = { session: null, desk: false, expanded: false, explorer: false, answer: 0 };
+export const DESK_ROOM_CLOSED: DeskRoomWindow = { session: null, desk: false, expanded: false, explorer: false, answer: null };
 
 /** Where the desk stands: attached to the session panel's left edge, or at the window's right edge with no session open (B16). */
 export type DeskPanelPlace = "beside_session" | "window_edge";
@@ -45,9 +50,17 @@ export function deskShown(room: DeskRoomWindow, tabs: number): boolean {
  * session's checkout is not the Explorer's, so that column closes.
  */
 export function openSession(room: DeskRoomWindow, pane: string, options: { answer?: boolean } = {}): DeskRoomWindow {
-  const answer = options.answer ? room.answer + 1 : room.answer;
-  if (room.session === pane) return { ...room, answer };
+  const answer = options.answer ? pane : null;
+  if (room.session === pane) return room.answer === answer ? room : { ...room, answer };
   return { ...room, session: pane, explorer: false, answer };
+}
+
+/**
+ * The press for `pane` ends: its box took the keyboard, or its pane is no longer a live session (closed, or gone
+ * before its box stood). Either way nothing takes it again.
+ */
+export function takeAnswer(room: DeskRoomWindow, pane: string): DeskRoomWindow {
+  return room.answer === pane ? { ...room, answer: null } : room;
 }
 
 /**
@@ -147,22 +160,25 @@ export function newSessionBeside(follow: NewSessionFollow, generation: number, i
  */
 export function followMoved(room: DeskRoomWindow, moved: readonly DeskMoved[]): DeskRoomWindow {
   const session = room.session === null ? null : livePane(moved, room.session);
-  return session === room.session ? room : { ...room, session };
+  // A press names a live pane: one whose pane is gone ends there, and the pane the session resumes in takes nothing from it.
+  const answer = room.answer !== null && livePane(moved, room.answer) !== room.answer ? null : room.answer;
+  return session === room.session && answer === room.answer ? room : { ...room, session, answer };
 }
 
 /** `‹ 한눈에` or Escape (B6): 한눈에 stands there again; Desk's desk stays as it was (B13). */
 export function closeSession(room: DeskRoomWindow): DeskRoomWindow {
   if (!room.session) return room;
-  return { ...room, session: null, explorer: false };
+  return { ...room, session: null, explorer: false, answer: null };
 }
 
 /**
  * The room left for another screen: the session beside Desk stays for the
  * operator's return, as Desk's desk keeps its tabs, and the desk, which
- * floats over the room, is folded (operator decision 2026-11-27).
+ * floats over the room, is folded (operator decision 2026-11-27); a
+ * `답하기` press its box has not taken yet is let go with the room.
  */
 export function leaveRoom(room: DeskRoomWindow): DeskRoomWindow {
-  return room.desk || room.expanded || room.explorer ? { ...room, desk: false, expanded: false, explorer: false } : room;
+  return room.desk || room.expanded || room.explorer || room.answer !== null ? { ...room, desk: false, expanded: false, explorer: false, answer: null } : room;
 }
 
 /**

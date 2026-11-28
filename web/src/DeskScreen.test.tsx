@@ -317,6 +317,39 @@ describe("Desk's room", () => {
   const key = async (name: string) => act(async () => { box().dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })); });
   const listed = () => Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-mention-session]")).map((row) => row.dataset.deskMentionSession);
 
+  // Mission-109's walk on main efd23d6fff: Desk turned on with no default agent dropped ↵ with nothing said. The line
+  // stands only from a ↵ that found no agent (operator's call on pull request 3099), until one is picked or the box empties.
+  it("keeps the words on ↵ with no agent chosen and says under the box to pick one, then sends once one is", async () => {
+    const unpicked = (section: DeskSection): DeskSection => ({ ...section, selection: { agent: null, model: null, effort: null }, settings: { ...section.settings, default_agent: null } });
+    const notice = () => document.body.querySelector("[data-desk-composer-notice]")?.textContent ?? null;
+    const write = async (text: string) => act(async () => useUiStore.setState({ deskDraft: { text, mentions: [] } }));
+    await render(unpicked(desk([])));
+    expect(notice()).toBeNull();
+    // Typing alone says nothing; the ↵ that finds no agent does, and the words stay.
+    await write("빌드 고쳐 줘");
+    expect(notice()).toBeNull();
+    await key("Enter");
+    expect(sent("desk_send")).toEqual([]);
+    expect(useUiStore.getState().deskDraft.text).toBe("빌드 고쳐 줘");
+    expect(notice()).toBe("Pick an agent first");
+    // Emptied, the line goes, and words written again say nothing until the next ↵.
+    await write("");
+    expect(notice()).toBeNull();
+    await write("빌드 고쳐 줘");
+    expect(notice()).toBeNull();
+    await key("Enter");
+    expect(notice()).toBe("Pick an agent first");
+    // Picked, the line goes and the same press sends.
+    await show(desk([]));
+    expect(notice()).toBeNull();
+    await key("Enter");
+    expect(sent("desk_send")).toEqual([{ text: "빌드 고쳐 줘", mentions: [] }]);
+    // No agent again: the line waits for a ↵ again.
+    await write("다음 것");
+    await show(unpicked(desk([])));
+    expect(notice()).toBeNull();
+  });
+
   const claudeList: NonNullable<DeskCommands["lists"]["claude"]> = [
     { name: "/compact", description: "Clear history but keep a summary", hint: "what to keep" },
     { name: "/context", description: "Show the context use" },
@@ -1131,6 +1164,65 @@ describe("Desk's room", () => {
     expect(useUiStore.getState().deskRoom.session).toBeNull();
     await act(async () => useShellStore.setState({ deskJobs: { jobs: [card("w1:p5")], workers: [], named: [], records: [], moved: [], glance: NO_GLANCE } }));
     expect(useUiStore.getState().deskRoom.session).toBe("w1:p5");
+  });
+
+  // Mission-109's walk on main efd23d6fff: 답하기 on the card of a session not open opened it beside Desk with the keyboard
+  // left on the button, so typed letters landed nowhere (a regression of pull request 3076).
+  it("gives the keyboard to the box of the session whose 답하기 was pressed, open or not, and none to a session opened later", async () => {
+    const row = { pane_id: "w1:p5", device_id: "local", identity_label: "asker", agent_kind: "claude", mark: "turn", state: { working: false, asking: true } } as never;
+    const card: DeskJob = { id: "intent-1", pane_id: "w1:p5", title: "asker", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
+      state: "asking", queue_position: null, now: null, plan: null, question: "Which one?", summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: "question",
+      mark: "turn", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 5, read: true, mission: null, workers: [], agent_id: null };
+    const sessionBox = () => document.body.querySelector<HTMLTextAreaElement>("[data-desk-thread-panel] [data-desk-composer-input]");
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([{ kind: "user", id: 1, text: "물어봐", at_ms: 0, mentions: [] }, { kind: "job", id: 2, job_id: "intent-1" }]));
+    await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [card], workers: [], named: [], records: [], moved: [], glance: NO_GLANCE } }));
+    // The session is closed and the keyboard is in Desk's own box.
+    await act(async () => useUiStore.getState().setDeskRoom(() => DESK_ROOM_CLOSED));
+    await act(async () => document.body.querySelector<HTMLElement>("[data-desk-composer-input]")!.focus());
+    expect(sessionBox()).toBeNull();
+
+    await press("[data-desk-job-action='answer']");
+    expect(useUiStore.getState().deskRoom.session).toBe("w1:p5");
+    expect(document.activeElement).toBe(sessionBox());
+
+    // Closed, opened again by a chip or 한눈에 rather than 답하기: the earlier press is spent, so the keyboard stays.
+    await act(async () => actions.deskCloseSession());
+    await act(async () => document.body.querySelector<HTMLElement>("[data-desk-composer-input]")!.focus());
+    const deskBox = document.activeElement;
+    await act(async () => actions.openDeskSession("w1:p5"));
+    expect(sessionBox()).not.toBeNull();
+    expect(document.activeElement).toBe(deskBox);
+
+    // With the session open, 답하기 gives its box the keyboard again.
+    await press("[data-desk-job-action='answer']");
+    expect(document.activeElement).toBe(sessionBox());
+  });
+
+  // Review round 1 of pull request 3099, F1: a press whose pane closed before its box stood ended nowhere, and the pane
+  // the session resumed in later took the keyboard from Desk's box with no new press.
+  it("ends a 답하기 press when its pane closes before its box stands, so the pane it resumes in takes no keyboard", async () => {
+    const row = { pane_id: "w1:p5", device_id: "local", identity_label: "asker", agent_kind: "claude", mark: "turn", state: { working: false, asking: true } } as never;
+    const card: DeskJob = { id: "intent-1", pane_id: "w1:p5", title: "asker", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
+      state: "asking", queue_position: null, now: null, plan: null, question: "Which one?", summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: "question",
+      mark: "turn", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 5, read: true, mission: null, workers: [], agent_id: null };
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([{ kind: "user", id: 1, text: "물어봐", at_ms: 0, mentions: [] }, { kind: "job", id: 2, job_id: "intent-1" }]));
+    await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [card], workers: [], named: [], records: [], moved: [], glance: NO_GLANCE } }));
+    await act(async () => useUiStore.getState().setDeskRoom(() => DESK_ROOM_CLOSED));
+    // The press and the pane's close land in one frame, before the session's box stands.
+    await act(async () => {
+      document.body.querySelector<HTMLElement>("[data-desk-job-action='answer']")!.click();
+      useShellStore.setState({ agents: [], deskJobs: { jobs: [], workers: [], named: [], records: [], moved: [], glance: NO_GLANCE } });
+    });
+    expect(useUiStore.getState().deskRoom.answer).toBeNull();
+    const deskBox = document.body.querySelector<HTMLElement>("[data-desk-composer-input]")!;
+    await act(async () => deskBox.focus());
+    // The session runs again in another pane.
+    await act(async () => useShellStore.setState({ agents: [{ ...(row as object), pane_id: "w1:p9" }] as never, deskJobs: { jobs: [{ ...card, pane_id: "w1:p9" }], workers: [], named: [], records: [], moved: [{ pane_id: "w1:p5", live_pane_id: "w1:p9" }], glance: NO_GLANCE } }));
+    expect(useUiStore.getState().deskRoom.session).toBe("w1:p9");
+    expect(document.body.querySelector("[data-desk-thread-panel] [data-desk-composer-input]")).not.toBeNull();
+    expect(document.activeElement).toBe(deskBox);
   });
 
   it("reads what the session beside Desk asks and answers it as the phone does, once (B14)", async () => {

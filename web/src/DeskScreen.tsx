@@ -15,7 +15,7 @@ import { answerPlace, type AnswerPlace, type FoundAnswerPath } from "./answerPat
 import { hostBridge } from "./host";
 import { keepScroll, keptScroll, placeAt, scrollPlace, stillAt } from "./conversationScroll";
 import { deskOn, deskPhase, holdsFoot, laneCards, livePane, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
-import { deskOpener, deskShown, followFrom, followMoved, newSessionBeside, openSession, outputNamed, rightSide, showDesk, type NewSessionFollow } from "./deskRoom";
+import { deskOpener, deskShown, followFrom, followMoved, newSessionBeside, openSession, outputNamed, rightSide, showDesk, takeAnswer, type NewSessionFollow } from "./deskRoom";
 import { deskViewOf, DESK_SCREEN } from "./deskDesk";
 import { CardPlaceContext, type CardPlace } from "./deskFront";
 import { DeskViewAreas } from "./ViewAreas";
@@ -140,6 +140,15 @@ function useFollowMoved() {
   }, [moved]);
 }
 
+/** A `답하기` press whose pane no longer runs a session the sidebar lists ends, before any later pane could take it. */
+function useAnswerEndsWithItsPane() {
+  const answer = useUiStore((s) => s.deskRoom.answer);
+  const gone = useShellStore((s) => answer !== null && !agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(answer));
+  useLayoutEffect(() => {
+    if (gone && answer !== null) useUiStore.getState().setDeskRoom((room) => takeAnswer(room, answer));
+  }, [gone, answer]);
+}
+
 /** Where the `@` menu stands: the `@` word Esc closed it on, the project ⇥ entered, and the parents the operator folded open or shut. */
 
 export function DeskScreen({ actions }: { actions: Actions }) {
@@ -187,6 +196,13 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const queuedHeld = desk?.conversation.queued_held ?? false;
   const queuedPaused = desk?.conversation.queued_paused ?? false;
   const canSend = agent?.state === "ready" && !queuedFull;
+  // A ↵ that found no agent to send to (no default, or one Desk no longer lists): the words stay, and the line under the
+  // box says to pick one until one is picked or the box is emptied; typing alone says nothing.
+  const [unpicked, setUnpicked] = useState(false);
+  const holds = draft.text.trim() !== "" || tray.files.length > 0;
+  if (unpicked && (agent !== undefined || !holds)) setUnpicked(false);
+  // Why the box holds what it holds, in the one line under it: a full waiting line, or a ↵ with no agent to send to.
+  const heldLine = queuedFull ? t("desk.queued.full") : unpicked ? t("desk.composer.pickAgent") : null;
 
   const lastUserId = (list: readonly DeskItem[]) => list.reduce((last, item) => (item.kind === "user" ? item.id : last), -1);
   useEffect(() => {
@@ -255,6 +271,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   useReadShownCards(scroller, jobs, actions.deskJobRead);
   useNewSessionBeside(actions, desk?.conversation.generation, items, byId);
   useFollowMoved();
+  useAnswerEndsWithItsPane();
 
   const send = (words = draft) => {
     if (!canSend || !items) return;
@@ -362,7 +379,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       label={t("desk.composer.label")}
       placeholder={t("desk.composer.placeholder")}
       tray={tray}
-      notice={queuedFull ? t("desk.queued.full") : notice}
+      notice={heldLine ?? notice}
       answering={answering}
       held={!canSend}
       focused={menus.menuOpen}
@@ -377,6 +394,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       onCaret={setCaret}
       onKeyDown={menus.onKeyDown}
       onSend={() => send()}
+      onHeld={() => setUnpicked(agent === undefined)}
       onStop={() => actions.deskStop()}
     >
       <DeskPermissionMenu permission={desk.settings.permission} agent={desk.agents.find((agent) => agent.id === desk.selection.agent)?.label ?? null} onPermission={(permission) => actions.deskPermission(permission)} />
@@ -765,7 +783,7 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
   const machine = useShellStore((s) => (row && row.device_id !== localDeviceId(s.rest) ? machineName(s.rest?.navigator?.devices, row.device_id, t) : null));
   const pulls = useMemo(() => (row ? rowPulls(row) : []), [row]);
   const explorer = useUiStore((s) => s.deskRoom.explorer);
-  const answer = useUiStore((s) => s.deskRoom.answer);
+  const answer = useUiStore((s) => s.deskRoom.answer === paneId);
   const filesChord = useShellStore((s) => commandLabel("toggle_lane_explorer", s.rest?.ui_state)) || null;
   const terminalChord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state)) || null;
   // Who the session is, kept while its row is listed: a session that sleeps or whose pane closes loses its row and its
@@ -796,6 +814,7 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
       actions={actions}
       startedByDesk={ownJob}
       answer={answer}
+      onAnswered={() => useUiStore.getState().setDeskRoom((now) => takeAnswer(now, paneId))}
       head={
         <>
         <SessionHead

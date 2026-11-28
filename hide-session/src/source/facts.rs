@@ -54,6 +54,14 @@ pub(crate) struct ClaudeHead {
     pub id: Option<String>,
     /// `cwd` of the first record that names one.
     pub cwd: Option<PathBuf>,
+    /// The scan read the whole file, every record whole and parsed, and
+    /// none was a person's or an assistant's: the session has not written
+    /// its conversation yet (Claude Code makes the file as it starts, with
+    /// its mode, owner and attachments). A record passed over for its size,
+    /// one that did not parse, or a scan the read limit cut proves nothing,
+    /// since any of them may be a message; nor does a message that names no
+    /// `sessionId`, which is a message whose owner is not found.
+    pub no_message: bool,
 }
 
 /// Which of [`ClaudeHead`]'s facts a scan stops once it has.
@@ -71,15 +79,27 @@ pub(crate) fn claude(reader: impl Read, wanted: Wanted) -> std::io::Result<Claud
         SESSION_LINE_LIMIT_BYTES,
     );
     let mut found = ClaudeHead::default();
-    while let Some(record) = head.next_record()? {
+    // Whether a record that may be a message was not read whole, and
+    // whether one was a message.
+    let (mut unread, mut message) = (false, false);
+    let mut ended = false;
+    loop {
+        let Some(record) = head.next_record()? else {
+            ended = head.read_bytes() < SESSION_READ_LIMIT_BYTES;
+            break;
+        };
         // A last record without its newline still names its facts once it
         // is whole JSON; one cut mid-record parses to nothing.
         let (record, last) = match record {
             HeadRecord::Complete(record) => (record, false),
             HeadRecord::Unfinished(record) => (record, true),
-            HeadRecord::Passed => continue,
+            HeadRecord::Passed => {
+                unread = true;
+                continue;
+            }
         };
         let Ok(record) = serde_json::from_slice::<Value>(&record) else {
+            unread = true;
             if last {
                 break;
             }
@@ -90,8 +110,11 @@ pub(crate) fn claude(reader: impl Read, wanted: Wanted) -> std::io::Result<Claud
         {
             found.cwd = Some(PathBuf::from(cwd));
         }
-        if found.id.is_none() && matches!(record["type"].as_str(), Some("user" | "assistant")) {
-            found.id = record["sessionId"].as_str().map(str::to_owned);
+        if matches!(record["type"].as_str(), Some("user" | "assistant")) {
+            message = true;
+            if found.id.is_none() {
+                found.id = record["sessionId"].as_str().map(str::to_owned);
+            }
         }
         let done = match wanted {
             Wanted::Id => found.id.is_some(),
@@ -101,6 +124,7 @@ pub(crate) fn claude(reader: impl Read, wanted: Wanted) -> std::io::Result<Claud
             break;
         }
     }
+    found.no_message = ended && !unread && !message;
     Ok(found)
 }
 

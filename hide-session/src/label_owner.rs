@@ -219,9 +219,15 @@ fn confirm_metadata(
                 })?
                 .and_then(|meta| meta["payload"]["id"].as_str().map(str::to_owned)),
             Agent::Claude => {
-                facts::claude(&file, Wanted::Id)
-                    .map_err(|_| anyhow!("label_session_metadata_read_failed"))?
-                    .id
+                let head = facts::claude(&file, Wanted::Id)
+                    .map_err(|_| anyhow!("label_session_metadata_read_failed"))?;
+                // A session that has not written its conversation yet, which
+                // reading again answers, as a file not there yet is; a
+                // message whose owner is not found stays unconfirmed.
+                if head.no_message {
+                    return Err(anyhow!("session_file_missing"));
+                }
+                head.id
             }
             _ => None,
         }
@@ -377,6 +383,73 @@ mod tests {
         ] {
             assert!(label_reference_token(provider, kind, value).is_none());
         }
+    }
+
+    /// Mission-109's walk: a Claude Code session opened beside Desk before
+    /// its first message read `읽기가 거절됐어요`. Claude Code writes the
+    /// file as it starts, with no person's or assistant's record yet.
+    #[test]
+    fn a_claude_file_with_no_message_yet_is_a_session_not_written_yet() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let id = "0b9a7a52-2f4e-4c1e-9f7a-3c1d2b4e5f60";
+        let start = format!(
+            "{{\"type\":\"mode\",\"mode\":\"normal\",\"sessionId\":\"{id}\"}}\n\
+             {{\"type\":\"session-owner\",\"sessionId\":\"{id}\"}}\n\
+             {{\"type\":\"system\",\"subtype\":\"informational\",\"sessionId\":\"{id}\",\"cwd\":\"/repo\"}}\n"
+        );
+        fs::write(&path, &start).unwrap();
+        assert_eq!(
+            confirm_label_session(Agent::Claude, &path, Some(id))
+                .unwrap_err()
+                .to_string(),
+            "session_file_missing"
+        );
+        // A message is there but its owner is not found: still unconfirmed,
+        // never a session that has not written yet (review round 1 of
+        // pull request 3099, F2). A message that names no session, one
+        // over the record cap whatever it names, and a line that does not
+        // parse may each be a message.
+        let unconfirmed = |contents: String| {
+            fs::write(&path, contents).unwrap();
+            confirm_label_session(Agent::Claude, &path, Some(id))
+                .unwrap_err()
+                .to_string()
+        };
+        assert_eq!(
+            unconfirmed(format!(
+                "{start}{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n"
+            )),
+            "label_session_metadata_unconfirmed"
+        );
+        assert_eq!(
+            unconfirmed(format!(
+                "{start}{{\"type\":\"user\",\"sessionId\":\"{id}\",\"pad\":\"{}\"}}\n",
+                "x".repeat(SESSION_LINE_LIMIT_BYTES)
+            )),
+            "label_session_metadata_unconfirmed"
+        );
+        assert_eq!(
+            unconfirmed(format!("{start}{{\"type\":\"user\",\"sessionId\n")),
+            "label_session_metadata_unconfirmed"
+        );
+
+        // Its first message names the session.
+        fs::write(
+            &path,
+            format!(
+                "{start}{{\"type\":\"user\",\"sessionId\":\"{id}\",\"cwd\":\"/repo\",\
+                 \"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            confirm_label_session(Agent::Claude, &path, Some(id))
+                .unwrap()
+                .native_session_id
+                .as_deref(),
+            Some(id)
+        );
     }
 
     #[test]

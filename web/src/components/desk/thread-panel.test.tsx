@@ -68,20 +68,21 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined, pane = "w1:p2", answer = 0 }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void; pane?: string; answer?: number } = {}) {
+async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined, pane = "w1:p2", answer = false }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void; pane?: string; answer?: boolean } = {}) {
   const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn(), switchThread: vi.fn(() => "switch-1"), observeCatalog: vi.fn(() => noop), requestFileIndex: vi.fn(), deskCommandsCheck: vi.fn(), inputQueue: vi.fn(), interruptThread: vi.fn(() => "stop-1") };
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   mounted.push(root);
   const noop = () => undefined;
-  const draw = (raised: number) => root.render(
+  const answered = vi.fn();
+  const draw = (asked: boolean, shownCard: DeskJob | null = card) => root.render(
     <TooltipProvider>
-      <ThreadPanel job={card} paneId={pane} answer={raised} actions={actions} foot={foot} ask={ask} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
+      <ThreadPanel job={shownCard} paneId={pane} answer={asked} onAnswered={answered} actions={actions} foot={foot} ask={ask} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
     </TooltipProvider>,
   );
   await act(async () => draw(answer));
-  const answerAgain = (raised: number) => act(async () => draw(raised));
+  const redraw = (asked: boolean, shownCard: DeskJob | null = card) => act(async () => draw(asked, shownCard));
   const box = () => container.querySelector("textarea")!;
   const type = async (value: string) => {
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
@@ -91,7 +92,7 @@ async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks 
     });
   };
   const enter = (composing = false) => act(async () => { box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: composing })); });
-  return { actions, container, root, box, type, enter, answerAgain };
+  return { actions, container, root, box, type, enter, redraw, answered };
 }
 
 it("opens its pane's thread while shown, draws what the core read, and closes it after", async () => {
@@ -1013,13 +1014,29 @@ it("keeps a session's words while another session opens beside Desk and gives th
   expect((await mount({ ...job, pane_id: "w1:p3" }, null, { pane: "w1:p3" })).box().value).toBe("다른 세션");
 });
 
-// Operator request 2026-11-27 (mission-109): `답하기` gives the box the keyboard once per press; a count an earlier
-// session's press raised is no press for a session opened later.
-it("takes the keyboard on a 답하기 pressed while it is open, never on one pressed before it opened", async () => {
-  const opened = await mount(job, null, { answer: 3 });
+// Operator request 2026-11-27 (mission-109) and its walk on main: `답하기` gives the keyboard to the box of the session it
+// was pressed for, once, whether that session was open at the press or opens because of it.
+it("takes the keyboard for a 답하기 pressed while it is open, and spends the press", async () => {
+  const opened = await mount();
   expect(document.activeElement).not.toBe(opened.box());
-  await opened.answerAgain(4);
+  await opened.redraw(true);
   expect(document.activeElement).toBe(opened.box());
+  expect(opened.answered).toHaveBeenCalledTimes(1);
+});
+
+it("takes the keyboard for the 답하기 that opened it, before its card arrives", async () => {
+  // The session opens because of the press, its card still on its way: its pane's box stands and takes the press once.
+  const opened = await mount(null, null, { answer: true });
+  expect(document.activeElement).toBe(opened.box());
+  expect(opened.answered).toHaveBeenCalledTimes(1);
+  await opened.redraw(false, job);
+  expect(opened.answered).toHaveBeenCalledTimes(1);
+});
+
+it("takes no keyboard when it opens with no press naming it", async () => {
+  const opened = await mount();
+  expect(document.activeElement).not.toBe(opened.box());
+  expect(opened.answered).not.toHaveBeenCalled();
 });
 
 // CR-06: the wire answers each input even when another window's snapshot wins the same burst.
