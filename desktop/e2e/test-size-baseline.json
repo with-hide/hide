@@ -8,10 +8,6 @@
       "lines": 172,
       "expect": 51
     },
-    "browser-cdp.spec.ts::browser CDP: native files cannot be read through runtime, frames, redirects or creation": {
-      "lines": 121,
-      "expect": 39
-    },
     "browser.spec.ts::browser: a page opens from an agent's pane, follows its area, moves without loading again, freezes under the palette and ends with its display": {
       "lines": 194,
       "expect": 54
