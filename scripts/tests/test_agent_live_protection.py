@@ -633,6 +633,11 @@ class ProcessProtection(unittest.TestCase):
                     if flavor == 4:
                         ctypes.set_errno(errno.ESRCH)
                         return 0
+                    if flavor == 13:
+                        # The refused refresh asks who runs it now: still us.
+                        short = ctypes.cast(pointer, ctypes.POINTER(ShortBsdInfo)).contents
+                        short.uid, short.ruid, short.pgid = os.getuid(), os.getuid(), pid
+                        return ctypes.sizeof(ShortBsdInfo)
                     self.assertEqual(flavor, 3)
                     bsd_reads += 1
                     if bsd_reads > 1 and outcome in ("gone", "unreadable"):
@@ -657,7 +662,7 @@ class ProcessProtection(unittest.TestCase):
                         patch("agent_live_check.process_table.ctypes.CDLL", return_value=library):
                     table = snapshot(None if outcome == "replacement_host" else pid)
                 self.assertEqual(bsd_reads, 2)
-                self.assertEqual(library.proc_pidinfo.call_count, 3)
+                self.assertEqual(library.proc_pidinfo.call_count, 4 if outcome == "unreadable" else 3)
                 if outcome in ("gone", "replacement_outside"):
                     self.assertNotIn(pid, table)
                     self.assertEqual(table.vanished, [pid])
@@ -730,6 +735,50 @@ class ProcessProtection(unittest.TestCase):
                 self.assertNotIn(child, table)
                 if expected == "foreign":
                     self.assertEqual(table.foreign_uid_pids, {child})
+                    require_complete(table)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "subjects_unavailable"):
+                        require_complete(table)
+
+    def test_a_group_member_running_a_set_user_id_program_is_not_a_missing_subject(self):
+        # Claude Code runs ps in its own group: the guardian's group sample
+        # cannot read it fully, yet it is the group's own member with our
+        # real UID. Anything else unreadable in the group stays a failure.
+        import errno
+        group, member = 24680, 24681
+        for name, ruid, pgid, expected in (("set-user-ID member", os.getuid(), group, "excluded"),
+                                           ("another user's process", os.getuid() + 1, group, "unavailable"),
+                                           ("another group", os.getuid(), group + 7, "unavailable")):
+            with self.subTest(name):
+                library = Mock()
+
+                def list_group(asked, pids, size):
+                    pids[0], pids[1] = group, member
+                    return 2
+
+                def read_process(subject, flavor, argument, pointer, size):
+                    if flavor == 13:
+                        short = ctypes.cast(pointer, ctypes.POINTER(ShortBsdInfo)).contents
+                        short.pid, short.uid, short.ruid, short.pgid = subject, 0, ruid, pgid
+                        return ctypes.sizeof(ShortBsdInfo)
+                    if subject == member:
+                        ctypes.set_errno(errno.EPERM)
+                        return 0
+                    if flavor == 4:
+                        return size
+                    info = ctypes.cast(pointer, ctypes.POINTER(BsdInfo)).contents
+                    info.pid, info.ppid, info.pgid, info.uid = subject, 1, group, os.getuid()
+                    info.sec, info.usec, info.flags, info.status = 100, 2, 0x10, 1
+                    return ctypes.sizeof(BsdInfo)
+
+                library.proc_listpgrppids.side_effect = list_group
+                library.proc_pidinfo.side_effect = read_process
+                with patch("agent_live_check.process_table.sys.platform", "darwin"), \
+                        patch("agent_live_check.process_table.ctypes.CDLL", return_value=library):
+                    table = snapshot(group)
+                self.assertEqual(list(table), [group])
+                if expected == "excluded":
+                    self.assertEqual(table.foreign_uid_pids, {member})
                     require_complete(table)
                 else:
                     with self.assertRaisesRegex(RuntimeError, "subjects_unavailable"):

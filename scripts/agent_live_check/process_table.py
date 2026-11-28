@@ -140,33 +140,39 @@ def snapshot(group: int | None = None) -> dict[int, Process]:
         if count < 0 or (count == 0 and (group is None or ctypes.get_errno())) or count >= MAX_SYSTEM_PROCESSES:
             raise RuntimeError("process_table_unavailable_or_over_budget")
 
-        def short_uid(pid):
+        def short_read(pid):
             # Full BSD info requires the same UID; short BSD info does not.
             short = ShortBsdInfo()
             ctypes.set_errno(0)
             read = library.proc_pidinfo(pid, 13, 1, ctypes.byref(short), ctypes.sizeof(short))
-            return (short.uid if read == ctypes.sizeof(short) else None), ctypes.get_errno()
+            return (short if read == ctypes.sizeof(short) else None), ctypes.get_errno()
 
-        def foreign(uid):
-            # A host-wide sample excludes a positively identified foreign
-            # UID, rather than confusing its expected refusal with our
-            # ownership.
-            return uid is not None and uid != os.getuid()
+        def another_users(short):
+            # A process that runs as another UID is refused the full read by
+            # design. A host-wide sample excludes it, rather than confusing
+            # that refusal with our ownership. A group sample excludes only
+            # its own member that runs a set-user-ID program (ps, which
+            # Claude Code runs in its group): its real UID is still ours.
+            # It is not measured, but the group's end still waits for it,
+            # since a group is gone only when nothing answers killpg.
+            if short is None or short.uid == os.getuid():
+                return False
+            return group is None or (short.pgid == group and short.ruid == os.getuid())
 
         for pid in pids[:count]:
             info, task = BsdInfo(), TaskInfo()
             ctypes.set_errno(0)
             if library.proc_pidinfo(pid, 3, 1, ctypes.byref(info), ctypes.sizeof(info)) != ctypes.sizeof(info):
                 error = ctypes.get_errno()
-                uid, short_error = short_uid(pid)
+                short, short_error = short_read(pid)
                 if error == errno.ESRCH:
                     # A later foreign UID may be a reused PID. Preserve the
                     # earlier disappearance before excluding that replacement.
                     result.vanished.append(pid)
-                if group is None and foreign(uid):
+                if another_users(short):
                     result.foreign_uid_pids.add(pid)
                     continue
-                if error == errno.ESRCH and (uid is not None or short_error == errno.ESRCH):
+                if error == errno.ESRCH and (short is not None or short_error == errno.ESRCH):
                     continue
                 else:
                     result.unavailable.append({"pid": pid, "errno": error})
@@ -187,7 +193,7 @@ def snapshot(group: int | None = None) -> dict[int, Process]:
                     # A child that execs a set-user-ID program (ps, login)
                     # between the reads now runs as another UID: the same
                     # process a sample taken a moment later excludes.
-                    if group is None and foreign(short_uid(pid)[0]):
+                    if another_users(short_read(pid)[0]):
                         result.foreign_uid_pids.add(pid)
                         continue
                     result.unavailable.append({"pid": pid, "errno": refresh_error})
