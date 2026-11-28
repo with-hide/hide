@@ -890,14 +890,12 @@ pub(crate) fn warn_acts(
                 node: at,
                 kind: WarningKind::ReviewFails,
             }),
-            None if held.is_some() => {
-                acts.push(WarnAct::Raise {
-                    node: at,
-                    kind: WarningKind::ReviewFails,
-                    from: last_review_at(node).unwrap_or(now),
-                    cause: None,
-                })
-            }
+            None if held.is_some() => acts.push(WarnAct::Raise {
+                node: at,
+                kind: WarningKind::ReviewFails,
+                from: last_review_at(node).unwrap_or(now),
+                cause: None,
+            }),
             _ => {}
         }
     }
@@ -2021,10 +2019,10 @@ mod tests {
                 node: 0,
                 kind: WarningKind::ReviewFails,
             }];
-            m.nodes[0].criteria[1].budget_from = limit;
+            m.nodes[0].criteria[1].budget_from = limit + 1;
             assert_eq!(warn_acts(&m, None, &[], &[], 10), clear, "{strength:?}");
             m.nodes[0].warnings.clear();
-            review(&mut m, 2 * limit, Fail);
+            review(&mut m, 2 * limit + 1, Fail);
             assert_eq!(
                 warn_acts(&m, None, &[], &[], 10).len(),
                 1,

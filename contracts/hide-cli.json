@@ -8587,6 +8587,14 @@
                     "value": {
                         "type": "unsigned"
                     }
+                },
+                {
+                    "name": "--follow-up",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
                 }
             ],
             "refusals": [
@@ -8595,7 +8603,9 @@
                 "mission_criterion_unknown",
                 "mission_ambiguous",
                 "mission_skip_reason_missing",
-                "mission_criteria_protected"
+                "mission_criteria_protected",
+                "mission_skip_follow_up_required",
+                "mission_follow_up_invalid"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -9821,7 +9831,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:c7d1f6b4af82b31c72fbcc13937a48e7f3fbd476d94388abe368169031fb0f4f",
+    "digest": "sha256:b508bf48c5dee842dbc7cb7a57711734fe6a1997ca2efab7b8ba043c86e62a9b",
     "envelopes": {
         "access": {
             "answer": "value",

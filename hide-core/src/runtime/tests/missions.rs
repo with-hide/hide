@@ -10278,19 +10278,18 @@ fn the_review_round_at_the_limit_failing_tells_the_conductor_once_how_to_settle_
         .find(|wake| wake.event == crate::missions::WakeEvent::Warning)
         .unwrap();
     let body = super::super::missions::wake_body(mission, wake);
+    assert!(body.len() <= 700, "one cell shows it whole: {body}");
     for words in [
-        "reached its review round limit",
-        "failed in round 3, with 3 rounds",
-        "`normal` strength",
-        "next check wakes no checker until you choose",
+        "hit its review round limit",
+        "review failed round 3 of 3",
+        "no checker wakes until you choose",
         "without the operator",
-        "fix only the serious ones in this pull request",
-        "follow-up node of this mission (not an issue)",
+        "fixes just the serious ones here",
+        "the rest become a follow-up node",
         "hide mission skip fix review --follow-up <node>",
-        "fresh worker on a different model",
-        "what not to try again",
-        "hide mission node fix --agent-id <agent-N> --attempts <n>",
-        "ask the operator with `hide mission decide --node fix`",
+        "fresh worker on another model",
+        "a handover and a do-not-retry list",
+        "(3) a fresh worker failing here too: `hide mission decide`",
     ] {
         assert!(body.contains(words), "{words:?} in {body}");
     }
@@ -19831,8 +19830,12 @@ fn failed_round(runtime: &mut Runtime, pane: &str, head: &str) {
     )
     .unwrap();
     let asked = read_cells(runtime, "agent-3");
-    assert!(asked.len() == 1 && asked[0].contains("ready for your review"), "{asked:?}");
-    let fail = json!({"commit": head, "pass": false, "evidence": format!("serious: drops v1 on {head}")});
+    assert!(
+        asked.len() == 1 && asked[0].contains("ready for your review"),
+        "{asked:?}"
+    );
+    let fail =
+        json!({"commit": head, "pass": false, "evidence": format!("serious: drops v1 on {head}")});
     command(runtime, "reviewer", record_of("fix", "review", fail)).unwrap();
 }
 
@@ -19876,10 +19879,11 @@ fn the_review_round_at_the_limit_failing_holds_the_node_until_the_conductor_choo
     let letters = limit_letters(&mut runtime);
     assert!(
         letters.len() == 1
-            && letters[0].contains("Node fix reached its review round limit")
-            && letters[0].contains("(1) Only ordinary or minor findings remain")
-            && letters[0].contains("(2) A serious finding came back in the same area")
-            && !letters[0].contains("earlier worker"),
+            && letters[0].contains("Node fix hit its review round limit")
+            && letters[0].contains("(1) only ordinary or minor findings left")
+            && letters[0].contains("(2) a serious one back in the same area")
+            && !letters[0].contains("earlier worker")
+            && !letters[0].ends_with('…'),
         "{letters:?}"
     );
     // The worker checks its fix: no round opens and nothing more is said.
@@ -19894,7 +19898,10 @@ fn the_review_round_at_the_limit_failing_holds_the_node_until_the_conductor_choo
         .1
     );
     runtime.drive_mission_health(now);
-    assert!(read_cells(&mut runtime, "agent-3").is_empty(), "no round opens");
+    assert!(
+        read_cells(&mut runtime, "agent-3").is_empty(),
+        "no round opens"
+    );
     assert!(limit_letters(&mut runtime).is_empty(), "one letter");
     assert!(
         runtime
@@ -19923,8 +19930,9 @@ fn the_review_round_at_the_limit_failing_holds_the_node_until_the_conductor_choo
     let again = limit_letters(&mut runtime);
     assert!(
         again.len() == 1
-            && again[0].contains("counted 3 rounds for an earlier worker of this node")
-            && again[0].contains("ask the operator with `hide mission decide --node fix` instead"),
+            && again[0].contains("if its earlier worker (3 rounds) was handed over at this limit, ask the operator with `hide mission decide`")
+            && again[0].contains("(2) a serious one back in the same area")
+            && !again[0].ends_with('…'),
         "{again:?}"
     );
 }
@@ -19996,7 +20004,10 @@ fn a_skip_at_the_round_limit_names_a_follow_up_node_of_the_mission() {
         command(runtime, "sender", skip)
     };
     let refused = skip(&mut runtime, "review", None).unwrap_err();
-    assert!(refused.starts_with("mission_skip_follow_up_required"), "{refused}");
+    assert!(
+        refused.starts_with("mission_skip_follow_up_required"),
+        "{refused}"
+    );
     let next = crate::missions::next_action(crate::coordination::split_refusal(&refused).0);
     assert!(
         next.contains("follow-up node of this mission (not an issue)")
@@ -20006,7 +20017,10 @@ fn a_skip_at_the_round_limit_names_a_follow_up_node_of_the_mission() {
     );
     for wrong in ["fix", "nowhere"] {
         let refused = skip(&mut runtime, "review", Some(wrong)).unwrap_err();
-        assert!(refused.starts_with("mission_follow_up_invalid"), "{wrong}: {refused}");
+        assert!(
+            refused.starts_with("mission_follow_up_invalid"),
+            "{wrong}: {refused}"
+        );
     }
     assert!(read_cells(&mut runtime, "agent-4").is_empty(), "still held");
     skip(&mut runtime, "review", Some("fix-rest")).unwrap();
@@ -20025,7 +20039,10 @@ fn a_skip_at_the_round_limit_names_a_follow_up_node_of_the_mission() {
         asked.len() == 1 && asked[0].contains("ready for your verify again"),
         "the held check reaches the verifier: {asked:?}"
     );
-    assert!(read_cells(&mut runtime, "agent-3").is_empty(), "the skipped review asks no one");
+    assert!(
+        read_cells(&mut runtime, "agent-3").is_empty(),
+        "the skipped review asks no one"
+    );
 }
 
 /// A checker's `hide mission record` of its line is its report: Hide ends

@@ -1429,27 +1429,32 @@ pub(super) fn wake_words(
             );
             let (what, ask) = match (wake.warning, node, warning) {
                 (Some(WarningKind::ReviewFails), Some(node), _) => {
+                    // A cell shows 700 bytes (`status_cells::CELL_BYTES`):
+                    // the node and its choices come first, and the steps
+                    // in full are `hide mission help`, Verification strength.
                     let limit = crate::mission_health::review_limit(mission);
                     let held = node.review_line(limit);
                     let line = held.map_or("review", |line| line.key.as_str());
                     let rounds = held.map_or(limit, Criterion::budget_rounds);
                     let key = wake.node.as_str();
+                    let choices = format!(
+                        "(1) only ordinary or minor findings left: its worker fixes just the serious ones here and the rest become a follow-up node, then `hide mission skip {key} {line} --follow-up <node>`; (2) a serious one back in the same area: a fresh worker on another model with a handover and a do-not-retry list"
+                    );
                     // Rounds counted before the current worker's budget: the
                     // node already had a fresh worker, maybe for this limit.
-                    let earlier = match held.map_or(0, |line| line.budget_from) {
-                        0 => String::new(),
+                    let ask = match held.map_or(0, |line| line.budget_from) {
+                        0 => format!(
+                            "choose, without the operator: {choices}; (3) a fresh worker failing here too: `hide mission decide`"
+                        ),
                         before => format!(
-                            "Its checkers counted {before} rounds for an earlier worker of this node: if that worker was handed over at this limit, the fresh one failed too, so ask the operator with `hide mission decide --node {key}` instead. "
+                            "if its earlier worker ({before} rounds) was handed over at this limit, ask the operator with `hide mission decide`; else choose: {choices}"
                         ),
                     };
                     (
                         format!(
-                            "reached its review round limit: the {line} failed in round {rounds}, with {limit} rounds the mission's `{}` strength allows, so its worker's next check wakes no checker until you choose how it goes on",
-                            mission.strength.unwrap_or_default().as_str()
+                            "hit its review round limit: {line} failed round {rounds} of {limit}; no checker wakes until you choose"
                         ),
-                        format!(
-                            "choose one, without the operator. {earlier}(1) Only ordinary or minor findings remain: tell its worker to fix only the serious ones in this pull request, plan the rest as a follow-up node of this mission (not an issue), and skip the line with `hide mission skip {key} {line} --follow-up <node> --reason \"<why>\"`; to have the serious fixes looked at once more first, ask its checker by letter to re-look only those on the fixed commit, and its pass passes the line. (2) A serious finding came back in the same area: hand the node to a fresh worker on a different model, with a handover note and a list of what not to try again, and bind it with `hide mission node {key} --agent-id <agent-N> --attempts <n>`, which gives its checkers a fresh round budget; if that worker reaches the limit too, ask the operator with `hide mission decide --node {key}`"
-                        ),
+                        ask,
                     )
                 }
                 (Some(WarningKind::Stopped), _, Some(warning)) => {
