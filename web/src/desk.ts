@@ -83,19 +83,28 @@ function rowSession(row: AgentRow): DeskSessionRef {
 }
 
 /**
- * The job states that end a job: no pane is coming for it, until a failed or
- * cancelled one is started again. Desk's room passes over such a job for the
- * turn's next session, and its card is dimmed, all but a failed one, whose
- * failure and `다시` are the operator's to act on.
+ * The job states that end a job for Desk: no pane is coming for it, until a
+ * failed or cancelled one is started again, or its tab left Desk. Desk's room
+ * passes over such a job for the turn's next session, and its card is dimmed
+ * while its agent is not at work or asking (`jobDimmed`).
  */
 export const ENDED_JOB_STATES: ReadonlySet<DeskJob["state"]> = new Set<DeskJob["state"]>(["failed", "cancelled", "closed", "moved_out", "archived"]);
 
-/** Where a session stands in 한눈에: waiting on the operator, at work, or idle (its agent done or asleep, or its job ended, `ENDED_JOB_STATES`), shown as 끝남. */
+/**
+ * Whether a job's agent is at work as Desk counts it: its row says it works,
+ * whatever the job's place (moved out of Desk's group included); an open job
+ * whose row is not read yet counts too, as it holds one of Desk's places.
+ */
+export function jobWorking(job: DeskJob): boolean {
+  return job.activity === "working" || (job.state === "open" && job.activity === null);
+}
+
+/** Where a session stands in 한눈에: waiting on the operator, at work, or idle (its agent done or asleep, or its job ended with nothing at work), shown as 끝남. */
 export type GlanceGroup = "turn" | "working" | "idle";
 
 export function glanceGroup(job: DeskJob): GlanceGroup {
-  if (job.state === "asking") return "turn";
-  if (job.state === "queued" || job.state === "starting" || job.state === "working") return "working";
+  if (job.activity === "asking") return "turn";
+  if (job.state === "queued" || job.state === "starting" || jobWorking(job)) return "working";
   return "idle";
 }
 
@@ -115,9 +124,9 @@ export function glanceSessions(panes: readonly string[], cards: readonly DeskJob
   return listed.map((card, at) => ({ card, at })).sort((a, b) => GLANCE_ORDER[glanceGroup(a.card)] - GLANCE_ORDER[glanceGroup(b.card)] || a.at - b.at).map(({ card }) => card);
 }
 
-/** Whether a job card is dimmed: an ended job's, but a failed one's (see `ENDED_JOB_STATES`). */
-export function jobDimmed(state: DeskJob["state"]): boolean {
-  return ENDED_JOB_STATES.has(state) && state !== "failed";
+/** Whether a job card is dimmed: an ended job's, but a failed one's (see `ENDED_JOB_STATES`) and one whose agent still works or asks. */
+export function jobDimmed(job: DeskJob): boolean {
+  return ENDED_JOB_STATES.has(job.state) && job.state !== "failed" && job.activity !== "working" && job.activity !== "asking";
 }
 
 /**
@@ -182,7 +191,8 @@ export function recordCard(record: DeskRecord): DeskJob {
     agent_kind: record.agent_kind,
     project: { workspace_id: null, label: project ? lastName(project) : "" },
     location: { kind: "checkout", label: folder },
-    state: "done",
+    state: "closed",
+    activity: "done",
     queue_position: null,
     now: record.line,
     plan: null,
@@ -538,7 +548,7 @@ export function outputKindOf(kind: SessionViewKind): DeskOutputKind | null {
 
 /** The sessions Desk started that ask the operator: the sidebar Desk row's warning mark (PRD desk-2-ui B46). */
 export function askingCount(jobs: readonly DeskJob[]): number {
-  return jobs.filter((job) => job.state === "asking").length;
+  return jobs.filter((job) => job.activity === "asking").length;
 }
 
 /**

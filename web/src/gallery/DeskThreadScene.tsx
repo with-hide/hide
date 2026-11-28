@@ -123,7 +123,7 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
   const job: DeskJob = useMemo(() => {
     const base = state === "asking" ? jobs.gallery! : jobs.conductor!;
     // A sleeping session's card reads asleep: no turn of it is running.
-    return { ...base, ...(state in SLEEPS ? { state: "sleeping" as const, mark: "asleep" as const } : {}), plan: { done: plan.progress.done, total: plan.progress.total } };
+    return { ...base, ...(state in SLEEPS ? { activity: "sleeping" as const, mark: "asleep" as const } : {}), plan: { done: plan.progress.done, total: plan.progress.total } };
   }, [jobs, plan, state]);
 
   useLayoutEffect(() => {

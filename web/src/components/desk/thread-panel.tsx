@@ -25,6 +25,7 @@ import { useComposerMenus } from "./composer-menus";
 import { SessionAgentBar } from "./desk-composer";
 import { FileDropZone } from "./file-drop";
 import { QueueGroup } from "./queue-group";
+import { SessionThreadAsk } from "./session-ask";
 import { NO_MENTIONS, ThreadView, type ThreadPartActions } from "./thread-view";
 
 import { Button } from "../ui/button";
@@ -48,13 +49,13 @@ const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "u
  * shelf under it), the agent's choice card, the questions Hide found and
  * what stands in an ended session's box's place are the caller's.
  */
-export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = false, onAnswered, head = null, ask = null, asks, onAsk, foot = null, asleep = null, onSessionWake, onTerminal, ...parts }: {
+export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = false, onAnswered, head = null, asks, onAsk, foot = null, asleep = null, onSessionWake, onTerminal, ...parts }: {
   /** The session's card; a session that is no job of Desk's opens before its card arrives, by its pane (D-87). */
   job: DeskJob | null;
   paneConversation?: boolean;
   /** The pane whose thread this is; its card's when not given. */
   paneId?: string | null;
-  actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread" | "switchThread" | "observeCatalog" | "requestFileIndex" | "deskCommandsCheck" | "inputQueue" | "interruptThread" | "wakeAgent" | "wakeSleepingSession">;
+  actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread" | "switchThread" | "observeCatalog" | "requestFileIndex" | "deskCommandsCheck" | "inputQueue" | "interruptThread" | "wakeAgent" | "wakeSleepingSession" | "askPane" | "answerPane" | "deskTerminal">;
   mentions?: readonly DeskMention[];
   startedByDesk?: boolean;
   focused?: boolean;
@@ -64,7 +65,6 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
   onAnswered?: () => void;
   /** The panel's head, drawn once the card is here. */
   head?: ReactNode;
-  ask?: ReactNode;
   asks?: readonly AskLine[];
   /** 무시하기 and 되돌리기 on one of `asks`, for the session they wait in; without it no question line is drawn. */
   onAsk?: (id: string, status: "open" | "dismissed") => void;
@@ -163,6 +163,14 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
   const row = rows.find((one) => one.pane_id === paneId);
   // Asleep: the conversation stays to read, dimmed, and the card in its middle wakes it; nothing is typed into it.
   const sleep = paneId ? conversationSleep(paneId, { row: row ?? null, job, session: asleep }, actions, onSessionWake) : null;
+  // What the agent does is its sidebar row's, the value its mark and its terminal's status show, beside Desk and over
+  // its pane alike, whatever its card says of its place (moved out of Desk's group, or no card of Desk's at all).
+  const asking = row?.state.asking === true;
+  const working = row?.state.working === true && !asking;
+  // The agent's own question, read from its screen and answered in place, stands while its row asks.
+  const ask = asking && row && paneId && !sleep && !foot ? (
+    <SessionThreadAsk paneId={paneId} deviceId={row.device_id} job={job} row={row} actions={actions} onTerminal={toTerminal} onWrite={() => box.current?.focus()} />
+  ) : null;
   const kind = row?.agent_kind ?? null;
   const adapter = kind ? agentAdapter(kind) : undefined;
   const commandSection = useShellStore((s) => s.deskCommands);
@@ -225,7 +233,6 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
   };
   // While the agent works, ■ types the keys its `[interrupt]` names and pauses its waiting line; ↵ keeps adding to the
   // line (PRD desk-queue B10-B12). A line's `보내기` waits until it rests and asks nothing (B16).
-  const working = row?.state.working === true && !row.state.asking;
   const stop = () => {
     if (!thread?.pane_id || !paneId || held !== null || sent || waiting || uncertain) return;
     if (!canSend()) return;
@@ -244,7 +251,7 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
       lines={thread.queue.lines}
       cleared={thread.queue.cleared}
       stalled={thread.queue.stalled === true}
-      sendable={row?.state.working === false && !row.state.asking}
+      sendable={row !== undefined && !working && !asking}
       dimmed={!thread.connected}
       onAction={(action, id) => actions.inputQueue(paneId, action, id)}
     />
@@ -307,6 +314,7 @@ export function ThreadPanel({ paneConversation = false, job, paneId = job?.pane_
         key={paneId ?? ""}
         scrollKey={paneId ? `thread:${paneId}` : null}
         job={job}
+        running={working}
         workingSince={rows.find((row) => row.pane_id === paneId)?.last_prompt_at_unix_ms ?? null}
         lines={screen.lines}
         reading={thread === null || screen.reading}

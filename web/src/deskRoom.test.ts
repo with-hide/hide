@@ -183,9 +183,9 @@ describe("the output a session's own line names (B27)", () => {
 // mission brief: a session a Desk turn starts opens beside Desk when the
 // right side is empty, only the turn's first, and a handed letter opens nothing.
 describe("a session a Desk turn starts (frame J)", () => {
-  const card = (id: string, pane: string | null, state: DeskJob["state"] = "working"): DeskJob => ({
+  const card = (id: string, pane: string | null, state: DeskJob["state"] = "open"): DeskJob => ({
     id, agent_id: null, pane_id: pane, title: id, agent_kind: "codex", project: { workspace_id: "w", label: "w" }, location: { kind: "checkout", label: "w" },
-    state, queue_position: null, now: null, plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false,
+    state, activity: state === "open" ? "working" : null, queue_position: null, now: null, plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false,
     reason: null, failure: null, ask: null, mark: null, mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [],
   });
   const user = (id: number): DeskItem => ({ kind: "user", id, text: "fix it", at_ms: 0, mentions: [] });

@@ -14,13 +14,12 @@ import type { Actions } from "./actions";
 import { answerPlace, type AnswerPlace, type FoundAnswerPath } from "./answerPaths";
 import { hostBridge } from "./host";
 import { keepScroll, keptScroll, placeAt, scrollPlace, stillAt } from "./conversationScroll";
-import { deskOn, deskPhase, holdsFoot, laneCards, livePane, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
+import { askingCount, deskOn, deskPhase, holdsFoot, jobWorking, laneCards, livePane, recordCard, sessionFacts, type DeskItem, type DeskRecord, type DeskJob, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
 import { deskOpener, deskShown, followFrom, followMoved, newSessionBeside, openSession, outputNamed, rightSide, showDesk, takeAnswer, type NewSessionFollow } from "./deskRoom";
 import { deskViewOf, DESK_SCREEN } from "./deskDesk";
 import { CardPlaceContext, type CardPlace } from "./deskFront";
 import { DeskViewAreas } from "./ViewAreas";
 import { ExplorerTree, type ExplorerScope } from "./ExplorerTree";
-import { SessionThreadAsk as DeskSessionAsk } from "./components/desk/session-ask";
 import { ThreadPanel } from "./components/desk/thread-panel";
 import { SessionChipProvider, type SessionChipSource } from "./components/desk/session-chip";
 import { SessionHead, SessionRecordFoot } from "./components/desk/desk-session";
@@ -356,7 +355,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   useDeskAgentOpens();
 
   if (!desk) return null;
-  const working = jobs.filter((job) => job.state === "working").length;
+  const working = jobs.filter(jobWorking).length;
   // The card or chip that opened what shows is marked (B16).
   const shownJob = place.session ? (jobs.find((job) => job.pane_id === place.session)?.id ?? null) : null;
   // Desk's waiting messages stand over its box as a session's do (B30, B31): ■ pauses them, and a refusal of its agent
@@ -413,7 +412,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
           chat={(
             <DeskChatColumn head={<DeskChatHead onGlance={glanceFolded ? () => actions.deskGlanceFold(false) : null} />} composer={composer} tray={tray} scrollRef={scroller}>
               {shown.length === 0 && !answering && queued.length === 0 ? (
-                <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
+                <DeskEmpty working={working} asking={askingCount(jobs)} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
                 <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} held={queuedHeld} live={liveAnswer} working={turnLine} selectedJob={shownJob} {...chatActions} />
               )}
@@ -814,7 +813,6 @@ function DeskLivePanel({ paneId, identity, asleep, actions, deskActions, room }:
   useEffect(() => {
     if (unread) actions.deskJobRead(unread);
   }, [actions, unread]);
-  const write = () => useUiStore.getState().setDeskRoom((now) => openSession(now, paneId, { answer: true }));
   return (
     <>
     <SessionCrumb title={title} kind={row?.agent_kind ?? job?.agent_kind ?? null} actions={actions} />
@@ -854,7 +852,6 @@ function DeskLivePanel({ paneId, identity, asleep, actions, deskActions, room }:
         />
         </>
       }
-      ask={job?.state === "asking" ? <DeskSessionAsk paneId={paneId} deviceId={row?.device_id ?? null} job={job} row={row} actions={actions} onWrite={write} /> : null}
       asks={row?.open_asks?.items}
       onAsk={(id, status) => {
         const asking = row ? askingSession(row) : null;
@@ -926,16 +923,6 @@ function useWakeFollow(waking: SessionIdentity | null, oldPane: string, done: ()
 
 /** How long a wake is followed before Desk stops looking for its new pane. */
 const WAKE_FOLLOW_MS = 60_000;
-
-/**
- * What the session beside Desk asks, read from its screen with `pane_ask`
- * each time its ask changes (PRD desk-2-ui B14), and answered with
- * `pane_choice` as the phone answers it: a choice is marked, `답하기` sends
- * it once, and one that may have landed or that the screen no longer shows
- * is answered in the terminal from then on; a choice refused stale reads
- * the card again. Until the read lands, the card
- * says what its row or card says, with `직접 쓰기` only.
- */
 
 /**
  * At the head of an Agent tab Desk sent the operator to (PRD desk-2-ui B7):

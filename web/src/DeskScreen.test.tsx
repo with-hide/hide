@@ -586,7 +586,7 @@ describe("Desk's room", () => {
       },
       status: { remote: [{ target_id: "deepbox", state: "connected" }] },
     } as unknown as SnapshotRest;
-    const row = { pane_id: "d:p1", identity_label: "remote worker", agent_kind: "claude", mark: "going", device_id: "deepbox", state: { working: false, asking: false } } as never;
+    const row = { pane_id: "d:p1", identity_label: "remote worker", agent_kind: "claude", mark: "going", device_id: "deepbox", state: { working: true, asking: false } } as never;
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([]));
     const calls = shown.map((path, index) => ({ sessionUpdate: "tool_call", toolCallId: `v${index}`, title: "Bash", kind: "execute", rawInput: { command: `hide file open ${path}` } }));
@@ -595,7 +595,7 @@ describe("Desk's room", () => {
       tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "보여줘" } }, ...calls], parts, sessions: {} } };
     await act(async () => {
       const card: DeskJob = { id: "pane:d:p1", pane_id: "d:p1", title: "remote worker", agent_kind: "claude", project: { workspace_id: "w-deep", label: "deep" }, location: { kind: "checkout", label: "main" },
-        state: "working", queue_position: null, now: "쓰는 중", plan: null, question: null, summary: null, pull_requests: [], outputs, joined: false, reason: null, failure: null, ask: null,
+        state: "open", activity: "working", queue_position: null, now: "쓰는 중", plan: null, question: null, summary: null, pull_requests: [], outputs, joined: false, reason: null, failure: null, ask: null,
         mark: "going", mark_read: false, machine: "deepbox", disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null };
       useShellStore.setState({ rest: remoteRest, agents: [row], deskJobs: { jobs: [], workers: [], named: [card], records: [], moved: [], glance: NO_GLANCE } });
       useUiStore.getState().setDeskRoom((now) => ({ ...now, session: "d:p1" }));
@@ -977,7 +977,7 @@ describe("Desk's room", () => {
     // `fixer` runs in the sidebar but Desk did not start it: it has no card until its conversation opens.
     const row = { pane_id: "w1:p2", identity_label: "fixer", agent_kind: "claude", mark: "going", state: { working: false, asking: false } } as never;
     const card: DeskJob = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
-      state: "working", queue_position: null, now: "고치는 중", plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
+      state: "open", activity: "working", queue_position: null, now: "고치는 중", plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
       mark: "going", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null };
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([{ kind: "user", id: 1, text: "@session(w1:p2 fixer) 어디까지 왔어?", at_ms: 0, mentions: [fixer] }]));
@@ -1160,7 +1160,7 @@ describe("Desk's room", () => {
 
   it("opens beside Desk the session a turn starts, as soon as its pane is there (frame J, 가-2)", async () => {
     const card = (pane: string | null): DeskJob => ({ id: "intent-1", pane_id: pane, title: "Windows 설치 폴더 OneDrive 문제", agent_kind: "codex", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
-      state: pane ? "working" : "starting", queue_position: null, now: null, plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
+      state: pane ? "open" : "starting", activity: pane ? "working" : null, queue_position: null, now: null, plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
       mark: null, mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null });
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([{ kind: "user", id: 1, text: "고쳐 줘", at_ms: 0, mentions: [] }]));
@@ -1175,7 +1175,7 @@ describe("Desk's room", () => {
   it("gives the keyboard to the box of the session whose 답하기 was pressed, open or not, and none to a session opened later", async () => {
     const row = { pane_id: "w1:p5", device_id: "local", identity_label: "asker", agent_kind: "claude", mark: "turn", state: { working: false, asking: true } } as never;
     const card: DeskJob = { id: "intent-1", pane_id: "w1:p5", title: "asker", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
-      state: "asking", queue_position: null, now: null, plan: null, question: "Which one?", summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: "question",
+      state: "open", activity: "asking", queue_position: null, now: null, plan: null, question: "Which one?", summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: "question",
       mark: "turn", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 5, read: true, mission: null, workers: [], agent_id: null };
     const sessionBox = () => document.body.querySelector<HTMLTextAreaElement>("[data-desk-thread-panel] [data-desk-composer-input]");
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
@@ -1208,7 +1208,7 @@ describe("Desk's room", () => {
   it("ends a 답하기 press when its pane closes before its box stands, so the pane it resumes in takes no keyboard", async () => {
     const row = { pane_id: "w1:p5", device_id: "local", identity_label: "asker", agent_kind: "claude", mark: "turn", state: { working: false, asking: true } } as never;
     const card: DeskJob = { id: "intent-1", pane_id: "w1:p5", title: "asker", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
-      state: "asking", queue_position: null, now: null, plan: null, question: "Which one?", summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: "question",
+      state: "open", activity: "asking", queue_position: null, now: null, plan: null, question: "Which one?", summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: "question",
       mark: "turn", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 5, read: true, mission: null, workers: [], agent_id: null };
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([{ kind: "user", id: 1, text: "물어봐", at_ms: 0, mentions: [] }, { kind: "job", id: 2, job_id: "intent-1" }]));
@@ -1232,7 +1232,7 @@ describe("Desk's room", () => {
   it("reads what the session beside Desk asks and answers it as the phone does, once (B14)", async () => {
     const row = { pane_id: "w1:p2", device_id: "local", identity_label: "fixer", agent_kind: "claude", mark: "turn", state: { working: false, asking: true } } as never;
     const card: DeskJob = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
-      state: "asking", queue_position: null, now: null, plan: null, question: "Delete the old captures?", summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: "question",
+      state: "open", activity: "asking", queue_position: null, now: null, plan: null, question: "Delete the old captures?", summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: "question",
       mark: "turn", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 5, read: true, mission: null, workers: [], agent_id: null };
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([]));

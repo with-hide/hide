@@ -49,7 +49,7 @@ export type SleepView = { sleep: AgentSleep; onWake: (() => void) | null; onFres
  */
 export function conversationSleep(
   paneId: string,
-  from: { row: { sleep?: AgentSleep | null } | null; job?: { state: string } | null; session?: SleepingSession | null },
+  from: { row: { sleep?: AgentSleep | null } | null; job?: { activity: string | null } | null; session?: SleepingSession | null },
   actions: Pick<Actions, "wakeAgent" | "wakeSleepingSession">,
   onSessionWake?: () => void,
 ): SleepView | null {
@@ -64,6 +64,6 @@ export function conversationSleep(
     } : null;
     return { sleep, onWake: wake, onFresh: null };
   }
-  if (from.job?.state === "sleeping") return { sleep: { state: "sleeping", since_unix_ms: 0 }, onWake: null, onFresh: null };
+  if (from.job?.activity === "sleeping") return { sleep: { state: "sleeping", since_unix_ms: 0 }, onWake: null, onFresh: null };
   return null;
 }

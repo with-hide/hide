@@ -28,9 +28,9 @@ afterEach(async () => {
 });
 
 describe("the session panel's head (Doop H 다, operator decision 2026-11-25)", () => {
-  const job = (state: DeskJob["state"]): DeskJob => ({
+  const job = (activity: DeskJob["activity"]): DeskJob => ({
     id: "pane:w1:p2", agent_id: null, pane_id: "w1:p2", title: "끊긴 뒤 로그인 고치기", agent_kind: "claude", project: { workspace_id: "w", label: "repo" }, location: { kind: "checkout", label: "main" },
-    state, queue_position: null, now: null, plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
+    state: "open", activity, queue_position: null, now: null, plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
     mark: "going", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: true, mission: null, workers: [],
   });
 

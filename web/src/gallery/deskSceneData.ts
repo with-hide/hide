@@ -61,11 +61,10 @@ export const SESSIONS = {
   room: { name: "1a-desk-room", mark: "done", agent_kind: "codex" } satisfies DeskSessionRef,
 };
 
-/** The mark the sidebar row would carry for a state: hided sends it with the job; the gallery invents it the same way. */
+/** The mark the sidebar row would carry for what its agent does: hided sends it with the job; the gallery invents it the same way. */
 function markOf(job: DeskJob): RowMark | null {
-  switch (job.state) {
-    case "starting":
-      return "waiting";
+  if (job.state === "starting") return "waiting";
+  switch (job.activity) {
     case "working":
       return "going";
     case "asking":
@@ -74,7 +73,7 @@ function markOf(job: DeskJob): RowMark | null {
       return job.read ? "quiet" : "done";
     case "sleeping":
       return "asleep";
-    default:
+    case null:
       return null;
   }
 }
@@ -92,7 +91,7 @@ const base = (now: number) => (id: string, title: string, extra: Partial<DeskJob
   id, title, agent_id: `agent-${id}`, pane_id: `w1:${id}`, agent_kind: "claude",
   project: { workspace_id: "herdr-ide", label: "herdr-ide" },
   location: { kind: "checkout", label: "herdr-ide" },
-  state: "working", queue_position: null, now: null, plan: null, question: null, summary: null,
+  state: "open", activity: "working", queue_position: null, now: null, plan: null, question: null, summary: null,
   pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null, mark: null, mark_read: false,
   machine: null, disconnected: false, changed_at_unix_ms: now - 5 * MINUTE, read: false, mission: null, workers: [],
 }, extra);
@@ -104,11 +103,11 @@ export function storyJobs(now: number): Record<string, DeskJob> {
   const job = base(now);
   const jobs: DeskJob[] = [
     job("mention", "mention 버튼 정리", { location: MENTION_BRANCH, now: "테스트 돌리는 중", plan: { done: 6, total: 14 }, pull_requests: [{ number: 1903, state: "pending" }], changed_at_unix_ms: now - 12 * MINUTE }),
-    job("gallery", "갤러리 캡처 비교", { state: "asking", ask: "question", question: "다크 모드도 찍을까요?", outputs: [OUTPUTS.compareLight, OUTPUTS.light1, OUTPUTS.light2], changed_at_unix_ms: now - 9 * MINUTE }),
-    job("release", "release 노트 초안", { state: "done", summary: "초안을 notes.md에 썼어요", outputs: [OUTPUTS.notes], changed_at_unix_ms: now - 62 * MINUTE }),
-    job("record", "record-now", { state: "asking", ask: "approval", question: "rm -rf web/dist", agent_kind: "codex", changed_at_unix_ms: now - 2 * MINUTE }),
+    job("gallery", "갤러리 캡처 비교", { activity: "asking", ask: "question", question: "다크 모드도 찍을까요?", outputs: [OUTPUTS.compareLight, OUTPUTS.light1, OUTPUTS.light2], changed_at_unix_ms: now - 9 * MINUTE }),
+    job("release", "release 노트 초안", { activity: "done", summary: "초안을 notes.md에 썼어요", outputs: [OUTPUTS.notes], changed_at_unix_ms: now - 62 * MINUTE }),
+    job("record", "record-now", { activity: "asking", ask: "approval", question: "rm -rf web/dist", agent_kind: "codex", changed_at_unix_ms: now - 2 * MINUTE }),
     job("conductor", "Desk 1차", { now: "Conductor · ui 다듬기 외 1", mission: MISSION, workers: ["w1:1a", "w1:1b"], changed_at_unix_ms: now - 22 * MINUTE }),
-    job("1a", "1a Desk 방", { state: "done", read: true, location: { kind: "worktree", label: "feat/desk-host" }, summary: "리뷰 기다림", pull_requests: [{ number: 1905, state: "pending" }], agent_kind: "codex" }),
+    job("1a", "1a Desk 방", { activity: "done", read: true, location: { kind: "worktree", label: "feat/desk-host" }, summary: "리뷰 기다림", pull_requests: [{ number: 1905, state: "pending" }], agent_kind: "codex" }),
     job("1b", "1b 스레드 화면", { location: { kind: "worktree", label: "feat/desk-thread" }, now: "ThreadView 턴 묶기", changed_at_unix_ms: now - 6 * MINUTE }),
     job("reel", "reel 자막 수정", { project: { workspace_id: "creator", label: "creator" }, location: { kind: "checkout", label: "creator" }, machine: "mini", disconnected: true, now: "자막 타이밍 맞추는 중", agent_kind: "codex", changed_at_unix_ms: now - 31 * MINUTE }),
   ];
@@ -120,21 +119,24 @@ export function everyStateJobs(now: number): { label: string; job: DeskJob }[] {
   const job = base(now);
   return [
     { label: "작업 중 · 작업 단계 칩", job: job("c-working", "mention 버튼 정리", { location: MENTION_BRANCH, now: "테스트 돌리는 중", plan: { done: 6, total: 14 } }) },
-    { label: "물어봄 · 결과물 칩", job: job("c-asking", "갤러리 캡처 비교", { state: "asking", ask: "question", question: "다크 모드도 찍을까요?", outputs: [OUTPUTS.compareLight, OUTPUTS.light1, OUTPUTS.light2] }) },
-    { label: "허락 기다림 (터미널의 권한 질문)", job: job("c-permission", "record-now", { state: "asking", ask: "approval", question: "rm -rf web/dist", agent_kind: "codex" }) },
-    { label: "끝남 · PR", job: job("c-done", "pane header @ hover", { state: "done", location: { kind: "worktree", label: "desk/pane-mention" }, summary: "PR을 열었고 CI 통과", pull_requests: [{ number: 1910, state: "mergeable" }] }) },
+    { label: "물어봄 · 결과물 칩", job: job("c-asking", "갤러리 캡처 비교", { activity: "asking", ask: "question", question: "다크 모드도 찍을까요?", outputs: [OUTPUTS.compareLight, OUTPUTS.light1, OUTPUTS.light2] }) },
+    { label: "허락 기다림 (터미널의 권한 질문)", job: job("c-permission", "record-now", { activity: "asking", ask: "approval", question: "rm -rf web/dist", agent_kind: "codex" }) },
+    { label: "끝남 · PR", job: job("c-done", "pane header @ hover", { activity: "done", location: { kind: "worktree", label: "desk/pane-mention" }, summary: "PR을 열었고 CI 통과", pull_requests: [{ number: 1910, state: "mergeable" }] }) },
     { label: "미션 (Conductor)", job: job("c-conductor", "Desk 1차", { now: "Conductor · 지금 ui 다듬기 외 1", mission: MISSION }) },
-    { label: "미션 판단", job: job("c-decision", "Desk 1차", { state: "asking", ask: "decision", question: "1b를 공용 부품 머지 전에 시작할까요?", mission: { ...MISSION, turn: "decision" } }) },
-    { label: "작업 단계 검토", job: job("c-review", "문서 정리", { state: "asking", ask: "plan_review", question: "5단계", plan: { done: 0, total: 5 }, agent_kind: "codex" }) },
+    { label: "미션 판단", job: job("c-decision", "Desk 1차", { activity: "asking", ask: "decision", question: "1b를 공용 부품 머지 전에 시작할까요?", mission: { ...MISSION, turn: "decision" } }) },
+    { label: "작업 단계 검토", job: job("c-review", "문서 정리", { activity: "asking", ask: "plan_review", question: "5단계", plan: { done: 0, total: 5 }, agent_kind: "codex" }) },
     { label: "다른 기기", job: job("c-mini", "reel 자막 수정", { project: { workspace_id: "creator", label: "creator" }, machine: "mini", now: "자막 타이밍 맞추는 중", agent_kind: "codex" }) },
     { label: "다른 기기, 연결 끊김 (흐림)", job: job("c-mini-off", "reel 자막 수정", { project: { workspace_id: "creator", label: "creator" }, machine: "mini", disconnected: true, now: "12분 전까지의 기록", agent_kind: "codex" }) },
     { label: "나도 참여 중", job: job("c-joined", "mention 버튼 정리", { location: MENTION_BRANCH, joined: true, now: "아이콘 14로 줄이는 중" }) },
-    { label: "대기", job: job("c-queued", "로그 정리", { state: "queued", queue_position: 2 }) },
-    { label: "실패", job: job("c-failed", "릴스 썸네일 3안", { state: "failed", reason: "spawn_failed", project: { workspace_id: "creator", label: "creator" }, agent_kind: "codex" }) },
-    { label: "끝까지 못 감", job: job("c-exited", "의존성 올리기", { state: "failed", reason: "exited", location: { kind: "worktree", label: "desk/bump-deps" } }) },
-    { label: "취소됨", job: job("c-cancelled", "아이콘 크기 맞추기", { state: "cancelled" }) },
-    { label: "잠듦", job: job("c-asleep", "문서 정리", { state: "sleeping", agent_kind: "codex" }) },
-    { label: "보관됨 (흐림)", job: job("c-archived", "로그 정리", { state: "archived" }) },
+    { label: "대기", job: job("c-queued", "로그 정리", { state: "queued", activity: null, queue_position: 2 }) },
+    { label: "실패", job: job("c-failed", "릴스 썸네일 3안", { state: "failed", activity: null, reason: "spawn_failed", project: { workspace_id: "creator", label: "creator" }, agent_kind: "codex" }) },
+    { label: "끝까지 못 감", job: job("c-exited", "의존성 올리기", { state: "failed", activity: null, reason: "exited", location: { kind: "worktree", label: "desk/bump-deps" } }) },
+    { label: "취소됨", job: job("c-cancelled", "아이콘 크기 맞추기", { state: "cancelled", activity: null }) },
+    { label: "잠듦", job: job("c-asleep", "문서 정리", { activity: "sleeping", agent_kind: "codex" }) },
+    { label: "내 탭으로 옮김 · 작업 중", job: job("c-moved-working", "파리크라상 교육 자료 구성안", { state: "moved_out", now: "Drive에서 입문반 파일 찾는 중" }) },
+    { label: "내 탭으로 옮김 · 물어봄", job: job("c-moved-asking", "파리크라상 교육 자료 구성안", { state: "moved_out", activity: "asking", ask: "question", question: "구성안을 이대로 확정할까요?" }) },
+    { label: "내 탭으로 옮김 · 끝남 (흐림)", job: job("c-moved-done", "아이콘 크기 맞추기", { state: "moved_out", activity: "done", summary: "아이콘을 14로 줄였어요" }) },
+    { label: "보관됨 (흐림)", job: job("c-archived", "로그 정리", { state: "archived", activity: null }) },
   ];
 }
 
@@ -450,40 +452,40 @@ export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
     { title: "herdr-ide", project: "herdr-ide", lines: [
       { label: "Desk 설계", sessions: [
         { name: "desk-planner", kind: "claude", mark: "going", branch: "desk/planner", extra: { now: "D-86 카드 문구 다듬는 중", plan: { done: 2, total: 4 } }, minutes: 21 },
-        { name: "desk-conductor", kind: "claude", mark: "quiet", extra: { state: "done", summary: "미션 노드 넷 시작함", mission: MISSION }, parent: "desk-planner", minutes: 40 },
-        { name: "desk-design-critic", kind: "claude", mark: "quiet", extra: { state: "done", summary: "목업 5번 승인 의견" }, parent: "desk-planner", minutes: 33 },
+        { name: "desk-conductor", kind: "claude", mark: "quiet", extra: { activity: "done", summary: "미션 노드 넷 시작함", mission: MISSION }, parent: "desk-planner", minutes: 40 },
+        { name: "desk-design-critic", kind: "claude", mark: "quiet", extra: { activity: "done", summary: "목업 5번 승인 의견" }, parent: "desk-planner", minutes: 33 },
       ] },
       { label: "startup 적용", sessions: [
-        { name: "cf-startup-apply", kind: "claude", mark: "quiet", extra: { state: "done", summary: "Cloudflare 신청서 냈어요", pull_requests: [{ number: 1918, state: "merged" }] }, minutes: 95 },
-        { name: "gcp-startup-apply", kind: "claude", mark: "asleep", extra: { state: "sleeping" }, minutes: 180 },
+        { name: "cf-startup-apply", kind: "claude", mark: "quiet", extra: { activity: "done", summary: "Cloudflare 신청서 냈어요", pull_requests: [{ number: 1918, state: "merged" }] }, minutes: 95 },
+        { name: "gcp-startup-apply", kind: "claude", mark: "asleep", extra: { activity: "sleeping" }, minutes: 180 },
       ] },
       { label: "agent journey", sessions: [
         { name: "agent-journey", kind: "codex", mark: "going", branch: "journey-agy", extra: { now: "Linux e2e 결과 기다리는 중", plan: { done: 3, total: 5 }, pull_requests: [{ number: 1921, state: "pending" }], outputs: [OUTPUTS.compareLight, OUTPUTS.notes] }, parent: "agent-14586", minutes: 14 },
         { name: "journey-impl", kind: "claude", mark: "going", branch: "journey-agy", extra: { now: "agy 핀 고정 확인" }, parent: "agent-journey", minutes: 9 },
-        { name: "agent-14586", kind: "claude", mark: "turn", extra: { state: "asking", ask: "question", question: "Windows 칸은 다음 PR로 미룰까요?" }, minutes: 3 },
+        { name: "agent-14586", kind: "claude", mark: "turn", extra: { activity: "asking", ask: "question", question: "Windows 칸은 다음 PR로 미룰까요?" }, minutes: 3 },
       ] },
       { label: "메모리 승격 3건", sessions: [
-        { name: "memory-promote-m400", kind: "claude", mark: "quiet", extra: { state: "done", summary: "AGENTS.md로 옮김" }, minutes: 50 },
-        { name: "m252", kind: "claude", mark: "quiet", extra: { state: "done", summary: "카드 합침" }, minutes: 52 },
+        { name: "memory-promote-m400", kind: "claude", mark: "quiet", extra: { activity: "done", summary: "AGENTS.md로 옮김" }, minutes: 50 },
+        { name: "m252", kind: "claude", mark: "quiet", extra: { activity: "done", summary: "카드 합침" }, minutes: 52 },
         { name: "m349", kind: "claude", mark: null },
       ] },
       { label: "CI 정리", sessions: [
         { name: "flaky-web-top", kind: "codex", mark: "going", branch: "fix/flaky-web", extra: { now: "tab-wait 도우미로 8개 옮기는 중" }, minutes: 27 },
-        { name: "macos-queue", kind: "codex", mark: "quiet", extra: { state: "done", summary: "패키지 빌드 7분으로" }, minutes: 70 },
+        { name: "macos-queue", kind: "codex", mark: "quiet", extra: { activity: "done", summary: "패키지 빌드 7분으로" }, minutes: 70 },
         { name: "premerge-lock", kind: "claude", mark: "waiting", extra: { now: "앞 PR 머지 기다림" }, minutes: 18 },
         { name: "nightly-triage", kind: "claude", mark: "going", extra: { now: "어젯밤 실패 둘 읽는 중" }, minutes: 6 },
       ] },
     ] },
     { title: "creator", project: "creator", lines: [
       { label: "캐러셀 비교", sessions: [
-        { name: "carousel-astra", kind: "codex", mark: "asleep", extra: { state: "sleeping" }, minutes: 120 },
-        { name: "carousel-fable", kind: "claude", mark: "asleep", extra: { state: "sleeping" }, minutes: 121 },
-        { name: "carousel-opus", kind: "claude", mark: "asleep", extra: { state: "sleeping" }, minutes: 122 },
+        { name: "carousel-astra", kind: "codex", mark: "asleep", extra: { activity: "sleeping" }, minutes: 120 },
+        { name: "carousel-fable", kind: "claude", mark: "asleep", extra: { activity: "sleeping" }, minutes: 121 },
+        { name: "carousel-opus", kind: "claude", mark: "asleep", extra: { activity: "sleeping" }, minutes: 122 },
       ] },
       { label: "릴스", sessions: [
         { name: "reel-captions", kind: "codex", mark: "going", extra: { now: "자막 타이밍 맞추는 중", outputs: [OUTPUTS.light1] }, minutes: 11 },
-        { name: "reel-thumbnail", kind: "claude", mark: "turn", extra: { state: "asking", ask: "question", question: "3안 중 어느 것?" }, minutes: 4 },
-        { name: "reel-caption-post", kind: "claude", mark: "quiet", extra: { state: "done", summary: "캡션 초안 둘" }, minutes: 44 },
+        { name: "reel-thumbnail", kind: "claude", mark: "turn", extra: { activity: "asking", ask: "question", question: "3안 중 어느 것?" }, minutes: 4 },
+        { name: "reel-caption-post", kind: "claude", mark: "quiet", extra: { activity: "done", summary: "캡션 초안 둘" }, minutes: 44 },
       ] },
     ] },
   ];

@@ -90,11 +90,11 @@ it("offers no wake while the core does not, and draws a Desk card that reads asl
   const unoffered = await card({ row: null, session: session({ wake_available: false }) });
   expect(unoffered.container.querySelector("[data-pane-sleep]")?.getAttribute("data-pane-sleep")).toBe("sleeping");
   expect(unoffered.container.querySelector("button")).toBeNull();
-  const job = await card({ row: null, job: { state: "sleeping" } });
+  const job = await card({ row: null, job: { activity: "sleeping" } });
   expect(job.container.querySelector("[data-pane-sleep]")?.getAttribute("data-pane-sleep")).toBe("sleeping");
   expect(job.container.querySelector("button")).toBeNull();
 });
 
 it("is nothing for an awake session, and a live row outranks a sleeping session of the same name", async () => {
-  expect(conversationSleep("w1:p2", { row: { sleep: null }, job: { state: "working" }, session: session({}) }, { wakeAgent: vi.fn(), wakeSleepingSession: vi.fn() })).toBeNull();
+  expect(conversationSleep("w1:p2", { row: { sleep: null }, job: { activity: "working" }, session: session({}) }, { wakeAgent: vi.fn(), wakeSleepingSession: vi.fn() })).toBeNull();
 });

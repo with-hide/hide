@@ -1,7 +1,7 @@
 import { ChevronRightIcon, GitBranchIcon, GlobeIcon, ImageIcon } from "lucide-react";
 import { pullLabel } from "../../codeHost";
 import type { ReactNode } from "react";
-import { jobDimmed, type DeskAsk, type DeskJob, type DeskJobFailure, type DeskOutput } from "../../desk";
+import { jobDimmed, jobWorking, type DeskAsk, type DeskJob, type DeskJobFailure, type DeskOutput } from "../../desk";
 import { AgentMark } from "../../AgentMark";
 import { fileIcon } from "../../fileIcons";
 import { useInterfaceTranslation } from "../../i18n/client";
@@ -30,13 +30,9 @@ const ASK_VERB: Record<DeskAsk, MessageKey> = {
   blocked: "desk.ask.blocked",
 };
 
-/** A job's state in its words (B21-B24, B36-B39): what the second line says when nothing more specific does. */
-export function jobStateWords(t: T, job: DeskJob): string {
-  switch (job.state) {
-    case "queued":
-      return t("desk.job.queued", { position: job.queue_position ?? 0 });
-    case "starting":
-      return t("desk.job.starting");
+/** What a job's agent does in words, from its row's activity; none while it has no row. */
+function activityWords(t: T, job: DeskJob): string | null {
+  switch (job.activity) {
     case "working":
       return t("desk.job.working");
     case "asking":
@@ -45,14 +41,33 @@ export function jobStateWords(t: T, job: DeskJob): string {
       return t("desk.job.done");
     case "sleeping":
       return t("desk.job.sleeping");
+    case null:
+      return null;
+  }
+}
+
+/**
+ * A job's state in its words (B21-B24, B36-B39): what the second line says
+ * when nothing more specific does. A job not ended for Desk says what its
+ * agent does; one moved out of Desk's group says both facts.
+ */
+export function jobStateWords(t: T, job: DeskJob): string {
+  const doing = activityWords(t, job);
+  switch (job.state) {
+    case "queued":
+      return t("desk.job.queued", { position: job.queue_position ?? 0 });
+    case "starting":
+      return t("desk.job.starting");
+    case "open":
+      return doing ?? t("desk.job.working");
     case "failed":
       return t("desk.job.failed");
     case "cancelled":
       return t("desk.job.cancelled");
     case "closed":
-      return t("desk.job.closed");
+      return doing ?? t("desk.job.closed");
     case "moved_out":
-      return t("desk.job.moved_out");
+      return doing ? `${t("desk.job.moved_out")} · ${doing}` : t("desk.job.moved_out");
     case "archived":
       return t("desk.job.archived");
   }
@@ -90,18 +105,31 @@ function failedWords(t: T, job: DeskJob): string | null {
   return job.failure ? t(FAILURE[job.failure]) : jobReasonWords(t, job.reason);
 }
 
-/** The second line's words after the place (B24): the verb and what follows it. */
-function jobWords(t: T, job: DeskJob): { verb: string | null; words: string | null; tone: "warning" | "destructive" | null; mono: boolean } {
+type Words = { verb: string | null; words: string | null; tone: "warning" | "destructive" | null; mono: boolean };
+
+/** What the agent of a job its place does not end does, in the second line's words. */
+function doingWords(t: T, job: DeskJob): Words | null {
+  if (job.activity === "asking") return { verb: activityWords(t, job), words: job.question ?? null, tone: "warning", mono: job.ask === "approval" };
+  if (job.activity === "done") return { verb: t("desk.job.done"), words: job.summary ?? null, tone: null, mono: false };
+  if (job.activity === "sleeping") return { verb: t("desk.job.sleeping"), words: null, tone: null, mono: false };
+  if (jobWorking(job)) return { verb: null, words: job.now ?? t("desk.job.working"), tone: null, mono: false };
+  return null;
+}
+
+/** The second line's words after the place (B24): the verb and what follows it; a job moved out of Desk's group leads with that, then what its agent does. */
+function jobWords(t: T, job: DeskJob): Words {
   if (job.disconnected) return { verb: t("desk.job.disconnected"), words: job.now ?? null, tone: null, mono: false };
   switch (job.state) {
-    case "working":
-      return { verb: null, words: job.now ?? t("desk.job.working"), tone: null, mono: false };
-    case "asking":
-      return { verb: jobStateWords(t, job), words: job.question ?? null, tone: "warning", mono: job.ask === "approval" };
-    case "done":
-      return { verb: t("desk.job.done"), words: job.summary ?? null, tone: null, mono: false };
     case "failed":
       return { verb: t("desk.job.failed"), words: failedWords(t, job), tone: "destructive", mono: false };
+    case "open":
+    case "closed":
+    case "moved_out": {
+      const doing = doingWords(t, job);
+      const place = job.state === "moved_out" ? t("desk.job.moved_out") : null;
+      if (!doing) return { verb: jobStateWords(t, job), words: null, tone: null, mono: false };
+      return { ...doing, verb: [place, doing.verb].filter(Boolean).join(" · ") || null };
+    }
     default:
       return { verb: jobStateWords(t, job), words: null, tone: null, mono: false };
   }
@@ -114,10 +142,10 @@ function jobWords(t: T, job: DeskJob): { verb: string | null; words: string | nu
  * connected keep their word, since no head says those; anything else with
  * nothing to say has no words.
  */
-function glanceWords(t: T, job: DeskJob): ReturnType<typeof jobWords> {
+function glanceWords(t: T, job: DeskJob): Words {
   const all = jobWords(t, job);
-  if (job.disconnected || job.state === "asking" || job.state === "failed") return all;
-  const words = job.state === "working" ? job.now : job.state === "done" ? job.summary : null;
+  if (job.disconnected || job.activity === "asking" || job.state === "failed") return all;
+  const words = jobWorking(job) ? job.now : job.activity === "done" ? job.summary : null;
   return { verb: null, words: words ?? null, tone: null, mono: false };
 }
 
@@ -251,7 +279,7 @@ export type DeskJobCardActions = {
 export function JobChip({ job, onOutput, onMission }: { job: DeskJob; onOutput: (output: DeskOutput) => void; onMission: (missionId: string) => void }) {
   const { t } = useInterfaceTranslation();
   if (job.mission) return <DeskMissionChip mission={job.mission} onOpen={onMission} />;
-  if (job.plan && (job.state === "working" || job.ask === "plan_review")) return <DeskPlanChip plan={job.plan} review={job.ask === "plan_review"} />;
+  if (job.plan && (jobWorking(job) || job.ask === "plan_review")) return <DeskPlanChip plan={job.plan} review={job.ask === "plan_review"} />;
   if (job.machine) return <DeviceChip label={job.machine} />;
   if (job.joined) return <Badge variant="outline" data-desk-job-joined="true">{t("desk.job.joined")}</Badge>;
   if (job.outputs.length) return <OutputsChip outputs={job.outputs} onOpen={onOutput} />;
@@ -267,9 +295,8 @@ function action(t: T, job: DeskJob, actions: DeskJobCardActions): ReactNode {
       {more ? <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : null}
     </Button>
   );
+  if (job.activity === "asking") return words("answer", t("desk.job.answer"), () => actions.onAnswer(job));
   switch (job.state) {
-    case "asking":
-      return words("answer", t("desk.job.answer"), () => actions.onAnswer(job));
     case "failed":
       return words("retry", t("desk.action.retry"), () => actions.onRetry(job));
     case "queued":
@@ -292,12 +319,13 @@ function action(t: T, job: DeskJob, actions: DeskJobCardActions): ReactNode {
  */
 export function DeskJobCard({ job, selected = false, ...actions }: { job: DeskJob; selected?: boolean } & DeskJobCardActions) {
   const { t } = useInterfaceTranslation();
-  const ended = jobDimmed(job.state);
+  const ended = jobDimmed(job);
   return (
     <article
       className={cn("relative min-w-0 rounded-lg border border-border", selected ? "bg-accent" : "hover:bg-accent")}
       aria-label={job.title}
       data-desk-job={job.state}
+      data-desk-job-activity={job.activity ?? undefined}
       data-desk-job-id={job.id}
       data-desk-job-selected={selected ? "true" : undefined}
     >
