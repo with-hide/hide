@@ -155,6 +155,16 @@ class WriteBackTest(unittest.TestCase):
 
 
 class Account(unittest.TestCase):
+    def test_the_signed_in_journey_asks_whether_it_runs_on_the_journey_account(self):
+        from agent_journey import cli
+        from agent_live_check.protection import ProtectionError
+        with mock.patch.object(cli, "journey_account", return_value=False) as asked:
+            # Refused after the question, for an agent no adapter declares.
+            with self.assertRaises(ProtectionError):
+                cli.main(["--mode", "local", "--agents", "no-such-agent"])
+        asked.assert_called_once()
+
+
     def test_an_administrator_is_never_the_journey_account(self):
         with tempfile.TemporaryDirectory() as home:
             (Path(home) / account.MARKER).write_text("")

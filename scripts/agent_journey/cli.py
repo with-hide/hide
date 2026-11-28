@@ -28,7 +28,7 @@ from agent_live_check.runtime import clean_env
 from agent_live_check.sandbox import WriteSandbox
 from agent_live_check.system import STOP_SIGNALS, WINDOWS, exe, git as git_program, launcher, tool_path
 
-from . import account, ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, hook_records, memory, opencode_service, profiles
+from . import ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, hook_records, memory, opencode_service, profiles
 from .controller import Controller
 from .contract import load_contract
 from .failure import FailureLogs, drop_on_pass
@@ -38,7 +38,7 @@ from .own_runtime import OwnRuntime
 from .routes import allow_hook_records, allow_hook_route, operator_routing
 from .local import (ROUTES, TRUST, allow_one_shot_references, claude_config, claude_session_folders,
                     disable_hide_ai, opencode_model, operator_trust, route, wrapper)
-from .account import WriteBack, write_back
+from .account import WriteBack, dedicated as journey_account, write_back
 from .report import save, table_lines
 
 KIT_SECONDS = 90
@@ -559,7 +559,7 @@ def main(argv=None):
     if args.fake_model and args.fixture_bin:
         refuse("fake_model_or_fixture_bin: the stand-ins answer for themselves")
     fake = args.fake_model
-    dedicated = local and not fake and account.dedicated()
+    dedicated = local and not fake and journey_account()
     if not local and not fake and not args.fixture_bin:
         # CI signs no agent in (operator decision, 2026-10-27); local mode
         # measures the operator's logins on the Mac.
