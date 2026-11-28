@@ -74,6 +74,16 @@ So every review covers the perspectives below, and names the perspective of each
 - A gap on a system or a device that has no cell in `docs/INSTALL.md`, What each system supports, with its reason and what would close it.
 - `gh`, `glab`, GitHub or GitLab words in core logic outside the host interface: GitLab and a later Bitbucket should need an adapter and nothing else.
 
+### 8. The command line
+
+`hided/AGENTS.md` owns the rule; a review checks the change against it.
+
+- A second name for a thing that has one, or a word used with a second meaning (a topic's name as a new topic's option, an option that takes another value type elsewhere).
+- A command under a topic other than the thing it changes, a verb with no line in the registry, or an option that does a verb's job.
+- A rename that drops the old spelling, removes or renames an entry, an argument or an envelope key of the contract, or keeps a second copy of the retired words outside the one table (`hide-shell/src/retired.rs`).
+- A command word changed in the parser and left in what teaches it (the guide, a skill stub, a `next_action`, the site notes).
+- A command only a program calls that `hide --help` prints with no reason, or one kept with no caller.
+
 ### Reviewing a cap
 
 A reviewer asks these four questions of every cap the change adds or changes; a failed answer is an ordinary finding.

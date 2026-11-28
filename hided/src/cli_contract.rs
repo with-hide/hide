@@ -13,6 +13,7 @@
 //! is the committed copy a review sees change.
 
 use hide_core::delivery::{BODY_LIMIT, BUNDLE_LETTERS};
+use hide_shell::retired;
 use serde_json::{Map, Value, json};
 
 /// The document's own format; a caller that reads another refuses it.
@@ -2706,6 +2707,119 @@ pub const COMMANDS: &[Spec] = &[
     },
 ];
 
+/// A topic inside a topic: its next word is the command's verb.
+const SUBTOPICS: &[&[&str]] = &[&["agent", "profile"]];
+
+/// What each verb of the table means, one line each: a command's verb is
+/// the word after its topic (`SUBTOPICS`). A new verb adds its line here,
+/// saying what none of the others says; reach first for `list`, `show`,
+/// `add`, `edit`, `remove` and the pairs (`hided/AGENTS.md`, Shape). The
+/// tests fail on a verb of the table that is not here and on a line no
+/// command uses.
+pub const VERBS: &[(&str, &str)] = &[
+    (
+        "accept-ssh",
+        "between two Hides: take the asking machine's key over SSH",
+    ),
+    ("ack", "mark a letter read"),
+    ("add", "add a thing to the topic's list"),
+    ("address", "set the address a device is reached at"),
+    ("allow", "let a waiting device pair with this one"),
+    ("approve", "approve a plan that waits for review"),
+    ("archive", "close an ended agent's pane and keep its record"),
+    (
+        "ask-human",
+        "ask the operator for a step only a person takes",
+    ),
+    ("assign", "give a watch to an observer"),
+    ("branch", "wait for a branch"),
+    (
+        "cancel",
+        "withdraw a letter or a wait before it is answered",
+    ),
+    (
+        "carry",
+        "between two Hides: carry a call to the other machine",
+    ),
+    ("catalog", "list what can be started, for choosing"),
+    ("close", "end a mission with its outcome"),
+    ("create", "create a mission"),
+    ("decide", "put a decision in front of the operator"),
+    ("default", "make a profile the agent's default"),
+    ("defect", "record a defect one node found in another"),
+    ("delay", "say why a mission waits, and until when"),
+    ("drop", "drop a plan"),
+    ("edit", "change fields of a thing"),
+    ("end", "end an agent"),
+    ("fold-ask", "fold an ask that was answered elsewhere"),
+    ("gate", "record the operator's word on a node's gate"),
+    ("join", "connect a bot with a code"),
+    ("leave", "disconnect a bot"),
+    ("list", "list the topic's things"),
+    (
+        "look-ssh",
+        "between two Hides: read what the other machine has",
+    ),
+    ("mission", "wait for a mission or one of its nodes"),
+    ("node", "change one node or step of a plan"),
+    ("off", "turn a store item off for agents"),
+    ("on", "turn a store item on for agents"),
+    ("open", "open a pane"),
+    ("pair", "pair a phone"),
+    ("pause", "stop a thing until it is resumed"),
+    ("plan", "set a mission's plan"),
+    ("pr", "wait for a pull request"),
+    ("preview", "read a schedule without saving it"),
+    (
+        "projects-ssh",
+        "between two Hides: list the other machine's projects",
+    ),
+    ("purpose", "set what the checkout is for"),
+    ("read", "read a pane's screen"),
+    ("record", "record a node's finish line"),
+    ("register", "register the agent of a pane"),
+    ("reinstall", "install a profile's agent program again"),
+    ("remove", "remove a thing from the topic's list"),
+    ("rename", "change a thing's name"),
+    ("reopen", "open a closed mission again"),
+    ("reply", "answer a letter"),
+    ("request", "ask to be let in"),
+    ("resume", "start again what pause stopped"),
+    ("retry", "try a failed connection again now"),
+    ("run", "run an automation now"),
+    ("send", "send a letter or keys"),
+    ("set", "set a session's plan"),
+    ("settings", "show a mission's settings"),
+    ("share", "make a link another machine pairs with"),
+    ("show", "show one thing"),
+    ("skip", "skip a node's finish line, with its reason"),
+    ("sleep", "put an agent to sleep"),
+    ("spawn", "start an agent"),
+    ("start", "start a thing"),
+    ("status", "show where a bot stands"),
+    ("stop", "stop a watch"),
+    ("switch", "switch a device to another connection"),
+    ("take", "take a mission over as its Conductor"),
+    (
+        "update",
+        "fetch a newer version of the thing; mcp update replaces a server's reach",
+    ),
+];
+
+/// The verb of `words`, the words after `hide`: the word after the topic
+/// (`SUBTOPICS`), unless the command is its topic alone or a mode (`inbox
+/// --ack`).
+pub fn verb<'a>(words: &[&'a str]) -> Option<&'a str> {
+    let topic = SUBTOPICS
+        .iter()
+        .find(|topic| words.starts_with(topic))
+        .map_or(1, |topic| topic.len());
+    words
+        .get(topic)
+        .copied()
+        .filter(|word| !word.starts_with('-'))
+}
+
 /// The command `args` (the words after `hide`) name, by its longest words.
 /// Whether `topic` is one whose every command the table names.
 pub fn topic(topic: &str) -> bool {
@@ -2813,19 +2927,133 @@ fn command_json(spec: &Spec) -> Value {
     command
 }
 
+/// `spec` as the contract lists it, with the options `table` retired from
+/// it beside its own.
+fn listed(spec: &Spec, table: &retired::Table) -> Value {
+    let mut command = command_json(spec);
+    if hidden(spec) {
+        command["hidden"] = json!(true);
+    }
+    for flags in table
+        .options
+        .iter()
+        .filter(|flags| flags.command == spec.words)
+    {
+        for flag in flags.renamed {
+            let value = spec
+                .options
+                .iter()
+                .find(|option| option.name == flag.now)
+                .and_then(|option| option.value)
+                .filter(|_| flag.arity > 0)
+                .map(value_json);
+            command["options"]
+                .as_array_mut()
+                .expect("options are a list")
+                .push(json!({
+                    "name": flag.old,
+                    "value": value,
+                    "required": false,
+                    "requires": [],
+                    "retired_for": flag.now,
+                }));
+        }
+    }
+    command
+}
+
+/// The contract's commands: each command of the table, followed by each
+/// retired spelling of it (`hide_shell::retired`) as an entry of its own
+/// under its old words, marked with the command it is now. A calling tool
+/// looks a command up by the words it types and refuses a Hide where they
+/// are gone, so a renamed command keeps its entry for good
+/// (`docs/delivery.md`, The contract a calling tool checks). An entry
+/// follows its command, so two branches that each retire one add lines in
+/// two places.
+fn commands(table: &retired::Table) -> Vec<Value> {
+    let mut commands = Vec::new();
+    for spec in COMMANDS {
+        commands.push(listed(spec, table));
+        for old in retired_spellings(spec, table) {
+            let mut command = listed(spec, table);
+            command["command"] = json!(old.join(" "));
+            command["retired_for"] = json!(spec.words.join(" "));
+            commands.push(command);
+        }
+    }
+    commands
+}
+
+/// The old spellings `table` reads as `spec`: by the rows whose words now
+/// start the command most closely, so a topic's row gives no spelling to a
+/// command a longer row renamed (`workspace info` to `checkout show` is not
+/// also `workspace show`), and none that a longer row keeps as it is.
+fn retired_spellings(spec: &Spec, table: &retired::Table) -> Vec<Vec<&'static str>> {
+    let rows: Vec<&retired::Command> = table
+        .commands
+        .iter()
+        .filter(|row| row.old != row.now && spec.words.starts_with(row.now))
+        .collect();
+    let closest = rows.iter().map(|row| row.now.len()).max().unwrap_or(0);
+    rows.into_iter()
+        .filter(|row| row.now.len() == closest)
+        .map(|row| {
+            row.old
+                .iter()
+                .chain(&spec.words[row.now.len()..])
+                .copied()
+                .collect::<Vec<_>>()
+        })
+        .filter(|old| table.current(old.as_slice()) == spec.words)
+        .collect()
+}
+
+/// Where each topic's printed line carries the answer and, when the
+/// command fails (a non-zero exit), the failure's code; a retired topic
+/// word keeps its key beside the one it is now.
+fn envelopes(table: &retired::Table) -> Value {
+    let mut envelopes = json!({
+        "agent": {"ok": "ok", "answer": "value", "code": "error.code"},
+        "ps": {"ok": "ok", "answer": "value", "code": "error.code"},
+        "request": {"ok": "ok", "answer": "result", "code": "reason"},
+        "inbox": {"ok": "ok", "answer": "result", "code": "reason"},
+        "watch": {"ok": "ok", "answer": "result", "code": "reason"},
+        "mission": {"ok": "ok", "answer": "result", "code": "reason"},
+        "task": {"ok": "ok", "answer": "result", "code": "reason"},
+        "automation": {"ok": "ok", "answer": "value", "code": "error.code"},
+        "device": {"ok": "ok", "answer": "value", "code": "error.code"},
+        "pane": {"ok": "ok", "answer": "value", "code": "error.code"},
+        "workspace": {"ok": "ok", "answer": "value", "code": "error.code"},
+        "access": {"ok": "ok", "answer": "value", "code": "error.code"},
+        "skill": {"ok": "ok", "answer": "value", "code": "error.code"},
+        "mcp": {"ok": "ok", "answer": "value", "code": "error.code"},
+    });
+    let map = envelopes
+        .as_object_mut()
+        .expect("the envelopes are an object");
+    for row in table.commands {
+        if let ([old], [now]) = (row.old, row.now)
+            && old != now
+            && let Some(envelope) = map.get(*now).cloned()
+        {
+            map.insert((*old).to_owned(), envelope);
+        }
+    }
+    envelopes
+}
+
 /// The contract without its digest.
 fn body() -> Value {
     json!({
         "format": FORMAT,
-        "commands": COMMANDS
+        "commands": commands(&retired::TABLE),
+        // The retired-words table's command rows, kept ones included, so a
+        // reader of text (`scripts/check-retired-spellings.py`) reads an old
+        // spelling by the same longest row as the CLI.
+        "retired_words": retired::TABLE
+            .commands
             .iter()
-            .map(|spec| {
-                let mut command = command_json(spec);
-                if hidden(spec) {
-                    command["hidden"] = json!(true);
-                }
-                command
-            })
+            .map(|row| json!({"old": row.old, "now": row.now}))
             .collect::<Vec<_>>(),
         "value_types": {
             "text": "non-empty, no control characters, does not start with --",
@@ -2849,24 +3077,7 @@ fn body() -> Value {
             ),
             "one_of": "one of the listed values",
         },
-        // Where each topic's printed line carries the answer and, when the
-        // command fails (a non-zero exit), the failure's code.
-        "envelopes": {
-            "agent": {"ok": "ok", "answer": "value", "code": "error.code"},
-            "ps": {"ok": "ok", "answer": "value", "code": "error.code"},
-            "request": {"ok": "ok", "answer": "result", "code": "reason"},
-            "inbox": {"ok": "ok", "answer": "result", "code": "reason"},
-            "watch": {"ok": "ok", "answer": "result", "code": "reason"},
-            "mission": {"ok": "ok", "answer": "result", "code": "reason"},
-            "plan": {"ok": "ok", "answer": "result", "code": "reason"},
-            "automation": {"ok": "ok", "answer": "value", "code": "error.code"},
-            "device": {"ok": "ok", "answer": "value", "code": "error.code"},
-            "pane": {"ok": "ok", "answer": "value", "code": "error.code"},
-            "workspace": {"ok": "ok", "answer": "value", "code": "error.code"},
-            "access": {"ok": "ok", "answer": "value", "code": "error.code"},
-            "skill": {"ok": "ok", "answer": "value", "code": "error.code"},
-            "mcp": {"ok": "ok", "answer": "value", "code": "error.code"},
-        },
+        "envelopes": envelopes(&retired::TABLE),
         // A bot runs the commands above as its connection, in the mode the
         // operator chose; any of them may answer one of these, with its
         // next_action (PRD hide-external-control B20-B23, mission-87).
@@ -3755,6 +3966,733 @@ mod tests {
                 device.contains(&(kept, false)),
                 "device {kept} is not listed"
             );
+        }
+    }
+
+    /// The option names that take more than one value type across the
+    /// table, each with why it stays: changing either side changes a value
+    /// type of the contract, which a calling tool matches exactly
+    /// (`docs/delivery.md`, The contract a calling tool checks), so each
+    /// waits for a release that changes the contract's format unless its
+    /// reason says it is by design.
+    const VALUE_TYPE_EXCEPTIONS: &[(&str, &str)] = &[
+        (
+            "--actor",
+            "text on agent end|sleep|archive (any name an agent goes by), key on watch start|assign (an agent id); one type changes the contract",
+        ),
+        (
+            "--for",
+            "by design: span (minutes or hours) for a mission's hold and delay, deadline (1h to 30d) for a wait",
+        ),
+        (
+            "--intent",
+            "text on agent spawn, key on request send|reply; a calling tool (sasu) matches both types",
+        ),
+        (
+            "--json",
+            "a switch that prints the answer as JSON, and the plan document on mission plan and task set until those take it as --inline",
+        ),
+        (
+            "--key",
+            "by design: a key's name on pane send, the asking machine's public key on device accept-ssh, which another Hide sends",
+        ),
+        (
+            "--kind",
+            "by design: a letter's kind (one_of) on request send, an agent's kind (text) elsewhere",
+        ),
+        (
+            "--status",
+            "by design: a mission node's status (working, done, dropped) and a plan step's, which can also go back to planned",
+        ),
+        (
+            "--name",
+            "key on access request (a bot's name), text elsewhere; one type changes the contract",
+        ),
+    ];
+
+    /// The option names of `commands` that take more than one value type,
+    /// less the `allowed` ones, and an allowed one that no longer does.
+    fn value_type_problems(commands: &[Spec], allowed: &[(&str, &str)]) -> Vec<String> {
+        // `one_of` with other values is another type: `--status` of a
+        // mission node is not a plan step's.
+        let kind = |value: Option<Input>| match value {
+            None => "switch".to_owned(),
+            Some(OneOf(values)) => {
+                let mut values = values.to_vec();
+                values.sort_unstable();
+                format!("one_of[{}]", values.join(","))
+            }
+            Some(value) => value.name().to_owned(),
+        };
+        let mut types: std::collections::BTreeMap<&str, std::collections::BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for spec in commands {
+            for option in spec.options {
+                types
+                    .entry(option.name)
+                    .or_default()
+                    .insert(kind(option.value));
+            }
+        }
+        let mut problems = Vec::new();
+        for (name, kinds) in &types {
+            if kinds.len() > 1 && !allowed.iter().any(|(allowed, _)| allowed == name) {
+                problems.push(format!(
+                    "{name} takes {kinds:?}; give it one value type or list it with its reason"
+                ));
+            }
+        }
+        for (name, _) in allowed {
+            if types.get(name).is_none_or(|kinds| kinds.len() < 2) {
+                problems.push(format!(
+                    "{name} takes one value type now; drop its exception"
+                ));
+            }
+        }
+        problems
+    }
+
+    /// An option name takes one value type across the table, but for the
+    /// exceptions with their reasons (`hided/AGENTS.md`, Options).
+    #[test]
+    fn an_option_name_takes_one_value_type_across_the_table() {
+        assert_eq!(
+            value_type_problems(COMMANDS, VALUE_TYPE_EXCEPTIONS),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn the_value_type_guard_catches_a_second_type_and_a_stale_exception() {
+        const WRONG: &[Spec] = &[
+            spec(&["x", "add"], &[], &[optional("--depth", Text)], &[]),
+            spec(&["x", "list"], &[], &[optional("--depth", Unsigned)], &[]),
+            spec(&["x", "show"], &[], &[optional("--for", Span)], &[]),
+            spec(
+                &["x", "a"],
+                &[],
+                &[optional("--mode", OneOf(&["a", "b"]))],
+                &[],
+            ),
+            spec(
+                &["x", "b"],
+                &[],
+                &[optional("--mode", OneOf(&["a", "c"]))],
+                &[],
+            ),
+        ];
+        let problems = value_type_problems(WRONG, &[("--for", "two ranges")]).join("\n");
+        assert!(problems.contains("--depth takes"), "{problems}");
+        assert!(problems.contains("--mode takes"), "{problems}");
+        assert!(
+            problems.contains("--for takes one value type now"),
+            "{problems}"
+        );
+    }
+
+    /// The verbs of `commands` with no line in `registry`, and a line no
+    /// command uses.
+    fn verb_problems(commands: &[Spec], registry: &[(&str, &str)]) -> Vec<String> {
+        let used: std::collections::BTreeSet<&str> = commands
+            .iter()
+            .filter_map(|spec| verb(spec.words))
+            .collect();
+        let mut problems = Vec::new();
+        for verb in &used {
+            match registry.iter().find(|(name, _)| name == verb) {
+                None => problems.push(format!(
+                    "hide … {verb} has no line in VERBS; add what it means, or use a verb that is there"
+                )),
+                Some((_, meaning)) if meaning.trim().is_empty() => {
+                    problems.push(format!("{verb} has an empty line in VERBS"))
+                }
+                Some(_) => {}
+            }
+        }
+        for (verb, _) in registry {
+            if !used.contains(verb) {
+                problems.push(format!("no command uses {verb}; drop its line from VERBS"));
+            }
+        }
+        problems
+    }
+
+    /// Every verb of the table has its one line of meaning (`VERBS`).
+    #[test]
+    fn every_verb_of_the_table_is_in_the_registry() {
+        assert_eq!(verb_problems(COMMANDS, VERBS), Vec::<String>::new());
+        assert_eq!(verb(&["agent", "profile", "add"]), Some("add"));
+        assert_eq!(verb(&["agent", "show", "here"]), Some("show"));
+        assert_eq!(verb(&["inbox", "--ack"]), None);
+        assert_eq!(verb(&["ps"]), None);
+    }
+
+    #[test]
+    fn the_verb_guard_catches_a_new_verb_and_an_unused_line() {
+        const WRONG: &[Spec] = &[spec(&["x", "frobnicate"], &[], &[], &[])];
+        let problems = verb_problems(WRONG, &[("list", "list things")]).join("\n");
+        assert!(problems.contains("frobnicate has no line"), "{problems}");
+        assert!(problems.contains("no command uses list"), "{problems}");
+    }
+
+    /// One `hide` line of a usage: the commands its leading words name
+    /// (`ack|cancel|show` names three), the alternatives of the placeholder
+    /// after them (`<id|name|pane|here>`), and the options it shows.
+    struct UsageLine {
+        commands: Vec<Vec<String>>,
+        subjects: Vec<String>,
+        options: std::collections::BTreeSet<String>,
+        text: String,
+    }
+
+    fn usage_lines(text: &str) -> Vec<UsageLine> {
+        let mut lines = Vec::new();
+        for line in text.lines() {
+            let line = line.trim().trim_start_matches("usage: ");
+            let Some(rest) = line.strip_prefix("hide ") else {
+                continue;
+            };
+            let mut commands: Vec<Vec<String>> = vec![Vec::new()];
+            let mut words = rest.split_whitespace().peekable();
+            while let Some(word) = words.peek() {
+                let named = word.split('|').all(|alternative| {
+                    alternative.starts_with(|c: char| c.is_ascii_lowercase())
+                        && alternative
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                });
+                if !named {
+                    break;
+                }
+                commands = commands
+                    .iter()
+                    .flat_map(|command| {
+                        word.split('|').map(move |alternative| {
+                            let mut command = command.clone();
+                            command.push(alternative.to_owned());
+                            command
+                        })
+                    })
+                    .collect();
+                words.next();
+            }
+            let subjects = words
+                .next()
+                .and_then(|word| word.strip_prefix('<'))
+                .and_then(|word| word.strip_suffix('>'))
+                .map(|word| word.split('|').map(str::to_owned).collect())
+                .unwrap_or_default();
+            let options = line
+                .split(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
+                .filter(|word| word.starts_with("--") && word.len() > 2 && *word != "--help")
+                .map(str::to_owned)
+                .collect();
+            lines.push(UsageLine {
+                commands,
+                subjects,
+                options,
+                text: line.to_owned(),
+            });
+        }
+        lines
+    }
+
+    /// Commands the usage leaves out, each with why: a program calls them
+    /// and no person or agent types them.
+    const PROGRAM_ONLY: &[(&str, &str)] = &[(
+        "inbox --confirm",
+        "the prompt hook confirms the letters it showed (hide-agent-hooks/src/hook_request.rs)",
+    )];
+
+    /// Where the usage and the table disagree, both ways: a command of the
+    /// table that `usage_of` (its `--help`) does not show, with every option
+    /// the table gives it but `--json`, which a command that always prints
+    /// JSON takes too; and a `hide` line of one of `usages` that names a
+    /// command or an option the table does not have. A line of a topic
+    /// outside the table is read only where the table names its command.
+    fn usage_problems(
+        commands: &[Spec],
+        usage_of: &dyn Fn(&Spec) -> String,
+        usages: &[(String, String)],
+    ) -> Vec<String> {
+        let mut problems = Vec::new();
+        for spec in commands {
+            let name = spec.words.join(" ");
+            if hidden(spec) || PROGRAM_ONLY.iter().any(|(command, _)| *command == name) {
+                continue;
+            }
+            let plain: Vec<&str> = spec
+                .words
+                .iter()
+                .copied()
+                .filter(|word| !word.starts_with('-'))
+                .collect();
+            let modes: Vec<&str> = spec
+                .words
+                .iter()
+                .copied()
+                .filter(|word| word.starts_with('-'))
+                .collect();
+            let text = usage_of(spec);
+            let lines: Vec<UsageLine> = usage_lines(&text)
+                .into_iter()
+                .filter(|line| {
+                    let named = line.commands.iter().any(|command| command == &plain)
+                        || plain.split_last().is_some_and(|(subject, command)| {
+                            line.commands.iter().any(|named| named == command)
+                                && line
+                                    .subjects
+                                    .iter()
+                                    .any(|alternative| alternative == subject)
+                        });
+                    named && modes.iter().all(|mode| line.options.contains(*mode))
+                })
+                .collect();
+            if lines.is_empty() {
+                problems.push(format!("hide {name} is not in its --help:\n{text}"));
+                continue;
+            }
+            for option in spec.options {
+                if option.name == "--help" || (option.name == "--json" && option.value.is_none()) {
+                    continue;
+                }
+                if !lines.iter().any(|line| line.options.contains(option.name)) {
+                    problems.push(format!("hide {name} {} is not in its --help", option.name));
+                }
+            }
+        }
+        for (topic, text) in usages {
+            for line in usage_lines(text) {
+                for command in &line.commands {
+                    if command.last().is_some_and(|word| word == "help") {
+                        continue;
+                    }
+                    let named: Vec<&Spec> = commands
+                        .iter()
+                        .filter(|spec| {
+                            spec.words
+                                .iter()
+                                .copied()
+                                .filter(|word| !word.starts_with('-'))
+                                .eq(command.iter().map(String::as_str))
+                        })
+                        .collect();
+                    if named.is_empty() {
+                        if command
+                            .first()
+                            .is_some_and(|word| TOPICS.contains(&word.as_str()))
+                        {
+                            problems.push(format!(
+                                "the {topic} usage shows hide {}, which the table does not name: {}",
+                                command.join(" "),
+                                line.text
+                            ));
+                        }
+                        continue;
+                    }
+                    for option in &line.options {
+                        let known = named.iter().any(|spec| {
+                            spec.words.contains(&option.as_str())
+                                || spec
+                                    .options
+                                    .iter()
+                                    .any(|known| known.name == option.as_str())
+                        });
+                        if !known {
+                            problems.push(format!(
+                                "the {topic} usage shows hide {} {option}, which the table does not give it",
+                                command.join(" ")
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        problems
+    }
+
+    /// What `hide <command> --help` prints.
+    fn help_of(spec: &Spec) -> String {
+        let mut line = hide_line(spec.words);
+        line.push("--help".to_owned());
+        match parse_args(&line) {
+            Ok(CommandKind::Usage(text)) => text,
+            Ok(CommandKind::AgentSpawnHelp) => crate::agent_cli::SPAWN_HELP.to_owned(),
+            other => panic!("hide {} --help: {other:?}", spec.words.join(" ")),
+        }
+    }
+
+    /// The usage of each topic a command of the table is under, and of the
+    /// topics inside one.
+    fn topic_usages() -> Vec<(String, String)> {
+        // Every topic a command of the table is under, `workspace` and
+        // `session` among them.
+        let topics: std::collections::BTreeSet<&str> =
+            COMMANDS.iter().map(|spec| spec.words[0]).collect();
+        topics
+            .into_iter()
+            .map(|topic| (topic, None))
+            .chain(SUBTOPICS.iter().map(|words| (words[0], Some(words[1]))))
+            .map(|(topic, verb)| {
+                let text = crate::cli::command_usage(topic, verb)
+                    .unwrap_or_else(|| panic!("hide {topic} has no usage"));
+                (
+                    verb.map_or(topic.to_owned(), |verb| format!("{topic} {verb}")),
+                    text,
+                )
+            })
+            .collect()
+    }
+
+    /// Every command and option of the table is in its topic's `--help`,
+    /// and every `hide` line and option of a usage is in the table
+    /// (`hided/AGENTS.md`, Help).
+    #[test]
+    fn the_usage_and_the_table_name_the_same_commands_and_options() {
+        assert_eq!(
+            usage_problems(COMMANDS, &help_of, &topic_usages()),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn the_usage_guard_catches_a_drift_either_way() {
+        const TABLE: &[Spec] = &[
+            spec(&["mission", "list"], &[], &[optional("--since", Span)], &[]),
+            spec(&["mission", "show"], &[], &[], &[]),
+        ];
+        let usage = |_: &Spec| "usage:\n  hide mission list\n  hide mission settings".to_owned();
+        let usages = [(
+            "mission".to_owned(),
+            "hide mission list [--limit <n>]\nhide mission take <id>".to_owned(),
+        )];
+        let problems = usage_problems(TABLE, &usage, &usages).join("\n");
+        for caught in [
+            "hide mission list --since is not in its --help",
+            "hide mission show is not in its --help",
+            "shows hide mission list --limit",
+            "shows hide mission take, which the table does not name",
+        ] {
+            assert!(problems.contains(caught), "{caught} not in:\n{problems}");
+        }
+    }
+
+    /// `hide` and `words`, as a command line.
+    fn hide_line<S: AsRef<str>>(words: &[S]) -> Vec<String> {
+        std::iter::once("hide")
+            .chain(words.iter().map(AsRef::as_ref))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// What is wrong with a retired-words table: an old spelling the parser
+    /// reads otherwise than the command it is now, a retired (command, word)
+    /// a current command uses, an option row whose command, option or
+    /// values the contract table does not have.
+    fn retired_problems(table: &retired::Table) -> Vec<String> {
+        let mut problems = Vec::new();
+        for row in table.commands.iter().filter(|row| row.old != row.now) {
+            let old = row.old.join(" ");
+            if let Some(spec) = COMMANDS.iter().find(|spec| spec.words.starts_with(row.old)) {
+                problems.push(format!(
+                    "retired hide {old} is used by hide {}",
+                    spec.words.join(" ")
+                ));
+            }
+            if let [topic] = row.old
+                && TOPICS.contains(topic)
+            {
+                problems.push(format!("retired hide {old} is a topic of the table"));
+            }
+            let mut lines: Vec<Vec<String>> = COMMANDS
+                .iter()
+                .filter(|spec| spec.words.starts_with(row.now))
+                .map(|spec| argv(spec, &[], None, spec.repeats.unwrap_or(1)))
+                .collect();
+            // A command outside the table is read by its words alone, and
+            // must be one: the parser reads both lines through the table, so
+            // a row whose words now name nothing reads the same either way.
+            if lines.is_empty() {
+                let now = hide_line(row.now);
+                if matches!(
+                    parse_args(&now),
+                    Err(_) | Ok(CommandKind::Open | CommandKind::OpenPath { .. })
+                ) {
+                    problems.push(format!(
+                        "hide {} names no command; the row would read hide {old} as nothing",
+                        row.now.join(" ")
+                    ));
+                }
+                lines.push(now);
+            }
+            // A topic of the table keeps its retired word's envelope.
+            if let ([old_topic], [now_topic]) = (row.old, row.now)
+                && TOPICS.contains(now_topic)
+            {
+                let envelopes = envelopes(table);
+                if envelopes.get(*old_topic).is_none() || envelopes.get(*now_topic).is_none() {
+                    problems.push(format!(
+                        "the contract's envelopes have no {old_topic} beside {now_topic}"
+                    ));
+                }
+            }
+            for now in lines {
+                let mut then = hide_line(row.old);
+                then.extend_from_slice(&now[1 + row.now.len()..]);
+                if parse_args(&then) != parse_args(&now) {
+                    problems.push(format!(
+                        "{} is not read as {}",
+                        then.join(" "),
+                        now.join(" ")
+                    ));
+                }
+            }
+        }
+        for flags in table.options {
+            let command = flags.command.join(" ");
+            let Some(spec) = COMMANDS.iter().find(|spec| spec.words == flags.command) else {
+                problems.push(format!("hide {command} is no command of the table"));
+                continue;
+            };
+            let valued: std::collections::BTreeSet<&str> = spec
+                .options
+                .iter()
+                .filter(|option| option.value.is_some())
+                .map(|option| option.name)
+                .collect();
+            if valued != flags.valued.iter().copied().collect() {
+                problems.push(format!(
+                    "hide {command} takes a value for {valued:?}, the row says {:?}",
+                    flags.valued
+                ));
+            }
+            for flag in flags.renamed {
+                let Some(now) = spec.options.iter().find(|option| option.name == flag.now) else {
+                    problems.push(format!("hide {command} has no {}", flag.now));
+                    continue;
+                };
+                if now.value.is_some() != (flag.arity > 0) {
+                    problems.push(format!(
+                        "hide {command} {} takes {} values",
+                        flag.old, flag.arity
+                    ));
+                }
+                // The old name stays in the contract as the retired option,
+                // with the value type it had; a current option of the same
+                // name would change that type (`--json <plan>` as `--json`).
+                if spec.options.iter().any(|option| option.name == flag.old) {
+                    problems.push(format!("retired hide {command} {} is used", flag.old));
+                }
+                let now_line = argv(spec, now.conflicts, None, spec.repeats.unwrap_or(1));
+                let mut then = now_line.clone();
+                if let Some(at) = then.iter().position(|word| word == flag.now) {
+                    then[at] = flag.old.to_owned();
+                }
+                if parse_args(&then) != parse_args(&now_line) {
+                    problems.push(format!(
+                        "{} is not read as {}",
+                        then.join(" "),
+                        now_line.join(" ")
+                    ));
+                }
+            }
+        }
+        problems
+    }
+
+    /// Every retired spelling reads as the command it is now, and no
+    /// current command uses one (`hided/AGENTS.md`, Renaming).
+    #[test]
+    fn each_retired_spelling_parses_as_the_command_it_is_now() {
+        assert_eq!(retired_problems(&retired::TABLE), Vec::<String>::new());
+        assert_eq!(
+            parse_args(&hide_line(&["plan", "set", "--json", "{\"nodes\": []}"])),
+            parse_args(&hide_line(&["task", "set", "--json", "{\"nodes\": []}"]))
+        );
+        assert!(matches!(
+            parse_args(&hide_line(&["plan", "show"])),
+            Ok(CommandKind::Plan(_))
+        ));
+    }
+
+    /// The retired-words guard catches a row the parser reads otherwise, a
+    /// retired word a current command uses, and an option row that does
+    /// not match the table.
+    #[test]
+    fn the_retired_words_guard_catches_a_wrong_row() {
+        use retired::{Command, Flag, Flags, Table};
+        const WRONG: Table = Table {
+            commands: &[
+                // Read as `task`, not as `agent`.
+                Command {
+                    old: &["plan"],
+                    now: &["agent"],
+                },
+                // `ps` is a current command.
+                Command {
+                    old: &["ps"],
+                    now: &["task"],
+                },
+                // A misspelt new word names nothing.
+                Command {
+                    old: &["letters"],
+                    now: &["lettr"],
+                },
+                // `wait` has no envelope to keep beside `waits`.
+                Command {
+                    old: &["waits"],
+                    now: &["wait"],
+                },
+            ],
+            options: &[Flags {
+                command: &["task", "node"],
+                valued: &["--status"],
+                renamed: &[Flag {
+                    // `--line` is a current option of `task node`.
+                    old: "--line",
+                    now: "--pr",
+                    arity: 1,
+                    only_with_value: false,
+                }],
+            }],
+        };
+        let problems = retired_problems(&WRONG).join("\n");
+        for caught in [
+            "is not read as hide agent ",
+            "retired hide ps is used by hide ps",
+            "retired hide ps is a topic of the table",
+            "hide task node takes a value for",
+            "retired hide task node --line is used",
+            "is not read as hide task node",
+            "hide lettr names no command",
+            "the contract's envelopes have no waits beside wait",
+        ] {
+            assert!(problems.contains(caught), "{caught} not in:\n{problems}");
+        }
+    }
+
+    /// A retired command keeps its entry, the current one's own under its
+    /// old words and marked with the command it is now, and a retired topic
+    /// word keeps its envelope beside the new one: a calling tool that looks
+    /// a command up by the words it types still finds it.
+    #[test]
+    fn a_retired_command_keeps_its_entry_and_its_envelope() {
+        let document = document();
+        let commands = document["commands"].as_array().unwrap();
+        let entry = |name: &str| {
+            let found: Vec<&Value> = commands
+                .iter()
+                .filter(|command| command["command"] == name)
+                .collect();
+            assert_eq!(found.len(), 1, "{name} is listed {} times", found.len());
+            found[0].clone()
+        };
+        let names: Vec<&str> = commands
+            .iter()
+            .map(|command| command["command"].as_str().unwrap())
+            .collect();
+        for name in [
+            "plan set",
+            "plan node",
+            "plan approve",
+            "plan drop",
+            "plan show",
+        ] {
+            assert!(names.contains(&name), "{name} is not listed");
+        }
+        // Every row's spellings, each right after the command it is now.
+        let mut retired = 0;
+        for spec in COMMANDS {
+            let now = spec.words.join(" ");
+            for old in retired_spellings(spec, &retired::TABLE) {
+                let old = old.join(" ");
+                let mut then = entry(&old);
+                assert_eq!(then["retired_for"], now.as_str());
+                let mut current = entry(&now);
+                assert!(current.get("retired_for").is_none());
+                let follows = names.iter().position(|name| *name == old).unwrap()
+                    > names.iter().position(|name| *name == now).unwrap();
+                assert!(follows, "{old} comes before {now}");
+                for value in [&mut then, &mut current] {
+                    let map = value.as_object_mut().unwrap();
+                    map.remove("command");
+                    map.remove("retired_for");
+                }
+                assert_eq!(then, current, "{old}");
+                retired += 1;
+            }
+        }
+        assert_eq!(retired, names.len() - COMMANDS.len());
+        assert_eq!(
+            document["retired_words"],
+            json!([{"old": ["plan"], "now": ["task"]}])
+        );
+        assert_eq!(document["envelopes"]["plan"], document["envelopes"]["task"]);
+        assert_eq!(document["envelopes"]["task"]["answer"], "result");
+    }
+
+    /// The forms a later rename writes: an option row lists the old option
+    /// beside the new one with its value and the option it is now, and a
+    /// longer row that keeps an old spelling gives it no retired entry.
+    #[test]
+    fn a_retired_option_and_a_kept_spelling_are_listed_as_the_table_says() {
+        use retired::{Command, Flag, Flags, Table};
+        const TABLE: Table = Table {
+            commands: &[
+                Command {
+                    old: &["plan"],
+                    now: &["task"],
+                },
+                Command {
+                    old: &["plan", "show"],
+                    now: &["plan", "show"],
+                },
+                Command {
+                    old: &["steps"],
+                    now: &["task"],
+                },
+                Command {
+                    old: &["steps", "peek"],
+                    now: &["task", "show"],
+                },
+            ],
+            options: &[Flags {
+                command: &["task", "node"],
+                valued: &["--status", "--line", "--pr", "--file"],
+                renamed: &[Flag {
+                    old: "--state",
+                    now: "--status",
+                    arity: 1,
+                    only_with_value: false,
+                }],
+            }],
+        };
+        let commands = commands(&TABLE);
+        let names: Vec<&str> = commands
+            .iter()
+            .map(|command| command["command"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"plan set") && !names.contains(&"plan show"));
+        // The closest row alone spells `task show`: no `steps show`.
+        assert!(names.contains(&"steps set") && names.contains(&"steps peek"));
+        assert!(!names.contains(&"steps show"));
+        for name in ["task node", "plan node"] {
+            let node = commands
+                .iter()
+                .find(|command| command["command"] == name)
+                .unwrap();
+            let options = node["options"].as_array().unwrap();
+            let status = options
+                .iter()
+                .find(|option| option["name"] == "--status")
+                .unwrap();
+            let state = options
+                .iter()
+                .find(|option| option["name"] == "--state")
+                .unwrap();
+            assert_eq!(state["retired_for"], "--status");
+            assert_eq!(state["value"], status["value"]);
+            assert_eq!(state["required"], false);
         }
     }
 
