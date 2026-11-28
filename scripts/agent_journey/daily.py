@@ -107,7 +107,10 @@ def environment(settings, extra=None):
             if not key.startswith("HIDE_") and not key.endswith("_API_KEY")}
     path = [str(root / "bin"), settings["toolchain_bin"], *SYSTEM_PATH]
     return {**base, "PATH": os.pathsep.join(path), "LANG": "en_US.UTF-8", "PYTHONUTF8": "1",
-            "CARGO_HOME": str(root / "cargo-home"), "RUSTUP_HOME": settings["rustup_home"], **(extra or {})}
+            "CARGO_HOME": str(root / "cargo-home"), "RUSTUP_HOME": settings["rustup_home"],
+            # The terminal parser's prepared inputs are the account's own:
+            # preparing them stamps the folder it reads (prepare-vt-inputs.py).
+            "HIDE_BUILD_CACHE": str(root / "build-cache"), **(extra or {})}
 
 
 def run_logged(argv, stream, env, cwd=CHECKOUT, timeout=None):
