@@ -4022,7 +4022,10 @@ mod tests {
             std::collections::BTreeMap::new();
         for spec in commands {
             for option in spec.options {
-                types.entry(option.name).or_default().insert(kind(option.value));
+                types
+                    .entry(option.name)
+                    .or_default()
+                    .insert(kind(option.value));
             }
         }
         let mut problems = Vec::new();
@@ -4059,8 +4062,18 @@ mod tests {
             spec(&["x", "add"], &[], &[optional("--depth", Text)], &[]),
             spec(&["x", "list"], &[], &[optional("--depth", Unsigned)], &[]),
             spec(&["x", "show"], &[], &[optional("--for", Span)], &[]),
-            spec(&["x", "a"], &[], &[optional("--mode", OneOf(&["a", "b"]))], &[]),
-            spec(&["x", "b"], &[], &[optional("--mode", OneOf(&["a", "c"]))], &[]),
+            spec(
+                &["x", "a"],
+                &[],
+                &[optional("--mode", OneOf(&["a", "b"]))],
+                &[],
+            ),
+            spec(
+                &["x", "b"],
+                &[],
+                &[optional("--mode", OneOf(&["a", "c"]))],
+                &[],
+            ),
         ];
         let problems = value_type_problems(WRONG, &[("--for", "two ranges")]).join("\n");
         assert!(problems.contains("--depth takes"), "{problems}");
@@ -4572,7 +4585,13 @@ mod tests {
             .iter()
             .map(|command| command["command"].as_str().unwrap())
             .collect();
-        for name in ["plan set", "plan node", "plan approve", "plan drop", "plan show"] {
+        for name in [
+            "plan set",
+            "plan node",
+            "plan approve",
+            "plan drop",
+            "plan show",
+        ] {
             assert!(names.contains(&name), "{name} is not listed");
         }
         // Every row's spellings, each right after the command it is now.
