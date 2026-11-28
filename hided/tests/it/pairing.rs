@@ -896,7 +896,7 @@ async fn a_pc_reaches_its_distributions_hide_through_hide_device_carry() {
         }
     });
     let to = PeerAddr::new(theirs, paired.first.clone());
-    let reached = tokio::time::timeout(WITHIN, transport.dial(&to))
+    let reached = tokio::time::timeout(WITHIN, transport.dial(&to, hide_peer::DialBound::start()))
         .await
         .expect("the distribution's core answered")
         .unwrap_or_else(|error| panic!("the carrier did not reach the core: {error:?}"));
@@ -920,7 +920,10 @@ async fn a_pc_reaches_its_distributions_hide_through_hide_device_carry() {
     let other = MachineKey::generate().unwrap().public();
     let wrong = tokio::time::timeout(
         WITHIN,
-        transport.dial(&PeerAddr::new(other, paired.first.clone())),
+        transport.dial(
+            &PeerAddr::new(other, paired.first.clone()),
+            hide_peer::DialBound::start(),
+        ),
     )
     .await
     .expect("a dial to another key ended");
@@ -933,7 +936,7 @@ async fn a_pc_reaches_its_distributions_hide_through_hide_device_carry() {
     // systemd: the next carrier starts it, since this account ran one.
     let stopped = distribution.run(&["stop"]);
     assert!(stopped.ok, "{}", stopped.text());
-    let again = tokio::time::timeout(WITHIN, transport.dial(&to))
+    let again = tokio::time::timeout(WITHIN, transport.dial(&to, hide_peer::DialBound::start()))
         .await
         .expect("the started core answered")
         .unwrap_or_else(|error| panic!("the carrier did not start the core: {error:?}"));

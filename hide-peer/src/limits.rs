@@ -118,10 +118,10 @@ pub const REDIAL_MOST: Duration = Duration::from_secs(60);
 pub const STAYED_AFTER: Duration = REDIAL_MOST;
 
 /// How long one dial may take before it counts as failed. The dial hands
-/// its deadline to the transport (`PeerTransport::dial_by`), and an SSH
-/// carrier attempt it starts runs to that same deadline wherever it is (the
-/// ladder, handed on, the climb): the wait for a carrier place, the
-/// sign-in, the `carry` step and the outgoing proof.
+/// its bound to the transport (`DialBound`), and an SSH carrier attempt it
+/// starts runs under that same bound wherever it is (the ladder, handed on,
+/// the climb): the wait for a carrier place, the sign-in, the `carry` step
+/// and the outgoing proof.
 pub const DIAL_WITHIN: Duration = Duration::from_secs(30);
 
 /// The SSH path. The head start a direct path gets

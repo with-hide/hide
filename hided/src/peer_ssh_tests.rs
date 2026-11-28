@@ -8,7 +8,8 @@ use std::sync::mpsc;
 
 use hide_node_link::device::SshFailure;
 use hide_peer::MachineKey;
-use hide_peer::pipe::PipeTransport;
+use hide_peer::loopback::{Loopback, Net};
+use hide_peer::pipe::{Beside, PipeTransport};
 use hide_peer::protocol::{Candidate, PathKind, PeerAddr};
 use hide_peer::{PeerConn, PeerTransport};
 use hide_platform::ipc::LocalStream;
@@ -170,9 +171,9 @@ fn this_machine(stand: &Arc<Stand>) -> Near {
         });
     }
     let dialing = Arc::clone(&carriers);
-    let pipe = PipeTransport::dialing(key(), move |to, over| {
+    let pipe = PipeTransport::dialing(key(), move |to, bound| {
         let alias = hide_peer::protocol::addr::ssh_alias(to).unwrap().to_owned();
-        dialing.carrier(to.key, alias, over)
+        dialing.carrier(to.key, alias, bound)
     })
     .with_routes(Arc::clone(&carriers) as Arc<dyn Routes>);
     Near {
@@ -191,18 +192,26 @@ fn route(near: &Near, key: &PeerKey, alias: &str) -> Route {
     Routes::route(near.carriers.as_ref(), key, alias)
 }
 
-/// The deadline of a dial that starts now.
-fn bound() -> Instant {
-    Instant::now() + limits::DIAL_WITHIN
+/// The bound of a dial that starts now.
+fn bound() -> DialBound {
+    DialBound::start()
 }
 
-/// The deadline of a dial that started [`limits::SSH_AFTER`] ago, as the
-/// ladder's is when it starts its SSH attempt: the attempt starts later
-/// than the bound it runs to.
-async fn ladder_bound() -> Instant {
-    let deadline = bound();
-    tokio::time::advance(limits::SSH_AFTER).await;
-    deadline
+/// This machine's carriers behind a [`Beside`], as the daemon dials: its
+/// other transport reaches nothing, so a ready route's ladder starts its SSH
+/// attempt at once, in a task of its own.
+fn beside(stand: &Arc<Stand>) -> (Arc<SshCarriers>, Beside<Loopback>) {
+    let carriers = SshCarriers::with_signer(Arc::clone(stand) as Arc<dyn Signer>);
+    let ours = key();
+    let dialing = Arc::clone(&carriers);
+    let pipe = PipeTransport::dialing(MachineKey::from_secret(&ours.secret()), move |to, bound| {
+        let alias = hide_peer::protocol::addr::ssh_alias(to).unwrap().to_owned();
+        dialing.carrier(to.key, alias, bound)
+    })
+    .with_routes(Arc::clone(&carriers) as Arc<dyn Routes>);
+    let main = Net::new().join(ours);
+    main.set_unreachable(true);
+    (carriers, Beside::new(main, pipe))
 }
 
 /// Until the stand-in's sign-in runs. A paused clock stands still while it
@@ -217,10 +226,8 @@ async fn signing_in(stand: &Stand) {
 }
 
 /// Where `key`'s route stands now.
-fn state(near: &Near, key: &PeerKey) -> Option<State> {
-    lock(&near.carriers.routes)
-        .get(key)
-        .map(|entry| entry.state)
+fn state(carriers: &SshCarriers, key: &PeerKey) -> Option<State> {
+    lock(&carriers.routes).get(key).map(|entry| entry.state)
 }
 
 /// A route is ready until an attempt says otherwise; a proved carrier
@@ -233,7 +240,7 @@ async fn a_proved_carrier_keeps_its_route_ready() {
     let to = over(far.key(), "studio");
     assert_eq!(route(&near, &to.key, "studio"), Route::Ready);
     let (dialed, accepted) = within("the connection", async {
-        tokio::join!(near.pipe.dial(&to), far.accept())
+        tokio::join!(near.pipe.dial(&to, bound()), far.accept())
     })
     .await;
     let (ours, theirs) = (dialed.unwrap(), accepted.unwrap());
@@ -263,11 +270,15 @@ async fn each_failure_moves_the_route_by_the_rule_a_device_row_reads() {
         let near = this_machine(&stand);
         let to = over(far.key(), "studio");
         stand.next(Next::Fails(problem));
-        assert!(within("the failure", near.pipe.dial(&to)).await.is_err());
+        assert!(
+            within("the failure", near.pipe.dial(&to, bound()))
+                .await
+                .is_err()
+        );
         assert_eq!(near.carriers.blocked(&to.key), parked, "{problem:?}");
         assert_eq!(route(&near, &to.key, "studio"), Route::Held, "{problem:?}");
         // Held: refused at once, with no second sign-in.
-        assert!(near.pipe.dial(&to).await.is_err());
+        assert!(near.pipe.dial(&to, bound()).await.is_err());
         assert_eq!(stand.started(), 1, "{problem:?}");
         // The operator's retry tries it again.
         near.carriers.retry(&to.key);
@@ -284,12 +295,20 @@ async fn a_waiting_route_is_due_after_its_wait_or_a_network_change() {
     let near = this_machine(&stand);
     let to = over(far.key(), "studio");
     stand.next(Next::Fails(SshProblem::Unreachable));
-    assert!(within("the failure", near.pipe.dial(&to)).await.is_err());
+    assert!(
+        within("the failure", near.pipe.dial(&to, bound()))
+            .await
+            .is_err()
+    );
     assert_eq!(route(&near, &to.key, "studio"), Route::Held);
     Routes::network_changed(near.carriers.as_ref());
     assert_eq!(route(&near, &to.key, "studio"), Route::Due);
     // Tried again while due, it fails again and waits again.
-    assert!(within("the failure", near.pipe.dial(&to)).await.is_err());
+    assert!(
+        within("the failure", near.pipe.dial(&to, bound()))
+            .await
+            .is_err()
+    );
     assert_eq!(stand.started(), 2);
     assert_eq!(route(&near, &to.key, "studio"), Route::Held);
     {
@@ -300,7 +319,11 @@ async fn a_waiting_route_is_due_after_its_wait_or_a_network_change() {
     // A parked route is no due one, whatever the network does.
     stand.next(Next::Fails(SshProblem::SignInNeeded));
     near.carriers.retry(&to.key);
-    assert!(within("the failure", near.pipe.dial(&to)).await.is_err());
+    assert!(
+        within("the failure", near.pipe.dial(&to, bound()))
+            .await
+            .is_err()
+    );
     Routes::network_changed(near.carriers.as_ref());
     assert_eq!(route(&near, &to.key, "studio"), Route::Held);
     assert_eq!(near.carriers.blocked(&to.key), Some(PeerSshBlocked::SignIn));
@@ -337,7 +360,11 @@ async fn what_the_far_command_said_moves_the_route() {
     let stand = Stand::new(&far);
     let near = this_machine(&stand);
     stand.next(Next::Says(r#"{"ok":false,"reason":"hide_not_running"}"#));
-    assert!(within("the refusal", near.pipe.dial(&to)).await.is_err());
+    assert!(
+        within("the refusal", near.pipe.dial(&to, bound()))
+            .await
+            .is_err()
+    );
     assert!(matches!(
         settled(&near, &to.key).await,
         State::Waiting { .. }
@@ -357,7 +384,11 @@ async fn what_the_far_command_said_moves_the_route() {
         stand.next(Next::Says(said));
         assert_eq!(route(&near, &to.key, "studio"), Route::Ready);
         near.carriers.heard_build(&to.key, "1.2.0");
-        assert!(within("the refusal", near.pipe.dial(&to)).await.is_err());
+        assert!(
+            within("the refusal", near.pipe.dial(&to, bound()))
+                .await
+                .is_err()
+        );
         assert_eq!(
             settled(&near, &to.key).await,
             State::Parked(PeerSshBlocked::UpdateThere),
@@ -380,7 +411,11 @@ async fn another_key_turns_the_route_off_only_for_the_attempts_epoch() {
     let near = this_machine(&stand);
     let paired = key().public();
     let to = over(paired, "studio");
-    assert!(within("the refusal", near.pipe.dial(&to)).await.is_err());
+    assert!(
+        within("the refusal", near.pipe.dial(&to, bound()))
+            .await
+            .is_err()
+    );
     assert_eq!(*lock(&near.turned_off), vec![(paired, "studio".to_owned())]);
     assert!(lock(&near.carriers.routes).get(&paired).is_none());
 
@@ -426,16 +461,24 @@ async fn an_unsaved_off_is_parked_shown_and_saved_after_a_retry() {
     let paired = key().public();
     let to = over(paired, "studio");
     near.save_fails.store(true, Ordering::Release);
-    assert!(within("the refusal", near.pipe.dial(&to)).await.is_err());
+    assert!(
+        within("the refusal", near.pipe.dial(&to, bound()))
+            .await
+            .is_err()
+    );
     assert_eq!(
         near.carriers.blocked(&paired),
         Some(PeerSshBlocked::NotSaved)
     );
-    assert!(near.pipe.dial(&to).await.is_err());
+    assert!(near.pipe.dial(&to, bound()).await.is_err());
     assert_eq!(stand.started(), 1, "a parked route starts no ssh");
     near.save_fails.store(false, Ordering::Release);
     near.carriers.retry(&paired);
-    assert!(within("the refusal", near.pipe.dial(&to)).await.is_err());
+    assert!(
+        within("the refusal", near.pipe.dial(&to, bound()))
+            .await
+            .is_err()
+    );
     assert_eq!(*lock(&near.turned_off), vec![(paired, "studio".to_owned())]);
 }
 
@@ -472,7 +515,11 @@ async fn recording_an_alias_again_starts_its_route_over_and_outdates_every_attem
     let near = this_machine(&stand);
     let to = over(far.key(), "studio");
     stand.next(Next::Fails(SshProblem::SignInNeeded));
-    assert!(within("the failure", near.pipe.dial(&to)).await.is_err());
+    assert!(
+        within("the failure", near.pipe.dial(&to, bound()))
+            .await
+            .is_err()
+    );
     assert_eq!(near.carriers.blocked(&to.key), Some(PeerSshBlocked::SignIn));
     let parked = lock(&near.carriers.routes).get(&to.key).unwrap().epoch;
     near.carriers
@@ -484,7 +531,7 @@ async fn recording_an_alias_again_starts_its_route_over_and_outdates_every_attem
     // alias, and is still the route's to end.
     stand.next(Next::Carry);
     let (dialed, accepted) = within("the connection", async {
-        tokio::join!(near.pipe.dial(&to), far.accept())
+        tokio::join!(near.pipe.dial(&to, bound()), far.accept())
     })
     .await;
     let (_ours, _theirs) = (dialed.unwrap(), accepted.unwrap());
@@ -572,7 +619,7 @@ async fn a_path_that_proves_and_falls_waits_longer_each_time() {
     let wait = |near: &Near| lock(&near.carriers.routes).get(&to.key).unwrap().wait;
     for doubled in [2, 4, 8] {
         let (dialed, accepted) = within("the connection", async {
-            tokio::join!(near.pipe.dial(&to), far.accept())
+            tokio::join!(near.pipe.dial(&to, bound()), far.accept())
         })
         .await;
         let (_ours, _theirs) = (dialed.unwrap(), accepted.unwrap());
@@ -594,7 +641,11 @@ async fn a_carrier_closed_before_its_proof_makes_the_route_wait() {
     let near = this_machine(&stand);
     let to = over(far.key(), "studio");
     stand.next(Next::Says("Connection to studio closed."));
-    assert!(within("the end", near.pipe.dial(&to)).await.is_err());
+    assert!(
+        within("the end", near.pipe.dial(&to, bound()))
+            .await
+            .is_err()
+    );
     assert!(matches!(
         settled(&near, &to.key).await,
         State::Waiting { .. }
@@ -673,28 +724,31 @@ async fn a_sign_in_that_hangs_until_its_dials_bound_makes_the_route_wait() {
     stand.next(Next::Stalls);
     let (told, stopped) = mpsc::channel();
     *lock(&stand.stopped) = Some(told);
-    let deadline = ladder_bound().await;
+    let deadline = bound();
     let (dialed, ()) = tokio::join!(
-        tokio::time::timeout_at(deadline, near.pipe.dial_by(&to, deadline)),
+        deadline.limit(near.pipe.dial(&to, deadline.clone())),
         async {
             signing_in(&stand).await;
             // Tokio fires a timer on the first millisecond past its deadline.
-            let left = deadline - Instant::now();
+            let left = deadline.over() - Instant::now();
             tokio::time::advance(left + Duration::from_millis(1)).await;
-        },
+        }
     );
-    assert!(dialed.is_err(), "the dial's bound gave it up");
+    assert!(dialed.is_none(), "the dial's bound ran out");
     stopped
         .recv_timeout(WITHIN)
         .expect("its sign-in was stopped");
-    assert!(matches!(state(&near, &to.key), Some(State::Waiting { .. })));
+    assert!(matches!(
+        state(&near.carriers, &to.key),
+        Some(State::Waiting { .. })
+    ));
     assert_eq!(route(&near, &to.key, "studio"), Route::Held);
-    assert!(near.pipe.dial(&to).await.is_err());
+    assert!(near.pipe.dial(&to, bound()).await.is_err());
     assert_eq!(stand.started(), 1, "no second sign-in");
 }
 
-/// A carrier whose key proof is never answered, given up at its dial's
-/// bound, makes the route wait as a hung sign-in does.
+/// A carrier whose key proof is never answered, given up when its dial's
+/// bound runs out, makes the route wait as a hung sign-in does.
 #[tokio::test(start_paused = true)]
 async fn a_proof_that_hangs_until_its_dials_bound_makes_the_route_wait() {
     let far = Arc::new(PipeTransport::accepting(key()));
@@ -702,40 +756,46 @@ async fn a_proof_that_hangs_until_its_dials_bound_makes_the_route_wait() {
     let near = this_machine(&stand);
     let to = over(far.key(), "studio");
     stand.next(Next::Silent);
-    let deadline = ladder_bound().await;
+    let deadline = bound();
     // Nothing runs once the proof waits, so the clock moves to the bound.
-    let dialed = tokio::time::timeout_at(deadline, near.pipe.dial_by(&to, deadline)).await;
-    assert!(dialed.is_err(), "the dial's bound gave it up");
+    let dialed = deadline.limit(near.pipe.dial(&to, deadline.clone())).await;
+    assert!(dialed.is_none(), "the dial's bound ran out");
     assert_eq!(lock(&stand.held).len(), 1, "it signed in and carried");
-    assert!(matches!(state(&near, &to.key), Some(State::Waiting { .. })));
-    assert!(near.pipe.dial(&to).await.is_err());
+    assert!(matches!(
+        state(&near.carriers, &to.key),
+        Some(State::Waiting { .. })
+    ));
+    assert!(near.pipe.dial(&to, bound()).await.is_err());
     assert_eq!(stand.started(), 1, "no second sign-in");
 }
 
-/// A sign-in its dial gives up before the dial's bound (another path was
-/// chosen, the daemon stops) ends, and leaves its route as it was.
+/// An attempt its ladder gives up before the dial's bound (another path
+/// was chosen, the daemon stops) leaves its route as it was and ends its
+/// sign-in, even when its task is only cleaned up after the bound: the
+/// bound did not run out, whatever the clock says by then.
 #[tokio::test(start_paused = true)]
-async fn a_sign_in_given_up_before_its_dials_bound_leaves_the_route_as_it_was() {
+async fn an_attempt_given_up_before_its_bound_leaves_the_route_however_late_it_ends() {
     let far = Arc::new(PipeTransport::accepting(key()));
     let stand = Stand::new(&far);
-    let near = this_machine(&stand);
+    let (carriers, beside) = beside(&stand);
     let to = over(far.key(), "studio");
     stand.next(Next::Stalls);
-    let (told, stopped) = mpsc::channel();
-    *lock(&stand.stopped) = Some(told);
-    let deadline = ladder_bound().await;
+    let deadline = bound();
     tokio::select! {
-        _ = near.pipe.dial_by(&to, deadline) => panic!("a stalled sign-in connected"),
-        () = async {
-            signing_in(&stand).await;
-            tokio::time::advance(limits::DIAL_WITHIN / 2).await;
-        } => {}
+        _ = beside.dial(&to, deadline.clone()) => panic!("a stalled sign-in connected"),
+        () = signing_in(&stand) => {}
     }
-    stopped
-        .recv_timeout(WITHIN)
-        .expect("its sign-in was stopped");
-    assert_eq!(state(&near, &to.key), Some(State::Ready));
-    assert_eq!(route(&near, &to.key, "studio"), Route::Ready);
+    // The ladder is dropped and its attempt's task aborted; the clock moves
+    // past the bound before the runtime runs that task's cleanup.
+    tokio::time::advance(deadline.over() - Instant::now() + Duration::from_millis(1)).await;
+    within("the sign-in's stop", async {
+        while stand.stops.load(Ordering::Acquire) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(!deadline.ran_out());
+    assert_eq!(state(&carriers, &to.key), Some(State::Ready));
 }
 
 /// A host forgotten, or one whose alias changed, takes its route with it,

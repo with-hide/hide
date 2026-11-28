@@ -1418,7 +1418,7 @@ async fn a_host_streaming_into_sixteen_mux_tunnels_passes_the_budget_by_at_most_
     };
     let to = PeerAddr::new(far.key(), vec![Candidate::Wsl("Ubuntu".to_owned())]);
     let (dialed, accepted) = within("the connection", async {
-        tokio::join!(near.dial(&to), far.accept())
+        tokio::join!(near.dial(&to, hide_peer::DialBound::start()), far.accept())
     })
     .await;
     let (ours, theirs) = (dialed.unwrap(), accepted.unwrap());

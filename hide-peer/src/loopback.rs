@@ -19,7 +19,7 @@ use tokio::sync::{Semaphore, mpsc, watch};
 
 use crate::gate::{Gate, Guarded};
 use crate::key::MachineKey;
-use crate::transport::{PeerConn, PeerTransport, RelayState, TransportError};
+use crate::transport::{DialBound, PeerConn, PeerTransport, RelayState, TransportError};
 use crate::{limits, proof};
 
 /// The bytes a loopback stream holds before its writer waits.
@@ -188,7 +188,7 @@ impl PeerTransport for Loopback {
         Vec::new()
     }
 
-    async fn dial(&self, to: &PeerAddr) -> Result<LoopConn, TransportError> {
+    async fn dial(&self, to: &PeerAddr, _bound: DialBound) -> Result<LoopConn, TransportError> {
         if self.unreachable.load(Ordering::Acquire) {
             return Err(unreachable("no network carries this machine's dials"));
         }
@@ -447,7 +447,7 @@ mod tests {
 
         let to = PeerAddr::new(host.key(), Vec::new());
         let (dialed, accepted) = tokio::time::timeout(Duration::from_secs(20), async {
-            tokio::join!(guest.dial(&to), host.accept())
+            tokio::join!(guest.dial(&to, DialBound::start()), host.accept())
         })
         .await
         .expect("the second dialer connected beside the unfinished proof");
@@ -477,7 +477,7 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert!(matches!(
-            guest.dial(&to).await,
+            guest.dial(&to, DialBound::start()).await,
             Err(TransportError::Unreachable(_))
         ));
         // The silent ones are given up in time, and the next dial is taken:
@@ -487,7 +487,7 @@ mod tests {
         while host.admitting.available_permits() < limits::MAX_ADMITTING {
             tokio::task::yield_now().await;
         }
-        guest.dial(&to).await.unwrap();
+        guest.dial(&to, DialBound::start()).await.unwrap();
         assert_eq!(accepting.await.unwrap().unwrap().peer(), guest.key());
     }
 }

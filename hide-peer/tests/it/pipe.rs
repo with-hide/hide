@@ -204,7 +204,12 @@ async fn a_pipe_that_ends_is_dialed_again() {
     .await;
     // The distribution never dials: only its PC makes a pipe (D-62).
     assert!(matches!(
-        distro.peers.transport().pipe().dial(&in_wsl(&pc)).await,
+        distro
+            .peers
+            .transport()
+            .pipe()
+            .dial(&in_wsl(&pc), hide_peer::DialBound::start())
+            .await,
         Err(hide_peer::TransportError::Unreachable(_))
     ));
 }
