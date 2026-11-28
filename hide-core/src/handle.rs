@@ -1767,17 +1767,18 @@ impl Core {
         lock_recover(&self.runtime).laid_record_pulls(record)
     }
 
-    /// What a hook's Memory read for a pane in `context` is answered from,
-    /// which the daemon then answers off this thread
-    /// (`crate::memory_hook::answer`), or why there is none.
+    /// What a hook's Memory read for `pane`, a pane in `context` as the hook
+    /// names it, is answered from, which the daemon then answers off this
+    /// thread (`crate::memory_hook::answer`), or why there is none.
     pub fn memory_scope(
         &self,
         context: &crate::workspace_control::Context,
+        pane: &str,
     ) -> Result<crate::memory_hook::Scope, &'static str> {
         if !check_owner_thread(self, "memory_scope") {
             return Err("core_unavailable");
         }
-        lock_recover(&self.runtime).memory_scope(context)
+        lock_recover(&self.runtime).memory_scope(context, pane)
     }
 
     /// What a prompt hook in `caller`'s pane on `device` reads the open

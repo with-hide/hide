@@ -353,6 +353,8 @@ enum Command {
     Session(SessionAsk),
     MemoryScope {
         context: Context,
+        /// The pane the hook runs in, as it names itself.
+        pane: String,
         /// The pane and the prompt's session, when the hook asks at a prompt.
         asks: Option<(String, String)>,
         /// The pane and the session it starts, when the hook starts one.
@@ -1654,12 +1656,14 @@ impl CoreHandle {
     /// caller's blocking task. The owner's answer is waited for until the
     /// hook's `deadline` at most, the one its node call and store read share.
     /// What a hook's answer is read from, in one trip to the owner thread:
-    /// Memory's scope, at a prompt the session's open questions' (`asks`
-    /// names the pane and the session the hook names) and at a session start
-    /// the Project's other sessions' (`brief`, the same pair).
+    /// Memory's scope for the hook in `pane`, at a prompt the session's open
+    /// questions' (`asks` names the pane and the session the hook names) and
+    /// at a session start the Project's other sessions' (`brief`, the same
+    /// pair).
     pub fn hook_scope(
         &self,
         context: &Context,
+        pane: &str,
         asks: Option<(String, String)>,
         brief: Option<(String, String)>,
         deadline: std::time::Instant,
@@ -1670,6 +1674,7 @@ impl CoreHandle {
             .commands
             .send(Command::MemoryScope {
                 context: context.clone(),
+                pane: pane.to_owned(),
                 asks,
                 brief,
                 reply,
@@ -2424,6 +2429,7 @@ fn owner_loop(
             },
             Command::MemoryScope {
                 context,
+                pane,
                 asks,
                 brief,
                 reply,
@@ -2433,7 +2439,7 @@ fn owner_loop(
                 });
                 let brief =
                     brief.and_then(|(pane, session)| core.brief_scope(&context, &pane, &session));
-                let _ = reply.send((core.memory_scope(&context), give, brief));
+                let _ = reply.send((core.memory_scope(&context, &pane), give, brief));
             }
             Command::FoldAsk {
                 device_id,
