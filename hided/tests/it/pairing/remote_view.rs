@@ -1185,6 +1185,28 @@ async fn a_machine_a_paired_computer_opens_takes_views_while_that_computer_is_co
         .to_string(),
     )
     .unwrap();
+    // A change to show: `notes.md` is committed, then edited.
+    for args in [
+        &["init", "-q"][..],
+        &["add", "notes.md", "page.html"],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "init",
+        ],
+    ] {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&project)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+    std::fs::write(project.join("notes.md"), "# notes\nchanged\n").unwrap();
     let outside = root.path().join("outside.txt");
     std::fs::write(&outside, "outside\n").unwrap();
     let running = hided::start_daemon(env).await.unwrap();
@@ -1232,12 +1254,7 @@ async fn a_machine_a_paired_computer_opens_takes_views_while_that_computer_is_co
     let page = in_checkout(&host, &project, &["browser", "open", "page.html"]);
     assert!(page.ok, "{}", page.text());
     let diff = in_checkout(&host, &project, &["diff", "open", "notes.md"]);
-    assert_ne!(
-        refusal(&diff).as_deref(),
-        Some("renderer_unavailable"),
-        "{}",
-        diff.text()
-    );
+    assert!(diff.ok, "{}", diff.text());
     // A file outside every checkout is granted by this machine's own
     // desktop window, and a paired computer is none.
     let external = in_checkout(
@@ -1270,6 +1287,29 @@ async fn a_machine_a_paired_computer_opens_takes_views_while_that_computer_is_co
     counted_becomes(&running, "renderers", 1).await;
     drop(view);
     counted_becomes(&running, "renderers", 0).await;
+
+    // A connected machine that may not open this one sees nothing of it:
+    // with the guest's way in paused, the Views are refused while the
+    // connection stays.
+    let paused = host.run(&["device", "pause", GUEST, "--incoming", "--json"]);
+    assert!(paused.ok, "{}", paused.text());
+    host.peer_becomes("the guest's way in is paused, still connected", |peer| {
+        peer["opened_by"] == "paused" && peer["connected"] == true
+    })
+    .await;
+    let not_opened = in_checkout(&host, &project, &["workspace", "info"]);
+    assert_eq!(
+        refusal(&not_opened).as_deref(),
+        Some("renderer_unavailable"),
+        "{}",
+        not_opened.text()
+    );
+    let resumed = host.run(&["device", "resume", GUEST, "--incoming", "--json"]);
+    assert!(resumed.ok, "{}", resumed.text());
+    host.peer_becomes("the guest's way in is back", |peer| {
+        peer["opened_by"] == "active" && peer["connected"] == true
+    })
+    .await;
 
     // The guest leaves: nobody can see this machine again.
     let stopped = guest.run(&["stop"]);

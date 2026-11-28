@@ -476,10 +476,7 @@ fn answer_hook(
             &hook,
             executor,
             lineage,
-            state
-                .desktop_renderers
-                .load(std::sync::atomic::Ordering::SeqCst)
-                > 0,
+            &crate::server::Screens::of(state),
         ))
     })();
     match result {

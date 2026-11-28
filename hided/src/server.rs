@@ -2367,11 +2367,8 @@ async fn scoped_client_loop(
                             .map(|_| state.browser_control.acquire_relay());
                         let core = Arc::clone(&state.core);
                         let registry = Arc::clone(&state.pane_capabilities);
-                        let renderers = Arc::clone(&state.renderers);
-                        let desktop_renderers = Arc::clone(&state.desktop_renderers);
-                        let page_renderers = Arc::clone(&state.page_renderers);
+                        let screens = Screens::of(&state);
                         let browser_control = Arc::clone(&state.browser_control);
-                        let peers = Arc::clone(&state.peers);
                         let query_token = token.clone();
                         let command_request_id = request_id.clone();
                         let caller_node = source.as_ref().map(|(node, _)| node.clone());
@@ -2391,12 +2388,11 @@ async fn scoped_client_loop(
                             // Desk's file open waits in the core for a window
                             // showing Desk, so it needs none now.
                             let desk = cap.pane_id == hide_core::workspace_control::DESK_CALLER;
-                            if command.needs_renderer() && !desk && !seen(&renderers, &peers) {
-                                return Err((
-                                    "renderer_unavailable".to_owned(),
-                                    "Open Hide's web or desktop shell and retry",
-                                ));
+                            let seen = screens.now();
+                            if command.needs_renderer() && !desk && !seen.screen() {
+                                return Err(("renderer_unavailable".to_owned(), NO_SCREEN));
                             }
+                            let desktop_renderers = &screens.desktop_renderers;
                             let result = match command {
                                 ScopedRequest::BrowserConnect(display_id) => {
                                     if desktop_renderers.load(Ordering::SeqCst) == 0 {
@@ -2571,7 +2567,7 @@ async fn scoped_client_loop(
                                     &core,
                                                                         &roots,
                                     &window_calls,
-                                    renderers.load(Ordering::SeqCst),
+                                    screens.renderers.load(Ordering::SeqCst),
                                     &cap.context.device_id,
                                     &path,
                                     &command_request_id,
@@ -2615,11 +2611,7 @@ async fn scoped_client_loop(
                                         let (reason, next_action) = cap.changed_refusal();
                                         return Err((reason.to_owned(), next_action));
                                     }
-                                    scope_page_query(
-                                        &mut result,
-                                        desktop_renderers.load(Ordering::SeqCst) > 0,
-                                        seen(&page_renderers, &peers),
-                                    );
+                                    seen.scope(&mut result);
                                     serde_json::to_value(result).map_err(|_| {
                                         ("result_encoding_failed".to_owned(), "Reconnect Hide and retry")
                                     })?
@@ -2654,7 +2646,7 @@ async fn scoped_client_loop(
                                         }
                                         None => action,
                                     };
-                                    if matches!(action, hide_core::workspace_control::Action::OpenBrowser { .. }) && !seen(&page_renderers, &peers) {
+                                    if matches!(action, hide_core::workspace_control::Action::OpenBrowser { .. }) && !seen.pages() {
                                         return Err(("browser_unsupported".to_owned(), NO_PAGE_RENDERER));
                                     }
                                     let preparation = core
@@ -6202,17 +6194,88 @@ pub(crate) fn scope_page_query(
     }
 }
 
-/// Whether anyone can see what `drawers` would draw of this machine: one of
-/// them is attached now, or a paired computer that opens this machine is
-/// connected and shows its screen once its operator turns to it. That
-/// computer's desktop closes a hidden screen's socket (PRD
-/// device-connect-iroh B63), so the attached count alone reads a machine
-/// watched only from another computer as watched by nobody. What is
-/// recorded meanwhile is drawn when that screen shows it. The work only a
-/// drawn screen starts (`renderers_drawn`) keeps reading the count.
-fn seen(drawers: &AtomicUsize, peers: &crate::peer_host::PeerHost) -> bool {
-    drawers.load(Ordering::SeqCst) > 0 || peers.viewer_connected()
+/// What shows this machine's screen and pages: the counts of what is
+/// attached now and the paired machines, for a command's gates and a pane's
+/// query (`docs/BROWSER_DISPLAYS.md`, A machine with no window of its own).
+#[derive(Clone)]
+pub struct Screens {
+    /// Every screen attached now, this machine's windows and other
+    /// machines' views of it.
+    pub(crate) renderers: Arc<AtomicUsize>,
+    /// This machine's own desktop windows.
+    pub(crate) desktop_renderers: Arc<AtomicUsize>,
+    /// What draws its browser displays now (`AppState::page_renderers`).
+    pub(crate) page_renderers: Arc<AtomicUsize>,
+    pub(crate) peers: Arc<crate::peer_host::PeerHost>,
 }
+
+impl Screens {
+    pub(crate) fn of(state: &AppState) -> Self {
+        Self {
+            renderers: Arc::clone(&state.renderers),
+            desktop_renderers: Arc::clone(&state.desktop_renderers),
+            page_renderers: Arc::clone(&state.page_renderers),
+            peers: Arc::clone(&state.peers),
+        }
+    }
+
+    /// One command's look at them: the paired machines are read at most
+    /// once, and only when nothing attached answers.
+    pub(crate) fn now(&self) -> Seen<'_> {
+        Seen {
+            screens: self,
+            viewer: std::cell::OnceCell::new(),
+        }
+    }
+}
+
+/// [`Screens`] as one command finds them.
+pub(crate) struct Seen<'a> {
+    screens: &'a Screens,
+    viewer: std::cell::OnceCell<bool>,
+}
+
+impl Seen<'_> {
+    /// Whether anyone can see this machine's screen: a screen of it is
+    /// attached, or a paired computer that opens it is connected and shows
+    /// it once its operator turns to it. That computer's desktop closes a
+    /// hidden screen's socket (PRD device-connect-iroh B63), so the attached
+    /// count alone reads a machine watched only from another computer as
+    /// watched by nobody. What is recorded meanwhile is drawn when that
+    /// screen shows it. The work only a drawn screen starts
+    /// (`renderers_drawn`) keeps reading the count.
+    pub(crate) fn screen(&self) -> bool {
+        self.attached_or_viewer(&self.screens.renderers)
+    }
+
+    /// Whether anyone can see this machine's pages: a desktop window or a
+    /// view that draws them, or the same connected paired computer, whose
+    /// app may turn out unable to draw them; the page then waits until a
+    /// screen that can shows it.
+    pub(crate) fn pages(&self) -> bool {
+        self.attached_or_viewer(&self.screens.page_renderers)
+    }
+
+    fn attached_or_viewer(&self, attached: &AtomicUsize) -> bool {
+        attached.load(Ordering::SeqCst) > 0
+            || *self
+                .viewer
+                .get_or_init(|| self.screens.peers.viewer_connected())
+    }
+
+    /// A pane's query told only what can show its pages now.
+    pub(crate) fn scope(&self, result: &mut hide_core::workspace_control::QueryResult) {
+        scope_page_query(
+            result,
+            self.screens.desktop_renderers.load(Ordering::SeqCst) > 0,
+            self.pages(),
+        );
+    }
+}
+
+/// What an agent is told when nobody can see this machine's screen.
+const NO_SCREEN: &str =
+    "Open Hide here, or Hide on a paired computer that opens this one, and retry";
 
 /// What an agent is told when nothing on this machine or another one could
 /// draw the page it opens.
