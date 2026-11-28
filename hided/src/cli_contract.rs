@@ -48,7 +48,7 @@ const WAIT_REFUSALS: &[&str] = &[
 const TOPICS: &[&str] = &[
     "agent",
     "ps",
-    "request",
+    "letter",
     "inbox",
     "watch",
     "mission",
@@ -1862,7 +1862,7 @@ pub const COMMANDS: &[Spec] = &[
     // `participant_registering` for the seconds the spawn that started the
     // sender takes to register it.
     Spec {
-        words: &["request", "send"],
+        words: &["letter", "send"],
         arguments: TARGET,
         repeats: None,
         needs_one_of: &[],
@@ -1889,14 +1889,14 @@ pub const COMMANDS: &[Spec] = &[
         ],
     },
     spec(
-        &["request", "reply"],
+        &["letter", "reply"],
         ID,
         &[required("--intent", Key), required("--body", Body)],
         &["letter"],
     ),
-    spec(&["request", "ack"], ID, &[], &["letter"]),
-    spec(&["request", "cancel"], ID, &[], &["letter"]),
-    spec(&["request", "show"], ID, &[], &["letter"]),
+    spec(&["letter", "ack"], ID, &[], &["letter"]),
+    spec(&["letter", "cancel"], ID, &[], &["letter"]),
+    spec(&["letter", "show"], ID, &[], &["letter"]),
     spec(&["inbox"], &[], &[], &["inbox"]),
     spec(
         &["inbox", "--hook"],
@@ -3015,7 +3015,7 @@ fn envelopes(table: &retired::Table) -> Value {
     let mut envelopes = json!({
         "agent": {"ok": "ok", "answer": "value", "code": "error.code"},
         "ps": {"ok": "ok", "answer": "value", "code": "error.code"},
-        "request": {"ok": "ok", "answer": "result", "code": "reason"},
+        "letter": {"ok": "ok", "answer": "result", "code": "reason"},
         "inbox": {"ok": "ok", "answer": "result", "code": "reason"},
         "watch": {"ok": "ok", "answer": "result", "code": "reason"},
         "mission": {"ok": "ok", "answer": "result", "code": "reason"},
@@ -3909,10 +3909,10 @@ mod tests {
         assert!(admit(&args(&["agent", "resume", "a1"])).is_err());
         assert!(admit(&args(&["watch", "pause", "w1"])).is_err());
         assert!(admit(&args(&["factory", "status"])).is_ok());
-        assert!(admit(&args(&["request", "send", "t", "--wait"])).is_err());
+        assert!(admit(&args(&["letter", "send", "t", "--wait"])).is_err());
         assert!(parse_args(&args(&["hide", "watch", "stop", "w1", "--observer", "o"])).is_err());
         // A value that looks like a flag is a value.
-        assert!(admit(&args(&["request", "send", "t", "--body", "--wait"])).is_ok());
+        assert!(admit(&args(&["letter", "send", "t", "--body", "--wait"])).is_ok());
         // What `--` passes through is the agent's own.
         assert!(admit(&args(&["agent", "spawn", "--", "--model", "x"])).is_ok());
         assert!(
@@ -3986,7 +3986,7 @@ mod tests {
         ),
         (
             "--intent",
-            "text on agent spawn, key on request send|reply; a calling tool (sasu) matches both types",
+            "text on agent spawn, key on letter send|reply; a calling tool (sasu) matches both types",
         ),
         (
             "--json",
@@ -3998,7 +3998,7 @@ mod tests {
         ),
         (
             "--kind",
-            "by design: a letter's kind (one_of) on request send, an agent's kind (text) elsewhere",
+            "by design: a letter's kind (one_of) on letter send, an agent's kind (text) elsewhere",
         ),
         (
             "--status",
@@ -4597,9 +4597,18 @@ mod tests {
             "plan approve",
             "plan drop",
             "plan show",
+            "request send",
+            "request reply",
+            "request show",
+            "request cancel",
+            "request ack",
         ] {
             assert!(names.contains(&name), "{name} is not listed");
         }
+        // A calling tool written against `request` (sasu) finds its
+        // arguments by the names it knows.
+        assert_eq!(entry("request send")["arguments"][0]["name"], "target");
+        assert_eq!(entry("request reply")["arguments"][0]["name"], "id");
         // Every row's spellings, each right after the command it is now.
         let mut retired = 0;
         for spec in COMMANDS {
@@ -4625,10 +4634,18 @@ mod tests {
         assert_eq!(retired, names.len() - COMMANDS.len());
         assert_eq!(
             document["retired_words"],
-            json!([{"old": ["plan"], "now": ["task"]}])
+            json!([
+                {"old": ["plan"], "now": ["task"]},
+                {"old": ["request"], "now": ["letter"]},
+            ])
         );
         assert_eq!(document["envelopes"]["plan"], document["envelopes"]["task"]);
         assert_eq!(document["envelopes"]["task"]["answer"], "result");
+        assert_eq!(
+            document["envelopes"]["request"],
+            document["envelopes"]["letter"]
+        );
+        assert_eq!(document["envelopes"]["letter"]["answer"], "result");
     }
 
     /// The forms a later rename writes: an option row lists the old option

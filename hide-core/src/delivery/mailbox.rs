@@ -24,12 +24,12 @@ pub enum Command {
         body: String,
         #[serde(default = "request_kind")]
         kind: String,
-        /// `hide request send --now`: delivered at the recipient's next safe
+        /// `hide letter send --now`: delivered at the recipient's next safe
         /// gap while it works, without the mid-turn wait (PRD
         /// letters-to-busy-agents D-05).
         #[serde(default)]
         now: bool,
-        /// `hide request send --force`: typed into the recipient's input now,
+        /// `hide letter send --force`: typed into the recipient's input now,
         /// even while it works, once its composer was read empty (PRD
         /// engine-bundle-1 D-14); see `Letter::forced`.
         #[serde(default)]
@@ -39,7 +39,7 @@ pub enum Command {
         id: String,
         intent: String,
         body: String,
-        /// Set by the core, never by `hide request reply`: a reply to an
+        /// Set by the core, never by `hide letter reply`: a reply to an
         /// open mission's Conductor is taken at its next tool call, as a
         /// sent letter's `--now` is.
         #[serde(skip)]
@@ -1107,6 +1107,15 @@ impl Bundling {
             Self::Legacy => LEGACY_HOOK_LETTERS,
         }
     }
+
+    /// The topic word the asking `hide` runs letters' commands with: a kit
+    /// older than bundles predates `hide letter` too.
+    fn letter_topic(self) -> &'static str {
+        match self {
+            Self::PerSender => "letter",
+            Self::Legacy => LEGACY_LETTER_TOPIC,
+        }
+    }
 }
 
 /// Whether a bundle may fold `letter` into its sender's line: a question or
@@ -1199,7 +1208,7 @@ fn fold_line(share: &Share<'_>, language: InterfaceLanguage) -> String {
         named.push("…");
     }
     format!(
-        "\nHide letters from {} ({}) {}: hide request show <id> ({})\n",
+        "\nHide letters from {} ({}) {}: hide letter show <id> ({})\n",
         share.sender.name,
         share.sender.kind,
         words.more(share.folded.len()),
@@ -1238,7 +1247,11 @@ fn render(mut pending: Vec<&Letter>, language: InterfaceLanguage, bundling: Bund
                 "\nHide letter {} from {} ({}) [{}]\n",
                 letter.id, letter.sender.name, letter.sender.kind, letter.kind
             );
-            let tail = format!("\nFull letter: hide request show {}\n", letter.id);
+            let tail = format!(
+                "\nFull letter: hide {} show {}\n",
+                bundling.letter_topic(),
+                letter.id
+            );
             let available =
                 HOOK_LIMIT.saturating_sub(context.len() + header.len() + tail.len() + TAIL_BUDGET);
             if available == 0 || ids.len() == limit {
@@ -1267,9 +1280,17 @@ fn render(mut pending: Vec<&Letter>, language: InterfaceLanguage, bundling: Bund
     }
 }
 
+// retired-spellings: kept from here: a hide older than bundles runs letters' commands only under this word
+/// The topic word a `hide` older than bundles knows for letters: such a
+/// build predates `hide letter`, so the command it can run to acknowledge one
+/// is spelled with the letters' retired topic word, which every later build
+/// still reads (`hide_shell::retired`).
+const LEGACY_LETTER_TOPIC: &str = "request";
+// retired-spellings: kept to here
+
 /// `hide inbox` for a `hide` older than bundles: every letter as before,
-/// each pending one with its own `hide request ack`, which that `hide` can
-/// run, since it has no `--ack`.
+/// each pending one with its own acknowledgement in the spelling that
+/// `hide` can run ([`LEGACY_LETTER_TOPIC`]), since it has no `--ack`.
 fn legacy_inbox(ledger: &Ledger, actor: &Actor) -> Value {
     let acknowledges = !prompt_hook(&actor.kind);
     Value::Array(
@@ -1286,7 +1307,8 @@ fn legacy_inbox(ledger: &Ledger, actor: &Actor) -> Value {
                     && letter.state == State::Pending
                     && letter.recipient.same_identity(actor)
                 {
-                    entry["ack_command"] = json!(format!("hide request ack {}", letter.id));
+                    entry["ack_command"] =
+                        json!(format!("hide {LEGACY_LETTER_TOPIC} ack {}", letter.id));
                 }
                 entry
             })
@@ -1616,7 +1638,7 @@ mod tests {
         assert!(intake.context.len() <= HOOK_LIMIT);
         assert_eq!(intake.ids, vec![ledger.letters[0].id.clone()]);
         assert!(intake.context.contains("6 more letters waiting"));
-        assert!(intake.context.contains("hide request show letter-1"));
+        assert!(intake.context.contains("hide letter show letter-1"));
         assert_eq!(ledger.letters[0].body.len(), (BODY_LIMIT / 3) * 3);
     }
     /// B4, B7: a letter waits for its agent however long that takes, and
@@ -4054,7 +4076,7 @@ mod tests {
         let ids = letters_from(&mut ledger, &worker, &conductor, &["progress"; 5], 1);
         let intake = bundle_for(&ledger, &conductor);
         assert!(intake.context.contains(
-            "Hide letters from worker (codex) 외 2통: hide request show <id> (letter-2, letter-1)"
+            "Hide letters from worker (codex) 외 2통: hide letter show <id> (letter-2, letter-1)"
         ));
         for at in 1..=2 {
             assert!(!intake.context.contains(&format!("body of worker at {at}")));
@@ -4148,11 +4170,11 @@ mod tests {
         let b_ids = letters_from(&mut ledger, &b, &conductor, &["progress"; 4], 10);
         let intake = bundle_for(&ledger, &conductor);
         assert!(intake.context.contains(&format!(
-            "Hide letters from worker-a (codex) 외 2통: hide request show <id> ({}, {})",
+            "Hide letters from worker-a (codex) 외 2통: hide letter show <id> ({}, {})",
             a_ids[1], a_ids[0]
         )));
         assert!(intake.context.contains(&format!(
-            "Hide letters from worker-b (codex) 외 1통: hide request show <id> ({})",
+            "Hide letters from worker-b (codex) 외 1통: hide letter show <id> ({})",
             b_ids[0]
         )));
         assert_eq!(intake.context.matches("\nHide letter ").count(), 6);
@@ -4393,6 +4415,14 @@ mod tests {
         assert!(hide_agent_hooks::delivery::valid_letter_ids(&intake.ids));
         assert!(!intake.context.contains("Hide letters from"));
         assert_eq!(intake.remaining, 2);
+        // Such a kit predates `hide letter`: it is told the spelling its
+        // `hide` runs, which every later build still reads.
+        assert!(
+            intake
+                .context
+                .contains(&format!("Full letter: hide request show {}", ids[0]))
+        );
+        assert!(!intake.context.contains("hide letter show"));
         apply(
             &mut ledger,
             &conductor,
@@ -4410,7 +4440,8 @@ mod tests {
         .unwrap();
         assert_eq!(next.ids, ids[5..]);
         assert_eq!(next.remaining, 0);
-        // Its `hide inbox` has no `--ack`, so each letter keeps its own ack.
+        // Its `hide inbox` has no `--ack`, so each letter keeps its own ack,
+        // in the spelling its `hide` runs.
         let mut reader = actor("reader");
         reader.kind = "cursor".into();
         letters_from(&mut ledger, &worker, &reader, &["progress"; 4], 30);

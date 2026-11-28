@@ -13,7 +13,7 @@
       { "sender": "ci-lead", "sender_kind": "claude", "kind": "request", "body": "CI 다시 봐줘" },
       { "sender": "release-owner", "sender_kind": "codex", "kind": "report", "body": "검증 완료" }
     ],
-    "context": "\nHide letter letter-1 from ci-lead (claude) [request]\nCI 다시 봐줘\nFull letter: hide request show letter-1\n\nHide letter letter-2 from release-owner (codex) [report]\n검증 완료\nFull letter: hide request show letter-2\n",
+    "context": "\nHide letter letter-1 from ci-lead (claude) [request]\nCI 다시 봐줘\nFull letter: hide letter show letter-1\n\nHide letter letter-2 from release-owner (codex) [report]\n검증 완료\nFull letter: hide letter show letter-2\n",
     "sender": "ci-lead"
   },
   "plan_context": {

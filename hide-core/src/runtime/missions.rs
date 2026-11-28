@@ -591,7 +591,7 @@ const NODE_LETTER_LIMIT: usize = 5;
 const NODE_LETTER_LINE: usize = 160;
 
 /// One letter of a node's worker or checker, as `hide mission show <node>`
-/// lists it: its id, which `hide request show` reads, who wrote to whom,
+/// lists it: its id, which `hide letter show` reads, who wrote to whom,
 /// its kind, and its first line.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct NodeLetter {

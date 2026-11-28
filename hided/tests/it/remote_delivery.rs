@@ -103,7 +103,7 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
         );
 
         let send = format!(
-            "{} request send remote-child --intent bridge-1 --body {}",
+            "{} letter send remote-child --intent bridge-1 --body {}",
             quote(&fixture.hide),
             quote("DELIVERY_REMOTE_ONCE")
         );
@@ -531,6 +531,117 @@ fn ending_the_recipients_registration_ends_the_senders_answer_wait_and_says_why(
                 );
             }))
         })?;
+        Ok(())
+    })
+}
+
+/// `command` run in `agent`'s pane, printed with its answer line as the
+/// run's transcript (`--no-capture`), and its `result`.
+fn transcribed(agent: &fixture::Agent, side: &str, command: &str) -> Result<Value> {
+    println!("{side}$ {command}");
+    let ran = agent.run_in_pane(command)?;
+    println!("{}", ran.stdout.trim_end());
+    ran.json()
+}
+
+/// The letter commands answer the same under `hide letter` and under the
+/// retired `hide request` they were (mission-113, `hide_shell::retired`):
+/// a letter sent under either spelling is shown, acknowledged, answered and
+/// cancelled under the other, through the real CLI in both machines' panes,
+/// since session files, edited skills and calling tools keep the old one.
+#[test]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
+fn the_letter_commands_answer_the_same_under_hide_letter_and_hide_request() -> Result<()> {
+    Fixture::journey(|fixture| {
+        let hide = quote(&fixture.hide);
+        let remote_hide = quote(&fixture.remote.hide);
+        let mut answers = Vec::new();
+        for (spelled, other) in [("letter", "request"), ("request", "letter")] {
+            let sent = transcribed(
+                &fixture.local,
+                "local",
+                &format!(
+                    "{hide} {spelled} send remote-child --intent spellings-{spelled} --body {}",
+                    quote(format!("SENT_AS_{spelled}"))
+                ),
+            )?;
+            let id = sent["id"].as_str().context("sent letter ID")?.to_owned();
+            ensure!(
+                sent["kind"] == "request" && sent["waiting_answer"] == true,
+                "{spelled} send did not send a question: {sent}"
+            );
+            let shown = transcribed(
+                &fixture.local,
+                "local",
+                &format!("{hide} {other} show {id}"),
+            )?;
+            ensure!(
+                shown["id"] == id.as_str() && shown["body"] == format!("SENT_AS_{spelled}"),
+                "{other} show did not show the letter {spelled} send sent: {shown}"
+            );
+            let acknowledged = transcribed(
+                &fixture.remote,
+                "device",
+                &format!("{remote_hide} {spelled} ack {id}"),
+            )?;
+            ensure!(
+                acknowledged["id"] == id.as_str() && acknowledged["state"] == "acknowledged",
+                "{spelled} ack did not acknowledge the letter: {acknowledged}"
+            );
+            let replied = transcribed(
+                &fixture.remote,
+                "device",
+                &format!(
+                    "{remote_hide} {other} reply {id} --intent spellings-{spelled}-answer --body {}",
+                    quote(format!("ANSWERED_AS_{other}"))
+                ),
+            )?;
+            ensure!(
+                replied["reply_to"] == id.as_str(),
+                "{other} reply did not answer the letter: {replied}"
+            );
+            let answered = transcribed(
+                &fixture.local,
+                "local",
+                &format!("{hide} {spelled} show {id}"),
+            )?;
+            ensure!(
+                answered["waiting_answer"] == false,
+                "the answer did not end the wait: {answered}"
+            );
+            let second = transcribed(
+                &fixture.local,
+                "local",
+                &format!(
+                    "{hide} {spelled} send remote-child --intent spellings-{spelled}-withdrawn --body {}",
+                    quote("WITHDRAWN")
+                ),
+            )?;
+            let second = second["id"]
+                .as_str()
+                .context("second letter ID")?
+                .to_owned();
+            let cancelled = transcribed(
+                &fixture.local,
+                "local",
+                &format!("{hide} {other} cancel {second}"),
+            )?;
+            ensure!(
+                cancelled["state"] == "cancelled",
+                "{other} cancel did not withdraw the letter: {cancelled}"
+            );
+            answers.push(
+                [&sent, &shown, &acknowledged, &replied, &cancelled].map(|answer| {
+                    answer
+                        .as_object()
+                        .map(|fields| fields.keys().cloned().collect::<Vec<_>>())
+                }),
+            );
+        }
+        ensure!(
+            answers[0] == answers[1],
+            "the two spellings answer with other fields: {answers:?}"
+        );
         Ok(())
     })
 }

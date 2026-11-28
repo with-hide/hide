@@ -79,9 +79,9 @@ Agents run these in their own pane, on every system:
 
 | Do | Run |
 | --- | --- |
-| Send a letter | `hide request send <target> --intent <key> --body <text> [--kind request\|block\|report\|progress] [--now \| --force]` |
-| Answer a letter | `hide request reply <id> --intent <key> --body <text>` |
-| Acknowledge, cancel or read one | `hide request ack <id>`, `hide request cancel <id>`, `hide request show <id>` |
+| Send a letter | `hide letter send <target> --intent <key> --body <text> [--kind request\|block\|report\|progress] [--now \| --force]` |
+| Answer a letter | `hide letter reply <id> --intent <key> --body <text>` |
+| Acknowledge, cancel or read one | `hide letter ack <id>`, `hide letter cancel <id>`, `hide letter show <id>` |
 | Read your letters | `hide inbox` |
 | Start, hand over, stop or list watches | `hide watch start <target>`, `hide watch assign <watch-or-target-id> --observer <id>`, `hide watch stop <id>`, `hide watch list` |
 | Start a helper that the parent watches | `hide agent spawn --parent here --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch>`, or without `--repo` and `--branch` in a project folder that is not a Git repository, where the helper works in the folder itself |
@@ -105,7 +105,7 @@ Quoted from the rows named below in `docs/INSTALL.md`, "What each system support
   - Pi and Antigravity: every system "supported on the next prompt"; mid-turn delivery is unverified.
   - Grok: every system "supported at rest ... mid-turn `PreToolUse` delivery and picker safety are not measured by this journey".
 - **A letter held on a possible draft goes in once the composer reads empty.** macOS: "supported for Claude Code and Codex, the agents a bell rings ... narrow panes and the light theme are unverified". Windows: "unverified ... no composer of a real agent has been read on Windows"; it closes when the agent journey's composer cell passes on the Windows lane. Linux: "unverified: the same"; it closes when that cell passes on the Linux lane.
-- **`hide pane read`, `hide pane send`, `hide pane open --beside` and `hide request send --force`.** Windows: "supported ... with the keys and the paste unmeasured live on Windows; `--paste` is refused `paste_unsupported` for Grok". Linux: "supported ... with the keys and the paste unmeasured live on Linux".
+- **`hide pane read`, `hide pane send`, `hide pane open --beside` and `hide letter send --force`.** Windows: "supported ... with the keys and the paste unmeasured live on Windows; `--paste` is refused `paste_unsupported` for Grok". Linux: "supported ... with the keys and the paste unmeasured live on Linux".
 
 The contract for letters and watches is `docs/delivery.md`, Commands and caller identity and Persistence, clocks and limits. The design of task identity and delegated escalation is owned by `docs/task-identity.md` in with-hide/hide-private.
 

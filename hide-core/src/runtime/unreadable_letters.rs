@@ -129,7 +129,7 @@ impl Runtime {
 /// who, why, that the letter still waits, and what to do now.
 fn note_body(recipient: &str, kind: &str, letter: &str, reason: &str) -> String {
     format!(
-        "Your {kind} letter {letter} to {recipient} is not delivered: Hide cannot read {recipient}'s session ({reason}), so it cannot tell when the letter would not interrupt.\nThe letter stays pending and is delivered once the session can be read. To type it in now, send it again with `hide request send {recipient} --force`."
+        "Your {kind} letter {letter} to {recipient} is not delivered: Hide cannot read {recipient}'s session ({reason}), so it cannot tell when the letter would not interrupt.\nThe letter stays pending and is delivered once the session can be read. To type it in now, send it again with `hide letter send {recipient} --force`."
     )
 }
 

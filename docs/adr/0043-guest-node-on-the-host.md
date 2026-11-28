@@ -94,7 +94,7 @@ The node asks so at most once in 600 s, counted in its own folder across its sta
 
 A pane of a guest's node reaches the guest's core through the pane service of the node's link, which lives only as long as a link does.
 While no link is served, the same `hide` asks the node itself on `away.sock` in the node's folder (`hided/src/guest_node/away.rs`), bound for the node's whole life: one line each way, both ends the guest's own build.
-A letter (`hide request send`) from a caller this machine's kernel finds in the pane it names is kept in the node's box, with that pane's terminal, and answered `queued`; every other command needs the core's judgement and is answered `owner_offline` at once, and so is a credential the pane asks for with no link (`workspace_cli::bootstrap`).
+A letter (`hide letter send`) from a caller this machine's kernel finds in the pane it names is kept in the node's box, with that pane's terminal, and answered `queued`; every other command needs the core's judgement and is answered `owner_offline` at once, and so is a credential the pane asks for with no link (`workspace_cli::bootstrap`).
 
 The box is `box.jsonl` and `acked` in the node's folder (`hided/src/guest_node/event_box.rs`), in the format `hide_peer_protocol::event` names because two builds of one guest read it: the node that wrote it and the one that replaces it.
 An event is appended and synced before its sender is answered, numbered from 1 with no gaps in a box named once; an event of the same kind and key that is still kept is the same event, so a send tried again adds nothing.
