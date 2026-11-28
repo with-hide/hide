@@ -87,6 +87,12 @@ impl ThreadCursor {
     pub fn position(&self) -> u64 {
         self.position
     }
+
+    /// Which file the position belongs to: a file replaced at the same path
+    /// has another.
+    pub fn incarnation(&self) -> &str {
+        &self.incarnation
+    }
 }
 
 /// One page of a session's thread.

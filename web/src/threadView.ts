@@ -17,8 +17,8 @@ export type ThreadConversation = {
   sessions: Record<string, ThreadSession>;
   /**
    * Each update's name, which neither a page read in above, the live page filling and joining the kept ones, nor the
-   * oldest kept page being let go moves: where its page begins in the record and its place in that page, whatever
-   * stands before it. A screen keeps a line's fold, its measured height and the place a reader stands at by it.
+   * oldest kept page being let go moves, and a record replaced at the same path never reuses: its page's record file,
+   * where the page begins in it and its place in the page, whatever stands before it. A screen keeps a line's fold, its measured height and the place a reader stands at by it.
    */
   ids: string[];
 };
@@ -38,7 +38,7 @@ export function threadConversation(thread: SessionThreadSection | null, history:
     updates: pages.flatMap((page) => page.updates),
     parts: Object.assign({}, ...pages.map((page) => page.parts)) as Record<string, ThreadPart>,
     sessions: Object.assign({}, ...pages.map((page) => page.sessions)) as Record<string, ThreadSession>,
-    ids: pages.flatMap((page) => page.updates.map((_, index) => `${page.start}:${index}`)),
+    ids: pages.flatMap((page) => page.updates.map((_, index) => `${page.record}@${page.start}:${index}`)),
   };
 }
 

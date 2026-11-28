@@ -3963,7 +3963,12 @@ export type ThreadSession = { pane_id: string; machine: string };
  * names runs, by the name as written; a name no live session answers to is absent.
  */
 export type ThreadPage = {
-  /** Where the page begins in its record, a byte offset: its name, which a page read in above or the live page joining the kept ones never changes. */
+  /**
+   * The record file the page was read from and where the page begins in it, a byte offset: together its name, which a
+   * page read in above or the live page joining the kept ones never changes, and a record replaced at the same path
+   * never shares.
+   */
+  record: string;
   start: number;
   updates: ThreadUpdate[];
   parts: Record<string, ThreadPart>;
