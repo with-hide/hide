@@ -1,38 +1,35 @@
 #!/usr/bin/env python3
-"""The daily agent canary's record: whether each agent CLI's latest release
-passed Hide's agent journey, kept in one GitHub issue, and an issue for each
-agent whose latest release fails (`.github/workflows/agent-canary.yml`).
+"""The agent canary's record: whether each agent CLI's latest release passed
+Hide's agent journey on each system, kept in one GitHub issue, and an issue
+for each agent whose latest release fails (the `agent canary` jobs of
+`.github/workflows/nightly.yml`).
 
 Usage:
-  agent-canary-record.py decide --versions <latest.json>
-  agent-canary-record.py reruns --versions <latest.json> --reports <dir>
-  agent-canary-record.py record --versions <latest.json> --reports <dir> --run-url <url> --commit <sha>
+  agent-canary-record.py --versions <latest.json> --systems <JSON> --reports <dir>
+                         --run-url <url> --commit <sha> [--write]
 
-`decide` prints `changed=true` when a version differs from the one the
-record last measured, or the record has none, or the last run left an agent
-unjudged or failing for Hide's reason, and `changed=false` otherwise, so a
-day on which no vendor released starts no journey. `reruns` prints the
-agents whose latest release failed a cell while their pin is another version
-(`agents=<id,...>`) and the systems it failed on (`systems=<JSON>`): the
-workflow measures those again at their pins, on the same commit. `record`
-judges each agent from the fake model lane's reports, one per system under
-`<dir>` (the latest releases' `agent-journey-fake-<system>` and the pinned
-rerun's `agent-journey-pinned-<system>`), and rewrites the record issue's
-table. A miss the pinned version does not repeat is the release's: the agent
-gets its own issue, or a comment on the open one, and an agent that passes
-again closes it. A miss the pinned version repeats on the same commit is
-Hide's, not the release's (with-hide/hide-private#358): it goes on one issue
-against Hide, which a run with no such miss closes. A miss with no pinned
-measurement leaves the agent `unknown`, blaming no one.
-The record's state rides in the issue body as one JSON comment, so the next
-run reads what this one measured without a commit to main. Every issue lives in
-the public repository (`ISSUE_REPOSITORY`) with the other development issues,
-under the `agent-canary` label; `--run-url` names the run where it ran.
+The nightly runs the fake model journey twice on the same commit: its
+`agent journey` at the pins (`agent-journey-fake-<system>`) and the canary at
+each CLI's latest release (`agent-canary-latest-<system>`), whose reports sit
+under `<dir>` one folder per artifact. Each agent gets a verdict on each
+system the canary measured: `pass` when every cell its declaration expects
+came out as declared; `fail` for a miss its pin does not repeat, which is the
+release's, so the agent gets its own issue, or a comment on the open one, and
+an agent that passes again closes it; `hide` for a miss its pin repeats,
+which is Hide's and which the nightly's report files from `agent journey`;
+and `unknown` when a report is missing, which proves nothing either way. The
+record's state rides in the issue body as one JSON comment, so the next run
+reads what this one measured without a commit to main. Every issue lives in
+the public repository (`ISSUE_REPOSITORY`) with the other development
+issues, under the `agent-canary` label. Without `--write`, as on a run of
+another branch, the record is read and nothing is written: the table and the
+issue actions it would take go to the job summary and standard output.
 """
 
 import argparse
 import datetime
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -46,15 +43,19 @@ from agent_journey.scene import lane_status  # noqa: E402
 # Where the record and every failure issue live.
 ISSUE_REPOSITORY = "with-hide/hide"
 LABEL = "agent-canary"
-RECORD_TITLE = "Agent CLI support record"
-HIDE_TITLE = "agent canary: Hide fails the agent journey with the pinned agent CLIs"
+# The record, "Agent CLI support record", is this one issue, found by its number: a title can be edited or
+# repeated. scripts/check-nightly-green.py exempts the same number.
+RECORD_ISSUE = 2552
 STATE = "<!-- agent-canary-state "
-# Windows runs no journey while a holder cannot leave the CI job (docs/INSTALL.md).
+# The systems the canary can measure; Windows runs no journey while a holder
+# cannot leave the CI job (docs/INSTALL.md). A run names the ones it measured.
 SYSTEMS = ("linux", "macos")
-# The artifact names of the latest releases' reports and the pinned rerun's.
-LATEST = "agent-journey-fake"
-PINNED = "agent-journey-pinned"
+# The artifact names of the latest releases' reports and the pins'.
+LATEST = "agent-canary-latest"
+PINNED = "agent-journey-fake"
 MARK = {"pass": "✅", "fail": "❌", "unknown": "❔", "hide": "⚠️ Hide"}
+# An agent's verdict is its worst system's, in this order.
+WORST = ("fail", "unknown", "hide", "pass")
 
 
 def read_state(body):
@@ -68,16 +69,6 @@ def read_state(body):
     except ValueError:
         return {"agents": {}}
     return state if isinstance(state, dict) and isinstance(state.get("agents"), dict) else {"agents": {}}
-
-
-def changed(versions, state):
-    """Whether any version differs from what the record last measured, or
-    the last run could not judge an agent or found Hide failing: those are
-    measured again every day until they pass."""
-    rows = state["agents"].values()
-    measured = {row.get("kind"): row.get("checked") for row in rows}
-    return (any(measured.get(kind) != version for kind, version in versions.items())
-            or any(row.get("status") in ("unknown", "hide") for row in rows))
 
 
 def misses(row, report, system):
@@ -110,129 +101,122 @@ def line(head, reason):
     return head + (f" ({reason})" if reason else "")
 
 
-def latest_misses(contract, reports):
-    """Each active agent's misses on the latest releases as `(system, what,
-    head, reason)`, or None when a system's report is missing: that run
-    proves nothing about the system."""
-    if any(system not in reports for system in SYSTEMS):
-        return {row["id"]: None for row in active_rows(contract)}
-    return {row["id"]: [(system, *miss) for system in SYSTEMS for miss in misses(row, reports[system], system)]
-            for row in active_rows(contract)}
-
-
 def pinned_already(row, versions, pins):
     """Whether the latest release the run measured is the agent's pin, so the
     latest run already measured the pinned version."""
     return versions.get(row["agent_cli"]) == pins.get(row["agent_cli"])
 
 
-def reruns(contract, versions, pins, reports):
-    """The agents to measure again at their pins, and the systems to measure
-    them on: each agent whose latest release missed something, on a system
-    where it did, unless that release is its pin."""
-    agents, systems = [], set()
-    found = latest_misses(contract, reports)
-    for row in active_rows(contract):
-        if found[row["id"]] and not pinned_already(row, versions, pins):
-            agents.append(row["id"])
-            systems.update(miss[0] for miss in found[row["id"]])
-    return agents, [system for system in SYSTEMS if system in systems]
-
-
-def verdicts(contract, versions, pins, reports, pinned):
-    """Each active agent's `(status, failures, keys)`: `pass` when every
-    system measured it and every cell its declaration expects came out as
-    declared; `fail` with the misses its latest release has and its pin,
-    measured on the same commit, does not; `hide` with the misses its pin
-    repeats, which are Hide's, and their `keys` without the run's reasons;
-    `unknown` when a system's report is missing or a miss has no pinned
-    measurement to say whose it is."""
-    result, found = {}, latest_misses(contract, reports)
-    for row in active_rows(contract):
-        agent, kind = row["id"], row["agent_cli"]
-        if found[agent] is None:
-            result[agent] = ("unknown", [f"{system}: no report" for system in SYSTEMS if system not in reports], [])
-            continue
-        same, pin = pinned_already(row, versions, pins), pins.get(kind)
-        label = f"{agent} {pin} (pinned)" if same else f"{agent} {pin} (pinned; latest {versions.get(kind)})"
-        release, hide, keys, unjudged = [], [], [], []
-        for system, what, head, reason in found[agent]:
-            if not same and what.rsplit("/", 1)[-1] == "install":
-                # The latest release's own install or version answer.
-                release.append(line(head, reason))
-                continue
-            if not same:
-                again = pinned.get(system)
-                measured = again is not None and agent in again.get("selected", [])
-                repeated = {miss[0] for miss in misses(row, again, system)} if measured else set()
-                if not measured or any(item.rsplit("/", 1)[-1] == "install" for item in repeated):
-                    unjudged.append(f"{line(head, reason)}; the pinned {pin} was not measured on {system}")
-                    continue
-                if what not in repeated:
-                    release.append(line(head, reason))
-                    continue
-            hide.append(f"{label}: {line(head, reason)}")
-            keys.append(f"{agent}: {head}")
-        if release:
-            result[agent] = ("fail", release, [])
-        elif unjudged:
-            result[agent] = ("unknown", unjudged, [])
-        elif hide:
-            result[agent] = ("hide", hide, keys)
+def system_verdict(row, system, versions, pins, latest, pinned):
+    """One agent on one system: `(status, failures)`, as the module says."""
+    if system not in latest:
+        return "unknown", [f"{system}: no report"]
+    found = misses(row, latest[system], system)
+    if not found:
+        return "pass", []
+    agent, kind = row["id"], row["agent_cli"]
+    pin = pins.get(kind)
+    if pinned_already(row, versions, pins):
+        return "hide", [f"{line(head, reason)} (the pinned {pin} is the latest)" for _, head, reason in found]
+    again = pinned.get(system)
+    measured = again is not None and agent in again.get("selected", [])
+    repeated = {miss[0] for miss in misses(row, again, system)} if measured else set()
+    release, hide, unjudged = [], [], []
+    for what, head, reason in found:
+        if what == "install":
+            # The latest release's own install or version answer.
+            release.append(line(head, reason))
+        elif not measured or "install" in repeated:
+            unjudged.append(f"{line(head, reason)}; the pinned {pin} was not measured on {system}")
+        elif what in repeated:
+            hide.append(f"{line(head, reason)}; the pinned {pin} fails it too")
         else:
-            result[agent] = ("pass", [], [])
-    return result
+            release.append(line(head, reason))
+    if release:
+        return "fail", release
+    if unjudged:
+        return "unknown", unjudged
+    return "hide", hide
+
+
+def verdicts(contract, versions, pins, systems, latest, pinned):
+    """Each active agent's `{system: (status, failures)}` on the systems this
+    run measured."""
+    return {row["id"]: {system: system_verdict(row, system, versions, pins, latest, pinned) for system in systems}
+            for row in active_rows(contract)}
 
 
 def updated_state(state, contract, versions, results, today):
-    """The record after this run: `checked` and `date` move for every agent,
-    `last_pass` only for one that passed, an agent's failure issue stays with
-    it until it passes, and the issue against Hide stays until a run closes it."""
+    """The record after this run. Each agent keeps one entry per system it was
+    ever measured on, `{status, version, failures}`; this run replaces the
+    entries of the systems it measured and keeps the others, so a day that
+    measures Linux alone says nothing about macOS. An entry for an older
+    version than the one checked now is unknown for the agent's verdict: a
+    failure there is not cleared until that system passes the current
+    version. `checked` and `date` move for every agent, `last_pass` only for
+    one whose every entry passes at the current version, and an agent's
+    failure issue stays with it until then."""
     agents = {}
     for row in active_rows(contract):
         agent, kind = row["id"], row["agent_cli"]
+        version = versions.get(kind)
         before = state["agents"].get(agent, {})
-        status, failures, _ = results[agent]
+        systems = {system: entry for system, entry in (before.get("systems") or {}).items()
+                   if isinstance(entry, dict) and system in SYSTEMS}
+        for system, (status, failures) in results[agent].items():
+            systems[system] = {"status": status, "version": version, "failures": failures}
+        statuses, failures = [], []
+        for system, entry in sorted(systems.items()):
+            if entry["version"] == version:
+                statuses.append(entry["status"])
+                failures += entry["failures"]
+            else:
+                statuses.append("unknown")
+                failures += [f"{system}: not measured at {version} since {entry['version']}, which was "
+                             f"{entry['status']}"] + [f"{text} (at {entry['version']})" for text in entry["failures"]]
+        status = min(statuses, key=WORST.index, default="unknown")
         passed = status == "pass"
         agents[agent] = {
             "kind": kind,
-            "checked": versions.get(kind),
+            "checked": version,
             "date": today,
             "status": status,
+            "systems": systems,
             "failures": failures,
-            "last_pass": versions.get(kind) if passed else before.get("last_pass"),
+            "last_pass": version if passed else before.get("last_pass"),
             "last_pass_date": today if passed else before.get("last_pass_date"),
             "issue": None if passed else before.get("issue"),
         }
-    hide = [results[agent] for agent in agents if results[agent][0] == "hide"]
-    return {"agents": agents,
-            "hide": {"issue": state.get("hide", {}).get("issue"),
-                     "failures": [text for _, failures, _ in hide for text in failures],
-                     "keys": sorted(key for _, _, keys in hide for key in keys)}}
+    return {"agents": agents}
 
 
 def render(state, pins, minimums, run_url):
     """The record issue's body: the table, then the state for the next run."""
     lines = [
-        "Each agent CLI's latest release, measured daily by the agent journey on the fake model on "
-        "Linux, macOS and Windows (`.github/workflows/agent-canary.yml`). "
+        "Each agent CLI's latest release, measured by the nightly's agent canary on the fake model "
+        "(`.github/workflows/nightly.yml`): on Linux every day and on macOS on Monday and Thursday, "
+        "beside the same journey at the pins on the same commit. "
         "`Minimum` is the oldest version Hide puts its hook, plugin or extension in place for "
         "(`minimum_version` in `contracts/agent-journey.json`); "
-        "`Pinned` is what every other CI lane installs (`contracts/agent-clis.json`).",
+        "`Pinned` is what every other CI lane installs (`contracts/agent-clis.json`). "
+        "⚠️ Hide marks a cell the pin fails too, which the nightly files as a `nightly-failure` issue.",
         "",
         "| Agent | Latest checked | Status | Minimum | Last passed | Pinned | Issue |",
         "|---|---|---|---|---|---|---|",
     ]
     for agent, row in sorted(state["agents"].items()):
         last = f"{row['last_pass']} ({row['last_pass_date']})" if row.get("last_pass") else "—"
-        number = state.get("hide", {}).get("issue") if row["status"] == "hide" else row.get("issue")
-        issue = f"#{number}" if number else ""
-        lines.append(f"| {agent} | {row['checked']} ({row['date']}) | {MARK[row['status']]} | "
+        status = " · ".join(f"{system} {MARK[entry['status']]}"
+                            + ("" if entry["version"] == row["checked"] else f" ({entry['version']})")
+                            for system, entry in sorted(row.get("systems", {}).items()))
+        issue = f"#{row['issue']}" if row.get("issue") else ""
+        lines.append(f"| {agent} | {row['checked']} ({row['date']}) | {status or MARK[row['status']]} | "
                      f"{minimums.get(agent, '—')} | {last} | {pins.get(row['kind'], '—')} | {issue} |")
-    hide = state.get("hide", {})
-    if hide.get("issue"):
-        lines += ["", f"⚠️ Hide: the pinned version fails the same cells on the same commit, so Hide is what broke "
-                  f"(#{hide['issue']}); the canary measures again every day until they pass."]
+    failing = [(agent, row) for agent, row in sorted(state["agents"].items()) if row["failures"]]
+    if failing:
+        lines += ["", "<details><summary>What each agent missed</summary>", ""]
+        lines += [f"- {agent} {row['checked']}: {text}" for agent, row in failing for text in row["failures"]]
+        lines += ["", "</details>"]
     lines += ["", f"Last run: {run_url}", "",
               STATE + json.dumps(state, separators=(",", ":")) + " -->"]
     return "\n".join(lines) + "\n"
@@ -247,13 +231,26 @@ def failure_body(agent, row, run_url, commit, pin):
             "request, so its CI proves the fix on it.\n")
 
 
-def hide_body(failures, run_url, commit):
-    return (f"Hide fails its agent journey on the fake model at {commit}: each cell below failed for an agent's "
-            "latest release and again for its pinned version on the same commit, so the cause is Hide's, not an "
-            "agent release's, and no agent's issue was filed for it.\n\n"
-            + "\n".join(f"- {line}" for line in failures)
-            + f"\n\nRun: {run_url}\n\nThe fix lands in Hide. The canary measures again every day until these "
-            "cells pass, then closes this issue.\n")
+def actions(state, before, run_url, commit, pins):
+    """What this run says on each agent's failure issue, as `(verb, agent,
+    gh arguments)`: open one for a release that fails with none open, comment
+    when a later release or other cells fail, close it when the agent passes.
+    A run that measured nothing new for an agent says nothing on its issue."""
+    found = []
+    for agent, row in state["agents"].items():
+        was = before["agents"].get(agent, {})
+        if row["status"] == "fail":
+            body = failure_body(agent, row, run_url, commit, pins.get(row["kind"]))
+            if not row.get("issue"):
+                found.append(("open", agent, ["issue", "create", "--label", LABEL, "--title",
+                                              f"agent canary: {agent} {row['checked']} fails the agent journey",
+                                              "--body", body]))
+            elif (was.get("checked"), was.get("failures")) != (row["checked"], row["failures"]):
+                found.append(("comment", agent, ["issue", "comment", str(row["issue"]), "--body", body]))
+        elif row["status"] == "pass" and was.get("issue"):
+            found.append(("close", agent, ["issue", "close", str(was["issue"]), "--comment",
+                                           f"`{agent}` {row['checked']} passes the agent journey again: {run_url}"]))
+    return found
 
 
 def gh(*args, run=subprocess.run):
@@ -263,49 +260,27 @@ def gh(*args, run=subprocess.run):
     return done.stdout
 
 
+def apply(state, found, run=subprocess.run):
+    """Writes each action, and records each opened issue's number in `state`."""
+    for verb, agent, args in found:
+        out = gh(*args, run=run)
+        if verb == "open":
+            state["agents"][agent]["issue"] = int(out.strip().rstrip("/").rsplit("/", 1)[-1])
+
+
 def record_issue(run=subprocess.run):
-    """(number, body) of the open record issue, or (None, "")."""
-    found = json.loads(gh("issue", "list", "--label", LABEL, "--state", "open", "--search",
-                          f'in:title "{RECORD_TITLE}"', "--json", "number,title,body", run=run))
-    found = [issue for issue in found if issue["title"] == RECORD_TITLE]
-    return (found[0]["number"], found[0]["body"]) if found else (None, "")
+    """The record issue's body; a record that is closed is refused, since the
+    release gate exempts its number only while it holds the record."""
+    issue = json.loads(gh("issue", "view", str(RECORD_ISSUE), "--json", "state,body", run=run))
+    if issue["state"] != "OPEN":
+        raise SystemExit(f"the support record #{RECORD_ISSUE} is {issue['state'].lower()}; reopen it")
+    return issue["body"]
 
 
-def apply(state, before, run_url, commit, pins, run=subprocess.run):
-    """Opens, comments on or closes each agent's failure issue and the one
-    issue against Hide, and records each opened issue's number in `state`.
-    A run that measured nothing new for an agent says nothing on its issue."""
-    for agent, row in state["agents"].items():
-        was = before["agents"].get(agent, {})
-        if row["status"] == "fail":
-            body = failure_body(agent, row, run_url, commit, pins.get(row["kind"]))
-            if not row.get("issue"):
-                url = gh("issue", "create", "--label", LABEL, "--title",
-                         f"agent canary: {agent} {row['checked']} fails the agent journey", "--body", body,
-                         run=run).strip()
-                row["issue"] = int(url.rstrip("/").rsplit("/", 1)[-1])
-            elif (was.get("checked"), was.get("failures")) != (row["checked"], row["failures"]):
-                gh("issue", "comment", str(row["issue"]), "--body", body, run=run)
-        elif row["status"] == "pass" and was.get("issue"):
-            gh("issue", "close", str(was["issue"]), "--comment",
-               f"`{agent}` {row['checked']} passes the agent journey again: {run_url}", run=run)
-    hide, was = state["hide"], before.get("hide", {})
-    if hide["failures"]:
-        if not hide.get("issue"):
-            url = gh("issue", "create", "--label", LABEL, "--title", HIDE_TITLE,
-                     "--body", hide_body(hide["failures"], run_url, commit), run=run).strip()
-            hide["issue"] = int(url.rstrip("/").rsplit("/", 1)[-1])
-        elif was.get("keys") != hide["keys"]:
-            gh("issue", "comment", str(hide["issue"]), "--body", hide_body(hide["failures"], run_url, commit), run=run)
-    elif hide.get("issue") and not any(row["status"] == "unknown" for row in state["agents"].values()):
-        # Every agent was judged and none fails for Hide's reason.
-        gh("issue", "close", str(hide["issue"]), "--comment",
-           f"Every pinned agent CLI passes the agent journey at {commit} again: {run_url}", run=run)
-        hide["issue"] = None
-
-
-def load_reports(folder, name=LATEST):
-    """One report on each system the journey runs; a missing one is no measurement."""
+def load_reports(folder, name):
+    """Each system's report of the artifacts named `<name>-<system>`, each
+    downloaded into a folder of its name with the report at its root; a
+    missing one is no measurement."""
     reports = {}
     for system in SYSTEMS:
         path = folder / f"{name}-{system}" / "report.json"
@@ -314,50 +289,58 @@ def load_reports(folder, name=LATEST):
     return reports
 
 
+def summary(text):
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+            output.write(text)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=("decide", "reruns", "record"))
     parser.add_argument("--versions", type=Path, required=True)
-    parser.add_argument("--reports", type=Path)
+    parser.add_argument("--systems", required=True, help="the systems the canary measured, as a JSON array")
+    parser.add_argument("--reports", type=Path, required=True)
     parser.add_argument("--run-url", default="")
-    parser.add_argument("--commit", default="", help="the commit both journeys measured")
+    parser.add_argument("--commit", required=True, help="the commit both journeys measured")
+    parser.add_argument("--write", action="store_true", help="write the record and the issues (main's run only)")
     args = parser.parse_args(argv)
+    systems = json.loads(args.systems)
+    if not systems or not set(systems) <= set(SYSTEMS):
+        parser.error(f"--systems names none or one outside {list(SYSTEMS)}: {systems}")
     versions = json.loads(args.versions.read_text())
     contract = load_contract(ROOT)
     pins = {kind: row["version"] for kind, row in
             json.loads((ROOT / "contracts/agent-clis.json").read_text())["clis"].items()}
-    if args.command == "reruns":
-        if not args.reports:
-            parser.error("reruns needs --reports")
-        agents, systems = reruns(contract, versions, pins, load_reports(args.reports))
-        print(f"agents={','.join(agents)}")
-        print(f"systems={json.dumps(systems)}")
-        return 0
-    number, body = record_issue()
-    state = read_state(body)
-    if args.command == "decide":
-        print(f"changed={'true' if changed(versions, state) else 'false'}")
-        return 0
-    if not args.reports or not args.commit:
-        parser.error("record needs --reports and --commit")
+    state = read_state(record_issue())
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
-    results = verdicts(contract, versions, pins, load_reports(args.reports), load_reports(args.reports, PINNED))
+    results = verdicts(contract, versions, pins, systems, load_reports(args.reports, LATEST),
+                       load_reports(args.reports, PINNED))
     after = updated_state(state, contract, versions, results, today)
-    gh("label", "create", LABEL, "--force", "--color", "C5DEF5",
-       "--description", "The daily agent CLI canary's record and failures")
-    apply(after, state, args.run_url, args.commit, pins)
+    found = actions(after, state, args.run_url, args.commit, pins)
+    if args.write:
+        gh("label", "create", LABEL, "--force", "--color", "C5DEF5",
+           "--description", "The agent CLI canary's record and failures")
+        apply(after, found)
     minimums = {row["id"]: row["minimum_version"] for row in active_rows(contract)}
     text = render(after, pins, minimums, args.run_url)
-    if number:
-        gh("issue", "edit", str(number), "--body", text)
-    else:
-        gh("issue", "create", "--label", LABEL, "--title", RECORD_TITLE, "--body", text)
-    failed = [agent for agent, row in after["agents"].items() if row["status"] != "pass"]
-    for agent in failed:
-        row = after["agents"][agent]
-        print(f"::error title=agent canary {agent}::{row['checked']} ({row['status']}): "
-              + "; ".join(row["failures"][:5]))
-    return 1 if failed else 0
+    if args.write:
+        gh("issue", "edit", str(RECORD_ISSUE), "--body", text)
+    where = f"#{RECORD_ISSUE}"
+    done = [f"- {'' if args.write else 'would '}{verb} the issue of {agent}" for verb, agent, _ in found]
+    summary(f"### Agent CLI support record ({'written to' if args.write else 'not written; would write'} {where})"
+            "\n\n" + text.split(STATE, 1)[0] + "\n" + "\n".join(done or ["- no agent issue to write"]) + "\n")
+    if not args.write:
+        print(text.split(STATE, 1)[0])
+        print("\n".join(done or ["no agent issue to write"]))
+    # The job fails on what this run measured; a system it did not measure
+    # (macOS on a Linux-only day) waits for its own run.
+    failed = {agent: [(system, status, failures) for system, (status, failures) in sorted(per.items())
+                      if status != "pass"] for agent, per in results.items()}
+    for agent, misses in failed.items():
+        for system, status, failures in misses:
+            print(f"::error title=agent canary {agent}::{after['agents'][agent]['checked']} on {system} ({status}): "
+                  + "; ".join(failures[:5]))
+    return 1 if any(failed.values()) else 0
 
 
 if __name__ == "__main__":

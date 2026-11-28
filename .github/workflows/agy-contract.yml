@@ -5,7 +5,7 @@
 # conversations and drive it for Hide AI against stand-ins and fixtures, then
 # installs the agy `contracts/agent-clis.json` pins into the runner and checks
 # that the real binary reads the `hide` block Hide writes, in the runner's
-# throwaway home; the daily agent canary measures agy's latest release.
+# throwaway home; the nightly's agent canary measures agy's latest release.
 # A pull request runs Windows (`pr.yml`, the `agy-contract` lane), where the
 # hook commands and the install folder differ; `rust` runs the same tests on
 # Linux, and `nightly.yml` runs the whole contract on all three systems.

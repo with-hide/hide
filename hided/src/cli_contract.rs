@@ -2025,6 +2025,8 @@ pub const COMMANDS: &[Spec] = &[
             "mission_dependency_line_unknown",
             "mission_dependency_stack_split",
             "mission_merge_order_stack",
+            "mission_paths_unordered",
+            "mission_paths_in_other_mission",
             "mission_criteria_missing",
             "mission_criteria_too_many",
             "mission_steps_invalid",

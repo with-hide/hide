@@ -2975,6 +2975,7 @@ impl Runtime {
                     super::mission_outside::begin_round(round_seq, current.node(&node.key), node);
                 }
                 self.check_planned_waits(&current, &next)?;
+                crate::missions::check_paths_across(&self.missions.book, &next)?;
                 // A change node the plan newly makes wait for the whole of
                 // another change node gets its Conductor a suggestion to
                 // wait on one of that node's lines (PRD mission-speed-2

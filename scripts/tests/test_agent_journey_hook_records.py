@@ -269,3 +269,95 @@ class JourneyStarts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PaneRecord(unittest.TestCase):
+    """A failed cell keeps what the pane's hooks recorded: the sessions its
+    record holds and its lines of the hooks' log, so a start that names
+    another agent's session shows whether the pane's hook named it
+    (with-hide/hide#3124). Nothing the agent was told is copied."""
+
+    def test_a_failed_cell_keeps_the_panes_sessions_and_log_lines_and_no_task(self):
+        with tempfile.TemporaryDirectory() as root:
+            run = runtime(Path(root))
+            records = hook_records.folder(run)
+            (records / "panes").mkdir(parents=True)
+            (records / "panes" / "hW_p2.json").write_text(json.dumps({"sessions": [
+                {"agent": "antigravity", "version": 1, "session": "3e3e5f18", "turn": "done", "working": 0,
+                 "running": [{"id": "s-1", "task": "the parent's words"}]}]}))
+            (records / hook_records.LOG_NAME).write_text("\n".join([
+                json.dumps({"component": "agent_hooks", "kind": "antigravity.conversation_opened_elsewhere",
+                            "pane": "hW:p2", "event": "UserPromptSubmit", "conversation": "9aacde14"}),
+                json.dumps({"kind": "report.failed", "pane": "hV:p2"}),
+                json.dumps({"kind": "report.failed", "pane": "hW:p2", "cause": "/srv/private-folder/notes"}),
+                "not json",
+            ]) + "\n")
+
+            kept = json.loads(hook_records.pane_record(run, "hW:p2", 32 * 1024))
+
+            self.assertEqual(kept["sessions"], [{"agent": "antigravity", "session": "3e3e5f18", "turn": "done"}])
+            self.assertEqual([line.get("conversation") for line in kept["log"]], ["9aacde14", None])
+            self.assertNotIn("private-folder", json.dumps(kept))
+            self.assertNotIn("the parent's words", json.dumps(kept))
+
+    def test_a_pane_the_hooks_kept_nothing_of_keeps_no_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertIsNone(hook_records.pane_record(runtime(Path(root)), "hW:p2", 32 * 1024))
+
+    def test_a_record_that_cannot_be_read_is_named_by_its_code_not_its_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            run = runtime(Path(root))
+            hook_records.pane_file(hook_records.folder(run), "hW:p2").mkdir(parents=True)
+            kept = hook_records.pane_record(run, "hW:p2", 32 * 1024)
+            self.assertIn('"record_unread"', kept)
+            self.assertNotIn(root, kept)
+            self.assertNotIn("agent-hooks", kept)
+
+    def test_a_long_log_keeps_its_newest_lines_within_the_cap_and_says_it_was_cut(self):
+        with tempfile.TemporaryDirectory() as root:
+            run = runtime(Path(root))
+            records = hook_records.folder(run)
+            records.mkdir(parents=True)
+            (records / hook_records.LOG_NAME).write_text("".join(
+                json.dumps({"kind": "antigravity.conversation_opened_elsewhere", "pane": "hW:p2",
+                            "event": "Stop", "at_unix_ms": n}) + "\n" for n in range(5000)))
+            text = hook_records.pane_record(run, "hW:p2", 4096)
+            self.assertLessEqual(len(text.encode()), 4096)
+            kept = json.loads(text)
+            self.assertTrue(kept["cut"])
+            self.assertEqual(kept["log"][-1]["at_unix_ms"], 4999)
+
+    def test_a_record_longer_than_its_read_is_named_too_large_and_its_sessions_are_cut_to_the_cap(self):
+        with tempfile.TemporaryDirectory() as root:
+            run = runtime(Path(root))
+            record = hook_records.pane_file(hook_records.folder(run), "hW:p2")
+            record.parent.mkdir(parents=True)
+            record.write_text(" " * (hook_records.RECORD_BYTES + 1))
+            self.assertEqual(json.loads(hook_records.pane_record(run, "hW:p2", 4096))["record_unread"], "too_large")
+            record.write_text(json.dumps({"sessions": [
+                {"agent": "antigravity", "session": f"s{n}", "turn": "idle"} for n in range(500)]}))
+            text = hook_records.pane_record(run, "hW:p2", 2048)
+            self.assertLessEqual(len(text.encode()), 2048)
+            kept = json.loads(text)
+            self.assertTrue(kept["cut"])
+            self.assertEqual(kept["sessions"][-1]["session"], "s499")
+
+    def test_a_log_longer_than_its_read_says_it_was_cut_even_when_the_panes_lines_fit(self):
+        with tempfile.TemporaryDirectory() as root:
+            run = runtime(Path(root))
+            records = hook_records.folder(run)
+            records.mkdir(parents=True)
+            line = lambda pane, at: json.dumps({"kind": "antigravity.conversation_opened_elsewhere",
+                                                "pane": pane, "event": "Stop", "at_unix_ms": at}) + "\n"
+            (records / hook_records.LOG_NAME).write_text(
+                line("hW:p2", 1) + "".join(line("hV:p9", n) for n in range(1500)) + line("hW:p2", 2))
+            kept = json.loads(hook_records.pane_record(run, "hW:p2", 32 * 1024))
+            self.assertEqual([entry["at_unix_ms"] for entry in kept["log"]], [2])
+            self.assertTrue(kept["cut"])
+
+            # With no line of the pane left in what was read, and no record
+            # of it, the answer still says the log was cut.
+            (records / hook_records.LOG_NAME).write_text(
+                line("hW:p2", 1) + "".join(line("hV:p9", n) for n in range(1500)))
+            self.assertEqual(json.loads(hook_records.pane_record(run, "hW:p2", 32 * 1024)),
+                             {"pane": "hW:p2", "cut": True})

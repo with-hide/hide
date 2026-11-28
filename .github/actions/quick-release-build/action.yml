@@ -12,6 +12,8 @@ runs:
       # Cargo's own profile variables, so the binaries still land in
       # target/release, the one path desktop/scripts/package.mjs reads, and
       # keep the release profile's strip, panic and debug-assertion settings.
+      # Set before the Rust cache's restore, so rust-cache hashes them into the
+      # quick set's key and a changed setting is a new set, never a stale one.
       shell: bash
       run: |
         {

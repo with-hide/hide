@@ -8109,6 +8109,8 @@
                 "mission_dependency_line_unknown",
                 "mission_dependency_stack_split",
                 "mission_merge_order_stack",
+                "mission_paths_unordered",
+                "mission_paths_in_other_mission",
                 "mission_criteria_missing",
                 "mission_criteria_too_many",
                 "mission_steps_invalid",
@@ -10018,7 +10020,7 @@
             "retired_for": "task show"
         }
     ],
-    "digest": "sha256:6e20d237eb48d3ab893978b0bc6e6f5e2b5ba89c321a046e95e3fd9ebcdcb8d2",
+    "digest": "sha256:18214e525567083d4ac0f2aca9e9bc1e7efe3215060fbff8670bb2f59045ed38",
     "envelopes": {
         "access": {
             "answer": "value",

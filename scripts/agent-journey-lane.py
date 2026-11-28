@@ -11,7 +11,7 @@ cleanup failure (the journey's exit 2), a request budget overrun, or a report
 with no row for an agent it stands for; the fake lane also fails when an
 agent's CLI is missing, as the job installed it, or answers another version
 than contracts/agent-clis.json pins. `--agents` names the agents a fake run
-was asked to measure (the agent canary's pinned rerun), and the lane then
+was asked to measure (a hand run's `agents`), and the lane then
 stands for those alone. Each finding is printed as a GitHub annotation; the
 exit code is the lane's.
 """

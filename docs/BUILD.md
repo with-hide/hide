@@ -130,12 +130,17 @@ A pull request's package lane builds its release binaries at opt-level 1 without
 That lane checks that the app packages, installs, starts and updates; none of that depends on how well the binaries are optimized, and the optimization was most of the lane's time.
 Each of the three binaries runs thin LTO over the whole program at its link, so after the last hide crate started compiling, a Windows release build still took about 12 more minutes (2026-10-30, pull request #1913).
 Measured on 2026-10-30 (pull request #1916) against the same lane's recent pull-request runs: `compile (windows)` went from 17-24 minutes to 7.6, `compile (macos)` from 15-21 to 8.8, and `package (linux)` from 16-22 to 12.1.
-The Windows cargo build alone went from 14.7 minutes in #1913 to 6.2, both compiling every dependency from source, since this setting rebuilds them anyway.
+The Windows cargo build alone went from 14.7 minutes in #1913 to 6.2, both compiling every dependency from source.
+
+That measurement did not last, because the dependencies were compiled from source every time.
+The nightly, a candidate and a release build with the release profile itself, and runs on main are the only savers of the `release` dependency set, so that set holds the release profile's dependencies, and cargo rebuilds a dependency whose profile differs.
+A pull request that restored it rebuilt every dependency at its own settings: by 2026-11-27 `compile (windows)` took 20.1 minutes (the median of successful pull-request runs), with 487 crates compiled after a full-match restore and the dependencies alone taking the first 4.1 minutes, and the package lane ended last in 17% of pull-request runs.
+So a pull request restores the `quick` set instead, which `package-cache.yml` builds on main with the compile jobs' own steps at these settings ([CI's Rust caches](#cis-rust-caches)), and compiles only the hide crates.
+Measured on 2026-11-28 in two runs of pull request #3112, each from a full-match restore of that set: `compile (windows)` compiled only this repository's own crates, where it had compiled 487, and took 12.6 and 16.0 minutes (its build step 10.7 and 13.9), against the 20.1-minute median; `package (linux)` and `compile (macos)` also compiled only this repository's crates.
 
 The settings are cargo's own profile variables, set in the job's environment, so the binaries still land in `target/release`, the path `desktop/scripts/package.mjs` reads, and keep the release profile's name, strip and debug-assertion settings.
 The cost is that a pull request's package never holds what ships.
-Main's push run, the nightly, a candidate and a release build with the release profile itself, and main's runs are the only savers of the `release` dependency set, so that set always holds the release profile's dependencies; a pull request restores it and rebuilds its dependencies at its own settings, because cargo rebuilds a dependency whose profile differs.
-`scripts/tests/test_quick_release_build.py` fails when another caller of `package.yml` turns the setting on, or a job that builds release binaries ignores it.
+`scripts/tests/test_quick_release_build.py` fails when another caller of `package.yml` turns the setting on, when a job that builds release binaries ignores it or reads another set, or when `package-cache.yml`'s steps or systems leave the compile jobs'.
 
 ## The toolchain is never copied
 
@@ -167,33 +172,49 @@ Three things made the copies: a key named after the job, so the rust lane, the w
 
 | Set | What it holds | Saved by, on main only | Read by |
 | --- | --- | --- | --- |
-| `workspace` | The debug build of the dependencies, one feature set for every member (`workspace-hack`) | `rust workspace / build tests` on Linux, `windows check / rust tests` on Windows, `desktop e2e` shard 1 on macOS | Every other lane that builds Rust, and a release tag's tests |
+| `workspace` | The debug build of the dependencies, one feature set for every member (`workspace-hack`) | `rust workspace / build tests` on Linux, `windows check / rust tests` on Windows, `desktop e2e` `build` job on macOS | Every other lane that builds Rust, and a release tag's tests |
 | `lint` | Clippy's check of the dependencies, which a test build does not make | `rust workspace / lint` on Linux | `merge check rust` |
 | `platform` | `hide-platform` built alone, outside that feature set | `os contract` on each system | Nothing else |
-| `release` | The release profile's dependencies | `package.yml`'s Windows and Linux package jobs and its macOS compile | The packages of a pull request and a release tag, and the nightly measurement |
+| `release` | The release profile's dependencies | `package.yml`'s Windows and Linux package jobs and its macOS compile, in the nightly and a candidate | The packages of the nightly, a candidate and a release tag, and the nightly measurement |
+| `quick` | The dependencies of a pull request's package build, at its settings ([A pull request's release build](#a-pull-requests-release-build)) | `package cache` (`package-cache.yml`) on each system | `package.yml`'s compile and Linux package jobs in a pull request |
+| `helper` | The device helpers' release dependencies for their target, built on `ubuntu-24.04` and `ubuntu-24.04-arm` | `device-helpers.yml` on each processor, in the nightly and a candidate | The device helpers of a pull request and a release tag |
 
 Each set is saved by one job per system, the one that builds the most of it, because a key that exists is never saved again: two savers would race and the loser's extra build would be lost every run.
 The Rust lane builds its tests in one job and lints in another beside it ([TESTING.md](TESTING.md#the-rust-lanes-shards)), and Cargo checks a dependency for Clippy apart from building it for a test, so neither job's build holds the other's: each saves its own set, and `merge check rust`, which runs the same lint, reads the `lint` set.
 The Windows lane builds its test binaries in one job and checks every target of the workspace in another beside it ([TESTING.md](TESTING.md#where-the-windows-runners-went)); the test build is the larger, every test step waits on it and the lane ends with it, so `windows check / rust tests` saves Windows's `workspace` set and `windows check / compile` reads it.
 A check makes metadata, not the compiled dependencies a test build makes, so what `compile` takes from the entry is the build scripts and proc macros the two share, and it checks the dependencies' metadata itself; the unit suites' job builds only the relay WebAssembly, as Linux `checks` does, and reads no set.
 A reader builds what the saver did not, which on macOS is the extra dependencies of the nightly lanes that test more than the daemon.
+A pull request's package jobs build at other settings than any job on main, so the `quick` set has a saver of its own: `package-cache.yml` runs the compile jobs' steps on each system after a push to main that changes what the key hashes, and once a day to replace an entry GitHub evicted or let expire, and a run whose exact entry exists stops after the restore.
+The quick settings are in the environment before the restore, in the saver and in the pull request's jobs alike, so rust-cache hashes them into the key: a changed setting is a new key that the saver builds, not a stale entry it keeps finding.
+Its macOS job runs on GitHub's macos-15, where `compile (macos)` runs while the Mac mini runner is off; that runner sets its own `CARGO_HOME` and `RUSTUP_HOME`, which rust-cache hashes into the key, so a job there reads no set main saved.
+The device helpers build at the release profile for an explicit target on Ubuntu 24.04, which no package job does, so they keep the `helper` set; they cannot read the Linux `release` set, which is built on `ubuntu-latest`: rust-cache keys by system and processor, not by image, and a dependency's C code compiled against a newer C library can ask for symbols an older system lacks.
 rust-cache's environment hash stays in the key; it hashes every installed toolchain, so the action first removes every toolchain but the one `rust-toolchain.toml` names, and the hash then depends on the pin and not on the runner.
 rust-cache ends each key with its own 8-digit hash of `Cargo.lock`, every member's `Cargo.toml` and `rust-toolchain.toml`, and when that hash changes it restores the newest entry of the same set and system and builds only the dependencies that changed; it leaves out the root `Cargo.toml`, whose `[profile]` sections change every dependency's build, so the action puts that file's hash in the key before the system, and a change there misses once.
-A changed lockfile thus saves a new key beside the old one, and nothing deletes the old one: GitHub deletes an entry no run has read for seven days, and past the repository's 10 GB it evicts the least recently read first.
-Main's runs read the current entry of every set every day, so what ages out or is evicted first is a replaced one; one entry per set and system is about 3 GB, and a week of replaced sets beside it stays under the limit unless the lockfile changes several times that week, when eviction takes the oldest replaced sets.
-Nothing in the repository prunes them: deciding which entry is current means computing rust-cache's own key, which changes whenever rust-cache does, and a copy of that computation that drifted would delete the current entries.
-The keys from before the sets (`v0-rust-<job>-...`) are deleted by hand once, after each set's first entry is saved.
+A changed lockfile thus saves a new key beside the old one.
+Left to GitHub, the old one stays until no run has read it for seven days or the repository passes its 10 GB, and then GitHub evicts the least recently read entry, which is not always a replaced one: on 2026-11-28 the cache held 11.16 GB in 86 entries with two generations of every set, and the current macOS `release` entry, which only the nightly reads, was gone while the one it replaced stayed.
+So `cache-generations.yml` runs `scripts/cache-generations.py` after each run on main that can save a set (`verify`'s push run, the nightly and `package cache`), and keeps, of every Rust set and hide-vt entry on main, only the one each set and system saved last.
+Only that job gets `actions: write` for it, and it starts only for this repository's own runs on main: `workflow_run`'s branch filter matches a head branch by name, which a fork's pull request from its own `main` shares.
+A failed prune files one open development issue, with a comment for each later failure, since nobody watches this workflow's runs.
+That needs no copy of rust-cache's key computation, which would delete the current entries the day it drifted: main saves a set only under a key that does not exist yet, so the entry saved last is the current one.
+Three cases break that rule, and each costs one rebuild of the sets it touches, after which the older key is missed and saved again: a lockfile change that is reverted, two runs on main with different lockfiles that save out of order, and a candidate dispatched from main for an older `source-sha`, which saves that commit's `release` and `helper` keys last.
+A key under `v0-rust-` or `vt-` whose shape the script cannot read fails the job instead of being guessed at.
+The script ran once by hand on 2026-11-28 and deleted the ten replaced entries, 4.03 GB, which left 7.12 GB.
+Main's entries then took 6.65 GB, its Rust sets 3.9 GB of it; a `quick` entry is 0.41 GB on Linux and macOS and 0.45 GB on Windows, and a `helper` entry 0.47 GB on x86-64 and 0.56 GB on ARM, so with them main holds about 9 GB of the 10, and pull requests' own entries (apt, Node and Gradle caches, about 0.4 GB) the rest.
+That leaves no room for a generation change: the push run that brings one saves the `workspace`, `lint` and `platform` sets (about 2.4 GB) and `package cache` the `quick` set (about 1.3 GB) before the prune runs, so for that run the cache passes 10 GB, and what GitHub evicts then is the entry read least recently, which is a `release` or `helper` entry the nightly read last.
+The cost is a cold nightly build of those sets after a lockfile change, and pull requests' device helpers build cold until that nightly saves theirs again; if the budget has to shrink, the `helper` set (about 1 GB) and, while the Mac mini runner is on, the macOS `quick` entry, which no job then reads, go first.
 `scripts/tests/test_rust_cache.py` fixes the action's key, its dependency-only save and the toolchain step, and each saver's exact `save` condition, and fails when a job uses rust-cache directly or names another set.
+`scripts/tests/test_cache_generations.py` fixes which entries the script deletes and that it refuses a key it cannot read.
 
 ### What a cached release dependency can change
 
 The packages a candidate builds are what ships on Windows and Linux, and their release dependencies now come from the `release` set rather than from a cold build.
 What a release build takes from the cache is limited to third-party dependencies, so every hide crate, `hided`'s build script (the embedded web shell, version, commit and build order) and the final link are compiled from the checkout in every run.
-Two steps hold that: the action keeps rust-cache's `cache-workspace-crates: false`, whose normal cleanup deletes the workspace's own crates from `target/` before a save, and since that cleanup swallows its own errors and saves anyway, a release job also runs `cargo clean --release --workspace` right after the restore, which removes any workspace crate an entry still held and leaves the dependencies.
+Two steps hold that: the action keeps rust-cache's `cache-workspace-crates: false`, whose normal cleanup deletes the workspace's own crates from `target/` before a save, and since that cleanup swallows its own errors and saves anyway, a job that restores the `release` or `helper` set also runs `cargo clean --release --workspace` (with its `--target`, for the helpers) right after the restore, which removes any workspace crate an entry still held and leaves the dependencies.
 Cargo reuses a cached dependency only when its fingerprint matches what this checkout asks for: the same package and version, which `Cargo.lock` pins with the registry checksum it was downloaded against, the same features, profile, target and compiler; anything else is rebuilt from source.
 A run reads entries saved by its own ref and by main, so the only entries a candidate or a release tag can read are those saved by runs on main, where a pull request's code arrives only through a reviewed merge; a pull request never saves (`save` is false off main), and an entry is never overwritten once saved.
 The argument stops at the artifact itself: cargo does not hash a compiled dependency against its source, so a release dependency is as trustworthy as the jobs that run on main, since any of them can save an entry under a key that does not exist yet.
-The macOS app the private publisher signs is built on the Mac mini from its own checkout and reads none of these caches, and the Linux device helpers (`device-helpers.yml`) still build cold.
+The Linux device helpers a candidate bundles take theirs from the `helper` set on the same terms, and its restore removes the hide crates from their target's folder.
+The macOS app the private publisher signs is built on the Mac mini from its own checkout and reads none of these caches.
 
 ## The terminal parser and Zig
 

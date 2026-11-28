@@ -1,38 +1,57 @@
 # The `@platform` web tests on macOS and Windows, the desktop suite whole on
-# macOS and its `@platform` tests on Linux and Windows, package checks and the
-# performance lane (perf.yml) nightly, and `verify` (pr.yml) with every lane on main. A push to main runs every lane
-# too, but a lane it fails opens no issue; here it opens a nightly-failure
-# issue, and a lane that breaks with no merge (a runner image, a service a test
-# reaches) is found within a day. The Rust toolchain is not one of those: its version is
-# the one `rust-toolchain.toml` names, so a new image cannot change it.
+# macOS and its `@platform` tests on Linux and Windows, package checks, the
+# performance lane (perf.yml), the agent journey at the pins and the agent
+# canary at each CLI's latest release, and `verify` (pr.yml) with every lane
+# on main. A push to main runs every pr.yml lane too, but a lane it fails
+# opens no issue; here it opens a nightly-failure issue, and a lane that
+# breaks with no merge (a runner image, a service a test reaches) is found
+# within a day. The Rust toolchain is not one of those: its version is the one
+# `rust-toolchain.toml` names, so a new image cannot change it.
 # A test fails this run only when it fails its retry too (CI retries a failed
 # test once; .config/nextest.toml); a test that passes the retry is flaky, and
 # scripts/ci-flaky-report.py files it as an issue, as in pr.yml. A test that
 # fails its retry too is written as a `Failed test` annotation on its job.
 # Runner windows and Linux Xvfb exercise automation, not physical IME/device QA.
 # PRs run the whole web suite on Linux and its `@platform` tests on Windows (see pr.yml); macOS runs only here.
-# The `report` job, the one writer of `nightly-failure` issues, opens one per
-# annotated test, or per lane and failed step for a failed job that annotated
-# none (`infra` when that step only prepares the runner), with the candidate
-# pull requests merged since the lane's last green nightly and a two-day
-# expiry; it comments once per run attempt on an issue already open for the
-# same failure, opens at most 10 per run and lists the rest in one, and
-# closes a lane's issues when a scheduled run (or a hand run of `all`) passes
-# it. A run of any other branch writes no issue.
-# docs/TESTING.md, "Nightly failures", owns the policy.
-# Run it by hand from the Actions tab (workflow_dispatch); actual queue load
-# and completed jobs must be measured separately from this configured matrix.
-# A hand run picks `lane`: `all`, or one system's web and desktop suites, so
-# checking Windows does not occupy the macOS runners (one full dispatch used 7
-# macOS jobs for 65 minutes); `macos` also runs the performance lane. `verify`
-# and `package` run for `all` only. `agy` runs only the agent contracts on all
-# three systems, agy's and the folder trust contract of Claude Code and
-# Codex, so a branch can check them by hand
-# (`gh workflow run nightly.yml --ref <branch> -f lane=agy`).
-# The schedule runs everything. A lane left out is skipped, and the failure
-# report ignores a skipped job. The report job first checks that selected
-# jobs succeeded and all others skipped, on branches too; only its issue
-# reporting step is restricted to main, and it runs even if that check fails.
+#
+# When: Linux and Windows every day, macOS on Monday and Thursday in Korea
+# (docs/TESTING.md, Nightly failures). One full run held 7 macOS jobs for 65
+# minutes, and the account shares five macOS runners across every
+# repository. The `scope` job reads the cron line that started the run, or a
+# hand run's `lane`, and `scripts/ci-plan.py nightly-scope` names the jobs
+# and systems that run: `all` (Monday and Thursday) is every job on every
+# system with `verify` and the macOS package, `daily` (the other days) the
+# direct jobs on Linux and Windows and their packages. A hand run picks
+# `all`, `daily` or one system's suites, so checking Windows does not occupy
+# the macOS runners; `agy` runs only the agent contracts on all three
+# systems, agy's and the folder trust contract of Claude Code and Codex, so a
+# branch can check them by hand (`gh workflow run nightly.yml --ref <branch>
+# -f lane=agy`). A job a run leaves out is skipped, and the failure report
+# ignores a skipped job.
+#
+# The `report` job, the one writer of `nightly-failure` issues, first checks
+# that the selected jobs succeeded and all others skipped, on branches too;
+# then, on main only, it opens one issue per annotated test, or per lane and
+# failed step for a failed job that annotated none (`infra` when that step
+# only prepares the runner), with the candidate pull requests merged since
+# the lane's last green nightly and a two-day expiry; it comments once per run
+# attempt on an issue already open for the same failure, opens at most 10 per
+# run and lists the rest in one, and closes a lane's issues when a scheduled
+# run (or a hand run of `all`) passes it. docs/TESTING.md, "Nightly
+# failures", owns the policy.
+#
+# The agent canary (docs/VERIFICATION.md, The agent canary) installs each
+# agent CLI's latest release, read where its own installer reads it, and
+# runs the same fake-model journey on it on Linux, and on macOS on the days
+# macOS runs. Its record judges each agent per system against this run's
+# `agent journey`, which measured the pins on the same commit: a cell the pin
+# fails too is Hide's, and the report files it from `agent journey`; a cell
+# only the latest release fails is the vendor's, kept in that agent's
+# `agent-canary` issue and the "Agent CLI support record" issue
+# (scripts/agent-canary-record.py). The report job does not wait for the
+# canary's jobs and never reads them, so a vendor's break is not filed twice.
+# A run of any other branch writes no issue: the record shows the table it
+# would write in its job summary.
 #
 # The schedule is at 17 past the hour: GitHub delays runs scheduled on the
 # hour, when every repository's are due, and the 18:00 UTC run started
@@ -45,14 +64,18 @@ name: nightly
 
 on:
   schedule:
-    - cron: "17 17 * * *"
+    # 02:17 in Korea; the two lines are ci-plan.py's NIGHTLY_SCHEDULES.
+    # Sunday and Wednesday UTC, Monday and Thursday in Korea: `all`.
+    - cron: "17 17 * * 0,3"
+    # The other days: `daily`, Linux and Windows.
+    - cron: "17 17 * * 1,2,4,5,6"
   workflow_dispatch:
     inputs:
       lane:
-        description: Which system's suites to run by hand
+        description: Which suites to run by hand (all, daily = Linux and Windows, one system's, or agy)
         type: choice
-        options: [all, linux, macos, windows, agy]
-        default: all
+        options: [all, daily, linux, macos, windows, agy]
+        default: daily
 
 permissions:
   contents: read
@@ -62,17 +85,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  scope:
+    name: scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      lane: ${{ steps.scope.outputs.lane }}
+      systems: ${{ steps.scope.outputs.systems }}
+      jobs: ${{ steps.scope.outputs.jobs }}
+      desktop: ${{ steps.scope.outputs.desktop }}
+      canary: ${{ steps.scope.outputs.canary }}
+      package-macos: ${{ steps.scope.outputs.package-macos }}
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 3
+        with:
+          persist-credentials: false
+      - name: What this run does
+        id: scope
+        timeout-minutes: 1
+        env:
+          LANE_INPUT: ${{ inputs.lane }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: python3 scripts/ci-plan.py nightly-scope --lane "$LANE_INPUT" --schedule "$SCHEDULE"
+
   # macOS and Windows run the web tests tagged `@platform`, as the pull
   # request's platform lanes do: what differs by system is checked there, and
   # the rest of the suite is the same code on every system, which the pull
   # request and the `verify` job below already run whole on
   # Linux, so Linux has no web job here. What this run adds is the desktop app
   # on Linux, the packages, and a runner image that changed. `verify` owns
-  # Windows web/desktop and macOS desktop on a scheduled or `all` run; the
-  # direct calls below retain OS-only dispatch without running those twice.
+  # Windows web/desktop and macOS desktop on an `all` run; the direct calls
+  # below run them on the other runs without `verify`.
   web-e2e-macos:
     name: web e2e (macOS @platform)
-    if: ${{ inputs.lane != 'linux' && inputs.lane != 'windows' && inputs.lane != 'agy' }}
+    needs: scope
+    if: ${{ contains(fromJSON(needs.scope.outputs.jobs), 'web-e2e-macos') }}
     uses: ./.github/workflows/web-e2e.yml
     secrets:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
@@ -86,7 +136,8 @@ jobs:
 
   web-e2e-windows:
     name: web e2e (Windows @platform)
-    if: ${{ inputs.lane == 'windows' }}
+    needs: scope
+    if: ${{ contains(fromJSON(needs.scope.outputs.jobs), 'web-e2e-windows') }}
     uses: ./.github/workflows/web-e2e.yml
     secrets:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
@@ -103,7 +154,8 @@ jobs:
   # `verify` below, which plans every lane.
   remote-mailbox-macos:
     name: remote mailbox (macOS)
-    if: ${{ inputs.lane != 'linux' && inputs.lane != 'windows' && inputs.lane != 'agy' }}
+    needs: scope
+    if: ${{ contains(fromJSON(needs.scope.outputs.jobs), 'remote-mailbox-macos') }}
     uses: ./.github/workflows/remote-mailbox.yml
     secrets:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
@@ -112,56 +164,62 @@ jobs:
     with:
       runner: macos-15
 
-  # The agy contract on all three systems (one system's on that system's hand
-  # run); a pull request runs only its Windows leg.
+  # The agy contract on the run's systems; a pull request runs only its
+  # Windows leg.
   agy-contract-all:
     name: agy contract
+    needs: scope
+    if: ${{ contains(fromJSON(needs.scope.outputs.jobs), 'agy-contract-all') }}
     uses: ./.github/workflows/agy-contract.yml
     secrets:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
     with:
-      systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
+      systems: ${{ needs.scope.outputs.systems }}
 
   # The agent journey: the stand-ins on Linux and macOS, the Windows forms
-  # and the pinned CLIs against the fake model on all three systems (one
-  # system's on that system's hand run); docs/VERIFICATION.md, Agent journey.
+  # and the pinned CLIs against the fake model, on the run's systems;
+  # docs/VERIFICATION.md, Agent journey. Its fake-model reports are the pins'
+  # measurement the agent canary's record judges the latest releases against.
   agent-journey:
     name: agent journey
-    if: ${{ inputs.lane != 'agy' }}
+    needs: scope
+    if: ${{ contains(fromJSON(needs.scope.outputs.jobs), 'agent-journey') }}
     uses: ./.github/workflows/agent-journey.yml
     permissions:
       contents: read
     with:
-      systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
+      systems: ${{ needs.scope.outputs.systems }}
       fake: true
 
   # Every pinned agent CLI in a pane holder across a node restart
-  # (holder-restart.yml), on all three systems (one system's on that
-  # system's hand run).
+  # (holder-restart.yml), on the run's systems.
   holder-restart:
     name: holder restart
-    if: ${{ inputs.lane != 'agy' }}
+    needs: scope
+    if: ${{ contains(fromJSON(needs.scope.outputs.jobs), 'holder-restart') }}
     uses: ./.github/workflows/holder-restart.yml
     permissions:
       contents: read
     with:
-      systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
+      systems: ${{ needs.scope.outputs.systems }}
 
   # The real Claude Code and Codex read the folder trust Hide records for a
-  # worktree it made, on all three systems (one system's on that system's
-  # hand run, all three on `agy`'s, the other agent contract); a pull request
-  # runs only the format tests, in `rust` and `windows check`.
+  # worktree it made, on the run's systems (all three on `agy`'s, the other
+  # agent contract); a pull request runs only the format tests, in `rust` and
+  # `windows check`.
   agent-trust-contract-all:
     name: agent trust contract
+    needs: scope
+    if: ${{ contains(fromJSON(needs.scope.outputs.jobs), 'agent-trust-contract-all') }}
     uses: ./.github/workflows/agent-trust-contract.yml
     secrets:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
     with:
-      systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
+      systems: ${{ needs.scope.outputs.systems }}
 
   # The whole desktop suite runs on macOS, the system the desktop app is written
   # against. Linux and Windows run only the tests tagged `@platform`: what the
@@ -171,14 +229,14 @@ jobs:
   # accelerators). A test that checks no such difference stays on macOS.
   desktop-e2e:
     name: desktop e2e (${{ matrix.system }} ${{ matrix.system == 'macos' && 'full' || '@platform' }})
-    if: ${{ inputs.lane != 'agy' }}
+    needs: scope
+    if: ${{ contains(fromJSON(needs.scope.outputs.jobs), 'desktop-e2e') }}
     strategy:
       fail-fast: false
       matrix:
-        # Only Linux here for a full run: `verify` already runs the whole
-        # macOS suite and Windows @platform, with its screenshots. An OS-only
-        # dispatch still runs its one system directly, without `verify`.
-        system: ${{ fromJSON(inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux"]') }}
+        # Only Linux on an `all` run: `verify` already runs the whole macOS
+        # suite and Windows @platform, with its screenshots.
+        system: ${{ fromJSON(needs.scope.outputs.desktop) }}
     uses: ./.github/workflows/desktop-e2e.yml
     secrets:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
@@ -198,12 +256,14 @@ jobs:
   # check is annotated as a failed measurement, which the report files.
   perf:
     name: performance (macOS)
-    if: ${{ inputs.lane != 'linux' && inputs.lane != 'windows' && inputs.lane != 'agy' }}
+    needs: scope
+    if: ${{ contains(fromJSON(needs.scope.outputs.jobs), 'perf') }}
     uses: ./.github/workflows/perf.yml
 
   verify:
     name: verify
-    if: ${{ inputs.lane == '' || inputs.lane == 'all' }}
+    needs: scope
+    if: ${{ contains(fromJSON(needs.scope.outputs.jobs), 'verify') }}
     uses: ./.github/workflows/pr.yml
     secrets:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
@@ -218,19 +278,120 @@ jobs:
     permissions:
       contents: read
       actions: read
+
+  # The Linux and Windows packages every day, the macOS app with them on an
+  # `all` run.
   package:
     name: package
-    if: ${{ inputs.lane == '' || inputs.lane == 'all' }}
+    needs: scope
+    if: ${{ contains(fromJSON(needs.scope.outputs.jobs), 'package') }}
     uses: ./.github/workflows/package.yml
     secrets:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     with:
       version: 0.0.0-nightly.${{ github.run_number }}
-      include-macos: true
+      include-macos: ${{ fromJSON(needs.scope.outputs.package-macos) }}
+
+  canary-latest:
+    name: agent canary latest releases
+    needs: scope
+    if: ${{ needs.scope.outputs.canary != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      table: ${{ steps.latest.outputs.table }}
+      versions: ${{ steps.latest.outputs.versions }}
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+      - name: Read each agent CLI's latest release
+        id: latest
+        timeout-minutes: 3
+        run: |
+          versions=$(python3 scripts/agent-cli-latest.py "$RUNNER_TEMP/agent-clis.json")
+          echo "::notice title=agent canary::latest releases $versions"
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
+          {
+            echo 'table<<TABLE_END'
+            cat "$RUNNER_TEMP/agent-clis.json"
+            echo 'TABLE_END'
+          } >> "$GITHUB_OUTPUT"
+
+  canary-journey:
+    name: agent canary journey
+    needs: [scope, canary-latest]
+    uses: ./.github/workflows/agent-journey.yml
+    permissions:
+      contents: read
+    with:
+      systems: ${{ needs.scope.outputs.canary }}
+      fake: true
+      stand-ins: false
+      clis-table: ${{ needs.canary-latest.outputs.table }}
+      report-name: agent-canary-latest
+
+  canary-record:
+    name: agent canary record
+    needs: [scope, canary-latest, canary-journey, agent-journey]
+    # A failed journey is what the record is for; a skipped or cancelled one
+    # measured nothing. The pins' journey is the same run's `agent journey`.
+    if: ${{ always() && needs.canary-latest.result == 'success' && (needs.canary-journey.result == 'success' || needs.canary-journey.result == 'failure') && (needs.agent-journey.result == 'success' || needs.agent-journey.result == 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # A run of another branch reads the record issue with this token and
+    # writes nothing; main's run writes with the development issues App's.
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+      - name: The latest releases' reports
+        uses: actions/download-artifact@v8
+        timeout-minutes: 3
+        with:
+          pattern: agent-canary-latest-*
+          path: ${{ runner.temp }}/reports
+      - name: The pins' reports from this run's agent journey
+        uses: actions/download-artifact@v8
+        timeout-minutes: 3
+        with:
+          pattern: agent-journey-fake-*
+          path: ${{ runner.temp }}/reports
+      - name: Mint the development issues token
+        id: issues-token
+        if: ${{ github.ref == 'refs/heads/main' }}
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide
+      - name: Rewrite the support record and each failing agent's issue
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ steps.issues-token.outputs.token || github.token }}
+          VERSIONS: ${{ needs.canary-latest.outputs.versions }}
+          SYSTEMS: ${{ needs.scope.outputs.canary }}
+          WRITE: ${{ github.ref == 'refs/heads/main' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '%s\n' "$VERSIONS" > "$RUNNER_TEMP/versions.json"
+          write=()
+          if [[ "$WRITE" == true ]]; then write=(--write); fi
+          python3 scripts/agent-canary-record.py --versions "$RUNNER_TEMP/versions.json" --systems "$SYSTEMS" \
+            --reports "$RUNNER_TEMP/reports" --run-url "$RUN_URL" --commit "$GITHUB_SHA" "${write[@]}"
 
   report:
     name: nightly report
-    needs: [web-e2e-macos, web-e2e-windows, remote-mailbox-macos, agy-contract-all, agent-trust-contract-all, agent-journey, holder-restart, desktop-e2e, perf, verify, package]
+    needs: [scope, web-e2e-macos, web-e2e-windows, remote-mailbox-macos, agy-contract-all, agent-trust-contract-all, agent-journey, holder-restart, desktop-e2e, perf, verify, package]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -244,8 +405,8 @@ jobs:
       - name: Require every selected job to succeed and every other job to skip
         env:
           NEEDS: ${{ toJSON(needs) }}
-          LANE_INPUT: ${{ inputs.lane }}
-        run: python3 scripts/ci-plan.py nightly-aggregate --lane "$LANE_INPUT"
+          LANE: ${{ needs.scope.outputs.lane }}
+        run: python3 scripts/ci-plan.py nightly-aggregate --lane "$LANE"
       # Unlike a lane's, a token this job cannot mint is its red: the run's
       # failures would otherwise go unfiled in silence.
       - name: Mint the development issues token

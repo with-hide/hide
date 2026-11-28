@@ -71,6 +71,8 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_dependency_line_unknown"
             | "mission_dependency_stack_split"
             | "mission_merge_order_stack"
+            | "mission_paths_unordered"
+            | "mission_paths_in_other_mission"
             | "mission_steps_invalid"
             | "mission_criteria_unmet"
             | "mission_criteria_protected"

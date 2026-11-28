@@ -1,9 +1,10 @@
 // How high the window's corner notices stand (`ToastStack`, UI_BEHAVIOR.md
 // Notices): above every input box a screen keeps at the window's foot, so a
 // notice that waits for the operator never covers where they type. Desk's
-// input boxes and the sleeping session's `에이전트 깨우기` in their place
-// (PRD desk-2-ui B43) each hold the corner above their top while they are
-// drawn; the screen under the corner never moves.
+// input boxes and an ended session's `이어서 하기` in their place each hold
+// the corner above their top while they are drawn; a sleeping session's card
+// stands in its conversation's middle, clear of the foot, and holds none.
+// The screen under the corner never moves.
 
 import { useLayoutEffect, type RefObject } from "react";
 import { useUiStore } from "./ui";
