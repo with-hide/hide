@@ -4398,13 +4398,13 @@ fn best_first(candidates: &mut [RetrievalCandidate]) {
     });
 }
 
-/// The matched cards in the order a prompt is given them: the matcher's score
+/// The fitting cards in the order a prompt is given them: the prompt's fit
 /// times the square root of the operator's reinforcement
-/// ([`reinforcement::weight`]), so among cards that match about as well, one
+/// ([`reinforcement::weight`]), so among cards that fit about as well, one
 /// the operator said across sessions and lately goes before a one-off or stale
 /// one. The root keeps the weight's spread under two, so it rarely outweighs a
-/// whole shared word. Every card here already passed the matcher's minimum
-/// score.
+/// rare shared word. Every card here already fits the prompt
+/// ([`matcher::MINIMUM_FIT`]).
 fn by_reinforcement(
     mut candidates: Vec<RetrievalCandidate>,
     support: &std::collections::HashMap<String, reinforcement::Support>,
