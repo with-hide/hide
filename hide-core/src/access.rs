@@ -1018,7 +1018,7 @@ pub enum CoreStanding {
 pub const MACHINE_NOT_PERMITTED: &str = "machine_not_permitted";
 
 /// What an agent refused with [`MACHINE_NOT_PERMITTED`] does next.
-pub const MACHINE_NOT_PERMITTED_NEXT: &str = "Another machine's core does this only for a machine it opened itself to: an agent on the machine that connected (hide device list) lists, shows, reads and starts agents there and writes to them; an agent there answers with hide request reply and reports to the agent that started it, and writes nothing first. hide pane send types into no pane of another machine's core, and an agent on a connected device cannot use --machine";
+pub const MACHINE_NOT_PERMITTED_NEXT: &str = "Another machine's core does this only for a machine it opened itself to: an agent on the machine that connected (hide device list) lists, shows, reads and starts agents there and writes to them; an agent there answers with hide letter reply and reports to the agent that started it, and writes nothing first. hide pane send types into no pane of another machine's core, and an agent on a connected device cannot use --machine";
 
 /// Where `machine` stands: it opens this machine while its grant here is
 /// active, and otherwise it only answers while this machine's grant there

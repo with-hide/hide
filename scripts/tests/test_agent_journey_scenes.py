@@ -214,7 +214,7 @@ class Repetitions(unittest.TestCase):
         journey, found, pressed, folder = self.probe(refuse=True)
         for n, record in enumerate(found, 1):
             self.assertEqual(record["candidate"], "unknown")
-            self.assertIn("hide request send refused", record["why"])
+            self.assertIn("hide letter send refused", record["why"])
             self.assertTrue((folder / str(n) / "record.json").is_file())
         # Each repetition opened the scene by its keys and closed it again.
         self.assertEqual(pressed.count(["esc"]), 3)

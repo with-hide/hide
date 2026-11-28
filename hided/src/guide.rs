@@ -199,7 +199,7 @@ mod tests {
                     "`core:<device id>:pane:<id>`",
                     "`@name (pane <address> · task)`",
                     "a pane that is no registered agent takes `hide pane send` and no letter",
-                    "so hand an agent work with `hide request send`",
+                    "so hand an agent work with `hide letter send`",
                     "40 characters at most",
                     "`cd <worktree> && hide checkout purpose \"…\"`",
                 ],
@@ -390,7 +390,7 @@ mod tests {
     /// a person's one-time import from the engine Hide ran before, never
     /// taught to an agent.
     const USAGE_TOPICS: &[&str] = &[
-        "request",
+        "letter",
         "inbox",
         "watch",
         "agent",
@@ -497,7 +497,7 @@ mod tests {
                         now.join(" ")
                     ));
                 }
-                // `request ack|cancel|show` names three commands.
+                // `letter ack|cancel|show` names three commands.
                 let mut commands: Vec<Vec<&str>> = vec![Vec::new()];
                 for word in text[at + "hide ".len()..]
                     .split(|c: char| c.is_whitespace() || c == '`' || c == ',')

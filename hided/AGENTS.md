@@ -16,6 +16,7 @@ Do not copy those contracts here.
 | A machine that runs panes | topic `device`, option `--machine <device id>` | `--device`, which `device accept-ssh` uses between two Hides for the asking machine's id |
 | An agent family | `--kind <kind>` | `--agent`, retired on `skill` and `mcp` `on`/`off` |
 | The text an agent starts with | `--brief <text>` | `--task`, retired on `automation add` and `edit` |
+| A message one agent sends another, kept with its answer | topic `letter` (`hide letter send\|reply\|show\|cancel\|ack`) | `request`, which names a letter's kind (`--kind request`) and the verb of `device request` and `access request`; the topic word `request` is the letters' retired spelling |
 | The checkout a pane works in | topic `checkout` (`show`, `purpose`, `remove`) | `workspace`, the engine's word, which only a hook's own commands keep (`workspace info --hook`, `status --hook`, `bootstrap`, `memory`) |
 | The project a command works in | `--repo <path>`, cleared by `--no-repo` | `--folder` and `--own-folder`, retired on `automation add` and `edit` |
 | A plan document given on the command line | `--inline <plan>` | `--json <plan>`, retired on `mission plan` and `task set` |
@@ -41,7 +42,7 @@ Do not copy those contracts here.
   Those two keep `--json` as the retired option with its `json` value, so neither takes a bare `--json` within the contract's format.
 - `--intent <key>` is the retry key: the same key converges on the first result.
 - A new command that answers data takes `--json`; one that always prints JSON takes it too and changes nothing.
-  Many existing commands that always print JSON (`inbox`, `request send`, `task show`, `mission list`) do not take it, and `admit` refuses it there.
+  Many existing commands that always print JSON (`inbox`, `letter send`, `task show`, `mission list`) do not take it, and `admit` refuses it there.
 
 ## Help
 

@@ -107,6 +107,15 @@ pub const TABLE: Table = Table {
             old: &["mcp", "update"],
             now: &["mcp", "edit"],
         },
+        // `hide letter` was `hide request`: the command agents type most,
+        // in every session file, edited skill and calling tool (sasu) since
+        // letters began. `request` stays a letter's kind (`--kind request`)
+        // and the verb of `device request` and `access request`, which this
+        // row, keyed by the topic, never reads.
+        Command {
+            old: &["request"],
+            now: &["letter"],
+        },
     ],
     options: &[
         // A project is `--repo`, as `agent spawn` names it, and the text an
@@ -409,6 +418,35 @@ mod tests {
         ] {
             assert_eq!(read(&TABLE, old), now, "{old}");
         }
+    }
+
+    #[test]
+    fn the_table_reads_hide_request_as_hide_letter() {
+        for verb in ["send", "reply", "show", "cancel", "ack"] {
+            assert_eq!(
+                current(&["request", verb, "x"]),
+                ["letter", verb, "x"],
+                "request {verb}"
+            );
+        }
+        assert_eq!(
+            current(&[
+                "request", "send", "parent", "--kind", "request", "--body", "request"
+            ]),
+            [
+                "letter", "send", "parent", "--kind", "request", "--body", "request"
+            ]
+        );
+        // `request` as another topic's verb is never the letter topic.
+        assert_eq!(
+            current(&["device", "request", "pc"]),
+            ["device", "request", "pc"]
+        );
+        assert_eq!(
+            current(&["access", "request", "--name", "bot"]),
+            ["access", "request", "--name", "bot"]
+        );
+        assert_eq!(current(&["letter", "show", "l1"]), ["letter", "show", "l1"]);
     }
 
     #[test]

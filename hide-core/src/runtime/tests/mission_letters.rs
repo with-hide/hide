@@ -1,4 +1,4 @@
-//! Who may read a letter through `hide request show`: its sender and its
+//! Who may read a letter through `hide letter show`: its sender and its
 //! recipient, and, beyond them, an agent bound to a mission node (its worker,
 //! reviewer or verifier) reading a letter between the Conductor and another
 //! agent of that node (docs/delivery.md, Who may read a letter), and which
@@ -207,7 +207,7 @@ impl Fixture {
 }
 
 /// A reviewer writes its verdict to the Conductor, as a mission asks. Its
-/// node's worker and verifier read it with `hide request show`; no other
+/// node's worker and verifier read it with `hide letter show`; no other
 /// agent does, whether it works another node of the same mission, a node of
 /// another mission, or no mission at all.
 #[test]
@@ -366,7 +366,7 @@ fn the_grant_ends_with_the_nodes_binding() {
 /// with-hide/hide-private#668: `hide mission show <node>` lists, apart
 /// from its worker's own letters, the letters its checkers wrote to the
 /// Conductor with their ids, so the worker finds and reads them with
-/// `hide request show` without being told; a checker's letter to anyone
+/// `hide letter show` without being told; a checker's letter to anyone
 /// else is not listed, and another node lists none of them.
 #[test]
 fn a_node_lists_its_checkers_letters_to_the_conductor_by_id() {

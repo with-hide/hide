@@ -243,7 +243,7 @@ pub(crate) fn command_usage(topic: &str, verb: Option<&str>) -> Option<String> {
 /// an agent types.
 fn topic_usage(topic: &str) -> Option<String> {
     Some(match topic {
-        "request" | "inbox" | "watch" => usage(crate::delivery_cli::USAGE),
+        "letter" | "inbox" | "watch" => usage(crate::delivery_cli::USAGE),
         "agent" => usage(crate::agent_cli::USAGE),
         "ps" => usage(crate::ps_cli::USAGE),
         "skill" => usage(crate::store_cli::SKILL_USAGE),
@@ -616,7 +616,7 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 .map(CommandKind::Access)
                 .map_err(|reason| wrong(reason, crate::access_cli::USAGE))
         }
-        Some(topic @ ("request" | "inbox" | "watch")) => {
+        Some(topic @ ("letter" | "inbox" | "watch")) => {
             crate::cli_contract::admit(&args[1..])
                 .map_err(|refusal| format!("{refusal}\n{}", usage(crate::delivery_cli::USAGE)))?;
             crate::delivery_cli::parse(topic, iter)
@@ -4157,6 +4157,10 @@ mod tests {
             (
                 &["hide", "device", "add", "--help"][..],
                 usage(crate::device_cli::USAGE),
+            ),
+            (
+                &["hide", "letter", "send", "--help"][..],
+                usage(crate::delivery_cli::USAGE),
             ),
             (
                 &["hide", "request", "send", "--help"][..],

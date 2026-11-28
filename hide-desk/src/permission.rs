@@ -402,7 +402,7 @@ pub enum Step {
     Sessions,
     /// A file read or search.
     Files,
-    /// `hide request send` or `reply`: a letter.
+    /// `hide letter send` or `reply`: a letter.
     Letter,
     /// `hide agent spawn`: a new session.
     Start,
@@ -433,12 +433,12 @@ fn hide_step(line: &str) -> Step {
         let rest = hide_shell::retired::current(rest);
         let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
         let this = match rest.as_slice() {
-            ["request", "send" | "reply", ..] => Step::Letter,
+            ["letter", "send" | "reply", ..] => Step::Letter,
             ["agent", "spawn", ..] => Step::Start,
             ["agent", "list" | "show", ..]
             | ["ps", ..]
             | ["inbox", ..]
-            | ["request", "show", ..]
+            | ["letter", "show", ..]
             | ["watch", "list", ..]
             | ["task", "show", ..]
             | ["mission", "show" | "list", ..]

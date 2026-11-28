@@ -293,7 +293,7 @@ def busy_letter_verdict(shown, read, session, held, token, *, declared, input_ru
     docs/delivery.md, Letters while the agent works, owns these expectations.
     """
     if not isinstance(shown, dict):
-        return FAIL, "hide request show gave no letter"
+        return FAIL, "hide letter show gave no letter"
     if shown.get("state") != "delivered" or shown.get("hook_confirmed") is not True:
         return FAIL, "the letter has no confirmed delivery"
     bells, handovers = shown.get("bell_attempts"), shown.get("tool_handovers")
@@ -386,7 +386,7 @@ def menu_letter_verdict(shown, read, session, token, after):
     after one bell and answered from `after` on: a bell line the picker took
     as its choice starts no turn, so it would ring again or never answer."""
     if not isinstance(shown, dict):
-        return FAIL, "hide request show gave no letter"
+        return FAIL, "hide letter show gave no letter"
     if shown.get("state") != "delivered":
         return FAIL, "letter state is " + str(shown.get("state")) + ", not delivered"
     if shown.get("bell_attempts") != 1:
@@ -505,7 +505,7 @@ def bell_turn(events, bell_line):
 def letter_verdict(shown, read, session, token):
     """The doorbell rang, the letter was delivered, and the reply to that turn carries the token."""
     if not isinstance(shown, dict):
-        return FAIL, "hide request show gave no letter"
+        return FAIL, "hide letter show gave no letter"
     if not shown.get("bell_line"):
         return FAIL, "the doorbell never rang (state " + str(shown.get("state")) + ")"
     if shown.get("state") != "delivered":
@@ -524,7 +524,7 @@ def prompt_letter_verdict(shown, read, session, token, after):
     typed after it: Hide records it delivered and confirmed by the hook, and
     the reply to that prompt, from `after` on, carries the token."""
     if not isinstance(shown, dict):
-        return FAIL, "hide request show gave no letter"
+        return FAIL, "hide letter show gave no letter"
     if shown.get("state") != "delivered" or shown.get("hook_confirmed") is not True:
         return FAIL, (f"letter state is {shown.get('state')} and hook confirmed {shown.get('hook_confirmed')}, "
                       "not delivered by the prompt hook")

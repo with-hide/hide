@@ -98,7 +98,7 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
             "Only the operator adds or removes a device, in Settings > Devices; ask the operator"
         }
         "access_needs_agent" => {
-            "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide request send"
+            "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide letter send"
         }
         "access_spawn_parent" => {
             "A tool is no agent's parent; run hide agent spawn without --parent and follow the agent with hide agent show and hide inbox"

@@ -87,7 +87,7 @@ mod tests {
             serde_json::from_str(include_str!("../../contracts/delivery-envelope.json")).unwrap();
         for example in contract["examples"].as_array().unwrap() {
             let line = example["first_line"].as_str().unwrap();
-            let body = format!("\n{line}\nPlease look\nFull letter: hide request show letter-1\n");
+            let body = format!("\n{line}\nPlease look\nFull letter: hide letter show letter-1\n");
             assert_eq!(
                 envelope_sender(&body).as_deref(),
                 example["sender"].as_str(),
