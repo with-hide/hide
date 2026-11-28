@@ -34,6 +34,8 @@ and `fake-pid` (its own pid). `$CODEX_HOME/fake-mode` selects the behaviour:
                 layer decides the value
   slow_write    takes 2.5 s over a projects write, longer than any wait a
                 second change of the same trust once had
+  slow_start    reads nothing for 3 s after it starts, as a Codex still
+                starting on a busy machine does, then answers everything
 
 Folder trust (`projects."<folder>".trust_level`) lives in
 `$CODEX_HOME/fake-projects.json`: `config/read` answers it as the user layer's
@@ -181,6 +183,8 @@ with open(path("fake-cwd"), "w") as f:
 MODE = mode()
 if MODE == "no_server":
     sys.exit(1)
+if MODE == "slow_start":
+    time.sleep(3)
 if MODE == "hang":
     # The child starts before any request, so a check that times out before
     # `hooks/list` arrives (a slow start under load) still has one to stop.
