@@ -23,8 +23,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agent_live_check.process_table import (BsdInfo, Process, ProcessTable, descendants, marked_descendants,
-                                           procargs_owned, require_complete, snapshot, validate_linux_procfs)
+from agent_live_check.process_table import (BsdInfo, Process, ProcessTable, ShortBsdInfo, descendants,
+                                           marked_descendants, procargs_owned, require_complete, snapshot,
+                                           validate_linux_procfs)
 from agent_live_check.processes import (OwnedProcesses, ProcessError, ProcessSafetyError, RssSamples, guard,
                                        control_plane, largest, linux_children_remain, reap_adopted,
                                        signal_reserved_group)
@@ -674,6 +675,54 @@ class ProcessProtection(unittest.TestCase):
                         self.assertEqual(table[pid].group, pid if outcome == "replacement_owned" else pid + 1)
                         old = Process(pid, 2, pid, 100_000_002, 0, False, os.getuid())
                         self.assertNotIn(pid, descendants(table, pid + 100, known={pid: old}))
+
+    def test_a_child_that_execs_a_set_user_id_program_mid_read_is_foreign(self):
+        # A host-wide sample reads a same-UID child, which then execs a
+        # set-user-ID program such as ps before its memory is read: the
+        # refreshed read is refused like any foreign process's. Inject only
+        # libproc's read boundary.
+        import errno
+        own, child = os.getpid(), 24680
+        for owner, expected in ((0, "foreign"), (os.getuid(), "unavailable")):
+            with self.subTest(owner=owner):
+                library = Mock()
+                child_reads = 0
+
+                def list_all(pids, size):
+                    pids[0], pids[1] = own, child
+                    return 2
+
+                def read_process(subject, flavor, argument, pointer, size):
+                    nonlocal child_reads
+                    if flavor == 13:
+                        short = ctypes.cast(pointer, ctypes.POINTER(ShortBsdInfo)).contents
+                        short.pid, short.uid = subject, owner
+                        return ctypes.sizeof(ShortBsdInfo)
+                    if subject == child:
+                        child_reads += 1
+                        if child_reads > 1:
+                            ctypes.set_errno(errno.EPERM)
+                            return 0
+                    if flavor == 4:
+                        return size
+                    info = ctypes.cast(pointer, ctypes.POINTER(BsdInfo)).contents
+                    info.pid, info.ppid, info.pgid, info.uid = subject, 1, subject, os.getuid()
+                    info.sec, info.usec, info.flags, info.status = 100, 2, 0x10, 1
+                    return ctypes.sizeof(BsdInfo)
+
+                library.proc_listallpids.side_effect = list_all
+                library.proc_pidinfo.side_effect = read_process
+                with patch("agent_live_check.process_table.sys.platform", "darwin"), \
+                        patch("agent_live_check.process_table.ctypes.CDLL", return_value=library):
+                    table = snapshot()
+                self.assertIn(own, table)
+                self.assertNotIn(child, table)
+                if expected == "foreign":
+                    self.assertEqual(table.foreign_uid_pids, {child})
+                    require_complete(table)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "subjects_unavailable"):
+                        require_complete(table)
 
     def test_unavailable_controller_ancestry_refuses_prelaunch_exclusion(self):
         table = ProcessTable()
