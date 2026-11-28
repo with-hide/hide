@@ -348,6 +348,7 @@ Each HTML grant holds one of 32 in-memory partitions, `hide-browser-external-<sl
 The page reports its state to the shell marked `external`, and the shell sends no `browser_state` for it, so its `file:` address is never written anywhere hided reads.
 It is a gateway target of no capability but the file capability of the agent that opened it, and Comment does not offer it.
 The core keeps the grant on its display and never prints it (`hide view list` leaves it out); hided passes it to the gateway with that agent's file purpose, so the page loads hidden for the agent even when no desk shows it.
+A page command's answer names the page's `file:` address to that agent, which gave the path itself; hided passes the answer through and neither keeps nor logs it.
 The grant ends when no tab stands on it: every browser sync names the grants of the core's outside displays and of opens still on their way (`external_grants`), the host lets go of the rest and destroys their pages, and a sync before the reloaded window has the core's tabs names nothing so a reload lets go of nothing.
 A grant no sync has named since it was handed out is kept for 10 s (`UNNAMED_GRANT_GRACE_MS`), because the shell learns of it only from the click's answer, and an open the core never answers stops being named after 10 s (`PENDING_GRANT_MS`), so a lost open frees its grant.
 When a window attaches it tells the core which grants its host still holds (`external_grants`), so a tab whose grant went with a quit app closes.

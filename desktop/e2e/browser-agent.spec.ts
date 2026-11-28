@@ -395,7 +395,7 @@ test("hide browser: a busy, hidden, file or missing display and a stale ref are 
   // A shell bound only to the checkout, not to a pane, is told who drives a file page.
   const shellEnv: NodeJS.ProcessEnv = { ...run.env };
   for (const key of ["HIDE_PANE_ID", "HERDR_PANE_ID", "HIDE_CAP_REF"]) delete shellEnv[key];
-  const outsidePane = spawnSync(HIDE_CLI, ["browser", "snapshot", fileDisplay], { cwd: checkout, env: shellEnv, encoding: "utf8", timeout: 30_000 });
+  const outsidePane = spawnSync(HIDE_CLI, ["browser", "snapshot", fileDisplay], { cwd: checkout, env: shellEnv, encoding: "utf8" });
   expect(outsidePane.status, outsidePane.stdout).not.toBe(0);
   expect(JSON.parse(outsidePane.stdout.trim().split("\n").at(-1)!)).toMatchObject({ ok: false, reason: "file_page_pane_only" });
   expect(await json(["snapshot", "browser-missing"])).toMatchObject({ ok: false, reason: "display_missing" });
