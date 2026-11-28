@@ -385,6 +385,14 @@ def setup(args):
     if CHECKOUT != root / "hide":
         print(f"refused: run setup from the journey's checkout, {root / 'hide'}", file=sys.stderr)
         return 2
+    partial = subprocess.run(["git", "config", "--get", "remote.origin.partialclonefilter"], cwd=CHECKOUT,
+                             capture_output=True, text=True)
+    if partial.stdout.strip():
+        # The journey's shared clone of this checkout checks every object, and
+        # a partial clone fetches each missing one from GitHub, past the
+        # journey's 15 s command cap (on the mini, 2026-11-28).
+        print("refused: the journey's checkout must be a full clone, not a partial one", file=sys.stderr)
+        return 2
     (Path.home() / account.MARKER).write_text("The daily real-login journey's account (scripts/agent_journey/account.py).\n")
     for folder in ("logs", "bin", "clis", "cargo-home"):
         (root / folder).mkdir(parents=True, exist_ok=True)
