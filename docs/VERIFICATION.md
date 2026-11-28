@@ -69,8 +69,9 @@ Manual QA covers what a spec cannot reach yet, and the pull request's Evidence s
 
 A probe runs the agent the operator signed in, on the operator's account, so it can reach the operator's files and the vendor.
 
-- Never run a real agent with a changed `HOME`.
-  agy lost its keychain sign-in that way and opened a Google sign-in window in the operator's browser on every run (2026-10-16); isolate with the real `HOME` and a scratch working folder instead.
+- Never run a real agent with a changed `HOME` that does not reach its sign-in.
+  agy finds its keychain sign-in through `HOME`'s `Library/Keychains`: without it, agy lost its sign-in and opened a Google sign-in window in the operator's browser on every run (2026-10-16).
+  Isolate with the real `HOME` and a scratch working folder, or, for agy, link the changed `HOME`'s `Library/Keychains` to the operator's, as the journey's [local mode](#local-mode-macos) does (agy 1.5.18, 2026-11-28).
 - Never pass an agent's skip-permissions flag in a probe.
   With agy's `--dangerously-skip-permissions` its model opened files outside the scratch folder and sent them to the vendor (2026-10-16).
 - A capture hook records the names of environment variables, never their values.
@@ -410,7 +411,7 @@ Build `hided`, `hide` and the hooks with `bash scripts/verify-cargo.sh cli` and 
 `--agents claude-code,codex` narrows the rows and `--model ID=MODEL` passes a model through the product's own flag.
 A release's run on the Mac is two runs from the same worktree, the fake model first and the signed-in agents second: `--fake-model` measures every agent Hide supports at its pinned CLI with no request to a provider, and the plain local run measures the CLI and login installed on the Mac.
 Run them one after the other, never side by side: both start a private `hided` from this worktree's build, and a local fake run leases the CLI cache.
-agy is measured by neither on the Mac (below): the CI fake model lane measures its CLI and Hide's kit, and no run measures a signed-in agy.
+agy is measured by both on the Mac through the private daemon home (below), the fake run on the installed agy rather than the pinned one, since it keeps the fake run's local exception.
 On 2026-10-25 the local fake run failed OpenCode's `start` on this Mac (its server answered HTTP 500 under the private sandbox, which no smaller sandbox reproduced) alone as well as beside others, and stopped the run before the agents after it, so leave it out of the local fake run's `--agents` until that closes; the fake model lane on CI measures it.
 It reuses `scripts/agent_live_check`'s isolation ([Run isolation](#run-isolation)): this worktree's `hided` on private state with the kit installed into a private daemon home, the write sandbox and the process guardian.
 The daemon starts without `XDG_STATE_HOME`, like an app opened from the Dock, while the pane shell inherits private XDG folders and no blanket `HIDE_STATE_DIR`.
@@ -425,8 +426,12 @@ Grok and Pi keep the operator's HOME too and read a private folder of the daemon
 OpenCode keeps the operator's HOME too and reads the daemon home's folders: its configuration from `.config/opencode`, where the kit puts Hide's plugin whatever `XDG_CONFIG_HOME` says, holding an `opencode.json` with only the operator's model choice and provider settings, so their MCP servers and permissions stay theirs, and exactly the variables the chosen providers' blocks name as `{env:NAME}` (the providers of `model` and `small_model`), read from the shell running the journey into 0600 files under the probe that the pane's `opencode` reads at each start, so no value is written into the wrapper or the report, which names the variables only; a provider whose variable the shell does not set leaves OpenCode `not measured` with the variable's name; its sessions and a 0600 copy of its `auth.json` from the probe's own `XDG_DATA_HOME`, the folder the daemon and Hide's reader read them from.
 Naming a different data folder for the agent than the daemon has is a harness bug, not a product finding: on 2026-10-18 it made the reader answer `session_file_missing` for a session OpenCode had stored.
 OpenCode 2 runs every terminal's sessions in one background server that outlives them, on the port its `service.json` names, where the operator's server may listen; the journey names a free port in the private `service.json` in every mode, marks the agent's environment (`HIDE_JOURNEY_OPENCODE`, which the server inherits), counts the marked servers after Sleep and Wake (more than one is a product finding), stops the agent's server once its cells are settled, so it holds no memory under the run's 2 GiB cap while the later agents run (left running, its 0.3 GB put omp's fork past the cap on Windows, 2026-10-18), and on every exit path stops any still running with OpenCode's `service stop`, admitted past the run's deadline and a cancellation as the rest of the teardown is, and then a signal to any still running, before the run's owner closes; the owner's close then ends whatever the run owns, the server included (on Windows, where no other process's environment can be read to signal it, the server is a member of the run's job), and a server still answering after that close fails the run.
-agy is `not measured` locally: it reads its hooks only from `~/.gemini/config` in the HOME its keychain sign-in needs, so the candidate's kit cannot reach it without the operator's own hooks running; CI mode's fake model lane measures its CLI and Hide's kit, and no run measures a signed-in agy.
-omp runs in the daemon home itself: it names a checkout's session folder from its own HOME and no variable moves it, so local mode starts it with HOME set to the private daemon home, where Hide's reader names the same folder, as hided and omp share one HOME in the product.
+omp and agy run in the daemon home itself: each keeps its sessions (and agy its hooks and folder trust) in a folder named from its own HOME and no variable moves it, so local mode starts it with HOME set to the private daemon home, where the kit writes its hooks and Hide's reader names the same folder, as hided and each share one HOME in the product.
+agy 1.5.18's `--settings` takes `settings.json` keys only, not a hooks file, so this is also what keeps the operator's own `~/.gemini/config/hooks.json`, whose `hide` block runs the installed Hide's hooks, out of the run; agy logs `loaded 1 named hooks from 1 hooks.json file(s)` there against 3 in the operator's HOME, and the guard compares that file and agy's settings before and after the run.
+agy's sign-in is one keychain item, which agy finds through HOME's `Library/Keychains`, so local mode links that folder of the daemon home to the operator's before agy first runs: the login stays the operator's own item, read and refreshed in place and never copied, and `agy models`, which reads the account and runs no model turn, must list a model or agy is `not measured` as not logged in.
+Before agy first runs, that HOME also gets the finished first-run status a used agy keeps (`.gemini/antigravity-cli/cache/onboarding.json`, the one CI mode writes): in a new HOME agy 1.5.18 opens its color scheme and data-use notice, which took the journey's later input on 2026-11-28.
+The candidate `hided` shares that HOME, so in a run that measures agy it reads the operator's keychain as an installed Hide does; Hide only reads a keychain item, never writes one.
+A run with the fake model makes no link, so agy reaches only its fake.
 That home's `.omp/agent` holds a 0600 copy of the login database (`agent.db` with its `-wal` and `-shm`), taken only while no process has it open, and of the operator's `config.yml` model roles; an OAuth login in it is judged by the same expiry rule as Grok's and Pi's.
 The candidate's Hide AI is off in local mode (`enabled: false` in the private home's `ai.json`), since it would run the operator's signed-in CLI with the private HOME; a request from it fails the run (exit 2).
 In CI mode it stays on, and the report counts its model requests by provider apart from each agent's budget.
@@ -520,10 +525,10 @@ Top-level entry enumeration and database row reads use the existing configuratio
 
 Claude Code, Codex, Grok, OpenCode, Pi and omp declare these routes.
 Their update policies are respectively `DISABLE_AUTOUPDATER`, `check_for_update_on_startup = false`, `GROK_DISABLE_AUTOUPDATER`, `update: disable`, `PI_OFFLINE` and `startup.checkUpdate: false` (omp checks for a version but does not automatically install it).
-agy keeps the local exception and is not started: no API-key environment is proven for its private HOME; CI's disposable runner still measures it.
+agy keeps the local exception (no API-key environment is proven for its private HOME), so it runs on its existing local route, the daemon home, with the fake model's key and no keychain link.
 Cursor remains excluded by operator decision.
-A missing key or update declaration keeps an adapter on its existing local fake route with the operator HOME, and the report names the exception.
-This preserves existing coverage: a route already measured still runs, while an existing local limitation such as agy remains `not measured`.
+A missing key or update declaration keeps an adapter on its existing local fake route (`ROUTES` in `scripts/agent_journey/local.py`) with the run's fake-model key, and the report names the exception.
+This preserves existing coverage: a route already measured still runs.
 The private fake sandbox denies reads of the operator's `~/.agents`, including metadata reads.
 Pi 1.0.4 searches a project's ancestors for `.agents/skills`, excluding only the current HOME's skills; without this boundary, a changed HOME makes the operator's skills look like project resources and adds an unrelated trust question.
 Operator skills must neither enter a fake run nor alter its folder-trust measurement.
