@@ -24,6 +24,9 @@ class ProcessTable(dict):
         self.unavailable = []
         self.vanished = []
         self.foreign_uid_pids = set()
+        # Live members of a sampled group left out of the table because they
+        # run a set-user-ID program: not measured, still ours to end.
+        self.unmeasured = set()
 
 
 class ProcessState(Enum):
@@ -147,17 +150,23 @@ def snapshot(group: int | None = None) -> dict[int, Process]:
             read = library.proc_pidinfo(pid, 13, 1, ctypes.byref(short), ctypes.sizeof(short))
             return (short if read == ctypes.sizeof(short) else None), ctypes.get_errno()
 
-        def another_users(short):
+        def another_users(pid, short):
             # A process that runs as another UID is refused the full read by
             # design. A host-wide sample excludes it, rather than confusing
             # that refusal with our ownership. A group sample excludes only
             # its own member that runs a set-user-ID program (ps, which
             # Claude Code runs in its group): its real UID is still ours.
-            # It is not measured, but the group's end still waits for it,
-            # since a group is gone only when nothing answers killpg.
+            # It is not measured, but it is still the group's live member:
+            # the guardian signals the group while it lives (`unmeasured`).
             if short is None or short.uid == os.getuid():
                 return False
-            return group is None or (short.pgid == group and short.ruid == os.getuid())
+            if group is None:
+                return True
+            if short.pgid == group and short.ruid == os.getuid():
+                if short.status != 5:
+                    result.unmeasured.add(pid)
+                return True
+            return False
 
         for pid in pids[:count]:
             info, task = BsdInfo(), TaskInfo()
@@ -169,7 +178,7 @@ def snapshot(group: int | None = None) -> dict[int, Process]:
                     # A later foreign UID may be a reused PID. Preserve the
                     # earlier disappearance before excluding that replacement.
                     result.vanished.append(pid)
-                if another_users(short):
+                if another_users(pid, short):
                     result.foreign_uid_pids.add(pid)
                     continue
                 if error == errno.ESRCH and (short is not None or short_error == errno.ESRCH):
@@ -193,7 +202,7 @@ def snapshot(group: int | None = None) -> dict[int, Process]:
                     # A child that execs a set-user-ID program (ps, login)
                     # between the reads now runs as another UID: the same
                     # process a sample taken a moment later excludes.
-                    if another_users(short_read(pid)[0]):
+                    if another_users(pid, short_read(pid)[0]):
                         result.foreign_uid_pids.add(pid)
                         continue
                     result.unavailable.append({"pid": pid, "errno": refresh_error})
@@ -302,11 +311,17 @@ def identity_state(pid, birth, *, uid=None, pointer_width=None, table=None):
     return ProcessState.ZOMBIE if zombie else ProcessState.LIVE
 
 
+def live_members(table):
+    """Whether a group sample holds a member that still runs: a readable one,
+    or one left unmeasured because it runs a set-user-ID program."""
+    return any(not p.zombie for p in table.values()) or bool(getattr(table, "unmeasured", ()))
+
+
 def group_state(table):
     require_complete(table)
-    if not table:
+    if not table and not getattr(table, "unmeasured", ()):
         return ProcessState.VANISHED
-    return ProcessState.LIVE if any(not p.zombie for p in table.values()) else ProcessState.ZOMBIE
+    return ProcessState.LIVE if live_members(table) else ProcessState.ZOMBIE
 
 
 class OwnerEnvironmentUnavailable(RuntimeError):

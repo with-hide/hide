@@ -23,7 +23,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agent_live_check.process_table import (BsdInfo, Process, ProcessTable, ShortBsdInfo, descendants,
+from agent_live_check.process_table import (BsdInfo, Process, ProcessState, ProcessTable, ShortBsdInfo, descendants, group_state,
                                            marked_descendants, procargs_owned, require_complete, snapshot,
                                            validate_linux_procfs)
 from agent_live_check.processes import (Limits, OwnedProcesses, ProcessError, ProcessSafetyError, RssSamples, guard,
@@ -779,10 +779,53 @@ class ProcessProtection(unittest.TestCase):
                 self.assertEqual(list(table), [group])
                 if expected == "excluded":
                     self.assertEqual(table.foreign_uid_pids, {member})
+                    self.assertEqual(table.unmeasured, {member})
                     require_complete(table)
                 else:
                     with self.assertRaisesRegex(RuntimeError, "subjects_unavailable"):
                         require_complete(table)
+
+    def test_a_set_user_id_member_keeps_its_group_signalled_after_the_root_ends(self):
+        # The root is a zombie awaiting its reap and the only other member
+        # runs a set-user-ID program, so the sample measures no live member.
+        # That member is still ours: the group's end has to reach it.
+        import errno
+        group, member = 24680, 24681
+        for member_status, signalled in ((1, True), (5, False)):
+            with self.subTest(member="zombie" if member_status == 5 else "running"):
+                library = Mock()
+
+                def list_group(asked, pids, size):
+                    pids[0], pids[1] = group, member
+                    return 2
+
+                def read_process(subject, flavor, argument, pointer, size):
+                    if flavor == 13:
+                        short = ctypes.cast(pointer, ctypes.POINTER(ShortBsdInfo)).contents
+                        short.pid, short.uid, short.ruid, short.pgid = subject, 0, os.getuid(), group
+                        short.status = member_status
+                        return ctypes.sizeof(ShortBsdInfo)
+                    if subject == member:
+                        ctypes.set_errno(errno.EPERM)
+                        return 0
+                    if flavor == 4:
+                        return size
+                    info = ctypes.cast(pointer, ctypes.POINTER(BsdInfo)).contents
+                    info.pid, info.ppid, info.pgid, info.uid = subject, 1, group, os.getuid()
+                    info.sec, info.usec, info.flags, info.status = 100, 2, 0x10, 5
+                    return ctypes.sizeof(BsdInfo)
+
+                library.proc_listpgrppids.side_effect = list_group
+                library.proc_pidinfo.side_effect = read_process
+                sent = []
+                with patch("agent_live_check.process_table.sys.platform", "darwin"), \
+                        patch("agent_live_check.process_table.ctypes.CDLL", return_value=library), \
+                        patch("agent_live_check.processes.os.killpg",
+                              side_effect=lambda pgid, signum: sent.append((pgid, signum))):
+                    self.assertEqual(group_state(snapshot(group)),
+                                     ProcessState.LIVE if signalled else ProcessState.ZOMBIE)
+                    signal_reserved_group(group, signal.SIGKILL)
+                self.assertEqual(sent, [(group, signal.SIGKILL)] if signalled else [])
 
     def test_unavailable_controller_ancestry_refuses_prelaunch_exclusion(self):
         table = ProcessTable()

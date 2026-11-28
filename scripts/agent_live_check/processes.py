@@ -870,7 +870,10 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
         errors = []
         try:
             table = collect()
-            needs_group = any(process.group == group and not process.zombie for process in table.values())
+            # A member left unmeasured (a set-user-ID program) still needs
+            # the group's signal, which its real UID lets us send.
+            needs_group = (any(process.group == group and not process.zombie for process in table.values())
+                           or bool(getattr(table, "unmeasured", ())))
             skip_group = True
         except Exception as error:
             # Metadata failure still ends the reserved group and remains a
@@ -943,11 +946,13 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
                     if root_exited:
                         current = snapshot(group)
                         require_complete(current)
+                        unmeasured = current.unmeasured
                         observed.update(current)
                         current = dict(observed)
                     else:
                         current = collect()
-                    active = any(not process.zombie for process in current.values())
+                        unmeasured = getattr(current, "unmeasured", ())
+                    active = any(not process.zombie for process in current.values()) or bool(unmeasured)
                 except BaseException:
                     active = True
                     failed = True
