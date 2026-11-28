@@ -21,10 +21,10 @@ import threading
 import time
 
 if __package__:
-    from .process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, live_members, marked_descendants, require_complete, snapshot
+    from .process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, live_members, marked_descendants, require_complete, retain_owned, snapshot
     from .system import WINDOWS
 else:
-    from process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, live_members, marked_descendants, require_complete, snapshot
+    from process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, live_members, marked_descendants, require_complete, retain_owned, snapshot
     from system import WINDOWS
 
 if WINDOWS:
@@ -815,11 +815,7 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
         # another live guardian's token belongs to concurrent work.
         if sys.platform == "darwin" or sys.platform.startswith("linux"):
             all_processes = snapshot()
-            retained = {}
-            for pid, previous in observed.items():
-                state = identity_state(pid, previous.birth, uid=previous.uid, table=all_processes)
-                if state is not ProcessState.VANISHED:
-                    retained[pid] = all_processes[pid]
+            retained = retain_owned(table, all_processes, observed, group if include_group else None)
 
             def matches(entry):
                 prefix = b"HIDE_LIVE_CHECK_OWNER="

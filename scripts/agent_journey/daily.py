@@ -39,8 +39,7 @@ import sys
 import threading
 import time
 
-from agent_live_check.processes import (GUARDIAN_FAILURES, Limits, OwnedProcesses,
-                                        ProcessError)
+from agent_live_check.processes import Limits, OwnedProcesses, ProcessError
 
 from . import account
 from .cells import EXCLUDED_AGENTS, FAIL, NOT_MEASURED, PASS
@@ -70,20 +69,10 @@ LOCK_TIMEOUT_EXIT = 75
 # 4 GiB (2026-11-28).
 CAPS = {"target": 30 * 1024 ** 3, "cargo-home": 4 * 1024 ** 3, "build-cache": 2 * 1024 ** 3}
 # The agents' own stores in the account's home, which their prompts and the
-# journey's sessions grow: their sum stays under STORES_CAP.
+# journey's sessions grow: past STORES_CAP before or after a run, fail and
+# ask the operator to clear space. Never remove anything from these stores.
 STORES = (".claude", ".codex", ".local/share/opencode", ".pi", ".omp", ".grok", ".gemini")
 STORES_CAP = 8 * 1024 ** 3
-# Where an agent keeps one file, or for Grok one folder, per session, and
-# nothing else: what the runner may drop to stay under the cap, oldest first.
-# A login lives elsewhere (a credential file, a database, the keychain), and
-# OpenCode's and Antigravity's sessions share a database with it, so they
-# are never dropped.
-SESSIONS = ((".claude/projects", "*/*.jsonl"), (".codex/sessions", "*/*/*/rollout-*.jsonl"),
-            (".pi/agent/sessions", "*/*.jsonl"), (".omp/agent/sessions", "*/*.jsonl"),
-            (".grok/sessions", "*/*"))
-# A session untouched this long has ended: the runner holds the journey's
-# lock, and an agent someone left open writes its session as it goes.
-SESSION_ENDED_SECONDS = 24 * 3600
 LOCK_WAIT_SECONDS = 3 * 3600
 BUILD_SECONDS = 90 * 60
 JOURNEY_SECONDS = 150 * 60
@@ -178,25 +167,6 @@ def log(stream, message):
     stream.flush()
 
 
-# What a failure may say in the log: its kind, never its message, which can
-# carry a path, an account or what a command printed. A guardian's line keeps
-# its prefix and up to two names after it: an exception's (OSError) or a
-# reason's (owned_processes_remain), which name no path, account or word.
-KIND = re.compile(r"[a-z]+(?:_[a-z]+)+")
-NAME = r"(?:[A-Z][A-Za-z]{0,63}|[a-z]+(?:_[a-z]+)+)"
-GUARDIAN_LINE = re.compile(rf"guardian(?:_[a-z]+)*_failure(?::{NAME}(?=:|$)){{1,2}}")
-
-
-def failure_kinds(error, output):
-    """The kinds a ProcessError and the guardian's lines in `output` name."""
-    kinds = [match.group(0)] if (match := KIND.fullmatch(str(error).split(":", 1)[0])) else [type(error).__name__]
-    for line in output.splitlines():
-        if line.startswith(GUARDIAN_FAILURES) and (match := GUARDIAN_LINE.match(line)):
-            kinds.append(match.group(0))
-    return kinds[:5]
-
-
-
 def environment(settings, extra=None):
     """The run's environment: none of the launching shell's Hide variables
     or provider keys, the journey's CLIs first on PATH, then the toolchain."""
@@ -234,9 +204,9 @@ def step(owner, name, argv, stream, env, seconds, *, cwd=CHECKOUT):
                 reader.join(timeout=5)
                 child.stdout.close()
     except ProcessError as error:
-        # Why the guardian could not own or end the command, by kind only.
-        for kind in failure_kinds(error, tail.text()):
-            log(stream, f"{name}: {kind}")
+        # The exception type is ours; the combined pipe is command-controlled.
+        # Never derive log text from that pipe, even a guardian-shaped line.
+        log(stream, f"{name}: {type(error).__name__}")
         raise
     if tail.error is not None:
         log(stream, f"{name}: output unreadable: {type(tail.error).__name__}")
@@ -326,52 +296,9 @@ def within_caps(stream):
             remove(folder)
 
 
-def newest_change(path):
-    """When anything in a session (a file, or a folder of files) last changed."""
-    if not path.is_dir():
-        return path.lstat().st_mtime
-    return max([path.lstat().st_mtime] + [os.lstat(os.path.join(folder, name)).st_mtime
-                                          for folder, _, files in os.walk(path) for name in files])
-
-
-def ended_sessions(home, now):
-    """The agents' sessions that have ended, oldest first, each with its
-    store's folder and when it last changed."""
-    found = []
-    for folder, pattern in SESSIONS:
-        for path in (home / folder).glob(pattern):
-            if path.is_symlink():
-                continue
-            with contextlib.suppress(OSError):
-                changed = newest_change(path)
-                if now - changed >= SESSION_ENDED_SECONDS:
-                    found.append((changed, folder, path))
-    return sorted(found)
-
-
-def stores_within_cap(stream, home):
-    """The agents' stores' size, after dropping ended sessions, oldest first,
-    while the stores are past their cap (each through `remove`)."""
-    total = sum(size(home / name) for name in STORES)
-    if total <= STORES_CAP:
-        return total
-    dropped = 0
-    for changed, folder, path in ended_sessions(home, time.time()):
-        if total <= STORES_CAP:
-            break
-        freed = size(path) if path.is_dir() else path.lstat().st_size
-        remove(path)
-        # omp keeps a lock file beside each session.
-        remove(path.with_name(f".{path.name}.lock.os"))
-        total -= freed
-        dropped += 1
-        # Which store and when, never the path: a session's name can carry a folder's.
-        log(stream, f"dropped an ended session in {folder}, last changed "
-                    f"{datetime.datetime.fromtimestamp(changed).date().isoformat()}")
-    total = sum(size(home / name) for name in STORES)
-    log(stream, f"agent stores past their cap: dropped {dropped} ended sessions, "
-                f"{'now within it' if total <= STORES_CAP else 'still past it'}")
-    return total
+def stores_size(home):
+    """Measure the agents' stores without changing sessions or login files."""
+    return sum(size(home / name) for name in STORES)
 
 
 def build(settings, stream, env):
@@ -551,7 +478,7 @@ def run(settings):
         env = environment(settings)
         try:
             # Before any agent runs: a run would grow the stores further.
-            if stores_within_cap(stream, account_home()) > STORES_CAP:
+            if stores_size(account_home()) > STORES_CAP:
                 raise Stage("agent stores over cap")
             with OwnedProcesses(run_seconds=RUN_SECONDS) as owner:
                 record["commit"] = checkout(owner, target, stream, env)
@@ -601,7 +528,11 @@ def run(settings):
             record["minutes"] = round((time.time() - started.timestamp()) / 60)
             cleanup()
             try:
-                record["stores_mb"] = round(stores_within_cap(stream, account_home()) / 1024 ** 2)
+                total = stores_size(account_home())
+                record["stores_mb"] = round(total / 1024 ** 2)
+                if total > STORES_CAP:
+                    record["run"] = "agent stores over cap"
+                    log(stream, record["run"])
             except Exception as error:
                 record["run"] = f"runner failed: {type(error).__name__}"
                 log(stream, f"agent stores: {record['run']}")

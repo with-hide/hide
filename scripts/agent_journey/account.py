@@ -22,7 +22,7 @@ from pathlib import Path
 from agent_live_check.protection import stamp, write_private
 
 MARKER = ".hide-journey-account"
-# The one account the runner may remove an agent's files in (docs/VERIFICATION.md).
+# The one account the runner may maintain its journey folders in (docs/VERIFICATION.md).
 NAME = "hidejourney"
 
 
@@ -57,10 +57,13 @@ def removable(home, path):
     else an agent's files are a person's work."""
     if not dedicated(home):
         return False
-    home, path = Path(home).resolve(), Path(path)
-    if path.is_symlink():
+    home, path = Path(home).absolute(), Path(path).absolute()
+    if path == home or not path.is_relative_to(home) or ".." in path.parts:
         return False
-    return path.resolve().is_relative_to(home) and path.resolve() != home
+    # Check every component before resolving: an internal link can redirect
+    # a journey folder to another store inside the very same home.
+    return not any(part.is_symlink() for part in (path, *path.parents)
+                   if part == home or part.is_relative_to(home))
 
 
 # The members SQLite keeps beside a database file.

@@ -311,6 +311,41 @@ def identity_state(pid, birth, *, uid=None, pointer_width=None, table=None):
     return ProcessState.ZOMBIE if zombie else ProcessState.LIVE
 
 
+def retain_owned(group_table, host_table, known, group):
+    """Keep readable identities and group-owned set-user-ID members separate.
+
+    A reserved group's short BSD read proves membership and real UID even
+    when exec makes birth/RSS unreadable. Such members remain owned by the
+    group, never by a stale per-PID identity used for individual signals.
+    """
+    retained = {}
+    for pid, previous in known.items():
+        if group is not None and pid in getattr(host_table, "foreign_uid_pids", ()):
+            # Exec may occur between the group and host samples. Refresh the
+            # group once at that boundary instead of rejecting the old birth.
+            current = group_table if pid in group_table.foreign_uid_pids else snapshot(group)
+            require_complete(current)
+            if pid in current.foreign_uid_pids:
+                group_table.pop(pid, None)
+                if pid in current.unmeasured:
+                    group_table.unmeasured.add(pid)
+                continue
+            # It may have exited or execed back between samples. Use the
+            # fresh readable identity when present; absence from a group
+            # alone cannot prove an escaped process ended.
+            if pid in current:
+                state = identity_state(pid, previous.birth, uid=previous.uid, table=current)
+                if state is not ProcessState.VANISHED:
+                    retained[pid] = current[pid]
+                continue
+            if identity_state(pid, previous.birth, uid=previous.uid) is ProcessState.VANISHED:
+                continue
+        state = identity_state(pid, previous.birth, uid=previous.uid, table=host_table)
+        if state is not ProcessState.VANISHED:
+            retained[pid] = host_table[pid]
+    return retained
+
+
 def live_members(table):
     """Whether a group sample holds a member that still runs: a readable one,
     or one left unmeasured because it runs a set-user-ID program."""

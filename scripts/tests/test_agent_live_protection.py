@@ -12,6 +12,7 @@ import errno
 import io
 import os
 from pathlib import Path
+import selectors
 import signal
 import socket
 import subprocess
@@ -25,7 +26,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check.process_table import (BsdInfo, Process, ProcessState, ProcessTable, ShortBsdInfo, descendants, group_state,
-                                           marked_descendants, procargs_owned, require_complete, snapshot,
+                                           marked_descendants, procargs_owned, require_complete, retain_owned, snapshot,
                                            validate_linux_procfs)
 from agent_live_check.processes import (Limits, OwnedProcesses, ProcessError, ProcessSafetyError, RssSamples, guard,
                                        control_plane, largest, linux_children_remain, reap_adopted,
@@ -397,9 +398,11 @@ with patch.object(os,'open',replaced):
  except ProtectionError: raise SystemExit(0)
 raise SystemExit('FIFO was accepted as configuration')
 """
-        with OwnedProcesses() as owner:
-            code, _, _ = owner.run([sys.executable, "-c", program], env=dict(os.environ), seconds=2)
-        self.assertEqual(code, 0)
+        # This probes a potentially blocking file open, not process-tree
+        # ownership. Keep the bound on that child, without guardian startup.
+        result = subprocess.run([sys.executable, "-c", program], env=dict(os.environ),
+                                capture_output=True, text=True, timeout=2)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_directory_cleanup_failure_still_removes_peer_and_restores_owner_limits(self):
         runtime = Paneless.__new__(Paneless)
@@ -828,6 +831,63 @@ class ProcessProtection(unittest.TestCase):
                     signal_reserved_group(group, signal.SIGKILL)
                 self.assertEqual(sent, [(group, signal.SIGKILL)] if signalled else [])
 
+    def test_an_observed_child_that_changes_uid_stays_owned_by_its_group(self):
+        # Script libproc's owner transition between samples, with no sleep or
+        # privilege change on the host. A retained birth must not turn this
+        # normal exec into an identity failure or an individual PID signal.
+        own, group, member = os.getpid(), 24680, 24681
+        for status in (1, 5):
+            with self.subTest(status=status):
+                library = Mock()
+                changed = False
+
+                def list_all(pids, size):
+                    pids[0], pids[1], pids[2] = own, group, member
+                    return 3
+
+                def list_group(asked, pids, size):
+                    pids[0], pids[1] = group, member
+                    return 2
+
+                def read_process(subject, flavor, argument, pointer, size):
+                    if flavor == 13:
+                        short = ctypes.cast(pointer, ctypes.POINTER(ShortBsdInfo)).contents
+                        short.pid, short.uid, short.ruid, short.pgid = subject, 0, os.getuid(), group
+                        short.status = status
+                        return size
+                    if changed and subject == member:
+                        ctypes.set_errno(errno.EPERM)
+                        return 0
+                    if flavor == 4:
+                        return size
+                    info = ctypes.cast(pointer, ctypes.POINTER(BsdInfo)).contents
+                    info.pid, info.ppid, info.pgid, info.uid = subject, group, group, os.getuid()
+                    info.sec, info.usec, info.flags, info.status = 100, 2, 0x10, 1
+                    return size
+
+                library.proc_listallpids.side_effect = list_all
+                library.proc_listpgrppids.side_effect = list_group
+                library.proc_pidinfo.side_effect = read_process
+                with patch("agent_live_check.process_table.sys.platform", "darwin"), \
+                        patch("agent_live_check.process_table.ctypes.CDLL", return_value=library):
+                    observed = snapshot(group)
+                    self.assertIn(member, observed)
+                    # Exec lands after the group sample and before the host
+                    # sample, the ordering the old retained-birth check lost.
+                    current = snapshot(group)
+                    changed = True
+                    host = snapshot()
+                    retained = retain_owned(current, host, observed, group)
+                    # Once the leader is reaped there is no reserved group
+                    # authority with which to adopt an unreadable PID.
+                    with self.assertRaisesRegex(RuntimeError, "owned_process_identity_unavailable"):
+                        retain_owned(ProcessTable(), host, observed, None)
+                    self.assertNotIn(member, retained)
+                    self.assertNotIn(member, current)
+                    self.assertEqual(current.unmeasured, {member} if status == 1 else set())
+                    # Later samples keep the live member until group cleanup.
+                    self.assertEqual(group_state(snapshot(group)), ProcessState.LIVE)
+
     def test_unavailable_controller_ancestry_refuses_prelaunch_exclusion(self):
         table = ProcessTable()
         table[100] = Process(100, 200, 100, 10, 0, False, os.getuid())
@@ -1010,18 +1070,32 @@ else:raise RuntimeError("group_survived_reap")
                     self.assertEqual(marked_descendants({111: orphan}, "fixture", unknown=unknown.append), {})
                 self.assertEqual(unknown, [orphan])
 
+    def end_ready_group(self, owner, program):
+        child = owner.spawn([sys.executable, "-c", program], env=dict(os.environ),
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            # Cleanup begins only after the fixture installed its handler.
+            # The bound detects a broken startup, not a slow host's runtime.
+            with selectors.DefaultSelector() as ready:
+                ready.register(child.stdout, selectors.EVENT_READ)
+                self.assertTrue(ready.select(10), "group fixture never became ready")
+                self.assertEqual(child.stdout.readline(), b"ready\n")
+            owner.end(child)
+        finally:
+            child.stdout.close()
+
     def test_term_ignoring_group_is_killed_without_ending_a_peer(self):
         with tempfile.TemporaryDirectory(prefix="agent-group-") as name:
             receipt = Path(name) / "group"
             program = ("import os,signal,time; from pathlib import Path; "
                        "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
                        f"Path({str(receipt)!r}).write_text(str(os.getpgrp())); "
-                       "os.fork(); time.sleep(30)")
+                       "child=os.fork(); "
+                       "os.write(1,b'ready\\n') if child else None; time.sleep(30)")
             with OwnedProcesses() as peer, OwnedProcesses() as owner:
                 unrelated = peer.spawn([sys.executable, "-c", "import time; time.sleep(30)"],
                                        env=dict(os.environ), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                with self.assertRaisesRegex(ProcessError, "command_timeout"):
-                    owner.run([sys.executable, "-c", program], env=dict(os.environ), seconds=0.5)
+                self.end_ready_group(owner, program)
                 self.assertIsNone(unrelated.poll(), "cleanup ended concurrent work")
                 self.assertTrue(receipt.exists(), "group fixture never started")
                 with self.assertRaises(ProcessLookupError):
@@ -1037,10 +1111,10 @@ else:raise RuntimeError("group_survived_reap")
                        "\n time.sleep(30)"
                        "\nsignal.signal(signal.SIGTERM,shutdown)"
                        f"\nPath({str(receipt)!r}).write_text(str(os.getpgrp()))"
+                       "\nos.write(1,b'ready\\n')"
                        "\ntime.sleep(30)")
             with OwnedProcesses() as owner:
-                with self.assertRaisesRegex(ProcessError, "command_timeout"):
-                    owner.run([sys.executable, "-c", program], env=dict(os.environ), seconds=0.5)
+                self.end_ready_group(owner, program)
             self.assertTrue(receipt.exists(), "shutdown fixture never started")
             with self.assertRaises(ProcessLookupError):
                 os.killpg(int(receipt.read_text()), 0)
