@@ -1318,6 +1318,7 @@ impl Pairing {
                 "looked": host.looked,
                 "system": host.system,
                 "leaves": host.leaves,
+                "condition": host.condition.as_ref().map(pairing_ssh::Condition::payload),
             }));
         }
         if let Ask::LookSwitch { device } = &ask {

@@ -7,10 +7,11 @@
 // operator (PRD system-ssh-device-link B4-B14) and stopped in each of the
 // three failure states, sign in, server key and cannot connect, on a Mac, or
 // with `system=windows` on the PC.
-// `look=ready|windows|password|update_there|not_running|sign_in` is what a
-// chosen SSH Host answers the dialog (PRD device-connect-iroh B7; operator
-// decision 2026-11-28): choose `studio` and its way is drawn, the server
-// card with `서버로 연결` where its own Hide runs, the SSH card with the one
+// `look=ready|restart|windows|password|update_there|not_running|sign_in` is
+// what a chosen SSH Host answers the dialog (PRD device-connect-iroh B7;
+// operator decision 2026-11-28): choose `studio` and its way is drawn, the
+// server card with `서버로 연결` where its own Hide runs (`restart`: a Mac
+// with automatic login off, said on the card), the SSH card with the one
 // line of why where it cannot be a server; with no `look` it runs no Hide
 // and can take one, and the card says Hide is installed there. `mini` and
 // WSL Debian are added, each with its way to its device's
@@ -22,7 +23,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary, useInterfaceTranslation } from "../i18n/client";
 import { AddDevice } from "../settings/AddDevice";
 import { DevicesTab } from "../settings/DevicesTab";
-import { NOTHING_UNDER_WAY, type SshLook } from "../pairing";
+import { NOTHING_UNDER_WAY, type SshLook, type SwitchCondition } from "../pairing";
 import type { Device, DeviceHost, DeviceProblem, DeviceSignIn, SshHosts, WslDistribution } from "../snapshot";
 import { useShellStore } from "../store";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
@@ -95,10 +96,11 @@ const FAILURES: Device[] = [
   { ...failed("office-pc", "windows_not_started"), host: { consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: null, contract: 3, bound_identity: null, granted_at_unix_ms: 1, state: "unavailable", message: null, platform: "windows x86_64", helper_path: null } },
 ];
 
-/** What a chosen Host answers, by the scene's `look`: its own Hide, the system its account runs, and why no Hide can be started there. */
-const LOOKS: Record<string, { looked: SshLook; system: string | null; leaves: string | null }> = {
+/** What a chosen Host answers, by the scene's `look`: its own Hide, the system its account runs, why no Hide can be started there, and where one that runs Hide stands on the switch rule. */
+const LOOKS: Record<string, { looked: SshLook; system: string | null; leaves: string | null; condition?: SwitchCondition }> = {
   install: { looked: { state: "absent" }, system: "linux", leaves: null },
-  ready: { looked: { state: "ready" }, system: "macos", leaves: null },
+  ready: { looked: { state: "ready" }, system: "macos", leaves: null, condition: { kind: "auto_login_on" } },
+  restart: { looked: { state: "ready" }, system: "macos", leaves: null, condition: { kind: "auto_login_off", how: true } },
   windows: { looked: { state: "absent" }, system: "windows", leaves: "windows" },
   password: { looked: { state: "not_reached" }, system: null, leaves: null },
   update_there: { looked: { state: "update_there" }, system: "windows", leaves: null },

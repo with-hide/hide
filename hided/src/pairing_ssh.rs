@@ -512,6 +512,11 @@ pub struct HostLook {
     /// For [`Looked::Absent`] alone: the code of why no Hide is started
     /// there.
     pub leaves: Option<&'static str>,
+    /// For [`Looked::Ready`] alone: where the machine stands on the rule
+    /// every switch passes, as a look reads it ([`may_move`]), so a Mac
+    /// that does not log its account in by itself is said before the press
+    /// (operator decision 2026-11-28); none when its `hide` did not say.
+    pub condition: Option<Condition>,
 }
 
 /// Asks the machine `alias` names whether it can pair over SSH and, when it
@@ -521,18 +526,19 @@ pub struct HostLook {
 pub fn look(reach: &Reach, alias: &str) -> HostLook {
     let upstream = Upstream::new(SshTarget::new(&reach.home, alias));
     let login = Ssh(&upstream);
-    let looked = host_look(&login, look_on(&login, reach));
+    let looked = host_look(&login, reach, look_on(&login, reach));
     upstream.close();
     looked
 }
 
 /// `looked`, with what the login it was read on says of the machine.
-fn host_look(login: &dyn Login, looked: Looked) -> HostLook {
+fn host_look(login: &dyn Login, reach: &Reach, looked: Looked) -> HostLook {
     if looked == Looked::NotReached {
         return HostLook {
             looked,
             system: None,
             leaves: None,
+            condition: None,
         };
     }
     let system = login
@@ -544,10 +550,17 @@ fn host_look(login: &dyn Login, looked: Looked) -> HostLook {
         (Looked::Absent, None) => Some(login.channel().not_reached()),
         _ => None,
     };
+    let condition = match looked {
+        Looked::Ready => may_move(login, reach, Asked::Look)
+            .ok()
+            .map(|moved| moved.condition),
+        _ => None,
+    };
     HostLook {
         looked,
         system,
         leaves,
+        condition,
     }
 }
 
@@ -1357,14 +1370,14 @@ mod tests {
     /// asked nothing more.
     #[test]
     fn a_host_with_no_hide_says_whether_a_switch_could_start_one() {
+        let reach = Reach {
+            home: PathBuf::from("/nonexistent"),
+            command_folder: None,
+            hide: None,
+        };
         let leaves = |system, systemd| {
             let login = Bare { system, systemd };
-            let reach = Reach {
-                home: PathBuf::from("/nonexistent"),
-                command_folder: None,
-                hide: None,
-            };
-            let look = host_look(&login, look_on(&login, &reach));
+            let look = host_look(&login, &reach, look_on(&login, &reach));
             assert_eq!(look.looked, Looked::Absent);
             look.leaves
         };
@@ -1380,12 +1393,14 @@ mod tests {
                     system: Err(()),
                     systemd: true
                 },
+                &reach,
                 Looked::Absent
             ),
             HostLook {
                 looked: Looked::Absent,
                 system: None,
                 leaves: Some("ssh_not_reached"),
+                condition: None,
             }
         );
         let ready = host_look(
@@ -1393,6 +1408,7 @@ mod tests {
                 system: Ok("macos"),
                 systemd: false,
             },
+            &reach,
             Looked::Ready,
         );
         assert_eq!(
@@ -1401,7 +1417,93 @@ mod tests {
                 looked: Looked::Ready,
                 system: Some("macos".to_owned()),
                 leaves: None,
+                condition: None,
             }
+        );
+    }
+
+    /// An account whose Hide runs, as a scripted login: its look answers,
+    /// and `hide always-on unattended` says `said`.
+    struct Running {
+        said: Value,
+    }
+
+    impl Login for Running {
+        fn channel(&self) -> Channel {
+            Channel::Ssh
+        }
+
+        fn name(&self) -> &str {
+            "running"
+        }
+
+        fn system(&self) -> Result<String, String> {
+            Ok("macos".to_owned())
+        }
+
+        fn on(&self) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        fn run(&self, argv: &[String], _cap: usize, _within: Duration) -> Result<Ran, String> {
+            let words: Vec<&str> = argv
+                .iter()
+                .map(String::as_str)
+                .skip_while(|word| !matches!(*word, "device" | "always-on"))
+                .take(2)
+                .collect();
+            let answer = match words.as_slice() {
+                ["device", "look-ssh"] => {
+                    json!({"ok":true,"value":{"look":{"system":"macos","core":true}}})
+                }
+                ["always-on", "unattended"] => json!({"ok":true,"value":self.said}),
+                other => return Err(format!("not scripted: {other:?}")),
+            };
+            Ok(Ran {
+                status: 0,
+                stdout: line(answer),
+                stderr: Vec::new(),
+            })
+        }
+
+        fn first(&self, _own: &[Candidate]) -> Vec<Candidate> {
+            Vec::new()
+        }
+
+        fn install(&self, _packages: &HelperPackages, _root: &str) -> Result<String, NotInstalled> {
+            Err(NotInstalled::Failed("not scripted".to_owned()))
+        }
+    }
+
+    /// A Mac that runs Hide says before Add device's press whether it logs
+    /// its account in by itself (operator decision 2026-11-28): one that
+    /// does not, FileVault's included, needs a login after a restart.
+    #[test]
+    fn a_mac_running_hide_says_before_the_press_whether_it_logs_in_by_itself() {
+        let reach = Reach {
+            home: PathBuf::from("/nonexistent"),
+            command_folder: None,
+            hide: None,
+        };
+        let condition = |said: Value| {
+            let login = Running { said };
+            let look = host_look(&login, &reach, look_on(&login, &reach));
+            assert_eq!(look.looked, Looked::Ready);
+            look.condition
+        };
+        assert_eq!(
+            condition(json!({"unattended": true, "desktop": true})),
+            Some(Condition::AutoLoginOn)
+        );
+        assert_eq!(
+            condition(json!({"unattended": false, "desktop": true})),
+            Some(Condition::AutoLoginOff { how: true })
+        );
+        assert_eq!(
+            condition(
+                json!({"unattended": false, "desktop": true, "automatic_login_offered": false})
+            ),
+            Some(Condition::AutoLoginOff { how: false })
         );
     }
 

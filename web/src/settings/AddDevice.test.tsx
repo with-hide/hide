@@ -82,9 +82,12 @@ it("connects a Host whose own Hide runs as a server, and installs nothing there 
   await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
   // Choosing the Host is the one look: an ssh that asks nobody.
   expect(sent(events, "pairing_look_ssh").map((event) => event.payload.alias)).toEqual(["lab"]);
-  await answer("look_ssh", { ok: true, alias: "lab", looked: { state: "ready" }, system: "macos", leaves: null });
+  await answer("look_ssh", { ok: true, alias: "lab", looked: { state: "ready" }, system: "macos", leaves: null, condition: { kind: "auto_login_on" } });
   expect(q('[data-add-way="connect"]')?.textContent).toContain("Recommended");
+  expect(q('[data-add-way="connect"] [data-device-way-headline]')?.textContent).toBe("Even when this computer sleeps,it keeps running on lab while that device is on");
   expect(q('[data-add-way-read="connect"]')?.textContent).toBe("macOS · Hide is there → connects without installing anything");
+  // A Mac that logs itself in after a restart has nothing more to say.
+  expect(q("[data-add-way-restart]")).toBeNull();
   // Nothing is installed, so there is no name to give and no install to agree to.
   expect(q("[data-device-label]")).toBeNull();
   expect(q("[data-add-device-advanced]")).toBeNull();
@@ -95,6 +98,18 @@ it("connects a Host whose own Hide runs as a server, and installs nothing there 
   expect(q('[data-add-device="connect"]')?.hasAttribute("disabled")).toBe(true);
   await answer("pair_ssh", { ok: true, device_id: "lab-machine", name: "Lab" });
   expect(paired).toHaveBeenCalledTimes(1);
+  await unmount();
+});
+it("says before the press that a Mac running Hide with automatic login off needs one login after a restart (operator decision 2026-11-28)", async () => {
+  const { q, answer, unmount } = await mount(hosts([host("lab"), host("studio")]));
+  const restart = async (alias: string, how: boolean) => {
+    await act(async () => { q(`[data-ssh-host="${alias}"] [role="radio"]`)?.click(); });
+    await answer("look_ssh", { ok: true, alias, looked: { state: "ready" }, system: "macos", leaves: null, condition: { kind: "auto_login_off", how } });
+    return q('[data-add-way="connect"] [data-add-way-restart]')?.textContent;
+  };
+  expect(await restart("lab", true)).toBe("Automatic login is off · after lab restarts, log in to that Mac once and it connects again");
+  // FileVault keeps automatic login from being turned on: the same line.
+  expect(await restart("studio", false)).toBe("Automatic login is off · after studio restarts, log in to that Mac once and it connects again");
   await unmount();
 });
 it("adds a Host that could be a server over SSH from the small row under the card, and leaves the Hide there as it is (operator decisions 2026-11-24, 2026-11-28)", async () => {
@@ -204,6 +219,8 @@ it("says in one line why a Host is not connected as a server, and makes SSH the 
     expect(q('[data-add-device="true"]')?.textContent).toBe("Connect");
     // SSH is the way now, so it is not offered again under the card.
     expect(q("[data-add-device-direct]")).toBeNull();
+    // A fact to read, not a warning: the line is in the muted tone.
+    expect(q("[data-add-way-reason]")?.classList.contains("text-muted-foreground")).toBe(true);
     return q("[data-add-way-reason]")?.textContent;
   };
   expect(await reason("lab", { looked: { state: "update_there" }, system: "windows", leaves: null })).toBe("Update Hide on that PC");

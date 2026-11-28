@@ -111,7 +111,7 @@ it("lays the two ways side by side, the server first, and says what each keeps d
   // The way Add device recommends comes first (operator decision 2026-11-28).
   expect([...document.querySelectorAll("[data-device-way-row]")].map((card) => card.getAttribute("data-device-way-row"))).toEqual(["server", "direct"]);
   expect(q(`${direct} [data-device-way-headline]`)?.textContent).toBe("When this computer sleeps,missions and automations stop too");
-  expect(q(`${server} [data-device-way-headline]`)?.textContent).toBe("Even when this computer sleeps,it keeps running on Mac mini");
+  expect(q(`${server} [data-device-way-headline]`)?.textContent).toBe("Even when this computer sleeps,it keeps running on Mac mini while that device is on");
   // Over SSH the agents go on in their terminals, while missions and automations wait for this computer.
   expect(asleep(q, "direct")).toEqual({ agents: "●Keep doing their work", missions: "‖Stop", automations: "‖Stop" });
   expect(asleep(q, "server")).toEqual({ agents: "●Keep running", missions: "●Keep running", automations: "●Keep running" });

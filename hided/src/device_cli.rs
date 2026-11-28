@@ -825,10 +825,13 @@ fn add_alias(
             let mut value = answered(answer)?;
             value["paired"] = json!("ssh");
             let name = value["name"].as_str().unwrap_or(alias).to_owned();
+            let restart = looked
+                .as_ref()
+                .map_or("", |looked| restart_line(&looked["condition"]));
             return Ok(Printed::Value(
                 value,
                 format!(
-                    "{alias} already runs Hide: connected to {name}, and nothing was installed there. hide device list shows it.\n"
+                    "{alias} already runs Hide: connected to {name}, and nothing was installed there. hide device list shows it.\n{restart}"
                 ),
             ));
         }
@@ -1439,13 +1442,22 @@ fn left_line(device: &str, condition: &Value) -> String {
 /// that does not log its account in by itself connects again after a
 /// restart only once someone logs in there.
 fn switched_lines(device: &str, condition: &Value) -> String {
-    let switched =
-        format!("Switched {device} to the Hide on its machine. Its running terminals carry on.\n");
+    format!(
+        "Switched {device} to the Hide on its machine. Its running terminals carry on.\n{}",
+        restart_line(condition)
+    )
+}
+
+/// The line a server connection goes on with when its machine said it
+/// (`pairing_ssh::Condition::payload`): a Mac that does not log its account
+/// in by itself connects again after a restart only once someone logs in
+/// there. Empty for any other machine.
+fn restart_line(condition: &Value) -> &'static str {
     match condition["kind"].as_str() {
-        Some("auto_login_off") => format!(
-            "{switched}Automatic login is off on that Mac: after it restarts, log in there once and it connects again.\n"
-        ),
-        _ => switched,
+        Some("auto_login_off") => {
+            "Automatic login is off on that Mac: after it restarts, log in there once and it connects again.\n"
+        }
+        _ => "",
     }
 }
 
@@ -1956,6 +1968,7 @@ mod tests {
             );
         }
 
+        assert_eq!(restart_line(&Value::Null), "");
         let switched =
             "Switched studio to the Hide on its machine. Its running terminals carry on.\n";
         assert_eq!(

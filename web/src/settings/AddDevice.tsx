@@ -98,7 +98,9 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onClose, onSho
   useEffect(() => {
     if (!answered?.request_id) return;
     if ((answered.verb === "look_ssh" || answered.verb === "look_wsl") && answered.request_id === look?.request && !look.answer.answered) {
-      const answer: HostAnswer = answered.ok ? { answered: true, looked: answered.looked ?? null, system: answered.system ?? null, leaves: answered.leaves ?? null } : { answered: true, looked: null, system: null, leaves: null };
+      const answer: HostAnswer = answered.ok
+        ? { answered: true, looked: answered.looked ?? null, system: answered.system ?? null, leaves: answered.leaves ?? null, condition: answered.condition ?? null }
+        : { answered: true, looked: null, system: null, leaves: null, condition: null };
       setLook({ ...look, answer });
     }
     if (answered.request_id !== pairing?.request || pairing.refused !== null) return;
@@ -241,7 +243,8 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onClose, onSho
       <Note data-ssh-hosts-hint="true">{t("devices.notListed")}</Note>
       {looking ? <Note tone="pending" data-ssh-look="looking">{t("pairing.ssh.looking")}</Note> : null}
       {lookLine ? <Status tone={lookLine.tone} data-ssh-look={looked?.state}>{t(lookLine.key)}</Status> : null}
-      {way?.kind === "ssh" && way.reason ? <Note tone="warn" data-add-way-reason={looked?.state ?? ""}>{t(way.reason)}</Note> : null}
+      {/* Why it is not a server is a fact to read, not a warning (operator decision 2026-11-28). */}
+      {way?.kind === "ssh" && way.reason ? <Note data-add-way-reason={looked?.state ?? ""}>{t(way.reason)}</Note> : null}
       {way && way.kind !== "looking" && chosen !== null ? <HostWay way={way} name={shownName} running={running && pairing?.verb === "add_server"} step={devices.find((device) => device.ssh_alias === chosen)?.switch_step ?? null} /> : null}
       {pairing?.refused != null ? <Note tone="warn" data-ssh-pair-refused={pairing.refused}>{t(refusalKey(pairing.refused) ?? "pairing.failed.ended")}</Note> : null}
       {connects ? null : (
@@ -321,7 +324,19 @@ function HostWay({ way, name, running, step }: { way: Exclude<AddWay, { kind: "l
         now={false}
         mark={server ? t("pairing.add.recommended") : undefined}
         lit={server}
-        foot={read ? <p className="break-keep text-caption text-muted-foreground" data-add-way-read={way.kind}>{system ? `${system} · ${read}` : read}</p> : null}
+        foot={
+          read ? (
+            <div className="flex min-w-0 flex-col gap-xxs">
+              <p className="break-keep text-caption text-muted-foreground" data-add-way-read={way.kind}>{system ? `${system} · ${read}` : read}</p>
+              {/* Said before the press, as the device row says it after (operator decision 2026-11-28). */}
+              {way.kind === "connect" && way.signInAfterRestart ? (
+                <Note tone="warn" data-add-way-restart="sign_in">
+                  {t("devices.ways.autoLoginOff", { device: name })}
+                </Note>
+              ) : null}
+            </div>
+          ) : null
+        }
       >
         {server ? <Headline lead={t("devices.ways.serverHead")} turn={t("devices.ways.serverHeadGo", { device: name })} tone="ok" /> : <Headline lead={t("devices.ways.directHead")} turn={t("devices.ways.directHeadStop")} tone="warn" />}
         {running ? <SwitchSteps name={name} current={step ?? "checking"} /> : <Picture way={server ? "server" : "direct"} name={name} />}

@@ -6,28 +6,35 @@
 // this only says which way that answer leads to.
 
 import type { MessageKey } from "../i18n/catalogs";
-import type { SshLook } from "../pairing";
+import type { SshLook, SwitchCondition } from "../pairing";
 
-/** What hided answered about the chosen Host: nothing yet, its look (none when it refused to look), the system it read and, for a Host with no Hide, why none can be started there. */
-export type HostAnswer = { answered: false } | { answered: true; looked: SshLook | null; system: string | null; leaves: string | null };
+/**
+ * What hided answered about the chosen Host: nothing yet, its look (none
+ * when it refused to look), the system it read, for a Host with no Hide why
+ * none can be started there, and for one that runs Hide where it stands on
+ * the switch rule (`pairing_ssh::HostLook`).
+ */
+export type HostAnswer = { answered: false } | { answered: true; looked: SshLook | null; system: string | null; leaves: string | null; condition: SwitchCondition | null };
 
 /**
  * The way a chosen Host is added: `connect` pairs with the Hide it runs
- * (`pair_ssh`), `install` adds it and starts Hide there (`add_server`), and
- * `ssh` adds it over SSH alone, with `reason` saying why it is not a server
- * (none when nothing was read).
+ * (`pair_ssh`), saying first when that Mac needs one login after a restart
+ * (`signInAfterRestart`: its automatic login is off, or FileVault rules it
+ * out); `install` adds it and starts Hide there (`add_server`); and `ssh`
+ * adds it over SSH alone, with `reason` saying why it is not a server (none
+ * when nothing was read).
  */
-export type AddWay = { kind: "looking" } | { kind: "connect"; system: string | null } | { kind: "install"; system: string | null } | { kind: "ssh"; reason: MessageKey | null };
+export type AddWay = { kind: "looking" } | { kind: "connect"; system: string | null; signInAfterRestart: boolean } | { kind: "install"; system: string | null } | { kind: "ssh"; reason: MessageKey | null };
 
 export function addWay(answer: HostAnswer): AddWay {
   if (!answer.answered) return { kind: "looking" };
-  const { looked, system, leaves } = answer;
+  const { looked, system, leaves, condition } = answer;
   switch (looked?.state) {
     case undefined:
       // A look hided refused looked at nothing: the Host is added as before.
       return { kind: "ssh", reason: null };
     case "ready":
-      return { kind: "connect", system };
+      return { kind: "connect", system, signInAfterRestart: condition?.kind === "auto_login_off" };
     case "absent":
       return leaves === null ? { kind: "install", system } : { kind: "ssh", reason: leavesKey(leaves) };
     // A login that asks for an answer, or a machine ssh did not reach: the

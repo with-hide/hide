@@ -64,7 +64,7 @@ export type PairingResult = {
   /** With `look_ssh`: the system the Host's account runs, and for one with no Hide why none can be started there (hided `pairing_ssh::HostLook`). */
   system?: string | null;
   leaves?: string | null;
-  /** With `look_switch` and `switch`: the device asked about, what its machine said, and the login name a Mac said. */
+  /** With `look_switch` and `switch`: the device asked about, what its machine said, and the login name a Mac said; with `look_ssh`, what a Host that runs Hide said of the same rule. */
   device_id?: string;
   condition?: SwitchCondition;
   user?: string | null;
