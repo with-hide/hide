@@ -1280,11 +1280,13 @@ fn render(mut pending: Vec<&Letter>, language: InterfaceLanguage, bundling: Bund
     }
 }
 
+// retired-spellings: kept from here: a hide older than bundles runs letters' commands only under this word
 /// The topic word a `hide` older than bundles knows for letters: such a
 /// build predates `hide letter`, so the command it can run to acknowledge one
 /// is spelled with the letters' retired topic word, which every later build
 /// still reads (`hide_shell::retired`).
 const LEGACY_LETTER_TOPIC: &str = "request";
+// retired-spellings: kept to here
 
 /// `hide inbox` for a `hide` older than bundles: every letter as before,
 /// each pending one with its own acknowledgement in the spelling that

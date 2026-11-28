@@ -39,7 +39,7 @@ Do not copy those contracts here.
   A rename of that `--json <plan>` keeps `--json` on those commands as the retired option with its `json` value, so neither command can take a bare `--json` within the contract's format.
 - `--intent <key>` is the retry key: the same key converges on the first result.
 - A new command that answers data takes `--json`; one that always prints JSON takes it too and changes nothing.
-  Many existing commands that always print JSON (`inbox`, `request send`, `task show`, `mission list`) do not take it, and `admit` refuses it there.
+  Many existing commands that always print JSON (`inbox`, `letter send`, `task show`, `mission list`) do not take it, and `admit` refuses it there.
 
 ## Help
 
