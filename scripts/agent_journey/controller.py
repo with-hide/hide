@@ -29,16 +29,30 @@ OUTPUT_BYTES = 1024 * 1024
 MAX_COMMANDS = 512
 
 
+class ControllerUnavailable(ProcessError):
+    """No command runs after one whose processes were not confirmed ended."""
+
+
 def command_answer(diagnostic, text):
-    """A settled, correlated child result is required before trusting JSON."""
+    """The product's answer, trusted only from a settled, whole run.
+
+    Settled: the supervisor's outcome for this command confirms every process
+    of it ended, so nothing of it can overlap the next command; anything else
+    is `controller_command_unsettled`. Whole: the supervisor and the driver
+    both saw an ordinary exit with the same status and the driver captured
+    both streams to their end; a settled run that is not whole is
+    `controller_command_failed`, however good its JSON looks.
+    """
     supervisor, driver = diagnostic["supervisor"], diagnostic["driver"]
     settled = (not diagnostic["wait_error"] and isinstance(supervisor, dict)
-               and supervisor.get("id") == diagnostic["id"] and supervisor.get("phase") == "exited"
-               and supervisor.get("cleanup_confirmed") is True and isinstance(driver, dict)
-               and driver.get("id") == diagnostic["id"] and driver.get("phase") == "exited"
-               and str(supervisor.get("exit")) == diagnostic["exit"]
-               and driver.get("exit") == supervisor.get("exit"))
+               and supervisor.get("id") == diagnostic["id"] and supervisor.get("cleanup_confirmed") is True
+               and str(supervisor.get("exit")) == diagnostic["exit"])
     if not settled:
+        return {"ok": False, "reason": "controller_command_unsettled", **diagnostic}
+    whole = (supervisor.get("phase") == "exited" and isinstance(driver, dict)
+             and driver.get("id") == diagnostic["id"] and driver.get("phase") == "exited"
+             and driver.get("exit") == supervisor.get("exit"))
+    if not whole:
         return {"ok": False, "reason": "controller_command_failed", **diagnostic}
     try:
         answer = json.loads(text)
@@ -47,6 +61,31 @@ def command_answer(diagnostic, text):
     if not isinstance(answer, dict) or (answer.get("ok") is True and driver["exit"] != 0):
         return {"ok": False, "reason": "unreadable_answer", **diagnostic}
     return answer
+
+
+def outcome(diagnostic):
+    """One line of constant identifiers for what the command's processes reported."""
+    if diagnostic["wait_error"]:
+        return "no completion: " + diagnostic["wait_error"]
+    supervisor, driver = diagnostic["supervisor"], diagnostic["driver"]
+    if not isinstance(supervisor, dict) or supervisor.get("id") != diagnostic["id"]:
+        return "no supervisor outcome for this command"
+    parts = [f"supervisor {supervisor.get('phase')} exit {supervisor.get('exit')}"]
+    if str(supervisor.get("exit")) != diagnostic["exit"]:
+        parts.append(f"completion status {diagnostic['exit']}")
+    if supervisor.get("cleanup_confirmed") is not True:
+        parts.append(f"cleanup unconfirmed (error {supervisor.get('cleanup_error')})")
+    if not isinstance(driver, dict) or driver.get("id") != diagnostic["id"]:
+        parts.append("no driver result for this command")
+    else:
+        details = [f"driver {driver.get('phase')} exit {driver.get('exit')}"]
+        if driver.get("os_error") is not None:
+            details.append(f"os_error {driver['os_error']}")
+        if "child_ms" in driver:
+            details.append(f"after {driver['child_ms']} ms")
+        details.extend(f"{name} {state}" for name, state in (driver.get("streams") or {}).items())
+        parts.append(" ".join(details))
+    return "; ".join(parts)
 
 
 class Controller:
@@ -65,7 +104,8 @@ class Controller:
         self.result = self.root / "command-result.json"
         self.outcome = self.root / "command-completed.json"
         self.sequence = 0
-        self.unsettled = False
+        # The command whose processes were not confirmed ended, once one was not.
+        self.unsettled = None
         self.pane = self.agent_id = None
 
     def start(self):
@@ -160,13 +200,21 @@ class Controller:
             raise ProcessError("journey_pane_read_unreadable") from error
 
     def hide(self, args, seconds=COMPLETION_SECONDS):
-        """One `hide` command run by the controller agent; its JSON answer."""
+        """One `hide` command run by the controller agent; the product's JSON answer.
+
+        A command the controller could not run to a trusted answer raises,
+        naming the command and what its processes reported, so the cell reads
+        as the controller's failure rather than a refusal of the product. One
+        whose processes were all confirmed ended leaves the next command free;
+        one that was not refuses every later command (ControllerUnavailable).
+        """
         runtime = self.runtime
         if self.unsettled:
-            raise ProcessError("controller_previous_command_unsettled")
+            raise ControllerUnavailable("controller_previous_command_unsettled: " + self.unsettled)
         if self.sequence >= MAX_COMMANDS:
             raise ProcessError("controller_command_limit")
         self.sequence += 1
+        command = f"command {self.sequence} ({' '.join(args[:2])})"
         remove_pane_files(self.completed, self.response, self.stderr, self.result, self.outcome)
         environment = {**home_env(runtime.home), "HIDE_STATE_DIR": str(runtime.state),
                        "PATH": runtime.env["PATH"], **temp_env(runtime.run / "agent-tmp")}
@@ -180,7 +228,7 @@ class Controller:
             status = runtime.wait(lambda: self.completed.is_file() and self.completed.read_text().strip(), seconds)
         except (ProcessError, Cancelled) as error:
             wait_error = str(error)
-            self.unsettled = True
+            self.unsettled = f"{command} no completion: {wait_error}"
             if isinstance(error, Cancelled):
                 raise
         def output(path):
@@ -202,6 +250,10 @@ class Controller:
         write_private(evidence.with_suffix(".stderr"), raw_stderr)
         write_private(evidence, json.dumps(diagnostic).encode())
         answer = command_answer(diagnostic, raw_response)
-        if answer.get("reason") == "controller_command_failed":
-            self.unsettled = True
+        reason = answer.get("reason")
+        if reason in ("controller_command_unsettled", "controller_command_failed"):
+            failure = f"{command} {outcome(diagnostic)}"
+            if reason == "controller_command_unsettled":
+                self.unsettled = failure
+            raise ProcessError(f"{reason}: {failure}")
         return answer
