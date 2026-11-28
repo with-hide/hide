@@ -3962,7 +3962,13 @@ export type ThreadSession = { pane_id: string; machine: string };
  * call id, and where each session a letter, a spawn or a letter's sender
  * names runs, by the name as written; a name no live session answers to is absent.
  */
-export type ThreadPage = { updates: ThreadUpdate[]; parts: Record<string, ThreadPart>; sessions: Record<string, ThreadSession> };
+export type ThreadPage = {
+  /** Where the page begins in its record, a byte offset: its name, which a page read in above or the live page joining the kept ones never changes. */
+  start: number;
+  updates: ThreadUpdate[];
+  parts: Record<string, ThreadPart>;
+  sessions: Record<string, ThreadSession>;
+};
 /** `contracts/snapshot-wire-enums.json`: `session_thread_state`. */
 export type SessionThreadState = "closed" | "loading" | "ready" | "failed";
 /** Why the record could not be read (B27; `session_thread_failure`). */

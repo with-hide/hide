@@ -200,8 +200,13 @@ test("long conversation history draws the rows near the reader, keeps the readin
       await app.evaluate(({ clipboard }, text) => clipboard.writeText(text), held);
     }
     await expect(composer).toHaveValue("읽던 곳을 유지해요");
+    // While the selection stands its rows stay drawn, even with the conversation at its foot.
     await scroll.evaluate((element) => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event("scroll")); });
     await expect(answer(120).locator(".cm-editor")).toHaveCount(1);
+    await expect(first).toHaveCount(1);
+    // A press in the box clears it, and the rows it held are let go.
+    await composer.click();
+    await expect.poll(() => page.evaluate(() => document.getSelection()?.isCollapsed ?? true)).toBe(true);
     await expect(first).toHaveCount(0);
     continueFixtureTranscript(fixture, "fixture-one", { task: "History 121: 아래에서는 새 글을 따라가요", at: Date.now() + 1000 });
     const following = answer(121);

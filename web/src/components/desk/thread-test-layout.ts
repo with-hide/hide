@@ -6,12 +6,14 @@ import { act } from "react";
 import { vi } from "vitest";
 
 /**
- * Gives the conversation's scroll box a viewport of `viewport` pixels and each row `row` pixels, and lets a scroll the
+ * Gives the conversation's scroll box a viewport of `viewport` pixels and each row `row` pixels (or the height `row`
+ * answers for it), and lets a scroll the
  * conversation asks for move it within its height and say so when it moved, as a browser's does. The default viewport
  * holds every row a test writes; a test of which rows are drawn gives a small one. Undone by `vi.restoreAllMocks()`.
  */
-export function layOutConversation({ viewport = 100_000, row = 40 }: { viewport?: number; row?: number } = {}): void {
-  const height = (element: HTMLElement) => (element.hasAttribute("data-desk-thread-conversation") ? viewport : element.hasAttribute("data-thread-row") ? row : null);
+export function layOutConversation({ viewport = 100_000, row = 40 }: { viewport?: number; row?: number | ((row: HTMLElement) => number) } = {}): void {
+  const rowHeight = typeof row === "number" ? () => row : row;
+  const height = (element: HTMLElement) => (element.hasAttribute("data-desk-thread-conversation") ? viewport : element.hasAttribute("data-thread-row") ? rowHeight(element) : null);
   const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!.get!;
   const clientHeight = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!.get!;
   const scrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!.get!;
