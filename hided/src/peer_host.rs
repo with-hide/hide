@@ -27,7 +27,7 @@ use hide_kit::layout;
 use hide_peer::peers::{Config, Peers};
 use hide_peer::pipe::{Beside, Either, PipeConn, PipeTransport};
 use hide_peer::protocol::hello::GrantState;
-use hide_peer::protocol::{Candidate, PeerAddr, StreamKind};
+use hide_peer::protocol::{Candidate, PeerAddr, PeerKey, StreamKind};
 use hide_peer::store::{Grant, GrantStatus, Grants, Host, Known, KnownState};
 use hide_peer::{Clock, MachineKey, PeerEvent, PeerTransport};
 use hide_peer_iroh::{DEVICE_RELAY_URL, IrohConn, IrohTransport, Options};
@@ -498,6 +498,26 @@ impl PeerHost {
     /// The open endpoint's connections; `None` while it is not open.
     pub fn peers(&self) -> Option<HostPeers> {
         self.opened.get().cloned()
+    }
+
+    /// Whether a machine that opens this one is connected now: its grant
+    /// here is active (`hide device list`: "it opens this machine: active")
+    /// and the connection is live. Such a machine shows this one's screen
+    /// whenever its operator turns to its tile, though its desktop closes
+    /// the screen's socket while the tile is hidden (PRD device-connect-iroh
+    /// B63).
+    pub fn viewer_connected(&self) -> bool {
+        let Some(peers) = self.peers() else {
+            return false;
+        };
+        let granted: Vec<PeerKey> = peers.grants(|grants, now| {
+            grants
+                .list(now)
+                .filter(|grant| grant.state == GrantStatus::Active)
+                .map(|grant| grant.key)
+                .collect()
+        });
+        granted.iter().any(|key| peers.link(key).is_some())
     }
 
     /// The endpoint once it is open, however long that takes: for a service

@@ -18,7 +18,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use hide_agent_hooks::hook_request::install::{self, PaneRequest};
@@ -1294,7 +1294,9 @@ pub struct Answering {
     pub core: Arc<CoreHandle>,
     pub engine: Option<EngineHandle>,
     pub port: u16,
-    pub desktop_renderers: Arc<AtomicUsize>,
+    /// What shows this machine's pages, which a hook's `hide workspace info --hook`
+    /// is told of (`crate::server::Screens`).
+    pub screens: crate::server::Screens,
     /// What `hide device` asks about pairing (`crate::pairing`).
     pub pairing: Arc<crate::pairing::Pairing>,
     /// What `hide phone` asks (`crate::mobile::command`).
@@ -1318,7 +1320,7 @@ pub async fn serve(
         core,
         engine,
         port,
-        desktop_renderers,
+        screens,
         pairing,
         mobile,
         health,
@@ -1374,7 +1376,7 @@ pub async fn serve(
         let registry = Arc::clone(&registry);
         let core = Arc::clone(&core);
         let engine = engine.clone();
-        let desktop_renderers = Arc::clone(&desktop_renderers);
+        let screens = screens.clone();
         let pairing = Arc::clone(&pairing);
         let mobile = Arc::clone(&mobile);
         let runtime = tokio::runtime::Handle::current();
@@ -1386,7 +1388,7 @@ pub async fn serve(
                 &core,
                 engine.as_ref(),
                 port,
-                desktop_renderers.load(Ordering::SeqCst) > 0,
+                &screens,
                 Some(Operators {
                     pairing: &pairing,
                     mobile: &mobile,
@@ -1424,7 +1426,7 @@ fn answer_bootstrap(
     core: &CoreHandle,
     engine: Option<&EngineHandle>,
     port: u16,
-    desktop: bool,
+    screens: &crate::server::Screens,
     operators: Option<Operators<'_>>,
 ) {
     use std::io::{BufRead, BufReader};
@@ -1618,7 +1620,7 @@ fn answer_bootstrap(
                 _ => None,
             };
             let mut answer =
-                crate::hook_request::answer(core, &cap, hook, executor, lineage, desktop);
+                crate::hook_request::answer(core, &cap, hook, executor, lineage, screens);
             install::stamp(&mut answer, answering_as(request.install.as_deref()));
             if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
                 return Err("response_too_large");

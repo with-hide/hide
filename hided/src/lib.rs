@@ -814,7 +814,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             core: Arc::clone(&core),
             engine: Some(core.engine().clone()),
             port,
-            desktop_renderers: Arc::clone(&app.desktop_renderers),
+            screens: server::Screens::of(&app),
             pairing,
             mobile: Arc::clone(&mobile),
             health: Arc::clone(&listeners.pane_bootstrap),
