@@ -170,7 +170,7 @@ class Account(unittest.TestCase):
 
 
     def test_an_administrator_is_never_the_journey_account(self):
-        with tempfile.TemporaryDirectory() as home:
+        with tempfile.TemporaryDirectory() as home, mock.patch.object(account.sys, "platform", "darwin"):
             (Path(home) / account.MARKER).write_text("")
             with mock.patch.object(account, "administrator", return_value=True):
                 self.assertFalse(account.dedicated(home))
@@ -179,6 +179,14 @@ class Account(unittest.TestCase):
             (Path(home) / account.MARKER).unlink()
             with mock.patch.object(account, "administrator", return_value=False):
                 self.assertFalse(account.dedicated(home))
+
+    def test_the_journey_account_exists_only_on_macos(self):
+        # Windows has no account database to ask; the CLI installer asks
+        # this question on every system.
+        with tempfile.TemporaryDirectory() as home, mock.patch.object(account.sys, "platform", "win32"), \
+                mock.patch.object(account, "administrator", side_effect=AssertionError("asked off macOS")):
+            (Path(home) / account.MARKER).write_text("")
+            self.assertFalse(account.dedicated(home))
 
 
 if __name__ == "__main__":

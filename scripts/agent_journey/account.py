@@ -14,10 +14,9 @@ is not an administrator: every operator account on a Mac is one, so an
 operator's Mac never reads as the journey account, whatever file it holds.
 """
 
-import grp
 import hashlib
 import os
-import pwd
+import sys
 from pathlib import Path
 
 from agent_live_check.protection import stamp, write_private
@@ -27,6 +26,8 @@ MARKER = ".hide-journey-account"
 
 def administrator(name):
     """Whether the account `name` is in macOS's `admin` group."""
+    import grp
+    import pwd
     try:
         members = grp.getgrnam("admin").gr_mem
     except KeyError:
@@ -35,7 +36,11 @@ def administrator(name):
 
 
 def dedicated(home=None):
-    """Whether this process runs as the journey account."""
+    """Whether this process runs as the journey account, which exists only
+    on macOS (docs/INSTALL.md: the signed-in journey is macOS only)."""
+    if sys.platform != "darwin":
+        return False
+    import pwd
     home = Path(home or Path.home())
     name = pwd.getpwuid(os.getuid()).pw_name
     return (home / MARKER).is_file() and not administrator(name)
