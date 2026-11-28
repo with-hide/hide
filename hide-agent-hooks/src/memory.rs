@@ -213,13 +213,18 @@ pub fn memory_context_until(
     let Some(session) = session_id.filter(|session| delivery::valid_session(session)) else {
         return MemoryContext::without(HookMemoryOutcome::Unavailable);
     };
-    let prompt = match event {
-        HookEvent::UserPromptSubmit => prompt
-            .as_deref()
-            .map(hide_memory::hook::prompt_prefix)
-            .unwrap_or_default()
-            .to_owned(),
-        _ => String::new(),
+    // The digest is of the whole prompt, as the letter pull's is: a brief
+    // longer than the prefix is still known for what it is.
+    let (prompt, prompt_digest) = match event {
+        HookEvent::UserPromptSubmit => (
+            prompt
+                .as_deref()
+                .map(hide_memory::hook::prompt_prefix)
+                .unwrap_or_default()
+                .to_owned(),
+            prompt.as_deref().map(delivery::prompt_digest),
+        ),
+        _ => (String::new(), None),
     };
     let budget_start = deadline
         .checked_sub(MEMORY_BUDGET)
@@ -231,6 +236,7 @@ pub fn memory_context_until(
             runtime: runtime_id.to_owned(),
             session,
             prompt,
+            prompt_digest,
         },
         deadline,
     );

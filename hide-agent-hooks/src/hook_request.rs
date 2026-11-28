@@ -71,6 +71,12 @@ pub enum HookCommand {
         session: String,
         #[serde(default)]
         prompt: String,
+        /// The whole prompt's identity (`delivery::prompt_digest`), which
+        /// the cut `prompt` cannot give: the core gives no card for a prompt
+        /// that is a brief Hide submitted into the pane. A caller older than
+        /// it leaves it out and its prompts are matched as before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt_digest: Option<String>,
     },
     /// What the pane's agent hook observed: its turn and its subagent
     /// counts, for the core's status judgement (PRD engine-bundle-1 D-7).

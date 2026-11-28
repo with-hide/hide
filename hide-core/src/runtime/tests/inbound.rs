@@ -442,12 +442,15 @@ fn memory_is_answered_for_this_machine_and_a_linked_node_only() {
         shared
             .lock()
             .unwrap()
-            .memory_scope(&crate::workspace_control::Context {
-                device_id: device.to_owned(),
-                workspace_id: "workspace".to_owned(),
-                checkout_id: "checkout".to_owned(),
-                checkout_path: "/work/project".to_owned(),
-            })
+            .memory_scope(
+                &crate::workspace_control::Context {
+                    device_id: device.to_owned(),
+                    workspace_id: "workspace".to_owned(),
+                    checkout_id: "checkout".to_owned(),
+                    checkout_path: "/work/project".to_owned(),
+                },
+                "p1",
+            )
             .map(|scope| {
                 (
                     scope.project.device_id,
@@ -650,7 +653,7 @@ fn a_dialed_helper_without_a_memory_reader_refuses_and_keeps_closed_sessions() {
         checkout_path: "/work/project".to_owned(),
     };
     assert_eq!(
-        runtime.memory_scope(&context).err(),
+        runtime.memory_scope(&context, "w1:p1").err(),
         Some("session_reader_memory_unsupported")
     );
     assert_eq!(
@@ -1215,12 +1218,15 @@ fn prepared_memory_identity_matches_the_analysis_owner_for_native_paths() {
             .unwrap()
             .into();
             let scope = runtime
-                .memory_scope(&crate::workspace_control::Context {
-                    device_id: own.clone(),
-                    workspace_id: "w".into(),
-                    checkout_id: "c".into(),
-                    checkout_path: spelling,
-                })
+                .memory_scope(
+                    &crate::workspace_control::Context {
+                        device_id: own.clone(),
+                        workspace_id: "w".into(),
+                        checkout_id: "c".into(),
+                        checkout_path: spelling,
+                    },
+                    "p1",
+                )
                 .unwrap();
             let expected = hide_project::resolve(path, &own).unwrap();
             assert_eq!(scope.project, expected);

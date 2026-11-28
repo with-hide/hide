@@ -4843,7 +4843,10 @@ mod tests {
                 checkout_path: fixture.root.to_string_lossy().into_owned(),
             };
             let key = ("claude", SESSION.to_owned());
-            assert_eq!(runtime.memory_scope(&context).err(), Some("link_down"));
+            assert_eq!(
+                runtime.memory_scope(&context, "p1").err(),
+                Some("link_down")
+            );
             let (nodes, unreached) = runtime.memory_nodes();
             let (reports, outcome) = fixture.pass_over(key.clone(), false, true, nodes, unreached);
             assert!(reports.is_empty());
@@ -4872,7 +4875,7 @@ mod tests {
                 crate::device_catalog::Fact::Known(hide_project::facts(&fixture.root).unwrap()),
             );
             let scope = runtime
-                .memory_scope(&context)
+                .memory_scope(&context, "p1")
                 .expect("a ready device's Memory");
             assert_eq!(
                 scope.store, fixture.database,
