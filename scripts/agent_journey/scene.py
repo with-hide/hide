@@ -99,9 +99,9 @@ def plan(case, mode):
 
 
 # The most model requests one watched scene may take: the held turn of a
-# scene opened from a working agent and the letter's turn, at most five each
+# scene opened from a working agent and the letter's turn, at most four each
 # (the most any agent's turn takes, hide-agent-adapter `requests_per_turn`).
-SURVEY_REQUESTS_PER_SCENE = 2 * 5
+SURVEY_REQUESTS_PER_SCENE = 2 * 4
 
 
 def survey_requests(row, repetitions):

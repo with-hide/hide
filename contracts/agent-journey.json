@@ -1614,7 +1614,7 @@
     ],
     "wake": "sleeping_session",
     "title": "automatic",
-    "request_budget": 50,
+    "request_budget": 40,
     "fake_home": {
       "status": "proven",
       "key_env": "JOURNEY_FAKE_KEY",

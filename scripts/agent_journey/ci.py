@@ -28,7 +28,13 @@ from .local import PROFILE_ROOT, QUIET
 # version (19.0 raised it to 3 with its update question). The account turns
 # the wizard off instead of naming a version (`startup.setupWizard`, which
 # 18.7.0 reads too), so a release that adds a step still starts on the prompt.
-OMP_SET_UP = "startup:\n  setupWizard: false\n"
+# omp 19 turns composer predictions on by default: after each turn it asks
+# the model for the next prompt and draws it as ghost text in the empty
+# composer, in a colour a theme may give typed text too, so Hide reads it as
+# a draft (docs/delivery.md, Reading the composer). The account turns them
+# off, so the composer cell measures drafts; 18.7.0 has no such setting and
+# ignores the key.
+OMP_SET_UP = "startup:\n  setupWizard: false\ncomposer:\n  predictions: false\n"
 
 # The folders each agent is named in the disposable HOME, relative to it.
 AGENT_ENV = {
