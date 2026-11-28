@@ -1511,51 +1511,6 @@ fn split_workspace_payload(
     .expect("split session payload")
 }
 
-/// Every source file of a shell in this repository, with its path relative
-/// to the repository, for the structure tests that keep a defect the core
-/// once fixed from coming back on the other side of the wire.
-fn shell_sources(relative_root: &str, extensions: &[&str]) -> Vec<(String, String)> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join(relative_root);
-    let mut files = Vec::new();
-    let mut pending = vec![root.clone()];
-    while let Some(directory) = pending.pop() {
-        for entry in std::fs::read_dir(&directory)
-            .unwrap_or_else(|_| panic!("{} is readable", directory.display()))
-        {
-            let path = entry.expect("a source entry").path();
-            if path.is_dir() {
-                pending.push(path);
-                continue;
-            }
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default();
-            let extension = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or_default();
-            if !extensions.contains(&extension) || name.contains(".test.") {
-                continue;
-            }
-            let relative = path.strip_prefix(&root).expect("under the root");
-            files.push((
-                format!("{relative_root}/{}", relative.display()),
-                std::fs::read_to_string(&path).expect("a readable source"),
-            ));
-        }
-    }
-    files.sort();
-    files
-}
-
-/// The web shell's sources, tests excluded.
-fn web_sources() -> Vec<(String, String)> {
-    shell_sources("web/src", &["ts", "tsx"])
-}
-
 /// Two registered checkouts with the first focused, so a reveal into the
 /// second has a checkout switch to make. The second holds
 /// `deep/nested/leaf/target.txt`, which is the shape SC1 and SC2 describe.

@@ -6322,6 +6322,7 @@
                 "sender_not_registered",
                 "codex_capability_unknown",
                 "invalid_brief",
+                "mission_brief_too_long",
                 "invalid_agent_name",
                 "brief_not_submitted",
                 "mission_brief_missing",
@@ -8587,6 +8588,14 @@
                     "value": {
                         "type": "unsigned"
                     }
+                },
+                {
+                    "name": "--follow-up",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
                 }
             ],
             "refusals": [
@@ -8595,7 +8604,9 @@
                 "mission_criterion_unknown",
                 "mission_ambiguous",
                 "mission_skip_reason_missing",
-                "mission_criteria_protected"
+                "mission_criteria_protected",
+                "mission_skip_follow_up_required",
+                "mission_follow_up_invalid"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -10007,7 +10018,7 @@
             "retired_for": "task show"
         }
     ],
-    "digest": "sha256:a068074a34285882e85d06c8ad6ac724d31965fe46147d8d6273ad46f39dee01",
+    "digest": "sha256:6e20d237eb48d3ab893978b0bc6e6f5e2b5ba89c321a046e95e3fd9ebcdcb8d2",
     "envelopes": {
         "access": {
             "answer": "value",

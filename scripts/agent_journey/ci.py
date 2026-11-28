@@ -23,9 +23,18 @@ from agent_live_check.system import WINDOWS, home_env, launcher, temp_env
 from . import cells, opencode_service
 from .local import PROFILE_ROOT, QUIET, agy_onboarded
 
-# What a set-up omp 18.7.0 keeps in its config.yml: without it the first
-# start runs omp's setup wizard over the prompt.
-OMP_SET_UP = "setupVersion: 2\n"
+# omp's setup wizard asks its new onboarding steps over the first prompt of a
+# start, once per setup version, and a release that adds a step raises the
+# version (19.0 raised it to 3 with its update question). The account turns
+# the wizard off instead of naming a version (`startup.setupWizard`, which
+# 18.7.0 reads too), so a release that adds a step still starts on the prompt.
+# omp 19 turns composer predictions on by default: after each turn it asks
+# the model for the next prompt and draws it as ghost text in the empty
+# composer, in a colour a theme may give typed text too, so Hide reads it as
+# a draft (docs/delivery.md, Reading the composer). The account turns them
+# off, so the composer cell measures drafts; 18.7.0 has no such setting and
+# ignores the key.
+OMP_SET_UP = "startup:\n  setupWizard: false\ncomposer:\n  predictions: false\n"
 
 # The folders each agent is named in the disposable HOME, relative to it.
 AGENT_ENV = {

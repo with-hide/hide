@@ -178,6 +178,23 @@ fn grok_reads_its_suggestion_as_empty_on_either_console() {
     }
 }
 
+/// omp 19.2.1 in the agent journey's pane at 80 columns on Linux on
+/// 2026-11-28 (hand run 46094104848), after its last turn ended: the next
+/// prompt it predicts stands in the empty composer as ghost text in its
+/// theme's `dim` colour, (107,114,128) in the default theme, with no SGR
+/// attribute. A theme may paint typed text that colour (`colors.text`), so
+/// the same cells can be a draft: both hold text, never empty.
+#[test]
+fn omp_reads_its_predicted_prompt_and_a_draft_in_the_same_colour_as_text() {
+    let omp = AgentId::Omp.adapter().composer.supported().unwrap();
+    let predicted = screen("omp-19.2.1-predicted");
+    assert_eq!(omp.judge(&predicted), Verdict::Holds);
+    let ghost = "\x1b[38;2;107;114;128mJOURNEY-FB3D0CB2";
+    assert!(predicted.contains(ghost));
+    let themed_draft = predicted.replace(ghost, "\x1b[38;2;107;114;128mhello there");
+    assert_eq!(omp.judge(&themed_draft), Verdict::Holds);
+}
+
 /// Claude Code 2.1.314 under Herdr 0.9.5 at 60 columns on 2026-10-30. A
 /// session named with `--name` or `/rename` draws its name in the composer's
 /// top rule (`labelled`), and the same steps run beside a session without a

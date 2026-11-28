@@ -156,7 +156,8 @@ impl Feature {
 
 /// What a What's new highlight may name as its `measure` in
 /// `web/src/releases.json`: an event's name, or `hide_feature_used:` and a
-/// feature's name. A test holds every highlight from 1.2.11 on to this list.
+/// feature's name. `scripts/check-shell-structure.py` reads this list as text
+/// and holds every highlight from 1.2.11 on to it.
 pub fn measures() -> Vec<String> {
     let mut measures: Vec<String> = [
         "hide_agent_started",
@@ -736,76 +737,6 @@ mod tests {
         assert!(days.first_of_day(Daily::Feature(Feature::SkillsMcp), midnight + 4));
         // A clock set back to an earlier day counts that day again.
         assert!(days.first_of_day(desktop, midnight - 1));
-    }
-
-    fn web_file(path: &str) -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../web/src")
-            .join(path)
-    }
-
-    /// Every practice chapter the window offers sends `hide_practice`: a
-    /// chapter added under `web/src/practice/chapters/` without its name
-    /// here would count nothing (CONTRIBUTING.md, A main feature brings its
-    /// practice, its scene and its measure).
-    #[test]
-    fn every_practice_chapter_is_named() {
-        let mut ids = Vec::new();
-        for entry in std::fs::read_dir(web_file("practice/chapters")).unwrap() {
-            let path = entry.unwrap().path();
-            let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            if !name.ends_with(".ts") || name.ends_with(".test.ts") {
-                continue;
-            }
-            let text = std::fs::read_to_string(&path).unwrap();
-            let id = text
-                .lines()
-                .find_map(|line| line.strip_prefix("  id: \""))
-                .and_then(|rest| rest.split('"').next())
-                .unwrap_or_else(|| panic!("{name} names no chapter id"));
-            ids.push(id.to_owned());
-        }
-        assert!(ids.len() >= 8, "{ids:?}");
-        for id in ids {
-            assert!(
-                PracticeChapter::of(&id).is_some(),
-                "practice chapter `{id}` has no name in PracticeChapter::of"
-            );
-        }
-    }
-
-    /// Every main feature the What's new window shows from 1.2.11 on names
-    /// how its use is counted (`measure`), and the measure is one this build
-    /// sends, so a main feature cannot ship without one.
-    #[test]
-    fn every_highlight_names_a_measure_this_build_sends() {
-        let text = std::fs::read_to_string(web_file("releases.json")).unwrap();
-        let file: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let measures = measures();
-        let version = |text: &str| -> Vec<u32> {
-            text.split('.').map(|part| part.parse().unwrap()).collect()
-        };
-        let mut checked = 0;
-        for entry in file["versions"].as_array().unwrap() {
-            let name = entry["version"].as_str().unwrap();
-            if version(name) < vec![1, 2, 11] {
-                continue;
-            }
-            for highlight in entry["highlights"].as_array().unwrap() {
-                let measure = highlight["measure"].as_str().unwrap_or_else(|| {
-                    panic!(
-                        "a {name} highlight ({}) names no `measure`",
-                        highlight["drawing"]
-                    )
-                });
-                assert!(
-                    measures.iter().any(|known| known == measure),
-                    "{name}: `{measure}` is not a measure this build sends: {measures:?}"
-                );
-                checked += 1;
-            }
-        }
-        assert!(checked > 0);
     }
 
     /// The wire spells how a bot came in and its mode, and nothing else of
