@@ -22,6 +22,7 @@ import { archiveOffer, type ArchiveOffer } from "./archive";
 import { agentsByPane, allAgents } from "./paneAgents";
 import { pairLabelKey, type PairOffer } from "./pairView";
 import { commandLabel } from "./shortcutLabels";
+import { revisitMenuItem, revisitOffer, type RevisitOffer } from "./components/revisit-mark";
 
 // The delegation tree where the operator works (PRD S6 D-07, B14-B16): a
 // child pane's header returns to its parent, a parent's badge lists every
@@ -152,8 +153,6 @@ type PaneMenuId =
  * each opened only by choosing it, its reference (name and engine pane id) to copy, and closing it. Opening
  * the menu moves no focus and marks nothing read.
  */
-/** 다시 볼 것 on a root agent's pane (PRD revisit-group D-08, B10): `star` offers the ★, `done` offers 다시 볼 것에서 빼기. */
-export type RevisitOffer = "hidden" | "star" | "done";
 
 /**
  * `overview`: the pane runs an agent, so `개요에서 보기` is offered (PRD pane-open-in-overview D-07).
@@ -210,7 +209,7 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
   // or a disconnected device; a shell, a Factory worker and Hide AI get none.
   const archiveEntry: MenuEntry<PaneMenuId> | null = archive.kind === "offered" ? { id: "archive_session", icon: "archive", label: translate("archive.menu.archive"), unavailable: archive.unavailable } : null;
   const revisitEntry: MenuEntry<PaneMenuId> | null = revisit === "hidden" ? null
-    : { id: "revisit", icon: revisit === "done" ? "unstar" : "star", label: translate(revisit === "done" ? "taskLens.menu.revisitDone" : "taskLens.menu.revisit"), unavailable: null };
+    : revisitMenuItem(revisit, (key) => translate(key));
   if (revisitEntry && pane.sleep_action) agentActions.push(revisitEntry);
   if (archiveEntry && pane.sleep_action) agentActions.push(archiveEntry);
   // Fork agent and Fork agent to the side (PRD fork-operator-root B2, B3, D-03):
@@ -428,8 +427,7 @@ function useRevisitOffer(paneId: string, open: boolean): RevisitOffer {
   return useShellStore((s) => {
     if (!open) return "hidden";
     const agent = agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).get(paneId);
-    if (!agent || agent.hide_ai || agent.delegated || agent.lineage_parent_pane_id) return "hidden";
-    return agent.revisit?.starred ? "done" : "star";
+    return agent ? revisitOffer(agent) : "hidden";
   });
 }
 
