@@ -178,6 +178,29 @@ fn grok_reads_its_suggestion_as_empty_on_either_console() {
     }
 }
 
+/// omp 19.2.1 in the agent journey's pane at 80 columns on Linux on
+/// 2026-11-28 (hand run 46094104848), after its last turn ended: the next
+/// prompt it predicts stands in the empty composer as ghost text in its
+/// theme's `dim` colour, (107,114,128), with no SGR attribute, and comes
+/// back after a draft is erased. Typed text is (229,229,231), so typing the
+/// start of the prediction, which leaves the rest of it as ghost text after
+/// the typed letters, holds text.
+#[test]
+fn omp_reads_its_predicted_prompt_as_empty_and_typed_text_before_it_as_text() {
+    let omp = AgentId::Omp.adapter().composer.supported().unwrap();
+    let predicted = screen("omp-19.2.1-predicted");
+    assert_eq!(omp.explain(&predicted), Ok(()));
+    let ghost = "\x1b[38;2;107;114;128mJOURNEY-FB3D0CB2";
+    assert!(predicted.contains(ghost));
+    let typed_prefix = predicted.replace(
+        ghost,
+        "\x1b[38;2;229;229;231mJOUR\x1b[38;2;107;114;128mNEY-FB3D0CB2",
+    );
+    assert_eq!(omp.judge(&typed_prefix), Verdict::Holds);
+    let typed = predicted.replace(ghost, "\x1b[38;2;229;229;231mJOURNEY-FB3D0CB2");
+    assert_eq!(omp.judge(&typed), Verdict::Holds);
+}
+
 /// Claude Code 2.1.314 under Herdr 0.9.5 at 60 columns on 2026-10-30. A
 /// session named with `--name` or `/rename` draws its name in the composer's
 /// top rule (`labelled`), and the same steps run beside a session without a
