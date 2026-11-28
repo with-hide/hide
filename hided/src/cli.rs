@@ -358,6 +358,19 @@ pub const RELEASE: hide_node::ssh::host::ReleaseIdentity = hide_node::ssh::host:
     order: ORDER,
 };
 
+/// Whether a line `parse_args` refuses is answered as JSON on stdout
+/// (`invalid_arguments` with the usage as its next action) rather than as
+/// text on stderr: the Workspace commands, which a program reads. The topic
+/// is read after the retired-words table, so an old spelling answers in the
+/// form of the command it is now.
+pub fn refuses_as_json(args: &[String]) -> bool {
+    let words = hide_shell::retired::current(args.get(1..).unwrap_or_default());
+    matches!(
+        words.first().map(String::as_str),
+        Some("checkout" | "workspace" | "file" | "diff" | "view" | "browser")
+    )
+}
+
 pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
     // A retired spelling (`hide plan` for `hide task`) is read as the
     // command it is now before anything else reads a word: the one table

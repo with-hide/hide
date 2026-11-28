@@ -4540,6 +4540,33 @@ mod tests {
         ));
     }
 
+    /// A malformed line of a renamed Workspace command is refused in the
+    /// same form under both spellings: JSON a program reads, not text.
+    #[test]
+    fn a_refused_old_spelling_answers_in_the_form_of_the_command_it_is_now() {
+        for (old, now) in [
+            ("workspace purpose", "checkout purpose"),
+            ("workspace info extra", "checkout show extra"),
+            ("workspace remove", "checkout remove"),
+            ("workspace remove p --bogus", "checkout remove p --bogus"),
+            ("view status", "view show"),
+        ] {
+            let (old, now) = (hide_line(&shell_words(old)), hide_line(&shell_words(now)));
+            assert!(parse_args(&now).is_err(), "{now:?}");
+            assert_eq!(parse_args(&old), parse_args(&now), "{old:?}");
+            assert!(crate::cli::refuses_as_json(&now), "{now:?}");
+            assert!(crate::cli::refuses_as_json(&old), "{old:?}");
+        }
+        for command in retired::TABLE.commands {
+            assert_eq!(
+                crate::cli::refuses_as_json(&hide_line(command.old)),
+                crate::cli::refuses_as_json(&hide_line(command.now)),
+                "{:?}",
+                command.old
+            );
+        }
+    }
+
     /// An old spelling of the second batch of names (`hided/AGENTS.md`, One
     /// name per thing) parses as the command it is now, and the rewrite
     /// leaves an option's value, the words after `--` and a hook's own
