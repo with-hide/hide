@@ -26,7 +26,7 @@ writes from that one table:
 Left out: `web/src/releases.json` (the release notes are history), test code
 and session fixtures (a path part `tests`, `__tests__`, `fixtures` or `e2e`, a
 `*.test.*` or `*.spec.*` file, a Rust `tests.rs`, and a Rust file's lines from
-its `#[cfg(test)]` on), and Rust comment lines. CONTRIBUTING.md, CI gates, owns
+the `#[cfg(test)]` of an inline test module on), and Rust comment lines. CONTRIBUTING.md, CI gates, owns
 the rule; this is its check.
 
 Usage: scripts/check-retired-spellings.py [--root <checkout>]
@@ -45,6 +45,7 @@ SUFFIXES = {'.rs', '.md', '.mdx', '.json', '.ts', '.tsx', '.astro', '.txt', '.ht
 SKIPPED_PARTS = {'tests', '__tests__', 'fixtures', 'e2e', 'node_modules', 'dist', '.astro'}
 SKIPPED_FILES = {'web/src/releases.json'}
 TEST_MODULE = re.compile(r'^\s*#\[cfg\(test\)\]')
+INLINE_MODULE = re.compile(r'^(pub(\([^)]*\))?\s+)?mod\s+\w+\s*\{')
 
 
 def retired(contract):
@@ -99,13 +100,26 @@ def candidates(root):
 
 
 def lines_of(path, text):
-    for number, line in enumerate(text.split('\n'), 1):
+    lines = text.split('\n')
+    for index, line in enumerate(lines):
         if path.suffix == '.rs':
-            if TEST_MODULE.match(line):
+            if TEST_MODULE.match(line) and opens_module(lines[index + 1:]):
                 return
             if line.lstrip().startswith('//'):
                 continue
-        yield number, line
+        yield index + 1, line
+
+
+def opens_module(rest):
+    """Whether the item an attribute stands on opens an inline module
+    (`mod tests {`): a `#[cfg(test)]` on one function or constant stops
+    nothing after it."""
+    for line in rest:
+        stripped = line.strip()
+        if not stripped or stripped.startswith(('#[', '//')):
+            continue
+        return bool(INLINE_MODULE.match(stripped))
+    return False
 
 
 def check(root):
