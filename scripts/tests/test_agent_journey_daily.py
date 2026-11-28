@@ -26,7 +26,7 @@ from agent_live_check.runtime import kept_login  # noqa: E402
 # The runner removes agents' sessions. These tests run it in a home of their
 # own: HOME is a fresh folder for the whole module, checked before any test
 # starts, so nothing here can reach the home of the account running them.
-REMOVABLE = account.removable
+REMOVABLE, DEDICATED = account.removable, account.dedicated
 _HOME = {}
 
 
@@ -158,7 +158,8 @@ class Runner(unittest.TestCase):
         for target, name, value in ((daily, "journey_root", mock.Mock(return_value=self.root)),
                                     (daily, "runs_folder", mock.Mock(return_value=self.runs)),
                                     (daily, "account_home", mock.Mock(return_value=self.home)),
-                                    # Stands in for the journey account: this test's own folder.
+                                    # Stand in for the journey account: this test's own folder.
+                                    (daily.account, "dedicated", lambda home=None: home == self.home),
                                     (daily.account, "removable",
                                      lambda home, path: home == self.home and self.root in Path(path).parents),
                                     (daily.signal, "signal", mock.Mock())):
@@ -301,6 +302,12 @@ class Runner(unittest.TestCase):
         self.assertEqual((code, record["run"], record["stores_mb"]), (1, "agent stores over cap", 0))
         self.assertTrue((self.home / ".pi/agent/sessions/--probe--/e.jsonl").exists())
 
+    def test_a_run_outside_the_journey_account_makes_nothing(self):
+        # The real check, whatever account runs the tests: none is the journey's here.
+        with mock.patch.object(daily.account, "dedicated", DEDICATED), self.assertRaises(RuntimeError):
+            daily.run(self.SETTINGS)
+        self.assertEqual(list(self.root.iterdir()), [self.home])
+
     def test_another_accounts_stores_are_never_touched(self):
         elsewhere = self.root / "elsewhere"
         session = elsewhere / ".claude/projects/-work/a.jsonl"
@@ -325,7 +332,7 @@ class Runner(unittest.TestCase):
         link = home / ".claude/projects/-probe/link.jsonl"
         link.symlink_to(outside)
         me = SimpleNamespace(pw_name=account.NAME, pw_dir=str(home))
-        with mock.patch("pwd.getpwuid", return_value=me), \
+        with mock.patch("pwd.getpwuid", return_value=me), mock.patch.object(account, "dedicated", DEDICATED), \
                 mock.patch.object(account, "administrator", return_value=False):
             self.assertTrue(REMOVABLE(home, session))
             for path in (outside, link, home):

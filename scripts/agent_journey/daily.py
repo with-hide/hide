@@ -520,6 +520,10 @@ def stop(*_):
 
 
 def run(settings):
+    # Before it makes or removes anything: a run anywhere but the journey
+    # account's own home would act on a person's files.
+    if not account.dedicated(account_home()):
+        raise RuntimeError("the daily run runs only as the journey account")
     import fcntl  # the runner is macOS's; nothing else loads this module's run
 
     root = journey_root()
