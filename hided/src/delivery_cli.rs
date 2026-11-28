@@ -4,12 +4,43 @@ use hide_core::delivery::{BODY_LIMIT, BUNDLE_LETTERS, Command};
 
 use crate::env::Env;
 
-pub const USAGE: &str = "hide letter send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now | --force]\nhide letter reply <id> --intent <key> --body <text>\nhide letter ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide inbox ack <bundle>\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nThese commands need a running Hide and a current agent pane, or a connected bot (hide access); Hide's window does not have to be open.";
+/// What each of the three topics' help says past its lines.
+macro_rules! needs_hide {
+    () => {
+        "These commands need a running Hide and a current agent pane, or a connected bot (hide access); Hide's window does not have to be open."
+    };
+}
+
+pub const LETTER_USAGE: &str = concat!(
+    "hide letter send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now | --force]\nhide letter reply <id> --intent <key> --body <text>\nhide letter ack|cancel|show <id>\n",
+    needs_hide!()
+);
+
+pub const INBOX_USAGE: &str = concat!(
+    "hide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide inbox ack <bundle>\n",
+    needs_hide!()
+);
+
+pub const WATCH_USAGE: &str = concat!(
+    "hide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\n",
+    needs_hide!()
+);
+
+/// The lines of `letter`, `inbox` or `watch`: what a refusal of that topic
+/// and its `--help` print.
+pub fn usage(topic: &str) -> &'static str {
+    match topic {
+        "inbox" => INBOX_USAGE,
+        "watch" => WATCH_USAGE,
+        _ => LETTER_USAGE,
+    }
+}
 
 pub fn parse<'a>(
     topic: &str,
     mut args: impl Iterator<Item = &'a String>,
 ) -> Result<Command, String> {
+    let usage = usage(topic);
     let verb = args.next().map(String::as_str);
     if topic == "inbox" {
         return match verb {
@@ -32,7 +63,7 @@ pub fn parse<'a>(
                                     .filter(|digest| {
                                         hide_core::delivery::valid_prompt_digest(digest)
                                     })
-                                    .ok_or(USAGE)?
+                                    .ok_or(usage)?
                                     .clone(),
                             );
                         }
@@ -40,16 +71,16 @@ pub fn parse<'a>(
                             session = Some(
                                 args.next()
                                     .filter(|id| hide_core::delivery::valid_session(id))
-                                    .ok_or(USAGE)?
+                                    .ok_or(usage)?
                                     .clone(),
                             );
                         }
-                        _ => return Err(USAGE.into()),
+                        _ => return Err(usage.into()),
                     }
                 }
                 // A tool event's ask names its session.
                 if point != hide_node_link::panes::PullPoint::Prompt && session.is_none() {
-                    return Err(USAGE.into());
+                    return Err(usage.into());
                 }
                 // This `hide` confirms a whole bundle.
                 Ok(Command::Pull {
@@ -62,7 +93,7 @@ pub fn parse<'a>(
             Some("--confirm") => {
                 let ids: Vec<_> = args.cloned().collect();
                 if ids.is_empty() || ids.len() > BUNDLE_LETTERS || !ids.iter().all(|id| key(id)) {
-                    return Err(USAGE.into());
+                    return Err(usage.into());
                 }
                 Ok(Command::Confirm { ids })
             }
@@ -70,22 +101,22 @@ pub fn parse<'a>(
                 (Some(bundle), None) if key(bundle) => Ok(Command::AckBundle {
                     bundle: bundle.clone(),
                 }),
-                _ => Err(USAGE.into()),
+                _ => Err(usage.into()),
             },
-            _ => Err(USAGE.into()),
+            _ => Err(usage.into()),
         };
     }
     if topic == "watch" && verb == Some("list") && args.next().is_none() {
         return Ok(Command::WatchList);
     }
-    let subject = args.next().filter(|value| key(value)).ok_or(USAGE)?.clone();
+    let subject = args.next().filter(|value| key(value)).ok_or(usage)?.clone();
     if topic == "watch" {
         let mut observer = None;
         let mut actor = None;
         let mut expected_generation = None;
         let mut approval = None;
         while let Some(flag) = args.next() {
-            let value = args.next().ok_or(USAGE)?;
+            let value = args.next().ok_or(usage)?;
             match flag.as_str() {
                 "--observer" if observer.is_none() && key(value) => observer = Some(value.clone()),
                 "--actor" if actor.is_none() && key(value) => actor = Some(value.clone()),
@@ -99,9 +130,9 @@ pub fn parse<'a>(
                 "--expected-generation"
                     if expected_generation.is_none() && verb == Some("assign") =>
                 {
-                    expected_generation = Some(value.parse::<u64>().map_err(|_| USAGE)?);
+                    expected_generation = Some(value.parse::<u64>().map_err(|_| usage)?);
                 }
-                _ => return Err(USAGE.into()),
+                _ => return Err(usage.into()),
             }
         }
         return match verb {
@@ -113,7 +144,7 @@ pub fn parse<'a>(
             Some("assign") if approval.is_none() || expected_generation.is_some() => {
                 Ok(Command::WatchAssign {
                     id: subject,
-                    observer: observer.ok_or(USAGE)?,
+                    observer: observer.ok_or(usage)?,
                     actor,
                     expected_generation,
                     approval,
@@ -122,7 +153,7 @@ pub fn parse<'a>(
             Some("stop") if observer.is_none() && actor.is_none() => {
                 Ok(Command::WatchStop { id: subject })
             }
-            _ => Err(USAGE.into()),
+            _ => Err(usage.into()),
         };
     }
     match verb {
@@ -141,7 +172,7 @@ pub fn parse<'a>(
                     force = true;
                     continue;
                 }
-                let value = args.next().ok_or(USAGE)?.clone();
+                let value = args.next().ok_or(usage)?.clone();
                 match flag.as_str() {
                     "--intent" if intent.is_none() && key(&value) => intent = Some(value),
                     "--body" if body.is_none() => body = Some(value),
@@ -155,7 +186,7 @@ pub fn parse<'a>(
                     {
                         kind = Some(value)
                     }
-                    _ => return Err(USAGE.into()),
+                    _ => return Err(usage.into()),
                 }
             }
             let intent = intent.ok_or("--intent is required")?;
@@ -188,7 +219,7 @@ pub fn parse<'a>(
             Some("cancel") => Ok(Command::Cancel { id: subject }),
             _ => Ok(Command::Show { id: subject }),
         },
-        _ => Err(USAGE.into()),
+        _ => Err(usage.into()),
     }
 }
 

@@ -4383,6 +4383,20 @@ mod tests {
             .collect()
     }
 
+    /// Every topic a command of the table is under is a topic of
+    /// `cli::TOPICS`: the one list the first screen, its `--help` and
+    /// `hide help <topic>` read.
+    #[test]
+    fn every_topic_of_the_table_is_a_help_topic() {
+        for spec in COMMANDS {
+            let topic = spec.words[0];
+            assert!(
+                crate::cli::TOPICS.iter().any(|known| known.word == topic),
+                "hide {topic} is in the contract table and not in cli::TOPICS"
+            );
+        }
+    }
+
     /// Every command and option of the table is in its topic's `--help`,
     /// and every `hide` line and option of a usage is in the table
     /// (`hided/AGENTS.md`, Help).

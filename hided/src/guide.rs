@@ -361,10 +361,14 @@ mod tests {
         for skill in hide_kit::agents::SKILLS {
             taught.push((format!("the {} skill", skill.name), skill.text()));
         }
-        for topic in USAGE_TOPICS {
-            let usage = crate::cli::command_usage(topic, None)
-                .unwrap_or_else(|| panic!("hide {topic} has no usage"));
-            taught.push((format!("hide {topic} --help"), usage));
+        // Every topic `hide --help` leads to; one left off it is not taught.
+        for topic in crate::cli::TOPICS
+            .iter()
+            .filter(|topic| !matches!(topic.shown, crate::cli::Shown::Off(_)))
+        {
+            let usage = crate::cli::command_usage(topic.word, None)
+                .unwrap_or_else(|| panic!("hide {} has no usage", topic.word));
+            taught.push((format!("hide {} --help", topic.word), usage));
         }
         taught.push((
             "hide agent profile --help".to_owned(),
@@ -385,43 +389,6 @@ mod tests {
             ("hide agent spawn --help", crate::agent_cli::SPAWN_HELP),
         ]
     }
-
-    /// Every topic whose usage `hide <topic> --help` prints, but `import`:
-    /// a person's one-time import from the engine Hide ran before, never
-    /// taught to an agent.
-    const USAGE_TOPICS: &[&str] = &[
-        "letter",
-        "inbox",
-        "watch",
-        "agent",
-        "ps",
-        "skill",
-        "mcp",
-        "device",
-        "phone",
-        "access",
-        "mission",
-        "task",
-        "wait",
-        "automation",
-        "links",
-        "session",
-        "memory",
-        "browser",
-        "file",
-        "diff",
-        "view",
-        "pane",
-        "checkout",
-        "status",
-        "stop",
-        "always-on",
-        "open",
-        "version",
-        "guide",
-        "issue",
-        "contract",
-    ];
 
     /// PRD engine-bundle-1 D-6, B1: an agent is taught Hide's commands only,
     /// never Herdr's program, its variables or its commands.
