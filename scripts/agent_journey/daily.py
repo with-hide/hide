@@ -69,6 +69,21 @@ LOCK_TIMEOUT_EXIT = 75
 # it again. A day's build of the journey's binaries leaves target at about
 # 4 GiB (2026-11-28).
 CAPS = {"target": 30 * 1024 ** 3, "cargo-home": 4 * 1024 ** 3, "build-cache": 2 * 1024 ** 3}
+# The agents' own stores in the account's home, which their prompts and the
+# journey's sessions grow: their sum stays under STORES_CAP.
+STORES = (".claude", ".codex", ".local/share/opencode", ".pi", ".omp", ".grok", ".gemini")
+STORES_CAP = 8 * 1024 ** 3
+# Where an agent keeps one file, or for Grok one folder, per session, and
+# nothing else: what the runner may drop to stay under the cap, oldest first.
+# A login lives elsewhere (a credential file, a database, the keychain), and
+# OpenCode's and Antigravity's sessions share a database with it, so they
+# are never dropped.
+SESSIONS = ((".claude/projects", "*/*.jsonl"), (".codex/sessions", "*/*/*/rollout-*.jsonl"),
+            (".pi/agent/sessions", "*/*.jsonl"), (".omp/agent/sessions", "*/*.jsonl"),
+            (".grok/sessions", "*/*"))
+# A session untouched this long has ended: the runner holds the journey's
+# lock, and an agent someone left open writes its session as it goes.
+SESSION_ENDED_SECONDS = 24 * 3600
 LOCK_WAIT_SECONDS = 3 * 3600
 BUILD_SECONDS = 90 * 60
 JOURNEY_SECONDS = 150 * 60
@@ -89,12 +104,13 @@ BUILDS = [["cli"], ["build", "-p", "hide-session", "--example", "journey_convers
 # non-interactively.
 CHECK_PROMPT = "Reply with the single word ok."
 ONE_SHOT = {
-    "claude": ["-p", CHECK_PROMPT],
-    "codex": ["exec", "--skip-git-repo-check", CHECK_PROMPT],
+    # The four that can answer without keeping a session do.
+    "claude": ["-p", "--no-session-persistence", CHECK_PROMPT],
+    "codex": ["exec", "--ephemeral", "--skip-git-repo-check", CHECK_PROMPT],
     # A private server, which ends with the prompt, not the background one.
     "opencode": ["run", "--standalone", CHECK_PROMPT],
-    "pi": ["-p", CHECK_PROMPT],
-    "omp": ["-p", CHECK_PROMPT],
+    "pi": ["-p", "--no-session", CHECK_PROMPT],
+    "omp": ["-p", "--no-session", CHECK_PROMPT],
     "grok": ["-p", CHECK_PROMPT],
     "agy": ["-p", CHECK_PROMPT],
 }
@@ -115,7 +131,12 @@ AGENT_STATES = [
 
 
 def journey_root():
-    return Path.home() / "journey"
+    return account_home() / "journey"
+
+
+def account_home():
+    """The journey account's home, which holds the agents' stores."""
+    return Path.home()
 
 
 def runs_folder():
@@ -289,6 +310,60 @@ def within_caps(stream):
         if folder.is_dir() and size(folder) > cap:
             log(stream, f"{name} past its cap: removed")
             shutil.rmtree(folder)
+
+
+def newest_change(path):
+    """When anything in a session (a file, or a folder of files) last changed."""
+    if not path.is_dir():
+        return path.lstat().st_mtime
+    return max([path.lstat().st_mtime] + [os.lstat(os.path.join(folder, name)).st_mtime
+                                          for folder, _, files in os.walk(path) for name in files])
+
+
+def ended_sessions(home, now):
+    """The agents' sessions that have ended, oldest first, each with its
+    store's folder and when it last changed."""
+    found = []
+    for folder, pattern in SESSIONS:
+        for path in (home / folder).glob(pattern):
+            if path.is_symlink():
+                continue
+            with contextlib.suppress(OSError):
+                changed = newest_change(path)
+                if now - changed >= SESSION_ENDED_SECONDS:
+                    found.append((changed, folder, path))
+    return sorted(found)
+
+
+def stores_within_cap(stream, home):
+    """The agents' stores' size, after dropping ended sessions, oldest first,
+    while the stores are past their cap. Only in the journey account's own
+    home: anywhere else the sessions are a person's work."""
+    total = sum(size(home / name) for name in STORES)
+    if total <= STORES_CAP:
+        return total
+    dropped = 0
+    for changed, folder, path in ended_sessions(home, time.time()):
+        if total <= STORES_CAP:
+            break
+        if not account.removable(home, path):
+            raise RuntimeError("agent stores of an account that is not the journey's")
+        freed = size(path) if path.is_dir() else path.lstat().st_size
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+            # omp keeps a lock file beside each session.
+            path.with_name(f".{path.name}.lock.os").unlink(missing_ok=True)
+        total -= freed
+        dropped += 1
+        # Which store and when, never the path: a session's name can carry a folder's.
+        log(stream, f"dropped an ended session in {folder}, last changed "
+                    f"{datetime.datetime.fromtimestamp(changed).date().isoformat()}")
+    total = sum(size(home / name) for name in STORES)
+    log(stream, f"agent stores past their cap: dropped {dropped} ended sessions, "
+                f"{'now within it' if total <= STORES_CAP else 'still past it'}")
+    return total
 
 
 def build(settings, stream, env):
@@ -466,6 +541,9 @@ def run(settings):
         publish(record, stream)
         env = environment(settings)
         try:
+            # Before any agent runs: a run would grow the stores further.
+            if stores_within_cap(stream, account_home()) > STORES_CAP:
+                raise Stage("agent stores over cap")
             with OwnedProcesses(run_seconds=RUN_SECONDS) as owner:
                 record["commit"] = checkout(owner, target, stream, env)
                 install_clis(owner, stream, env)
@@ -513,6 +591,11 @@ def run(settings):
         finally:
             record["minutes"] = round((time.time() - started.timestamp()) / 60)
             cleanup()
+            try:
+                record["stores_mb"] = round(stores_within_cap(stream, account_home()) / 1024 ** 2)
+            except Exception as error:
+                record["run"] = f"runner failed: {type(error).__name__}"
+                log(stream, f"agent stores: {record['run']}")
             publish(record, stream)
     return 0 if record["run"] == "ok" else 1
 

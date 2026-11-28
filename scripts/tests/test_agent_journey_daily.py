@@ -23,6 +23,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import account, daily  # noqa: E402
 from agent_live_check.runtime import kept_login  # noqa: E402
 
+# The runner removes agents' sessions. These tests run it in a home of their
+# own: HOME is a fresh folder for the whole module, checked before any test
+# starts, so nothing here can reach the home of the account running them.
+REMOVABLE = account.removable
+_HOME = {}
+
+
+def setUpModule():
+    import pwd
+    _HOME["before"] = os.environ.get("HOME")
+    _HOME["folder"] = tempfile.TemporaryDirectory(prefix="journey-home-")
+    os.environ["HOME"] = _HOME["folder"].name
+    real = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve() if os.name != "nt" else None
+    if Path.home().resolve() != Path(_HOME["folder"].name).resolve() or Path.home().resolve() == real:
+        raise RuntimeError("the daily runner's tests need a HOME of their own")
+
+
+def tearDownModule():
+    if _HOME.get("before") is None:
+        os.environ.pop("HOME", None)
+    else:
+        os.environ["HOME"] = _HOME["before"]
+    _HOME["folder"].cleanup()
+
 
 def cells(**statuses):
     return {name: {"status": status, "reason": "screen said: private words", "evidence": None} for name, status in statuses.items()}
@@ -127,8 +151,15 @@ class Runner(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: __import__("shutil").rmtree(self.root, ignore_errors=True))
         self.runs = self.root / "runs"
+        # The run's own account home: the runner drops sessions there, so a
+        # test must never reach the home of the account running it.
+        self.home = self.root / "home"
+        self.home.mkdir()
         for target, name, value in ((daily, "journey_root", mock.Mock(return_value=self.root)),
                                     (daily, "runs_folder", mock.Mock(return_value=self.runs)),
+                                    (daily, "account_home", mock.Mock(return_value=self.home)),
+                                    (daily.account, "removable",
+                                     lambda home, path: home == self.home and self.home in Path(path).parents),
                                     (daily.signal, "signal", mock.Mock())):
             patcher = mock.patch.object(target, name, value)
             patcher.start()
@@ -227,6 +258,82 @@ class Runner(unittest.TestCase):
         self.assertIn("probe: guardian_failure:FileNotFoundError", stream.getvalue())
         for private in PRIVATE.split() + ["someone", "Errno"]:
             self.assertNotIn(private, stream.getvalue())
+
+    def write(self, relative, size, days_old):
+        path = self.home / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * size)
+        stamp = time.time() - days_old * 86400
+        os.utime(path, (stamp, stamp))
+        return path
+
+    def test_ended_sessions_go_oldest_first_until_the_stores_fit(self):
+        login = self.write(".codex/auth.json", 100, 30)
+        database = self.write(".local/share/opencode/opencode.db", 300, 30)
+        oldest = self.write(".claude/projects/-probe/a.jsonl", 400, 9)
+        lock = self.write(".omp/agent/sessions/-probe/.b.jsonl.lock.os", 0, 8)
+        older = self.write(".omp/agent/sessions/-probe/b.jsonl", 400, 8)
+        grok = self.write(".grok/sessions/%2Fprobe/c/updates.jsonl", 400, 3)
+        newer = self.write(".codex/sessions/2026/11/27/rollout-d.jsonl", 400, 2)
+        open_now = self.write(".pi/agent/sessions/--probe--/e.jsonl", 400, 0.1)
+        stream = io.StringIO()
+        with mock.patch.object(daily, "STORES_CAP", 1700):
+            total = daily.stores_within_cap(stream, self.home)
+        self.assertEqual(total, 1600)
+        self.assertEqual([path.exists() for path in (oldest, older, lock, grok, newer)],
+                         [False, False, False, True, True])
+        for kept in (login, database, open_now):
+            self.assertTrue(kept.exists(), kept)
+        self.assertIn("dropped an ended session in .claude/projects, last changed", stream.getvalue())
+        self.assertIn("dropped 2 ended sessions, now within it", stream.getvalue())
+        self.assertNotIn(str(self.home), stream.getvalue())
+
+    def test_stores_past_the_cap_with_nothing_ended_start_no_work(self):
+        self.write(".codex/packages/daemon", 2000, 30)
+        self.write(".pi/agent/sessions/--probe--/e.jsonl", 400, 0.1)
+        work = mock.Mock(side_effect=AssertionError("started work"))
+        with mock.patch.object(daily, "STORES_CAP", 1000), mock.patch.object(daily, "checkout", work), \
+                mock.patch.object(daily, "install_clis", work), mock.patch.object(daily, "build", work), \
+                mock.patch.object(daily, "check_outside", work), mock.patch.object(daily, "step", work):
+            code = daily.run(self.SETTINGS)
+        record = json.loads((self.root / daily.RECORD).read_text())
+        self.assertEqual((code, record["run"], record["stores_mb"]), (1, "agent stores over cap", 0))
+        self.assertTrue((self.home / ".pi/agent/sessions/--probe--/e.jsonl").exists())
+
+    def test_another_accounts_stores_are_never_touched(self):
+        elsewhere = self.root / "elsewhere"
+        session = elsewhere / ".claude/projects/-work/a.jsonl"
+        session.parent.mkdir(parents=True)
+        session.write_bytes(b"x" * 400)
+        os.utime(session, (0, 0))
+        # The real check, whatever account runs the tests: none is the journey's here.
+        with mock.patch.object(daily, "STORES_CAP", 1), \
+                mock.patch.object(daily.account, "removable", REMOVABLE), self.assertRaises(RuntimeError):
+            daily.stores_within_cap(io.StringIO(), elsewhere)
+        self.assertTrue(session.exists())
+
+    @unittest.skipUnless(sys.platform == "darwin", "the journey account is macOS's")
+    def test_only_the_journey_accounts_own_files_are_removable(self):
+        home = self.root / "hidejourney"
+        session = home / ".claude/projects/-probe/a.jsonl"
+        session.parent.mkdir(parents=True)
+        session.write_text("{}")
+        (home / account.MARKER).write_text("")
+        outside = self.root / "other.jsonl"
+        outside.write_text("{}")
+        link = home / ".claude/projects/-probe/link.jsonl"
+        link.symlink_to(outside)
+        me = SimpleNamespace(pw_name=account.NAME, pw_dir=str(home))
+        with mock.patch("pwd.getpwuid", return_value=me), \
+                mock.patch.object(account, "administrator", return_value=False):
+            self.assertTrue(REMOVABLE(home, session))
+            for path in (outside, link, home):
+                self.assertFalse(REMOVABLE(home, path), path)
+            self.assertFalse(REMOVABLE(self.root, outside))
+            with mock.patch("pwd.getpwuid", return_value=SimpleNamespace(pw_name="someone", pw_dir=str(home))):
+                self.assertFalse(REMOVABLE(home, session))
+            (home / account.MARKER).unlink()
+            self.assertFalse(REMOVABLE(home, session))
 
     ENTRY = Path(daily.__file__).parents[1] / "agent-journey-daily.py"
 

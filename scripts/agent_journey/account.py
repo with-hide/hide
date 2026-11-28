@@ -22,6 +22,8 @@ from pathlib import Path
 from agent_live_check.protection import stamp, write_private
 
 MARKER = ".hide-journey-account"
+# The one account the runner may remove an agent's files in (docs/VERIFICATION.md).
+NAME = "hidejourney"
 
 
 def administrator(name):
@@ -44,6 +46,23 @@ def dedicated(home=None):
     home = Path(home or Path.home())
     name = pwd.getpwuid(os.getuid()).pw_name
     return (home / MARKER).is_file() and not administrator(name)
+
+
+def removable(home, path):
+    """Whether the runner may remove `path`: it runs as the journey account,
+    whose own home `home` is and holds the marker, and `path` lies inside
+    that home through no link. Anywhere else an agent's files are a
+    person's work."""
+    if sys.platform != "darwin":
+        return False
+    import pwd
+    me = pwd.getpwuid(os.getuid())
+    home, path = Path(home), Path(path)
+    if me.pw_name != NAME or home.resolve() != Path(me.pw_dir).resolve() or not dedicated(home):
+        return False
+    if path.is_symlink():
+        return False
+    return path.resolve().is_relative_to(home.resolve()) and path.resolve() != home.resolve()
 
 
 # The members SQLite keeps beside a database file.
