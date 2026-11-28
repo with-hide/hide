@@ -47,7 +47,7 @@ A public document may name a private document's path and section; it does not re
 | Interface language policy, translation boundaries and integration coverage | [LOCALIZATION.md](LOCALIZATION.md) | `web/src/i18n/`, `SettingsSheet.tsx`, core UI-state persistence and language events |
 | What the UI does: behavior rules for every screen, grouped by area, independent of exact pixel values | [UI_BEHAVIOR.md](UI_BEHAVIOR.md) | `web/src/`, `hide-core/src/runtime/` |
 | How a public design change is proposed, implemented and visually reviewed | [DESIGN_WORKFLOW.md](DESIGN_WORKFLOW.md) | `design/tokens.json`, `scripts/gen-tokens.mjs`, `scripts/check-design-contract.mjs`, `web/src/components`, `web/src/gallery` |
-| Architecture, engine versus core ownership, the core's own engine and its pane holders, the bundled runtime: one decision record per file under `docs/adr/`, the table of them with their code paths in ARCHITECTURE.md | [ARCHITECTURE.md](ARCHITECTURE.md), [adr/0001](adr/0001-record-architecture-decisions.md) for how a record is written and replaced | `scripts/check-adr.py`,  `hide-core/src/runtime.rs`, `engine/{mod,contract}.rs`, `engine/own/`, `session_sync/{coordinator,projection,pulled}.rs`, `hide-holder/`, `hided/src/{env,cli,server}.rs`, `desktop/src/main/`, contract and boundary tests |
+| Architecture, engine versus core ownership, the core's own engine and its pane holders, the bundled runtime: one decision record per file under `docs/adr/`, the table of them with their code paths in ARCHITECTURE.md | [ARCHITECTURE.md](ARCHITECTURE.md), [adr/0001](adr/0001-record-architecture-decisions.md) for how a record is written and replaced | `scripts/check-docs.py`,  `hide-core/src/runtime.rs`, `engine/{mod,contract}.rs`, `engine/own/`, `session_sync/{coordinator,projection,pulled}.rs`, `hide-holder/`, `hided/src/{env,cli,server}.rs`, `desktop/src/main/`, contract and boundary tests |
 | Mobile relay routing, device challenge, Noise sessions, bounded chunks, QR v2, the memory-only server and its push relay to Apple and Google | [RELAY_PROTOCOL.md](RELAY_PROTOCOL.md) | `hide-relay-protocol/`, `hide-relay/`, `scripts/check-relay-protocol.sh`, `.github/workflows/relay-protocol.yml` |
 | Where new state belongs, whether it publishes, and how it is saved without blocking input | [ARCHITECTURE.md: State placement and publication](ARCHITECTURE.md#state-placement-and-publication) | `hide-core/src/{runtime,handle,reader,persistence,input_gate}.rs`, `runtime/{agents,agent_sleep,memory,workspace_view}.rs`, `web/src/components/elapsed.tsx` |
 | A device's link through the system `ssh`: one owned child per device, its start script and install, what ssh asks on the device row, the failure classes, the consent's machine id | [ARCHITECTURE.md: A device's ssh](ARCHITECTURE.md#a-devices-ssh), [UI_BEHAVIOR.md: Settings](UI_BEHAVIOR.md#settings), [INSTALL.md: What each system supports](INSTALL.md#what-each-system-supports) | `hide-node/src/ssh/{device,openssh,askpass,bootstrap}.rs`, `hide-core/src/runtime/{device_sign_in,hosts}.rs`, `web/src/settings/{DeviceRow,SignInPrompt}.tsx`, `web/src/settings.ts` (`deviceProblemLine`), `hided/tests/it/{system_ssh,node_contract}.rs` over `hided/tests/it/support/sshd.rs`, `.github/workflows/remote-mailbox.yml` |
@@ -171,3 +171,26 @@ Old PRDs may name those removed inputs because they record the original work rat
 - Keep procedures in their owning guide; AGENTS.md should route readers and retain critical invariants rather than copying long runbooks.
 - Keep CI descriptions tied to actual workflow steps; a command in a guide is not evidence that CI executes it.
 - Put performance impact and unrun native checks in PR evidence for rendering/runtime changes, following the performance guide's review policy.
+
+## Splitting a document
+
+Every Markdown file git tracks stays at or under 60 KB: one agent read holds a 60 KB English file whole with room for two or three more, so a guide read before a change is read in full rather than searched in slices.
+`scripts/check-docs.py` holds the number (`LIMIT`) and runs in CI's structural checks; `scripts/hooks/docs-size-cap.sh` refuses an agent's edit that would leave a file over it and larger than before.
+
+A change to covered behavior edits the sentence that is wrong, in place; it does not append a paragraph, and the history stays in the pull request and its commits.
+A file that still does not fit is split in the same pull request:
+
+- The file keeps its name and becomes the table of contents: a short introduction, a `| Piece | Code |` table linking each piece with the paths it covers, then every heading the file had, at its level, each followed by `Moved to [<piece>](<folder>/<piece>.md#<anchor>).`, so a reference such as `FILE.md, <section>` or `FILE.md#<anchor>` still lands.
+- The pieces live in `docs/<lowercase name>/`, one file per subject, and each starts with its title and two fields, then its text as Rule (what holds), Why (what broke or what it protects) and Check (the test or command that proves it); text moved by a first split keeps its own headings under the fields until a later change rewrites it.
+
+  ```markdown
+  # <Title>
+
+  - Code: `path/one.rs`, `path/folder/`
+  - Index: [FILE.md](../FILE.md)
+  ```
+
+- Every Code path exists, the table of contents links every piece, and every piece and anchor it links exists; the pair is registered in `SPLITS` in `scripts/check-docs.py`.
+
+`docs/ARCHITECTURE.md` and its decision records under `docs/adr/` are split the same way, with the record's own fields ([adr/0001](adr/0001-record-architecture-decisions.md)).
+The files that were over the cap when it arrived are listed in `EXCEPTIONS` in `scripts/check-docs.py` until each is split; the list only shrinks, and the check fails on an entry whose file is gone or back within the cap.
