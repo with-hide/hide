@@ -489,12 +489,15 @@ export type LocalPageVerdict = { cancel: false } | { cancel: true; boundary: "fi
  * `resolve`d by the caller before it is allowed, since a name can answer with
  * a private address.
  */
-export function localPageRequest(raw: string, resourceType: string, insideCheckout: (path: string) => boolean): LocalPageVerdict {
+export function localPageRequest(raw: string, resourceType: string, insideCheckout: (path: string) => boolean, held = false): LocalPageVerdict {
   let url: URL;
   try { url = new URL(raw); } catch { return { cancel: true, boundary: "network" }; }
   switch (url.protocol) {
     case "file:": {
-      if (resourceType === "mainFrame") return { cancel: false };
+      // A page an agent's file capability has held loads its own documents
+      // from its checkout only, so nothing the agent writes into it moves it to
+      // another file; the operator's own page follows a file link anywhere.
+      if (resourceType === "mainFrame" && !held) return { cancel: false };
       if (resourceType === "xhr" || resourceType === "webSocket" || resourceType === "ping" || resourceType === "cspReport" || resourceType === "other") return { cancel: true, boundary: "file" };
       let file: string;
       try { file = fileURLToPath(url); } catch { return { cancel: true, boundary: "file" }; }

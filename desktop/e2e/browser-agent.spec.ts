@@ -13,7 +13,7 @@ import { WebSocket } from "ws";
 import { focusTab, openProject, sendKeys, withControl } from "../../web/e2e/daemon-actions";
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { enterWorkspaceWithLane, showProjectRow } from "../../web/e2e/wire";
-import { fitWindow, HIDE_CLI, launchShell, startStack, test, type Isolated, type Stack } from "./fixture";
+import { fitWindow, HIDE_CLI, hostLog, launchShell, startStack, test, type Isolated, type Stack } from "./fixture";
 
 test.describe.configure({ timeout: 180_000 });
 let stack: Stack;
@@ -392,6 +392,14 @@ test("hide browser: a busy, hidden, file or missing display and a stale ref are 
   const fileRead = await snapshot(fileDisplay);
   expect(fileRead).toContain("# Local file");
   expect((await json(["click", fileDisplay, ref(fileRead, /button "Press"/)])).changed).toContain("pressed");
+  // While the pane drives it, a script it runs cannot move the page to a file outside the checkout and read it.
+  const canary = path.join(fixture.root, "private-canary.html");
+  fs.writeFileSync(canary, "<title>Private</title><p>PRIVATE-FILE-CANARY</p>");
+  await json(["eval", fileDisplay, `location.href = ${JSON.stringify(pathToFileURL(canary).href)}`]);
+  await expect.poll(() => hostLog(run.env).some((line) => line.event === "browser.navigation_refused" && line.reason === "checkout_boundary")).toBe(true);
+  const held = await snapshot(fileDisplay);
+  expect(held).toContain("# Local file");
+  expect(held).not.toContain("PRIVATE-FILE-CANARY");
   // A shell bound only to the checkout, not to a pane, is told who drives a file page.
   const shellEnv: NodeJS.ProcessEnv = { ...run.env };
   for (const key of ["HIDE_PANE_ID", "HIDE_CAP_REF"]) delete shellEnv[key];

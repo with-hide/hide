@@ -728,12 +728,15 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
   });
 
   it("lists a checkout's file page and an outside page by kind, and loads an unloaded file page again for an agent", async () => {
+    // A real checkout, so the page's file is inside it on every system.
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hide-checkout-")));
+    const address = pathToFileURL(path.join(root, "report.html")).href;
     try {
       const { subject, window, page, pages, pass } = views();
       // A page never shown lays out off screen, from the window's bounds.
       Object.assign(window, { getContentBounds: () => ({ x: 0, y: 0, width: 800, height: 600 }) });
-      const file = page("report", { partition: "persist:hide-browser-file-x", fileRestricted: false, state: { url: "file:///checkout/report.html", loading: false, failure: null } });
-      (file.view.webContents as unknown as { getURL: () => string }).getURL = () => "file:///checkout/report.html";
+      const file = page("report", { partition: "persist:hide-browser-file-x", fileRestricted: false, checkoutRoot: root, state: { url: address, loading: false, failure: null } });
+      (file.view.webContents as unknown as { getURL: () => string }).getURL = () => address;
       page("outside", { partition: "hide-browser-external-0", fileRestricted: false, grant: "ab".repeat(16), state: { url: "file:///outside/r.html", loading: false, failure: null } });
       page("web");
       expect(subject.cdpPages().map((listed) => [listed.id, listed.local])).toEqual([["report", "checkout"], ["outside", "outside"], ["web", undefined]]);
@@ -749,7 +752,7 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       expect(await subject.cdpRevive(report, false)).toBe("none");
       expect(created).toEqual([]);
       expect(await subject.cdpRevive(report, true)).toBe("loaded");
-      expect(created).toEqual([{ id: "report", area_id: "a1", url: "file:///checkout/report.html", load: 3, rect: null, visible: false }]);
+      expect(created).toEqual([{ id: "report", area_id: "a1", url: address, load: 3, rect: null, visible: false }]);
       // An outside page leaves no record when it unloads: it loads again only by the grant hided read from the core's display, while this window holds it.
       const outside = { workspace, area_id: "a1", display_id: "outside" };
       const grant = (Reflect.get(subject, "externals") as ExternalFiles).grant("/outside/r.html", "html")!.id;
@@ -762,6 +765,43 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       expect(created[1]).toEqual({ id: "outside", area_id: "a1", url: "", load: 0, rect: null, visible: false, grant });
     } finally {
       vi.useRealTimers();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("holds a checkout page an agent's file capability drove to its checkout, and lists it only while it shows its checkout", () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hide-checkout-")));
+    const inside = pathToFileURL(path.join(root, "report.html")).href;
+    const beside = pathToFileURL(path.join(root, "other.html")).href;
+    const outside = pathToFileURL(path.join(path.dirname(root), "private.html")).href;
+    try {
+      const { subject, page } = views();
+      let shown = inside;
+      const report = page("report", { partition: "persist:hide-browser-file-x", fileRestricted: false, checkoutRoot: root, state: { url: inside, loading: false, failure: null } });
+      const contents = report.view.webContents as unknown as EventEmitter & { getURL: () => string };
+      contents.getURL = () => shown;
+      const moves = (url: string) => {
+        const event = { preventDefault: vi.fn() };
+        contents.emit("will-navigate", event, url);
+        return !event.preventDefault.mock.calls.length;
+      };
+      // The operator's own page, and one Comment reads, follow a file link anywhere.
+      expect(moves(outside)).toBe(true);
+      const [listed] = subject.cdpPages();
+      subject.cdpAttached(listed!, true, "comment");
+      expect(moves(outside)).toBe(true);
+      // Once an agent's file capability leases it, it moves only within its checkout, after the lease ends too.
+      subject.cdpAttached(listed!, true, "file");
+      subject.cdpAttached(listed!, false);
+      expect(moves(outside)).toBe(false);
+      expect(moves(beside)).toBe(true);
+      // A page that shows another file is listed to no capability.
+      expect(subject.cdpPages().map((page) => page.id)).toEqual(["report"]);
+      shown = outside;
+      expect(subject.cdpPages()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });

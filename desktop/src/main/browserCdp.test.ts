@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { request } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpPage, type CdpRetirement, type CdpScope } from "./browserCdp";
+import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpPage, type CdpPurpose, type CdpRetirement, type CdpScope } from "./browserCdp";
 
 type Json = Record<string, unknown>;
 // Electron is the platform boundary. HTTP, WS, scope policy and lifecycle
@@ -78,6 +78,8 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
   const pages: CdpPage[] = [first, second, foreign, otherCheckout];
   const listeners = new Set<(retirement?: CdpRetirement) => void>();
   const attached = new Map<string, boolean>();
+  // The purpose each lease named to the host, which holds a file capability's page to its checkout.
+  const leasedFor = new Map<string, CdpPurpose | undefined>();
   const intents = new Map<string, CdpActionResult>();
   const opened: { scope: CdpScope; url: string | undefined }[] = [];
   const actions: CdpAction[] = [];
@@ -92,7 +94,7 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
     pages: () => pages,
     incarnation: () => incarnation,
     changed: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    attached: (page, value) => { attached.set(page.id, value); },
+    attached: (page, value, purpose) => { attached.set(page.id, value); if (value) leasedFor.set(page.id, purpose); },
     ...(options.revive ? { revive: (scope: CdpScope, file: boolean, grant?: string) => options.revive!(scope, pages, grant, file) } : {}),
     externalOpen: async (path, page) => { externalOpens.push({ path, page }); return { grant: { id: "a1".repeat(16), name: "r.html", kind: page ? "html" : "text" } }; },
     externalRead: async (grant, file, limit) => {
@@ -147,7 +149,7 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
     shutdown.push(async () => { client.socket.terminate(); });
     return client;
   }
-  return { gateway, address, capability, client, first, second, foreign, pages, changed, attached, opened, actions, externalOpens, externalReads, stills,
+  return { gateway, address, capability, client, first, second, foreign, pages, changed, attached, leasedFor, opened, actions, externalOpens, externalReads, stills,
     authority: (value: boolean) => { incarnation = value ? 1 : null; changed(); },
     incarnate: (value: number) => { incarnation = value; changed(); }, advance: (milliseconds: number) => { time += milliseconds; } };
 }
@@ -1096,7 +1098,7 @@ describe("file capability on a local file page", () => {
   const reached = (debug: ElectronDebugger) => vi.spyOn(debug, "sendCommand");
 
   it("drives a checkout's file page and an outside page with an agent's commands", async () => {
-    const { checkout, outside, connect, scope, client } = await withFilePages();
+    const { checkout, outside, connect, scope, client, leasedFor } = await withFilePages();
     for (const [page, target] of [[checkout, "page-21"], [outside, "page-22"]] as const) {
       const answer = await connect({ ...scope(page.id), purpose: "file" });
       expect(answer.status, page.id).toBe(200);
@@ -1105,6 +1107,7 @@ describe("file capability on a local file page", () => {
       const targets = await driver.call("Target.getTargets");
       expect((targets.result as { targetInfos: Json[] }).targetInfos.map((info) => info.targetId)).toEqual([target, target.replace("page", "tab")]);
       const session = await attach(driver, target);
+      expect(leasedFor.get(page.id), page.id).toBe("file");
       const allowed: [string, Json][] = [
         ["Page.enable", {}], ["Runtime.enable", {}], ["Runtime.evaluate", { expression: "document.title" }],
         ["Page.createIsolatedWorld", { frameId: target, worldName: "hide-page" }],

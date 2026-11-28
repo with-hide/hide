@@ -46,7 +46,7 @@ type Options = {
   incarnation: (scope: CdpScope) => number | null;
   changed: (listener: (retirement?: CdpRetirement) => void) => () => void;
   action: (scope: CdpScope, action: CdpAction, signal: AbortSignal) => Promise<CdpActionResult>;
-  attached: (page: CdpPage, attached: boolean) => void;
+  attached: (page: CdpPage, attached: boolean, purpose?: CdpPurpose) => void;
   /**
    * Loads a display's unloaded page again, hidden, for an agent's connection to it, an outside
    * page by the grant hided read from the core's display (`BrowserViews.cdpRevive`).
@@ -667,7 +667,7 @@ export class BrowserCdpGateway {
     client.leases.set(page.contents.id, lease);
     client.sessions.set(root.id, root);
     this.owners.set(page.contents.id, lease);
-    this.options.attached(page, true);
+    this.options.attached(page, true, client.capability.purpose);
     // Chromium identifies a page's main frame by its native target ID. Our
     // public target is stable for the Hide display generation, so translate
     // that protocol identity after this exact debugger attests its frame.
