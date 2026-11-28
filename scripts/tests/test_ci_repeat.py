@@ -428,16 +428,35 @@ class UnitFiles(unittest.TestCase):
 
         def lister(package, files):
             asked.append((package, files))
-            return 4
+            return {path: 4 for path in files}
 
-        plan = repeat.units_plan(["web/src/searchDetail.test.ts", "desktop/src/main/env.test.ts"], lister)
+        plan, moved = repeat.units_plan(["web/src/searchDetail.test.ts", "desktop/src/main/env.test.ts"], lister, "linux")
         self.assertEqual(asked, [("desktop", ["desktop/src/main/env.test.ts"]), ("web", ["web/src/searchDetail.test.ts"])])
         self.assertEqual(plan, [{"package": "desktop", "files": ["desktop/src/main/env.test.ts"], "tests": 4},
                                 {"package": "web", "files": ["web/src/searchDetail.test.ts"], "tests": 4}])
+        self.assertEqual(moved, [])
 
-    def test_a_file_that_lists_no_test_fails_the_count(self):
-        with self.assertRaises(ValueError):
-            repeat.units_plan(["web/src/searchDetail.test.ts"], lambda package, files: 0)
+    def test_a_file_that_lists_no_test_fails_a_leg_and_names_its_system(self):
+        with self.assertRaisesRegex(ValueError, "list no test on windows: web/src/searchDetail.test.ts"):
+            repeat.units_plan(["web/src/searchDetail.test.ts"], lambda package, files: {path: 0 for path in files}, "windows")
+
+    def test_a_pull_requests_count_moves_a_file_linux_lists_no_test_of_to_windows(self):
+        # A file whose tests all declare Windows (`describe.runIf(process.platform
+        # === "win32")`) lists none on Linux, which completed zero runs of it
+        # (#3150); the count keeps its Linux files and hands that one on.
+        counts = {"desktop/e2e/windows-processes.unit.ts": 0, "desktop/src/main/env.test.ts": 5, "web/e2e/windows-sockets.unit.ts": 0}
+        plan, moved = repeat.units_plan(sorted(counts), lambda package, files: {path: counts[path] for path in files}, "linux",
+                                        repeat.UNITS_ELSEWHERE)
+        self.assertEqual(plan, [{"package": "desktop", "files": ["desktop/src/main/env.test.ts"], "tests": 5}])
+        self.assertEqual(moved, ["desktop/e2e/windows-processes.unit.ts", "web/e2e/windows-sockets.unit.ts"])
+
+    def test_a_test_counts_for_the_file_vitest_names_and_only_a_selected_one(self):
+        # A filter is a substring, so `env.test.ts` also lists `myenv.test.ts`.
+        selected = ["desktop/src/main/env.test.ts", "desktop/e2e/windows-processes.unit.ts"]
+        tests = [{"name": name, "file": (repeat.ROOT / path).as_posix()} for name, path in (
+            ("a", "desktop/src/main/env.test.ts"), ("b", "desktop/src/main/env.test.ts"), ("c", "desktop/src/main/myenv.test.ts"))]
+        self.assertEqual(repeat.listed_per_file(tests, selected),
+                         {"desktop/src/main/env.test.ts": 2, "desktop/e2e/windows-processes.unit.ts": 0})
 
 
 class Nextest(unittest.TestCase):
@@ -608,7 +627,7 @@ class Command(unittest.TestCase):
 
     def test_the_workflow_verdict_exits_nonzero_for_a_successful_zero_run(self):
         needs = {"count": {"result": "success", "outputs": {"run-web": "true", "run-units": "false", "run-rust": "false",
-                                                            "repeat": "0", "web-repeat": "10"}},
+                                                            "repeat": "0", "web-repeat": "10", "units-legs": "[]"}},
                  "web": {"result": "success", "outputs": {"completed": "0"}}, "units": {"result": "skipped"},
                  "rust": {"result": "skipped"}}
         result, _ = self.run_script("verdict", needs=needs)
@@ -629,10 +648,11 @@ class Command(unittest.TestCase):
         self.assertEqual(outputs["web"], "web/e2e/s3.spec.ts")
         self.assertEqual(json.loads(outputs["units"]), ["web/src/searchDetail.test.ts"])
         self.assertEqual(json.loads(outputs["rust"]), [{"package": "hided", "test": "it", "module": "handshake"}])
-        # A hand run counts no tests, but its unit files are still listed:
-        # the units job runs what the count found in each package.
+        # A hand run counts no tests, and its unit files are listed by the
+        # units leg on the system asked for, where their tests may be the
+        # only ones that run.
         self.assertEqual((outputs["repeat"], outputs["counted"], outputs["web-count-needed"], outputs["units-count-needed"],
-                          outputs["rust-count-needed"]), ("10", "false", "false", "true", "false"))
+                          outputs["rust-count-needed"]), ("10", "false", "false", "false", "false"))
 
     def test_a_pull_request_resolves_with_its_rust_count_and_no_repeat_yet(self):
         rust = json.dumps([{"package": "hided", "test": "lib", "module": "handshake"}], separators=(",", ":"))
@@ -643,10 +663,10 @@ class Command(unittest.TestCase):
         self.assertEqual((outputs["web-count-needed"], outputs["units-count-needed"], outputs["rust-count-needed"]),
                          ("true", "true", "true"))
 
-    def test_a_hand_run_lists_its_unit_files_and_a_run_without_them_counts_nothing(self):
+    def test_a_hand_run_names_its_unit_files_and_the_count_lists_none_of_them(self):
         _, outputs = self.run_script("resolve", "--event", "workflow_dispatch", "--units", "web/src/searchDetail.test.ts",
                                     "--repeat", "3")
-        self.assertEqual((outputs["units"], outputs["units-count-needed"]), ('["web/src/searchDetail.test.ts"]', "true"))
+        self.assertEqual((outputs["units"], outputs["units-count-needed"]), ('["web/src/searchDetail.test.ts"]', "false"))
         _, outputs = self.run_script("resolve", "--event", "workflow_dispatch", "--web", "s3.spec.ts", "--repeat", "3")
         self.assertEqual((outputs["units"], outputs["units-count-needed"]), ("[]", "false"))
 
@@ -709,10 +729,13 @@ class Verdict(unittest.TestCase):
                                  [{"package": "hided", "test": "lib", "module": "seat"}] if selected["rust"] else [],
                                  "3", {"tests": 10, "seconds": 900.0, "repeat": 3, "shards": 2, "parts": 1, "heaviest": 600.0},
                                  "100", ["web/src/searchDetail.test.ts"] if selected["units"] else [], "100")
+        # A units leg names its outputs by its system and says the repeat it ran.
+        outputs = ({f"completed-{leg['os']}": completed, f"repeat-{leg['os']}": str(leg["repeat"])}
+                   for leg in json.loads(decision["units-legs"])) if kind == "units" else [{"completed": completed}]
         return {"count": {"result": "success", "outputs": decision},
                 "web": {"result": "skipped", "outputs": {}}, "units": {"result": "skipped", "outputs": {}},
                 "rust": {"result": "skipped", "outputs": {}},
-                kind: {"result": result, "outputs": {"completed": completed}}}
+                kind: {"result": result, "outputs": {key: value for leg in outputs for key, value in leg.items()}}}
 
     def test_a_hand_run_and_a_pr_require_actual_runs_of_each_chosen_kind(self):
         for event in ("workflow_dispatch", "pull_request"):
@@ -726,8 +749,44 @@ class Verdict(unittest.TestCase):
                         with self.subTest(outcome=outcome), self.assertRaises(ValueError):
                             repeat.verdict(self.needs(event, kind, result=outcome))
 
+    def test_a_pull_request_runs_a_file_linux_lists_no_test_of_on_windows_at_the_repeat_listed_there(self):
+        linux, windows = "desktop/src/main/env.test.ts", "desktop/e2e/windows-processes.unit.ts"
+        decision = repeat.choose("pull_request", "", [], "", None, "", [linux, windows], "5", [windows])
+        self.assertEqual(json.loads(decision["units-legs"]), [
+            {"os": "linux", "runner": "ubuntu-latest", "files": [linux], "repeat": 10},
+            {"os": "windows", "runner": "windows-latest", "files": [windows], "repeat": 0}])
+
+        def needs(**units):
+            outputs = {"completed-linux": "50", "repeat-linux": "10", "completed-windows": "20", "repeat-windows": "10", **units}
+            return {"count": {"result": "success", "outputs": decision}, "web": {"result": "skipped"},
+                    "rust": {"result": "skipped"},
+                    "units": {"result": "success", "outputs": {key: value for key, value in outputs.items() if value is not None}}}
+
+        repeat.verdict(needs())
+        # The Windows leg is held to the repeat it chose, the Linux leg to the count's.
+        for units in ({"completed-windows": "0"}, {"completed-windows": None}, {"completed-windows": "15"},
+                      {"repeat-windows": "0"}, {"repeat-windows": None}, {"repeat-linux": "5", "completed-linux": "25"}):
+            with self.subTest(units=units), self.assertRaises(ValueError):
+                repeat.verdict(needs(**units))
+        # Windows files alone: no Linux leg, and no shared repeat.
+        alone = repeat.choose("pull_request", "", [], "", None, "", [windows], "0", [windows])
+        self.assertEqual((alone["repeat"], alone["run-units"], len(json.loads(alone["units-legs"]))), (0, "true", 1))
+        repeat.verdict({"count": {"result": "success", "outputs": alone}, "web": {"result": "skipped"}, "rust": {"result": "skipped"},
+                        "units": {"result": "success", "outputs": {"completed-windows": "20", "repeat-windows": "10"}}})
+
+    def test_files_moved_elsewhere_must_be_selected_and_a_linux_file_must_list_tests(self):
+        for units, count, elsewhere in ((["web/src/a.test.ts"], "3", ["web/src/b.test.ts"]),
+                                        (["web/src/a.test.ts", "web/src/b.test.ts"], "0", ["web/src/b.test.ts"])):
+            with self.subTest(units=units, count=count), self.assertRaises(ValueError):
+                repeat.choose("pull_request", "", [], "", None, "", units, count, elsewhere)
+
+    def test_a_hand_runs_unit_files_are_one_leg_on_the_system_it_asked_for(self):
+        decision = repeat.choose("workflow_dispatch", "", [], "7", None, "", ["web/e2e/windows-sockets.unit.ts"], "", None, "windows")
+        self.assertEqual(json.loads(decision["units-legs"]),
+                         [{"os": "windows", "runner": "windows-latest", "files": ["web/e2e/windows-sockets.unit.ts"], "repeat": 7}])
+
     def test_missing_decisions_failed_count_and_missing_jobs_fail_closed(self):
-        for field in ("run-web", "run-units", "run-rust", "repeat", "web-repeat"):
+        for field in ("run-web", "run-units", "run-rust", "repeat", "web-repeat", "units-legs"):
             needs = self.needs("workflow_dispatch", "web")
             del needs["count"]["outputs"][field]
             with self.subTest(field=field), self.assertRaises((ValueError, KeyError)):
@@ -803,6 +862,13 @@ class Reports(unittest.TestCase):
                     for index in range(3)
                 ) + '</testsuites>', encoding="utf-8")
             self.assertEqual(repeat.completed_runs(None, paths), 6)
+            # A units leg's count is named by its system, so the legs of one
+            # matrix job do not overwrite each other's.
+            with tempfile.TemporaryDirectory() as outputs:
+                written = Path(outputs) / "output"
+                subprocess.run([sys.executable, str(SCRIPT), "report", "--junit", *map(str, paths), "--leg", "windows"],
+                               check=True, capture_output=True, env={**os.environ, "GITHUB_OUTPUT": str(written)})
+                self.assertEqual(written.read_text(encoding="utf-8"), "completed-windows=6\n")
             paths[0].write_text('<testsuites><testsuite><testcase><skipped/></testcase></testsuite></testsuites>', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "zero tests"):
                 repeat.completed_runs(None, paths[:1])

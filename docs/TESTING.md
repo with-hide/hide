@@ -1160,6 +1160,7 @@ Nothing is handed to the nightly.
   A changed line says nothing reliable about which test it reaches (a helper, a hook, a fixture at the top of the file, a loop that declares tests), and reading the TypeScript to tell is more machinery than the lane earns.
   A change to `tests/it/support` or `tests/it/main.rs`, or a module that lists no test (a helper file such as `stand_ins.rs`, even beside modules that do list tests), selects the crate's whole `it` binary, since what a helper reaches is not knowable from the diff; a deleted file and a desktop spec are not selected; the desktop suite needs the macOS runner, and [Where the macOS runners went](#where-the-macos-runners-went) owns who gets one.
   A unit test file of the `web`, `desktop` or `mobile` package added or modified (`src/a.test.ts`, `src/a.test.tsx`, `e2e/a.unit.ts`, `scripts/a.test.mjs`) runs whole under that package's Vitest, which is what `checks` runs.
+  A unit test file whose tests run on one system says so with Vitest's own declaration around them, `describe.runIf(process.platform === "win32")`, never a skip inside a test: Vitest's listing then leaves out the tests a system does not run, so the lane counts and repeats a file where its tests run (`web/e2e/windows-sockets.unit.ts`), and the e2e lint still reads each `test` inside it as a test.
   A file under a crate's `src` that the crate's `lib`, `main` or `bin` target builds is selected by the test modules it declares: its own module when only a test build compiles it (`#[cfg(test)] mod clear_tests;` in `hided/src/mobile/` gives `mobile::clear_tests`), and each test-gated module block when a product file holds them (`#[cfg(test)] mod tests { ... }` in `hide-kit/src/process.rs` gives `process::tests`).
   The product module itself is never selected: its name holds the product's code, not its tests. A `src` file whose tests sit nowhere a declaration names is not selected, because the diff cannot say what they are; `scripts/rust_scan.py`, "module_tree", reads the declarations the way rustc does, `#[path]` and inline blocks included.
   `scripts/ci-repeat.py` selects them, `scripts/ci-plan.py` plans the lane from its answer, and `scripts/tests/test_ci_repeat.py` holds both.
@@ -1174,6 +1175,8 @@ Nothing is handed to the nightly.
   The job summary says the tests, their seconds, the shards and the repeat chosen.
 - **The unit test files and Rust modules share a budget of 200 test runs.**
   N is the number of tests that will run, not the number of files: each package's `vitest list` counts its unit tests, and `cargo nextest list` counts the Rust tests the final plan matches.
+  A unit file that lists no test on Linux is not in N: its tests declare Windows, the one other system whose `windows check` runs the packages' Vitest suites in a pull request, so the units job gets a Windows leg that lists it there and repeats it by that count, `clamp(floor(200 / N), 3, 10)` again; a file that lists none there either fails the lane, as a file that lists none anywhere did (`units_plan` and `choose` in `scripts/ci-repeat.py`).
+  Before, a pull request that changed `desktop/e2e/windows-processes.unit.ts` repeated it on Linux, where every test skipped, and the lane failed with zero completed runs (#3150, run 46157698314).
   A helper lists none under its own filter, so the PR plan counts and repeats its crate's whole `it` binary instead, and a `src` file that lists no test under its own module repeats its whole target.
   A pull request's repeat asks for no ignored test: they need what another lane prepares (an sshd, an agent's program, Windows OpenSSH, a retained older build) or are a subprocess's entry point that fails run alone, and repeating them here would turn an ordinary pull request red.
   A changed module of ignored tests alone lists none, so it runs its target whole with the ordinary tests, as a helper file does.
@@ -1205,7 +1208,7 @@ Nothing is handed to the nightly.
   The final `verdict` job always checks those decisions, every job result and the actual completed runs from Playwright JSON, Vitest JUnit and nextest JUnit reports.
   A missing decision or report, a chosen job skipped, cancelled or failed, or zero completed tests fails the lane and `pr.yml`'s required `verify` check.
   A PR with no changed tests may skip every repeat leg; selected files that list no tests fail during counting.
-- **All three run on Linux in a pull request.**
+- **All three run on Linux in a pull request**, except a unit test file whose tests declare Windows, as above.
   A fix is shown on the system that failed with a hand run, with no temporary commit:
 
   ```sh

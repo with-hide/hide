@@ -17,7 +17,10 @@ tests, a fixture at the top of the file):
   run with `vitest run --retry=0` once per iteration (Vitest has no
   `--repeat-each`). The package is the file's
   top folder, and a file the package's Vitest config does not collect is not
-  selected.
+  selected. A file runs on Linux unless its tests all declare another system
+  (`describe.runIf(process.platform === "win32")`), so Linux lists none:
+  it then runs on `UNITS_ELSEWHERE`, in a units leg of its own that lists it
+  there and chooses its repeat from that count.
 * Rust: a module of a crate's `tests/it` binary added or modified (`foo.rs`,
   `foo/mod.rs` or `foo/bar.rs`); every test of that module and its children,
   picked with nextest's `test(/^module::/)`. A deleted file has none left.
@@ -58,8 +61,8 @@ The count job's listing builds the changed crates' tests once; it packs each
 target it listed into a nextest archive with the same cargo arguments
 (`rust_archive`), so cargo only packs what it built, and the Rust leg runs
 that archive rather than building the tests again. A hand run names its own
-repeat, counts nothing and runs on one web shard, its Rust leg building on the
-system it asked for.
+repeat, counts nothing and runs on one web shard, its Rust leg building and its
+units leg listing on the system it asked for.
 
 `select` is what `scripts/ci-plan.py` calls; the subcommands are what
 `repeat.yml` and `web-e2e.yml` call.
@@ -121,6 +124,12 @@ MODULE = re.compile(r"^(?:\*|[a-z0-9_]+(?:::[a-z0-9_]+)*)$")
 SPEC_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.spec\.ts$")
 
 RUNNERS = {"linux": "ubuntu-latest", "macos": "macos-15", "windows": "windows-latest"}
+# Where a pull request repeats a unit test file that runs no test on Linux: a
+# file whose tests all declare another system (Vitest's
+# `describe.runIf(process.platform === "win32")`) is skipped by Linux `checks`, and
+# Windows is the one other system whose `windows check` runs the packages'
+# Vitest suites in a pull request.
+UNITS_ELSEWHERE = "windows"
 REPORT_BYTES = 16 * 1024 * 1024
 REPORT_FILES = 128
 
@@ -132,37 +141,48 @@ def count_value(value):
     return int(value)
 
 
-def choose(event, web, rust, named, planned, rust_count, units=None, units_count=""):
+def choose(event, web, rust, named, planned, rust_count, units=None, units_count="", units_elsewhere=None, runner="linux"):
     """One explicit run decision for every leg of the lane.
 
     The legs are the Playwright specs (`web`), the Rust tests (`rust`) and the
-    packages' Vitest unit test files (`units`). A hand run names its own
-    repeat, counts nothing and runs its specs on one shard; a pull request runs
+    packages' Vitest unit test files (`units`), one units leg per system. A
+    hand run names its own repeat, counts nothing and runs its specs on one
+    shard and its unit files on the system it asked for; a pull request runs
     `count` first and this decides from what the runners listed: the web
     specs from `planned`, what `web_plan` made of their seconds budget, and
     the unit and Rust tests from their count (`repeat`, the run-count budget
-    they share).
+    they share). A pull request's unit files that list no test on Linux
+    (`units_elsewhere`) are their own leg on `UNITS_ELSEWHERE`, which lists
+    them and chooses their repeat from that count (`repeat` 0 in the leg),
+    since Linux cannot count them.
     """
     units = [] if units is None else units
+    units_elsewhere = [] if units_elsewhere is None else units_elsewhere
     selected = {"web": bool(web), "rust": bool(rust), "units": bool(units)}
-    tests = selected["rust"] or selected["units"]
     if event == "workflow_dispatch":
         named = count_value(named)
         if not 1 <= named <= DISPATCH_MAX_REPEAT or not any(selected.values()):
             raise ValueError("a hand run needs named tests and a repeat from 1 to 100")
         web_times, web_shards, web_parts = (named, 1, 1) if selected["web"] else (0, 0, 0)
-        times = named if tests else 0
+        times = named if selected["rust"] or selected["units"] else 0
+        legs = [{"os": runner, "runner": RUNNERS[runner], "files": units, "repeat": named}] if units else []
     else:
         if selected["web"] and not planned:
             raise ValueError("selected web files listed no tests")
         web_times, web_shards, web_parts = ((planned["repeat"], planned["shards"], planned["parts"])
                                             if selected["web"] else (0, 0, 0))
-        counts = {}
-        for kind, raw in (("rust", rust_count), ("units", units_count)):
-            counts[kind] = count_value(raw) if selected[kind] else 0
-            if selected[kind] and counts[kind] == 0:
+        if not set(units_elsewhere) <= set(units):
+            raise ValueError(f"files to repeat elsewhere that were not selected: {sorted(set(units_elsewhere) - set(units))}")
+        linux = [path for path in units if path not in units_elsewhere]
+        counts = {"rust": count_value(rust_count) if selected["rust"] else 0,
+                  "units": count_value(units_count) if linux else 0}
+        for kind, chosen in (("rust", selected["rust"]), ("units", bool(linux))):
+            if chosen and counts[kind] == 0:
                 raise ValueError(f"selected {kind} files listed no tests")
         times = repeats(sum(counts.values()))
+        legs = ([{"os": "linux", "runner": RUNNERS["linux"], "files": linux, "repeat": times}] if linux else []) + (
+            [{"os": UNITS_ELSEWHERE, "runner": RUNNERS[UNITS_ELSEWHERE], "files": sorted(units_elsewhere), "repeat": 0}]
+            if units_elsewhere else [])
     return {
         "run-web": str(selected["web"]).lower(),
         "run-rust": str(selected["rust"]).lower(),
@@ -171,6 +191,7 @@ def choose(event, web, rust, named, planned, rust_count, units=None, units_count
         "web-repeat": web_times,
         "web-shards": web_shards,
         "web-parts": web_parts,
+        "units-legs": json.dumps(legs, separators=(",", ":")),
     }
 
 
@@ -245,13 +266,15 @@ def total_completed(paths, shards):
 
 
 def verdict(needs):
-    """A selected repeat leg must succeed and report completed test runs."""
+    """A selected repeat leg must succeed and report completed test runs, each units leg its own."""
     if needs["count"]["result"] != "success":
         raise ValueError("choosing the repeat did not succeed")
     outputs = needs["count"]["outputs"]
-    # The web specs repeat by their seconds budget, the unit and Rust tests by their shared count.
+    # The web specs repeat by their seconds budget, the Rust tests and the
+    # counted units leg by their shared count.
     times = {"web": count_value(outputs["web-repeat"])}
-    times["units"] = times["rust"] = count_value(outputs["repeat"])
+    times["rust"] = count_value(outputs["repeat"])
+    legs = json.loads(outputs["units-legs"])
     for kind in ("web", "rust", "units"):
         selected = outputs[f"run-{kind}"]
         if selected not in ("true", "false"):
@@ -260,13 +283,26 @@ def verdict(needs):
         expected = "success" if selected == "true" else "skipped"
         if job["result"] != expected:
             raise ValueError(f"{kind}: expected {expected}, got {job['result']}")
-        if selected == "true":
+        if selected == "true" and kind != "units":
             completed = count_value(job["outputs"].get("completed", ""))
             if times[kind] == 0 or completed == 0 or completed % times[kind]:
                 raise ValueError(f"{kind}: {completed} completed test runs do not prove {times[kind]} repeats")
+    if (outputs["run-units"] == "true") != bool(legs):
+        raise ValueError("the units legs and run decision disagree")
+    # Each units leg reports its own completed runs and the repeat it ran: the
+    # one the count chose, or, for a leg the count could not list, the one it
+    # chose from its own listing (`repeat` 0).
+    for leg in legs:
+        system = leg["os"]
+        completed = count_value(needs["units"]["outputs"].get(f"completed-{system}", ""))
+        ran = count_value(needs["units"]["outputs"].get(f"repeat-{system}", ""))
+        if leg["repeat"] and ran != leg["repeat"]:
+            raise ValueError(f"units on {system}: ran {ran} repeats, not the {leg['repeat']} chosen")
+        if ran == 0 or completed == 0 or completed % ran:
+            raise ValueError(f"units on {system}: {completed} completed test runs do not prove {ran} repeats")
     if (times["web"] > 0) != (outputs["run-web"] == "true"):
         raise ValueError("the web repeat and run decisions disagree")
-    if (times["units"] > 0) != any(outputs[f"run-{kind}"] == "true" for kind in ("rust", "units")):
+    if (times["rust"] > 0) != (outputs["run-rust"] == "true" or any(leg["repeat"] for leg in legs)):
         raise ValueError("the repeat and run decisions disagree")
 
 
@@ -484,37 +520,68 @@ def unit_path(name):
     return path
 
 
-def units_plan(units, lister):
-    """What the units job runs, from the tests the package lists for each file.
+def units_plan(units, lister, system, elsewhere=None):
+    """What a units leg runs on `system`, from the tests each file lists there.
 
-    `lister(package, files)` answers how many tests Vitest would run. A file
-    that lists no test fails here, so N is what runs and never an estimate.
+    `lister(package, files)` answers, for each file, how many tests Vitest
+    would run on this runner; a test a file declares for another system
+    (`describe.runIf(process.platform === "win32")`) is not among them. Answers
+    `(plan, moved)`: the plan of the files that list tests here, and the files
+    that list none, which go to the `elsewhere` system when one is given (a
+    pull request's count on Linux) and fail otherwise, so N is what runs and
+    never an estimate, and a file runs where its tests do.
     """
-    plan = []
+    plan, moved = [], []
     for package in sorted({UNIT_TEST.match(path)["package"] for path in units}):
         files = sorted(path for path in units if UNIT_TEST.match(path)["package"] == package)
-        tests = lister(package, files)
-        if tests == 0:
-            raise ValueError(f"{package} files listed no tests: {', '.join(files)}")
-        plan.append({"package": package, "files": files, "tests": tests})
-    return plan
+        counts = lister(package, files)
+        listed = [path for path in files if counts[path]]
+        moved += [path for path in files if not counts[path]]
+        if listed:
+            plan.append({"package": package, "files": listed, "tests": sum(counts[path] for path in listed)})
+    if moved and not elsewhere:
+        raise ValueError(f"these files list no test on {system}: {', '.join(moved)}")
+    return plan, moved
 
 
 def units_lister(package, files):
-    """The tests `vitest list` says the package would run for these files.
+    """How many tests `vitest list` says the package would run of each file.
 
     The file filters are the ones the package's own Vitest matches, so they
     are spelled from the package's folder: `desktop/src/main/env.test.ts` is
     `src/main/env.test.ts` to a run in `desktop/`, and a path from the
     repository root matches nothing there (measured: it listed 0 tests, which
-    would have made every units run fail its count).
+    would have made every units run fail its count). A filter is a substring,
+    so the listing can hold another file's tests; each test is counted for the
+    file Vitest names, and only the selected files are answered.
     """
     relative = [PurePosixPath(path).relative_to(package).as_posix() for path in files]
     with tempfile.TemporaryDirectory() as directory:
         listed = Path(directory) / "listed.json"
-        command = ["pnpm", "--dir", package, "exec", "vitest", "list", *relative, f"--json={listed}"]
+        # Looked up first, because on Windows `pnpm` is a `.cmd` that
+        # `subprocess` finds only by its full name.
+        pnpm = shutil.which("pnpm")
+        if not pnpm:
+            raise ValueError("pnpm is not on PATH, so no unit test can be listed")
+        command = [pnpm, "--dir", package, "exec", "vitest", "list", *relative, f"--json={listed}"]
         subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True)
-        return len(json.loads(listed.read_text(encoding="utf-8")))
+        tests = json.loads(listed.read_text(encoding="utf-8"))
+    return listed_per_file(tests, files)
+
+
+def listed_per_file(tests, files):
+    """The tests of `vitest list --json` counted for each of `files`.
+
+    Vitest names a test's file by its absolute path, with `/` between names
+    on every system; the count is keyed by the path from the repository root.
+    """
+    root = ROOT.resolve()
+    counts = {path: 0 for path in files}
+    for test in tests:
+        path = Path(test["file"]).resolve()
+        if path.is_relative_to(root) and path.relative_to(root).as_posix() in counts:
+            counts[path.relative_to(root).as_posix()] += 1
+    return counts
 
 
 def rust_entry(item):
@@ -765,11 +832,10 @@ def resolve(event, web, rust, repeat, runner, units=""):
         # (no `run_ignored` yet; `plan_run_ignored`).
         plan = [{"package": package, "test": test, "filter": expression}
                 for package, test, expression in nextest_filters(modules)]
-        # The unit files are listed even for a hand run: the units job runs the
-        # files the count found in each package, and only Vitest can say which
-        # ones its config collects.
+        # The unit files are listed by the units leg, on the system asked for:
+        # a file's tests may declare that system, and Linux would list none.
         return {"web": specs, "units": unit_files, "rust": modules, "runner": runner,
-                "repeat": int(repeat), "counted": False, "units_counted": bool(unit_files), "plan": plan}
+                "repeat": int(repeat), "counted": False, "units_counted": False, "plan": plan}
     specs = json.loads(web or "[]")
     unit_files = json.loads(units or "[]")
     modules = json.loads(rust or "[]")
@@ -835,8 +901,12 @@ def main():
     archive_parser.add_argument("--dir", required=True, type=Path, help="where the archives are written")
     lines_parser = sub.add_parser("plan-lines", help="one `package test filterset run_ignored archive` line per target of a Rust plan, fields split by UNIT_SEPARATOR")
     lines_parser.add_argument("--plan", required=True, help="the JSON plan")
-    units_parser = sub.add_parser("units-plan", help="list the selected unit test files' tests and write the units job's plan")
+    units_parser = sub.add_parser("units-plan", help="list the selected unit test files' tests on this runner and write a units plan")
     units_parser.add_argument("--units", required=True, help="the JSON list of unit test paths")
+    units_parser.add_argument("--system", required=True, choices=sorted(RUNNERS), help="the system this runner is")
+    units_parser.add_argument("--elsewhere", choices=[UNITS_ELSEWHERE],
+                              help="a pull request's count: the system a file that lists no test here goes to")
+    units_parser.add_argument("--repeat", help="a units leg: the repeat the count chose, or 0 to choose it from this listing")
     units_lines = sub.add_parser("units-lines", help="one `package<TAB>file` line per file of a units plan")
     units_lines.add_argument("--plan", required=True, help="the JSON plan")
     choose_parser = sub.add_parser("choose", help="write an explicit run decision for every repeat leg")
@@ -848,6 +918,8 @@ def main():
     choose_parser.add_argument("--web-list", default="", help="a pull request's `playwright test --list` output of its specs")
     choose_parser.add_argument("--table", default=WEB_TABLE, help="the duration table the web shards are dealt by")
     choose_parser.add_argument("--units-count", default="")
+    choose_parser.add_argument("--units-elsewhere", default="[]", help="the unit files the count found no test of on Linux")
+    choose_parser.add_argument("--runner", default="linux", choices=sorted(RUNNERS), help="a hand run's system")
     choose_parser.add_argument("--rust-count", default="")
     sub.add_parser("verdict", help="fail unless every chosen repeat leg completed tests (NEEDS JSON)")
     share_parser = sub.add_parser("shard-share", help="print `group/groups repeat` for one shard of a web repeat")
@@ -861,6 +933,7 @@ def main():
     reports = report_parser.add_mutually_exclusive_group(required=True)
     reports.add_argument("--playwright")
     reports.add_argument("--junit", nargs="+")
+    report_parser.add_argument("--leg", choices=sorted(RUNNERS), help="a units leg's system, which names its output")
     args = parser.parse_args()
 
     try:
@@ -869,14 +942,15 @@ def main():
             if args.web_list:
                 plan = web_plan(Path(args.web_list).read_text(encoding="utf-8"), e2e_shard.read_table(args.table))
             decision = choose(args.event, args.web, json.loads(args.rust), args.repeat, plan, args.rust_count,
-                              json.loads(args.units), args.units_count)
+                              json.loads(args.units), args.units_count, json.loads(args.units_elsewhere), args.runner)
             write_outputs(decision)
             if os.environ.get("GITHUB_STEP_SUMMARY"):
                 with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
                     web = (f"{plan['tests']} ({plan['seconds']} s a pass, the heaviest of {plan['shards']} shards "
                            f"in {plan['parts']} repeat parts {plan['heaviest']} s)") if plan else "not counted"
                     summary.write(f"Tests counted: web={web}, "
-                                  f"units={args.units_count or 'not counted'}, Rust={args.rust_count or 'not counted'}.\n")
+                                  f"units={args.units_count or 'not counted'}, Rust={args.rust_count or 'not counted'}; "
+                                  f"unit files listed on {UNITS_ELSEWHERE}: {args.units_elsewhere}.\n")
                     summary.write(f"Repeat decision: {json.dumps(decision)}\n")
         elif args.command == "shard-share":
             found = re.fullmatch(r"([0-9]+)/([0-9]+)", args.shard)
@@ -893,7 +967,7 @@ def main():
             verdict(json.loads(os.environ["NEEDS"]))
             print("Every chosen repeat leg completed its tests.")
         elif args.command == "report":
-            write_outputs({"completed": completed_runs(args.playwright, args.junit)})
+            write_outputs({f"completed-{args.leg}" if args.leg else "completed": completed_runs(args.playwright, args.junit)})
         elif args.command == "resolve":
             work = resolve(args.event, args.web, args.rust, args.repeat, args.runner, args.units)
             write_outputs({
@@ -913,8 +987,16 @@ def main():
             plan = rust_plan(json.loads(args.rust), nextest_lister)
             write_outputs({"rust-plan": json.dumps(plan, separators=(",", ":")), "rust-count": sum(entry["tests"] for entry in plan)})
         elif args.command == "units-plan":
-            plan = units_plan(json.loads(args.units), units_lister)
-            write_outputs({"units-plan": json.dumps(plan, separators=(",", ":")), "units-count": sum(entry["tests"] for entry in plan)})
+            plan, moved = units_plan(json.loads(args.units), units_lister, args.system, args.elsewhere)
+            count = sum(entry["tests"] for entry in plan)
+            written = {"units-plan": json.dumps(plan, separators=(",", ":")), "units-count": count}
+            if args.elsewhere:
+                written["units-elsewhere"] = json.dumps(moved, separators=(",", ":"))
+            if args.repeat is not None:
+                # A leg the count could not list chooses its repeat from what it
+                # lists here; the leg's job names the output by its system.
+                written["repeat"] = written[f"repeat-{args.system}"] = count_value(args.repeat) or repeats(count)
+            write_outputs(written)
         elif args.command == "units-lines":
             lines = []
             for entry in json.loads(args.plan):

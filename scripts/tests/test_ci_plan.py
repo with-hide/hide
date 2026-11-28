@@ -1862,7 +1862,8 @@ class WindowsOnPullRequests(unittest.TestCase):
             if "windows-latest" in text:
                 with self.subTest(workflow=name):
                     self.assertTrue(ci.windows_path("M", f".github/workflows/{name}", CRATES))
-        # `repeat.yml` and `remote-mailbox.yml` run on Linux in a pull request.
+        # `repeat.yml` and `remote-mailbox.yml` name no Windows runner: the
+        # repeat's Windows unit leg takes its runner from `ci-repeat.py`.
         for name in ("repeat.yml", "remote-mailbox.yml"):
             self.assertIsNone(ci.windows_path("M", f".github/workflows/{name}", CRATES))
             self.assertTrue(pr_plan(f".github/workflows/{name}")["full"])
