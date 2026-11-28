@@ -16,9 +16,9 @@
 //! in `session_part`, in `ordinal` order, and leaves the message's `content`
 //! empty; a message 2.4 never split keeps its items inline. Every read takes
 //! an assistant's items the way OpenCode itself reads them back
-//! (`SessionHistory.withParts`): its `session_part` rows when it has any,
-//! else its own `content` ([`items`]), and counts its parts' bytes as the
-//! message's ([`bytes`]).
+//! (`SessionHistory.withParts`): its `session_part` rows, then its own
+//! `content`, which an older build may still write after the split
+//! ([`items`]), and counts its parts' bytes as the message's ([`bytes`]).
 //!
 //! A message is written in order of its `seq`, which a message's index
 //! counts. An assistant message OpenCode is still writing has no
@@ -46,9 +46,12 @@ const SCAN_LIMIT_BYTES: u64 = 8 * 1024 * 1024;
 const CONTENT_KINDS: &str = "json_extract(value, '$.type') IN ('text', 'tool')";
 
 /// The content items of the message whose rowid is `?1`, as `(key, value)`
-/// rows in OpenCode's order: its `session_part` rows when the database has
-/// them and the message has any, else the items of its own `content`. A part
-/// row's `data` is the item whole, its `type` included, as an inline one is.
+/// rows in OpenCode's order (`SessionHistory.withParts`): its `session_part`
+/// rows by ordinal when the database has them, then the items of its own
+/// `content`, which an older build may still write after the split, keyed
+/// past the last part so the keys keep that order. A message with no part
+/// rows reads its `content` alone, under its own keys. A part row's `data` is
+/// the item whole, its `type` included, as an inline one is.
 pub(crate) fn items(parts: bool) -> String {
     let inline = "json_each((SELECT data FROM session_message WHERE rowid = ?1), '$.content')";
     if !parts {
@@ -57,8 +60,8 @@ pub(crate) fn items(parts: bool) -> String {
     let own = "session_part.message_id = (SELECT id FROM session_message WHERE rowid = ?1)";
     format!(
         "(SELECT ordinal AS key, data AS value FROM session_part WHERE {own} \
-         UNION ALL SELECT key, value FROM {inline} \
-         WHERE NOT EXISTS (SELECT 1 FROM session_part WHERE {own}))"
+         UNION ALL SELECT key + (SELECT coalesce(max(ordinal) + 1, 0) FROM session_part WHERE {own}), \
+         value FROM {inline})"
     )
 }
 

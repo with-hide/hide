@@ -1155,10 +1155,12 @@ mod part_rows {
         assert_eq!(split.event_offsets, inline.event_offsets);
     }
 
-    /// OpenCode reads a message's part rows in place of its `content` once
-    /// it has any, and a message it never split from its `content`.
+    /// OpenCode 2.4.2 reads a message as its part rows followed by its own
+    /// `content`, which an older build may still write after the split, and
+    /// a message it never split as its `content` alone
+    /// (`SessionHistory.withParts`, packages/core/src/session/history.ts).
     #[test]
-    fn a_message_with_part_rows_reads_them_and_one_without_reads_its_content() {
+    fn a_message_reads_its_part_rows_then_its_own_content() {
         let home = home();
         let writer = writer(home.path());
         assistant(
@@ -1188,7 +1190,10 @@ mod part_rows {
                 text_item("second part"),
             ],
         );
-        assert_eq!(texts(home.path()), ["first part\nsecond part"]);
+        assert_eq!(
+            texts(home.path()),
+            ["first part\nsecond part\nwritten inline"]
+        );
     }
 
     #[test]

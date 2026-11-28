@@ -3,8 +3,8 @@
 //! of this checkout). 1.x writes a `message` row per message and a `part`
 //! row per piece of it; 2.x writes one `session_message` row per message,
 //! the pieces inside its data until 2.4, which writes an assistant's pieces
-//! as `session_part` rows and reads them back in place of the message's own
-//! (`crate::opencode::v2`). All are drawn by the same piece reader;
+//! as `session_part` rows and reads them back ahead of any the message still
+//! holds itself (`crate::opencode::v2`). All are drawn by the same piece reader;
 //! titles and kinds follow OpenCode's own ACP server (`opencode acp`, D-04).
 //!
 //! A page is a run of whole messages, newest first, within the page's byte
@@ -223,7 +223,8 @@ fn rows(
 }
 
 /// The pieces of `message` kept in rows of their own, in OpenCode's order:
-/// none for a 2.x database without `session_part`.
+/// none for a 2.x database without `session_part`, and none for a message
+/// with no part rows.
 fn parts(
     connection: &Connection,
     schema: Schema,
@@ -293,15 +294,17 @@ fn draw(message: &Message, schema: Schema, thread: &mut Thread) {
                 };
                 thread.user(id, origin, parts);
             }
-            // OpenCode reads an assistant's part rows in place of its
-            // `content` once it has any.
-            Some("assistant") if !message.parts.is_empty() => {
-                pieces(id, &message.parts, false, thread);
-            }
+            // OpenCode reads an assistant as its part rows followed by its
+            // own `content`, which an older build may still write after the
+            // split (`SessionHistory.withParts`).
             Some("assistant") => match data["content"].as_array() {
-                Some(content) => content
-                    .iter()
-                    .for_each(|item| piece(id, item, false, thread)),
+                Some(content) => {
+                    pieces(id, &message.parts, false, thread);
+                    content
+                        .iter()
+                        .for_each(|item| piece(id, item, false, thread));
+                }
+                None if !message.parts.is_empty() => pieces(id, &message.parts, false, thread),
                 None => thread.unreadable("opencode_message_shape"),
             },
             // Turn ends, compactions and the like are not conversation.
