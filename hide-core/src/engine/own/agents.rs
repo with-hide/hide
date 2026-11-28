@@ -932,6 +932,26 @@ mod tests {
         }
     }
 
+    /// What Claude Code's screen reads in `state`: at rest, its prompt box,
+    /// the rule its start waits for (`[start] ready`).
+    fn claude_read(state: ScreenState) -> ScreenRead {
+        match state {
+            ScreenState::Idle => ScreenRead::Read {
+                state,
+                rule: Some("live_prompt_box".to_owned()),
+            },
+            state => read(state),
+        }
+    }
+
+    /// A screen no rule matched, as the holder reads it.
+    fn unmatched() -> ScreenRead {
+        ScreenRead::Read {
+            state: ScreenState::Unknown,
+            rule: None,
+        }
+    }
+
     #[test]
     fn installed_packages_identify_agents_without_guessing_from_cli_js() {
         let catalog = catalog();
@@ -1355,7 +1375,7 @@ mod tests {
         pane.agent = Some(PaneAgent::started("claude-code", Some("worker"), None));
         let at = |state| PaneFacts {
             foreground: program("claude"),
-            screen: read(state),
+            screen: claude_read(state),
             ..PaneFacts::default()
         };
         pane.facts(at(ScreenState::Idle));
@@ -1533,7 +1553,7 @@ mod tests {
         let start = pane.agent.as_ref().unwrap().live.started.unwrap();
         let at = |state| PaneFacts {
             foreground: program("claude"),
-            screen: read(state),
+            screen: claude_read(state),
             line_editing: Some(false),
             ..PaneFacts::default()
         };
@@ -1664,6 +1684,41 @@ mod tests {
         );
         pane.facts(at(Some(&ready)));
         assert!(!pane.agent.as_ref().unwrap().launch_pending(Instant::now()));
+    }
+
+    /// A Claude Code fork took the terminal's keys at once and drew its
+    /// prompt box seconds later. Its pane meanwhile showed only the shell's
+    /// line the start was typed on, which no rule matches and so reads at
+    /// rest: the start settled, and the fork's held prompt reached Claude
+    /// before its prompt box, which kept the text without its Enter
+    /// (#3171). The start waits for the prompt box however long the settle.
+    #[test]
+    fn a_claude_start_takes_input_only_once_its_prompt_box_shows() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("claude-code", Some("fork"), None));
+        let at = |screen| PaneFacts {
+            foreground: program("claude"),
+            screen,
+            line_editing: Some(false),
+            ..PaneFacts::default()
+        };
+        pane.facts(at(unmatched()));
+        pane.agent
+            .as_mut()
+            .unwrap()
+            .typed_at(Instant::now() - START_SETTLE * 2);
+        pane.facts(at(unmatched()));
+        assert_eq!(pane.status(), Some("idle"), "no rule matched reads at rest");
+        assert_eq!(
+            pane.agent.as_ref().unwrap().readiness(Instant::now()),
+            Readiness::Launching,
+            "its prompt box has not shown"
+        );
+        pane.facts(at(claude_read(ScreenState::Idle)));
+        assert_eq!(
+            pane.agent.as_ref().unwrap().readiness(Instant::now()),
+            Readiness::Ready
+        );
     }
 
     /// A terminal whose foreground the system could not say keeps the

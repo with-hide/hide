@@ -1,0 +1,3 @@
+LIVE_CHECK_READY> claude --resume 09eaf348-d836-42ab-9418-714e05152d95 --fork-se
+ssion --dangerously-skip-permissions --settings '{"skipDangerousModePermissionPr
+ompt":true}'
