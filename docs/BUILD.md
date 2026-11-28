@@ -195,7 +195,7 @@ So `cache-generations.yml` runs `scripts/cache-generations.py` after each run on
 That needs no copy of rust-cache's key computation, which would delete the current entries the day it drifted: main saves a set only under a key that does not exist yet, so the entry saved last is the current one.
 A reverted lockfile change is the exception, and costs one rebuild when the older key is missed and saved again; a key under `v0-rust-` or `vt-` whose shape the script cannot read fails the job instead of being guessed at.
 The script ran once by hand on 2026-11-28 and deleted the ten replaced entries, 4.03 GB, which left 7.12 GB.
-One `quick` entry was 0.41 GB on Linux and 0.45 GB on Windows, so with one generation per set and system the Rust sets take about 5.5 GB of the 10.
+With one generation per set and system the Rust sets then took 3.9 GB; a `quick` entry is 0.41 GB on Linux and 0.45 GB on Windows, and a `helper` entry should be about a `release` entry's 0.5 GB, so all of them take about 6 GB of the 10.
 `scripts/tests/test_rust_cache.py` fixes the action's key, its dependency-only save and the toolchain step, and each saver's exact `save` condition, and fails when a job uses rust-cache directly or names another set.
 `scripts/tests/test_cache_generations.py` fixes which entries the script deletes and that it refuses a key it cannot read.
 
