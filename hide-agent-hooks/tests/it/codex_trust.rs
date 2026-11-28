@@ -402,6 +402,26 @@ fn a_codex_that_does_not_answer_in_time_is_timed_out_and_what_it_started_is_gone
     }
 }
 
+/// A Codex that is still starting reads nothing until it is ready, and its
+/// handshake waits for that start: on the Mac mini's signed-in journey
+/// (2026-11-28) a new app-server was still starting 7 s after it was run,
+/// past the 5 s the handshake had, and the kit recorded a Codex that never
+/// refused as one that had not trusted Hide's hooks (issue 3128). The
+/// handshake gets the whole check's bound; a request after it keeps its own
+/// (the test above).
+#[test]
+fn a_codex_slower_to_start_than_a_request_may_take_is_still_trusted() {
+    let fixture = Fixture::new();
+    fixture.install();
+    fixture.mode("slow_start");
+    assert_eq!(
+        fixture.trust_within(quick()),
+        TrustOutcome::Trusted {
+            recorded: own_hook_count()
+        }
+    );
+}
+
 #[test]
 fn a_finished_check_leaves_no_app_server() {
     let fixture = Fixture::new();

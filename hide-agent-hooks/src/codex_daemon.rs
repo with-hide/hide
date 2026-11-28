@@ -31,9 +31,11 @@ use hide_platform::programs::Program;
 /// The feature `codex features` names the shared daemon by.
 pub const DAEMON_FEATURE: &str = "daemon_auto_start";
 
-/// How long one `codex features` or `codex app-server daemon version` call
-/// may take; each answers in well under a second.
-const DEADLINE: Duration = Duration::from_secs(5);
+/// How long one `codex features` or `codex app-server daemon version` run
+/// may take. A Codex that runs answers in well under a second, but each run
+/// starts Codex anew, which a busy machine slows by seconds, so it gets what
+/// a trust check's handshake gets (`codex_trust::Limits`).
+const DEADLINE: Duration = crate::codex_trust::Limits::DEFAULT.overall;
 
 /// How long `codex app-server daemon stop` may take: it returns once the
 /// daemon has let its clients go and exited.

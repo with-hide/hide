@@ -43,19 +43,24 @@ use crate::runtime::AgentRuntime;
 #[cfg(test)]
 use crate::runtime::HookEvent;
 
-/// How long Codex gets. It answers each call in well under a second; these
-/// are the bounds for one that does not.
+/// How long Codex gets. A Codex that runs answers each call in well under a
+/// second, but the handshake's answer waits for the program to start, which
+/// a busy machine slows by seconds (docs/agent-hooks.md, Codex trusts Hide's
+/// own hooks); these are the bounds for one that does not answer.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
-    /// The whole check, from start to the child's end.
+    /// The whole check, from start to the child's end; the handshake may
+    /// take all of it.
     pub overall: Duration,
-    /// One request's share of it.
+    /// Each request after the handshake, to a Codex that has started.
     pub request: Duration,
 }
 
 impl Limits {
+    /// Hide AI gives the same handshake to the same `codex app-server` 30 s
+    /// (`hide-ai/src/codex.rs`).
     pub const DEFAULT: Self = Self {
-        overall: Duration::from_secs(15),
+        overall: Duration::from_secs(30),
         request: Duration::from_secs(5),
     };
 }
@@ -435,9 +440,12 @@ impl<'a> Session<'a> {
             stop,
             ended: false,
         };
-        match session.request(
+        // Its answer waits for the program to start, so it gets the whole
+        // check rather than one request's share.
+        match session.request_within(
             "initialize",
             json!({"clientInfo": {"name": "hide-agent-hooks", "version": env!("CARGO_PKG_VERSION")}}),
+            limits.overall,
         ) {
             Ok(_) => {}
             Err(Failed::Gone(_)) => return Ok(Started::Unsupported),
@@ -604,13 +612,24 @@ impl<'a> Session<'a> {
             })
     }
 
-    /// One request and its answer. A request the server declines is
-    /// [`Failed::Rejected`]; no answer in time is [`Failed::TimedOut`].
+    /// One request to a Codex that has started, and its answer.
     fn request(&mut self, method: &'static str, params: Value) -> Result<Value, Failed> {
+        self.request_within(method, params, self.limits.request)
+    }
+
+    /// One request and its answer within `bound` and the whole check's. A
+    /// request the server declines is [`Failed::Rejected`]; no answer in time
+    /// is [`Failed::TimedOut`].
+    fn request_within(
+        &mut self,
+        method: &'static str,
+        params: Value,
+        bound: Duration,
+    ) -> Result<Value, Failed> {
         self.next_id += 1;
         let id = self.next_id;
         self.write(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
-        let request_end = Instant::now() + self.limits.request;
+        let request_end = Instant::now() + bound;
         let mut refused = 0usize;
         loop {
             if self.stop.load(Ordering::Relaxed) {
