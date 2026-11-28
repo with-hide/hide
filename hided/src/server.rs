@@ -2405,7 +2405,7 @@ async fn scoped_client_loop(
                                         let (reason, next_action) = cap.changed_refusal();
                                         return Err((reason.to_owned(), next_action));
                                     }
-                                    browser_control.connect(&result, display_id.as_deref(), caller_node.as_deref())
+                                    browser_control.connect(&result, display_id.as_deref(), caller_node.as_deref(), cap.drives_file_pages())
                                         .map_err(|(reason, next_action)| (reason.to_owned(), next_action))?
                                 }
                                 ScopedRequest::BrowserRelay(display_id) => {
@@ -2419,7 +2419,7 @@ async fn scoped_client_loop(
                                         let (reason, next_action) = cap.changed_refusal();
                                         return Err((reason.to_owned(), next_action));
                                     }
-                                    let relay = browser_control.relay(&result, &display_id, caller_node.as_deref())
+                                    let relay = browser_control.relay(&result, &display_id, caller_node.as_deref(), cap.drives_file_pages())
                                         .map_err(|(reason, next_action)| (reason.to_owned(), next_action))?;
                                     *command_relay.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(relay);
                                     relay_facts(result.views.as_deref().unwrap_or(&[]), &display_id)
@@ -6569,6 +6569,7 @@ mod tests {
             openers: Vec::new(),
             operator: false,
             unseen: false,
+            grant: None,
         };
         QueryResult {
             context: Context {
@@ -6746,6 +6747,7 @@ mod tests {
             openers: Vec::new(),
             operator: false,
             unseen: true,
+            grant: None,
         };
         let shelf = hide_core::workspace_views::SHELF_AREA;
         let views = vec![
