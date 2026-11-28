@@ -505,7 +505,10 @@ fn an_opencode_session_whose_items_are_part_rows_reads_as_the_same_thread() {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert!(mixed > 0, "no message holds both part rows and inline items");
+            assert!(
+                mixed > 0,
+                "no message holds both part rows and inline items"
+            );
         }
         let split = placed.read_all();
         assert!(!split.is_empty());
