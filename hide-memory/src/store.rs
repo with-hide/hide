@@ -768,8 +768,10 @@ pub struct Injection {
     pub kind: InjectionKind,
     pub items: Vec<InjectedItem>,
     pub token_count: usize,
-    /// Cards the query matched, counting those the session was already
-    /// given: zero says the text has no Memory of its own.
+    /// Cards the query's words reach at [`MINIMUM_SCORE`], the unweighted
+    /// match `hide memory search` uses, whether or not they fit it and
+    /// counting those the session was already given: zero says the text has
+    /// no Memory of its own.
     pub matched: usize,
 }
 
@@ -3838,7 +3840,7 @@ impl MemoryStore {
                 // A card in the repository's own files is read there (B12),
                 // and is left out before the candidate limit, so it takes no
                 // live card's place.
-                let Some(candidates) =
+                let Some((reached, candidates)) =
                     self.fitting(&query.project_id, &Query::new(&query.text), &expired)?
                 else {
                     return Ok(empty(InjectionOutcome::Deadline));
@@ -3846,7 +3848,7 @@ impl MemoryStore {
                 if expired() {
                     return Ok(empty(InjectionOutcome::Deadline));
                 }
-                matched = candidates.len();
+                matched = reached;
                 let ids = candidates
                     .iter()
                     .map(|candidate| candidate.id.clone())
@@ -4216,17 +4218,27 @@ impl MemoryStore {
         Ok(candidates)
     }
 
-    /// The cards that fit a prompt (`query`), best first, or `None` once
-    /// `expired`: the hook's candidates, each kept at or above
-    /// [`matcher::MINIMUM_FIT`] by its fit ([`matcher::fit`]), with the
-    /// weights of only the words some candidate holds.
+    /// The cards that fit a prompt (`query`), best first, beside how many of
+    /// the hook's candidates its words reach at [`MINIMUM_SCORE`], fitting or
+    /// not ([`Injection::matched`]), or `None` once `expired`. Each card is
+    /// kept at or above [`matcher::MINIMUM_FIT`] by its fit
+    /// ([`matcher::fit`]), with the weights of only the words some candidate
+    /// holds.
     fn fitting(
         &self,
         project_id: &str,
         query: &Query,
         expired: &dyn Fn() -> bool,
-    ) -> Result<Option<Vec<RetrievalCandidate>>, MemoryError> {
+    ) -> Result<Option<(usize, Vec<RetrievalCandidate>)>, MemoryError> {
         let mut candidates = self.candidates(project_id, query, HOOK_CANDIDATE_LIMIT, true)?;
+        let reached = candidates
+            .iter()
+            .filter(|candidate| {
+                let mut named = candidate.aliases.clone();
+                named.push(candidate.title.clone());
+                query.score(&CardTerms::new(&candidate.body, &named)) >= MINIMUM_SCORE
+            })
+            .count();
         let credits = candidates
             .iter()
             .map(|candidate| {
@@ -4245,7 +4257,7 @@ impl MemoryStore {
         }
         candidates.retain(|candidate| candidate.score >= matcher::MINIMUM_FIT);
         best_first(&mut candidates);
-        Ok(Some(candidates))
+        Ok(Some((reached, candidates)))
     }
 
     /// Each query word's weight ([`matcher::weight`]) over the Project's
@@ -12640,20 +12652,30 @@ PRAGMA user_version=14;"#,
             };
             store.set_promotion(&project, number, &promotion).unwrap();
         }
-        // Every card shares the prompt's words, so the fit gives none of
-        // them; what is checked is the candidates the fit is asked about.
-        let candidates = store
-            .candidates(
-                &project,
-                &Query::new("deploy lint"),
-                HOOK_CANDIDATE_LIMIT,
-                true,
-            )
-            .unwrap()
-            .into_iter()
-            .map(|candidate| candidate.number)
+        // Cards on other topics keep the prompt's words, which the merged
+        // cards share, rare enough for the live card to fit by them: 61 of
+        // 861 cards, while the merged cards still fill the candidate limit
+        // ahead of it, shorter and newer.
+        let others = (0..800)
+            .map(|index| {
+                candidate(
+                    &format!("Archive retention note {index}"),
+                    CandidateRelation::New,
+                )
+            })
             .collect::<Vec<_>>();
-        assert_eq!(candidates, [1]);
+        let summary = store
+            .apply_candidates(&batch(&project, "others", "h-others"), &others)
+            .unwrap();
+        assert_eq!(summary.created, others.len());
+        let given = store
+            .retrieve(&RetrievalQuery::prompt(&project, "deploy lint", vec![]))
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| item.number)
+            .collect::<Vec<_>>();
+        assert_eq!(given, [1]);
     }
 
     #[test]

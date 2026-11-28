@@ -233,10 +233,12 @@ where
         }
         return base();
     };
-    // Native hooks give text, not a continuation flag: a prompt that fits
-    // any card, even one the session was already given, has its own topic.
-    // Only a brief one that fits none is ranked again, on the same open
-    // store, with its task. No language-specific words decide it.
+    // Native hooks give text, not a continuation flag: a prompt whose words
+    // reach any card (`Injection::matched`), even one too weak to fit or one
+    // the session was already given, has its own topic and gets only the
+    // cards that fit it. Only a brief one that reaches none is ranked again,
+    // on the same open store, with its task. No language-specific words
+    // decide it.
     let continues = request.event == HookEvent::UserPromptSubmit
         && injection.matched == 0
         && !prompt.trim().is_empty()
@@ -633,6 +635,36 @@ mod tests {
         }
         let store = MemoryStore::open(&path).unwrap();
         assert_eq!(store.search(&project.id, "PR", 10).unwrap().len(), 4);
+    }
+
+    /// A short prompt whose words reach cards but fit none names a topic of
+    /// its own and gets nothing, never the checkout's task's cards; one
+    /// that reaches no card continues the task and gets the task's card.
+    #[test]
+    fn a_short_prompt_that_fits_no_card_gets_its_tasks_card_only_when_it_names_no_topic() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, project) =
+            enabled_store(temp.path(), &temp.path().join("project"), &project_cards());
+        let given = |prompt: &str| {
+            context_for(
+                &path,
+                &project,
+                HookRequest {
+                    task_context: Some("SSH 서버 추천 목업"),
+                    ..ask(HookEvent::UserPromptSubmit, prompt, Some(prompt))
+                },
+                frozen(),
+            )
+        };
+        assert_eq!(given("PR 확인").outcome, HookOutcome::Empty);
+        let continued = given("계속해 주세요");
+        assert_eq!(continued.outcome, HookOutcome::Provided { count: 1 });
+        assert!(
+            continued
+                .context
+                .unwrap()
+                .contains("두 Hide를 잇는 서버 연결")
+        );
     }
 
     #[test]
