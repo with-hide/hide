@@ -136,6 +136,7 @@ That measurement did not last, because the dependencies were compiled from sourc
 The nightly, a candidate and a release build with the release profile itself, and runs on main are the only savers of the `release` dependency set, so that set holds the release profile's dependencies, and cargo rebuilds a dependency whose profile differs.
 A pull request that restored it rebuilt every dependency at its own settings: by 2026-11-27 `compile (windows)` took 20.1 minutes (the median of successful pull-request runs), with 487 crates compiled after a full-match restore and the dependencies alone taking the first 4.1 minutes, and the package lane ended last in 17% of pull-request runs.
 So a pull request restores the `quick` set instead, which `package-cache.yml` builds on main with the compile jobs' own steps at these settings ([CI's Rust caches](#cis-rust-caches)), and compiles only the hide crates.
+Measured on 2026-11-28 (pull request #3112, from a full-match restore of that set): `compile (windows)` compiled 26 crates, every one of them this repository's, where it had compiled 487, and took 12.6 minutes, its build step 10.7, against the 20.1-minute median; `package (linux)` also compiled only those 26.
 
 The settings are cargo's own profile variables, set in the job's environment, so the binaries still land in `target/release`, the path `desktop/scripts/package.mjs` reads, and keep the release profile's name, strip and debug-assertion settings.
 The cost is that a pull request's package never holds what ships.
@@ -194,6 +195,7 @@ So `cache-generations.yml` runs `scripts/cache-generations.py` after each run on
 That needs no copy of rust-cache's key computation, which would delete the current entries the day it drifted: main saves a set only under a key that does not exist yet, so the entry saved last is the current one.
 A reverted lockfile change is the exception, and costs one rebuild when the older key is missed and saved again; a key under `v0-rust-` or `vt-` whose shape the script cannot read fails the job instead of being guessed at.
 The script ran once by hand on 2026-11-28 and deleted the ten replaced entries, 4.03 GB, which left 7.12 GB.
+One `quick` entry was 0.41 GB on Linux and 0.45 GB on Windows, so with one generation per set and system the Rust sets take about 5.5 GB of the 10.
 `scripts/tests/test_rust_cache.py` fixes the action's key, its dependency-only save and the toolchain step, and each saver's exact `save` condition, and fails when a job uses rust-cache directly or names another set.
 `scripts/tests/test_cache_generations.py` fixes which entries the script deletes and that it refuses a key it cannot read.
 
