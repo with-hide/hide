@@ -11,12 +11,12 @@
 //       started after it was listed), and, given a root folder, every process
 //       running an executable under it; returns once none is left. Each end is
 //       waited for on the process's own handle. Exits 1, naming the survivors
-//       on stderr, when some remain after five seconds.
-//
-// A process that has ended is not listed, though the system's table still
-// names it for a while after its end, as long as a handle to it is open: a
-// wait on it has returned, and a listing that took it for running named the
-// packaged update test's app as a survivor it was not (#3126).
+//       on stderr, when some remain after five seconds. A process that has
+//       ended is not one that remains, though the system's table still names
+//       it while a handle to it is open: the packaged update test's own
+//       listing once called its app still running after the wait on it had
+//       returned (#3126). `tree` still lists such a process, since its
+//       identity finds the live processes it started.
 //   hide-processes run <program> [<argument> ...]
 //       runs the program in a job object from its first instruction, so
 //       everything it starts, at any depth and whatever exits first, is in
@@ -66,6 +66,7 @@ typedef struct {
   DWORD parent;
   ULONGLONG created;
   char path[MAX_PATH];
+  int ended;
   int marked;
 } Row;
 
@@ -101,14 +102,12 @@ static int snapshot(void) {
     row->parent = entry.th32ParentProcessID;
     row->created = 0;
     row->path[0] = 0;
+    row->ended = 0;
     row->marked = 0;
     HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, row->id);
     if (!process) process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, row->id);
-    if (process && ended(process)) {
-      CloseHandle(process);
-      continue;
-    }
     if (process) {
+      row->ended = ended(process);
       row->created = started(process);
       DWORD size = sizeof row->path;
       if (!QueryFullProcessImageNameA(process, 0, row->path, &size)) row->path[0] = 0;
@@ -234,7 +233,7 @@ static int end(const char *root, int argc, char **argv) {
     int targets = 0;
     for (int i = 0; i < row_count; i += 1) {
       Row *row = &rows[i];
-      row->marked = (row->created != 0 && is_owned(row->id, row->created)) || (root[0] && row->path[0] && starts_with(row->path, root));
+      row->marked = !row->ended && ((row->created != 0 && is_owned(row->id, row->created)) || (root[0] && row->path[0] && starts_with(row->path, root)));
       if (row->marked && row->id != GetCurrentProcessId()) targets += 1;
     }
     if (targets == 0) return 0;
@@ -246,7 +245,7 @@ static int end(const char *root, int argc, char **argv) {
   int survivors = 0;
   for (int i = 0; i < row_count; i += 1) {
     Row *row = &rows[i];
-    if (row->id == GetCurrentProcessId()) continue;
+    if (row->id == GetCurrentProcessId() || row->ended) continue;
     if ((row->created != 0 && is_owned(row->id, row->created)) || (root[0] && row->path[0] && starts_with(row->path, root))) {
       if (survivors == 0) fprintf(stderr, "fixture processes still running after %d s:", END_MS / 1000);
       fprintf(stderr, " %lu %s", (unsigned long)row->id, row->path);
