@@ -673,9 +673,9 @@ impl Runtime {
                     // The core's own engine, this machine's or another's,
                     // stopped listing the agent before its end landed and
                     // published the session while the record was still
-                    // ending, which draws no row, and it publishes again only
-                    // on a change; the pane's machine's session is read again
-                    // so the sleeping row is drawn from the record. The
+                    // ending, whose row carries no sleep yet, and it publishes
+                    // again only on a change; the pane's machine's session is
+                    // read again so the row is drawn asleep. The
                     // engine can still list the agent here, and the published
                     // session stream brings the session that no longer does.
                     self.read_session_of(pane_id);

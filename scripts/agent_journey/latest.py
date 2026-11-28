@@ -1,5 +1,5 @@
 """Each agent CLI's latest release, read from where its installer reads it,
-so the daily agent canary measures what an operator installing today gets.
+so the nightly's agent canary measures what an operator installing today gets.
 
 Every source is the one the vendor's own installer asks: npm's `latest`
 dist-tag for an npm row, Grok's `stable` channel pointer, omp's latest

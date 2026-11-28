@@ -937,7 +937,7 @@ The transition retains these explicit exceptions:
 | --- | --- | --- |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
-A run that plans every lane a pull request can plan starts at most 79 jobs.
+A run that plans every lane a pull request can plan starts at most 81 jobs.
 The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and every suite runs once, on the core's own engine, since Herdr's lanes went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
@@ -957,7 +957,7 @@ The package lane's six preparation and compile jobs (helper identity, two Linux 
 | `windows wsl` (Linux, Windows) | 2 | a real WSL 2 distribution on the Windows runner connected as a device through `wsl.exe`, with this build's Linux programs, which only a Linux job can build, and a Windows core dialing the runner's OpenSSH Server and an sshd in that distribution over Windows' own `ssh.exe`, planned only for the crates those links cross (`hide-platform`, `hide-node`, `hide-node-link`, `hide-host`), the node command and the two tests ([WSL device lane](#wsl-device-lane)) |
 | `remote mailbox` (Linux x64, Linux ARM64) | 2 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS; its ARM64 leg is planned only for the device link, its device test and the device kit contract |
 | `repeat changed tests` | 13 | the count of the changed tests, their unit test files under Vitest, their Rust modules under nextest from the count's archive, a final verdict requiring actual completed runs, and their web specs through `web-e2e.yml` on as many shards as keep each at 600 s (at most six, an over-budget plan's, with the daemon and shell builds and the shards' total); each repeat leg starts only when selected, and most specs plan one shard that builds in place ([The repeat lane](#the-repeat-lane)) |
-| `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
+| `desktop e2e` | 4 | the only macOS lane of the desktop app's own changes: a macOS job for the daemon, kit binaries and pane holder and a Linux job for the web shell, in parallel, and two shards that download them, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `Android app` | 1 | the Android app host's JVM unit tests and debug build on Linux, planned for `mobile/android/`; its instrumented tests need an emulator and run on the build machine ([BUILD.md](BUILD.md#the-android-app)) |
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
 | `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |
@@ -998,6 +998,11 @@ The shell build uses the same checkout, Node, pnpm, frozen lockfile, command and
 Each shard still installs its test dependencies and runs its unchanged discovery, selection, execution and reporting steps.
 A single shard builds in place, with no additional job or artifact transfer.
 The separate shell build adds one job against the organization's 20-job limit; lane measurements include both build queues and setup before the final shard completes.
+The multi-shard macOS desktop lane (`desktop-e2e.yml`) builds once too: the daemon, kit binaries and pane holder in one `build` job on the lane's runner, and the web shell in a `build-web` job on Linux beside it.
+The shell goes to a Linux runner, not a second macOS one: the organization runs five macOS jobs at once, and a second macOS build job would hold another for the whole build.
+A Linux-built `web/dist` is the same shell on every system: the bundle reads no system's environment (`vite.config.ts` has no system branch, and the one variable, the relay URL, is the same everywhere), and the relay WebAssembly it embeds compiles from the same locked source for the browser on any host.
+Each shard downloads `desktop-binaries-<lane>` into `target/debug` and `desktop-web-dist-<lane>` into `web/dist`, and keeps installing its dependencies, the Electron runtime and Playwright's Chromium; on Windows it also fetches the holder's ConPTY runtime and sets the fixture programs up.
+The `build` job is macOS's one saver of the `workspace` Rust set on main ([BUILD.md](BUILD.md#cis-rust-caches)), and `build-web` only restores the binding tool, whose Linux saver is `web-e2e.yml`; a single-shard call still builds in place and only restores both.
 
 Playwright's `--shard` cuts the tests in file order into runs of equal count, and a test takes from 1 second to a minute, so with four shards one web shard job took 11 minutes and another 6 (run `37402687007`, 2026-10-06).
 It also runs a project's dependencies whole in every shard that holds a dependent test, which in the desktop suite is every background test (below).
@@ -1014,7 +1019,7 @@ A plan that finds tests the table lacks, or a heaviest shard more than 15 % over
 A shard's step keeps its 20-minute timeout as a cap on a stalled run, never as the size of its work.
 A lane sizes its shards to plan at most 60 % of that cap, and `split --budget <seconds>` turns a plan whose heaviest shard holds more into a `::warning::` on the first shard's step: the suite has outgrown its shards, and the answer is another shard in the caller's `shards:`, not a longer timeout.
 Both lanes pass 720 seconds.
-A macOS shard costs one of the five macOS runners the organization runs at once and about 4.5 minutes of its own setup (checkout, the caches, the cargo build of the CLI binaries and the web build), so the macOS lanes add the fewest shards that keep that margin.
+A macOS desktop shard costs one of the five macOS runners the organization runs at once and the setup of its own (checkout, the caches, its dependencies, Electron and Chromium), and the lane's one `build` job costs a third for the cargo build of the binaries (the web build runs on Linux), so the macOS lanes add the fewest shards that keep that margin.
 
 The current web table is the median per listed test from the Linux web e2e jobs of six successful main `verify` runs, collected on 2026-11-27 and 2026-11-28 (54 shard jobs, from [45991021537](https://github.com/with-hide/hide/actions/runs/45991021537) through [46086319005](https://github.com/with-hide/hide/actions/runs/46086319005)), and of one full nine-shard run of the practice change's branch ([46097086961](https://github.com/with-hide/hide/actions/runs/46097086961)), which is the only run that has the practice spec's current tests.
 It lists 522 tests that total 3642.1 seconds; the practice spec's 25 of them weigh 331.3, where its 29 tests weighed 1473 seconds in main run [46020952643](https://github.com/with-hide/hide/actions/runs/46020952643) (2026-11-27) before each chapter played once in the browser.
@@ -1217,7 +1222,13 @@ Nothing is handed to the nightly.
 
 ### Nightly failures
 
+The nightly runs at 02:17 in Korea (17:17 UTC): Linux and Windows every day, and macOS on Monday and Thursday (operator decision 2026-11-28).
+One full run had held 7 macOS jobs for 65 minutes, and the account shares five macOS runners across every repository, so the nightly was turned off on 2026-11-22 and two releases then lost about 13 hours to breaks first seen on their candidate.
+Each cron line names a lane, `scripts/ci-plan.py nightly-scope` turns it into the jobs and systems that run, and `nightly-aggregate` checks the run against the same answer: `all` (Monday and Thursday) is every job on every system with `verify` and the macOS package, `daily` (the other days) is the direct jobs on Linux and Windows (the agent journey and canary, holder restart, the agent contracts, the desktop and Windows web `@platform` tests) with the Linux and Windows packages.
+A hand run picks `all`, `daily`, one system or `agy` (`gh workflow run nightly.yml --ref <branch> -f lane=<lane>`).
+
 The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one writer of `nightly-failure` issues, so the run's cap, the comments and the closing never race between lanes; a lane only writes its annotations.
+The agent canary's jobs in the same run are not the report's: it neither waits for nor reads them, since a vendor's release that breaks Hide is kept in its agent's `agent-canary` issue and a cell the pins fail too is filed from `agent journey` ([VERIFICATION.md](VERIFICATION.md#the-agent-canary)).
 
 - A failure is one issue: a test a lane annotated as `Failed test`, a check the performance lane annotated as `Failed measurement`, or, for a failed job that annotated none (its report step died, wrote nothing or never ran), the lane and its failed step.
   The lane is the job's name without its shard, so a test is the same failure in whichever shard ran it; `verify`'s gate, which fails whenever a lane it waits for did, is not a lane.
@@ -1226,9 +1237,10 @@ The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one w
   It is ended by fixing the cause or reverting the candidate; a longer timeout, more retries or a skip does not end it.
 - The same failure again (a hidden `nightly-failure:<lane>:<test or step>` marker) is one comment per run attempt on the open issue, never a second issue.
   Windows web/build and Windows/macOS desktop calls that moved under `verify` resolve their former lane names to the same suite, so existing issues and green history remain connected; OS-only hand runs keep their direct names and use the same mapping.
-- A scheduled run on main, or a hand run of `all`, that passes a lane closes that lane's issues with a comment naming the commit and the run; a skipped or cancelled lane closes nothing.
+- A scheduled run on main, or a hand run of `all`, that passes a lane closes that lane's issues with a comment naming the commit and the run; a skipped or cancelled lane closes nothing, so a macOS lane's issue waits for the next Monday or Thursday run.
 - One run opens at most 10 issues; the rest, with the count of failed tests a lane had no annotation room for, go into one issue, `nightly: N more failures in run <id>`, which the next scheduled run closes as it files its own.
 - A run of any other branch writes no issue.
+- A failed scheduled nightly on main, or an open `nightly-failure` issue, stops a release candidate at its first job ([CONTRIBUTING.md](../CONTRIBUTING.md#releases)), so the issues are read before a release rather than after it.
 - The report fails its job when GitHub does, and when it cannot mint the App's token, so a failure it could not file shows as a red report job rather than a silence.
   `--dry-run` with `--runs-repo` and `--run` prints what it would write for any finished run and writes nothing; `--issues-repo` reads another issue repository than with-hide/hide.
 - The report reads a failed job's log through `gh api`, which from gh 2.97 hands over a body carrying a terminal escape only when told `--allow-escape-sequences`, and every job log carries one (the runner colors each step's command), so the report and its `--dry-run` need gh 2.97 or later.

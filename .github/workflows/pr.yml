@@ -747,8 +747,9 @@ jobs:
       include-macos: ${{ needs.plan.outputs.macos == 'true' }}
       macos-compile-runner: ${{ needs.plan.outputs.self-hosted-macos }}
       web-typechecked: ${{ contains(fromJSON(needs.plan.outputs.lanes), 'checks') }}
-      # A pull request checks the package, not the optimizer; main's push run
-      # and the nightly build what ships and save the release dependency set.
+      # A pull request checks the package, not the optimizer, and reads the
+      # quick dependency set `package-cache.yml` saves on main; the nightly, a
+      # candidate and a release build what ships from the release set.
       quick-build: ${{ github.event_name == 'pull_request' }}
 
   # A merge queue group's Rust check: formatting and Clippy over the whole

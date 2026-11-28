@@ -3962,7 +3962,18 @@ export type ThreadSession = { pane_id: string; machine: string };
  * call id, and where each session a letter, a spawn or a letter's sender
  * names runs, by the name as written; a name no live session answers to is absent.
  */
-export type ThreadPage = { updates: ThreadUpdate[]; parts: Record<string, ThreadPart>; sessions: Record<string, ThreadSession> };
+export type ThreadPage = {
+  /**
+   * The record file the page was read from and where the page begins in it, a byte offset: together its name, which a
+   * page read in above or the live page joining the kept ones never changes, and a record replaced at the same path
+   * never shares.
+   */
+  record: string;
+  start: number;
+  updates: ThreadUpdate[];
+  parts: Record<string, ThreadPart>;
+  sessions: Record<string, ThreadSession>;
+};
 /** `contracts/snapshot-wire-enums.json`: `session_thread_state`. */
 export type SessionThreadState = "closed" | "loading" | "ready" | "failed";
 /** Why the record could not be read (B27; `session_thread_failure`). */
@@ -4021,6 +4032,8 @@ export type SessionWorkSearch = { query: string; options?: SessionSearchOptions;
 export type SleepingSession = {
   sleep_id: string;
   node_id: string;
+  /** The agent's own conversation id the sleep keeps; absent from a core before it was sent. */
+  session_id?: string;
   checkout_path: string;
   kind: string;
   identity_label: string;
