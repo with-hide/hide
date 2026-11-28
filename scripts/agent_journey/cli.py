@@ -287,7 +287,8 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
     read or copied: each agent's private folder points it at the fake, with
     the key the run's fake models take (`fake_key`). On the journey account
     (`dedicated`, account.py) each login copy goes back to the account after
-    the run, so no refresh window refuses one."""
+    the run, so no refresh window refuses one, and no reading of a login's
+    files refuses an agent: whether it is signed in is its CLI's answer."""
     run, owner = runtime.run, runtime.owner
     report["agents"].extend({"id": key} for key in measured)
     kinds = [rows[key]["agent_cli"] for key in measured]
@@ -369,8 +370,10 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
         def status(args, launch=launch, environment=environment):
             code, output, _ = owner.run([str(launch), *args], env=environment, check=False)
             return code, output
-        # A copy must outlast what is left of the run, whose deadline ends every process in it.
-        refusal = entry["login"](private, status, None if dedicated else owner.deadline - time.monotonic())
+        # A copy must outlast what is left of the run, whose deadline ends every process in it. On the
+        # journey account the agent's own CLI has already said whether it is signed in (daily.py), so a
+        # reading of its files, which can be wrong, never keeps it from being measured.
+        refusal = None if dedicated else entry["login"](private, status, owner.deadline - time.monotonic())
         if refusal:
             agent["login"] = refusal
             cells.settle_agent(table, key, refusal)

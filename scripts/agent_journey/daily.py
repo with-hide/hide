@@ -9,30 +9,40 @@ replaces one file, ~/journey/record.json, with what the morning check acts
 on: each agent's CLI version and result, never an account name or screen
 text. The account holds no GitHub login: the morning check reads the file
 over SSH and reports from the operator's machine.
-An agent with a failed cell answers one prompt outside Hide afterwards; when
-it cannot, the failure is the agent's state (`login needed`, `usage limit`,
-`update needed`, `agent error`), not Hide's. Everything else stays in the
-run folder on that machine. docs/VERIFICATION.md, The daily real-login journey.
+Before the journey each agent answers one prompt outside Hide, and only the
+ones that answer are measured: whether an agent is signed in is its CLI's
+answer, never a reading of its files. An agent with a failed cell answers
+again afterwards; what it does goes beside the journey's result, never over
+it (`outside`), so a reader tells Hide's failure from the agent's own state
+(`login needed`, `usage limit`, `update needed`, `agent error`). Every
+command of the run is owned (agent_live_check.processes): its whole tree ends
+at its deadline, with the run, or when the runner dies. The log names each
+command and its exit and nothing a command printed. Everything else stays in
+the run folder on that machine. docs/VERIFICATION.md, The daily real-login
+journey.
 """
 
 import argparse
 import contextlib
 import datetime
-import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import plistlib
 import re
+import secrets
 import shutil
+import signal
 import subprocess
 import sys
-import tempfile
+import threading
 import time
 
+from agent_live_check.processes import Limits, OwnedProcesses
+
 from . import account
-from .cells import FAIL, NOT_MEASURED, PASS
+from .cells import EXCLUDED_AGENTS, FAIL, NOT_MEASURED, PASS
 
 CHECKOUT = Path(__file__).resolve().parents[2]
 LABEL = "dev.withhide.agent-journey"
@@ -44,16 +54,31 @@ STALE = ("a record older than a day means the run did not start: a restart of th
 # 05:00 on the machine's clock (Asia/Seoul on the mini): after the nightly
 # (17:17 UTC, 02:17 KST) and before the morning check reads the record.
 HOUR, MINUTE = 5, 0
-KEEP_RUNS = 7
-KEEP_LOGS = 14
-# A kept target past this is removed before the build: one build of the
-# journey's binaries is about TARGET_ESTIMATE, and what a day's build leaves
-# behind accumulates.
-TARGET_CAP = 30 * 1024 ** 3
+# What a run keeps, newest first: run folders and logs by count and by
+# bytes together, the oldest going first past either.
+KEEP_RUNS, RUNS_CAP = 7, 2 * 1024 ** 3
+KEEP_LOGS, LOGS_CAP = 14, 64 * 1024 ** 2
+# The last bytes of a command's output the runner reads (an agent's answer,
+# the installer's list of programs); none of it is written anywhere.
+OUTPUT_TAIL = 64 * 1024
+# What lockf exits with when the lock stayed taken past its wait (EX_TEMPFAIL).
+LOCK_TIMEOUT_EXIT = 75
+# A folder of the account's own that a build or an install grows, removed
+# whole past its cap, before the build and after it; the next build fills
+# it again. A day's build of the journey's binaries leaves target at about
+# 4 GiB (2026-11-28).
+CAPS = {"target": 30 * 1024 ** 3, "cargo-home": 4 * 1024 ** 3, "build-cache": 2 * 1024 ** 3}
 LOCK_WAIT_SECONDS = 3 * 3600
 BUILD_SECONDS = 90 * 60
 JOURNEY_SECONDS = 150 * 60
 CHECK_SECONDS = 180
+STEP_SECONDS = 30 * 60
+# The whole run, every step at its own deadline: the owner's guardians end
+# anything still running past it.
+RUN_SECONDS = 2 * STEP_SECONDS + LOCK_WAIT_SECONDS + BUILD_SECONDS + JOURNEY_SECONDS + 8 * CHECK_SECONDS
+# A build of Hide's binaries runs about a dozen compilers at once, past an
+# agent's limits (agent_live_check.processes.Limits), on a 16 GiB mini.
+BUILD_LIMITS = Limits(descendants=512, rss_bytes=12 * 1024 ** 3)
 SYSTEM_PATH = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
 BUILDS = [["cli"], ["build", "-p", "hide-session", "--example", "journey_conversation"],
           ["build", "-p", "hide-memory", "--example", "journey_memory"],
@@ -82,16 +107,39 @@ AGENT_STATES = [
                                 r"credential|expired|re-?auth|api key", re.I)),
     ("update needed", re.compile(r"update|upgrade|newer version|no longer supported|unsupported version", re.I)),
 ]
-# The journey's own refusals before an agent starts that mean its login.
-LOGIN_REFUSAL = re.compile(r"^(?:not logged in|login (?:expired|near refresh|expiry unreadable|refresh time))")
 
 
 def journey_root():
     return Path.home() / "journey"
 
 
+def runs_folder():
+    """Where each run's report folder goes, kept as the journey keeps its own."""
+    return CHECKOUT / "agents/runs"
+
+
 class Stage(Exception):
     """A whole-run failure, by a constant name the record shows."""
+
+
+class Stopped(Exception):
+    """The runner was asked to stop (launchd's SIGTERM)."""
+
+
+class Tail:
+    """The last `cap` bytes a stream wrote, read to its end."""
+
+    def __init__(self, cap):
+        self.cap, self.data = cap, bytearray()
+
+    def read(self, stream):
+        while chunk := os.read(stream.fileno(), 65536):
+            self.data += chunk
+            if len(self.data) > self.cap:
+                del self.data[:len(self.data) - self.cap]
+
+    def text(self):
+        return bytes(self.data).decode("utf-8", errors="replace")
 
 
 def log(stream, message):
@@ -113,25 +161,45 @@ def environment(settings, extra=None):
             "HIDE_BUILD_CACHE": str(root / "build-cache"), **(extra or {})}
 
 
-def run_logged(argv, stream, env, cwd=CHECKOUT, timeout=None):
-    log(stream, "$ " + " ".join(argv))
-    return subprocess.run(argv, cwd=cwd, env=env, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout).returncode
+def step(owner, name, argv, stream, env, seconds, *, cwd=CHECKOUT):
+    """One command of the run, owned by `owner`: its whole tree ends at
+    `seconds`, with the run, or when the runner dies. The log names the step
+    and its exit, never what it printed, which can carry a path, an account
+    or a secret. Its code and its output's last OUTPUT_TAIL bytes."""
+    end = time.monotonic() + seconds
+    child = owner.spawn(argv, env=env, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, deadline=end)
+    tail = Tail(OUTPUT_TAIL)
+    reader = threading.Thread(target=tail.read, args=(child.stdout,), daemon=True)
+    reader.start()
+    try:
+        code = child.wait(timeout=max(0.0, end - time.monotonic()))
+    except subprocess.TimeoutExpired as error:
+        log(stream, f"{name}: no end in {seconds} s")
+        raise Stage(f"{name} timed out") from error
+    finally:
+        owner.end(child)
+        reader.join(timeout=5)
+        child.stdout.close()
+    log(stream, f"{name}: exit {code}")
+    return code, tail
 
 
-def checkout(target, stream, env):
+def checkout(owner, target, stream, env):
     """Moves the checkout to `target` (a commit or origin/main); its commit."""
     ref = target or "main"
-    if run_logged(["git", "fetch", "--quiet", "origin", ref], stream, env, timeout=600):
+    for name, argv in (("fetch", ["git", "fetch", "--quiet", "origin", ref]),
+                       ("checkout", ["git", "checkout", "--quiet", "--detach", "FETCH_HEAD"]),
+                       # The run folders and the target stay; anything else the last commit left goes.
+                       ("clean", ["git", "clean", "-fdq", "-e", "/agents/", "-e", "/target/"])):
+        if step(owner, name, argv, stream, env, 600)[0]:
+            raise Stage("checkout failed")
+    code, head = step(owner, "rev-parse", ["git", "rev-parse", "HEAD"], stream, env, 60)
+    if code or not re.fullmatch(r"[0-9a-f]{40}", head.text().strip()):
         raise Stage("checkout failed")
-    if run_logged(["git", "checkout", "--quiet", "--detach", "FETCH_HEAD"], stream, env, timeout=120):
-        raise Stage("checkout failed")
-    # The run folders and the target stay; anything else the last commit left goes.
-    run_logged(["git", "clean", "-fdq", "-e", "/agents/", "-e", "/target/"], stream, env, timeout=300)
-    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=CHECKOUT, capture_output=True, text=True,
-                          check=True).stdout.strip()
+    return head.text().strip()
 
 
-def install_clis(stream, env):
+def install_clis(owner, stream, env):
     """The pinned CLIs, installed once per pin table into a folder of their
     own, linked from ~/journey/bin by name; an older table's folder goes."""
     root = journey_root()
@@ -141,12 +209,11 @@ def install_clis(stream, env):
     if not installed.is_file():
         shutil.rmtree(folder, ignore_errors=True)
         folder.mkdir(parents=True)
-        result = subprocess.run([sys.executable, "scripts/install-agent-clis.py", "--all", "--prefix", str(folder)],
-                                cwd=CHECKOUT, env=env, capture_output=True, text=True, timeout=1800)
-        stream.write(result.stdout + result.stderr)
-        if result.returncode:
+        code, output = step(owner, "install", [sys.executable, "scripts/install-agent-clis.py", "--all",
+                                               "--prefix", str(folder)], stream, env, STEP_SECONDS)
+        if code:
             raise Stage("CLI install failed")
-        programs = dict(line.split("=", 1) for line in result.stdout.splitlines()
+        programs = dict(line.split("=", 1) for line in output.text().splitlines()
                         if re.fullmatch(r"[a-z]+=/.+", line))
         installed.write_text(json.dumps(programs))
     programs = json.loads(installed.read_text())
@@ -175,27 +242,37 @@ def size(path):
     return total
 
 
+def within_caps(stream):
+    """Removes each grown folder of the account's past its cap."""
+    for name, cap in CAPS.items():
+        folder = CHECKOUT / name if name == "target" else journey_root() / name
+        if folder.is_dir() and size(folder) > cap:
+            log(stream, f"{name} past its cap: removed")
+            shutil.rmtree(folder)
+
+
 def build(settings, stream, env):
-    """The journey's binaries, built while holding the shared cargo lock."""
-    target = CHECKOUT / "target"
-    if target.is_dir() and size(target) > TARGET_CAP:
-        log(stream, "target past its cap: removed")
-        shutil.rmtree(target)
-    script = " && ".join("bash scripts/verify-cargo.sh " + " ".join(step) for step in BUILDS)
+    """The journey's binaries, built while holding the shared cargo lock,
+    under an owner of the build's own limits; the lock goes with the build's
+    tree (`lockf` holds it for its child)."""
+    within_caps(stream)
+    script = " && ".join("bash scripts/verify-cargo.sh " + " ".join(argv) for argv in BUILDS)
     argv = ["/usr/bin/lockf", "-k", "-t", str(LOCK_WAIT_SECONDS), settings["cargo_lock"], "/bin/bash", "-c", script]
-    try:
-        if run_logged(argv, stream, env, timeout=LOCK_WAIT_SECONDS + BUILD_SECONDS):
+    with OwnedProcesses(run_seconds=LOCK_WAIT_SECONDS + BUILD_SECONDS + STEP_SECONDS, limits=BUILD_LIMITS) as owner:
+        code, _ = step(owner, "build", argv, stream, env, LOCK_WAIT_SECONDS + BUILD_SECONDS)
+        if code == LOCK_TIMEOUT_EXIT:
+            raise Stage("build lock not free")
+        if code:
             raise Stage("build failed")
         # The controller's spawn provider, built here as CI builds it: inside
         # the journey a compile shares one command's 15 s cap, which a loaded
         # mini's first compile in the session outlasted (2026-11-28).
         provider = controller_provider()
         provider.parent.mkdir(parents=True, exist_ok=True)
-        if run_logged(["/usr/bin/cc", "-O2", "-o", str(provider), "web/e2e/shims/spawn-provider.c"], stream, env,
-                      timeout=600):
+        if step(owner, "controller provider", ["/usr/bin/cc", "-O2", "-o", str(provider),
+                                               "web/e2e/shims/spawn-provider.c"], stream, env, 600)[0]:
             raise Stage("build failed")
-    except subprocess.TimeoutExpired as error:
-        raise Stage("build timed out") from error
+    within_caps(stream)
 
 
 def summarize(report):
@@ -216,8 +293,6 @@ def summarize(report):
             entry["result"] = "fail"
         elif counts.get(PASS):
             entry["result"] = "pass"
-        elif LOGIN_REFUSAL.match(row.get("login") or ""):
-            entry["result"] = "login needed"
         elif row.get("login_in_use"):
             # An agent someone left open in the account holds its login.
             entry["result"] = "login in use"
@@ -235,34 +310,42 @@ def agent_state(output):
     return "agent error"
 
 
-def check_outside(kind, stream, env):
-    """None when the agent answers one prompt in its own folders, outside
-    Hide; else the kind of its state."""
+def check_outside(owner, kind, stream, env):
+    """`answers` when the agent answers one prompt in its own folders,
+    outside Hide; else the kind of its state. What it said is read here and
+    kept nowhere, the log included: it can carry the account's name. It runs
+    in one folder kept for it, so an agent that keeps a session per folder
+    keeps these in one place."""
     program = journey_root() / "bin" / kind
     if kind not in ONE_SHOT or not program.exists():
         return "agent error"
-    with tempfile.TemporaryDirectory(dir=journey_root()) as folder:
-        try:
-            result = subprocess.run([str(program), *ONE_SHOT[kind]], cwd=folder, env=env, stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, timeout=CHECK_SECONDS)
-        except subprocess.TimeoutExpired:
-            log(stream, f"{kind}: no answer outside Hide in {CHECK_SECONDS} s")
-            return "agent error"
-    output = result.stdout + result.stderr
-    stream.write(f"--- {kind} outside Hide, exit {result.returncode}\n{output[-4000:]}\n")
-    if not result.returncode and re.search(r"\bok\b", result.stdout, re.I):
-        return None
-    return agent_state(output)
+    folder = journey_root() / "probe"
+    folder.mkdir(exist_ok=True)
+    try:
+        code, output = step(owner, f"{kind} outside Hide", [str(program), *ONE_SHOT[kind]], stream, env,
+                            CHECK_SECONDS, cwd=folder)
+    except Stage:
+        return "agent error"
+    said = output.text()
+    if not code and re.search(r"\bok\b", said, re.I):
+        return "answers"
+    return agent_state(said)
 
 
-def recheck(agents, kinds, stream, env):
-    """A failed agent that cannot answer outside Hide either carries its
-    state, its failed cells kept beside it for the reader."""
+def unmeasured(key, state):
+    """An agent that did not answer before the journey, so was not measured."""
+    return {"id": key, "cli": None, "cells": {}, "failed": [],
+            "result": "login needed" if state == "login needed" else NOT_MEASURED, "outside": state}
+
+
+def recheck(agents, kinds, check):
+    """An agent with a failed cell answers again (`check(kind)`), as its
+    failure may come from its own state, such as a limit reached during the
+    run. The answer goes beside the result as `outside`, never over it: a
+    cell Hide failed stays failed whatever the agent's state."""
     for entry in agents:
-        if entry["result"] == "fail":
-            state = check_outside(kinds[entry["id"]], stream, env)
-            if state:
-                entry["result"] = state
+        if entry["result"] == FAIL:
+            entry["outside"] = check(kinds[entry["id"]])
 
 
 def publish(record, stream):
@@ -271,52 +354,54 @@ def publish(record, stream):
     replacement = target.with_name(target.name + ".next")
     replacement.write_text(json.dumps(record, indent=1) + "\n")
     os.replace(replacement, target)
-    log(stream, f"record: {target}")
+    log(stream, f"record: run {record['run']}")
 
 
-def ancestors():
-    found, pid = set(), os.getpid()
-    while pid > 1 and pid not in found:
-        found.add(pid)
-        answer = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True)
-        pid = int(answer.stdout.strip() or 1)
-    return found
+def keep_newest(folder, count, cap):
+    """Run folders or logs past the newest `count`, or past `cap` bytes
+    together, oldest first."""
+    if not folder.is_dir():
+        return
+    entries = sorted((entry for entry in folder.iterdir() if entry.name.startswith("daily-")),
+                     key=lambda entry: entry.name, reverse=True)
+    total = 0
+    for index, entry in enumerate(entries):
+        total += size(entry) if entry.is_dir() else entry.stat().st_size
+        if index >= count or total > cap:
+            if entry.is_dir():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink()
 
 
-def cleanup(stream):
-    """What a run of this account may have left: its processes started from
-    the journey folder (a candidate hided, a pane holder, an agent's
-    server), its files in /private/tmp, and run folders and logs past the
-    newest few. The account runs nothing else."""
+def trim(path, cap):
+    """Keeps a log that only grows (launchd's, setup's) to its last `cap` bytes."""
+    if path.is_file() and path.stat().st_size > cap:
+        with open(path, "rb") as stream:
+            stream.seek(-cap, os.SEEK_END)
+            kept = stream.read()
+        path.write_bytes(kept)
+
+
+def cleanup():
+    """What a run leaves: run folders and logs past the newest few. Its
+    processes the owners' guardians end, and its folder in /private/tmp the
+    journey removes (agent_live_check/runtime.py); the runner removes nothing
+    there whose maker it cannot prove, such as an agent's own folders."""
     root = journey_root()
-    keep = ancestors()
-    listing = subprocess.run(["ps", "-U", str(os.getuid()), "-o", "pid=,command="], capture_output=True, text=True)
-    for line in listing.stdout.splitlines():
-        pid, _, command = line.strip().partition(" ")
-        if pid.isdigit() and int(pid) not in keep and str(root) in command:
-            log(stream, f"ended leftover {pid}: {command[:160]}")
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.kill(int(pid), 9)
-    for entry in Path("/private/tmp").iterdir():
-        with contextlib.suppress(OSError):
-            if entry.lstat().st_uid == os.getuid():
-                log(stream, f"removed {entry}")
-                if entry.is_dir() and not entry.is_symlink():
-                    shutil.rmtree(entry, ignore_errors=True)
-                else:
-                    entry.unlink()
-    for folder, keep_count in ((CHECKOUT / "agents/runs", KEEP_RUNS), (root / "logs", KEEP_LOGS)):
-        if folder.is_dir():
-            entries = sorted((entry for entry in folder.iterdir() if entry.name.startswith("daily-")),
-                             key=lambda entry: entry.name, reverse=True)
-            for old in entries[keep_count:]:
-                if old.is_dir():
-                    shutil.rmtree(old, ignore_errors=True)
-                else:
-                    old.unlink()
+    keep_newest(runs_folder(), KEEP_RUNS, RUNS_CAP)
+    keep_newest(root / "logs", KEEP_LOGS, LOGS_CAP)
+    for name in ("launchd.log", "setup.log"):
+        trim(root / "logs" / name, OUTPUT_TAIL)
+
+
+def stop(*_):
+    raise Stopped()
 
 
 def run(settings):
+    import fcntl  # the runner is macOS's; nothing else loads this module's run
+
     root = journey_root()
     (root / "logs").mkdir(parents=True, exist_ok=True)
     started = datetime.datetime.now().astimezone()
@@ -325,41 +410,65 @@ def run(settings):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            log(stream, "another run holds the journey; this one ends")
-            return 0
+            log(stream, "another run holds the journey; it takes a request made meanwhile when it ends")
+            return None
+        # launchd stops a job with SIGTERM: the run still ends its commands
+        # and says so in the record.
+        signal.signal(signal.SIGTERM, stop)
         request = root / "request.json"
-        target = json.loads(request.read_text()).get("commit") if request.is_file() else None
+        asked = json.loads(request.read_text()) if request.is_file() else {}
         request.unlink(missing_ok=True)
-        record = {"format": 1, "started": started.isoformat(timespec="minutes"), "if_stale": STALE,
-                  "source": f"request {target}" if target else "main", "run": "ok", "exit": None, "agents": []}
+        target = asked.get("commit")
+        record = {"format": 1, "started": started.isoformat(timespec="seconds"), "if_stale": STALE,
+                  "source": f"request {target}" if target else "main", "request": asked.get("id"),
+                  "run": "running", "exit": None, "agents": []}
+        # A reader that finds this record knows the run has begun and not ended.
+        publish(record, stream)
         env = environment(settings)
         try:
-            record["commit"] = checkout(target, stream, env)
-            install_clis(stream, env)
-            build(settings, stream, env)
-            run_dir = CHECKOUT / "agents/runs" / f"daily-{stamp}"
-            try:
-                record["exit"] = run_logged([sys.executable, "-X", "utf8", "scripts/agent-journey-check.py",
-                                             "--run-dir", str(run_dir), "--controller-provider",
-                                             str(controller_provider())], stream, env, timeout=JOURNEY_SECONDS)
-            except subprocess.TimeoutExpired as error:
-                raise Stage("journey timed out") from error
-            report = run_dir / "report.json"
-            if not report.is_file():
-                raise Stage("journey left no report")
-            data = json.loads(report.read_text())
-            record["agents"] = summarize(data)
-            kinds = {row["id"]: row["agent_cli"] for row in json.loads(
-                (CHECKOUT / "contracts/agent-journey.json").read_text())}
-            recheck(record["agents"], kinds, stream, env)
-            if record["exit"] == 2:
-                record["run"] = "setup or cleanup failure"
+            with OwnedProcesses(run_seconds=RUN_SECONDS) as owner:
+                record["commit"] = checkout(owner, target, stream, env)
+                install_clis(owner, stream, env)
+                build(settings, stream, env)
+                kinds = {row["id"]: row["agent_cli"] for row in json.loads(
+                    (CHECKOUT / "contracts/agent-journey.json").read_text())}
+                # Whether each agent is signed in is its own answer, asked first.
+                before = {key: check_outside(owner, kind, stream, env)
+                          for key, kind in kinds.items() if key not in EXCLUDED_AGENTS}
+                answering = [key for key, state in before.items() if state == "answers"]
+                measured = {}
+                if answering:
+                    run_dir = runs_folder() / f"daily-{stamp}"
+                    # The journey's output is its screens' words: its report folder
+                    # keeps what it found, the log only its exit.
+                    record["exit"], _ = step(owner, "journey", [
+                        sys.executable, "-X", "utf8", "scripts/agent-journey-check.py", "--run-dir", str(run_dir),
+                        "--controller-provider", str(controller_provider()), "--agents", ",".join(answering)],
+                        stream, env, JOURNEY_SECONDS)
+                    report = run_dir / "report.json"
+                    if not report.is_file():
+                        raise Stage("journey left no report")
+                    measured = {entry["id"]: entry for entry in summarize(json.loads(report.read_text()))}
+                    recheck(measured.values(), kinds, lambda kind: check_outside(owner, kind, stream, env))
+                record["agents"] = [
+                    {"id": key, "cli": None, "cells": {}, "failed": [], "result": "excluded"}
+                    if key in EXCLUDED_AGENTS else measured.get(key) or unmeasured(key, before[key])
+                    for key in kinds]
+            record["run"] = "setup or cleanup failure" if record["exit"] == 2 else "ok"
         except Stage as stage:
             record["run"] = str(stage)
             log(stream, f"stopped: {stage}")
+        except Stopped:
+            record["run"] = "runner stopped"
+            log(stream, "stopped by launchd")
+        except BaseException as error:
+            # Only the kind: a message can carry a path or what a command said.
+            record["run"] = f"runner failed: {type(error).__name__}"
+            log(stream, record["run"])
+            raise
         finally:
             record["minutes"] = round((time.time() - started.timestamp()) / 60)
-            cleanup(stream)
+            cleanup()
             publish(record, stream)
     return 0 if record["run"] == "ok" else 1
 
@@ -408,8 +517,8 @@ def setup(args):
     if line not in (profile.read_text() if profile.is_file() else ""):
         with open(profile, "a") as stream:
             stream.write(line)
-    with open(root / "logs/setup.log", "a") as stream:
-        print(json.dumps(install_clis(stream, environment(settings)), indent=1))
+    with open(root / "logs/setup.log", "w") as stream, OwnedProcesses(run_seconds=2 * STEP_SECONDS) as owner:
+        print(json.dumps(install_clis(owner, stream, environment(settings)), indent=1))
     print(f"set up; the LaunchAgent loads at this account's next login, or now with:\n"
           f"  launchctl bootstrap gui/{os.getuid()} {agents / (LABEL + '.plist')}")
     return 0
@@ -419,8 +528,13 @@ def request(args):
     """Asks the account's session to run now, on `--commit` when given: a
     run outside that session would find the keychain locked."""
     root = journey_root()
-    (root / "request.json").write_text(json.dumps({"commit": args.commit}))
-    return subprocess.run(["launchctl", "kickstart", f"gui/{os.getuid()}/{LABEL}"]).returncode
+    asked = {"commit": args.commit, "id": secrets.token_hex(8)}
+    (root / "request.json").write_text(json.dumps(asked))
+    code = subprocess.run(["launchctl", "kickstart", f"gui/{os.getuid()}/{LABEL}"]).returncode
+    if not code:
+        # The record that answers it carries this id as `request`.
+        print(asked["id"])
+    return code
 
 
 def status(args):
@@ -450,4 +564,9 @@ def main(argv=None):
         return request(args)
     if args.command == "status":
         return status(args)
-    return run(json.loads((journey_root() / "settings.json").read_text()))
+    settings = json.loads((journey_root() / "settings.json").read_text())
+    code = run(settings)
+    # A request made while that run went on starts one more, on its commit.
+    while code is not None and (journey_root() / "request.json").is_file():
+        code = run(settings)
+    return code or 0

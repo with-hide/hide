@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check.process_table import (BsdInfo, Process, ProcessTable, ShortBsdInfo, descendants,
                                            marked_descendants, procargs_owned, require_complete, snapshot,
                                            validate_linux_procfs)
-from agent_live_check.processes import (OwnedProcesses, ProcessError, ProcessSafetyError, RssSamples, guard,
+from agent_live_check.processes import (Limits, OwnedProcesses, ProcessError, ProcessSafetyError, RssSamples, guard,
                                        control_plane, largest, linux_children_remain, reap_adopted,
                                        signal_reserved_group)
 from agent_live_check.protection import ConfigGuard, ProtectionError, stamp, validate_isolation
@@ -675,6 +675,17 @@ class ProcessProtection(unittest.TestCase):
                         self.assertEqual(table[pid].group, pid if outcome == "replacement_owned" else pid + 1)
                         old = Process(pid, 2, pid, 100_000_002, 0, False, os.getuid())
                         self.assertNotIn(pid, descendants(table, pid + 100, known={pid: old}))
+
+    def test_an_owners_own_limits_reach_its_guardian(self):
+        # A build owner allows more than an agent's; the guardian of each
+        # child enforces its owner's limits, not the defaults.
+        program = ("import subprocess, sys, time\n"
+                   "for _ in range(4):\n"
+                   "    subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+                   "time.sleep(30)\n")
+        with OwnedProcesses(limits=Limits(descendants=2)) as owner:
+            with self.assertRaisesRegex(ProcessError, r'owned_processes_over_budget:\{"descendants":'):
+                owner.run([sys.executable, "-c", program], env=dict(os.environ), check=False, seconds=10)
 
     def test_a_child_that_execs_a_set_user_id_program_mid_read_is_foreign(self):
         # A host-wide sample reads a same-UID child, which then execs a
