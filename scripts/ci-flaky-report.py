@@ -131,6 +131,11 @@ HISTORY_PREFIX = "ci-test-history-"
 # Jobs that only report on the others: this job, and `verify`'s gate, which
 # fails whenever a lane it waits for did and so names no failure of its own.
 REPORT_JOBS = ("nightly report", "verify / verify")
+# The agent canary's jobs in the nightly: a cell only an agent's latest
+# release fails is the vendor's, kept in that agent's `agent-canary` issue
+# (scripts/agent-canary-record.py), and one the pins fail too is filed from
+# `agent journey`, so the report reads none of them.
+CANARY_JOBS = "agent canary "
 # Full nightly runs moved these duplicate calls under verify. Keep old issue
 # keys and green history attached to the identical suite, including build
 # failures; OS-only dispatch still uses the former job names. The Rust lane's
@@ -828,6 +833,7 @@ class Nightly:
             jobs = listing(self.call, f"repos/{self.repo}/actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs")
             self.jobs_of[(run_id, attempt)] = [
                 job for job in jobs if job.get("status") == "completed" and job["name"] not in REPORT_JOBS
+                and not job["name"].startswith(CANARY_JOBS)
             ]
         return self.jobs_of[(run_id, attempt)]
 

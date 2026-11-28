@@ -74,6 +74,16 @@ So every review covers the perspectives below, and names the perspective of each
 - A gap on a system or a device that has no cell in `docs/INSTALL.md`, What each system supports, with its reason and what would close it.
 - `gh`, `glab`, GitHub or GitLab words in core logic outside the host interface: GitLab and a later Bitbucket should need an adapter and nothing else.
 
+### 8. The command line
+
+`hided/AGENTS.md` owns the rule; a review checks the change against it.
+
+- A second name for a thing that has one, or a word used with a second meaning (a topic's name as a new topic's option, an option that takes another value type elsewhere).
+- A command under a topic other than the thing it changes, a verb with no line in the registry, or an option that does a verb's job.
+- A rename that drops the old spelling, removes or renames an entry, an argument or an envelope key of the contract, or keeps a second copy of the retired words outside the one table (`hide-shell/src/retired.rs`).
+- A command word changed in the parser and left in what teaches it (the guide, a skill stub, a `next_action`, the site notes).
+- A command only a program calls that `hide --help` prints with no reason, or one kept with no caller.
+
 ### Reviewing a cap
 
 A reviewer asks these four questions of every cap the change adds or changes; a failed answer is an ordinary finding.
@@ -98,7 +108,11 @@ A reviewer asks these four questions of every cap the change adds or changes; a 
   - **minor**: anything else worth saying.
 - Serious and ordinary findings block the merge until fixed or until the person who owns the decision accepts them in writing on the pull request.
   Minor findings do not block; the author fixes them or lists them as follow-ups.
-- In a mission, after the last review round its verification strength allows (`hide mission help`, Verification strength), the Conductor owns that decision for ordinary findings: it may accept them as follow-up issues, named on the pull request, and go on without asking the operator.
+- In a mission, review rounds stop at the limit its verification strength allows (`hide mission help`, Verification strength): when that round fails, Hide opens no further round, and the Conductor, not the operator, owns the decision in three steps.
+  1. Only ordinary or minor findings remain: the worker fixes the serious ones in the same pull request, which then merges, and the rest become a follow-up node of the same mission, never an issue alone; the line is skipped naming that node.
+     The Conductor may ask the checker for one re-look of the serious fixes first, and its pass passes the line.
+  2. A serious finding comes back in the same area: the node goes to a fresh worker of a different model, with a handover note and a list of what not to try again, and its checkers count a fresh set of rounds; a fresh checker alone does not.
+  3. The fresh worker reaches the limit too: the Conductor asks the operator.
   Serious findings still block until fixed in the node.
 - A review round after a fix reads only what changed since the round before and says whether each earlier finding is closed; it raises a new finding only when it is serious.
 - In a mission, a commit that only merges the destination into the branch is not a round: its CI proves the merge and the review that passed before it stands, unless resolving a conflict changed the node's own code (`hide mission help`, While it runs).

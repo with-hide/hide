@@ -33,6 +33,9 @@ hide-platform = { path = "../hide-platform" }
 hide-relay-protocol = { path = "../hide-relay-protocol" }
 hide-kit = { path = "../hide-kit" }
 hide-session = { path = "../hide-session" }
+# The retired-words table every reader of a `hide` command shares
+# (`hide_shell::retired`).
+hide-shell = { path = "../hide-shell" }
 axum = { version = "=0.8.9", features = ["ws"] }
 tokio = { version = "=1.53.2", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 serde = { version = "=1.0.229", features = ["derive"] }

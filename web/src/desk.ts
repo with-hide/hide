@@ -434,9 +434,11 @@ const nameOnly = (name: string): DeskSessionRef => ({ name, mark: null, agent_ki
  * message id joined (chunks with no message id join each other), a call's
  * updates folded into the call (an update's content replaces the call's, as
  * ACP says), and a call the reader turned into a Hide part drawn as that part
- * instead (B26). `session` names a letter's sender as its chip draws it.
+ * instead (B26). `session` names a letter's sender as its chip draws it, and
+ * `ids` each update by a name a page read in above does not move
+ * (`threadConversation`), so a message line keeps its id as the record grows.
  */
-export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonly<Record<string, ThreadHidePart>> = {}, session: (name: string) => DeskSessionRef = nameOnly): ThreadLine[] {
+export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonly<Record<string, ThreadHidePart>> = {}, session: (name: string) => DeskSessionRef = nameOnly, ids: readonly string[] = []): ThreadLine[] {
   const lines: ThreadLine[] = [];
   const calls = new Map<string, Extract<ThreadLine, { kind: "tool" }>>();
   // A letter's sender as the record wrote it, so its chunks join by who wrote them, not by how the chip names them.
@@ -456,7 +458,8 @@ export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonl
     }
   };
   updates.forEach((update, index) => {
-    const id = `u${index}`;
+    // A message line is named by its first update: its lasting name where the caller has one, else its place.
+    const id = `u${ids[index] ?? index}`;
     const last = lines.at(-1);
     const message = "messageId" in update ? (update.messageId ?? null) : null;
     switch (update.sessionUpdate) {

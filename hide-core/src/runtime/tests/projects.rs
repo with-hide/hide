@@ -4746,6 +4746,7 @@ fn a_sleeping_project_stays_open_until_it_wakes() {
     let sleeper = crate::agent_sleep::SleepingSessionSnapshot {
         sleep_id: crate::agent_sleep::SleepId::new().unwrap(),
         node_id: crate::node::TEST_NODE.to_owned(),
+        session_id: "session-asleep".to_owned(),
         checkout_path: path.to_owned(),
         kind: "claude".to_owned(),
         identity_label: "asleep".to_owned(),

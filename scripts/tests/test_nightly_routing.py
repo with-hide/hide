@@ -6,22 +6,32 @@ workflow syntax separately. Expected suites come from docs/TESTING.md, not the
 workflow's current matrix.
 """
 from collections import Counter
+import importlib.util
 import json
 from pathlib import Path
+import re
 import unittest
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
+spec = importlib.util.spec_from_file_location("ci_plan", ROOT / "scripts/ci-plan.py")
+ci = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ci)
 
 
 def expression(value, lane, system=""):
+    """`lane` is the run's lane, as nightly-scope chose it from the hand run's
+    input or the schedule's cron line."""
     if not isinstance(value, str) or not value.startswith("${{"):
         return value
-    code = value[3:-2].replace("inputs.lane", repr(lane)).replace("matrix.system", repr(system))
+    scope = ci.nightly_scope(lane)
+    code = re.sub(r"needs\.scope\.outputs\.([a-z-]+)",
+                  lambda match: repr(json.dumps(scope[match.group(1)])), value[3:-2])
+    code = code.replace("matrix.system", repr(system))
     code = code.replace("&&", " and ").replace("||", " or ")
-    return eval(code, {"__builtins__": {}, "fromJSON": json.loads})
+    return eval(code, {"__builtins__": {}, "fromJSON": json.loads, "contains": lambda items, item: item in items})
 
 
 def suites(lane):
@@ -72,9 +82,13 @@ DESKTOP_WINDOWS = ("desktop-e2e.yml", "windows-latest", "@platform", 1, True)
 class NightlyRouting(unittest.TestCase):
     def test_schedule_and_all_run_each_suite_once(self):
         expected = Counter([WEB_LINUX, WEB_MACOS, WEB_WINDOWS_VERIFY, DESKTOP_MACOS, DESKTOP_LINUX, DESKTOP_WINDOWS])
-        for lane in ("", "all"):
-            with self.subTest(lane=lane or "schedule"):
-                self.assertEqual(suites(lane), expected)
+        # Monday and Thursday's schedule, and a hand run of `all`.
+        self.assertEqual(ci.NIGHTLY_SCHEDULES["17 17 * * 0,3"], "all")
+        self.assertEqual(suites("all"), expected)
+
+    def test_the_other_days_run_linux_and_windows_and_no_macos_suite(self):
+        self.assertEqual(ci.NIGHTLY_SCHEDULES["17 17 * * 1,2,4,5,6"], "daily")
+        self.assertEqual(suites("daily"), Counter([WEB_WINDOWS, DESKTOP_LINUX, DESKTOP_WINDOWS]))
 
     def test_os_only_dispatch_keeps_its_suites_without_starting_other_systems(self):
         for lane, expected in (

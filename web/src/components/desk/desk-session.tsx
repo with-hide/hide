@@ -1,4 +1,4 @@
-import { ArrowUpRightIcon, CircleAlertIcon, EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, WaypointsIcon } from "lucide-react";
+import { ArrowUpRightIcon, EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, WaypointsIcon } from "lucide-react";
 import { useMemo, useRef, type ReactNode } from "react";
 import type { Actions } from "../../actions";
 import type { DeskJob, DeskPullRequest } from "../../desk";
@@ -14,8 +14,7 @@ import { DeviceChip } from "../device-chip";
 import { Elapsed } from "../elapsed";
 import { AncestorPath, usePaneMenu } from "../../PaneRelations";
 import { useNoticeFloor } from "../../noticeFloor";
-import { wakeFailureReason, wakingLine } from "../../sleep";
-import type { AgentRow, AgentSleep, PaneRow } from "../../snapshot";
+import type { AgentRow, PaneRow } from "../../snapshot";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { PrMark } from "../pr-mark";
@@ -159,37 +158,6 @@ export function SessionAskCard({ onWrite, ...card }: Parameters<typeof AskCardVi
           <Button variant="text" size="inline" className="text-caption text-subtle-foreground" data-desk-question-write="true" onClick={onWrite}>{t("desk.room.writeOwn")}</Button>
         </div>
       ) : null}
-    </div>
-  );
-}
-
-/**
- * Where the input box stood while the session sleeps (PRD desk-2-ui D-28,
- * B43): the sleeping session row's moon, its name and `에이전트 깨우기`, as
- * the sidebar's sleeping row and the sleeping pane offer it. An agent asleep
- * in its pane (`sleep`) says what its pane says (`SleepBody`, `sleep.ts`):
- * a wake under way and how old the conversation is, or a wake that failed,
- * its reason, `다시 시도` and `새 세션 시작`. A session whose sleep closed its
- * pane has no `sleep`; `state` is its phase. `onWake` is null while nothing
- * can wake it.
- */
-export function SessionSleepingFoot({ title, sleep, state, onWake, onFresh }: { title: string; sleep: AgentSleep | null; state: string; onWake: (() => void) | null; onFresh: (() => void) | null }) {
-  const { t } = useInterfaceTranslation();
-  // A notice in the window's corner stands above the foot, as above the input box it replaces.
-  const foot = useRef<HTMLDivElement>(null);
-  useNoticeFloor(foot);
-  const failed = sleep?.state === "failed";
-  const reason = failed ? wakeFailureReason(sleep, t) : null;
-  return (
-    <div ref={foot} className="flex min-w-0 shrink-0 flex-col gap-xxs border-t border-border px-md py-sm text-body" data-desk-session-sleeping={sleep?.state ?? state}>
-      <div className="flex min-w-0 items-center gap-xs">
-        {failed ? <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-destructive" /> : <MoonIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />}
-        <span className="min-w-0 flex-1 truncate text-subtle-foreground">{failed ? t("panes.sleep.resumeFailed") : title}</span>
-        {sleep?.state === "waking" ? <span role="status" className="shrink-0 text-caption text-muted-foreground">{wakingLine(sleep, Date.now(), t)}</span> : null}
-        {onWake ? <Button variant="ghost" size="sm" data-desk-session-wake="true" onClick={onWake}>{failed ? t("common.retry") : t("panes.sleep.wake")}</Button> : null}
-        {failed && onFresh ? <Button variant="ghost" size="sm" data-desk-session-wake-fresh="true" onClick={onFresh}>{t("panes.sleep.newSession")}</Button> : null}
-      </div>
-      {reason ? <p role="alert" className="pl-(--size-control-sm) text-caption text-muted-foreground" data-desk-session-wake-reason="true">{reason}</p> : null}
     </div>
   );
 }

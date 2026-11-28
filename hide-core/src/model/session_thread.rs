@@ -97,6 +97,14 @@ pub struct ThreadInputSnapshot {
 /// page names run.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ThreadPageSnapshot {
+    /// The record file the page was read from (its incarnation), and where
+    /// the page begins in it, a byte offset: together the page's name, which
+    /// reading a page before it, the live page filling and joining the kept
+    /// ones, or the oldest kept page being let go never changes, and which a
+    /// record replaced at the same path never shares, so a screen keys a line
+    /// by them and the line's place in the page.
+    pub record: String,
+    pub start: u64,
     pub updates: Vec<serde_json::Value>,
     pub parts: BTreeMap<String, HideCall>,
     /// Each session a letter or a spawn on the page names (its registration

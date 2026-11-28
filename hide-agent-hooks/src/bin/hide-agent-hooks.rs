@@ -487,6 +487,13 @@ fn antigravity_event(event: HookEvent, started: Instant) {
         return;
     };
     let runtime = GuidanceAgent::Antigravity.id();
+    // A model call of a conversation this agy never opened, such as the
+    // account's earlier one (with-hide/hide#3124), is nothing of the pane's:
+    // no guidance, no Memory, no letter, and it never stands as the pane's
+    // session or counts as its subagent.
+    if antigravity::opened_elsewhere(&home, &read, event.name()) {
+        return;
+    }
     // A subagent's conversation opens with its parent's message, which an
     // agy that does not say who prompted a conversation writes as it starts
     // it; the start waits a moment for that line.

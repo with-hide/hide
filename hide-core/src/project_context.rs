@@ -1126,6 +1126,7 @@ mod tests {
         SleepingSessionSnapshot {
             sleep_id: crate::agent_sleep::SleepId::new().expect("sleep id"),
             node_id: device.to_owned(),
+            session_id: "session-asleep".to_owned(),
             checkout_path: checkout_path.to_owned(),
             kind: "claude".to_owned(),
             identity_label: "asleep".to_owned(),

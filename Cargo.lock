@@ -1912,6 +1912,7 @@ dependencies = [
  "hide-project",
  "hide-relay-protocol",
  "hide-session",
+ "hide-shell",
  "http-body-util",
  "hyper",
  "hyper-util",

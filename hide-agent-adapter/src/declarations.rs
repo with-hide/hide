@@ -876,6 +876,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             marker: &["╰─"],
             trailer: 0,
             under: None,
+            // The next prompt omp 19 predicts after a turn is ghost text in
+            // its theme's `dim` colour with no SGR attribute, and a theme may
+            // give typed text that colour, so a prediction holds text
+            // (`tests/fixtures/composer/omp-19.2.1-predicted.ansi`).
             empty: &[Placeholder {
                 text: "⇧⇥ to change thinking effort",
                 style: Style::Any,

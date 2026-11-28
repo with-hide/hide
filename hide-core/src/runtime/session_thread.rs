@@ -126,6 +126,14 @@ impl ThreadReference {
         })
     }
 
+    /// Whether `other` names the same session: the same reader and reference,
+    /// whatever folder or account each was read with.
+    fn same_session(&self, other: &Self) -> bool {
+        self.agent == other.agent
+            && self.reference_kind == other.reference_kind
+            && self.reference_value == other.reference_value
+    }
+
     /// Whether it holds what [`ThreadReference::of`] admits: a reference
     /// read back from a file is held to the same bounds.
     pub(crate) fn bounded(&self) -> bool {
@@ -394,6 +402,21 @@ impl Runtime {
                     reference,
                 )
             });
+        } else if let Some((device, reference)) = self.sleeping_thread(&payload.pane_id) {
+            // An agent asleep in its pane: the engine no longer lists it, so
+            // no observation holds its session, and the session its sleep
+            // kept is read in its place. Its conversation stays to read while
+            // it sleeps; the pane's terminal is taken from the agent that
+            // wakes on it (`follow_session_thread`).
+            thread.machine = Some(device.clone());
+            thread.state = ThreadState::Loading;
+            thread.failure = None;
+            self.session_thread.open = Some(OpenThread::opened(
+                generation,
+                payload.pane_id.clone(),
+                device,
+                Some(reference),
+            ));
         } else if let Some((device, reference)) = self.desk_named_thread(&payload.pane_id) {
             // A session a Desk chip names whose pane is gone: its kept
             // reference is read once, read-only (feedback 2, frame K). The
@@ -427,6 +450,28 @@ impl Runtime {
         self.compose_desk_jobs();
         self.compose_desk_mentions();
         true
+    }
+
+    /// The machine and session of an agent asleep in `pane_id`, from its
+    /// sleep record (PRD agent-sleep: the record is the only holder of the
+    /// conversation id while the agent sleeps), read as its row reads it.
+    fn sleeping_thread(&self, pane_id: &str) -> Option<(String, ThreadReference)> {
+        let record = self.snapshot.ui_state.agent_sleep.records.get(pane_id)?;
+        let session = record.session_id.as_deref()?;
+        let reference = ThreadReference {
+            agent: hide_session::Agent::from_kind(&record.kind)?,
+            account: self.pane_account(
+                pane_id,
+                &record.kind,
+                record.agent_name.as_deref(),
+                Some(session),
+            ),
+            reference_kind: "id".to_owned(),
+            reference_value: session.to_owned(),
+            cwd: record.cwd.clone(),
+        };
+        let device = crate::address::device_of(pane_id).unwrap_or(self.node.as_str());
+        (reference.bounded() && !session.trim().is_empty()).then(|| (device.to_owned(), reference))
     }
 
     pub(super) fn close_session_thread(&mut self) -> bool {
@@ -499,6 +544,14 @@ impl Runtime {
         device: &str,
         payload: &SessionSnapshotPayload,
     ) -> bool {
+        // The session the pane's sleep keeps, while its agent sleeps.
+        let kept = self
+            .session_thread
+            .open
+            .as_ref()
+            .filter(|open| open.device == device)
+            .and_then(|open| self.sleeping_thread(&open.pane_id))
+            .map(|(_, reference)| reference);
         let Some(open) = self
             .session_thread
             .open
@@ -508,6 +561,19 @@ impl Runtime {
             return false;
         };
         let observed = self.delivery_observations.get(&open.pane_id);
+        // A thread opened while its agent slept took no terminal: the agent
+        // that wakes in the pane on the same session is the one it was
+        // opened for, and its terminal and reference are taken up.
+        if open.raw_pane.is_empty()
+            && open.terminal_id.is_none()
+            && let Some(observation) = observed
+            && let (Some(woken), Some(reference)) = (&observation.thread, &open.reference)
+            && woken.same_session(reference)
+        {
+            open.raw_pane.clone_from(&observation.raw_pane_id);
+            open.terminal_id.clone_from(&observation.terminal_id);
+            open.reference = Some(woken.clone());
+        }
         let same_terminal = observed.is_some_and(|observation| {
             observation.terminal_id == open.terminal_id && observation.raw_pane_id == open.raw_pane
         });
@@ -535,6 +601,15 @@ impl Runtime {
                 ThreadPane::Same
             }
             Some(_) => ThreadPane::Changed,
+            // Asleep on the session the thread reads: still the same pane.
+            None if kept.as_ref().is_some_and(|kept| {
+                open.reference
+                    .as_ref()
+                    .is_some_and(|reference| reference.same_session(kept))
+            }) =>
+            {
+                ThreadPane::Same
+            }
             None if payload
                 .panes
                 .iter()
@@ -1534,11 +1609,15 @@ impl ReadPage {
         let sessions = ledger.map_or_else(BTreeMap::new, |ledger| {
             page_sessions(&updates, &parts, ledger, node)
         });
+        let at = page.start.position();
+        let record = page.start.incarnation().to_owned();
         Self {
             start: page.start,
             end: page.end,
             more: page.more,
             snapshot: ThreadPageSnapshot {
+                record,
+                start: at,
                 updates,
                 parts,
                 sessions,
@@ -1850,6 +1929,67 @@ mod tests {
         });
     }
 
+    /// An agent asleep in its pane is no longer listed by the engine: its
+    /// thread opened then reads the session its sleep kept, stays the same
+    /// pane while it sleeps, and takes the terminal of the agent that wakes
+    /// on that session, which input then reaches.
+    #[test]
+    fn a_thread_opened_while_the_agent_sleeps_reads_the_kept_session_and_follows_the_wake() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        let row: crate::model::SidebarAgentSnapshot = crate::sidebar::project_agents(
+            serde_json::from_value(json!({"agents": [{"id": "worker", "pane_id": "w1:p1",
+                "agent": "claude", "agent_status": "idle", "state_change_seq": 1,
+                "cwd": "/tmp/project", "agent_session": {"kind": "id", "value": SESSION}}]}))
+            .unwrap(),
+        )
+        .agents
+        .remove(0);
+        let mut record =
+            crate::agent_sleep::SleepRecord::ending(&row, Some("/tmp/project".into()), 5).unwrap();
+        record.phase = crate::agent_sleep::SleepPhase::Sleeping;
+        runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .records
+            .insert("w1:p1".into(), record);
+        let asleep: SessionSnapshotPayload = serde_json::from_value(json!({
+            "agents": [], "panes": [{"pane_id": "w1:p1", "terminal_id": "t1"}],
+        }))
+        .unwrap();
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &asleep, None, None);
+
+        node.answer(Ok(page(0, 100, false, vec![said("잠들기 전 답")])));
+        open(&mut runtime);
+        assert_eq!(node.asked(), vec![ThreadRead::Newest]);
+        let shown = thread(&runtime);
+        assert_eq!(
+            (shown.state, shown.failure, shown.pane),
+            (ThreadState::Ready, None, ThreadPane::Same)
+        );
+        runtime.follow_session_thread(crate::node::TEST_NODE, &asleep);
+        assert_eq!(
+            thread(&runtime).pane,
+            ThreadPane::Same,
+            "asleep on its session"
+        );
+
+        // The agent wakes on the same session in the same terminal.
+        node.answer(Ok(page(0, 100, false, vec![said("잠들기 전 답")])));
+        observe(&mut runtime, "idle", 2, "t1", true);
+        assert_eq!(
+            thread(&runtime).pane,
+            ThreadPane::Same,
+            "the woken agent is the one it was opened for"
+        );
+        let open = runtime.session_thread.open.as_ref().unwrap();
+        assert_eq!(
+            (open.raw_pane.as_str(), open.terminal_id.as_deref()),
+            ("w1:p1", Some("t1"))
+        );
+    }
+
     /// The approved reader set controls row admission, before any file read or web rendering.
     #[test]
     fn reader_capability_and_identity_follow_the_reported_session() {
@@ -2145,9 +2285,19 @@ mod tests {
         assert_eq!(kept.pages[1].updates[0]["content"]["text"], "긴 출력");
         let shown = thread(&runtime);
         assert!(!shown.has_older, "the first page starts the session");
+        let tail = shown.tail.expect("the live page");
+        assert_eq!(tail.updates[0]["content"]["text"], "끝");
+        // Each page is named by where it begins in the record: the filled page
+        // keeps the start it had while it was the live page.
         assert_eq!(
-            shown.tail.expect("the live page").updates[0]["content"]["text"],
-            "끝"
+            (kept.pages[0].start, kept.pages[1].start, tail.start),
+            (0, 100, 600_000)
+        );
+        // And by the record file it was read from, which a replaced file does
+        // not share.
+        assert_eq!(
+            [&kept.pages[0].record, &kept.pages[1].record, &tail.record],
+            ["file-1"; 3]
         );
     }
 

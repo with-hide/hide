@@ -3,7 +3,7 @@
 
 Usage: agent-cli-latest.py <out.json>
 
-The daily agent canary installs from the written table through
+The nightly's agent canary installs from the written table through
 `HIDE_AGENT_CLIS_TABLE` (scripts/agent_journey/clis.py). It prints the
 versions as one JSON object on stdout, by kind.
 """
