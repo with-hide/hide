@@ -21,7 +21,7 @@ from agent_live_check.runtime import XDG_FOLDERS
 from agent_live_check.system import WINDOWS, home_env, launcher, temp_env
 
 from . import cells, opencode_service
-from .local import PROFILE_ROOT, QUIET
+from .local import PROFILE_ROOT, QUIET, agy_onboarded
 
 # What a set-up omp 18.7.0 keeps in its config.yml: without it the first
 # start runs omp's setup wizard over the prompt.
@@ -153,16 +153,9 @@ def share_with_daemon(runtime, environment):
 
 def agy_set_up(home):
     """What a set-up agy 1.4.2 keeps in its HOME: Gemini as its provider,
-    and its first-run onboarding (a color scheme, then a security notice)
-    finished, the status it saves in `cache/onboarding.json`. In a HOME
-    without it the onboarding opens over the first prompt and can hold it,
-    so the start answers nothing."""
-    folder = home / ".gemini/antigravity-cli"
-    private_directory(folder / "cache")
-    write_private(folder / "settings.json", json.dumps({"modelProvider": "gemini"}).encode())
-    write_private(folder / "cache/onboarding.json", json.dumps({
-        "onboardingComplete": True, "consumerOnboardingComplete": True,
-        "enterpriseOnboardingComplete": False}).encode())
+    and its first-run onboarding finished (agy_onboarded)."""
+    agy_onboarded(home)
+    write_private(home / ".gemini/antigravity-cli/settings.json", json.dumps({"modelProvider": "gemini"}).encode())
 
 
 def claude_project(folder):
