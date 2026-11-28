@@ -74,7 +74,7 @@ hide letter show letter-1
 hide letter ack letter-1
 hide letter cancel letter-1
 hide inbox
-hide inbox --ack letter-9~3f9a1c2b7d4e
+hide inbox ack letter-9~3f9a1c2b7d4e
 hide watch start child-name
 hide watch list
 hide watch stop watch-2
@@ -151,6 +151,7 @@ The contract only grows within a `format`: a caller looks a command up by the wo
 A renamed command keeps its old spelling for good, read as the command it is now by the one retired-words table every reader of a `hide` command shares (`hide-shell/src/retired.rs`), and keeps its entry: the current entry's own arguments, options and answers under the old words, with `retired_for` naming the command it is now (the entry `plan set` carries `"retired_for": "task set"`, and `request send` carries `"retired_for": "letter send"` with its argument `target`, so a tool written against `request` still finds every command, argument and type it checks).
 A renamed option stays in its command's `options` with the value type it had and `retired_for` naming the option it is now, and a retired topic word keeps its key in `envelopes` beside the new one (`plan` beside `task`, `request` beside `letter`).
 `retired_words` lists the table's command rows (`{"old": ["plan"], "now": ["task"]}`), rows that keep a longer old spelling as it is included, for a reader that reads old spellings in text.
+A list of options a command takes any of (`conflicts`, `needs_one_of`) names a retired option right before the one it is now, while `requires`, which takes all it names, names only the current option: a caller reads a retired option through its `retired_for` before it reads `requires`.
 An argument's name and a value's type do not change within a `format`.
 A calling tool offers neither a `retired_for` nor a `hidden` entry to a person; `hided/AGENTS.md`, Renaming, owns how a rename is written.
 The CLI admits only the commands and flags the contract names (`hided/src/cli_contract.rs`), its tests hold each parser to the table, and the answer schemas come from the core's answer types (`hide-core/src/delivery/answer.rs`), so a changed command name, option or answer field changes the exported contract.
@@ -393,7 +394,7 @@ It exists because one chatty sender used to fill every handover: on 2026-11-03 a
 - A sender with three or fewer such letters is shown exactly as before: all in full, no fold line.
 - A folded letter is neither deleted nor rewritten; it stays in the ledger, opens with `hide letter show <id>`, and `hide inbox` lists every folded id under `folded`.
 
-Taking the bundle takes every letter in it, folded ones included, with one confirmation: a hook's flushed confirmation as before (a confirmation, a hook's or `hide inbox --confirm`'s, takes at most 1024 ids, `BUNDLE_LETTERS`, which the open-letter limit keeps a bundle under), and for an agent with no prompt hook the one `ack_command` `hide inbox` prints, `hide inbox --ack <bundle>`.
+Taking the bundle takes every letter in it, folded ones included, with one confirmation: a hook's flushed confirmation as before (a confirmation, a hook's or `hide inbox --confirm`'s, takes at most 1024 ids, `BUNDLE_LETTERS`, which the open-letter limit keeps a bundle under), and for an agent with no prompt hook the one `ack_command` `hide inbox` prints, `hide inbox ack <bundle>`.
 The bundle token is the newest listed letter's id, `~`, and the first 12 hex digits of the SHA-256 of every pending letter the answer listed, shown or folded, in the ledger's order (`mailbox::bundle_token`), so it takes exactly the letters that answer carried: a letter that came after it stays pending, and a set below its newest that is not the one listed, such as one taken meanwhile by a hook, is refused `bundle_changed` with nothing taken, and `hide inbox` again prints the bundle as it is now.
 A folded `report` still ends its parent's watch.
 `hide inbox` gives the caller's own letters that came back apart, under `returned` (those that ended `no_recipient`, and those that ended `expired` at the update to this build), so a letter coming back never reads as one received: each names the recipient that did not get it, and `bell_failure` why its last bell failed when one did.
@@ -1218,7 +1219,7 @@ The engine's rename has no compare-and-set, so a user rename between the final r
 Completed intent replay returns the durable receipt without contacting the engine, including while a device is offline.
 
 `--machine <device id>` starts the child on a connected device instead of the caller's own; it works with delegation and handoff alike.
-The id is the `device_id` that `hide workspace info` shows and the `machine` that `hide agent list` shows for agents there, which is the device's machine id ([ARCHITECTURE.md](ARCHITECTURE.md#a-devices-id)); the SSH alias the device was added with names it too and is read as its id, an alias two devices share is refused with `machine_unknown` and their ids, a device label is not accepted, and the caller's own id is the same as leaving the flag out, so a spawn without `--machine` is exactly the spawn above.
+The id is the `device_id` that `hide checkout show` shows and the `machine` that `hide agent list` shows for agents there, which is the device's machine id ([ARCHITECTURE.md](ARCHITECTURE.md#a-devices-id)); the SSH alias the device was added with names it too and is read as its id, an alias two devices share is refused with `machine_unknown` and their ids, a device label is not accepted, and the caller's own id is the same as leaving the flag out, so a spawn without `--machine` is exactly the spawn above.
 `--repo` and `--path` are then paths on that device.
 A spawn records the machine of its child only when that is not the caller's own, and the ledger refuses a child whose machine is not the spawn's.
 The caller keeps the parent registration, the authority and the watch; the child's checkout (a worktree when the branch has none), tab, agent start, identity wait and lineage tokens are the device's, made through its engine, and the tokens name this machine as `parent_machine`.
@@ -1368,7 +1369,7 @@ A ledger with no wait writes no `identity_waits` field, and a build from before 
 
 ## Pane commands
 
-`hide pane read <pane> [--lines <n>]`, `hide agent read <agent> [--lines <n>]`, `hide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]`, `hide pane open --beside [--focus] -- <command>` and `hide workspace purpose <text>` are an agent's reads of and input to the panes of its machine, and its checkout's purpose (PRD engine-bundle-1 D-5, D-13).
+`hide pane read <pane> [--lines <n>]`, `hide agent read <agent> [--lines <n>]`, `hide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]`, `hide pane open --beside [--focus] -- <command>` and `hide checkout purpose <text>` are an agent's reads of and input to the panes of its machine, and its checkout's purpose (PRD engine-bundle-1 D-5, D-13).
 They need the running daemon and a pane-bound caller, like the letter commands; a caller outside a Hide pane is refused by the credential boundary, and a checkout-bound one with `pane_required`.
 The daemon admits the caller's pane and checkout on the core's owner thread (`Runtime::prepare_pane_command`), and the engine calls run on the caller's task, off the runtime lock, through the engine boundary (`hide_core::pane_command`); nothing they do is recorded in the ledger.
 
@@ -1397,15 +1398,15 @@ The daemon admits the caller's pane and checkout on the core's owner thread (`Ru
   On Windows that is PowerShell, the default shell of a pane; with another `default_shell`, such as cmd.exe or Git Bash, pass the command as one word ([INSTALL.md](INSTALL.md#what-each-system-supports)).
   A split whose answer never came is `pane_open_unconfirmed`, and a shell that did not take the command is `shell_not_ready` with the pane open.
   A split the pane floor refuses ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#the-pane-floor)) opens nothing and is `pane_too_narrow`, or `pane_unmeasured` while the caller's window draws the tab but has not measured it; the split waits its turn in the tab's line, and a tab still busy with eight operations ahead is `pane_tab_busy`.
-- `hide workspace purpose` makes the checkout row's Set purpose write (`worktree_control::write_checkout_purpose`): the purpose token on the checkout's engine workspace and its branch description, so a worktree no tab has opened yet takes one too; at most 40 characters on one line (`purpose_too_long`, `purpose_invalid`), and an empty text clears it.
-  The checkout is the one the command runs in: the CLI sends the root of the Git checkout around its folder, the nearest one holding a `.git`, and the core takes the checkout of the caller's project at that path, so `cd <worktree> && hide workspace purpose …` from another pane names that worktree, never the caller's own; a folder Hide lists in no checkout of that project is `purpose_checkout_unlisted`, and a folder outside any Git checkout names the caller's own.
+- `hide checkout purpose` makes the checkout row's Set purpose write (`worktree_control::write_checkout_purpose`): the purpose token on the checkout's engine workspace and its branch description, so a worktree no tab has opened yet takes one too; at most 40 characters on one line (`purpose_too_long`, `purpose_invalid`), and an empty text clears it.
+  The checkout is the one the command runs in: the CLI sends the root of the Git checkout around its folder, the nearest one holding a `.git`, and the core takes the checkout of the caller's project at that path, so `cd <worktree> && hide checkout purpose …` from another pane names that worktree, never the caller's own; a folder Hide lists in no checkout of that project is `purpose_checkout_unlisted`, and a folder outside any Git checkout names the caller's own.
   It answers the purpose and the folder of the checkout that shows it.
 - Every refusal is one line, `{"ok":false,"error":{"code","message"}}`, whose message is the next step, with a non-zero exit; a limit is checked by the CLI before it asks the daemon and by the daemon again.
 - They work the same on macOS, Linux and Windows: each step is an engine call, and the command line is typed into whatever shell the pane runs.
 
-## Removing a worktree: `hide workspace remove`
+## Removing a worktree: `hide checkout remove`
 
-`hide workspace remove <path> [--delete-branch] [--force]` removes a linked worktree of the caller's machine the way the delete dialog does ([UI_BEHAVIOR.md](UI_BEHAVIOR.md)): it closes the checkout's panes in the engine first, so the engine's workspace for it closes with them, and then Git removes the folder.
+`hide checkout remove <path> [--delete-branch] [--force]` removes a linked worktree of the caller's machine the way the delete dialog does ([UI_BEHAVIOR.md](UI_BEHAVIOR.md)): it closes the checkout's panes in the engine first, so the engine's workspace for it closes with them, and then Git removes the folder.
 A plain `git worktree remove` deletes the folder and leaves that workspace and its panes open, and after a restart they come back with a directory that is gone; an agent removes a checkout Hide shows with this command instead (`.claude/skills/merge-green/SKILL.md`, step 5), and keeps `git worktree remove` for a temporary worktree Hide never opened, such as `scripts/premerge-check.py`'s.
 
 - It is the dialog's own removal, not a second one: the runtime admits the caller under its lock (`Runtime::worktree_remove_command`), answers the dialog's questions from the command's switches, and starts the same `remove_worktree` path with its deletion gate, the host's recheck, the pane close and Git (`Runtime::start_git_worktree_removal`, [ARCHITECTURE.md](ARCHITECTURE.md)).

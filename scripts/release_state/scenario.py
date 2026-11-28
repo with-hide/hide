@@ -357,6 +357,7 @@ class Scenario:
         core = self.checked("core-a", "hide memory add 'The core project keeps its readme short'", lambda answer: True)
         return {"device": device, "core": core}
 
+    # retired-spellings: kept from here: a released core runs its own hide, which knows only --json <plan>
     def plan_spawn(self):
         plan = {"nodes": [{"key": "review", "title": "리뷰", "depends_on": [], "status": "planned", "delegate": True}]}
         self.checked("dev-a", f"hide task set --json '{json.dumps(plan)}'")
@@ -516,6 +517,7 @@ class Scenario:
             shown(running, lambda row: row.get("decision"), "the second gate's question")
         shown(running, lambda row: any(node.get("key") == "out" and node.get("line") for node in row.get("nodes") or []),
               "the outside branch read")
+        # retired-spellings: kept to here
 
         # A pane conducts one open mission, and a release reads a branch
         # only where it knows the default branch, which it does not for a

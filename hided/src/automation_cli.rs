@@ -18,7 +18,7 @@ use crate::env::Env;
 /// The guide `hide automation help` prints.
 pub const HELP: &str = include_str!("../assets/automation/help.md");
 
-pub const USAGE: &str = "hide automation help\nhide automation add --name <name> --task <text> --schedule <when> --kind <kind> [--profile <name>] [--model <model>] [--effort <effort>] [--folder <path> [--worktree]] [--run-now]\nhide automation list\nhide automation show <id|name>\nhide automation run <id|name>\nhide automation pause <id|name>\nhide automation resume <id|name>\nhide automation edit <id|name> [--name <name>] [--task <text>] [--schedule <when>] [--kind <kind> [--profile <name>] [--model <model>] [--effort <effort>]] [--folder <path> | --own-folder] [--worktree | --no-worktree]\nhide automation remove <id|name>\nhide automation preview --schedule <when>";
+pub const USAGE: &str = "hide automation help\nhide automation add --name <name> --brief <text> --schedule <when> --kind <kind> [--profile <name>] [--model <model>] [--effort <effort>] [--repo <path> [--worktree]] [--run-now]\nhide automation list\nhide automation show <id|name>\nhide automation run <id|name>\nhide automation pause <id|name>\nhide automation resume <id|name>\nhide automation edit <id|name> [--name <name>] [--brief <text>] [--schedule <when>] [--kind <kind> [--profile <name>] [--model <model>] [--effort <effort>]] [--repo <path> | --no-repo] [--worktree | --no-worktree]\nhide automation remove <id|name>\nhide automation preview --schedule <when>";
 
 /// The forms `--schedule` takes, as a refusal and the guide name them.
 const SCHEDULE_FORMS: &str = "Give --schedule as one of: \"daily 09:00\", \"weekdays 09:00\", \"weekly mon,thu 09:00\", \"every 15m\" (every 5, 10, 15 or 30 minutes from the hour), \"every 3h 09:00\" (every 1 to 12 hours from that time), \"cron <minute> <hour> <day> <month> <weekday>\", such as \"cron 0 9 * * 1-5\", or one time: \"once 2026-12-02 09:00\", \"once in 7d 09:00\" (7 days from today at 09:00), \"once in 3h\" or \"once in 30m\" (from now); times are HH:MM on a 24-hour clock in the zone of the machine that runs Hide";
@@ -30,13 +30,13 @@ pub const FLAGS: &[(&str, &[&str], &[&str])] = &[
         "add",
         &[
             "--name",
-            "--task",
+            "--brief",
             "--schedule",
             "--kind",
             "--profile",
             "--model",
             "--effort",
-            "--folder",
+            "--repo",
         ],
         &["--worktree", "--run-now"],
     ),
@@ -49,15 +49,15 @@ pub const FLAGS: &[(&str, &[&str], &[&str])] = &[
         "edit",
         &[
             "--name",
-            "--task",
+            "--brief",
             "--schedule",
             "--kind",
             "--profile",
             "--model",
             "--effort",
-            "--folder",
+            "--repo",
         ],
-        &["--own-folder", "--worktree", "--no-worktree"],
+        &["--no-repo", "--worktree", "--no-worktree"],
     ),
     ("remove", &[], &[]),
     ("preview", &["--schedule"], &[]),
@@ -98,7 +98,7 @@ pub enum Request {
         task: Option<String>,
         schedule: Option<String>,
         agent: Option<Agent>,
-        /// `Some(None)`: back to its own folder (`--own-folder`).
+        /// `Some(None)`: back to its own folder (`--no-repo`).
         folder: Option<Option<String>>,
         worktree: Option<bool>,
     },
@@ -165,7 +165,7 @@ pub fn parse(args: &[String]) -> Result<AutomationCli, String> {
                 .next()
                 .ok_or_else(|| format!("{flag} needs a value"))?;
             let admitted = match *flag {
-                "--task" => body(value),
+                "--brief" => body(value),
                 _ => text(value),
             };
             if !admitted {
@@ -216,9 +216,9 @@ pub fn parse(args: &[String]) -> Result<AutomationCli, String> {
                 return Err(USAGE.to_owned());
             }
             let (Some(name), Some(task), Some(schedule)) =
-                (take("--name"), take("--task"), take("--schedule"))
+                (take("--name"), take("--brief"), take("--schedule"))
             else {
-                return Err("hide automation add needs --name, --task and --schedule".to_owned());
+                return Err("hide automation add needs --name, --brief and --schedule".to_owned());
             };
             let Some(agent) = agent(
                 take("--kind"),
@@ -231,10 +231,10 @@ pub fn parse(args: &[String]) -> Result<AutomationCli, String> {
                     "hide automation add needs --kind, the agent each run starts".to_owned(),
                 );
             };
-            let folder = take("--folder");
+            let folder = take("--repo");
             let worktree = on.contains("--worktree");
             if worktree && folder.is_none() {
-                return Err("--worktree goes with --folder naming a Git project".to_owned());
+                return Err("--worktree goes with --repo naming a Git project".to_owned());
             }
             Request::Add {
                 name,
@@ -254,8 +254,8 @@ pub fn parse(args: &[String]) -> Result<AutomationCli, String> {
                 take("--model"),
                 take("--effort"),
             )?;
-            let folder = match (take("--folder"), on.contains("--own-folder")) {
-                (Some(_), true) => return Err("give --folder or --own-folder, not both".to_owned()),
+            let folder = match (take("--repo"), on.contains("--no-repo")) {
+                (Some(_), true) => return Err("give --repo or --no-repo, not both".to_owned()),
                 (Some(path), false) => Some(Some(path)),
                 (None, true) => Some(None),
                 (None, false) => None,
@@ -266,7 +266,7 @@ pub fn parse(args: &[String]) -> Result<AutomationCli, String> {
                 (false, true) => Some(false),
                 (false, false) => None,
             };
-            let (name, task, schedule) = (take("--name"), take("--task"), take("--schedule"));
+            let (name, task, schedule) = (take("--name"), take("--brief"), take("--schedule"));
             if name.is_none()
                 && task.is_none()
                 && schedule.is_none()
@@ -474,7 +474,7 @@ pub fn next_action(code: &str) -> &'static str {
         "automation_name_taken" => {
             "Another automation has that name; choose another, or change that one with hide automation edit"
         }
-        "automation_task_missing" => "Give the task each run is handed with --task",
+        "automation_task_missing" => "Give the brief each run is handed with --brief",
         "automation_task_too_long" => {
             "The task is longer than 16 KiB; shorten it, or have it point at a file in the automation's folder"
         }
@@ -482,19 +482,19 @@ pub fn next_action(code: &str) -> &'static str {
             "Name an agent Hide starts with --kind (hide agent catalog lists them), and a model, effort and profile as hide agent spawn takes them"
         }
         "automation_folder_on_device" => {
-            "An automation runs on the machine that runs Hide, not on this device, so it cannot work in this device's folder; leave out --folder to work in the automation's own folder there"
+            "An automation runs on the machine that runs Hide, not on this device, so it cannot work in this device's folder; leave out --repo to work in the automation's own folder there"
         }
         "automation_folder_unknown" => {
-            "--folder must name a project's root folder as Hide has it open on the machine that runs Hide, not a folder inside one; open the folder in Hide first (hide <path>), or leave --folder out to work in the automation's own folder"
+            "--repo must name a project's root folder as Hide has it open on the machine that runs Hide, not a folder inside one; open the folder in Hide first (hide <path>), or leave --repo out to work in the automation's own folder"
         }
         "automation_worktree_needs_git" => {
-            "A new worktree per run needs a Git project; name one with --folder, or leave out --worktree"
+            "A new worktree per run needs a Git project; name one with --repo, or leave out --worktree"
         }
         "automation_cap" => {
             "Hide keeps 100 automations at most; remove one the operator no longer needs with hide automation remove, then add this one"
         }
         "automation_home_unknown" => {
-            "Hide could not find this machine's home folder for the automation's own folder; give --folder with a project folder, and the reason is in Hide's diagnostic log"
+            "Hide could not find this machine's home folder for the automation's own folder; give --repo with a project folder, and the reason is in Hide's diagnostic log"
         }
         "automation_running" => {
             "A run of this automation is going now; wait until it ends (hide automation show <id>) before running it again"
@@ -512,7 +512,7 @@ pub fn next_action(code: &str) -> &'static str {
             "The agent's sign-in on this machine ended: ask the operator to sign in to that agent's CLI again, then run hide automation resume <id>"
         }
         "automation_folder_missing" => {
-            "The automation's folder is gone: make the folder again, or point it at another with hide automation edit <id> --folder <path>, then run hide automation resume <id>"
+            "The automation's folder is gone: make the folder again, or point it at another with hide automation edit <id> --repo <path>, then run hide automation resume <id>"
         }
         "automation_agent_missing" => {
             "The agent is not installed or not set up for Hide on this machine: ask the operator to install it or allow Hide's hooks for it, or choose another with hide automation edit <id> --kind <kind>, then run hide automation resume <id>"
@@ -524,7 +524,7 @@ pub fn next_action(code: &str) -> &'static str {
             "It was made on another machine: run hide automation resume <id> to run it on this one from its next time"
         }
         "automation_folder_in_repository" => {
-            "Its own folder lies inside a Git repository: give it a project folder with hide automation edit <id> --folder <path>, then run hide automation resume <id>"
+            "Its own folder lies inside a Git repository: give it a project folder with hide automation edit <id> --repo <path>, then run hide automation resume <id>"
         }
         other => crate::cli::request_next_action(other),
     }
@@ -1062,7 +1062,7 @@ mod tests {
                 "add",
                 "--name",
                 "이슈 정리",
-                "--task",
+                "--brief",
                 "새 이슈를 정리해\n라벨도 붙여",
                 "--schedule",
                 "daily 09:00",
@@ -1092,7 +1092,7 @@ mod tests {
             "add",
             "--name",
             "n",
-            "--task",
+            "--brief",
             "t",
             "--schedule",
             "daily 09:00",
@@ -1112,7 +1112,7 @@ mod tests {
     #[test]
     fn edit_names_what_changes_and_nothing_else() {
         assert_eq!(
-            request(&["edit", "k3x9a2", "--own-folder", "--no-worktree"]),
+            request(&["edit", "k3x9a2", "--no-repo", "--no-worktree"]),
             Request::Edit {
                 id: "k3x9a2".into(),
                 name: None,
@@ -1124,7 +1124,7 @@ mod tests {
             }
         );
         assert!(parse(&words(&["edit", "k3x9a2"])).is_err());
-        assert!(parse(&words(&["edit", "a", "--folder", "/p", "--own-folder"])).is_err());
+        assert!(parse(&words(&["edit", "a", "--repo", "/p", "--no-repo"])).is_err());
         assert!(parse(&words(&["edit", "a", "--worktree", "--no-worktree"])).is_err());
         assert!(parse(&words(&["show"])).is_err());
         assert!(parse(&words(&["show", "a", "b"])).is_err());
@@ -1135,7 +1135,7 @@ mod tests {
 
     #[test]
     fn an_edit_sends_only_its_changes_and_null_for_its_own_folder() {
-        let call = call_json(&request(&["edit", "a", "--own-folder"])).unwrap();
+        let call = call_json(&request(&["edit", "a", "--no-repo"])).unwrap();
         assert_eq!(call, json!({"call": "edit", "id": "a", "folder": null}));
         let parsed = from_wire(&call).unwrap();
         let Call::Edit { changes, .. } = parsed else {
@@ -1152,7 +1152,7 @@ mod tests {
                 "add",
                 "--name",
                 "n",
-                "--task",
+                "--brief",
                 "t",
                 "--schedule",
                 "weekly mon 09:00",
@@ -1282,7 +1282,7 @@ mod tests {
             "add",
             "--name",
             "n",
-            "--task",
+            "--brief",
             "t",
             "--schedule",
             "daily 09:00",
@@ -1291,10 +1291,10 @@ mod tests {
         ];
         assert!(!device_folder(&call(&add)));
         let mut with_folder = add.to_vec();
-        with_folder.extend(["--folder", "/"]);
+        with_folder.extend(["--repo", "/"]);
         assert!(device_folder(&call(&with_folder)));
-        assert!(device_folder(&call(&["edit", "n", "--folder", "/"])));
-        assert!(!device_folder(&call(&["edit", "n", "--own-folder"])));
+        assert!(device_folder(&call(&["edit", "n", "--repo", "/"])));
+        assert!(!device_folder(&call(&["edit", "n", "--no-repo"])));
         assert!(!device_folder(&call(&["edit", "n", "--name", "m"])));
     }
 
@@ -1305,7 +1305,7 @@ mod tests {
             "add",
             "--name",
             "n",
-            "--task",
+            "--brief",
             long.as_str(),
             "--schedule",
             "daily 09:00",

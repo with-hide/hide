@@ -1107,7 +1107,7 @@ impl Runtime {
                             if found.is_some() {
                                 return Err(Refusal {
                                     reason: "ambiguous_pane",
-                                    next_action: "Reconnect the pane and run hide workspace info again",
+                                    next_action: "Reconnect the pane and run hide checkout show again",
                                 });
                             }
                             found = Some(context());
@@ -1146,7 +1146,7 @@ impl Runtime {
             Caller::Desk => DESK_REFUSAL,
             Caller::Pane(_) => Refusal {
                 reason: "pane_not_connected",
-                next_action: "Reconnect the pane in Hide and run hide workspace info again",
+                next_action: "Reconnect the pane in Hide and run hide checkout show again",
             },
             Caller::Checkout { .. } => Refusal {
                 reason: "checkout_not_registered",
@@ -1260,6 +1260,11 @@ impl Runtime {
                                 .collect(),
                             operator: display.operator || display.openers.is_empty(),
                             unseen: display.unseen.is_some(),
+                            grant: display
+                                .external
+                                .as_ref()
+                                .filter(|file| file.kind == crate::view_layout::ExternalKind::Html)
+                                .map(|file| file.grant.clone()),
                         })
                 })
                 .collect()
@@ -1330,7 +1335,7 @@ fn caller_changed(caller_id: &str) -> Refusal {
         Caller::Desk => DESK_REFUSAL,
         Caller::Pane(_) => Refusal {
             reason: "pane_changed",
-            next_action: "Reconnect the pane and run hide workspace info again",
+            next_action: "Reconnect the pane and run hide checkout show again",
         },
         Caller::Checkout { .. } => Refusal {
             reason: "checkout_not_registered",

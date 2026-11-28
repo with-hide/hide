@@ -124,7 +124,7 @@ const SECTIONS = [
   ["Missions", ["mission"]],
   ["Tasks", ["task"]],
   ["Automations", ["automation"]],
-  ["Panes and workspaces", ["pane", "workspace"]],
+  ["Panes and checkouts", ["pane", "checkout"]],
   ["The operator's screen", ["file", "diff", "browser", "view"]],
   ["Devices", ["device", "phone"]],
   ["Bots", ["access"]],

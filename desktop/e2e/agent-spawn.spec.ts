@@ -31,7 +31,7 @@ test("a spawned child appears in the native delegation tree", async () => {
     });
     // The agent in the pane is the synthetic provider; this case observes its own native session report.
     const caller = await agentPane(fixture, daemon.stateDir, parent);
-    const purpose = await caller(["workspace", "purpose", "Spawn delegation fixture"]);
+    const purpose = await caller(["checkout", "purpose", "Spawn delegation fixture"]);
     expect(purpose.status, purpose.out).toBe(0);
     const command = (args: string[]) => hideAnswer(caller, args);
     await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true");

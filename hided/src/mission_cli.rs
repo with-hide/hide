@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 /// at: how a Conductor works with the operator and what Hide holds it to.
 pub const HELP: &str = include_str!("../assets/mission/help.md");
 
-pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission node <key> [--mission <id>] (--hold <why> --for <30m|2h> | --no-hold)\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--summary <text>] [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>] [--follow-up <node>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission gate <node> [--mission <id>] ((--pass | --fix) --said <the operator's words> | --show <view-id|path>...)\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>]... [--show <view-id|path>]... | --clear)\nhide mission delay [--mission <id>] (--line <text> --for <30m|2h> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node-or-mission-id>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
+pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --inline <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission node <key> [--mission <id>] (--hold <why> --for <30m|2h> | --no-hold)\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--summary <text>] [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>] [--follow-up <node>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission gate <node> [--mission <id>] ((--pass | --fix) --said <the operator's words> | --show <view-id|path>...)\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>]... [--show <view-id|path>]... | --clear)\nhide mission delay [--mission <id>] (--line <text> --for <30m|2h> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node-or-mission-id>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
 
 /// The largest plan or report file read from disk; the daemon refuses a
 /// frame past its own limit anyway.
@@ -58,7 +58,7 @@ pub enum MissionCli {
 /// is the one given more than once).
 pub const FLAGS: &[(&str, &[&str], &[&str])] = &[
     ("create", &["--title", "--scope", "--cap", "--github"], &[]),
-    ("plan", &["--mission", "--file", "--json"], &[]),
+    ("plan", &["--mission", "--file", "--inline"], &[]),
     (
         "node",
         &[
@@ -333,7 +333,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                 return Err(USAGE.to_owned());
             }
             let mission = mission_of(&values)?;
-            match (values.get("--file"), values.get("--json")) {
+            match (values.get("--file"), values.get("--inline")) {
                 (Some(path), None) => {
                     return Ok(MissionCli::PlanFile {
                         mission,
@@ -344,7 +344,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                     mission,
                     plan: plan_input(text)?,
                 },
-                _ => return Err("give the plan with --file or --json".to_owned()),
+                _ => return Err("give the plan with --file or --inline".to_owned()),
             }
         }
         "node" => {
@@ -1044,11 +1044,11 @@ mod tests {
     fn a_plan_is_given_once_and_read_as_a_mission_plan() {
         let neither = words(&["plan"]);
         assert!(parse(neither.iter()).is_err());
-        let bad = words(&["plan", "--json", "{\"nodes\": 3}"]);
+        let bad = words(&["plan", "--inline", "{\"nodes\": 3}"]);
         assert!(parse(bad.iter()).is_err());
         let good = words(&[
             "plan",
-            "--json",
+            "--inline",
             "{\"nodes\": [{\"key\":\"a\",\"title\":\"A\",\"kind\":\"research\"}]}",
         ]);
         assert!(matches!(

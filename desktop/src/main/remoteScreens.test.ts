@@ -2,7 +2,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
-import { REMOTE_BROWSER_SYNC_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
+import { REMOTE_BROWSER_SYNC_CHANNEL, REMOTE_PAGE_SHOWING_CHANNEL, REMOTE_SHOWING_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
 import type { HostLog } from "./log";
 import { MAX_SEND_BYTES, pageAddress } from "./remotePage";
 import { HAND_WITHIN_MS } from "../../../web/src/remoteView";
@@ -329,6 +329,59 @@ describe("an ask of a remote screen", () => {
     done(fromPage(view), { request: "r-1", outcome: "refused", kind: "start_refused" });
     done(fromPage(view), { request: "r-1", outcome: "started" });
     expect(answers()).toEqual([{ device: DEVICE, request: "r-1", outcome: "refused", kind: "start_refused" }]);
+  });
+
+  // PRD device-connect-iroh D-55: a show with a request is this computer's own work on that machine,
+  // and its window opens it in its own tile unless that machine's page says it shows it.
+  it("passes on a page's answer to a show asked with a request, and answers one that never reached its page", async () => {
+    const screens = screensOn(9, { event: vi.fn() });
+    const show = { op: "show", pane: "guest:mac:pane:w1:p3", request: "s-1" } as const;
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null, display: null });
+    screens.go({ device: DEVICE, key: KEY, work: show });
+    await loaded(1);
+    const view = views.at(-1)!;
+    expect(handed(view)).toEqual([show]);
+    const done = ipc.get(REMOTE_WORK_DONE_CHANNEL)!;
+    done(fromPage(view), { request: "s-1", outcome: "shown" });
+    done(fromPage(view), { request: "s-1", outcome: "not_listed" });
+    expect(answers()).toEqual([{ device: DEVICE, request: "s-1", outcome: "shown" }]);
+
+    screens.go({ device: DEVICE, key: REPLACEMENT, work: { ...show, request: "s-2" } });
+    screens.go({ device: DEVICE, key: REPLACEMENT, work: { op: "show", pane: "w1:p2" } });
+    expect(answers().slice(1)).toEqual([{ device: DEVICE, request: "s-2", outcome: "not_shown" }]);
+  });
+
+  // A page of an older build answers no show: the host keeps one per machine, the latest, and answers it when the page goes.
+  it("keeps one unanswered show per machine and answers it unconfirmed when the page goes", async () => {
+    const screens = screensOn(9, { event: vi.fn() });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null, display: null });
+    await loaded(1);
+    const view = views.at(-1)!;
+    const done = ipc.get(REMOTE_WORK_DONE_CHANNEL)!;
+    for (const request of ["s-1", "s-2", "s-3"]) screens.go({ device: DEVICE, key: KEY, work: { op: "show", pane: "guest:mac:pane:w1:p3", request } });
+    done(fromPage(view), { request: "s-1", outcome: "late" });
+    expect(answers()).toEqual([]);
+    screens.closeAll();
+    expect(answers()).toEqual([{ device: DEVICE, request: "s-3", outcome: "unconfirmed" }]);
+  });
+
+  // D-55: the page says which pane of another machine's work it shows, and only its own top frame is heard.
+  it("tells the window which pane of another machine's work a page shows, from that page only", async () => {
+    const screens = screensOn(9, { event: vi.fn() });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null, display: null });
+    await loaded(1);
+    const view = views.at(-1)!;
+    const showing = ipc.get(REMOTE_PAGE_SHOWING_CHANNEL)!;
+    showing({ sender: view.webContents, senderFrame: { parent: null, url: "https://example.com/" } }, { device: "mac", pane: "w1:p3" });
+    showing(fromPage(view), { device: "Not A Device", pane: "w1:p3" });
+    showing(fromPage(view), { device: "mac", pane: "" });
+    showing(fromPage(view), { device: "mac", pane: "w1:p3" });
+    showing(fromPage(view), null);
+    const told = shellSent.filter((sent) => sent.channel === REMOTE_SHOWING_CHANNEL).map((sent) => sent.value);
+    expect(told).toEqual([
+      { device: DEVICE, shown: { device: "mac", pane: "w1:p3" } },
+      { device: DEVICE, shown: null },
+    ]);
   });
 
   // An agent still coming up is not the end; a page that went takes its

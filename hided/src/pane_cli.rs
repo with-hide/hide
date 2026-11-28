@@ -1,4 +1,4 @@
-//! `hide pane read|send|open`, `hide agent read` and `hide workspace
+//! `hide pane read|send|open`, `hide agent read` and `hide checkout
 //! purpose`: an agent's reads of and input to the panes of its machine, and
 //! its checkout's purpose, through Hide rather than Herdr (PRD
 //! engine-bundle-1 D-5). The daemon runs them (`hide_core::pane_command`).
@@ -9,7 +9,10 @@ use serde_json::json;
 
 use crate::env::Env;
 
-pub const USAGE: &str = "hide pane read <pane> [--lines <n>] [--json]\nhide pane read <pane> --source visible --format ansi [--json]\nhide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]\nhide pane open --beside [--focus] -- <command>\nhide agent read <agent> [--lines <n>] [--json]\nhide workspace purpose <text>";
+pub const USAGE: &str = "hide pane read <pane> [--lines <n>] [--json]\nhide pane read <pane> --source visible --format ansi [--json]\nhide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]\nhide pane open --beside [--focus] -- <command>\nhide agent read <agent> [--lines <n>] [--json]";
+
+/// The line `hide checkout purpose` refuses its words with.
+pub const PURPOSE_USAGE: &str = "hide checkout purpose <text>";
 
 /// One parsed command, and whether its read is printed as the answer line.
 #[derive(Debug, Eq, PartialEq)]
@@ -176,7 +179,7 @@ pub fn parse_agent_read(args: &[String]) -> Result<PaneCli, String> {
     })
 }
 
-/// `hide workspace purpose <text>`, the words after `purpose`; an empty text
+/// `hide checkout purpose <text>`, the words after `purpose`; an empty text
 /// clears the purpose. The checkout it names is the one the command runs in,
 /// read when it runs.
 pub fn parse_purpose(args: &[String]) -> Result<PaneCli, String> {
@@ -188,7 +191,7 @@ pub fn parse_purpose(args: &[String]) -> Result<PaneCli, String> {
             },
             json: false,
         }),
-        _ => Err(USAGE.to_owned()),
+        _ => Err(PURPOSE_USAGE.to_owned()),
     }
 }
 

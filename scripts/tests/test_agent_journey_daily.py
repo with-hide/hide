@@ -1,0 +1,664 @@
+"""The daily real-login journey's record and the journey account's logins
+(scripts/agent_journey/daily.py, account.py; docs/VERIFICATION.md, The daily
+real-login journey): what the morning check reads tells an agent's own state
+apart from Hide's failure and carries no account name or screen text, and a
+login an agent refreshed inside the run goes back to the account."""
+
+import contextlib
+import io
+import json
+import os
+from pathlib import Path
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from types import SimpleNamespace
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from agent_journey import account, daily  # noqa: E402
+from agent_live_check.runtime import kept_login  # noqa: E402
+
+# HOME and USERPROFILE belong to this module before any runner test starts.
+# Its remaining removals must never reach the invoking account's home.
+REMOVABLE, DEDICATED = account.removable, account.dedicated
+_HOME = {}
+
+
+def setUpModule():
+    real = None
+    if os.name != "nt":
+        import pwd
+        real = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    _HOME["before"] = {key: os.environ.get(key) for key in ("HOME", "USERPROFILE")}
+    _HOME["folder"] = tempfile.TemporaryDirectory(prefix="journey-home-")
+    for key in _HOME["before"]:
+        os.environ[key] = _HOME["folder"].name
+    if Path.home().resolve() != Path(_HOME["folder"].name).resolve() or Path.home().resolve() == real:
+        raise RuntimeError("the daily runner's tests need a HOME of their own")
+
+
+def tearDownModule():
+    for key, value in _HOME["before"].items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    _HOME["folder"].cleanup()
+
+
+def cells(**statuses):
+    return {name: {"status": status, "reason": "screen said: private words", "evidence": None} for name, status in statuses.items()}
+
+
+REPORT = {
+    "agents": [
+        {"id": "claude-code", "version": "2.1.302 (Claude Code)"},
+        {"id": "grok", "version": "grok 1.0.52"},
+        {"id": "cursor", "excluded": "excluded: operator decision 2026-10-17"},
+        {"id": "pi", "version": "1.0.4", "login": "pi's login is open in another process (busy)",
+         "login_in_use": True},
+        {"id": "omp", "version": "18.7.0"},
+    ],
+    "table": {
+        "claude-code": cells(start="pass", reply="pass", profile="not measured"),
+        "grok": cells(start="pass", reply="fail", title="fail"),
+        "cursor": cells(start="excluded"),
+        "pi": cells(start="not measured"),
+        "omp": cells(start="not measured"),
+    },
+}
+# A synthetic path, address and token a command or an agent might print.
+# Split so the workstation-identity check does not read it as a real home.
+PRIVATE = "/Users" "/someone/secret someone@example.com sk-ant-0123456789abcdef0123456789"
+
+
+class ModuleIsolation(unittest.TestCase):
+    def test_windows_module_setup_needs_no_posix_account_module(self):
+        # Windows has no pwd and Path.home reads USERPROFILE. Exercise the
+        # setup in a child so its HOME changes cannot disturb this module.
+        program = """
+import builtins, os, runpy, sys
+from pathlib import Path
+from types import SimpleNamespace
+module = runpy.run_path(sys.argv[1])
+setup, teardown = module['setUpModule'], module['tearDownModule']
+setup.__globals__['os'] = SimpleNamespace(name='nt', environ=os.environ)
+original = builtins.__import__
+def without_pwd(name, *args, **kwargs):
+    if name == 'pwd':
+        raise ModuleNotFoundError('pwd is unavailable on Windows')
+    return original(name, *args, **kwargs)
+builtins.__import__ = without_pwd
+before = {key: os.environ.get(key) for key in ('HOME', 'USERPROFILE')}
+setup()
+try:
+    assert os.environ['HOME'] == os.environ['USERPROFILE']
+    assert os.environ['HOME'] != before['HOME']
+    assert Path.home() == Path(os.environ['HOME'])
+finally:
+    teardown()
+assert {key: os.environ.get(key) for key in before} == before
+"""
+        done = subprocess.run([sys.executable, "-c", program, __file__],
+                              capture_output=True, text=True, timeout=30)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+
+class Summary(unittest.TestCase):
+    def test_each_agent_reads_as_what_the_journey_saw(self):
+        rows = {row["id"]: row for row in daily.summarize(REPORT)}
+        self.assertEqual(rows["claude-code"]["result"], "pass")
+        self.assertEqual(rows["claude-code"]["cli"], "2.1.302")
+        self.assertEqual(rows["grok"]["result"], "fail")
+        self.assertEqual(rows["grok"]["failed"], ["reply", "title"])
+        self.assertEqual(rows["cursor"]["result"], "excluded")
+        # A login held by an agent left open is not a sign-in the person must make.
+        self.assertEqual(rows["pi"]["result"], "login in use")
+        self.assertEqual(rows["omp"]["result"], "not measured")
+
+    def test_an_agents_own_state_goes_beside_hides_failure_never_over_it(self):
+        # A resume Hide broke stays failed when the agent's login expires
+        # afterwards: the reader sees both.
+        rows = daily.summarize(REPORT)
+        asked = []
+        daily.recheck(rows, {"grok": "grok"}, lambda kind: asked.append(kind) or "login needed")
+        grok = next(row for row in rows if row["id"] == "grok")
+        self.assertEqual((grok["result"], grok["failed"], grok["outside"]), ("fail", ["reply", "title"], "login needed"))
+        self.assertEqual(asked, ["grok"])
+
+    def test_an_agent_that_does_not_answer_first_is_not_measured_and_says_why(self):
+        self.assertEqual(daily.unmeasured("codex", "login needed"),
+                         {"id": "codex", "cli": None, "cells": {}, "failed": [], "result": "login needed",
+                          "outside": "login needed"})
+        self.assertEqual(daily.unmeasured("grok", "usage limit")["result"], "not measured")
+
+    def test_what_the_agent_said_outside_hide_is_kept_nowhere(self):
+        said = daily.Tail(daily.OUTPUT_TAIL)
+        said.data += f"signed in as {PRIVATE}: usage limit reached".encode()
+        stream = io.StringIO()
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(daily, "journey_root", return_value=Path(root)), \
+                mock.patch.object(daily, "step", return_value=(1, said)):
+            (Path(root) / "bin").mkdir()
+            (Path(root) / "bin/grok").write_text("")
+            self.assertEqual(daily.check_outside(None, "grok", stream, {}), "usage limit")
+        for private in PRIVATE.split():
+            self.assertNotIn(private, stream.getvalue())
+
+    def test_what_an_agent_said_reads_as_its_kind(self):
+        for said, kind in (("Claude AI usage limit reached|1764000000", "usage limit"),
+                           ("You've hit your usage limit. Upgrade to Pro", "usage limit"),
+                           ("ERROR: 429 Too Many Requests", "usage limit"),
+                           ("Invalid API key · Please run /login", "login needed"),
+                           ("Your refresh token was already used. Please log out and sign in again.", "login needed"),
+                           ("401 Unauthorized", "login needed"),
+                           ("Error: Not logged in. Run grok login.", "login needed"),
+                           ("A new version is required; run npm i -g to update", "update needed"),
+                           # A failure that only names a login on its way is not a refusal of it.
+                           ("connect ECONNRESET while loading login state", "agent error"),
+                           ("Segmentation fault", "agent error")):
+            self.assertEqual(daily.agent_state(said), kind, said)
+
+    def test_the_record_holds_results_and_no_account_or_screen_text(self):
+        record = {"format": 1, "started": "2026-11-29T05:00:07+09:00", "if_stale": daily.STALE, "source": "main",
+                  "request": None, "run": "ok", "exit": 1, "commit": "a" * 40, "minutes": 84,
+                  "agents": daily.summarize(REPORT)}
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(daily, "journey_root", return_value=Path(root)), \
+                mock.patch.object(account, "removable", side_effect=lambda home, path: Path(root) in Path(path).parents):
+            daily.publish(record, io.StringIO())
+            text = (Path(root) / daily.RECORD).read_text()
+            self.assertEqual(sorted(path.name for path in Path(root).iterdir()), [daily.RECORD])
+        read = json.loads(text)
+        self.assertEqual({row["id"]: row["result"] for row in read["agents"]},
+                         {"claude-code": "pass", "grok": "fail", "cursor": "excluded", "pi": "login in use",
+                          "omp": "not measured"})
+        for private in ("/Users/", "another process", "private words"):
+            self.assertNotIn(private, text)
+
+
+@unittest.skipIf(os.name == "nt", "the daily runner uses macOS flock and signals")
+class Runner(unittest.TestCase):
+    SETTINGS = {"toolchain_bin": "/nowhere", "rustup_home": "/nowhere", "cargo_lock": "/nowhere"}
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.root, ignore_errors=True))
+        self.runs = self.root / "runs"
+        # The run's own account home: the runner maintains folders there, so a
+        # test must never reach the home of the account running it.
+        self.home = self.root / "home"
+        self.home.mkdir()
+        for target, name, value in ((daily, "journey_root", mock.Mock(return_value=self.root)),
+                                    (daily, "runs_folder", mock.Mock(return_value=self.runs)),
+                                    (daily, "account_home", mock.Mock(return_value=self.home)),
+                                    # Stand in for the journey account: this test's own folder.
+                                    (daily.account, "dedicated", lambda home=None: home == self.home),
+                                    (daily.account, "removable",
+                                     lambda home, path: home == self.home and self.root in Path(path).parents),
+                                    (daily.signal, "signal", mock.Mock())):
+            patcher = mock.patch.object(target, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def run_with(self, failure):
+        (self.root / "request.json").write_text(json.dumps({"commit": "b" * 40, "id": "0123abcd"}))
+        with mock.patch.object(daily, "checkout", side_effect=failure):
+            code = daily.run(self.SETTINGS)
+        return code, json.loads((self.root / daily.RECORD).read_text())
+
+    def test_cli_links_replace_atomically_and_refuse_a_linked_parent(self):
+        root = self.home / "journey"
+        root.mkdir()
+        table = (daily.CHECKOUT / "contracts/agent-clis.json").read_bytes()
+        folder = root / "clis" / __import__("hashlib").sha256(table).hexdigest()[:16]
+        folder.mkdir(parents=True)
+        installed = folder / "installed.json"
+        installed.write_text(json.dumps({"claude": str(folder / "first")}))
+        with mock.patch.object(daily, "journey_root", return_value=root), \
+                mock.patch.object(account, "removable", REMOVABLE), \
+                mock.patch.object(Path, "unlink", side_effect=AssertionError("link update must not unlink")):
+            daily.install_clis(None, io.StringIO(), {})
+            installed.write_text(json.dumps({"claude": str(folder / "second")}))
+            daily.install_clis(None, io.StringIO(), {})
+            self.assertEqual(os.readlink(root / "bin/claude"), str(folder / "second"))
+            (root / "bin").rename(root / "old-bin")
+            vault = self.home / "vault"
+            vault.mkdir()
+            protected = vault / "claude"
+            protected.write_bytes(b"keep this file")
+            (root / "bin").symlink_to(vault, target_is_directory=True)
+            with self.assertRaises(RuntimeError):
+                daily.install_clis(None, io.StringIO(), {})
+            self.assertEqual(protected.read_bytes(), b"keep this file")
+            self.assertEqual(list(vault.iterdir()), [protected])
+
+    def test_request_is_archived_and_a_linked_request_is_refused(self):
+        root, runs = self.home / "journey", self.home / "runs"
+        root.mkdir()
+        request = root / "request.json"
+        asked = {"commit": "b" * 40, "id": "0123abcd"}
+        request.write_text(json.dumps(asked))
+        with mock.patch.object(daily, "journey_root", return_value=root), \
+                mock.patch.object(daily, "runs_folder", return_value=runs), \
+                mock.patch.object(account, "removable", REMOVABLE), \
+                mock.patch.object(daily, "checkout", side_effect=daily.Stage("checkout failed")), \
+                mock.patch.object(Path, "unlink", side_effect=AssertionError("request must not unlink")):
+            self.assertEqual(daily.run(self.SETTINGS), 1)
+            archived = list(runs.glob("daily-*/request.json"))
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(json.loads(archived[0].read_text()), asked)
+            self.assertFalse(request.exists())
+            request.symlink_to(archived[0])
+            with self.assertRaises(RuntimeError):
+                daily.run(self.SETTINGS)
+            self.assertTrue(request.is_symlink())
+            self.assertEqual(json.loads(archived[0].read_text()), asked)
+
+    def test_a_run_that_did_not_finish_never_reads_as_ok(self):
+        for failure, run in ((daily.Stage("install timed out"), "install timed out"),
+                             (subprocess.TimeoutExpired("installer", 1), "runner failed: TimeoutExpired"),
+                             (OSError(PRIVATE), "runner failed: OSError"),
+                             (daily.Stopped(), "runner stopped")):
+            with self.subTest(run=run):
+                code, record = self.run_with(failure)
+                self.assertNotEqual(code, 0)
+                self.assertEqual((record["run"], record["request"]), (run, "0123abcd"))
+                logs = "".join(path.read_text() for path in (self.root / "logs").iterdir())
+                for private in PRIVATE.split():
+                    self.assertNotIn(private, json.dumps(record))
+                    self.assertNotIn(private, logs)
+
+    def test_only_the_agents_that_answer_first_are_measured(self):
+        kinds = {row["id"]: row["agent_cli"] for row in json.loads(
+            (daily.CHECKOUT / "contracts/agent-journey.json").read_text())}
+        silent = {"codex": "login needed", "grok": "usage limit"}
+        journeys = []
+
+        def journey(owner, name, argv, stream, env, seconds, cwd=daily.CHECKOUT):
+            journeys.append(argv)
+            run_dir = Path(argv[argv.index("--run-dir") + 1])
+            run_dir.mkdir(parents=True, exist_ok=True)
+            agents = argv[argv.index("--agents") + 1].split(",")
+            (run_dir / "report.json").write_text(json.dumps({
+                "agents": [{"id": key, "version": "1.0.0"} for key in agents],
+                "table": {key: cells(start="pass") for key in agents}}))
+            return 0, daily.Tail(daily.OUTPUT_TAIL)
+
+        def outside(owner, kind, stream, env):
+            return next((state for key, state in silent.items() if kinds[key] == kind), "answers")
+
+        with mock.patch.object(daily, "checkout", return_value="c" * 40), mock.patch.object(daily, "install_clis"), \
+                mock.patch.object(daily, "build"), mock.patch.object(daily, "check_outside", side_effect=outside), \
+                mock.patch.object(daily, "step", side_effect=journey):
+            code = daily.run(self.SETTINGS)
+        record = json.loads((self.root / daily.RECORD).read_text())
+        self.assertEqual((code, record["run"]), (0, "ok"))
+        selected = journeys[0][journeys[0].index("--agents") + 1].split(",")
+        self.assertEqual(sorted(selected), sorted(key for key in kinds
+                                                  if key not in silent and key not in daily.EXCLUDED_AGENTS))
+        rows = {row["id"]: row for row in record["agents"]}
+        self.assertEqual(list(rows), list(kinds))
+        self.assertEqual((rows["codex"]["result"], rows["codex"]["outside"]), ("login needed", "login needed"))
+        self.assertEqual((rows["grok"]["result"], rows["grok"]["outside"]), ("not measured", "usage limit"))
+        for key in set(daily.EXCLUDED_AGENTS) & set(kinds):
+            self.assertEqual(rows[key]["result"], "excluded")
+        self.assertEqual(rows["claude-code"]["result"], "pass")
+
+    def test_a_step_logs_its_exit_and_nothing_it_printed(self):
+        stream = io.StringIO()
+        with daily.OwnedProcesses(run_seconds=60) as owner:
+            code, _ = daily.step(owner, "build", [sys.executable, "-c", f"print({PRIVATE!r}); raise SystemExit(3)"],
+                                 stream, dict(os.environ), 30, cwd=self.root)
+        self.assertEqual(code, 3)
+        self.assertIn("build: exit 3", stream.getvalue())
+        for private in PRIVATE.split():
+            self.assertNotIn(private, stream.getvalue())
+
+    def test_a_guardians_own_failure_reaches_the_log(self):
+        # Only the process exception type crosses into the daily log.
+        program = (f"import subprocess, sys, time\nprint({PRIVATE!r}, flush=True)\n"
+                   "for _ in range(3):\n"
+                   "    subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+                   "time.sleep(30)\n")
+        stream = io.StringIO()
+        with daily.OwnedProcesses(run_seconds=60, limits=daily.Limits(descendants=2)) as owner:
+            with self.assertRaises(daily.ProcessError):
+                daily.step(owner, "probe", [sys.executable, "-c", program], stream, dict(os.environ), 20,
+                           cwd=self.root)
+        self.assertIn("probe: ProcessSafetyError", stream.getvalue())
+        for private in PRIVATE.split():
+            self.assertNotIn(private, stream.getvalue())
+
+    def test_a_guardians_failure_keeps_its_kind_and_none_of_its_message(self):
+        # The guardian's own error names the program it could not start; the
+        # log keeps the process exception type, not the guardian pipe.
+        missing = PRIVATE.split()[0] + "/" + PRIVATE.split()[1]
+        stream = io.StringIO()
+        with daily.OwnedProcesses(run_seconds=60) as owner:
+            with self.assertRaises(daily.ProcessError):
+                daily.step(owner, "probe", [missing, PRIVATE.split()[2]], stream, dict(os.environ), 20,
+                           cwd=self.root)
+        self.assertIn("probe: ProcessSafetyError", stream.getvalue())
+        for private in PRIVATE.split() + ["someone", "Errno"]:
+            self.assertNotIn(private, stream.getvalue())
+
+    def test_command_output_cannot_impersonate_a_guardian_error_in_the_log(self):
+        forged = "guardian_failure:Account:SyntheticPrivateAccountName"
+        stream = io.StringIO()
+        with daily.OwnedProcesses(run_seconds=60) as owner:
+            with self.assertRaises(daily.ProcessError):
+                daily.step(owner, "probe", [sys.executable, "-c", f"print({forged!r}); raise SystemExit(125)"],
+                           stream, dict(os.environ), 20, cwd=self.root)
+        self.assertIn("probe: ProcessSafetyError", stream.getvalue())
+        self.assertNotIn("SyntheticPrivateAccountName", stream.getvalue())
+        self.assertNotIn("guardian_failure", stream.getvalue())
+
+    def write(self, relative, size, days_old):
+        path = self.home / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * size)
+        stamp = time.time() - days_old * 86400
+        os.utime(path, (stamp, stamp))
+        return path
+
+    def test_store_measurement_preserves_every_file_even_old_open_sessions(self):
+        paths = [self.write(name, 400, 30) for name in (
+            ".codex/auth.json", ".local/share/opencode/opencode.db",
+            ".claude/projects/-probe/a.jsonl", ".omp/agent/sessions/-probe/b.jsonl",
+            ".omp/agent/sessions/-probe/.b.jsonl.lock.os", ".grok/sessions/probe/c/updates.jsonl",
+            ".codex/sessions/2026/11/27/rollout-d.jsonl", ".pi/agent/sessions/probe/e.jsonl")]
+        import fcntl
+        with paths[3].open("rb") as session, paths[4].open("rb") as lock, \
+                mock.patch.object(daily, "STORES_CAP", 1):
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(daily.stores_size(self.home), 3200)
+            self.assertEqual(session.read(), b"x" * 400)
+            for path in paths:
+                self.assertEqual(path.read_bytes(), b"x" * 400)
+
+    def test_a_run_that_grows_stores_past_the_cap_fails_even_when_all_cells_pass(self):
+        def journey(owner, name, argv, stream, env, seconds, **kwargs):
+            self.write(".codex/sessions/2026/11/28/rollout-new.jsonl", 101, 0)
+            run_dir = Path(argv[argv.index("--run-dir") + 1])
+            run_dir.mkdir(parents=True, exist_ok=True)
+            agents = argv[argv.index("--agents") + 1].split(",")
+            (run_dir / "report.json").write_text(json.dumps({
+                "agents": [{"id": key, "version": "1.0.0"} for key in agents],
+                "table": {key: cells(start="pass") for key in agents}}))
+            return 0, daily.Tail(daily.OUTPUT_TAIL)
+
+        with mock.patch.object(daily, "STORES_CAP", 100), \
+                mock.patch.object(daily, "checkout", return_value="c" * 40), \
+                mock.patch.object(daily, "install_clis"), mock.patch.object(daily, "build"), \
+                mock.patch.object(daily, "check_outside", return_value="answers"), \
+                mock.patch.object(daily, "step", side_effect=journey):
+            code = daily.run(self.SETTINGS)
+        record = json.loads((self.root / daily.RECORD).read_text())
+        self.assertEqual((code, record["run"], record["exit"]), (1, "agent stores over cap", 0))
+        self.assertTrue(all(row["result"] in ("pass", "excluded") for row in record["agents"]))
+        self.assertEqual(daily.stores_size(self.home), 101)
+
+    def test_stores_past_the_cap_with_nothing_ended_start_no_work(self):
+        self.write(".codex/packages/daemon", 2000, 30)
+        self.write(".pi/agent/sessions/--probe--/e.jsonl", 400, 0.1)
+        work = mock.Mock(side_effect=AssertionError("started work"))
+        with mock.patch.object(daily, "STORES_CAP", 1000), mock.patch.object(daily, "checkout", work), \
+                mock.patch.object(daily, "install_clis", work), mock.patch.object(daily, "build", work), \
+                mock.patch.object(daily, "check_outside", work), mock.patch.object(daily, "step", work):
+            code = daily.run(self.SETTINGS)
+        record = json.loads((self.root / daily.RECORD).read_text())
+        self.assertEqual((code, record["run"], record["stores_mb"]), (1, "agent stores over cap", 0))
+        self.assertTrue((self.home / ".pi/agent/sessions/--probe--/e.jsonl").exists())
+
+    def test_a_run_outside_the_journey_account_makes_nothing(self):
+        # The real check, whatever account runs the tests: none is the journey's here.
+        with mock.patch.object(daily.account, "dedicated", DEDICATED), self.assertRaises(RuntimeError):
+            daily.run(self.SETTINGS)
+        self.assertEqual(list(self.root.iterdir()), [self.home])
+
+    @unittest.skipUnless(sys.platform == "darwin", "the journey account is macOS's")
+    def test_only_the_journey_accounts_own_files_are_removable(self):
+        home = self.root / "hidejourney"
+        session = home / ".claude/projects/-probe/a.jsonl"
+        session.parent.mkdir(parents=True)
+        session.write_text("{}")
+        (home / account.MARKER).write_text("")
+        outside = self.root / "other.jsonl"
+        outside.write_text("{}")
+        link = home / ".claude/projects/-probe/link.jsonl"
+        link.symlink_to(outside)
+        alias = home / "journey"
+        alias.symlink_to(session.parent, target_is_directory=True)
+        me = SimpleNamespace(pw_name=account.NAME, pw_dir=str(home))
+        with mock.patch("pwd.getpwuid", return_value=me), mock.patch.object(account, "dedicated", DEDICATED), \
+                mock.patch.object(account, "administrator", return_value=False):
+            self.assertTrue(REMOVABLE(home, session))
+            for path in (outside, link, home, alias / session.name):
+                self.assertFalse(REMOVABLE(home, path), path)
+            self.assertFalse(REMOVABLE(self.root, outside))
+            with mock.patch("pwd.getpwuid", return_value=SimpleNamespace(pw_name="someone", pw_dir=str(home))):
+                self.assertFalse(REMOVABLE(home, session))
+            (home / account.MARKER).unlink()
+            self.assertFalse(REMOVABLE(home, session))
+
+    ENTRY = Path(daily.__file__).parents[1] / "agent-journey-daily.py"
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS's admin group")
+    def test_an_uncaught_failure_at_the_entry_point_names_only_its_kind(self):
+        # launchd keeps the runner's stderr in the account's log. Setup asked
+        # about an account that does not exist fails in pwd, whose message
+        # names the account.
+        name = PRIVATE.split()[1]
+        done = subprocess.run([sys.executable, str(self.ENTRY), "setup", "--cargo-lock", PRIVATE.split()[0],
+                               "--toolchain-bin", str(self.root), "--rustup-home", str(self.root)],
+                              env={**os.environ, "USER": name}, capture_output=True, text=True, timeout=60)
+        self.assertEqual((done.returncode, done.stdout, done.stderr),
+                         (1, "", "agent-journey-daily: failed: KeyError\n"))
+
+    def test_an_uncaught_failure_in_a_thread_names_only_its_kind(self):
+        program = ("import runpy, sys, threading\n"
+                   "runpy.run_path(sys.argv[1])\n"
+                   f"def fail():\n    raise OSError({PRIVATE!r})\n"
+                   "thread = threading.Thread(target=fail); thread.start(); thread.join()\n"
+                   "fail()\n")
+        done = subprocess.run([sys.executable, "-c", program, str(self.ENTRY)], capture_output=True, text=True,
+                              timeout=60)
+        self.assertEqual((done.returncode, done.stderr), (1, "agent-journey-daily: failed: OSError\n" * 2))
+
+    def test_a_step_whose_output_cannot_be_read_fails_by_its_kind(self):
+        # The reader thread's failure is the step's, raised to its caller.
+        class Unreadable(daily.Tail):
+            def read(self, stream):
+                def refused():
+                    raise OSError(PRIVATE)
+                super().read(SimpleNamespace(fileno=refused))
+
+        stream = io.StringIO()
+        with mock.patch.object(daily, "Tail", Unreadable), daily.OwnedProcesses(run_seconds=60) as owner:
+            with self.assertRaises(OSError):
+                daily.step(owner, "probe", [sys.executable, "-c", "pass"], stream, dict(os.environ), 20,
+                           cwd=self.root)
+        self.assertIn("probe: output unreadable: OSError", stream.getvalue())
+        for private in PRIVATE.split():
+            self.assertNotIn(private, stream.getvalue())
+
+    GRANDCHILD = "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(60)"
+    PARENT = ("import subprocess, sys, time\n"
+              "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])\n"
+              "time.sleep(60)\n")
+
+    def ended(self, marker, seconds):
+        """Whether the process whose pid `marker` holds ends within `seconds`."""
+        end = time.monotonic() + seconds
+        while not marker.is_file() or not marker.read_text():
+            self.assertLess(time.monotonic(), end, "the grandchild never started")
+            time.sleep(0.05)
+        pid = int(marker.read_text())
+        while True:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            if time.monotonic() >= end:
+                os.kill(pid, 9)
+                return False
+            time.sleep(0.05)
+
+    def test_a_step_ends_its_whole_tree_at_its_deadline(self):
+        marker = self.root / "grandchild"
+        with daily.OwnedProcesses(run_seconds=60) as owner:
+            with self.assertRaisesRegex(daily.Stage, "probe timed out"):
+                daily.step(owner, "probe", [sys.executable, "-c", self.PARENT, self.GRANDCHILD, str(marker)],
+                           io.StringIO(), dict(os.environ), 3, cwd=self.root)
+        self.assertTrue(self.ended(marker, 0))
+
+    def test_a_runner_killed_outright_leaves_no_command_running(self):
+        # The guardian of each command ends its tree when the runner's end of
+        # their pipe closes, SIGKILL included.
+        marker = self.root / "grandchild"
+        runner = (f"import io, os, sys\nsys.path.insert(0, {str(daily.CHECKOUT / 'scripts')!r})\n"
+                  "from agent_journey import daily\n"
+                  "with daily.OwnedProcesses(run_seconds=60) as owner:\n"
+                  "    daily.step(owner, 'probe', [sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3]],"
+                  " io.StringIO(), dict(os.environ), 60)\n")
+        process = subprocess.Popen([sys.executable, "-c", runner, self.PARENT, self.GRANDCHILD, str(marker)],
+                                   cwd=self.root)
+        try:
+            end = time.monotonic() + 20
+            while not marker.is_file() or not marker.read_text():
+                self.assertLess(time.monotonic(), end, "the grandchild never started")
+                time.sleep(0.05)
+        finally:
+            process.kill()
+            process.wait()
+        self.assertTrue(self.ended(marker, 10), "the grandchild outlived its killed runner")
+
+    @unittest.skipUnless(Path("/usr/bin/lockf").exists(), "lockf(1) is BSD's and macOS's")
+    def test_the_shared_lock_is_free_once_a_step_that_held_it_ends(self):
+        lock, marker = self.root / "cargo.lock", self.root / "grandchild"
+        argv = ["/usr/bin/lockf", "-k", "-t", "0", str(lock), sys.executable, "-c", self.PARENT, self.GRANDCHILD,
+                str(marker)]
+        with daily.OwnedProcesses(run_seconds=60) as owner:
+            with self.assertRaisesRegex(daily.Stage, "build timed out"):
+                daily.step(owner, "build", argv, io.StringIO(), dict(os.environ), 3, cwd=self.root)
+        self.assertTrue(self.ended(marker, 0))
+        free = subprocess.run(["/usr/bin/lockf", "-k", "-t", "0", str(lock), "/usr/bin/true"])
+        self.assertEqual(free.returncode, 0)
+
+    def test_old_runs_go_past_their_count_or_their_bytes(self):
+        self.runs.mkdir()
+        for day in range(1, 6):
+            (self.runs / f"daily-2026112{day}").mkdir()
+            (self.runs / f"daily-2026112{day}" / "report.json").write_bytes(b"x" * 100)
+        daily.keep_newest(self.runs, 4, 250)
+        self.assertEqual(sorted(path.name for path in self.runs.iterdir()), ["daily-20261124", "daily-20261125"])
+        daily.keep_newest(self.runs, 1, 10 ** 6)
+        self.assertEqual([path.name for path in self.runs.iterdir()], ["daily-20261125"])
+
+
+@unittest.skipIf(os.name == "nt", "login write-back belongs to the macOS journey account")
+class WriteBackTest(unittest.TestCase):
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.folder))
+        (self.folder / "account").mkdir()
+        (self.folder / "private").mkdir()
+
+    def copy(self, name, content):
+        source, private = self.folder / "account" / name, self.folder / "private" / name
+        source.write_bytes(content)
+        private.write_bytes(content)
+        return source, private
+
+    def test_a_login_the_agent_refreshed_goes_back_to_the_account(self):
+        source, private = self.copy("auth.json", b'{"token": "old"}')
+        entry = account.WriteBack(source, private)
+        private.write_bytes(b'{"token": "new"}')
+        self.assertEqual(account.write_back([entry], {private: kept_login(private)}),
+                         {"auth.json": "written back"})
+        self.assertEqual(source.read_bytes(), b'{"token": "new"}')
+        self.assertEqual(source.stat().st_mode & 0o777, 0o600)
+
+    def test_an_untouched_login_stays_as_it_is(self):
+        source, private = self.copy("auth.json", b'{"token": "old"}')
+        entry = account.WriteBack(source, private)
+        before = source.stat().st_ino
+        self.assertEqual(entry.apply(kept_login(private)), "unchanged")
+        self.assertEqual(source.stat().st_ino, before)
+
+    def test_a_login_changed_in_the_account_during_the_run_is_kept(self):
+        source, private = self.copy("auth.json", b'{"token": "old"}')
+        entry = account.WriteBack(source, private)
+        private.write_bytes(b'{"token": "copy"}')
+        source.write_bytes(b'{"token": "signed in again"}')
+        self.assertIn("changed during the run", entry.apply(kept_login(private)))
+        self.assertEqual(source.read_bytes(), b'{"token": "signed in again"}')
+
+    def test_a_database_goes_back_whole_with_no_stale_journal(self):
+        source = self.folder / "account" / "agent.db"
+        with contextlib.closing(sqlite3.connect(source)) as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("CREATE TABLE auth (token TEXT)")
+            db.execute("INSERT INTO auth VALUES ('old')")
+            db.commit()
+        private = self.folder / "private" / "agent.db"
+        with contextlib.closing(sqlite3.connect(source)) as db, contextlib.closing(sqlite3.connect(private)) as copy:
+            db.backup(copy)
+        entry = account.WriteBack(source, private)
+        with contextlib.closing(sqlite3.connect(private)) as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("UPDATE auth SET token = 'new'")
+            db.commit()
+        self.assertEqual(entry.apply(kept_login(private)), "written back")
+        self.assertFalse(source.with_name("agent.db-wal").exists())
+        with contextlib.closing(sqlite3.connect(source)) as db:
+            self.assertEqual(db.execute("SELECT token FROM auth").fetchall(), [("new",)])
+
+
+class Account(unittest.TestCase):
+    def test_the_signed_in_journey_asks_whether_it_runs_on_the_journey_account(self):
+        from agent_journey import cli
+        from agent_live_check.protection import ProtectionError
+        with mock.patch.object(cli, "journey_account", return_value=False) as asked:
+            # Refused after the question, for an agent no adapter declares.
+            with self.assertRaises(ProtectionError):
+                cli.main(["--mode", "local", "--agents", "no-such-agent"])
+        asked.assert_called_once()
+
+
+    @unittest.skipIf(os.name == "nt", "no account database to stand in for")
+    def test_only_the_journey_user_in_its_own_marked_home_is_the_journey_account(self):
+        with tempfile.TemporaryDirectory() as home, mock.patch.object(account.sys, "platform", "darwin"):
+            (Path(home) / account.MARKER).write_text("")
+            journey = SimpleNamespace(pw_name=account.NAME, pw_dir=home)
+            with mock.patch("pwd.getpwuid", return_value=journey):
+                with mock.patch.object(account, "administrator", return_value=True):
+                    self.assertFalse(account.dedicated(home))
+                with mock.patch.object(account, "administrator", return_value=False):
+                    self.assertTrue(account.dedicated(home))
+                    with tempfile.TemporaryDirectory() as other:
+                        (Path(other) / account.MARKER).write_text("")
+                        self.assertFalse(account.dedicated(other))
+            with mock.patch("pwd.getpwuid", return_value=SimpleNamespace(pw_name="someone", pw_dir=home)), \
+                    mock.patch.object(account, "administrator", return_value=False):
+                self.assertFalse(account.dedicated(home))
+            (Path(home) / account.MARKER).unlink()
+            with mock.patch("pwd.getpwuid", return_value=journey), \
+                    mock.patch.object(account, "administrator", return_value=False):
+                self.assertFalse(account.dedicated(home))
+
+    def test_the_journey_account_exists_only_on_macos(self):
+        # Windows has no account database to ask; the CLI installer asks
+        # this question on every system.
+        with tempfile.TemporaryDirectory() as home, mock.patch.object(account.sys, "platform", "win32"), \
+                mock.patch.object(account, "administrator", side_effect=AssertionError("asked off macOS")):
+            (Path(home) / account.MARKER).write_text("")
+            self.assertFalse(account.dedicated(home))
+
+
+if __name__ == "__main__":
+    unittest.main()

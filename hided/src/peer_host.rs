@@ -27,7 +27,7 @@ use hide_kit::layout;
 use hide_peer::peers::{Config, Peers};
 use hide_peer::pipe::{Beside, Either, PipeConn, PipeTransport};
 use hide_peer::protocol::hello::GrantState;
-use hide_peer::protocol::{Candidate, PeerAddr, StreamKind};
+use hide_peer::protocol::{Candidate, PeerAddr, PeerKey, StreamKind};
 use hide_peer::store::{Grant, GrantStatus, Grants, Host, Known, KnownState};
 use hide_peer::{Clock, MachineKey, PeerEvent, PeerTransport};
 use hide_peer_iroh::{DEVICE_RELAY_URL, IrohConn, IrohTransport, Options};
@@ -184,8 +184,8 @@ impl Settings {
             (None, None) => PipeTransport::accepting(pipe_key),
             (wsl, ssh) => {
                 let (wsl, carriers) = (wsl.clone(), ssh.clone());
-                let pipe = PipeTransport::dialing(pipe_key, move |to| {
-                    carrier_to(wsl.as_ref(), carriers.as_ref(), to)
+                let pipe = PipeTransport::dialing(pipe_key, move |to, bound| {
+                    carrier_to(wsl.as_ref(), carriers.as_ref(), to, bound)
                 });
                 match ssh {
                     Some(routes) => pipe.with_routes(Arc::clone(routes) as _),
@@ -244,14 +244,15 @@ impl Settings {
     }
 }
 
-/// The carrier to the machine `to` names: a distribution's through
-/// `wsl.exe`, an alias's through the system `ssh`. Either is started off
-/// the runtime; a dial given up meanwhile drops what it gets, which ends its
-/// child.
+/// The carrier to the machine `to` names, for a dial under `bound`: a
+/// distribution's through `wsl.exe`, an alias's through the system `ssh`.
+/// Either is started off the runtime; a dial given up meanwhile drops what
+/// it gets, which ends its child.
 fn carrier_to(
     wsl: Option<&Arc<crate::pairing_wsl::Carriers>>,
     ssh: Option<&Arc<crate::peer_ssh::SshCarriers>>,
     to: &PeerAddr,
+    bound: hide_peer::DialBound,
 ) -> Pin<Box<dyn Future<Output = io::Result<hide_peer::mux::Carrier>> + Send>> {
     let no = |what: &str| io::Error::new(io::ErrorKind::InvalidInput, what.to_owned());
     if let Some(distro) = hide_peer::pipe::distribution(to).map(str::to_owned) {
@@ -265,7 +266,9 @@ fn carrier_to(
         });
     }
     match (hide_peer::protocol::addr::ssh_alias(to), ssh) {
-        (Some(alias), Some(carriers)) => Box::pin(carriers.carrier(to.key, alias.to_owned())),
+        (Some(alias), Some(carriers)) => {
+            Box::pin(carriers.carrier(to.key, alias.to_owned(), bound))
+        }
         _ => Box::pin(std::future::ready(Err(no(
             "the address names no carrier this machine makes",
         )))),
@@ -498,6 +501,26 @@ impl PeerHost {
     /// The open endpoint's connections; `None` while it is not open.
     pub fn peers(&self) -> Option<HostPeers> {
         self.opened.get().cloned()
+    }
+
+    /// Whether a machine that opens this one is connected now: its grant
+    /// here is active (`hide device list`: "it opens this machine: active")
+    /// and the connection is live. Such a machine shows this one's screen
+    /// whenever its operator turns to its tile, though its desktop closes
+    /// the screen's socket while the tile is hidden (PRD device-connect-iroh
+    /// B63).
+    pub fn viewer_connected(&self) -> bool {
+        let Some(peers) = self.peers() else {
+            return false;
+        };
+        let granted: Vec<PeerKey> = peers.grants(|grants, now| {
+            grants
+                .list(now)
+                .filter(|grant| grant.state == GrantStatus::Active)
+                .map(|grant| grant.key)
+                .collect()
+        });
+        granted.iter().any(|key| peers.link(key).is_some())
     }
 
     /// The endpoint once it is open, however long that takes: for a service

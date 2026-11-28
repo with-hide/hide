@@ -474,8 +474,12 @@ fn next_action(reason: &str, display: &str) -> String {
             "The display is not in front; ask the operator to show it, then retry".to_owned()
         }
         "display_unsupported" | "browser_address_unsupported" => {
-            "hide browser works on http(s) and blank displays; open the page with hide browser open <url>".to_owned()
+            "hide browser works on http(s), blank and file pages; open the page with hide browser open <url-or-path>".to_owned()
         }
+        // A file page's refusals say who drives it, as hided gave them.
+        "file_page_pane_only" => crate::browser_control::FILE_PAGE_PANE_ONLY.1.to_owned(),
+        "outside_page_not_opened" => crate::browser_control::OUTSIDE_PAGE_NOT_OPENED.1.to_owned(),
+        "file_page_elsewhere" => crate::browser_control::FILE_PAGE_ELSEWHERE.1.to_owned(),
         "display_missing" | "browser_display_missing" => {
             "Run hide view list and choose a current browser display".to_owned()
         }
@@ -496,7 +500,7 @@ fn next_action(reason: &str, display: &str) -> String {
             "The machine whose window shows this display is not reachable; retry once it is back".to_owned()
         }
         "drag_not_started" => "The source did not start a native drag; retry with --mode pointer".to_owned(),
-        "screenshot_failed" => "Retry the screenshot; if it keeps failing, check the display with hide view status".to_owned(),
+        "screenshot_failed" => "Retry the screenshot; if it keeps failing, check the display with hide view show".to_owned(),
         "cdp_error" | "page_script_failed" => {
             format!("The page changed under the command; run {snapshot} and retry against what it shows")
         }

@@ -52,7 +52,7 @@ use crate::gate::{CLOSED, Gate, Guarded};
 use crate::limits;
 use crate::store::{Change, Grant, GrantStatus, Grants, Host, Known, KnownState, StoreError, Via};
 use crate::transport::Route;
-use crate::transport::{PeerConn, PeerTransport, TransportError};
+use crate::transport::{DialBound, PeerConn, PeerTransport, TransportError};
 use crate::wire;
 
 /// A peer as the rest of Hide names it: its connection id and its product
@@ -1289,11 +1289,13 @@ impl<T: PeerTransport> Inner<T> {
         self.drained(&to.key).await;
         // Only the transport's dial is given up for the peer's connection.
         // Once ours is established both sides see two, and `decide` leaves
-        // the same one on both.
+        // the same one on both. The transport is handed the bound it is
+        // given up at.
+        let bound = DialBound::start();
         let conn = tokio::select! {
             link = self.arrived(&to.key, &mut admitted) => return Ok(link),
-            conn = tokio::time::timeout(limits::DIAL_WITHIN, self.transport.dial(to)) => {
-                conn.map_err(|_| DialError::TimedOut)??
+            conn = bound.limit(self.transport.dial(to, bound.clone())) => {
+                conn.ok_or(DialError::TimedOut)??
             }
         };
         let failed = match self.establish_replacing(conn.clone(), replaces).await {
@@ -1924,15 +1926,16 @@ impl<T: PeerTransport> Inner<T> {
     ) -> Result<Link<T::Conn>, NotMoved> {
         self.drained(&to.key).await;
         let start = Instant::now();
+        let bound = DialBound::start();
         let dialing = async {
             match over_route {
-                true => self.transport.dial_route(to).await,
-                false => self.transport.dial(to).await,
+                true => self.transport.dial_route(to, bound.clone()).await,
+                false => self.transport.dial(to, bound.clone()).await,
             }
         };
-        let conn = match tokio::time::timeout(limits::DIAL_WITHIN, dialing).await {
-            Ok(Ok(conn)) => conn,
-            Ok(Err(_)) | Err(_) => return Err(NotMoved::NotDialed),
+        let conn = match bound.limit(dialing).await {
+            Some(Ok(conn)) => conn,
+            Some(Err(_)) | None => return Err(NotMoved::NotDialed),
         };
         // From here the connection is this move's: whichever way the move
         // ends short of an install, its being given up included, it is
@@ -2326,7 +2329,11 @@ mod tests {
             Vec::new()
         }
 
-        async fn dial(&self, _to: &PeerAddr) -> Result<LoopConn, TransportError> {
+        async fn dial(
+            &self,
+            _to: &PeerAddr,
+            _bound: DialBound,
+        ) -> Result<LoopConn, TransportError> {
             Err(TransportError::Unreachable("unbound".into()))
         }
 

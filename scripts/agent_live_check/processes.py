@@ -6,6 +6,7 @@ On Windows each child is owned by a job object instead of a guardian process
 
 import contextlib
 import ctypes
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -20,10 +21,10 @@ import threading
 import time
 
 if __package__:
-    from .process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, marked_descendants, require_complete, snapshot
+    from .process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, live_members, marked_descendants, owned_group_member_state, require_complete, retain_owned, snapshot
     from .system import WINDOWS
 else:
-    from process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, marked_descendants, require_complete, snapshot
+    from process_table import ProcessState, ProcessTable, descendants, group_state, identity_state, live_members, marked_descendants, owned_group_member_state, require_complete, retain_owned, snapshot
     from system import WINDOWS
 
 if WINDOWS:
@@ -57,6 +58,17 @@ END_SECONDS = 4
 
 class ProcessError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class Limits:
+    """What one owned child's tree may hold: how many processes, and their
+    resident memory summed. The defaults fit an agent and its servers; a
+    build of Hide's binaries runs a dozen compilers at once and passes them
+    (scripts/agent_journey/daily.py)."""
+    descendants: int = MAX_DESCENDANTS
+    rss_bytes: int = MAX_RSS_BYTES
+    committed_bytes: int = MAX_COMMITTED_BYTES
 
 
 class Cancelled(RuntimeError):
@@ -243,10 +255,10 @@ def reap_adopted(root):
     raise ProcessError("adopted_child_reap_over_budget")
 
 
-def job_over_budget(job):
+def job_over_budget(job, rss_bytes=MAX_RSS_BYTES):
     """Windows: why `job` must end, measured as the Unix guardian measures its
     group: the resident memory (working set) of its processes summed against
-    MAX_RSS_BYTES. Not the job's own limit on committed memory, which Windows
+    `rss_bytes`. Not the job's own limit on committed memory, which Windows
     counts every page a process committed, touched or not, so a run within
     the cap on Linux and macOS would pass it."""
     try:
@@ -254,7 +266,7 @@ def job_over_budget(job):
     except OSError as error:
         return "rss_samples_unavailable:" + str(error)[:MAX_FAILURE_REASON]
     rss = sum(sizes.values())
-    if rss > MAX_RSS_BYTES:
+    if rss > rss_bytes:
         # Named only once the cap is crossed: a name is the failure's label, not a measure.
         table = {pid: windows.Resident(windows.process_name(pid), size) for pid, size in sizes.items()}
         return "owned_processes_over_budget:" + json.dumps(
@@ -270,8 +282,10 @@ class OwnedProcesses:
     """
 
     def __init__(self, cancelled: threading.Event | None = None, diagnostics: Path | None = None,
-                 run_seconds: float = RUN_SECONDS):
-        """`run_seconds` caps the whole run, every child's guardian included."""
+                 run_seconds: float = RUN_SECONDS, limits: Limits = Limits()):
+        """`run_seconds` caps the whole run, every child's guardian included;
+        `limits` caps each child's tree."""
+        self.limits = limits
         self.children = {}
         self.diagnostics = diagnostics
         self.receipts = {}
@@ -342,7 +356,7 @@ class OwnedProcesses:
                 diagnostic = str(self.diagnostics / (str(self.sequence) + ".json"))
             command = [sys.executable, str(Path(__file__).resolve()),
                        "--guard", str(reader), diagnostic, self.family, str(launch_deadline), str(self.deadline),
-                       "--", *map(str, argv)]
+                       str(self.limits.descendants), str(self.limits.rss_bytes), "--", *map(str, argv)]
         try:
             # The only raw spawn. Only the guardian uses the unguarded branch.
             launch_env = {key: value for key, value in env.items() if key != "HIDE_LIVE_CHECK_OWNER"} if _guarded else env
@@ -374,12 +388,13 @@ class OwnedProcesses:
         if self.port is None:
             self.port = windows.JobPort({
                 windows.JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT: "owned_processes_over_budget:" + json.dumps(
-                    {"descendants": MAX_DESCENDANTS}, separators=(",", ":")),
+                    {"descendants": self.limits.descendants}, separators=(",", ":")),
                 windows.JOB_OBJECT_MSG_JOB_MEMORY_LIMIT: "owned_processes_over_budget:" + json.dumps(
-                    {"committed_bytes": MAX_COMMITTED_BYTES}, separators=(",", ":"))},
-                job_over_budget, POLL_SECONDS)
+                    {"committed_bytes": self.limits.committed_bytes}, separators=(",", ":"))},
+                lambda job: job_over_budget(job, self.limits.rss_bytes), POLL_SECONDS)
         self.jobs += 1
-        job = windows.Job(self.port.handle, self.jobs, processes=MAX_DESCENDANTS, committed=MAX_COMMITTED_BYTES)
+        job = windows.Job(self.port.handle, self.jobs, processes=self.limits.descendants,
+                          committed=self.limits.committed_bytes)
         self.port.register(job)
         try:
             admit()
@@ -560,11 +575,11 @@ class OwnedProcesses:
         for child in self.children:
             if child.poll() is None:
                 current.update(descendants(table, child.pid))
-        if len(current) > MAX_CHILDREN * (MAX_DESCENDANTS + 1):
+        if len(current) > MAX_CHILDREN * (self.limits.descendants + 1):
             raise ProcessError("owned_processes_over_budget")
         measured = {"descendants": len(current), **self.rss_samples.measure(current),
                     "in_flight": len(self.children), "sampled": True}
-        if measured["rss_bytes"] > MAX_CHILDREN * MAX_RSS_BYTES:
+        if measured["rss_bytes"] > MAX_CHILDREN * self.limits.rss_bytes:
             raise ProcessError("owned_processes_over_budget")
         return measured
 
@@ -736,7 +751,7 @@ class ExitWatch:
 
 
 def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
-          launch_deadline: float | None = None, run_deadline: float | None = None) -> int:
+          launch_deadline: float | None = None, run_deadline: float | None = None, limits: Limits = Limits()) -> int:
     """`run_deadline` the owner's, on the monotonic clock every process of
     the machine shares, so a child started first ends with the run, not
     `RUN_SECONDS` after its own start."""
@@ -800,11 +815,7 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
         # another live guardian's token belongs to concurrent work.
         if sys.platform == "darwin" or sys.platform.startswith("linux"):
             all_processes = snapshot()
-            retained = {}
-            for pid, previous in observed.items():
-                state = identity_state(pid, previous.birth, uid=previous.uid, table=all_processes)
-                if state is not ProcessState.VANISHED:
-                    retained[pid] = all_processes[pid]
+            retained = retain_owned(table, all_processes, observed, group if include_group else None)
 
             def matches(entry):
                 prefix = b"HIDE_LIVE_CHECK_OWNER="
@@ -855,7 +866,10 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
         errors = []
         try:
             table = collect()
-            needs_group = any(process.group == group and not process.zombie for process in table.values())
+            # A member left unmeasured (a set-user-ID program) still needs
+            # the group's signal, which its real UID lets us send.
+            needs_group = (any(process.group == group and not process.zombie for process in table.values())
+                           or bool(getattr(table, "unmeasured", ())))
             skip_group = True
         except Exception as error:
             # Metadata failure still ends the reserved group and remains a
@@ -886,21 +900,19 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
         exit_watch = ExitWatch(child.pid)
         while not cancelled.is_set():
             table = collect()
-            if len(table) > MAX_DESCENDANTS:
+            if len(table) > limits.descendants:
                 raise ProcessError("owned_processes_over_budget:" + json.dumps(
                     {"descendants": len(table)}, separators=(",", ":")))
             rss = rss_samples.measure(table)["rss_bytes"]
-            if rss > MAX_RSS_BYTES:
+            if rss > limits.rss_bytes:
                 raise ProcessError("owned_processes_over_budget:" + json.dumps(
                     {"descendants": len(table), "rss_bytes": rss, "largest": largest(table)}, separators=(",", ":")))
             if sys.platform.startswith("linux"):
                 reap_adopted(child.pid)
-            root = table.get(child.pid)
-            if root is None:
+            root_state = owned_group_member_state(table, child.pid, group)
+            if root_state is ProcessState.VANISHED:
                 raise ProcessError("unreaped_owned_root_missing")
-            if root.group != group:
-                raise ProcessError("owned_group_unconfirmed")
-            if root.zombie:
+            if root_state is ProcessState.ZOMBIE:
                 root_exited = True
                 break
             if time.monotonic() >= deadline:
@@ -928,11 +940,13 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
                     if root_exited:
                         current = snapshot(group)
                         require_complete(current)
+                        unmeasured = current.unmeasured
                         observed.update(current)
                         current = dict(observed)
                     else:
                         current = collect()
-                    active = any(not process.zombie for process in current.values())
+                        unmeasured = getattr(current, "unmeasured", ())
+                    active = live_members(current) or bool(unmeasured)
                 except BaseException:
                     active = True
                     failed = True
@@ -947,7 +961,7 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
                     end = time.monotonic() + 0.5
                     while time.monotonic() < end:
                         try:
-                            if not any(not p.zombie for p in collect().values()):
+                            if not live_members(collect()):
                                 break
                         except BaseException:
                             failed = True
@@ -1022,12 +1036,12 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 9 or sys.argv[1] != "--guard" or sys.argv[7] != "--":
+    if len(sys.argv) < 11 or sys.argv[1] != "--guard" or sys.argv[9] != "--":
         raise SystemExit(2)
     try:
-        code = guard(int(sys.argv[2]), sys.argv[8:], sys.argv[3], sys.argv[4], float(sys.argv[5]),
-                     float(sys.argv[6]))
+        code = guard(int(sys.argv[2]), sys.argv[10:], sys.argv[3], sys.argv[4], float(sys.argv[5]),
+                     float(sys.argv[6]), Limits(int(sys.argv[7]), int(sys.argv[8])))
     except BaseException as error:
-        sys.stderr.write("guardian_failure:" + type(error).__name__ + "\n")
+        sys.stderr.write("guardian_failure:" + type(error).__name__ + ":" + str(error)[:MAX_FAILURE_REASON] + "\n")
         code = 125
     raise SystemExit(code)

@@ -29,6 +29,8 @@ class OwnRuntime(Runtime):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.control = None
+        # The journey account's login copies that go back to it (account.py).
+        self.write_backs = []
         self.owned = Owned()
         self.owned.records(self.state)
         self.initial_shells = set()

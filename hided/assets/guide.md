@@ -15,7 +15,7 @@ Every pane, agent and letter command here is a `hide` command; there is no other
 ## Before the first command
 
 - Your session's start note from Hide, when there is one, names your checkout and points at the commands you need most; when the note and this guide differ, the note is right for this pane.
-- `hide workspace info` answers the same for this checkout now: the Workspace, the checkout, the device id and the commands available.
+- `hide checkout show` answers the same for this checkout now: the Workspace, the checkout, the device id and the commands available.
 - `hide --help` lists every command's syntax, `hide agent spawn --help` explains spawning, `hide browser help`, `hide mission help` and `hide wait help` are the guides to their topics.
 - The agent, letter and Workspace commands print one JSON line, `{"ok":true,...}` or `{"ok":false,"reason":...,"next_action":...}`; follow `next_action`, and after a timeout read the state before you run the command again.
 
@@ -36,7 +36,7 @@ hide inbox
 - A recipient that is working reads a letter after five minutes of its work; `--now` hands it over at its next tool call instead, so keep `--now` for what cannot wait.
 - `--force` puts the letter into the recipient's input now, even while it works, and keeps it as a letter with its reply and retry. Hide reads the recipient's input first: while someone is typing there the send is refused with `composer_not_empty`, and one it cannot read as empty with `composer_unconfirmed`; nothing is typed or recorded then, so send it again without `--force`. Someone who starts typing just before Hide types it keeps their text, and the letter waits as one sent with `--now`.
 - A prompt that begins with 🦉 is Hide waking you for a letter: the letter comes with it, and `hide inbox` shows it if it did not; answer with `hide letter reply`.
-- Letters come as one bundle: each sender's questions and blocks in full, its newest three other letters in full, and older ones folded into one line you open with `hide letter show <id>`. Taking the bundle takes the folded letters too; an agent with no prompt hook takes it with the one `hide inbox --ack <bundle>` that `hide inbox` prints.
+- Letters come as one bundle: each sender's questions and blocks in full, its newest three other letters in full, and older ones folded into one line you open with `hide letter show <id>`. Taking the bundle takes the folded letters too; an agent with no prompt hook takes it with the one `hide inbox ack <bundle>` that `hide inbox` prints.
 - Once you send your parent a `report`, Hide puts you to sleep at your next rest off the operator's screen, after your pull request's running checks end, ending your process and keeping your conversation; send `progress` instead while you still have work to do; a letter that would wake you (a `request` or `block`, or the operator's Done on your person's turn) keeps you awake when it comes first, and wakes you when it comes after.
 - An agent Hide put to sleep still takes letters: a `request` or `block` wakes it, resuming its conversation, and is handed over once it is awake; a `report` or `progress` waits for its next wake, and the hour a letter waits does not run while it sleeps. Each `request` or `block` wakes it once: one that already rang or already woke it does not wake it again, and its hour runs while it sleeps.
   When it cannot be woken, the letter ends undelivered and Hide's own letter tells you whom and why; send again to try once more.
@@ -58,7 +58,7 @@ hide agent end <id> [--actor <id>] [--keep-pane]
 - Delegate work you will supervise with `hide agent spawn --parent here …`: it records that you answer for the child and starts an automatic watch on it. Hand independent work the operator will handle to `hide agent spawn …` without `--parent`: it becomes an operator-owned root with no automatic watch. Both record you as origin and leave the operator's screen and keyboard focus unchanged.
 - Without `--beside`, `hide agent spawn` opens the agent in a tab of its own. `hide agent spawn --beside …` starts it in a pane beside yours, in your own checkout only; it is the operator's to watch, so it takes no `--parent`.
 - Never start an agent with `hide pane open` or by typing its program into a pane: that agent has no parent, letters or watch.
-- From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the `device_id` `hide workspace info` shows, the `machine` `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`.
+- From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the `device_id` `hide checkout show` shows, the `machine` `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`.
 - See current panes and agents with `hide ps`: one tree of the live panes and the agents in them; `--here` keeps this project, `--all` adds ended registrations, `--json` gives the flat list.
 - `hide agent list` shows the agents Hide knows, with their machine and their `runtime`: `running`, `asleep` while Hide holds one asleep (a `request` or `block` letter wakes it), or `ended`; `hide ps` says the same; `hide agent show here` is your own registration: your id, parent, origin, machine and the watch on you.
 - `hide agent show <id>` adds `state`, what the agent is doing now as the sidebar reads it: `activity` (`working`, `stopped` or `unknown`; a state Hide cannot read now is `unknown`, never ready), `waiting` (null when it waits on nothing; otherwise its `cause`, such as `question`, `approval`, `blocked`, `input_unconfirmed` or `human_turn` (with `human`: its kind, place and time), and `on`, `operator` or the agent id that should answer) and `pending_inputs` (a brief or letter Hide typed that the agent has not recorded, with its `attempts` and `phase`).
@@ -114,7 +114,7 @@ hide pane read <pane> --source visible --format ansi [--json]
 hide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]
 hide pane open --beside [--focus] -- <command>
 hide agent read <agent> [--lines <n>] [--json]
-hide workspace purpose <text>
+hide checkout purpose <text>
 ```
 
 - A bare pane id such as `w1:p2` names a pane of your own machine, as `hide ps` lists it; an agent is its name, registration id or pane, as a letter's target.
@@ -126,15 +126,15 @@ hide workspace purpose <text>
   It is refused with `composer_not_empty` when someone typed into the pane since the agent last took input and its input box still holds text, a draft a person may be writing; a question, approval or review screen no one typed into takes it, and so does text your own earlier send left there. If a typed command and its `--enter` in one send leave the command in the box, as Codex's command menu can, send `--key enter` on its own; `keys_not_sent` says the text landed and the keys did not, `send_unconfirmed` that an answer was lost, and `operator_typing` that someone typed into the pane during the send, which stopped there; each says in `sent` what landed: read the pane before sending again.
   It is input, not a letter: Hide logs that it happened, never what was typed, and keeps no reply or retry, so hand an agent work with `hide letter send`.
 - `hide pane open --beside -- <command>` opens a pane right of yours in your checkout, runs the command there and answers the new pane's id; the command is one line of 1000 bytes at most, and one that needs its shell's own quoting goes as one quoted argument. Your keyboard focus stays where it is unless `--focus`.
-- `hide workspace purpose <text>` sets the one-line purpose of the checkout it runs in, 40 characters at most, which the sidebar shows, and `""` clears it.
-  When you create a worktree, set its purpose in that worktree's folder: `cd <worktree> && hide workspace purpose "…"`.
+- `hide checkout purpose <text>` sets the one-line purpose of the checkout it runs in, 40 characters at most, which the sidebar shows, and `""` clears it.
+  When you create a worktree, set its purpose in that worktree's folder: `cd <worktree> && hide checkout purpose "…"`.
   Run in a worktree of your project, such as one you just made, it names that worktree, not your pane's checkout; a folder Hide lists in no checkout of your project yet is refused with `purpose_checkout_unlisted`.
 - A refusal is one line with its `code` and the step to take: a pane or agent that is not there, a limit passed, or a shell outside a Hide pane.
 
 ## Removing a worktree
 
 ```
-hide workspace remove <path> [--delete-branch] [--force]
+hide checkout remove <path> [--delete-branch] [--force]
 ```
 
 - Remove a worktree Hide shows with this, never a plain `git worktree remove`: it closes the checkout's panes first, as the operator's Delete does, while Git alone leaves them open on a folder that is gone.
@@ -144,7 +144,7 @@ hide workspace remove <path> [--delete-branch] [--force]
 ## Automations
 
 ```
-hide automation add --name <name> --task <text> --schedule <when> --kind <kind> [--profile <name>] [--model <model>] [--effort <effort>] [--folder <path> [--worktree]] [--run-now]
+hide automation add --name <name> --brief <text> --schedule <when> --kind <kind> [--profile <name>] [--model <model>] [--effort <effort>] [--repo <path> [--worktree]] [--run-now]
 hide automation list | show <id|name> | run <id|name> | pause <id|name> | resume <id|name> | remove <id|name>
 hide automation edit <id|name> …        hide automation preview --schedule <when>        hide automation help
 ```
@@ -197,7 +197,7 @@ hide access list [--json]
 - `join` takes a bot the operator already made in Settings › Bots, with the one-time code the operator gives you (`K7Q4-MZ2P-X3RD`): the bot's name and mode are the ones the operator chose, and a code joins once, within ten minutes of being shown (`access_code_invalid` otherwise: ask for a new code). The key is kept before it is sent, so a join whose answer was lost finishes when you run the same command again; a home finishes one join at a time (`access_join_pending`), and a join never replaces another key of the bot's name in this home (`access_key_exists`).
 - `request` asks the operator, who approves it in Settings › Bots in one of two modes, and waits up to ten minutes for the answer (`--no-wait` answers at once); a request whose wait ended is picked up by the next `hide` command once approved, with no second `request`. Once joined or approved it writes the bot's key, private to its account, in `~/.hide/access` of its own home, and every later `hide` command of that home runs as the bot, without `HIDE_CAP_REF` or a pane; `status` says which mode it runs in.
 - Own space (`own`): the bot works only on its own work, the agents it starts with `hide agent spawn` (never `--parent`), the agents those start and the missions they conduct. It reads them, writes them letters, types into their panes, ends them and puts them to sleep, and `hide agent list`, `hide ps` and `hide mission list` show only them; anything else, the operator's agents, Views, devices, automations and `hide access list` included, is refused with `access_not_own_work`.
-- Full (`all`): the bot works as the operator on every agent, pane and mission on every connected device, opens files, diffs and pages on the operator's screen (`--repo <folder>` when it runs outside a checkout), lists devices and bots, and makes and runs automations with `hide automation`; what it starts is the operator's work, marked with the bot's name.
+- Full (`all`): the bot works as the operator on every agent, pane and mission on every connected device, opens files, diffs and pages on the operator's screen (`--repo <path>` when it runs outside a checkout), lists devices and bots, and makes and runs automations with `hide automation`; what it starts is the operator's work, marked with the bot's name.
 - In either mode, adding, removing, pausing or resuming a device is refused with `access_operator_only`, only the operator's window approves bots or changes their mode, and what only an agent in a pane can mean (mission and task commands, `--beside`, `agent ask-human`, `agent show here`) is refused with `access_needs_agent`: start an agent and ask it in a letter instead.
 - Replies never come to a bot on their own: no agent writes to a bot first, so read the answers to your letters and your watches' warnings with `hide inbox`, take each with its `ack_command`, and check again every few seconds while you wait.
 - A home with several bots' keys chooses one with `HIDE_ACCESS=<name>`. Each refusal names its code and what to do; the operator can disconnect a bot or change its mode at any time, which reaches its next command, and `leave` disconnects it from the bot's side.
@@ -211,7 +211,7 @@ hide file open <path>
 hide diff open <path>
 hide browser open <url-or-path> [--wait]
 hide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...
-hide view list [--session <id|here>] | status <view-id> | select <view-id> | close <view-id>
+hide view list [--session <id|here>] | show <view-id> | select <view-id> | close <view-id>
 hide view split <view-id> --area <area-id> --edge left|right|up|down
 hide view move <view-id> --area <area-id> --index <n>
 ```
@@ -222,11 +222,11 @@ hide view move <view-id> --area <area-id> --index <n>
 - Open is how you show the operator a result: until they look at it, your row waits in their Needs You as To look at, even while you keep working. Open only what the operator should look at, and say what you opened.
 - Something you made for the operator to look at (an HTML page, an image, a PDF, a diagram, a long report), asked for or not, you open as soon as it is ready, without asking whether to, and say in one line what you opened: from a pane the operator is not watching it only waits in your Views list, so it interrupts nothing.
 - Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`): it lands in an app outside Hide with no trace of who opened it, and Hide refuses the call. Use `browser open` for a page or a URL and `file open` for anything else, for a file outside the checkout too.
-- `browser snapshot`, `click`, `fill` and the rest read and drive a page already open in a View, by its id from `view list`, from a pane on a connected device exactly as from one on the machine that runs Hide; `workspace info` lists each as `browser.<command>`, and `hide browser help` explains them.
+- `browser snapshot`, `click`, `fill` and the rest read and drive a page already open in a View, by its id from `view list`, from a pane on a connected device exactly as from one on the machine that runs Hide; `checkout show` lists each as `browser.<command>`, and `hide browser help` explains them.
 - Check a page for yourself with your own browser tool, such as `aside`, not `browser open`: a page you open in Hide waits for the operator like any result.
 - What you open belongs to your session: it stays in your pane's Views list, and it closes when your pane closes or your session is archived.
 - The `view` commands arrange the Views that are already open; `view list` gives their ids, areas and the sessions that opened each, whether the operator has seen each (`unseen`), and `--session here` keeps only yours. `view split` and `view move` arrange only a View the operator has on their tab's Views; one still waiting in your pane's list is refused with `view_not_in_lane`, and its layout is the operator's to choose when they open it.
-- What a delegated child opens does not wait for the operator: it marks your row to read, and the child's report letter lists it. You answer for it: read it with `view status <view-id>` or `browser snapshot|screenshot|eval|console|network <display>` from your own pane, which clears that mark, and when the operator should see it, open it again from your own pane so it waits for them as yours.
+- What a delegated child opens does not wait for the operator: it marks your row to read, and the child's report letter lists it. You answer for it: read it with `view show <view-id>` or `browser snapshot|screenshot|eval|console|network <display>` from your own pane, which clears that mark, and when the operator should see it, open it again from your own pane so it waits for them as yours.
 - `hide <path>` (or `hide .`) is the operator's own command: it adds a folder of your machine as a project when it is not one yet, then brings Hide's window to it, moving the operator's screen. Run it only when the operator asks you to open a folder in Hide, and say what came forward.
 
 ## Project Memory
@@ -245,16 +245,16 @@ hide memory search <words> | show <card> | add <text> | stale <card> <reason>
 
 ```
 hide session list [--since <n>m|h|d] [--limit <n>] [--json]
-hide session record <id> [--json]
+hide session show <id> [--json]
 hide session read <id> --request <n> | --from <n> [--events <n>] [--json]
 hide session fold-ask <id> --reason <text> [--json]
 ```
 
-- When the operator asks you to look through past work, narrow it in three steps instead of opening session files: `list` to scan one line per session (the last 7 days and 50 sessions unless you ask for more, 200 at most), `record` to read the one you picked as its session record shows it, and `read` only for the few requests whose exact words or tool output you need.
+- When the operator asks you to look through past work, narrow it in three steps instead of opening session files: `list` to scan one line per session (the last 7 days and 50 sessions unless you ask for more, 200 at most), `show` to read the one you picked as its session record shows it, and `read` only for the few requests whose exact words or tool output you need.
 - The scope is the Project of your checkout and the connected devices' checkouts of the same repository (the one each checkout's `origin` names), with every session they delegated; another Project's session is refused with `other_project`, and one on a device Hide is still reading with `device_reading`, which a retry a minute later answers.
-- A session is named by its agent id (`agent-N`) or its native session id; `record` numbers its requests from 1, and `read <id> --request <n>` reads the raw events around request `n`, `--from <n>` goes on from event `n` (16 events unless `--events` asks, 40 at most, and the answer names the next `--from`).
+- A session is named by its agent id (`agent-N`) or its native session id; `show` numbers its requests from 1, and `read <id> --request <n>` reads the raw events around request `n`, `--from <n>` goes on from event `n` (16 events unless `--events` asks, 40 at most, and the answer names the next `--from`).
 - Every line says where its words come from: `[AI summary]` is Hide AI's summary, `[original]` what was sent or recorded as it was; check a summary against `read` before you rely on it.
-- `read` masks credentials, refuses a session file whose path looks like a credential file (`credential_path_refused`) and a disconnected device (`device_unavailable`); read the record instead. `list`, `record` and `read` change nothing on the operator's screen.
+- `read` masks credentials, refuses a session file whose path looks like a credential file (`credential_path_refused`) and a disconnected device (`device_unavailable`); read the record instead. `list`, `show` and `read` change nothing on the operator's screen.
 - `fold-ask` folds a question your own session asked, as your prompt's open questions list it, out of the operator's Needs You.
 
 ## Where to go next

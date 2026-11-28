@@ -5,15 +5,15 @@ A task for one later time with no one present ("check it in N days", "look at th
 A wait or a check inside this conversation (watch CI every ten minutes until it ends, poll a deploy) is not an automation: keep doing it yourself as now.
 
 ```
-hide automation add --name <name> --task <text> --schedule <when> --kind <kind> [--profile <name>] [--model <model>] [--effort <effort>] [--folder <path> [--worktree]] [--run-now]
+hide automation add --name <name> --brief <text> --schedule <when> --kind <kind> [--profile <name>] [--model <model>] [--effort <effort>] [--repo <path> [--worktree]] [--run-now]
 hide automation list        hide automation show <id|name>        hide automation preview --schedule <when>
 hide automation run <id|name>        hide automation pause <id|name>        hide automation resume <id|name>
-hide automation edit <id|name> [--name <name>] [--task <text>] [--schedule <when>] [--kind <kind> [--profile <name>] [--model <model>] [--effort <effort>]] [--folder <path> | --own-folder] [--worktree | --no-worktree]
+hide automation edit <id|name> [--name <name>] [--brief <text>] [--schedule <when>] [--kind <kind> [--profile <name>] [--model <model>] [--effort <effort>]] [--repo <path> | --no-repo] [--worktree | --no-worktree]
 hide automation remove <id|name>
 ```
 
 ## Making one from the operator's words
-- `--task` is what each run's agent is handed, written as a request it can carry out alone: what to do, where to look, what to leave behind (a file in its folder, a comment, a pull request) and when to ask the operator. A run starts with no memory of this conversation; Hide adds the last run's time, result and final answer to it.
+- `--brief` is what each run's agent is handed, written as a request it can carry out alone: what to do, where to look, what to leave behind (a file in its folder, a comment, a pull request) and when to ask the operator. A run starts with no memory of this conversation; Hide adds the last run's time, result and final answer to it.
 - `--schedule` takes one of these, read in the zone of the machine that runs Hide:
   - `daily 09:00`: every day at 09:00.
   - `weekdays 09:00`: Monday to Friday at 09:00.
@@ -32,9 +32,9 @@ hide automation remove <id|name>
 - `hide automation preview --schedule <when>` answers what a schedule reads as and when it runs next, without making anything.
 - `--kind`, `--profile`, `--model` and `--effort` name the agent each run starts, as `hide agent spawn` takes them (`hide agent catalog` lists what a machine has).
   Use the agent, model and effort the operator named; when they named none, your own kind with the model and effort you run with.
-- Without `--folder` each run works in the automation's own folder, `~/hide/automations/<name>-<id>`, which Hide makes and keeps out of the sidebar's projects, and its results stay there.
-  Give `--folder` only when the operator named a project, or the task is plainly about one (this repository's issues or pull requests): the project's root folder as Hide has it open on the machine that runs Hide, Git or not, never a folder inside it or a worktree of your own that will go.
-  An automation runs on the machine that runs Hide: from a pane of a connected device, leave out `--folder` (it is refused with `automation_folder_on_device`), and tell the operator it runs on that machine.
+- Without `--repo` each run works in the automation's own folder, `~/hide/automations/<name>-<id>`, which Hide makes and keeps out of the sidebar's projects, and its results stay there.
+  Give `--repo` only when the operator named a project, or the task is plainly about one (this repository's issues or pull requests): the project's root folder as Hide has it open on the machine that runs Hide, Git or not, never a folder inside it or a worktree of your own that will go.
+  An automation runs on the machine that runs Hide: from a pane of a connected device, leave out `--repo` (it is refused with `automation_folder_on_device`), and tell the operator it runs on that machine.
   `--worktree` gives each run a new worktree of that Git project; a run that changed nothing leaves none behind.
 - `--run-now` starts a run as soon as the automation is made, marked manual; do it when the operator wants to see one now.
 - Each run starts with the agent permissions the operator set in Settings › Agents, with no one watching: say so when the task writes outside its folder.
@@ -51,7 +51,7 @@ Each command prints one line, `{"ok":true,"value":…}` or `{"ok":false,"error":
 
 ## Changing and removing
 - Name an automation by its id or its exact name; `list` shows both.
-- `edit` changes only what it names, from the next run on: a run going keeps what it started with. `--own-folder` moves it back to its own folder.
+- `edit` changes only what it names, from the next run on: a run going keeps what it started with. `--no-repo` moves it back to its own folder.
 - `pause` stops the next times and lets a run going finish; `resume` turns it on again from its next time and clears its line in the operator's Needs You.
   A once automation paused past its time runs once as soon as it is resumed; one whose time came cannot be paused (`automation_done`).
 - `run` starts a manual run now, refused while one goes (`automation_running`); on a done once automation it runs once more and it stays done.

@@ -1,13 +1,13 @@
 // Proves each docs part holds one still picture under reduced motion: it loads every part id in the built
-// `docs-embed-dist`, takes a picture, lets 120 seconds of page time pass (Playwright's fake clock fires every
-// timer due in that span), takes another, and fails unless the two are byte-identical. A control run of the
-// task-row without reduced motion must change, so a check that cannot see motion cannot pass.
+// `docs-embed-dist`, waits until it is drawn, takes a picture, lets 120 seconds of page time pass (Playwright's fake
+// clock fires every timer due in that span), takes another, and fails unless the two are byte-identical. A control run
+// of the task-row without reduced motion must change, so a check that cannot see motion cannot pass.
 //
 //   pnpm --dir web build:docs-embed && node web/src/docs/check-still.mjs
 //
 // It needs the browser the web e2e lane installs (`bash scripts/verify-web.sh web playwright-install`); without it
 // the script fails and says so. `scripts/docs/check-all.mjs` runs it after the embed build, and the docs lane installs it first.
-/* global console, URL */
+/* global console, URL, document */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -35,6 +35,11 @@ async function twoPictures(browser, part, theme, reducedMotion) {
   await page.clock.install({ time: NOW });
   await page.goto(`${base}?part=${part}&theme=${theme}&lang=en`);
   await page.waitForSelector("[data-docs-part]");
+  // A map is drawn once it has its placed layout: it first stands in plain columns and takes the layout when the
+  // layout worker answers, in the page's real time, which the fake clock does not hold. The e2e lane waits for the same.
+  await page.waitForFunction(() => [...document.querySelectorAll("[data-dependency-graph]")].every((graph) => graph.getAttribute("data-dependency-layout") === "layered")).catch((cause) => {
+    throw new Error(`${part} ${theme} was never drawn: a map in it stayed in plain columns, so its layout was refused or never answered`, { cause });
+  });
   await page.clock.runFor(1500);
   const first = await page.screenshot({ fullPage: true });
   await page.clock.runFor(SPAN_MS);

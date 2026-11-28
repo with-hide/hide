@@ -23,10 +23,14 @@ export type BridgeSocketEvent =
  * What the operator asked of another computer's screen from their own
  * (PRD device-connect-iroh D-73, D-78): one of its works to show, by the
  * pane its core knows it by, or a start to make there, which is then that
- * computer's own work.
+ * computer's own work. A show with a `request` is this computer's own work
+ * that runs on that computer (D-55), named by its guest address there
+ * (`guestPaneAddress`): that computer's page answers it (`RemoteShowResult`),
+ * and one that cannot show it leaves the asking window to open it in its own
+ * tile.
  */
 export type RemoteWork =
-  | { op: "show"; pane: string }
+  | { op: "show"; pane: string; request?: string }
   | { op: "start"; request: string; place: RemotePlace; provider: string; model: string | null; prompt: string | null; profile: string | null };
 
 /** Where a start goes on that computer: one checkout's folder, or a new worktree of a repository, each in the wire spelling. */
@@ -42,6 +46,7 @@ export type RemotePlace = { checkout: string } | { repository: string; branch: s
  * answer to the start, as the start panel reads one of its own.
  */
 export type RemoteWorkResult =
+  | RemoteShowResult
   | { request: string; outcome: "started" }
   /** Not an end: the tab exists and its agent is still coming up; `started` or `agent_failed` follows, or `unconfirmed`. */
   | { request: string; outcome: "starting" }
@@ -53,6 +58,23 @@ export type RemoteWorkResult =
   | { request: string; outcome: "not_added" | "refused"; kind: string }
   | { request: string; outcome: "failed"; code: string | null }
   | { request: string; outcome: "agent_failed"; reason: string | null; line: string | null };
+
+/**
+ * How a show with a `request` ended on that computer's page: `shown`, its
+ * guest pane is on that screen now; `not_listed`, that computer lists no such
+ * pane of this one's (not yet, or no more), so nothing opened there. The page
+ * answers `late` for one it held past its wait or that a later ask replaced,
+ * the desktop `not_shown` for one that never reached the page and
+ * `unconfirmed` for one whose page went before it answered.
+ */
+export type RemoteShowResult = { request: string; outcome: "shown" } | { request: string; outcome: "not_listed" };
+
+/**
+ * How long the asking window waits for a show's answer before it opens the
+ * work in its own tile: past a page's load and its first snapshot. A page of
+ * an older build answers no show, and this bound is how the window learns it.
+ */
+export const SHOW_ANSWER_MS = 10_000;
 
 /**
  * How long the desktop holds a start for its screen's page to load: a page
@@ -90,6 +112,12 @@ export type RemoteBridge = {
   /** Tells the guest how a start it handed here ended. */
   workResult?(result: RemoteWorkResult): void;
   /**
+   * Tells the window that shows this screen which pane of another machine's
+   * work this page shows now, or none (D-55): that window counts its own
+   * work as looked at while it shows here. Absent from an older desktop app.
+   */
+  showing?(shown: ShownGuestPane | null): void;
+  /**
    * The browser displays this screen places, which the showing window's
    * desktop app draws in this screen's tile with every request leaving
    * through this machine (docs/BROWSER_DISPLAYS.md, A page in another
@@ -98,6 +126,9 @@ export type RemoteBridge = {
    */
   browser?: BrowserBridge;
 };
+
+/** A pane of another machine's work a page shows: that machine's device id and its node's own id for the pane (`navigator.guest_panes`). */
+export type ShownGuestPane = { device: string; pane: string };
 
 /** The close the desktop gives the socket of a tile it hid: nothing to show, nothing to reconnect. */
 export const HIDDEN_CLOSE = 4012;

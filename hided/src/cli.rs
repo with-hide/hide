@@ -49,7 +49,7 @@ pub enum CommandKind {
         id: String,
         actor: Option<String>,
     },
-    /// `hide workspace remove <path> [--delete-branch] [--force]`.
+    /// `hide checkout remove <path> [--delete-branch] [--force]`.
     WorkspaceRemove(crate::worktree_cli::RemoveCli),
     /// `hide agent archive <id> [--actor <id>]`.
     AgentArchive {
@@ -70,7 +70,7 @@ pub enum CommandKind {
     /// `hide access request|status|leave|list`: an external tool's own
     /// connection.
     Access(crate::access_cli::AccessCli),
-    /// `hide pane …`, `hide agent read` and `hide workspace purpose`.
+    /// `hide pane …`, `hide agent read` and `hide checkout purpose`.
     Pane(crate::pane_cli::PaneCli),
     Help,
     AgentSpawnHelp,
@@ -172,22 +172,26 @@ const LINKS_USAGE: &str = "usage: hide links pr <number | #number | !number | ad
 
 const MEMORY_USAGE: &str = "usage: hide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card> | recheck <card>";
 
-const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--repo <folder>] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
+const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--repo <path>] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
 
 /// What an open with the `--beside` it no longer takes answers (PRD
 /// unseen-agent-views D-24, B27): an agent's open is always a tab of the
 /// active View area, and only the operator splits the areas.
 const BESIDE_REMOVED: &str = "open no longer takes --beside: run the same command again without --beside; the View opens as a tab of the active View area of your tab's Views";
 
-const FILE_USAGE: &str = "usage: hide file open <path> [--repo <folder>] [--request-id <id>]";
+/// `hide checkout …`: the checkout the caller's pane works in. A hook's
+/// own `hide workspace …` commands are not listed.
+const CHECKOUT_USAGE: &str = "hide checkout show\nhide checkout purpose <text>\nhide checkout remove <path> [--delete-branch] [--force]";
 
-const DIFF_USAGE: &str = "usage: hide diff open <path> [--repo <folder>] [--request-id <id>]";
+const FILE_USAGE: &str = "usage: hide file open <path> [--repo <path>] [--request-id <id>]";
+
+const DIFF_USAGE: &str = "usage: hide diff open <path> [--repo <path>] [--request-id <id>]";
 
 const OPEN_USAGE: &str = "usage: hide [open] [<path>]";
 
 const IMPORT_USAGE: &str = "usage: hide import herdr [--yes]";
 
-const VIEW_USAGE: &str = "usage: hide view list [--session <id|here>] | status <view-id> | select <view-id> [--request-id <id>] | close <view-id> [--request-id <id>] | split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>] | move <view-id> --area <area-id> --index <n> [--request-id <id>]";
+const VIEW_USAGE: &str = "usage: hide view list [--session <id|here>] | show <view-id> | select <view-id> [--request-id <id>] | close <view-id> [--request-id <id>] | split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>] | move <view-id> --area <area-id> --index <n> [--request-id <id>]";
 
 /// A topic's command lines as a wrong command or `--help` prints them: one
 /// `usage:` line, then each form indented under it.
@@ -262,9 +266,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "diff" => DIFF_USAGE.to_owned(),
         "view" => VIEW_USAGE.to_owned(),
         "pane" => usage(crate::pane_cli::USAGE),
-        "workspace" => usage(
-            "hide workspace info\nhide workspace purpose <text>\nhide workspace remove <path> [--delete-branch] [--force]",
-        ),
+        "checkout" => usage(CHECKOUT_USAGE),
         "status" => "usage: hide status [--json]".to_owned(),
         "import" => IMPORT_USAGE.to_owned(),
         "stop" => "usage: hide stop".to_owned(),
@@ -301,11 +303,11 @@ pub(crate) fn help_text() -> String {
         crate::wait_cli::USAGE,
         crate::automation_cli::USAGE,
         crate::pane_cli::USAGE,
-        "hide workspace info",
+        CHECKOUT_USAGE,
         FILE_USAGE.trim_start_matches("usage: "),
         DIFF_USAGE.trim_start_matches("usage: "),
         "hide browser open <url-or-path> [--wait] [--request-id <id>]\nhide browser connect [--display <id>]\nhide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...\nhide browser help",
-        "hide view list [--session <id|here>]\nhide view status <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]",
+        "hide view list [--session <id|here>]\nhide view show <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]",
         LINKS_USAGE.trim_start_matches("usage: "),
         crate::session_cli::USAGE,
         MEMORY_USAGE.trim_start_matches("usage: "),
@@ -316,7 +318,7 @@ pub(crate) fn help_text() -> String {
     text.push_str(&indent(crate::access_cli::USAGE));
     text.push_str("  Once the operator approves it as a bot, it runs the commands above as its connection: in its own space, only on the agents and missions it started, or Full, as the operator. hide guide, section Bots, says what each mode may do.\n");
     text.push_str(
-        "\nA command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there or in a plain ssh shell as the account Hide connects with, and brings Hide's window to that device's folder.\n\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide session needs the same and reads the sessions of the project it is in and of the connected devices' checkouts of its repository, as each checkout's origin names it (Desk, and a bot outside every checkout, read every project): list to scan one line per session, record to read one as its session record shows it, read for a few raw events around one request.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
+        "\nA command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there or in a plain ssh shell as the account Hide connects with, and brings Hide's window to that device's folder.\n\nCommands that act on the operator's screen (checkout, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide session needs the same and reads the sessions of the project it is in and of the connected devices' checkouts of its repository, as each checkout's origin names it (Desk, and a bot outside every checkout, read every project): list to scan one line per session, show to read one as its session record shows it, read for a few raw events around one request.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
     );
     text
 }
@@ -355,6 +357,19 @@ pub const RELEASE: hide_node::ssh::host::ReleaseIdentity = hide_node::ssh::host:
     commit: COMMIT,
     order: ORDER,
 };
+
+/// Whether a line `parse_args` refuses is answered as JSON on stdout
+/// (`invalid_arguments` with the usage as its next action) rather than as
+/// text on stderr: the Workspace commands, which a program reads. The topic
+/// is read after the retired-words table, so an old spelling answers in the
+/// form of the command it is now.
+pub fn refuses_as_json(args: &[String]) -> bool {
+    let words = hide_shell::retired::current(args.get(1..).unwrap_or_default());
+    matches!(
+        words.first().map(String::as_str),
+        Some("checkout" | "workspace" | "file" | "diff" | "view" | "browser")
+    )
+}
 
 pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
     // A retired spelling (`hide plan` for `hide task`) is read as the
@@ -493,11 +508,17 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         }
         Some(topic @ ("skill" | "mcp")) => {
             let (kind, usage_text) = if topic == "skill" {
-                (hide_kit::store::ItemKind::Skill, crate::store_cli::SKILL_USAGE)
+                (
+                    hide_kit::store::ItemKind::Skill,
+                    crate::store_cli::SKILL_USAGE,
+                )
             } else {
                 (hide_kit::store::ItemKind::Mcp, crate::store_cli::MCP_USAGE)
             };
-            if matches!(args.get(2).map(String::as_str), None | Some("help" | "--help")) {
+            if matches!(
+                args.get(2).map(String::as_str),
+                None | Some("help" | "--help")
+            ) {
                 println!("{usage_text}");
                 std::process::exit(0);
             }
@@ -548,9 +569,8 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             crate::automation_cli::parse(&args[2..]).map(CommandKind::Automation)
         }
         Some("automation") => {
-            crate::cli_contract::admit(&args[1..]).map_err(|refusal| {
-                format!("{refusal}\n{}", usage(crate::automation_cli::USAGE))
-            })?;
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::automation_cli::USAGE)))?;
             crate::automation_cli::parse(&args[2..])
                 .map(CommandKind::Automation)
                 .map_err(|reason| wrong(reason, crate::automation_cli::USAGE))
@@ -604,40 +624,44 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 .map_err(|reason| wrong(reason, crate::delivery_cli::USAGE))
         }
         Some("browser") => parse_browser(iter),
+        // A hook's own commands; `workspace info`, `purpose` and `remove`
+        // are read as `checkout` by the retired-words table.
         Some("workspace") => match iter.next().map(String::as_str) {
             Some("memory") => {
                 let words: Vec<&str> = iter.map(String::as_str).collect();
                 parse_workspace_memory(&words)
             }
             Some("bootstrap") if iter.next().is_none() => Ok(CommandKind::WorkspaceBootstrap),
-            Some("purpose") => {
-                crate::cli_contract::admit(&args[1..])
-                    .map_err(|refusal| format!("{refusal}\n{}", usage(crate::pane_cli::USAGE)))?;
-                crate::pane_cli::parse_purpose(&args[3..])
-                    .map(CommandKind::Pane)
-                    .map_err(|reason| wrong(reason, crate::pane_cli::USAGE))
-            }
-            Some("remove") => {
-                crate::cli_contract::admit(&args[1..]).map_err(|refusal| {
-                    format!("{refusal}\n{}", usage(crate::worktree_cli::USAGE))
-                })?;
-                crate::worktree_cli::parse(&args[3..])
-                    .map(CommandKind::WorkspaceRemove)
-                    .map_err(|reason| wrong(reason, crate::worktree_cli::USAGE))
-            }
             Some("status") => match (iter.next().map(String::as_str), iter.next()) {
                 (Some("--hook"), None) => Ok(CommandKind::StatusHook),
                 _ => Err("usage: hide workspace status --hook < report".to_owned()),
             },
             Some("info") => match (iter.next().map(String::as_str), iter.next()) {
-                (None, None) => Ok(CommandKind::WorkspaceInfo),
                 (Some("--hook"), None) => Ok(CommandKind::WorkspaceHookInfo),
-                _ => Err("usage: hide workspace info [--hook]".to_owned()),
+                _ => Err(usage(CHECKOUT_USAGE)),
             },
-            _ => Err(
-                "usage: hide workspace info | purpose <text> | remove <path> [--delete-branch] [--force]"
-                    .to_owned(),
-            ),
+            _ => Err(usage(CHECKOUT_USAGE)),
+        },
+        Some("checkout") => match iter.next().map(String::as_str) {
+            Some("show") => match iter.next() {
+                None => Ok(CommandKind::WorkspaceInfo),
+                Some(_) => Err(usage(CHECKOUT_USAGE)),
+            },
+            Some("purpose") => {
+                crate::cli_contract::admit(&args[1..])
+                    .map_err(|refusal| format!("{refusal}\n{}", usage(CHECKOUT_USAGE)))?;
+                crate::pane_cli::parse_purpose(&args[3..])
+                    .map(CommandKind::Pane)
+                    .map_err(|reason| wrong(reason, crate::pane_cli::PURPOSE_USAGE))
+            }
+            Some("remove") => {
+                crate::cli_contract::admit(&args[1..])
+                    .map_err(|refusal| format!("{refusal}\n{}", usage(CHECKOUT_USAGE)))?;
+                crate::worktree_cli::parse(&args[3..])
+                    .map(CommandKind::WorkspaceRemove)
+                    .map_err(|reason| wrong(reason, crate::worktree_cli::USAGE))
+            }
+            _ => Err(usage(CHECKOUT_USAGE)),
         },
         Some("file") => parse_open(iter, true),
         Some("diff") => parse_open(iter, false),
@@ -849,7 +873,7 @@ fn parse_view<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<CommandK
             _ => Err(usage.to_owned()),
         };
     }
-    if verb == "status" {
+    if verb == "show" {
         return match (iter.next(), iter.next()) {
             (Some(view_id), None) if !view_id.is_empty() && !view_id.starts_with('-') => {
                 Ok(CommandKind::ViewStatus {
@@ -1907,33 +1931,37 @@ fn workspace_query_options(
     display_id: Option<&str>,
     report: bool,
 ) -> Result<serde_json::Value, String> {
-    let mut credential = match crate::workspace_cli::Credential::acquire(env) {
-        Ok(credential) => credential,
-        Err(reason) => {
-            return query_refusal(&reason, bootstrap_next_action(&reason), report);
+    workspace_query_answer(env, query, display_id).map_err(|refusal| {
+        if report {
+            println!("{refusal}");
         }
-    };
+        refusal["reason"]
+            .as_str()
+            .unwrap_or("workspace_request_failed")
+            .to_owned()
+    })
+}
+
+/// A query's answer, or its refusal with the reason and the next step it
+/// gives: hided's own answer, or this CLI's when hided was not reached.
+fn workspace_query_answer(
+    env: &Env,
+    query: &str,
+    display_id: Option<&str>,
+) -> Result<serde_json::Value, serde_json::Value> {
+    let refusal = |reason: &str, next_action: &str| serde_json::json!({"ok":false,"reason":reason,"next_action":next_action});
+    let mut credential = crate::workspace_cli::Credential::acquire(env)
+        .map_err(|reason| refusal(&reason, bootstrap_next_action(&reason)))?;
     let requested = if query == "browser_connect" {
         crate::workspace_cli::browser_connect(&mut credential, display_id)
     } else {
         crate::workspace_cli::request(&mut credential, query)
     };
-    let answer = match requested {
-        Ok(answer) => answer,
-        Err(reason) => {
-            return query_refusal(&reason, request_next_action(&reason), report);
-        }
-    };
+    let answer = requested.map_err(|reason| refusal(&reason, request_next_action(&reason)))?;
     if answer["ok"] == true {
         Ok(answer)
     } else {
-        if report {
-            println!("{answer}");
-        }
-        Err(answer["reason"]
-            .as_str()
-            .unwrap_or("workspace_request_failed")
-            .to_owned())
+        Err(answer)
     }
 }
 
@@ -1980,6 +2008,64 @@ fn view_status(env: &Env, view_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// What `hide browser open` says about driving the page it opened when
+/// `browser connect` handed no capability URLs (`refusal`, hided's answer),
+/// after waiting for the window to make the page (`page_made`): hided's own
+/// reason and next step, which is the step for `hide browser connect`, except
+/// in three cases. A window on another machine hands no URLs of its loopback
+/// (`browser_control_elsewhere`), and Hide's page commands drive the page.
+/// With no desktop window here (`browser_unsupported`, which hided answers
+/// before it asks any window), or one that does not answer for a page it has
+/// made (`browser_control_unavailable`), the caller connects once it is back,
+/// rather than opening the page again, which would reload it.
+fn open_control(display_id: &str, refusal: &serde_json::Value) -> serde_json::Value {
+    let reason = refusal["reason"]
+        .as_str()
+        .unwrap_or("workspace_request_failed");
+    let connect = format!("Run hide browser connect --display {display_id}");
+    let next_action = match reason {
+        "browser_control_elsewhere" => {
+            format!("Run hide browser snapshot {display_id} and the other page commands")
+        }
+        "browser_unsupported" | "browser_control_unavailable" => {
+            format!("{connect} after the desktop window reconnects")
+        }
+        _ => refusal["next_action"]
+            .as_str()
+            .map_or(connect, str::to_owned),
+    };
+    serde_json::json!({"state":"unavailable","reason":reason,"next_action":next_action})
+}
+
+/// How long an open waits for the desktop window to make its page before it
+/// reads the window as not answering. A window makes it in about a tenth of
+/// a second.
+const PAGE_MADE_WITHIN: Duration = Duration::from_secs(3);
+
+/// Whether the window has made `load` of `display_id`'s page: the core reads
+/// a page `pending` until the window reports it. False when it stays pending,
+/// a newer load replaced it, or its state cannot be read.
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn page_made(env: &Env, display_id: &str, load: u64) -> bool {
+    let deadline = std::time::Instant::now() + PAGE_MADE_WITHIN;
+    loop {
+        let Ok(status) = view_status_value(env, display_id, false) else {
+            return false;
+        };
+        let page = &status["view"]["page"];
+        if page["load"].as_u64() != Some(load) {
+            return false;
+        }
+        if page["state"] != "pending" {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 fn browser_open(
     env: &Env,
@@ -2010,28 +2096,29 @@ fn browser_open(
         .as_str()
         .ok_or("invalid_response")?
         .to_owned();
-    match browser_connect_value(env, Some(&display_id), false) {
+    let load = answer["result"]["load"]
+        .as_u64()
+        .ok_or("invalid_response")?;
+    let mut connected = workspace_query_answer(env, "browser_connect", Some(&display_id));
+    // A desktop window answers unavailable until it has made the page, which
+    // it says by reporting the page; the open asks once more after that.
+    if connected
+        .as_ref()
+        .is_err_and(|refusal| refusal["reason"] == "browser_control_unavailable")
+        && page_made(env, &display_id, load)
+    {
+        connected = workspace_query_answer(env, "browser_connect", Some(&display_id));
+    }
+    match connected {
         Ok(connection) => {
             for key in ["cdp_http_url", "browser_ws_url"] {
                 answer["result"][key] = connection["result"][key].clone();
             }
         }
-        Err(reason) => {
-            // Opening already applied. Endpoint discovery cannot recast it as
-            // a failed action and tempt a caller to create the page again.
-            let next_action = if reason == "browser_control_elsewhere" {
-                // The only window showing it is on another machine: its
-                // endpoints are that machine's loopback, its page commands
-                // reach it through Hide.
-                format!("Run hide browser snapshot {display_id} and the other page commands")
-            } else {
-                format!(
-                    "Run hide browser connect --display {display_id} after the desktop window reconnects"
-                )
-            };
-            answer["result"]["browser_control"] = serde_json::json!({
-                "state":"unavailable","reason":reason,"next_action":next_action
-            });
+        // Opening already applied. Endpoint discovery cannot recast it as a
+        // failed action and tempt a caller to create the page again.
+        Err(refusal) => {
+            answer["result"]["browser_control"] = open_control(&display_id, &refusal);
         }
     }
     if !wait {
@@ -2041,9 +2128,6 @@ fn browser_open(
     let view_id = answer["result"]["view_id"]
         .as_str()
         .ok_or("invalid_response")?;
-    let requested_load = answer["result"]["load"]
-        .as_u64()
-        .ok_or("invalid_response")?;
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let status = match view_status_value(env, view_id, false) {
@@ -2051,16 +2135,16 @@ fn browser_open(
             Err(reason) => {
                 println!(
                     "{}",
-                    serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_status_unavailable","detail":reason,"view_id":view_id,"result":answer["result"],"next_action":format!("Run hide view status {view_id} or retry the same request ID")})
+                    serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_status_unavailable","detail":reason,"view_id":view_id,"result":answer["result"],"next_action":format!("Run hide view show {view_id} or retry the same request ID")})
                 );
                 return Err("page_status_unavailable".to_owned());
             }
         };
         let page = &status["view"]["page"];
-        if page["load"].as_u64() != Some(requested_load) {
+        if page["load"].as_u64() != Some(load) {
             println!(
                 "{}",
-                serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_superseded","view_id":view_id,"page":page,"next_action":"Run hide view status or open the page again with a new request ID"})
+                serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_superseded","view_id":view_id,"page":page,"next_action":"Run hide view show or open the page again with a new request ID"})
             );
             return Err("page_superseded".to_owned());
         }
@@ -2082,7 +2166,7 @@ fn browser_open(
             Some("disconnected" | "unsupported") => {
                 println!(
                     "{}",
-                    serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_unavailable","view_id":view_id,"page":page,"next_action":"Reconnect the Hide desktop window and run hide view status again"})
+                    serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_unavailable","view_id":view_id,"page":page,"next_action":"Reconnect the Hide desktop window and run hide view show again"})
                 );
                 return Err("page_unavailable".to_owned());
             }
@@ -2097,7 +2181,7 @@ fn browser_open(
             _ => {
                 println!(
                     "{}",
-                    serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_status_unavailable","view_id":view_id,"result":answer["result"],"page":page,"next_action":format!("Run hide view status {view_id} or retry the same request ID")})
+                    serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_status_unavailable","view_id":view_id,"result":answer["result"],"page":page,"next_action":format!("Run hide view show {view_id} or retry the same request ID")})
                 );
                 return Err("page_status_unavailable".to_owned());
             }
@@ -2105,7 +2189,7 @@ fn browser_open(
         if std::time::Instant::now() >= deadline {
             println!(
                 "{}",
-                serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_wait_timeout","view_id":view_id,"page":page,"next_action":format!("Run hide view status {view_id} or retry the same request ID")})
+                serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_wait_timeout","view_id":view_id,"page":page,"next_action":format!("Run hide view show {view_id} or retry the same request ID")})
             );
             return Err("page_wait_timeout".to_owned());
         }
@@ -3588,6 +3672,75 @@ fn open_browser(state: &DaemonState, health: &serde_json::Value) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What `hide browser open` tells the caller about driving the page it
+    /// opened when discovery handed no capability URLs: the page commands
+    /// for a window on another machine, hided's own reason and step for a
+    /// refused caller, and a connect once the window is back when none is
+    /// attached or it does not answer.
+    #[test]
+    fn an_opened_page_s_control_says_why_and_what_drives_it() {
+        let refused = |(reason, next_action): (&str, &str)| serde_json::json!({"ok": false, "reason": reason, "next_action": next_action});
+        let control = |reason: &str, next_action: &str| serde_json::json!({"state": "unavailable", "reason": reason, "next_action": next_action});
+
+        // The window is on another machine: the page commands drive it.
+        assert_eq!(
+            open_control(
+                "v1",
+                &refused((
+                    "browser_control_elsewhere",
+                    "Use hide browser page commands, which reach that window through Hide"
+                ))
+            ),
+            control(
+                "browser_control_elsewhere",
+                "Run hide browser snapshot v1 and the other page commands"
+            )
+        );
+        // A refused caller hears hided's reason and next step unchanged.
+        for refusal in [
+            crate::browser_control::FILE_PAGE_PANE_ONLY,
+            crate::browser_control::OUTSIDE_PAGE_NOT_OPENED,
+            crate::browser_control::FILE_PAGE_ELSEWHERE,
+            (
+                "browser_control_ambiguous",
+                "Keep one desktop window attached to this daemon and retry",
+            ),
+        ] {
+            assert_eq!(
+                open_control("v1", &refused(refusal)),
+                control(refusal.0, refusal.1)
+            );
+        }
+        // No desktop window here, or one that does not answer for the page
+        // it made: connect once it is back, never open again.
+        for refusal in [
+            ("browser_unsupported", "Open the Hide desktop app and retry"),
+            (
+                "browser_control_unavailable",
+                "Reconnect the Hide desktop app and retry",
+            ),
+        ] {
+            assert_eq!(
+                open_control("v1", &refused(refusal)),
+                control(
+                    refusal.0,
+                    "Run hide browser connect --display v1 after the desktop window reconnects"
+                )
+            );
+        }
+        // A refusal that names no step still gets one.
+        assert_eq!(
+            open_control(
+                "v1",
+                &serde_json::json!({"ok": false, "reason": "browser_control_busy"})
+            ),
+            control(
+                "browser_control_busy",
+                "Run hide browser connect --display v1"
+            )
+        );
+    }
 
     /// The address is decided from the health the daemon answered when it
     /// was found: a daemon that does not answer a second request still gets

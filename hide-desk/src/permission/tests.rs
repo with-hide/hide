@@ -135,6 +135,8 @@ fn a_retired_spelling_counts_as_the_command_it_is_now() {
     }
     assert!(counted > 0, "no retired spelling names a step Desk counts");
     assert_eq!(hide_step("hide plan show"), Step::Sessions);
+    assert_eq!(hide_step("hide view status view-2"), Step::Sessions);
+    assert_eq!(hide_step("hide view show view-2"), Step::Sessions);
 }
 
 #[test]

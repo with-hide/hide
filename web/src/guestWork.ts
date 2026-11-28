@@ -209,6 +209,19 @@ export function isGuestPaneId(id: string): boolean {
 }
 
 /**
+ * The address a paired machine gives one of this computer's panes that runs
+ * there (`hide_node_link::address::guest_pane_id`): `device` is this
+ * computer's own device id, the id that machine names its guest by, and
+ * `pane` the id this computer's node there gives the pane, which this core
+ * publishes as the row's `device_pane_id`. This computer's
+ * `remote:<that machine>:pane:<pane>` and that machine's
+ * `guest:<device>:pane:<pane>` are the one pane (`hided/tests/it/pairing/guest_work.rs`).
+ */
+export function guestPaneAddress(device: string, pane: string): string {
+  return `guest:${device}:pane:${pane}`;
+}
+
+/**
  * What a window does to another machine's pane (D-74): the closed set. The
  * rest of a pane's menu is drawn dimmed with the machine to do it on, whether
  * or not that machine is connected.
