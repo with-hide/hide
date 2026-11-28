@@ -12,6 +12,11 @@
 //       running an executable under it; returns once none is left. Each end is
 //       waited for on the process's own handle. Exits 1, naming the survivors
 //       on stderr, when some remain after five seconds.
+//
+// A process that has ended is not listed, though the system's table still
+// names it for a while after its end, as long as a handle to it is open: a
+// wait on it has returned, and a listing that took it for running named the
+// packaged update test's app as a survivor it was not (#3126).
 //   hide-processes run <program> [<argument> ...]
 //       runs the program in a job object from its first instruction, so
 //       everything it starts, at any depth and whatever exits first, is in
@@ -74,6 +79,15 @@ static ULONGLONG started(HANDLE process) {
   return ((ULONGLONG)created.dwHighDateTime << 32) | created.dwLowDateTime;
 }
 
+// Whether `process` has ended: its object is signalled once its last thread
+// has exited. A process opened without the right to wait on it says by its
+// exit code.
+static int ended(HANDLE process) {
+  if (WaitForSingleObject(process, 0) == WAIT_OBJECT_0) return 1;
+  DWORD code;
+  return GetExitCodeProcess(process, &code) && code != STILL_ACTIVE;
+}
+
 // Reads the live processes into `rows`.
 static int snapshot(void) {
   HANDLE all = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -88,7 +102,12 @@ static int snapshot(void) {
     row->created = 0;
     row->path[0] = 0;
     row->marked = 0;
-    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, row->id);
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, row->id);
+    if (!process) process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, row->id);
+    if (process && ended(process)) {
+      CloseHandle(process);
+      continue;
+    }
     if (process) {
       row->created = started(process);
       DWORD size = sizeof row->path;

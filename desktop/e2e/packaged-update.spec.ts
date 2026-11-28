@@ -29,7 +29,7 @@ import { openProject, splitPane, tabPanes, waitForPaneInput } from "../../web/e2
 import { startEngine } from "../../web/e2e/engine-fixture";
 import { connectStateDir, useControl } from "../../web/e2e/hided-control.mjs";
 import { ownedHolders } from "../../web/e2e/pane-holders.mjs";
-import { fixtureExecutable } from "../../web/e2e/platform-fixture";
+import { endWindowsProcesses, fixtureExecutable, windowsProcessTree, type WindowsProcess } from "../../web/e2e/platform-fixture";
 import { panePrompt } from "../../web/e2e/pane-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
 import { hostLog, isolate, launch, screenshot, shellPage, test } from "./fixture";
@@ -81,93 +81,60 @@ function sudoShim(): string {
   return dir;
 }
 
+/** A live process running the installed app's executable, with its arguments on Linux. */
+type AppProcess = { pid: number; args?: string };
+
 /**
- * Ends the app the installer reopened, which no test handle owns, and throws
- * only when it is still running: an app that did not reopen, or ended between
- * the lookup and the stop, is not a failure.
- *
- * On Windows the NSIS installer writes the new version to the registry, then
- * makes the shortcuts, and reopens the app last, so the version the test waits
- * for appears while the installer still runs. Ending the app before the
- * installer exits can miss the app it reopens a moment later; the installer
- * (named after its file in the feed, which the updater runs from its cache)
- * is waited for first.
+ * The live processes running the installed app's executable. A process the
+ * system still lists after it has ended is left out: on Windows the process
+ * table names it for a moment while a handle to it is open (`HasExited` reads
+ * its handle), and on Linux one waiting to be reaped is listed as
+ * `[name] <defunct>`, which does not match.
  */
-function endReopenedApp(app: string): void {
+function appProcesses(app: string): AppProcess[] {
   if (process.platform === "win32") {
-    const setup = fs.readdirSync(feed!).find(name => name.endsWith("-setup.exe"));
-    if (!setup) throw new Error(`no installer in the feed ${feed}`);
-    // Diagnostic for with-hide/hide#3126: every process under the install
-    // folder or named after the installer, with its parent, start time and
-    // command line, at each step of the cleanup.
-    const script = String.raw`
-$app = $env:HIDE_E2E_REOPENED_APP
-$dir = Split-Path $app
-$setup = $env:HIDE_E2E_REOPENED_SETUP
-function Snap([string]$label) {
-  $all = @(Get-CimInstance Win32_Process)
-  $byId = @{}
-  foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p }
-  $now = (Get-Date).ToString('o')
-  $matched = @($all | Where-Object { ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, 'OrdinalIgnoreCase')) -or $_.Name -like 'hide*' })
-  "update-diag $label at=$now matched=$($matched.Count) self=$PID selfSession=$((Get-Process -Id $PID).SessionId)"
-  if ($label -eq 'start') { foreach ($x in @($all | Where-Object { $_.Name -eq 'explorer.exe' })) { 'update-diag-explorer ' + ([ordered]@{ pid = $x.ProcessId; session = $x.SessionId; created = $x.CreationDate.ToString('o') } | ConvertTo-Json -Compress) } }
-  foreach ($p in $matched) {
-    $parent = $byId[[int]$p.ParentProcessId]
-    $row = [ordered]@{ label = $label; pid = $p.ProcessId; name = $p.Name; ppid = $p.ParentProcessId; parent = $(if ($parent) { $parent.Name } else { $null }); parentCreated = $(if ($parent) { $parent.CreationDate.ToString('o') } else { $null }); created = $p.CreationDate.ToString('o'); session = $p.SessionId; path = $p.ExecutablePath; cmd = $p.CommandLine }
-    'update-diag-proc ' + ($row | ConvertTo-Json -Compress)
+    const script = "Get-Process hide -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $env:HIDE_E2E_INSTALLED_APP -and -not $_.HasExited } | ForEach-Object { $_.Id }";
+    const listed = execFileSync("pwsh", ["-NoProfile", "-Command", script], { encoding: "utf8", env: { ...process.env, HIDE_E2E_INSTALLED_APP: app } });
+    return listed.split(/\r?\n/).filter(Boolean).map((pid) => ({ pid: Number(pid) }));
   }
-  foreach ($g in @(Get-Process hide -ErrorAction SilentlyContinue)) {
-    $row = [ordered]@{ label = $label; pid = $g.Id; path = $g.Path; exited = $g.HasExited; start = $(try { $g.StartTime.ToString('o') } catch { "$_" }); handles = $g.HandleCount; threads = $g.Threads.Count; session = $g.SessionId }
-    'update-diag-gp ' + ($row | ConvertTo-Json -Compress)
-  }
+  return execFileSync("ps", ["-eo", "pid=,args="], { encoding: "utf8" }).split("\n").flatMap((line) => {
+    const match = /^\s*(\d+) (.*)$/.exec(line);
+    if (!match) return [];
+    const args = match[2]!;
+    return args === app || args.startsWith(`${app} `) ? [{ pid: Number(match[1]), args }] : [];
+  });
 }
-function Reopened { Get-Process hide -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $app } }
-function Stamp([string]$what) { "update-diag $what at=$((Get-Date).ToString('o'))" }
-function Rows([string]$label, $list) { foreach ($g in @($list)) { 'update-diag-obj ' + ([ordered]@{ label = $label; pid = $g.Id; exited = $g.HasExited; exitTime = $(if ($g.HasExited) { try { $g.ExitTime.ToString('o') } catch { "$_" } } else { $null }); start = $(try { $g.StartTime.ToString('o') } catch { "$_" }) } | ConvertTo-Json -Compress) } }
-# The cleanup's own commands, in its order and with nothing slow between
-# them; what they saw is printed after the decision.
-Stamp 'begin'
-# Reproduction: the order before #3148, which stopped the app as soon as the
-# new version was recorded, while the installer may still run.
-$t1 = (Get-Date).ToString('o')
-$installerAtStop = @(Get-Process -Name $setup -ErrorAction SilentlyContinue)
-foreach ($i in $installerAtStop) { try { $null = $i.Handle } catch {} }
-$victims = @(Reopened)
-$victims | Stop-Process -Force -ErrorAction SilentlyContinue -ErrorVariable stopErrors
-$t2 = (Get-Date).ToString('o')
-$waited = @(Reopened)
-$waited | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue -ErrorVariable waitErrors
-$t3 = (Get-Date).ToString('o')
-$left = @(Reopened)
-$t4 = (Get-Date).ToString('o')
-Rows 'left-now' $left
-"update-diag installer-at-stop $($installerAtStop.Count): $(($installerAtStop | ForEach-Object { $_.Id }) -join ',')"
-"update-diag times before-stop=$t1 stopped=$t2 waited=$t3 checked=$t4"
-"update-diag stopped $($victims.Count): $(($victims | ForEach-Object { $_.Id }) -join ',')"
-foreach ($e in $stopErrors) { "update-diag stop-error $e" }
-"update-diag waited-on $($waited.Count): $(($waited | ForEach-Object { $_.Id }) -join ',')"
-foreach ($e in $waitErrors) { "update-diag wait-error $e" }
-"update-diag left $($left.Count): $(($left | ForEach-Object { $_.Id }) -join ',')"
-Rows 'victim' $victims
-Rows 'waited' $waited
-Rows 'left' $left
-Snap 'after-check'
-foreach ($i in $installerAtStop) { try { $null = $i.WaitForExit(120000); "update-diag installer $($i.Id) exited=$($i.HasExited) at=$($i.ExitTime.ToString('o'))" } catch { "update-diag installer $($i.Id) unread: $_" } }
-# Whether an app appears later, after the check a passing run ends on.
-for ($j = 1; $j -le 20; $j++) { Start-Sleep -Seconds 1; Snap "later-$j" }
-foreach ($p in @(Reopened)) { "update-diag later-stop $($p.Id)"; $p | Stop-Process -Force -ErrorAction SilentlyContinue }
-if ($left.Count -gt 0) { throw 'the reopened app is still running' }
-`;
-    execFileSync("pwsh", ["-NoProfile", "-Command", script], { stdio: "inherit", env: { ...process.env, HIDE_E2E_REOPENED_APP: app, HIDE_E2E_REOPENED_SETUP: path.parse(setup).name } });
-  } else {
-    try {
-      execFileSync("pkill", ["-f", `^${app}( |$)`], { stdio: "inherit" });
-    } catch (error) {
-      // pkill exits 1 when nothing matched: the app did not reopen.
-      if ((error as { status?: number }).status !== 1) throw error;
+
+/** Electron's relauncher on Linux, which waits for the old app to exit and then starts the new one, is not the app. */
+const isRelauncher = (listed: AppProcess): boolean => listed.args?.includes(" --type=relauncher") ?? false;
+
+/**
+ * Ends every process of the installed app, which after the update is the new
+ * version the update opened and no test handle owns, and returns once none
+ * is left.
+ *
+ * On Windows each one's tree is ended too: the reopened app runs with
+ * Explorer's environment, not the test's, so its `hide connect` starts a
+ * daemon in the runner's own home. `hide-processes` ends each process and
+ * waits for its end on the process's own handle, not on a listing.
+ */
+async function endReopenedApp(app: string): Promise<void> {
+  if (process.platform === "win32") {
+    const owned = new Map<string, WindowsProcess>();
+    for (const listed of appProcesses(app)) {
+      for (const item of windowsProcessTree(listed.pid)) owned.set(`${item.id}:${item.created}`, item);
+    }
+    endWindowsProcesses([...owned.values()], path.dirname(app));
+    return;
+  }
+  for (const listed of appProcesses(app)) {
+    try { process.kill(listed.pid, "SIGKILL"); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
     }
   }
+  await expect.poll(() => appProcesses(app).map((listed) => `${listed.pid} ${listed.args}`), {
+    message: "every process of the reopened app ended", timeout: 5_000, // wait-ok: the killed processes leave the process table
+  }).toEqual([]);
 }
 
 test("the installed app updates to the next version and the panes and daemon keep running", async () => {
@@ -244,15 +211,21 @@ test("the installed app updates to the next version and the panes and daemon kee
     expect(hostLog(run.env).map((line) => line.event)).toEqual(expect.arrayContaining(["update.check", "update.found", "update.ready"]));
 
     const closed = app.waitForEvent("close", { timeout: 120_000 });
-    console.log(`update-diag test ${new Date().toISOString()} restart pressed`);
     await restart.click();
     await closed;
-    console.log(`update-diag test ${new Date().toISOString()} app closed`);
     app = null;
 
     // The installer of N+1 replaced N (B16) and nothing the core runs ended (D-19).
     await expect.poll(installedVersion, { timeout: 180_000, intervals: [1_000] }).toBe(next);
-    console.log(`update-diag test ${new Date().toISOString()} version ${next} recorded`);
+    // Restart opens the new version once it is installed (B16). It is not
+    // the app this test launched: on Windows the installer has Explorer start
+    // it (electron-builder's NSIS `StartApp`), and Explorer does so on its own
+    // time, sometimes after the installer has exited; on Linux Electron's
+    // relauncher starts it once the old app has exited. It is ended below
+    // only once it is there, or it would start after the end and stay.
+    await expect.poll(() => appProcesses(file).filter((listed) => !isRelauncher(listed)).length, {
+      message: `hide ${next} opened after the update`, timeout: 60_000, intervals: [1_000], // wait-ok: the update starts the new version
+    }).toBeGreaterThan(0);
     expect(run.daemonPid()).toBe(daemon);
     expect(await panesNow()).toBe(panes);
     expect(hostLog(run.env).map((line) => line.event)).toContain("update.install");
@@ -262,8 +235,7 @@ test("the installed app updates to the next version and the panes and daemon kee
     throw error;
   } finally {
     await app?.close().catch(() => undefined);
-    console.log(`update-diag test ${new Date().toISOString()} ending the reopened app`);
-    try { endReopenedApp(file); } catch (error) {
+    try { await endReopenedApp(file); } catch (error) {
       if (failed) console.log(`ending the reopened app failed: ${error instanceof Error ? error.message : String(error)}`);
       else leftRunning = error;
     }
