@@ -14,6 +14,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import ci
+from agent_journey.failure import FailureLogs
 from agent_journey.journey import Journey
 from agent_journey.cli import budget_failures, hide_ai_requests, leftover_copies, measured_clone, provider_keys
 from agent_journey.local import (ROUTES, agy_home, agy_login_refusal, claude_session_folders, disable_hide_ai,
@@ -252,11 +253,11 @@ class FailedCellScreen(unittest.TestCase):
             def read_pane(pane, **_kwargs):
                 read.append(pane)
                 return f"screen of {pane}\n"
-            runtime = SimpleNamespace(run=Path(folder),
+            runtime = SimpleNamespace(run=Path(folder), home=Path(folder), state=Path(folder) / "state",
                                       owner=SimpleNamespace(cancelled=threading.Event()))
             table = {"opencode": {name: {"status": "pending"} for name in ("fork", "resume")}}
             journey = Journey(runtime, None, SimpleNamespace(read_pane=read_pane), table, {"id": "opencode", "agent_cli": "opencode", "model_flag": []},
-                              Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None, failure_logs=None)
+                              Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None, failure_logs=FailureLogs(None))
             journey.pane = "w3:p1"
             # A fork is measured in its own pane while the journey's stays the source's.
             journey.settle("fork", ("fail", "no answer"), pane="w3:p7")

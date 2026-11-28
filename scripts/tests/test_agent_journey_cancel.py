@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent_journey import cells, journey as journey_module, kit  # noqa: E402
 from agent_journey.daemon import Daemon  # noqa: E402
+from agent_journey.failure import FailureLogs  # noqa: E402
 from agent_journey.journey import Journey  # noqa: E402
 from agent_live_check.processes import Cancelled, ProcessError  # noqa: E402
 
@@ -38,7 +39,7 @@ class CancelDuringACellWait(unittest.TestCase):
         cells.settle(table, "codex", "start", cells.PASS, "fixture")
         journey = Journey(runtime, daemon, None, table, {"id": "codex", "agent_cli": "codex", "model_flag": []},
                           Path("/repo"), {}, None, branch="b", created=[], sessions=Path(folder),
-                          route={}, composer_judge=None, failure_logs=SimpleNamespace(mark=lambda: 0))
+                          route={}, composer_judge=None, failure_logs=FailureLogs(SimpleNamespace(line_start=lambda: 0)))
         return journey, table["codex"]
 
     def cancel_soon(self, cancelled):

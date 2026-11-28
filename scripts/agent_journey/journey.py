@@ -22,6 +22,9 @@ from . import (cells, composer, failure, fork, hook_records, kit, memory, provid
                usage)
 from .requests import model_requests
 
+# The most a failed cell keeps of what the pane's hooks recorded (hook_records.pane_record).
+HOOK_RECORD_BYTES = 32 * 1024
+
 SPAWN_SECONDS = 150
 TURN_SECONDS = 180
 LETTER_SECONDS = 240
@@ -249,6 +252,32 @@ class Journey:
         write_private(path, failure.scrub(text).encode())
         return path.name
 
+    def hook_record(self, name, pane=None):
+        """What the candidate's hooks kept of the pane the cell measured
+        (hook_records.pane_record), kept only for a failed cell under the
+        failed cells' budget (failure.py)."""
+        text = hook_records.pane_record(self.runtime, pane or self.pane,
+                                        min(HOOK_RECORD_BYTES, self.failure_logs.allowance()))
+        if text is None:
+            return None
+        path = self.run / f"{self.name}-{name}-hooks.json"
+        path.unlink(missing_ok=True)
+        write_private(path, text.encode())
+        self.failure_logs.spend(len(text.encode()))
+        return path.name
+
+    def kept(self, name, kind, keep):
+        """A failed cell's evidence file, or a note that it could not be
+        kept, naming the file and the error's code only: a failure to keep
+        one piece of evidence never takes the next one, or the cell's own
+        verdict and reason, with it. A cancel still ends the run."""
+        try:
+            return keep()
+        except Cancelled:
+            raise
+        except Exception as error:
+            return f"{self.name}-{name}-{kind} not kept: {hook_records.unread(error)}"
+
     def daemon_log(self, name):
         """What hided wrote while the running step ran, kept only for a
         failed cell, at its failure (failure.py)."""
@@ -275,8 +304,10 @@ class Journey:
             cells.settle_agent(self.table, self.id, refused)
             return False
         if status == cells.FAIL:
-            screen = self.capture(name, pane)
-            evidence = ", ".join(value for value in (evidence, screen, self.daemon_log(name)) if value) or None
+            kept = (self.kept(name, "pane.txt", lambda: self.capture(name, pane)),
+                    self.kept(name, "hooks.json", lambda: self.hook_record(name, pane)),
+                    self.kept(name, "hided.log", lambda: self.daemon_log(name)))
+            evidence = ", ".join(value for value in (evidence, *kept) if value) or None
         cells.settle(self.table, self.id, name, status, reason, evidence)
         return status == cells.PASS
 
