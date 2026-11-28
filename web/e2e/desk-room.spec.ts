@@ -355,7 +355,7 @@ test("Desk's box and the session's grow with their lines, stop at the composer's
 
 type Box = { x: number; y: number; width: number; height: number };
 
-test("a session beside Desk that sleeps in its own pane offers 에이전트 깨우기 in its input box's place, which wakes it in that pane (PRD desk-2-ui B43) @platform", async ({ page }) => {
+test("a session beside Desk that sleeps in its own pane dims its conversation under 에이전트 깨우기 with no box, which wakes it in that pane (PRD desk-2-ui B43) @platform", async ({ page }) => {
   // e2e: the sleep and the wake are the engine ending and restarting the agent in its pane.
   test.setTimeout(150_000);
   const desk = await startDesk(page, "desk-room-sleep");
@@ -370,17 +370,18 @@ test("a session beside Desk that sleeps in its own pane offers 에이전트 깨�
     await expect(item).toBeEnabled({ timeout: 20_000 }); // wait-ok: the stand-in's session report, which makes it sleepable
     await item.click();
 
-    await expect(panel.locator("[data-desk-session-sleeping]")).toHaveAttribute("data-desk-session-sleeping", /.+/, { timeout: 30_000 }); // wait-ok: the engine ending the agent
+    await expect(panel.locator("[data-pane-sleep]")).toHaveAttribute("data-pane-sleep", /.+/, { timeout: 30_000 }); // wait-ok: the engine ending the agent
     await screenshot(page, "desk-room-sleep");
-    const wake = panel.locator("[data-desk-session-wake]");
+    const wake = panel.locator(`[data-agent-wake="${desk.pane}"]`);
     await expect(wake).toBeVisible();
-    await expect(panel.locator("[data-desk-session-sleeping]")).toHaveAttribute("data-desk-session-sleeping", "sleeping");
+    await expect(panel.locator("[data-pane-sleep]")).toHaveAttribute("data-pane-sleep", "sleeping");
+    await expect(panel.locator("[data-thread-asleep]")).toHaveCount(1);
     await expect(panel.locator("[data-desk-composer]")).toHaveCount(0);
     await expect(page.locator("[data-desk-session-terminal]")).toHaveCount(0);
 
     await wake.click();
     await expect(page.locator("[data-desk-session-terminal]")).toBeVisible({ timeout: 40_000 }); // wait-ok: the agent started again in its pane
-    await expect(panel.locator("[data-desk-session-sleeping]")).toHaveCount(0);
+    await expect(panel.locator("[data-pane-sleep]")).toHaveCount(0);
     await expect(panel.locator("[data-desk-composer]")).toHaveCount(1);
     await screenshot(page, "desk-room-woke");
   } finally {
@@ -389,7 +390,7 @@ test("a session beside Desk that sleeps in its own pane offers 에이전트 깨�
   }
 });
 
-test("a session beside Desk whose sleep closes its pane keeps its conversation above 에이전트 깨우기, which wakes it in a new pane beside Desk (PRD desk-2-ui B43)", async ({ page }) => {
+test("a session beside Desk whose sleep closes its pane keeps its conversation under 에이전트 깨우기, which wakes it in a new pane beside Desk (PRD desk-2-ui B43)", async ({ page }) => {
   // e2e: the pane closes, the core keeps the sleeping session and the read conversation, and the wake starts a new pane.
   test.setTimeout(180_000);
   // Pi's sleep closes its pane and keeps a sleeping session to wake in a new one (`session-readers.spec.ts`). Its
@@ -419,7 +420,7 @@ test("a session beside Desk whose sleep closes its pane keeps its conversation a
     await expect(page.locator('[data-menu-item="sleep_agent"]')).toBeEnabled({ timeout: 20_000 }); // wait-ok: the agent row the pane menu reads
     await page.locator('[data-menu-item="sleep_agent"]').click();
     await withControl(daemon, (control) => control.until((rest) => (tabOfPane(rest, pane) === undefined ? true : undefined), `${pane} closed`, 30_000));
-    const wake = panel.locator("[data-desk-session-wake]");
+    const wake = panel.locator("[data-agent-wake]");
     await expect(wake).toBeVisible();
     await screenshot(page, "desk-room-pi-asleep");
     await expect(panel.locator("[data-desk-thread-lines]")).toBeVisible();

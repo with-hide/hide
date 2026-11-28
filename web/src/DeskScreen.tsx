@@ -23,7 +23,8 @@ import { ExplorerTree, type ExplorerScope } from "./ExplorerTree";
 import { SessionThreadAsk as DeskSessionAsk } from "./components/desk/session-ask";
 import { ThreadPanel } from "./components/desk/thread-panel";
 import { SessionChipProvider, type SessionChipSource } from "./components/desk/session-chip";
-import { SessionHead, SessionRecordFoot, SessionSleepingFoot } from "./components/desk/desk-session";
+import { SessionHead, SessionRecordFoot } from "./components/desk/desk-session";
+import { conversationSleep } from "./sleep";
 import { LineButton } from "./LinkSessions";
 import { resumeBlock, resumeCheckout } from "./linkPanel";
 import { resumeFailureText, resumeReason, resumeRequest, useSessionResume } from "./useSessionResume";
@@ -672,7 +673,8 @@ const NO_WIDTHS: import("./snapshot").DeskLane = { view_width: null, session_wid
  * The session open beside Desk (PRD desk-2-ui D-01, D-09-D-11, D-20, D-28,
  * B2, B6-B15, B27, B30, B34, B43, B47): its head as the pane head draws it,
  * its conversation read from its pane, the question it waits on as a card,
- * and its input box, or `에이전트 깨우기` in the box's place while it sleeps.
+ * and its input box; while it sleeps, its conversation dimmed with the sleep
+ * card in its middle and no box (`ThreadPanel`).
  */
 function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: string; actions: Actions; deskActions: Actions; room: RoomActions }) {
   const listed = useShellStore((s) => agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(paneId));
@@ -791,11 +793,10 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
   const known = useRef<SessionIdentity | null>(null);
   if (row && checkoutPath) known.current = { title: row.identity_label, node: row.device_id, checkout: checkoutPath };
   const identity = known.current;
-  const asleep = useShellStore((s) => (identity ? sleepingOf(s.rest?.navigator?.sleeping_sessions, identity) : null));
   // Most agents sleep in their own pane, which stays (PRD agent-sleep) and wakes there; an agent whose sleep closes
-  // its pane (Pi's) is found among the sleeping sessions and wakes in a new one (B43).
-  const inPane = row?.sleep ?? null;
-  const sleeping = inPane !== null || job?.state === "sleeping" || (!row && asleep !== null);
+  // its pane (Pi's) is found among the sleeping sessions and wakes in a new one (B43). `conversationSleep` decides.
+  const asleep = useShellStore((s) => (identity ? sleepingOf(s.rest?.navigator?.sleeping_sessions, identity) : null));
+  const sleeping = conversationSleep(paneId, { row, job, session: asleep }, actions) !== null;
   const title = row?.identity_label ?? job?.title ?? identity?.title ?? "";
   const [waking, setWaking] = useState<SessionIdentity | null>(null);
   useWakeFollow(waking, paneId, () => setWaking(null));
@@ -850,24 +851,8 @@ function DeskLivePanel({ paneId, actions, deskActions, room }: { paneId: string;
         const asking = row ? askingSession(row) : null;
         if (asking) actions.setMissedStatus(asking, id, status);
       }}
-      foot={sleeping ? (
-        <SessionSleepingFoot
-          title={title}
-          sleep={inPane}
-          state={asleep?.phase ?? "unknown"}
-          onFresh={() => actions.wakeAgent(paneId, true)}
-          onWake={
-            inPane
-              ? inPane.state === "waking" ? null : () => actions.wakeAgent(paneId)
-              : asleep?.wake_available
-                ? () => {
-                    actions.wakeSleepingSession(asleep.sleep_id);
-                    setWaking(identity);
-                  }
-                : null
-          }
-        />
-      ) : null}
+      asleep={asleep}
+      onSessionWake={() => setWaking(identity)}
       onTerminal={() => actions.deskTerminal()}
       outputOf={(output, viewId) => outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath, folder: place?.cwd ?? checkoutPath } : null, viewId)}
       onOutput={(output) => actions.deskOpen({ kind: "output", output })}

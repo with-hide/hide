@@ -2,14 +2,14 @@
 import { Blob as NodeBlob } from "node:buffer";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAttachments } from "../../attachments";
 import { configureFileBytes, receiveBytes } from "../../fileBytes";
 import { keepSent } from "../../deskComposer";
 import type { CopyText } from "../human-turn-copy";
 import type { AskLine } from "../open-asks";
 import type { DeskJob } from "../../desk";
-import type { AgentRow, DeskMentions, SessionThreadSection, SnapshotRest, ThreadPage } from "../../snapshot";
+import type { AgentRow, AgentSleep, DeskMentions, SessionThreadSection, SleepingSession, SnapshotRest, ThreadPage } from "../../snapshot";
 import { useShellStore } from "../../store";
 import { receiveThreadInputResult } from "../../sessionDraftSends";
 import { useUiStore } from "../../ui";
@@ -68,8 +68,8 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined, pane = "w1:p2", answer = false }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void; pane?: string; answer?: boolean } = {}) {
-  const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn(), switchThread: vi.fn(() => "switch-1"), observeCatalog: vi.fn(() => noop), requestFileIndex: vi.fn(), deskCommandsCheck: vi.fn(), inputQueue: vi.fn(), interruptThread: vi.fn(() => "stop-1") };
+async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], ask = null, onCopy = () => Promise.resolve(true), onAsk = () => undefined, pane = "w1:p2", answer = false, asleep = null, onSessionWake }: { asks?: AskLine[]; ask?: ReactNode; onCopy?: CopyText; onAsk?: (id: string, status: "open" | "dismissed") => void; pane?: string; answer?: boolean; asleep?: SleepingSession | null; onSessionWake?: () => void } = {}) {
+  const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn(), switchThread: vi.fn(() => "switch-1"), observeCatalog: vi.fn(() => noop), requestFileIndex: vi.fn(), deskCommandsCheck: vi.fn(), inputQueue: vi.fn(), interruptThread: vi.fn(() => "stop-1"), wakeAgent: vi.fn(), wakeSleepingSession: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -78,7 +78,7 @@ async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks 
   const answered = vi.fn();
   const draw = (asked: boolean, shownCard: DeskJob | null = card) => root.render(
     <TooltipProvider>
-      <ThreadPanel job={shownCard} paneId={pane} answer={asked} onAnswered={answered} actions={actions} foot={foot} ask={ask} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
+      <ThreadPanel job={shownCard} paneId={pane} answer={asked} onAnswered={answered} actions={actions} foot={foot} asleep={asleep} onSessionWake={onSessionWake} ask={ask} asks={asks} onAsk={onAsk} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
     </TooltipProvider>,
   );
   await act(async () => draw(answer));
@@ -109,8 +109,8 @@ it("opens its pane's thread while shown, draws what the core read, and closes it
   expect(actions.closeThread).toHaveBeenCalledTimes(1);
 });
 
-it("keeps a sleeping session's record above the foot that wakes it once its card is gone with its pane (PRD desk-2-ui B43)", async () => {
-  const { container } = await mount(null, <p data-foot="true">에이전트 깨우기</p>);
+it("keeps an ended session's record above the foot that stands in its box's place", async () => {
+  const { container } = await mount(null, <p data-foot="true">이어서 하기</p>);
   await act(async () => useShellStore.setState({ sessionThread: section({ pane: "gone" }), sessionThreadHistory: { generation: 4, pages: [] } }));
   expect(container.textContent).toContain("다크도 찍어줘");
   expect(container.textContent).toContain("라이트는 끝났어요");
@@ -118,6 +118,65 @@ it("keeps a sleeping session's record above the foot that wakes it once its card
   const conversation = container.querySelector('[data-desk-thread-conversation="true"]')!;
   expect(conversation.compareDocumentPosition(container.querySelector('[data-foot="true"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(container.querySelector("textarea")).toBeNull();
+});
+
+// A sleeping session's conversation (operator decision 2026-11-28, A-1): readable and dimmed, the sleep card in its
+// middle, and no box until the agent is awake, beside Desk and over its pane alike.
+describe("a sleeping session", () => {
+  const asleepRow = (sleep: AgentSleep | null) => ({ pane_id: "w1:p2", agent_kind: "claude", sleep, state: { working: false, asking: false } }) as AgentRow;
+  const dimmed = (container: HTMLElement) => container.querySelector<HTMLElement>("[data-thread-taken]")!;
+
+  it("dims its conversation, keeps it readable, and offers Wake agent in its middle in place of the box", async () => {
+    const { container, actions } = await mount(job, null, { answer: true });
+    await act(async () => useShellStore.setState({ sessionThread: section(), sessionThreadHistory: { generation: 4, pages: [] }, agents: [asleepRow({ state: "sleeping", since_unix_ms: 0, progress: "다크 캡처 중" })] }));
+    expect(container.textContent).toContain("라이트는 끝났어요");
+    expect(dimmed(container).className).toContain("opacity-(--opacity-dimmed)");
+    expect(dimmed(container).hasAttribute("inert")).toBe(false);
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(container.querySelector("[data-desk-composer]")).toBeNull();
+    const card = container.querySelector("[data-thread-sleep-card] [data-pane-sleep]")!;
+    expect(card.getAttribute("data-pane-sleep")).toBe("sleeping");
+    expect(card.textContent).toContain("다크 캡처 중");
+    // The card is not dimmed with the conversation, and stands after it for Tab.
+    expect(dimmed(container).contains(card)).toBe(false);
+    expect(container.querySelector('[data-desk-thread-conversation="true"]')!.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-agent-wake="w1:p2"]')!.click());
+    expect(actions.wakeAgent).toHaveBeenCalledWith("w1:p2");
+  });
+
+  it("brings the box back once the agent is awake, and the press that opened it gives the box the keyboard then", async () => {
+    useShellStore.setState({ sessionThread: section(), agents: [asleepRow({ state: "waking", since_unix_ms: 0 })] });
+    const { container, answered } = await mount(job, null, { answer: true });
+    expect(container.querySelector("[data-pane-sleep]")?.getAttribute("data-pane-sleep")).toBe("waking");
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(answered).not.toHaveBeenCalled();
+    await act(async () => useShellStore.setState({ agents: [asleepRow(null)] }));
+    expect(container.querySelector("[data-pane-sleep]")).toBeNull();
+    expect(dimmed(container).className).not.toContain("opacity-(--opacity-dimmed)");
+    expect(document.activeElement).toBe(container.querySelector("textarea"));
+    expect(answered).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Retry and a new session after a failed wake, each dispatched for its pane", async () => {
+    const { container, actions } = await mount();
+    await act(async () => useShellStore.setState({ sessionThread: section(), agents: [asleepRow({ state: "failed", since_unix_ms: 0, reason: "The conversation file is gone" })] }));
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("The conversation file is gone");
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-agent-wake-retry]")!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-agent-wake-fresh]")!.click());
+    expect(actions.wakeAgent.mock.calls).toEqual([["w1:p2"], ["w1:p2", true]]);
+  });
+
+  it("wakes a session whose sleep closed its pane from its sleeping session, its record kept to read", async () => {
+    const asleep: SleepingSession = { sleep_id: "sleep-1", node_id: "mac", checkout_path: "/repo", kind: "pi", identity_label: "갤러리 캡처 비교", group: "seen", phase: "sleeping", since_unix_ms: 0, reason: null, wake_available: true, checking: false };
+    const follow = vi.fn();
+    const { container, actions } = await mount(null, null, { asleep, onSessionWake: follow });
+    await act(async () => useShellStore.setState({ sessionThread: section({ pane: "gone" }), agents: [] }));
+    expect(container.textContent).toContain("다크도 찍어줘");
+    expect(container.querySelector("textarea")).toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-agent-wake]")!.click());
+    expect(actions.wakeSleepingSession).toHaveBeenCalledWith("sleep-1");
+    expect(follow).toHaveBeenCalledTimes(1);
+  });
 });
 
 it("sends the box's words on Enter, takes them out of the box at once, and never sends mid-composition", async () => {
